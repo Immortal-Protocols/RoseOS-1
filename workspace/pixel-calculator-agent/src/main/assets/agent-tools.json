@@ -1,0 +1,86 @@
+[
+  {
+    "name": "calculator_evaluate",
+    "operation": "evaluate",
+    "description": "Calculate a new arithmetic expression in Calculator Agent and display the saved result. Replaces current work. Supports decimals, negatives, + - * /, postfix %, normal precedence; no parentheses. Automatically opens the app. equalsCount includes first equals and repeats the final operation for extra presses.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "equalsCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "expression"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "calculator_continue",
+    "operation": "continue",
+    "description": "Apply an operator and operand to the current displayed calculator value. suffix starts with + - * /. Supports contextual percentages. Opens app and returns actual result.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "suffix": {
+          "type": "string"
+        },
+        "equalsCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "suffix"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "calculator_state",
+    "operation": "get_state",
+    "description": "Read the actual current calculator entry, pending expression, error and repeated operation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "calculator_history",
+    "operation": "history_list",
+    "description": "List actual saved calculator history, newest first, including indices, expressions and answers.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "calculator_recall",
+    "operation": "history_recall",
+    "description": "Recall a saved calculator answer by an index returned from calculator_history. Does not independently recompute it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "index"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

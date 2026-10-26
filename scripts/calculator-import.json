@@ -1,0 +1,51 @@
+{
+  "repository": "Immortal-Protocols/pixel-workspace",
+  "revision": "9f1261dd5aac9227ea4b16d3817f394bffa1cf5c",
+  "files": [
+    {
+      "path": "workspace/pixel-calculator-agent/AndroidManifest.xml",
+      "git_blob_sha": "424f79c6ed0506825f8dd62fa75f30952b201334"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/res/drawable/backspace.xml",
+      "git_blob_sha": "fd132cd96b40d954488ac65e95d2f9f3ed8db8df"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/res/drawable/icon.xml",
+      "git_blob_sha": "e15ca4d59c649e859a304689318172cb8b06fa5c"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/AgentProvider.java",
+      "git_blob_sha": "92a842240dba8153247b9df2498c2df52a0c7d53"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/Calculator.java",
+      "git_blob_sha": "1d49a7c2dbd7560b23a0d0532c69d5e1a6989f6d"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/CalculatorSession.java",
+      "git_blob_sha": "d69f66c4358d37fc43b9def02a284cf35ff1be1e"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/ExpressionKeys.java",
+      "git_blob_sha": "7c44b2da866398fce578ceba9ddb29b9c911070b"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/MainActivity.java",
+      "git_blob_sha": "77428cceff5a5f37db82c812d9292f40f74bdd2c"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/PixelAppearance.java",
+      "git_blob_sha": "0519e651be6d03dc32d7956ed3dc9671a7eece5c"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/dev/pixel/calculator/agent/PixelStyle.java",
+      "git_blob_sha": "b3d49d81b6b2c4bd06ae18eef53963e2a361f7ac"
+    },
+    {
+      "path": "workspace/pixel-calculator-agent/src/main/assets/agent-tools.json",
+      "git_blob_sha": "c310249637d11fe839b9dfbab17c381af721a6d6"
+    }
+  ],
+  "build_script": "Replaced with a local unsigned Linux build; original signing-key dependency removed."
+}
