@@ -121,12 +121,20 @@ test('a failed interrupt or workspace close keeps the gate closed and reports it
  assert.match(stop.summary(),/did not confirm it closed \(close_failed: cleanup_failed\)/);
 });
 
-test('a late owner-stop report for an older task does not stop the current one',async()=>{
+test('a refused start for an older task neither stops nor locks out the current task',async()=>{
+ const launcher=task();let calls=0;const reported=[];
+ const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>calls++,abortReview:()=>{},closeWorkspace:async()=>calls++});
+ let requested;let live='task-A';
+ const send=async c=>{if(c.operation==='get_state')return {status:'idle'};if(c.operation==='start'){requested=c.params.taskId;live=launcher.current.id;return {status:'user_stopped',actionExecuted:false,rejectedTaskId:'task-A',stopReason:'user',current:{status:'idle'}};}throw Error('unexpected');};
+ const phone=new BackgroundPhone({enabled:()=>true,taskId:()=>live,onOwnerStop:e=>reported.push(stop.request({taskId:e.taskId||undefined})),send});
+ const result=await phone.execute({action:'open_app',packageName:'maps'});
+ assert.equal(requested,'task-A');assert.equal(result.status,'not_executed');assert.equal(result.rejectedTaskId,'task-A');
+ assert.equal(reported.length,0);assert.equal(phone.stoppedByOwner,null);assert.equal(launcher.current.state,'running');assert.equal(calls,0);
+});
+
+test('TaskStop answers stale_task for an owner-stop report naming another task',async()=>{
  const launcher=task();let calls=0;
  const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>calls++,abortReview:()=>{},closeWorkspace:async()=>calls++});
- const reported=[];
- const phone=new BackgroundPhone({enabled:()=>true,taskId:()=>launcher.current.id,onOwnerStop:e=>reported.push(stop.request({taskId:e.taskId||undefined})),
-  send:async c=>c.operation==='get_state'?{status:'stopped',stopReason:'user',stoppedTaskId:'task-A',stoppedSessionId:'s-A'}:{status:'user_stopped',stopReason:'user',stoppedTaskId:'task-A'}});
- await phone.execute({action:'open_app',packageName:'maps'});
- assert.equal((await reported[0]).status,'stale_task');assert.equal(launcher.current.state,'running');assert.equal(calls,0);
+ assert.equal((await stop.request({taskId:'task-A',source:'workspace_notification'})).status,'stale_task');
+ assert.equal(launcher.current.state,'running');assert.equal(calls,0);
 });

@@ -87,8 +87,12 @@ export class BackgroundPhone {
    const taskId=this.taskId();
    state=await this.call('start',{packageName,...(taskId?{taskId}:{})});
    // Schema 3: the owner already stopped this task; nothing was opened.
-   // Prefer the controller's identity for the refused task; TaskStop ignores one that is not current.
-   if(state.status==='user_stopped')return this.ownerStop(state,state.rejectedTaskId||state.stoppedTaskId||taskId);
+   // Schema 3 names the refused task in rejectedTaskId; the workspace under "current" is untouched.
+   if(state.status==='user_stopped'){
+    const rejected=state.rejectedTaskId||state.stoppedTaskId||taskId;
+    if(rejected&&rejected!==this.taskId()){this.record({stage:'background_stale_task_refused',rejectedTaskId:rejected});return {status:'not_executed',actionExecuted:false,backgroundExecution:true,rejectedTaskId:rejected,reason:'The controller refused a start for an earlier, stopped task. The current task is unchanged.'};}
+    return this.ownerStop(state,rejected);
+   }
    const deadline=this.now()+12000;
    while(['starting','launching','scheduled'].includes(state.status)&&this.now()<deadline){await this.sleep(150);state=await this.call('get_state');}
   }
