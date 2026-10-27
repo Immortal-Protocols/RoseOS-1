@@ -41,16 +41,22 @@ jobs:
           fi
           cp "$apk" "$build_dir/apk-metadata.txt" "$build_dir/java-version.txt" out/release-assets/
           python3 - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
+          import hashlib, json, os, pathlib, re, subprocess
           out = pathlib.Path('out/release-assets')
           apk = out / 'calculator-unsigned.apk'
+          metadata = (out / 'apk-metadata.txt').read_text()
+          package_line = next(line for line in metadata.splitlines() if line.startswith('package: '))
+          identity = dict(re.findall(r"(\w+)='([^']*)'", package_line))
+          assert identity['name'] == 'dev.pixel.calculator.agent', 'Unexpected APK package'
+          version_code = int(identity['versionCode'])
+          assert version_code > 0, 'Invalid version code'
           receipt = {
               'source_commit': os.environ['GITHUB_SHA'],
               'source_clean': not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip(),
               'workflow_run': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
               'artifact': apk.name,
               'artifact_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
-              'package': 'dev.pixel.calculator.agent', 'version_name': '1.2', 'version_code': 3,
+              'package': identity['name'], 'version_name': identity['versionName'], 'version_code': version_code,
               'min_sdk': 30, 'target_sdk': 35,
               'signing_status': 'unsigned', 'signing_certificate_sha256': None,
               'status': 'experimental', 'android_platform': '35 revision 2', 'build_tools': '35.0.0',
