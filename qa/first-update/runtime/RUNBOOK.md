@@ -69,10 +69,16 @@ and the audio recorder at the start and end of every run.
 Source review at OS `4b5af1f` cannot prove these; they require the built target-files and OTA.
 
 1. `verify-target-files.py` passes on the candidate target-files with the policy receipt that
-   produced it: paths, byte identity, `PRESIGNED`, signer, no collisions.
-2. The generated preinstall blueprint omits `preprocessed: true` (the controller's own
-   Android.bp has it). Byte identity in gate 1 is therefore the evidence that no zipalign or
-   uncompress step rewrote the Rose Agent or Calculator APKs.
+   produced it: paths, byte identity, `PRESIGNED`, signer, no collisions. For the phone OTA add
+   `--expect-endpoint https://100.68.248.87:9444 --expect-pin f703219f…75ca` (App B1): the
+   bundled Rose Agent `assets/connection.json` must carry the Pixel 10 hub values, not the
+   compile-only loopback ones, and must not contain a token.
+2. Since main `34fa48f` (OS #5) the generated preinstall blueprint is `preprocessed: true` and the
+   patcher refuses inputs the pinned validator would reject (compressed native libraries, failing
+   `zipalign -c -p 4`) and colliding module names. Compressed dex is accepted for these
+   non-privileged imports (Infra BUILD-011; App PR #6 left unmerged). If Stage C on the dirty
+   historical builder tree writes preinstall blueprints by hand rather than with this helper,
+   confirm they carry `preprocessed: true`; byte identity in gate 1 is the final evidence.
 3. Image checks in the candidate VM (OS M017 step 6): `persist.wm.debug.pixel_agent_tray=1`; the
    controller at `/system_ext/priv-app` with versionCode 27; Rose Agent and Calculator at
    `/product/app` with the expected versionCode and signer; provider capabilities

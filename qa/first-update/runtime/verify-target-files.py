@@ -7,11 +7,17 @@ controller (system_ext priv-app):
   2. its bytes are identical to the receipt's apkSha256 (Soong/signing did not rewrite it);
   3. META/apkcerts.txt marks it PRESIGNED (release signing will not re-sign it);
   4. optional: apksigner signer SHA-256 equals the receipt's certificates (if --apksigner given).
-Usage: verify-target-files.py TARGET_FILES.zip POLICY.json [--apksigner PATH]
+  5. optional (App B1): Rose Agent's bundled assets/connection.json carries the expected endpoint and
+     TLS pin (--expect-endpoint URL --expect-pin HEX); never prints values other than endpoint/pin,
+     and flags a token field (a secret must not be bundled) by presence only.
+Usage: verify-target-files.py TARGET_FILES.zip POLICY.json [--apksigner PATH] [--expect-endpoint URL --expect-pin HEX]
 Exit 1 on any failure; prints a JSON report."""
 import sys,json,zipfile,hashlib,subprocess,tempfile,os,re
 args=sys.argv[1:];apksigner=None
 if '--apksigner' in args:i=args.index('--apksigner');apksigner=args[i+1];del args[i:i+2]
+def opt(name):
+  if name in args:i=args.index(name);v=args[i+1];del args[i:i+2];return v
+expect_endpoint=opt('--expect-endpoint');expect_pin=opt('--expect-pin')
 tf,policy_path=args;policy=json.load(open(policy_path))
 z=zipfile.ZipFile(tf);names=z.namelist()
 certs={}
@@ -35,7 +41,14 @@ for e in expected:
     with tempfile.NamedTemporaryFile(suffix='.apk') as f:
       f.write(data);f.flush();out=subprocess.run([apksigner,'verify','--print-certs',f.name],capture_output=True,text=True).stdout
     found=sorted({m.upper() for m in re.findall(r'SHA-256 digest: ([0-9a-fA-F]{64})',out)});r['signers']=found;r['signersMatchReceipt']=found==sorted(c.upper() for c in e['certs'])
-  passed=r['bytesMatchReceipt'] and r['presigned'] and r.get('signersMatchReceipt',True)
+  if e['packageName']=='dev.pixel.voice' and (expect_endpoint or expect_pin):
+    import io
+    try:
+      c=json.loads(zipfile.ZipFile(io.BytesIO(data)).read('assets/connection.json'))
+      r['connection']={'endpoint':c.get('endpoint'),'pin':c.get('pin'),'hasToken':'token' in c}
+      r['connectionMatches']=(expect_endpoint in (None,c.get('endpoint')) and expect_pin in (None,c.get('pin')) and 'token' not in c)
+    except Exception as x:r['connection']={'error':type(x).__name__};r['connectionMatches']=False
+  passed=r['bytesMatchReceipt'] and r['presigned'] and r.get('signersMatchReceipt',True) and r.get('connectionMatches',True)
   r['pass']=passed;ok=ok and passed;report.append(r)
 modules=[e['module'] for e in expected];dup=sorted({m for m in modules if modules.count(m)>1})
 if dup:ok=False
