@@ -13,7 +13,8 @@ import {LauncherTask} from './launcher-task.mjs';
 // rules, fastPhone, /phone/commands and /task/stop are sliced from server.mjs.
 const server=fs.readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
 const between=(from,to)=>{const start=server.indexOf(from),end=server.indexOf(to,start);assert.ok(start>0&&end>start,from);return server.slice(start,end);};
-const phoneFunctions=between('function phoneCommandRejection(','function checkPausedApp(')+between('// Origin of phone work,','async function rawFastPhone(');
+const originBlock=(()=>{const start=server.indexOf('// Origin of phone work,'),end=server.indexOf('\n',server.indexOf('const readOnlyPhoneActions=',start));assert.ok(start>0&&end>start);return server.slice(start,end+1);})();
+const phoneFunctions=originBlock+between('function phoneCommandRejection(','function checkPausedApp(')+between('function legacyReadPhone(','async function rawFastPhone(');
 const route=name=>{const start=server.indexOf(" if(url.pathname==='"+name+"'){");assert.ok(start>0,name);return server.slice(start,server.indexOf('\n',start));};
 const CALC='dev.pixel.calculator.agent';
 const evaluate=expression=>({action:'app_command',packageName:CALC,operation:'evaluate',params:{expression}});
@@ -125,8 +126,9 @@ test('the Stop gate is reopened only where a new user request starts a task',()=
 });
 
 test('origin is bound at every in-process, output and turn boundary',()=>{
- assert.match(server,/appRuntime\.handleToolCall=request=>\{const stale=taskStop\.authorize\(\{turnId:request\.turnId\}\)\|\|taskStop\.guard\(\{action:'tool:'\+request\.tool\}\);if\(stale\)return Promise\.resolve\(.*\);return phoneOrigin\.run\(\{taskId:taskStop\.current\(\)\},\(\)=>handle\(request\)\);\};/);
- assert.match(server,/codex\.on\('toolActivity',\(method,params\)=>\{if\(method==='turn\/started'\)taskStop\.addTurn\(params\.turn\?\.id\);\}\);/);
+ assert.match(server,/appRuntime\.handleToolCall=request=>\{const stale=taskStop\.authorize\(\{turnId:request\.turnId\?\?null,required:true\}\)\|\|taskStop\.guard\(\{action:'tool:'\+request\.tool\}\);if\(stale\)return Promise\.resolve\(.*\);return phoneOrigin\.run\(\{taskId:taskStop\.current\(\)\},\(\)=>handle\(request\)\);\};/);
+ assert.match(server,/codex\.on\('turnCreated',\(\{turnId,origin\}\)=>taskStop\.bindTurn\(turnId,origin\)\);/);
+ assert.equal([...server.matchAll(/codex\.submit\(/g)].length,[...server.matchAll(/codex\.submit\([^;]*,taskStop\.current\(\)\);/g)].length,'every turn is created with its origin task');
  assert.match(server,/codex\.on\('message',\(text,phase,turnId\)=>\{\n \/\/ .*\n if\(!taskStop\.acceptsOutput\(turnId\)\)\{/);
  assert.match(server,/codex\.on\('done',turn=>\{\n \/\/ .*\n if\(!taskStop\.ownsTurn\(turn\.id\)\)\{/);
  assert.match(server,/new DebugBridge\(\{dispatch:data=>nonTaskPhone\(data\),/);
@@ -135,4 +137,14 @@ test('origin is bound at every in-process, output and turn boundary',()=>{
  assert.match(server,/const jobTask=taskStop\.current\(\),taskPhone=\(data,genericVisual\)=>fastPhone\(\{\.\.\.data,taskId:jobTask\},genericVisual\);/);
  assert.match(server,/checkPausedApp\(data\);delete data\.taskId;const stopped=phoneCommandRejection\(req,data\);/);
  assert.match(fs.readFileSync(new URL('./codex.mjs',import.meta.url),'utf8'),/this\.emit\('message',p\.item\.text,p\.item\.phase,p\.turnId\)/);
+});
+
+test('origin constants are declared before any use, so startup with app tools enabled cannot hit the TDZ',()=>{
+ const code=server.replace(/^[ \t]*\/\/.*$/gm,m=>' '.repeat(m.length));
+ for(const name of ['phoneOrigin','NON_TASK','LEGACY_READ','readOnlyPhoneActions']){
+  const declared=code.search(new RegExp('(const |,)'+name+'='));
+  assert.ok(declared>0,name);
+  assert.equal(code.search(new RegExp('\\b'+name+'\\b')),code.indexOf(name,declared-1),name+' is used before its declaration');
+ }
+ assert.ok(server.indexOf('const phoneOrigin=')<server.indexOf('await phoneOrigin.run(NON_TASK,()=>loadAppToolCatalog('));
 });

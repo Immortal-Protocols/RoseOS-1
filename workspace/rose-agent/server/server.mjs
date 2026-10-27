@@ -102,6 +102,15 @@ import {BookmarkResearch} from '../bookmark-research/service.mjs';
 import {verifiedTextSender} from '../bookmark-research/text-delivery.mjs';
 const root=path.resolve(import.meta.dirname,'../..');
 const priv=(process.env.PIXEL_VOICE_CONFIG_DIR||(process.env.HOME+"/.config/pixel-voice"));
+// Declared before any top-level use (catalog loading runs during startup).
+// Origin of phone work, bound when the work is created and never read from current state:
+// - {taskId}: a worker tool call (bound to its turn's generation) or the Decisions executor job.
+// - NON_TASK: debug bridge, app generation and startup catalog loading.
+// - LEGACY_READ: local shell tools (control.py) over HTTP. They cannot prove an origin, so
+//   only read-only observations run, and only while no Stop is in force.
+// Anything else is a task path without origin and fails closed.
+const phoneOrigin=new AsyncLocalStorage(),NON_TASK=Object.freeze({nonTask:true}),LEGACY_READ=Object.freeze({legacyRead:true});
+const readOnlyPhoneActions=new Set(['screenshot','inspect_ui','app_context','environment','diagnostics','list_apps','control_status','visualization_status','migration_backup_status']);
 let evaluation=null;
 function controlledModelRoute(value){
  if(value.provider==='local'){
@@ -263,7 +272,7 @@ const toolActivity=new ToolActivity(text=>{
  capture.record('worker.activity',{text},captureContext());
 });
 codex.on('toolActivity',(method,params)=>toolActivity.event(method,params));
-codex.on('toolActivity',(method,params)=>{if(method==='turn/started')taskStop.addTurn(params.turn?.id);});
+codex.on('turnCreated',({turnId,origin})=>taskStop.bindTurn(turnId,origin));
 codex.on('toolEvidence',item=>{if(visualTrial&&busy)taskEvidence.observe(item);});
 codex.on('imageView',item=>{visualGuard.saw(item.path);logDecision({stage:'agent_image_view',model:lastRoute?.model,imagePath:item.path});});
 function deliverAgentMessage(text,phase){if(phase==='commentary')launcherTask.progress(text);else launcherTask.result(text);capture.record('worker.message',{text,phase},captureContext());voiceTasks.message(text,phase);if(phase!=='commentary'&&activeRequestSource==='typed')conversationTimeline.add('assistant',text,'text');if(lastRoute&&taskStarted){const elapsed=Date.now()-taskStarted;if(phase==='commentary')lastRoute.firstProgressMs??=elapsed;else lastRoute.firstAnswerMs??=elapsed;}emit('task',{text,phase});if(phase==='commentary')spokenProgress.update(text);else spokenProgress.finish();if(activeSession)emit('live',{event:{type:phase==='commentary'?'session.thinking.append':'session.commentary.append',delegation_id:delegation,content:text.slice(0,1500)}});}
@@ -289,7 +298,7 @@ async function finishAgentTurn(turn){
    if(!taskReviewMatches(target,launcherTask.current,pendingVisualAnswer))throw Error('The task answer or card changed during verification; the changed result was not approved.');
    if(checked.status==='continue'){
     pendingVisualAnswer='';spokenProgress.start();launcherTask.running();
-    await codex.submit(visualVerificationPolicy+'\n'+checked.prompt,lastRoute);
+    await codex.submit(visualVerificationPolicy+'\n'+checked.prompt,lastRoute,[],taskStop.current());
     return;
    }
    // Approval releases the answer that was checked, not the checker’s assessment.
@@ -333,7 +342,7 @@ Object.assign(appRuntime,{dynamicTools:[webLookupTool,...modelTools.definitions,
 taskEvidence.fastTools=new Set(appRuntime.dynamicTools.map(tool=>tool.name));
 // A tool call runs as its worker turn's task generation; a call from a stopped or earlier
 // turn never runs.
-{const handle=appRuntime.handleToolCall;appRuntime.handleToolCall=request=>{const stale=taskStop.authorize({turnId:request.turnId})||taskStop.guard({action:'tool:'+request.tool});if(stale)return Promise.resolve({success:false,contentItems:[{type:'inputText',text:JSON.stringify(stale)}]});return phoneOrigin.run({taskId:taskStop.current()},()=>handle(request));};}
+{const handle=appRuntime.handleToolCall;appRuntime.handleToolCall=request=>{const stale=taskStop.authorize({turnId:request.turnId??null,required:true})||taskStop.guard({action:'tool:'+request.tool});if(stale)return Promise.resolve({success:false,contentItems:[{type:'inputText',text:JSON.stringify(stale)}]});return phoneOrigin.run({taskId:taskStop.current()},()=>handle(request));};}
 autoGenerator=new AppGenerationDriver({store:generationStore,phone:nonTaskPhone,client,currentRequest:()=>activeTaskRequest+'\nLatest corrections: '+JSON.stringify(visualGuard.corrections||[]),route:()=>checkerRoute(modelSelection.preferred(decisionsConfig.read())||ROUTES.deep),canStart:()=>!evaluation&&!artemisEnabled&&ready&&!busy&&!fastRun&&!visualReview,knownPackages:()=>new Set([...(appToolsConfig?.packages||[]),...appAdapters.map(a=>a.packageName)]),log:logDecision});
 setInterval(()=>autoGenerator.tick(),30000).unref();
 
@@ -353,14 +362,6 @@ function phoneCommandRejection(req,data){
  return taskStop.guard(data);
 }
 function checkPausedApp(data){if(birdPaused&&data.packageName==='co.bird.android')throw Error('Bird actions are stopped at the user’s request');}
-// Origin of phone work, bound when the work is created and never read from current state:
-// - {taskId}: a worker tool call (bound to its turn's generation) or the Decisions executor job.
-// - NON_TASK: debug bridge, app generation and startup catalog loading.
-// - LEGACY_READ: local shell tools (control.py) over HTTP. They cannot prove an origin, so
-//   only read-only observations run, and only while no Stop is in force.
-// Anything else is a task path without origin and fails closed.
-const phoneOrigin=new AsyncLocalStorage(),NON_TASK=Object.freeze({nonTask:true}),LEGACY_READ=Object.freeze({legacyRead:true});
-const readOnlyPhoneActions=new Set(['screenshot','inspect_ui','app_context','environment','diagnostics','list_apps','control_status','visualization_status','migration_backup_status']);
 function legacyReadPhone(data,genericVisual){return phoneOrigin.run(LEGACY_READ,()=>fastPhone(data,genericVisual));}
 const legacyMutationRefused=data=>({status:'not_executed',actionExecuted:false,reason:'This shell phone tool cannot prove which task it belongs to, so it may only observe. Use the registered app tools for '+(data.action==='app_command'?data.packageName+' '+data.operation:data.action)+'.'});
 function nonTaskPhone(data,genericVisual){return phoneOrigin.run(NON_TASK,()=>fastPhone(data,genericVisual));}
@@ -457,7 +458,7 @@ async function submitLuna(text,source,selected,photoSession,photoInputs,config){
  const memoryRequestId=codex.thread+':'+crypto.randomUUID();
  const memory=evaluation?{text:''}:personalMemory.forConsumer('codex',memoryRequestId,codex.memoryRevision());
  text=(memory.text||'')+'\n\nCurrent request and recent conversation:\n'+text;
-busy=true;emit('status',{status:'Sending to Codex'});await codex.submit(text,selected,photoSession===activeSession?photoInputs:[]);if(!evaluation&&!memory.unchanged){codex.rememberMemoryRevision(memory.revision);personalMemory.log(memory,'codex',memoryRequestId,'queued-in-context');}}
+busy=true;emit('status',{status:'Sending to Codex'});await codex.submit(text,selected,photoSession===activeSession?photoInputs:[],taskStop.current());if(!evaluation&&!memory.unchanged){codex.rememberMemoryRevision(memory.revision);personalMemory.log(memory,'codex',memoryRequestId,'queued-in-context');}}
 async function event(e){
  if(e.type==='client.diagnostic'){sessionLease.observe(activeSession,e);lastClient={at:Date.now(),status:String(e.status||'').slice(0,200),ready:!!e.ready,starting:!!e.starting,muted:!!e.muted,connection:e.connection,channel:e.channel,visibility:e.visibility,audioRoute:e.audioRoute,tracks:e.tracks,senders:e.senders,lastButton:e.lastButton};return;}
  if(e.type==='session.input_transcript.delta'||e.type==='session.output_transcript.delta'){const role=e.type.includes('input_')?'user':'assistant';history.append(role,e.delta||'');const prev=transcript.at(-1);if(prev?.role===role)prev.text+=e.delta||'';else transcript.push({role,text:e.delta||''});if(transcript.length>100)transcript.shift();}

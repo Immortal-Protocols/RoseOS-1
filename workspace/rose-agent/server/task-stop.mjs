@@ -7,29 +7,31 @@ const reason=error=>String(error?.message||error).slice(0,200);
 
 export class TaskStop {
  constructor({task,stopping,interrupt,abortReview,closeWorkspace,announce=()=>{},cancelQueued=()=>{},onBegin=()=>{},now=Date.now,record=()=>{}}){
-  Object.assign(this,{task,stopping,interrupt,abortReview,closeWorkspace,announce,cancelQueued,onBegin,now,record});this.requested=null;this.generation=null;this.turns=new Set();
+  Object.assign(this,{task,stopping,interrupt,abortReview,closeWorkspace,announce,cancelQueued,onBegin,now,record});this.requested=null;this.generation=null;this.turnTask=new Map();
  }
  // An explicit new user request starts generation taskId; only it reopens the Stop gate.
- begin(taskId=null){this.requested=null;this.generation=taskId;this.turns=new Set();try{this.onBegin(taskId);}catch(error){this.record({stage:'task_generation_publish_failed',reason:reason(error)});}}
- addTurn(turnId){if(turnId)this.turns.add(turnId);}
+ begin(taskId=null){this.requested=null;this.generation=taskId;try{this.onBegin(taskId);}catch(error){this.record({stage:'task_generation_publish_failed',reason:reason(error)});}}
+ // Worker turns are bound to the task they were created for (Codex 'turnCreated'), never
+ // inferred from the turn that happens to arrive; the map keeps recent turns only.
+ bindTurn(turnId,taskId){if(!turnId||!taskId)return;this.turnTask.set(turnId,taskId);while(this.turnTask.size>64)this.turnTask.delete(this.turnTask.keys().next().value);}
+ ownsTurn(turnId){const current=this.current();return !!turnId&&!!current&&this.turnTask.get(turnId)===current;}
  // Fails closed for work that names another or no generation: a phone command's taskId, or a
  // tool call's worker turn once this generation's turn is known. The current generation is
  // the one begin() named, else the displayed task.
  current(){return this.generation??this.task()?.id??null;}
- // required: a task path (agent phone command) with no identity fails closed instead of
- // running as the legacy path.
+ // required: a task path with no identity fails closed. A turn must be a registered turn of
+ // the current generation; an unregistered or missing turn is never trusted.
  authorize({taskId,turnId,required=false}={}){
   const current=this.current();
-  const stale=taskId?taskId!==current:turnId?this.turns.size>0&&!this.turns.has(turnId):required;
+  const stale=taskId?taskId!==current:turnId!==undefined?!this.ownsTurn(turnId):required;
   if(!stale)return null;
   this.record({stage:'task_generation_rejected',taskId:taskId||null,turnId:turnId||null,currentTaskId:current});
   return {status:'stale_task',actionExecuted:false,reason:'This action belongs to an earlier or unknown task and was not run.',currentTaskId:current};
  }
  active(){return !!this.requested;}
- // Output (progress, results, speech) from the worker: accepted only from a turn of the
- // current, unstopped generation. Without a turn identity, only the Stop latch applies.
- ownsTurn(turnId){return !turnId||this.turns.size===0||this.turns.has(turnId);}
- acceptsOutput(turnId){return !this.requested&&(!turnId||this.turns.size===0||this.turns.has(turnId));}
+ // Output (progress, results, speech) from the worker: accepted only from a registered turn
+ // of the current, unstopped generation. A missing or unregistered turn is refused.
+ acceptsOutput(turnId){return !this.requested&&this.ownsTurn(turnId);}
  // Blocks phone actions from an acknowledged Stop until an explicit new user task
  // calls begin(), including after the stopped task reaches its terminal state.
  guard(command){

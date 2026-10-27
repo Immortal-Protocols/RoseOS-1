@@ -203,17 +203,21 @@ test('PhoneCommands withdraws undelivered commands on Stop',async()=>{
  assert.equal(commands.complete(c.id,{status:'ok'}).status,'cancelled','a late completion does not resurrect it');
 });
 
-test('task generations: only turns and task IDs of the current request are authorized',async()=>{
- const launcher=task();const published=[];
- const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{},onBegin:id=>published.push(id)});
+test('task generations: only task IDs and turns bound to the current request are authorized',async()=>{
+ const launcher=task();
+ const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{}});
  assert.equal(stop.authorize({taskId:launcher.current.id}),null,'before begin(), the displayed task is the generation');
  assert.equal(stop.authorize({taskId:'anything'}).status,'stale_task');assert.equal(stop.authorize({required:true}).status,'stale_task','a task path with no identity fails closed');
- stop.begin('task-A');stop.addTurn('turn-A1');
+ stop.begin('task-A');stop.bindTurn('turn-A1','task-A');
  assert.equal(stop.authorize({taskId:'task-A'}),null);assert.equal(stop.authorize({turnId:'turn-A1'}),null);assert.equal(stop.authorize({}),null,'identity optional unless required');
- stop.begin('task-B');stop.addTurn('turn-B1');
- assert.equal(stop.authorize({taskId:'task-A'}).status,'stale_task');assert.equal(stop.authorize({turnId:'turn-A1'}).status,'stale_task');
- assert.equal(stop.authorize({turnId:'turn-unknown'}).status,'stale_task');assert.equal(stop.authorize({turnId:'turn-B1'}),null);
- assert.deepEqual(published,['task-A','task-B']);
+ stop.begin('task-B');
+ assert.equal(stop.authorize({turnId:'turn-A1'}).status,'stale_task','A\'s turn before B\'s turn exists');
+ assert.equal(stop.authorize({turnId:'turn-unknown'}).status,'stale_task','an unregistered turn is never trusted, even with no B turn yet');
+ assert.equal(stop.authorize({turnId:null,required:true}).status,'stale_task','a tool call without a turn fails closed');
+ assert.equal(stop.ownsTurn(undefined),false);assert.equal(stop.acceptsOutput(undefined),false);assert.equal(stop.acceptsOutput('turn-A1'),false);
+ stop.bindTurn('turn-B1','task-B');
+ assert.equal(stop.authorize({turnId:'turn-B1'}),null);assert.equal(stop.acceptsOutput('turn-B1'),true);assert.equal(stop.ownsTurn('turn-B1'),true);
+ assert.equal(stop.authorize({taskId:'task-A'}).status,'stale_task');
 });
 
 test('controller start, command and stop carry the originating task ID; non-task work carries none',async()=>{
@@ -240,12 +244,28 @@ test('a schema 3 stale_task refusal from the controller is reported as not execu
 test('worker output and tool calls are accepted only from turns of the current, unstopped generation',async()=>{
  const launcher=task();
  const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{}});
- stop.begin('task-A');stop.addTurn('turn-A');
+ stop.begin('task-A');stop.bindTurn('turn-A','task-A');
  assert.equal(stop.acceptsOutput('turn-A'),true);assert.equal(stop.ownsTurn('turn-A'),true);
  await stop.request({});
  assert.equal(stop.acceptsOutput('turn-A'),false,'no output after Stop, even from the current turn');
  assert.equal(stop.guard({action:'tool:web_lookup'}).status,'task_stopped','tool calls of the stopped turn are refused');
- stop.begin('task-B');stop.addTurn('turn-B');
+ stop.begin('task-B');stop.bindTurn('turn-B','task-B');
  assert.equal(stop.acceptsOutput('turn-A'),false);assert.equal(stop.ownsTurn('turn-A'),false);assert.equal(stop.authorize({turnId:'turn-A'}).status,'stale_task');
  assert.equal(stop.acceptsOutput('turn-B'),true);assert.equal(stop.guard({action:'tool:web_lookup'}),null);
+});
+
+test('Codex binds each new turn once to the task it was created for',async()=>{
+ const {Codex}=await import('./codex.mjs');
+ const make=eventFirst=>{const c=new Codex('/tmp','/tmp/state');const bound=[];c.on('turnCreated',e=>bound.push(e));
+  c.prepareRoute=async()=>{};c.ensureInstructions=async()=>{};
+  c.rpc=async method=>{if(method==='turn/start'){if(eventFirst)c.bindCreatedTurn('turn-1');return {turn:{id:'turn-1'}};}if(method==='turn/steer')return {};};
+  return {c,bound};};
+ for(const eventFirst of [true,false]){
+  const {c,bound}=make(eventFirst);
+  await c.submit('first',undefined,[],'task-B');
+  assert.deepEqual(bound,[{turnId:'turn-1',origin:'task-B'}],'bound exactly once ('+(eventFirst?'event':'response')+' first)');
+  await c.submit('correction',undefined,[],'task-B');
+  assert.equal(bound.length,1,'steering an active turn creates no new binding');
+  c.bindCreatedTurn('turn-stray');assert.equal(bound.length,1,'a turn not created by submit is never bound');
+ }
 });
