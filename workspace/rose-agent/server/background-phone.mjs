@@ -29,12 +29,13 @@ export class BackgroundPhone {
  }
  // A new task may open a workspace again after an owner Stop ended the previous one.
  beginTask(){this.stoppedByOwner=null;}
- ownerStop(state){
+ // Reports which task the controller says was stopped, so a late report cannot stop a newer task.
+ ownerStop(state,taskId=state?.stoppedTaskId||null){
   const sessionId=this.stoppedByOwner??this.session?.sessionId??state?.stoppedSessionId??null;
   if(!this.stoppedByOwner){
    this.stoppedByOwner=sessionId||'unknown';this.session=null;this.observations.clear();
    this.record({stage:'background_owner_stop',sessionId,stopReason:state?.stopReason??'inferred'});
-   try{this.onOwnerStop({sessionId,stopReason:state?.stopReason||null});}catch{/* Reporting cannot reopen the workspace. */}
+   try{this.onOwnerStop({sessionId,stopReason:state?.stopReason||null,taskId});}catch{/* Reporting cannot reopen the workspace. */}
   }
   return {status:'stopped_by_owner',actionExecuted:false,backgroundExecution:true,sessionId,reason:'The owner stopped the background workspace. Rose does not reopen it for this task.'};
  }
@@ -86,7 +87,8 @@ export class BackgroundPhone {
    const taskId=this.taskId();
    state=await this.call('start',{packageName,...(taskId?{taskId}:{})});
    // Schema 3: the owner already stopped this task; nothing was opened.
-   if(state.status==='user_stopped')return this.ownerStop(state);
+   // Prefer the controller's identity for the refused task; TaskStop ignores one that is not current.
+   if(state.status==='user_stopped')return this.ownerStop(state,state.rejectedTaskId||state.stoppedTaskId||taskId);
    const deadline=this.now()+12000;
    while(['starting','launching','scheduled'].includes(state.status)&&this.now()<deadline){await this.sleep(150);state=await this.call('get_state');}
   }

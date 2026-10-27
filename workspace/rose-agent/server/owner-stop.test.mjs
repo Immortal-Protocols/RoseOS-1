@@ -32,7 +32,7 @@ test('owner Stop on the workspace notification is not silently replaced by a new
  const reopened=await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'});
  assert.equal(reopened.status,'stopped_by_owner');assert.equal(reopened.actionExecuted,false);
  assert.equal(device.starts(),1,'no replacement workspace was started');
- assert.deepEqual(stops.map(s=>s.sessionId),['session-1']);
+ assert.deepEqual(stops.map(s=>s.sessionId),['session-1']);assert.equal(stops[0].taskId,null);
 });
 
 test('owner Stop is detected by a UI action in the stopped workspace',async()=>{
@@ -55,7 +55,7 @@ test('an agent-closed workspace can be reopened; a deadline expiry ends the task
  const phone=new BackgroundPhone({send:expired.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
  await phone.execute({action:'open_app',packageName:'maps'});expired.ownerStop('deadline');
  assert.equal((await phone.execute({action:'open_app',packageName:'maps'})).status,'stopped_by_owner');
- assert.deepEqual(stops,[{sessionId:'session-1',stopReason:'deadline'}]);assert.equal(expired.starts(),1);
+ assert.deepEqual(stops,[{sessionId:'session-1',stopReason:'deadline',taskId:null}]);assert.equal(expired.starts(),1);
 });
 
 test('schema 3: each start carries the task ID and a user_stopped refusal ends the task',async()=>{
@@ -66,7 +66,7 @@ test('schema 3: each start carries the task ID and a user_stopped refusal ends t
  const result=await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'});
  assert.equal(calls.find(c=>c.operation==='start').params.taskId,'task-1');
  assert.equal(result.status,'stopped_by_owner');assert.equal(result.actionExecuted,false);
- assert.deepEqual(stops,[{sessionId:'session-9',stopReason:'user'}]);
+ assert.deepEqual(stops,[{sessionId:'session-9',stopReason:'user',taskId:'task-1'}]);
  assert.equal((await phone.execute({action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate',params:{}})).status,'stopped_by_owner');
  assert.equal(calls.filter(c=>c.packageName==='dev.pixel.calculator.agent').length,0);
  phone.beginTask();
@@ -119,4 +119,14 @@ test('a failed interrupt or workspace close keeps the gate closed and reports it
  assert.equal(ack.status,'stopping');assert.equal(ack.worker,'interrupt_failed: turn/interrupt timed out');assert.equal(ack.workspace,'close_failed: cleanup_failed');
  assert.equal(stop.guard({action:'tap'}).status,'task_stopped');
  assert.match(stop.summary(),/did not confirm it closed \(close_failed: cleanup_failed\)/);
+});
+
+test('a late owner-stop report for an older task does not stop the current one',async()=>{
+ const launcher=task();let calls=0;
+ const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>calls++,abortReview:()=>{},closeWorkspace:async()=>calls++});
+ const reported=[];
+ const phone=new BackgroundPhone({enabled:()=>true,taskId:()=>launcher.current.id,onOwnerStop:e=>reported.push(stop.request({taskId:e.taskId||undefined})),
+  send:async c=>c.operation==='get_state'?{status:'stopped',stopReason:'user',stoppedTaskId:'task-A',stoppedSessionId:'s-A'}:{status:'user_stopped',stopReason:'user',stoppedTaskId:'task-A'}});
+ await phone.execute({action:'open_app',packageName:'maps'});
+ assert.equal((await reported[0]).status,'stale_task');assert.equal(launcher.current.state,'running');assert.equal(calls,0);
 });
