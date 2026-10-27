@@ -7,6 +7,16 @@ const directActions=new Set(['environment','diagnostics','list_apps','control_st
 const PACKAGE='dev.pixel.backgroundcontrol';
 const nodeActions=new Set(['tap','long_press','touch_point','set_text','ime_enter','scroll','swipe','drag']);
 const labelActions=new Set(['tap_label','touch_label']);
+// A "stopped" controller while this workspace still holds its session means
+// something other than the agent ended it: the owner's Stop, or the 600 s
+// deadline. Agent stop/home clears the session first, so it never matches.
+// Schema 3 controllers report stopReason and stoppedSessionId; schema 2 keeps
+// the last sessionId (Controller.stop) and has no reason.
+const ownerStopped=(s,session)=>{
+ if(!session||s?.status!=='stopped'||s.stopReason==='agent')return false;
+ const ended=s.stoppedSessionId||s.sessionId;
+ return !ended||ended===session.sessionId;
+};
 // Rose Agent refuses background work while the owner is away unless they armed locked control,
 // and Android refuses or blocks locked sessions at owner gates. Neither is a retryable failure.
 const ownerUnlockRequired=s=>s?.status==='locked'||s?.reason==='owner_unlock_required'||s?.reason==='device_locked';
@@ -14,16 +24,44 @@ const lockedResult=(details,extra={})=>({status:'locked',actionExecuted:false,ba
 const nodeKey=n=>JSON.stringify([n.packageName??'',n.className??n.class??'',n.viewId??'',n.text??'',n.description??'',n.bounds??[],!!n.clickable,!!n.editable,!!n.scrollable,!!n.password]);
 
 export class BackgroundPhone {
- constructor({send,enabled=()=>false,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),record=()=>{}}){
-  Object.assign(this,{send,enabled,now,sleep,record});this.queue=Promise.resolve();this.session=null;this.observations=new Map();
+ constructor({send,enabled=()=>false,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),record=()=>{},onOwnerStop=()=>{},taskId=()=>null}){
+  Object.assign(this,{send,enabled,now,sleep,record,onOwnerStop,taskId});this.queue=Promise.resolve();this.session=null;this.observations=new Map();this.stoppedByOwner=null;this.closeGeneration=0;this.origin=null;
  }
- execute(command){
+ // A new task may open a workspace again after an owner Stop ended the previous one.
+ // Only an explicit new user task reopens the workspace; it starts without the old task's session.
+ beginTask(){this.stoppedByOwner=null;this.session=null;this.observations.clear();}
+ // A backend Stop (POST /task/stop) latches at once, so work already queued behind an
+ // in-flight action is refused when it reaches the front; the close then waits its turn.
+ latchStop(){this.stoppedByOwner??=this.session?.sessionId||'task_stop';}
+ endForStop(taskId=null){this.latchStop();this.closeGeneration++;const work=this.queue.catch(()=>{}).then(()=>this.withOrigin(taskId,()=>this.closeNow()));this.queue=work;return work;}
+ // An owner Stop not yet seen by an action: check before acting on the phone screen or closing.
+ async undetectedOwnerStop(){if(!this.session)return null;const state=await this.call('get_state');return ownerStopped(state,this.session)?state:null;}
+ // Reports which task the controller says was stopped, so a late report cannot stop a newer task.
+ ownerStop(state,taskId=state?.stoppedTaskId||null){
+  const sessionId=this.stoppedByOwner??this.session?.sessionId??state?.stoppedSessionId??null;
+  if(!this.stoppedByOwner){
+   this.stoppedByOwner=sessionId||'unknown';this.session=null;this.observations.clear();
+   this.record({stage:'background_owner_stop',sessionId,stopReason:state?.stopReason??'inferred'});
+   try{this.onOwnerStop({sessionId,stopReason:state?.stopReason||null,taskId});}catch{/* Reporting cannot reopen the workspace. */}
+  }
+  return {status:'stopped_by_owner',actionExecuted:false,backgroundExecution:true,sessionId,reason:'The owner stopped the background workspace. Rose does not reopen it for this task.'};
+ }
+// origin: the task generation that issued this work (absent for non-task callers). It is sent
+ // as taskId on every controller start/command/stop so a schema 3 controller refuses stale
+ // work instead of driving whichever task now holds the workspace.
+ async withOrigin(taskId,work){const previous=this.origin;this.origin=taskId||null;try{return await work();}finally{this.origin=previous;}}
+ execute(command,{taskId=null}={}){
   if(!this.enabled())return this.send(command);
   // Serialize selection and UI operations, including calls from separate APIs.
-  const work=this.queue.catch(()=>{}).then(()=>this.run(command));this.queue=work;return work;
+  // An action admitted before close() was called is refused when it reaches the front.
+  const generation=this.closeGeneration;
+  const work=this.queue.catch(()=>{}).then(()=>generation===this.closeGeneration?this.withOrigin(taskId,()=>this.run(command)):this.superseded(command));this.queue=work;return work;
  }
  state(){return {enabled:this.enabled(),mode:this.enabled()?'background':'foreground',session:this.session?{...this.session}:null};}
- call(operation,params={}){return this.send({action:'app_command',packageName:PACKAGE,operation,params});}
+ call(operation,params={}){
+  const tagged=this.origin&&['start','command','stop'].includes(operation)?{...params,taskId:this.origin}:params;
+  return this.send({action:'app_command',packageName:PACKAGE,operation,params:tagged});
+ }
  remember(observation){
   if(observation.status!=='ok'||!observation.snapshotId||!Array.isArray(observation.nodes))return;
   this.observations.set(observation.snapshotId,{sessionId:this.session?.sessionId,nodes:observation.nodes.map(n=>({...n,bounds:n.bounds?.slice()}))});
@@ -37,6 +75,7 @@ export class BackgroundPhone {
   if(hasNode&&!target)return {error:'The observed target is no longer available; inspect the current controls.'};
   const current=await this.call('command',{action:'inspect_ui',sessionId:this.session.sessionId});
   if(ownerUnlockRequired(current))return {locked:current};
+  if(current.status==='error'&&/not ready: stopped/i.test(current.error||'')){const state=await this.call('get_state');if(ownerStopped(state,this.session))return {ownerStop:state};}
   this.remember(current);
   if(current.status!=='ok'||!current.snapshotId||current.sessionId&&current.sessionId!==this.session.sessionId)return {error:'Could not refresh controls in the existing background workspace.'};
   let nodeId=command.nodeId;
@@ -50,6 +89,7 @@ export class BackgroundPhone {
  }
  async start(packageName){
   let state=await this.call('get_state');
+  if(ownerStopped(state,this.session))return this.ownerStop(state);
   // Reopening the same app while Android's installer blocks it must not
   // destroy the live workspace. Approval/status tools can finish the pending
   // operation and the next observation will resume that same session.
@@ -60,7 +100,16 @@ export class BackgroundPhone {
    return {status:'background_blocked',actionExecuted:false,packageName,backgroundExecution:true,sessionId:state.sessionId,sessionRetained:true,details:state,reason:'The existing background app is blocked by Android. Resolve its pending operation before continuing; the workspace has been retained.'};
   }
   if(state.status!=='ready'||state.targetPackage!==packageName){
-   state=await this.call('start',{packageName});
+   // Only the originating task names the workspace; the taskId option is a legacy fallback.
+   const taskId=this.origin??this.taskId();
+   state=await this.call('start',{packageName,...(taskId?{taskId}:{})});
+   // Schema 3: the owner already stopped this task; nothing was opened.
+   // Schema 3 names the refused task in rejectedTaskId; the workspace under "current" is untouched.
+   if(state.status==='user_stopped'){
+    const rejected=state.rejectedTaskId||state.stoppedTaskId||taskId;
+    if(rejected&&rejected!==this.taskId()){this.record({stage:'background_stale_task_refused',rejectedTaskId:rejected});return {status:'not_executed',actionExecuted:false,backgroundExecution:true,rejectedTaskId:rejected,reason:'The controller refused a start for an earlier, stopped task. The current task is unchanged.'};}
+    return this.ownerStop(state,rejected);
+   }
    const deadline=this.now()+12000;
    while(['starting','launching','scheduled'].includes(state.status)&&this.now()<deadline){await this.sleep(150);state=await this.call('get_state');}
   }
@@ -80,6 +129,9 @@ export class BackgroundPhone {
  }
  async run(command){
   if(command.display!==undefined&&command.display!=='background'&&command.display!=='phone')throw Error('Unknown display; choose background or phone');
+  // After an owner Stop no workspace or phone-screen action runs until the next task.
+  if(this.stoppedByOwner&&!directActions.has(command.action))return this.ownerStop();
+  if(command.display==='phone'&&this.session){const state=await this.undetectedOwnerStop();if(state)return this.ownerStop(state);}
   if(command.display==='phone'){
    const {display,...request}=command;
    if(!uiActions.has(request.action)&&request.action!=='open_app')throw Error('Display selection applies to phone UI commands');
@@ -88,13 +140,17 @@ export class BackgroundPhone {
    return {...result,scope:'phone_display',backgroundExecution:false};
   }
   if(command.action==='open_app')return this.start(command.packageName);
-  if(command.action==='app_command')return isBackgroundSafeAppCommand(command)?this.send(command):backgroundAppCommandRejection(command);
+  if(command.action==='app_command'){
+   if(!isBackgroundSafeAppCommand(command))return backgroundAppCommandRejection(command);
+   if(this.session){const state=await this.call('get_state');if(ownerStopped(state,this.session))return this.ownerStop(state);}
+   return this.send(command);
+  }
   if(directActions.has(command.action)){
    const result=await this.send(command);
    return command.action==='control_status'?{...result,backgroundControl:this.state()}:result;
   }
   if(!uiActions.has(command.action))return {status:'not_executed',actionExecuted:false,reason:'This operation is not verified for background control. Use background phone UI controls.',backgroundExecution:true};
-  if(command.action==='home'){await this.closeNow();return {status:'action_accepted',actionExecuted:true,backgroundExecution:true,workspaceClosed:true};}
+  if(command.action==='home'){const state=await this.undetectedOwnerStop();if(state)return this.ownerStop(state);await this.closeNow();return {status:'action_accepted',actionExecuted:true,backgroundExecution:true,workspaceClosed:true};}
   if(!this.session){
    const state=await this.call('get_state');
    if(state.status==='ready'&&state.sessionId&&state.targetPackage)this.session={sessionId:state.sessionId,targetPackage:state.targetPackage};
@@ -104,6 +160,7 @@ export class BackgroundPhone {
   if(nodeActions.has(command.action)||labelActions.has(command.action)){
    const refreshed=await this.refreshTarget(command);
    if(refreshed.locked)return lockedResult(refreshed.locked,{sessionId:this.session.sessionId});
+   if(refreshed.ownerStop)return this.ownerStop(refreshed.ownerStop);
    if(refreshed.error)return {status:'stale_screen',actionExecuted:false,reason:refreshed.error,backgroundExecution:true};
    request={...refreshed.command,sessionId:this.session.sessionId};
   }
@@ -116,13 +173,27 @@ export class BackgroundPhone {
    request.snapshotId=observation.snapshotId;
   }
   let result=await this.call('command',request);
+  // Schema 3: the workspace belongs to another task; nothing ran.
+  if(result.status==='stale_task')return {status:'not_executed',actionExecuted:false,backgroundExecution:true,rejectedTaskId:result.rejectedTaskId??null,reason:'The background workspace belongs to another task; this action did not run.'};
   // The controller reports a blocked session as not ready; its state says whether the owner must act.
   if(result.status==='error'&&/not ready: blocked/.test(result.error||'')){const state=await this.call('get_state');if(ownerUnlockRequired(state))result=state;}
+  if(result.status==='error'&&/not ready: stopped/i.test(result.error||'')){const state=await this.call('get_state');if(ownerStopped(state,this.session))return this.ownerStop(state);}
   if(ownerUnlockRequired(result)){this.record({stage:'background_locked',action:command.action,packageName:this.session.targetPackage,lockedControl:result.lockedControl??result.reason});return lockedResult(result,{sessionId:this.session.sessionId});}
   this.remember(result);
   this.record({stage:'background_action',action:command.action,packageName:this.session.targetPackage,sessionId:this.session.sessionId,status:result.status});
   return {...result,backgroundExecution:true,sessionId:this.session.sessionId};
  }
- async closeNow(){try{await this.call('stop');}finally{this.session=null;this.observations.clear();}}
- close(){const work=this.queue.catch(()=>{}).then(()=>this.closeNow());this.queue=work;return work;}
+ // Returns the controller's stop state; "cleanup_failed" means the workspace may still be open.
+ async closeNow(){
+  // Clearing the session would otherwise forget an owner Stop nobody has acted on yet (schema 2).
+  try{const state=await this.undetectedOwnerStop();if(state)this.ownerStop(state);}catch{/* Closing must still be attempted. */}
+  try{return await this.call('stop');}finally{this.session=null;this.observations.clear();}
+ }
+ superseded(command){
+  if(this.stoppedByOwner&&!directActions.has(command.action))return this.ownerStop();
+  this.record({stage:'background_action_superseded',action:command.action});
+  return {status:'not_executed',actionExecuted:false,backgroundExecution:true,reason:'The background workspace was closed before this action ran.'};
+ }
+ // taskId: the task whose workspace is being closed. Without it, whatever workspace exists is closed.
+ close(taskId=null){this.closeGeneration++;const work=this.queue.catch(()=>{}).then(()=>this.withOrigin(taskId,()=>this.closeNow()));this.queue=work;return work;}
 }

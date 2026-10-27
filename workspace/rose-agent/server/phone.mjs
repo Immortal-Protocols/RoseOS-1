@@ -61,6 +61,8 @@ export class PhoneCommands {
  }
  get(id){const c=this.commands.get(id);if(c&&c.status==='pending'&&this.now()>c.expires)c.status='expired';return c;}
  pending(){return [...this.commands.keys()].map(id=>this.get(id)).filter(c=>c.status==='pending'&&!c.internalOnly);}
+ // Owner Stop: commands not yet completed are withdrawn; a phone that already fetched one may still be running it.
+ cancelPending(result){let count=0;for(const id of [...this.commands.keys()]){const c=this.get(id);if(c?.status==='pending'){c.status='cancelled';c.result=result;count++;}}return count;}
  complete(id,result){const c=this.get(id);if(!c)throw Error('Unknown phone command');if(c.status!=='pending')return c;
   if(!result||typeof result.status!=='string')throw Error('Missing phone result');
   c.status='completed';c.result=result;c.completed=this.now();return c;

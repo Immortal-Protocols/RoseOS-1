@@ -16,7 +16,7 @@ async function fixture(review){
  const reviewed=new Promise(resolve=>{resolveReview=resolve;});
  const launcherUpdates=[];
  const context=vm.createContext({codex,voiceTasks,visualTrial:true,
-  taskStopRequested:false,backgroundEnabled:false,AbortController,reviewAbort:null,evaluation:null,taskReviewTarget,taskReviewMatches,
+  withdrawTaskGeneration:()=>{},taskStop:{stopped:false,active(){return this.stopped;},acceptsOutput(){return !this.stopped;},current:()=>'task-1',summary:()=>'Task stopped'},backgroundEnabled:false,AbortController,reviewAbort:null,evaluation:null,taskReviewTarget,taskReviewMatches,
   taskEvidence:{collectDelegated:async()=>{}},
   capture:{record(){}},captureContext:()=>({}),launcherTask:{progress:t=>launcherUpdates.push(['progress',t]),result:t=>launcherUpdates.push(['result',t]),checking:()=>launcherUpdates.push(['checking']),running:()=>launcherUpdates.push(['running']),finish:(state)=>launcherUpdates.push(['finish',state])},
   visualGuard:{needsReview:()=>true,assess:()=>reviewed},pendingVisualAnswer:'',
@@ -70,6 +70,18 @@ test('a blocked result reports the reviewed failure instead of the proposed succ
  assert.equal(f.record.state,'failed');
  assert.equal(f.record.text,'Unable to verify the result');
  assert.ok(!JSON.stringify(f.events).includes('Unverified claim of success'));
+});
+
+test('after an acknowledged Stop the late answer is neither shown nor spoken and the task ends stopped',async()=>{
+ const f=await fixture({status:'complete',summary:'unused'});
+ f.codex.emit('message','Opening Calculator','commentary');
+ f.context.taskStop.stopped=true;
+ f.codex.emit('message','34.50 plus a 20% tip is 41.40.','final_answer');
+ await f.context.finishAgentTurn({status:'interrupted'});
+ assert.equal(f.record.state,'failed');assert.equal(f.record.text,'Task stopped');
+ assert.deepEqual(f.launcherUpdates.at(-1),['finish','interrupted']);
+ assert.ok(!f.launcherUpdates.some(e=>e[0]==='checking'),'no result check after Stop');
+ assert.ok(!JSON.stringify(f.events).includes('41.40'));
 });
 
 

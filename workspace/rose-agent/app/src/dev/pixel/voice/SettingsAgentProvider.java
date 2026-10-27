@@ -59,7 +59,7 @@ public final class SettingsAgentProvider extends ContentProvider {
   VoiceService s=VoiceService.instance;
   boolean available=s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000);
   boolean running=false;
-  try{JSONObject task=s==null?null:new JSONObject(s.taskStateJson).optJSONObject("current");String state=task==null?"":task.optString("state");running=available&&(state.equals("running")||state.equals("checking"));}catch(Exception ignored){}
+  try{JSONObject task=s==null?null:new JSONObject(s.taskStateJson).optJSONObject("current");String state=task==null?"":task.optString("state");running=available&&(state.equals("running")||state.equals("checking")||state.equals("stopping"));}catch(Exception ignored){}
   Bundle b=new Bundle();b.putBoolean("available",available);b.putBoolean("running",running);return b;
  }
  private static void only(JSONObject p,String... allowed)throws Exception{

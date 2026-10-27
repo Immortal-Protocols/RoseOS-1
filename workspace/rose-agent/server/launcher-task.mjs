@@ -17,7 +17,9 @@ export class LauncherTask {
   if(this.active())this.finish('interrupted','The backend restarted. The previous outcome is unknown.');
   if(this.current?.state==='completed'&&!this.current.widget&&!this.current.visualization&&this.current.widgetStatus!=='unavailable'){this.current.widgetStatus='unavailable';this.save();}
  }
- active(){return !!this.current&&['running','checking'].includes(this.current.state);}
+ active(){return !!this.current&&['running','checking','stopping'].includes(this.current.state);}
+ // Accepts worker output only before an owner Stop; afterwards the card shows Stopping.
+ accepting(){return this.active()&&this.current.state!=='stopping';}
  snapshot(){return {version:1,current:this.current?{...this.current}:null};}
  start(request,presentation='native'){
   const text=String(request||'').trim().slice(0,12000);
@@ -41,15 +43,16 @@ export class LauncherTask {
   task.widgetStatus=status;this.touch();return {status:'updated'};
  }
  setVisualization(id,html){
-  if(this.current?.id!==id||!this.active()||this.current.presentation!=='html')return {status:'not_applied',reason:'No matching active HTML task'};
+  if(this.current?.id!==id||!this.accepting()||this.current.presentation!=='html')return {status:'not_applied',reason:'No matching active HTML task'};
   this.current.visualization={type:'html',html};this.touch();return {status:'prepared',shown:'after task completion'};
  }
  followup(text){if(this.active()){this.current.latestInstruction=String(text).trim().slice(0,12000);this.touch();}}
- progress(text){if(this.active()){this.current.progress=String(text||'').trim().slice(0,3000);this.touch();}}
- activity(text){if(this.active()){this.current.activity=String(text||'').trim().slice(0,300);this.touch();}}
- result(text){if(this.active()){this.current.result=String(text||'').trim().slice(0,12000);this.touch();}}
- checking(){if(this.active()){this.current.state='checking';this.touch();}}
- running(){if(this.active()){delete this.current.visualization;this.current.state='running';this.touch();}}
+ progress(text){if(this.accepting()){this.current.progress=String(text||'').trim().slice(0,3000);this.touch();}}
+ activity(text){if(this.accepting()){this.current.activity=String(text||'').trim().slice(0,300);this.touch();}}
+ result(text){if(this.accepting()){this.current.result=String(text||'').trim().slice(0,12000);this.touch();}}
+ checking(){if(this.accepting()){this.current.state='checking';this.touch();}}
+ stopping({at=this.now(),source='unknown'}={}){if(this.active()){this.current.state='stopping';this.current.activity='';this.current.stopRequestedAt=at;this.current.stopSource=source;this.touch();}}
+ running(){if(this.accepting()){delete this.current.visualization;this.current.state='running';this.touch();}}
  finish(state,result){
   if(!this.active())return;
   if(!['completed','failed','interrupted'].includes(state))throw Error('Invalid terminal task state');
