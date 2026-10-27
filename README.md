@@ -32,7 +32,8 @@ Each run creates a unique `apps-storage-test-RUN_ID-ATTEMPT` tag at its source
 commit. It uploads the individual APK, APK metadata, Java version, build receipt
 and relative-path `SHA256SUMS` to a draft. It downloads all assets and compares
 them byte-for-byte before publishing an experimental prerelease (not Latest),
-then verifies another download. Failed verification leaves the draft unpublished.
+then verifies another download. Failed prepublication verification leaves the
+draft unpublished.
 The job has only `contents: write`, a 15-minute timeout and no signing credentials.
 
 To retrieve a successful build, replace `TAG` with its exact release tag and use
