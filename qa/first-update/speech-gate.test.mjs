@@ -30,7 +30,7 @@ function world(){
   voiceTasks:{finish:failure=>[{failure}]},emit:(e,d)=>out.push({kind:'emit',event:e,data:d}),
   spokenProgress:{finish:()=>{},start:()=>{}},speakProgress:text=>out.push({kind:'spoken',text})});
  vm.runInContext('var pendingVisualAnswer="";'+onMessage+'\n'+finish+'\nglobalThis.finishAgentTurn=finishAgentTurn;',context);
- return {out,launcher,taskStop,message:(t,p)=>handlers.message(t,p),finishTurn:turn=>context.finishAgentTurn(turn)};
+ return {out,launcher,taskStop,message:(t,p)=>handlers.message(t,p),messageWithOrigin:(t,p,o)=>handlers.message(t,p,o),finishTurn:turn=>context.finishAgentTurn(turn)};
 }
 
 test('after Stop is acknowledged, a late worker result is neither shown nor spoken; only the Stop acknowledgment is',{skip:!has&&'no task-stop.mjs'},async()=>{
@@ -52,3 +52,22 @@ test('after Stop is acknowledged, a late worker result is neither shown nor spok
 // and playing at the acknowledgment is not cancelled from the task path. This needs a VM/device
 // audio capture or a client-side cancel contract from App; it is NOT accepted offline.
 test.todo('voice output already playing at the Stop acknowledgment is cancelled (requires App client contract or VM audio evidence)');
+
+// ---- Chief review APP-005/006: origin-bound output and tool calls ----
+// ORIGIN ADAPTER: how a worker event carries its origin turn. At App 2f1d6e2 the message handler
+// receives only (text, phase); the turn is passed as an extra argument that current code ignores.
+// Update only this adapter once App documents its origin field; expectations stay unchanged.
+const emitWorker=(w,text,phase,turnId)=>w.messageWithOrigin(text,phase,{turnId});
+
+test('a late worker result from stopped A emitted after fresh B begins reaches neither display nor voice; B output still does',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ w.launcher.start('A: 84.50 plus 15%');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-A');
+ await w.taskStop.request({taskId:w.launcher.current.id,source:'app'});
+ await w.finishTurn({status:'interrupted'});
+ w.launcher.start('B: 12 times 7');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-B');
+ const mark=w.out.length;
+ emitWorker(w,'A total is 97.18','final_answer','turn-A');
+ assert.equal(JSON.stringify(w.out.slice(mark)).includes('97.18'),false,'stale A result reached output after B began: '+JSON.stringify(w.out.slice(mark)));
+ emitWorker(w,'B result is 84','final_answer','turn-B');
+ assert.equal(JSON.stringify(w.out.slice(mark)).includes('84'),true,'B output must still be delivered');
+});
