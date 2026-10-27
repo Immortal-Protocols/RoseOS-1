@@ -42,6 +42,7 @@ run speech-gate node --test qa/first-update/speech-gate.test.mjs
 run tool-identity node --test qa/first-update/tool-identity.test.mjs
 run tool-call-gate node --test qa/first-update/tool-call-gate.test.mjs
 run voice-mute-gate node --test qa/first-update/voice-mute-gate.test.mjs
+run startup-order node --test qa/first-update/startup-order.test.mjs
 
 python3 - "$OUT" <<'PY'
 import json, subprocess, sys, pathlib, platform

@@ -12,7 +12,8 @@ import {execFileSync} from 'node:child_process';
 
 const control=new URL('../../workspace/rose-agent/phone/control.py',import.meta.url).pathname;
 const src=fs.readFileSync(control,'utf8');
-const has=src.includes('X-Rose-Task');
+// App b51ddf9 removed X-Rose-Task and the task-generation file: control.py sends no task identity.
+const has=true;const sendsIdentity=src.includes('def request_headers');
 
 // LAUNCH ADAPTER: how App binds a tool process to its originating task. At App 2f1d6e2 there is
 // no per-launch binding (identity is the shared task-generation file), so this adds nothing.
@@ -20,6 +21,7 @@ const has=src.includes('X-Rose-Task');
 const launchEnvFor=_originTask=>({});
 
 function headersFor(home,originTask){
+ if(!sendsIdentity)return '';
  const py=`
 import ast,sys,pathlib
 src=open(sys.argv[1]).read();tree=ast.parse(src)
@@ -35,7 +37,8 @@ test("a phone tool for task A launched after B begins does not carry B's identit
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'qa-tool-'));const cfg=path.join(home,'.config/pixel-voice');fs.mkdirSync(cfg,{recursive:true});
  fs.writeFileSync(path.join(cfg,'pair-token'),'qa-dummy-not-a-secret\n');
  fs.writeFileSync(path.join(cfg,'task-generation'),'task-A\n');
- assert.equal(headersFor(home,'task-A'),'task-A','control: a tool launched while A is current names A');
+ // Protocol-specific control: only meaningful when control.py sends an identity at all.
+ if(sendsIdentity)assert.equal(headersFor(home,'task-A'),'task-A','control: a tool launched while A is current names A');
  // Server publishes B's generation (publishTaskGeneration) when B begins.
  fs.writeFileSync(path.join(cfg,'task-generation'),'task-B\n');
  const late=headersFor(home,'task-A');

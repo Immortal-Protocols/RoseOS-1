@@ -6,21 +6,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 const dir=new URL('../../workspace/rose-agent/server/',import.meta.url);
 const server=fs.readFileSync(new URL('server.mjs',dir),'utf8');
 const marker=' // A tool call from a stopped or earlier worker turn never runs.';
-const has=fs.existsSync(new URL('task-stop.mjs',dir))&&server.includes(marker);
+// WIRING ADAPTER: App 2f1d6e2 gated inside handleToolCall (marker comment); App b51ddf9 wraps
+// appRuntime.handleToolCall in a block that runs the original handler under phoneOrigin.
+const WRAP='{const handle=appRuntime.handleToolCall;appRuntime.handleToolCall=request=>{';
+const wrapped=server.includes(WRAP);
+const has=fs.existsSync(new URL('task-stop.mjs',dir))&&(server.includes(marker)||wrapped);
 const {TaskStop}=has?await import(new URL('task-stop.mjs',dir)):{};
 
 function gate(){
- const start=server.indexOf(marker),lookup=server.indexOf("if(request.tool==='web_lookup')",start);
- const body=server.slice(start,server.indexOf('\n',lookup));
  const ran=[];let current={id:'task-A',state:'running'};
  const taskStop=new TaskStop({task:()=>current,stopping:()=>{current={...current,state:'stopping'};},interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{}});
  const context=vm.createContext({taskStop,client:{},JSON,capture:{record:()=>{}},captureContext:()=>({}),
   webLookup:async()=>{ran.push('web_lookup');return {usage:null};}});
- vm.runInContext('globalThis.handle=async request=>{'+body+'\nreturn {success:true,fellThrough:true};};',context);
+ if(wrapped){
+  const s=server.indexOf(WRAP);const block=server.slice(s,server.indexOf('\n',s));
+  context.AsyncLocalStorage=AsyncLocalStorage;
+  vm.runInContext('var phoneOrigin=new AsyncLocalStorage();var appRuntime={handleToolCall:async request=>{if(request.tool===\'web_lookup\'){await webLookup(client,request.arguments);return {success:true};}return {success:true};}};'+block+'\nglobalThis.handle=r=>appRuntime.handleToolCall(r);',context);
+ }else{
+  const start=server.indexOf(marker),lookup=server.indexOf("if(request.tool==='web_lookup')",start);
+  const body=server.slice(start,server.indexOf('\n',lookup));
+  vm.runInContext('globalThis.handle=async request=>{'+body+'\nreturn {success:true,fellThrough:true};};',context);
+ }
  return {ran,taskStop,handle:r=>context.handle(r),setCurrent:c=>{current=c;}};
 }
 
@@ -43,4 +54,20 @@ test('a tool call from turn A after fresh B begins runs no handler; a turn-B cal
  assert.deepEqual(g.ran,[],'turn A ran a tool after B began');
  await g.handle({tool:'web_lookup',turnId:'turn-B',arguments:{query:'new'}});
  assert.deepEqual(g.ran,['web_lookup'],'turn B tool must run');
+});
+
+test('a stale A tool call after B begins but before B\'s turn is registered runs no handler',{skip:!has&&'no tool-call gate in this tree'},async()=>{
+ const g=gate();
+ g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ await g.taskStop.request({taskId:'task-A',source:'app'});
+ g.setCurrent({id:'task-B',state:'running'});g.taskStop.begin('task-B');
+ await g.handle({tool:'web_lookup',turnId:'turn-A',arguments:{query:'stale'}});
+ assert.deepEqual(g.ran,[],'stale A tool call ran in the window before B\'s turn was registered');
+});
+
+test('a tool call with no turn ID runs no handler while a task is current',{skip:!has&&'no tool-call gate in this tree'},async()=>{
+ const g=gate();
+ g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ await g.handle({tool:'web_lookup',arguments:{query:'no turn'}});
+ assert.deepEqual(g.ran,[],'a tool call without a turn ID ran');
 });

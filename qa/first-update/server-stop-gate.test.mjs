@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 const dir=new URL('../../workspace/rose-agent/server/',import.meta.url);
 const has=fs.existsSync(new URL('task-stop.mjs',dir));
@@ -20,7 +21,9 @@ const CONTROLLER='dev.pixel.backgroundcontrol', CALCULATOR='dev.pixel.calculator
 
 function world(){
  const server=fs.readFileSync(new URL('server.mjs',dir),'utf8');
- const fastPhoneSrc=server.slice(server.indexOf('async function fastPhone('),server.indexOf('async function rawFastPhone('));
+ // WIRING ADAPTER: App b51ddf9+ defines phone origin (phoneCommandRejection .. fastPhone) as one block.
+ const originStart=server.indexOf('function phoneCommandRejection(');
+ const fastPhoneSrc=server.slice(originStart>=0?originStart:server.indexOf('async function fastPhone('),server.indexOf('async function rawFastPhone('));
  const route=name=>{const s=server.indexOf(" if(url.pathname==='"+name+"'){");assert.ok(s>0,name);return server.slice(s,server.indexOf('\n',s));};
  const log=[];let seq=0;const hold=new Map();
  const holdFor=expr=>{let release;const promise=new Promise(r=>release=r);hold.set(expr,{promise,release});return release;};
@@ -48,43 +51,52 @@ function world(){
  // WIRING ADAPTER: mirrors server.mjs construction at the tested head; optional hooks are ignored by older code.
  taskStop=new TaskStop({task:()=>launcher.current,stopping:d=>launcher.stopping(d),interrupt:async()=>{},abortReview:()=>{},
   announce:()=>{},cancelQueued:()=>{backgroundPhone.latchStop?.();},onBegin:()=>{},
-  closeWorkspace:async()=>{const s=await (backgroundPhone.endForStop?backgroundPhone.endForStop():backgroundPhone.close());if(s?.status==='cleanup_failed')throw Error('cleanup_failed');}});
+  closeWorkspace:async()=>{const s=await (backgroundPhone.endForStop?backgroundPhone.endForStop(taskStop.current?.()??null):backgroundPhone.close());if(s?.status==='cleanup_failed')throw Error('cleanup_failed');}});
  const responses=[];
  const context=vm.createContext({taskStop,backgroundEnabled:true,backgroundPhone,crypto,setImmediate,Date,Error,checkPausedApp:()=>{},
+  AsyncLocalStorage,Object,Set,peerIdentity:req=>req?.peer??null,birdPaused:false,
   autoGenerator:{active:false},visualTrial:false,busy:true,genericUiActions:new Set(),visualGuard:{},measurePhone:()=>{},
   phone:{create:c=>({id:'c'+Math.random(),action:c.action,status:'pending'}),complete:()=>{},get:()=>({status:'pending'})},
   phonePush:{publish:()=>{}},rawVisualCaptures:new Map(),decisionsConfig:{read:()=>({enabled:false})},
   rawFastPhone:async c=>{log.push('raw:'+c.action);return {status:'ok'};},answer:(res,status,body)=>responses.push({status,body})});
- vm.runInContext(fastPhoneSrc,context);
+ vm.runInContext(fastPhoneSrc+'\n;globalThis.__origin=typeof phoneOrigin==="undefined"?null:{phoneOrigin,NON_TASK:typeof NON_TASK==="undefined"?null:NON_TASK,nonTaskPhone:typeof nonTaskPhone==="undefined"?null:nonTaskPhone};',context);
  for(const name of ['/phone/commands','/task/stop'])vm.runInContext('globalThis['+JSON.stringify(name)+']=async(url,data,res,req)=>{'+route(name)+'};',context);
  const callNoWait=(name,data,headers={})=>context[name]({pathname:name},data,{},{headers});
  const call=async(name,data,headers={})=>{await context[name]({pathname:name},data,{},{headers});await new Promise(r=>setTimeout(r,25));return responses.at(-1);};
  // Mirrors server.mjs dispatch() for a new explicit user request when no worker is active.
- const newRequest=text=>{backgroundPhone.beginTask?.();launcher.start(text);taskStop.begin(launcher.current.id);return launcher.current.id;};
+ // Also mirrors codex toolActivity turn/started -> taskStop.addTurn for the new task's worker turn.
+ const newRequest=(text,{turnStarted=true}={})=>{backgroundPhone.beginTask?.();launcher.start(text);taskStop.begin(launcher.current.id);if(turnStarted)taskStop.addTurn?.('turn-'+launcher.current.id);return launcher.current.id;};
+ // PROTOCOL ADAPTER (App b51ddf9 APP-001-M007): agent task phone work runs in-process inside
+ // phoneOrigin.run({taskId}) (registered tool / executor). Older trees: plain fastPhone.
+ const O=()=>context.__origin;
+ const asTask=(taskId,c)=>O()?.phoneOrigin?O().phoneOrigin.run({taskId},()=>context.fastPhone(c)):context.fastPhone(c);
+ const nonTask=c=>O()?.nonTaskPhone?O().nonTaskPhone(c):context.fastPhone(c);
  // Mirrors server.mjs finishAgentTurn() after a stopped turn ends.
  // Mirrors finishAgentTurn() for the stopped task (A). launcher.finish is a no-op if B already replaced A.
- const turnEnds=async()=>{await backgroundPhone.close();launcher.finish('interrupted',taskStop.summary());};
- return {log,launcher,taskStop,fastPhone:c=>context.fastPhone(c),call,newRequest,turnEnds,ctl,holdFor,callNoWait};
+ // WIRING ADAPTER: codex 'done' for task A's turn: ignored unless the current generation owns the turn
+ // (App b51ddf9); finishAgentTurn closes with launcherTask.current.id.
+ const turnEnds=async(origin=launcher.current?.id)=>{if(taskStop.ownsTurn&&!taskStop.ownsTurn('turn-'+origin))return;await backgroundPhone.close(launcher.current?.id);launcher.finish('interrupted',taskStop.summary());};
+ return {log,launcher,taskStop,fastPhone:(c,origin)=>origin===undefined?context.fastPhone(c):asTask(origin,c),asTask,nonTask,call,newRequest,turnEnds,ctl,holdFor,callNoWait};
 }
 
 test('acknowledged /task/stop -> terminal interrupted -> late Calculator, open_app and raw command are all denied; fresh B allowed',{skip:!has&&'tree has no task-stop.mjs (App PR #3 not present)'},async()=>{
  const w=world();
  const A=w.newRequest('What is 84.50 plus a 15% tip?');
- await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR},A);
  const ack=await w.call('/task/stop',{taskId:A,source:'workspace_notification'});
  assert.equal(ack.body.status,'stopping');
  await w.turnEnds();
  assert.equal(w.launcher.current.state,'interrupted');
  const mark=w.log.length;
- const lateCalc=await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'84.50+15%'}});
- const lateOpen=await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ const lateCalc=await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'84.50+15%'}},A);
+ const lateOpen=await w.fastPhone({action:'open_app',packageName:CALCULATOR},A);
  await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'continue',params:{suffix:'+1'}});
- const lateDisplay=await w.fastPhone({action:'tap',display:'phone',x:1,y:1});
+ const lateDisplay=await w.fastPhone({action:'tap',display:'phone',x:1,y:1},A);
  assert.deepEqual(w.log.slice(mark),[],'late canceled-task actions executed: '+JSON.stringify({lateCalc,lateOpen,lateDisplay}));
  const B=w.newRequest('What is 12 times 7?');
  const mark2=w.log.length;
- const opened=await w.fastPhone({action:'open_app',packageName:CALCULATOR});
- await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'12*7'}});
+ const opened=await w.fastPhone({action:'open_app',packageName:CALCULATOR},B);
+ await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'12*7'}},B);
  assert.equal(opened.backgroundVerified,true,JSON.stringify(opened));
  assert.deepEqual(w.log.slice(mark2).map(e=>e.split(':')[0]),['start','ui','calculator']);
  assert.ok(w.log.slice(mark2)[0].endsWith(':'+B),'B workspace started under task B');
@@ -93,11 +105,11 @@ test('acknowledged /task/stop -> terminal interrupted -> late Calculator, open_a
 test('while task A is stopping (before terminal), late Calculator/open_app/raw are denied',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
  const A=w.newRequest('Calculate 20% of 50');
- await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR},A);
  await w.call('/task/stop',{taskId:A,source:'app'});
  const mark=w.log.length;
- await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'50*20%'}});
- await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'50*20%'}},A);
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR},A);
  await w.call('/phone/commands',{action:'screenshot'});
  assert.deepEqual(w.log.slice(mark),[]);
 });
@@ -106,10 +118,10 @@ test('a duplicate Stop is not acknowledged before queued canceled-task work is b
  // Chief review APP-002 sequence. X executes before Stop and is held; Y was admitted before Stop and is queued.
  const w=world();
  const A=w.newRequest('Two calculations');
- await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR},A);
  const releaseX=w.holdFor('1+1');
- const x=w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'1+1'}});
- const y=w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'2+2'}});
+ const x=w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'1+1'}},A);
+ const y=w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'2+2'}},A);
  await new Promise(r=>setImmediate(r));
  const first=w.taskStop.request({taskId:A,source:'workspace_notification'});
  const dup=await w.taskStop.request({taskId:A,source:'app'});
@@ -123,7 +135,9 @@ test('a duplicate Stop is not acknowledged before queued canceled-task work is b
 // INTERFACE ADAPTER (App PR #3 @ 2f1d6e2, documented in source): phone/control.py reads the
 // published task generation and sends it as HTTP header X-Rose-Task on POST /phone/commands.
 // Only this adapter tracks App's interface; the expectations below are unchanged.
-const tagged=(w,command,taskId)=>w.call('/phone/commands',command,{'x-rose-task':taskId});
+// App b51ddf9 (APP-001-M007): agent task commands are origin-bound in-process (registered tools);
+// X-Rose-Task was removed. Older trees (2f1d6e2) used the header on /phone/commands.
+const tagged=(w,command,taskId)=>w.asTask(taskId,command);
 const untagged=(w,command)=>w.call('/phone/commands',command,{});
 
 test('generation: after A is stopped and B is running, A-tagged commands are denied and B-tagged commands run',{skip:!has&&'no task-stop.mjs'},async()=>{
@@ -182,7 +196,7 @@ test('a Stop of A still in progress when fresh B begins completes with a truthfu
 
 test('generation: an intentional non-task command still works with no task running',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
- const r=await w.fastPhone({action:'control_status'});
+ const r=await w.nonTask({action:'control_status'});
  assert.notEqual(r?.status,'task_stopped');
 });
 
@@ -209,7 +223,7 @@ test('generation: an HTTP command for A accepted before Stop, dispatched after B
  await tagged(w,{action:'open_app',packageName:CALCULATOR},A);
  const mark=w.log.length;
  // Admit A's command (route returns after scheduling dispatch), then Stop A and begin B before dispatch runs.
- const admitted=w.callNoWait('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'7+7'}},{'x-rose-task':A});
+ const admitted=w.asTask(A,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'7+7'}});
  const stop=w.taskStop.request({taskId:A,source:'app'});
  w.newRequest('Fresh request B');
  await admitted;await stop.catch(()=>{});await new Promise(r=>setTimeout(r,40));
@@ -225,7 +239,7 @@ test('generation: a late cleanup from stopped A does not close task B\'s workspa
  const B=w.newRequest('Multiply 3 by 4');
  await tagged(w,{action:'open_app',packageName:CALCULATOR},B);
  const bSession=w.ctl.sessionId;
- await w.turnEnds();
+ await w.turnEnds(A);
  assert.equal(w.ctl.status,'ready','B workspace was closed by A\'s late cleanup');assert.equal(w.ctl.sessionId,bSession);
  const mark=w.log.length;
  await tagged(w,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'3*4'}},B);
@@ -238,27 +252,30 @@ test('generation: a late cleanup from stopped A does not close task B\'s workspa
 // argument cannot be expressed and is ignored. When App documents an origin-bound credential (e.g.
 // a per-turn token bound at worker/tool launch), change only this adapter; expectations stay.
 const originHeaders=(_w,_originTask,presentedTask)=>({'x-rose-task':presentedTask});
+// App b51ddf9: a command whose origin equals the presented task is an origin-bound in-process call;
+// an A-origin process presenting B's ID can only reach the shell HTTP path (its header is not trusted).
+const originCall=(w,command,origin,presented)=>origin===presented?w.asTask(origin,command):w.call('/phone/commands',command,originHeaders(w,origin,presented));
 
 test('origin: a delayed A-origin command presenting B\'s task ID gains no authority; B-origin command runs',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
  const A=w.newRequest('Add 9 and 9');
- await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},originHeaders(w,A,A));
+ await originCall(w,{action:'open_app',packageName:CALCULATOR},A,A);
  await w.call('/task/stop',{taskId:A,source:'app'});
  await w.turnEnds();
  const B=w.newRequest('Subtract 2 from 9');
- await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},originHeaders(w,B,B));
+ await originCall(w,{action:'open_app',packageName:CALCULATOR},B,B);
  const mark=w.log.length;
  // A's late tool read B's ID from mutable shared state and presents it.
- await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9+9'}},originHeaders(w,A,B));
+ await originCall(w,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9+9'}},A,B);
  assert.deepEqual(w.log.slice(mark),[],'A-origin command presenting B\'s ID ran with B\'s authority');
- await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9-2'}},originHeaders(w,B,B));
+ await originCall(w,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9-2'}},B,B);
  assert.deepEqual(w.log.slice(mark),['calculator:9-2'],'B-origin command must run');
 });
 
 test('origin: an untagged task-mutating command with no trusted origin is refused even while a task runs',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
  const A=w.newRequest('Add 4 and 4');
- await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},originHeaders(w,A,A));
+ await originCall(w,{action:'open_app',packageName:CALCULATOR},A,A);
  const mark=w.log.length;
  await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'4+4'}},{});
  await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},{});
@@ -270,4 +287,16 @@ test('origin: an untagged non-task read (control_status) is still answered while
  w.newRequest('Any task');
  const r=await w.call('/phone/commands',{action:'control_status'},{});
  assert.notEqual(r?.body?.result?.status,'task_stopped');assert.notEqual(r?.body?.result?.status,'stale_task');
+});
+
+test('origin: A\'s late turn end arriving after B begins but before B\'s worker turn starts does not finish B or close its workspace',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Add 1 and 2');
+ await tagged(w,{action:'open_app',packageName:CALCULATOR},A);
+ await w.call('/task/stop',{taskId:A,source:'app'});
+ // Explicit B request accepted; its worker turn has not started yet (no turn/started event).
+ const B=w.newRequest('Add 3 and 4',{turnStarted:false});
+ await w.turnEnds(A);
+ assert.equal(w.launcher.current.id,B);
+ assert.equal(w.launcher.current.state,'running','A\'s late turn end finished task B: '+w.launcher.current.state);
 });

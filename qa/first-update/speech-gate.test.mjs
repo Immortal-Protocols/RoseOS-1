@@ -54,10 +54,9 @@ test('after Stop is acknowledged, a late worker result is neither shown nor spok
 test.todo('voice output already playing at the Stop acknowledgment is cancelled (requires App client contract or VM audio evidence)');
 
 // ---- Chief review APP-005/006: origin-bound output and tool calls ----
-// ORIGIN ADAPTER: how a worker event carries its origin turn. At App 2f1d6e2 the message handler
-// receives only (text, phase); the turn is passed as an extra argument that current code ignores.
-// Update only this adapter once App documents its origin field; expectations stay unchanged.
-const emitWorker=(w,text,phase,turnId)=>w.messageWithOrigin(text,phase,{turnId});
+// ORIGIN ADAPTER: App b51ddf9 (APP-001-M007 item 5) documents the Codex message event as
+// (text, phase, turnId) with turnId a string. Older trees ignore the third argument.
+const emitWorker=(w,text,phase,turnId)=>w.messageWithOrigin(text,phase,turnId);
 
 test('a late worker result from stopped A emitted after fresh B begins reaches neither display nor voice; B output still does',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
@@ -70,4 +69,25 @@ test('a late worker result from stopped A emitted after fresh B begins reaches n
  assert.equal(JSON.stringify(w.out.slice(mark)).includes('97.18'),false,'stale A result reached output after B began: '+JSON.stringify(w.out.slice(mark)));
  emitWorker(w,'B result is 84','final_answer','turn-B');
  assert.equal(JSON.stringify(w.out.slice(mark)).includes('84'),true,'B output must still be delivered');
+});
+
+test('a stale A result arriving after B begins but before B\'s worker turn starts is not delivered',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ w.launcher.start('A: 10 plus 5');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-A');
+ await w.taskStop.request({taskId:w.launcher.current.id,source:'app'});
+ await w.finishTurn({status:'interrupted'});
+ w.launcher.start('B: 2 times 3');w.taskStop.begin(w.launcher.current.id);
+ const mark=w.out.length;
+ emitWorker(w,'A total is 15','final_answer','turn-A');
+ assert.equal(JSON.stringify(w.out.slice(mark)).includes('15'),false,'stale A result delivered in the window before B\'s turn started: '+JSON.stringify(w.out.slice(mark)));
+});
+
+test('worker output with no turn ID is not delivered once the current task\'s turn is registered',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ w.launcher.start('B: 2 times 3');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-B');
+ const mark=w.out.length;
+ emitWorker(w,'unattributed 99','final_answer',undefined);
+ assert.equal(JSON.stringify(w.out.slice(mark)).includes('99'),false,'output without a turn ID was delivered');
+ emitWorker(w,'B result 6','final_answer','turn-B');
+ assert.equal(JSON.stringify(w.out.slice(mark)).includes('B result 6'),true,'B output must be delivered');
 });
