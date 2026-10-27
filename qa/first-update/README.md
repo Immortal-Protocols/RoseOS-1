@@ -28,7 +28,13 @@ stale start for a stopped task is refused while the current task keeps its works
 Between tasks the harness calls `close()`, as `server.mjs` does when a turn ends.
 Implementation hooks (`taskId` option, `beginTask()`) are optional adapters.
 
-Server routes (`/phone/commands`, fast/raw paths), speech after Stop, the Android
+`server-stop-gate.test.mjs` exercises the real `server.mjs` `fastPhone` and the `/task/stop`
+and `/phone/commands` route bodies (extracted from source, like App's own test) over the real
+`TaskStop`, `LauncherTask` and `BackgroundPhone`. It covers: acknowledged Stop, then terminal
+state, then late canceled-task commands; denial while stopping; and a duplicate Stop that must
+not be acknowledged before queued work is barred. It skips on trees without `task-stop.mjs`.
+
+Speech after Stop, the Android
 controller itself and real device behaviour are outside this harness and need a VM run.
 
 None of these checks builds Android, uses the Pixel Voice VM, touches a phone,

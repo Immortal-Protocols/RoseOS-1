@@ -1,0 +1,111 @@
+// Independent QA server-layer Stop check (Chief review ROS-FIRST-UPDATE-CHIEF-REVIEW-QA-002).
+// Uses the real server.mjs fastPhone and /task/stop + /phone/commands route bodies (extracted
+// from source text, as App's own server-stop-gate test does), wired to the real TaskStop,
+// LauncherTask and BackgroundPhone over a fake controller that follows Controller.java.
+// Requires a tree with App PR #3 (task-stop.mjs). Offline only; not VM or device evidence.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import vm from 'node:vm';
+import crypto from 'node:crypto';
+
+const dir=new URL('../../workspace/rose-agent/server/',import.meta.url);
+const has=fs.existsSync(new URL('task-stop.mjs',dir));
+const {TaskStop}=has?await import(new URL('task-stop.mjs',dir)):{};
+const {LauncherTask}=await import(new URL('launcher-task.mjs',dir));
+const {BackgroundPhone}=await import(new URL('background-phone.mjs',dir));
+const CONTROLLER='dev.pixel.backgroundcontrol', CALCULATOR='dev.pixel.calculator.agent';
+
+function world(){
+ const server=fs.readFileSync(new URL('server.mjs',dir),'utf8');
+ const fastPhoneSrc=server.slice(server.indexOf('async function fastPhone('),server.indexOf('async function rawFastPhone('));
+ const route=name=>{const s=server.indexOf(" if(url.pathname==='"+name+"'){");assert.ok(s>0,name);return server.slice(s,server.indexOf('\n',s));};
+ const log=[];let seq=0;const hold=new Map();
+ const holdFor=expr=>{let release;const promise=new Promise(r=>release=r);hold.set(expr,{promise,release});return release;};
+ const ctl={status:'stopped',sessionId:null,taskId:null,target:null,stopReason:'',stoppedSessionId:null};
+ const userStopped=new Set();
+ const state=()=>({status:ctl.status,sessionId:ctl.sessionId,targetPackage:ctl.target,taskId:ctl.taskId,stopReason:ctl.stopReason,stoppedSessionId:ctl.stoppedSessionId,elapsedMs:1000});
+ const rec=why=>{if(ctl.stopReason==='user'&&why!=='user'&&ctl.stoppedSessionId===ctl.sessionId)return;ctl.stopReason=why;ctl.stoppedSessionId=ctl.sessionId;if(why==='user'&&ctl.taskId)userStopped.add(ctl.taskId);};
+ const send=async c=>{
+  if(c.packageName===CALCULATOR){const h=hold.get(c.params?.expression);if(h){log.push('calculator-begin:'+c.params.expression);await h.promise;}log.push('calculator:'+(c.params?.expression??c.operation));return {status:'completed',result:{status:'verified'}};}
+  if(c.packageName!==CONTROLLER){log.push('physical:'+c.action);return {status:'ok'};}
+  if(c.operation==='get_state')return state();
+  if(c.operation==='start'){const t=c.params.taskId??null;if(t&&userStopped.has(t))return {status:'user_stopped',rejectedTaskId:t,actionExecuted:false,current:state()};
+   ctl.status='ready';ctl.sessionId='session-'+(++seq);ctl.taskId=t;ctl.target=c.params.packageName;ctl.stopReason='';ctl.stoppedSessionId=null;log.push('start:'+ctl.sessionId+':'+t);return state();}
+  if(c.operation==='stop'){rec('agent');ctl.status='stopped';return state();}
+  if(c.operation==='command'){if(ctl.status!=='ready'||c.params.sessionId!==ctl.sessionId)return {status:'error',error:'Session not ready: '+ctl.status};log.push('ui:'+c.params.action);return {status:'ok',packageName:ctl.target,sessionId:ctl.sessionId,snapshotId:'s'+seq,nodes:[]};}
+  throw Error('unexpected '+c.operation);
+ };
+ const launcher=new LauncherTask(path.join(fs.mkdtempSync(path.join(os.tmpdir(),'qa-stop-')),'task.json'));
+ let taskStop;
+ const backgroundPhone=new BackgroundPhone({send,enabled:()=>true,sleep:async()=>{},taskId:()=>launcher.active()?launcher.current.id:null,onOwnerStop:({taskId})=>void taskStop.request({taskId:taskId||undefined,source:'workspace_notification'})});
+ taskStop=new TaskStop({task:()=>launcher.current,stopping:d=>launcher.stopping(d),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{const s=await backgroundPhone.close();if(s?.status==='cleanup_failed')throw Error('cleanup_failed');}});
+ const responses=[];
+ const context=vm.createContext({taskStop,backgroundEnabled:true,backgroundPhone,crypto,setImmediate,Date,Error,checkPausedApp:()=>{},
+  autoGenerator:{active:false},visualTrial:false,busy:true,genericUiActions:new Set(),visualGuard:{},measurePhone:()=>{},
+  phone:{create:c=>({id:'c'+Math.random(),action:c.action,status:'pending'}),complete:()=>{},get:()=>({status:'pending'})},
+  phonePush:{publish:()=>{}},rawVisualCaptures:new Map(),decisionsConfig:{read:()=>({enabled:false})},
+  rawFastPhone:async c=>{log.push('raw:'+c.action);return {status:'ok'};},answer:(res,status,body)=>responses.push({status,body})});
+ vm.runInContext(fastPhoneSrc,context);
+ for(const name of ['/phone/commands','/task/stop'])vm.runInContext('globalThis['+JSON.stringify(name)+']=async(url,data,res)=>{'+route(name)+'};',context);
+ const call=async(name,data)=>{await context[name]({pathname:name},data,{});await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));return responses.at(-1);};
+ // Mirrors server.mjs dispatch() for a new explicit user request when no worker is active.
+ const newRequest=text=>{taskStop.begin();backgroundPhone.beginTask?.();launcher.start(text);return launcher.current.id;};
+ // Mirrors server.mjs finishAgentTurn() after a stopped turn ends.
+ const turnEnds=async()=>{await backgroundPhone.close();launcher.finish('interrupted',taskStop.summary());};
+ return {log,launcher,taskStop,fastPhone:c=>context.fastPhone(c),call,newRequest,turnEnds,ctl,holdFor};
+}
+
+test('acknowledged /task/stop -> terminal interrupted -> late Calculator, open_app and raw command are all denied; fresh B allowed',{skip:!has&&'tree has no task-stop.mjs (App PR #3 not present)'},async()=>{
+ const w=world();
+ const A=w.newRequest('What is 84.50 plus a 15% tip?');
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ const ack=await w.call('/task/stop',{taskId:A,source:'workspace_notification'});
+ assert.equal(ack.body.status,'stopping');
+ await w.turnEnds();
+ assert.equal(w.launcher.current.state,'interrupted');
+ const mark=w.log.length;
+ const lateCalc=await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'84.50+15%'}});
+ const lateOpen=await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'continue',params:{suffix:'+1'}});
+ const lateDisplay=await w.fastPhone({action:'tap',display:'phone',x:1,y:1});
+ assert.deepEqual(w.log.slice(mark),[],'late canceled-task actions executed: '+JSON.stringify({lateCalc,lateOpen,lateDisplay}));
+ const B=w.newRequest('What is 12 times 7?');
+ const mark2=w.log.length;
+ const opened=await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'12*7'}});
+ assert.equal(opened.backgroundVerified,true,JSON.stringify(opened));
+ assert.deepEqual(w.log.slice(mark2).map(e=>e.split(':')[0]),['start','ui','calculator']);
+ assert.ok(w.log.slice(mark2)[0].endsWith(':'+B),'B workspace started under task B');
+});
+
+test('while task A is stopping (before terminal), late Calculator/open_app/raw are denied',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Calculate 20% of 50');
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.call('/task/stop',{taskId:A,source:'app'});
+ const mark=w.log.length;
+ await w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'50*20%'}});
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ await w.call('/phone/commands',{action:'screenshot'});
+ assert.deepEqual(w.log.slice(mark),[]);
+});
+
+test('a duplicate Stop is not acknowledged before queued canceled-task work is barred',{skip:!has&&'no task-stop.mjs'},async()=>{
+ // Chief review APP-002 sequence. X executes before Stop and is held; Y was admitted before Stop and is queued.
+ const w=world();
+ const A=w.newRequest('Two calculations');
+ await w.fastPhone({action:'open_app',packageName:CALCULATOR});
+ const releaseX=w.holdFor('1+1');
+ const x=w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'1+1'}});
+ const y=w.fastPhone({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'2+2'}});
+ await new Promise(r=>setImmediate(r));
+ const first=w.taskStop.request({taskId:A,source:'workspace_notification'});
+ const dup=await w.taskStop.request({taskId:A,source:'app'});
+ const ackMark=w.log.length;
+ assert.equal(dup.status,'stopping');
+ releaseX();await Promise.all([x,y,first]);
+ assert.deepEqual(w.log.slice(ackMark).filter(e=>e==='calculator:2+2'),[],'queued Y ran after the duplicate Stop acknowledgment; log after ack: '+JSON.stringify(w.log.slice(ackMark)));
+});

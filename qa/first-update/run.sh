@@ -37,6 +37,7 @@ run agent-app-trust-system-jdk trust
 
 # 4. Independent Stop acceptance gate (expected to fail until Stop is fixed end to end).
 run stop-gate node --test qa/first-update/stop-gate.test.mjs
+run server-stop-gate node --test qa/first-update/server-stop-gate.test.mjs
 
 python3 - "$OUT" <<'PY'
 import json, subprocess, sys, pathlib, platform
