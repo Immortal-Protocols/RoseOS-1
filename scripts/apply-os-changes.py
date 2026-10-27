@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from background_apks import validate_policy
+from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan, validate_policy
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('source', help='Existing GrapheneOS checkout matching os/pinned-manifest.xml')
@@ -22,10 +22,14 @@ p.add_argument('--agent-tray', action='store_true',
     help='Enable the Rose Agent status tray in the system image (persist.wm.debug.pixel_agent_tray=1)')
 p.add_argument('--updater-url',
     help='Release channel base URL for the system Updater; must match the installed phone (https, ends with /)')
+p.add_argument('--preinstall-apk', type=Path, action='append', default=[],
+    help='Preinstall this exact signed Rose Agent or target APK from the policy receipt on the product partition (repeatable)')
 p.add_argument('--check', action='store_true', help='Run all preflight checks without changing source')
 a = p.parse_args()
 if bool(a.background_policy) != bool(a.background_agent):
     p.error('--background-policy and --background-agent must be supplied together')
+if a.preinstall_apk and not a.background_policy:
+    p.error('--preinstall-apk needs --background-policy and --background-agent')
 if a.locked_control and not a.background_policy:
     p.error('--locked-control needs --background-policy and --background-agent')
 if a.reference_display_address and (not a.background_policy or not a.reference_display_address.isdecimal()
@@ -56,6 +60,8 @@ if a.background_policy:
     if a.locked_control:projects['frameworks/base'].append('locked-control-frameworks-base.patch')
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
+preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
+PRODUCT_MAKEFILE = 'target/product/handheld_product.mk'
 
 def is_background_overlay(path):
     return str(path).startswith(('packages/apps/PixelBackgroundControl/',
@@ -90,6 +96,9 @@ for project, patches in projects.items():
     if subprocess.check_output(['git', '-C', str(dest), 'status', '--porcelain']):
         raise SystemExit(f'Local changes present in {project}; refusing to overwrite them')
     check_patch_sequence(dest, [(bundle/'patches'/patch).resolve() for patch in patches])
+if preinstalls:
+    product = subprocess.check_output(['git', '-C', str(source/'build/make'), 'show', 'HEAD:'+PRODUCT_MAKEFILE], text=True)
+    if 'RosePreinstall_' in product:raise SystemExit('Preinstall entries already present in '+PRODUCT_MAKEFILE)
 if a.updater_url:
     config = subprocess.check_output(['git', '-C', str(source/'packages/apps/Updater'), 'show',
         'HEAD:res/values/config.xml'], text=True)
@@ -101,8 +110,16 @@ for file in (bundle/'overlays').rglob('*'):
     if is_background_overlay(relative) and policy is None:continue
     copies.append((file, source/relative))
 if policy:copies.append((a.background_agent, source/'packages/apps/PixelBackgroundControl/Agent.apk'))
+generated = []
+for row in preinstalls:
+    directory = source/'packages/apps/RosePreinstall'/row['module']
+    copies.append((row['apk'], directory/'app.apk'))
+    generated.append((directory/'Android.bp', preinstall_blueprint(row['module']).encode()))
 for file, target in copies:
     if target.exists() and target.read_bytes() != file.read_bytes():
+        raise SystemExit(f'Unexpected existing overlay target: {target}')
+for target, data in generated:
+    if target.exists() and target.read_bytes() != data:
         raise SystemExit(f'Unexpected existing overlay target: {target}')
 if a.check:
     print('All revisions, patches, overlays and optional exact background pins passed preflight. No files changed.')
@@ -114,6 +131,11 @@ for project, patches in projects.items():
 for file, target in copies:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(file, target)
+for target, data in generated:
+    target.write_bytes(data)
+if preinstalls:
+    product = source/'build/make'/PRODUCT_MAKEFILE
+    product.write_text(product.read_text() + preinstall_make_block([row['module'] for row in preinstalls]))
 if a.updater_url:
     config = source/UPDATER_CONFIG
     config.write_text(config.read_text().replace(UPDATER_MARKER,

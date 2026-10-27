@@ -97,6 +97,8 @@ python3 scripts/prepare-background-policy.py \
 python3 scripts/apply-os-changes.py /path/to/os-source \
   --background-policy out/background-policy.json \
   --background-agent out/rose-controller/Agent.apk --agent-tray \
+  --preinstall-apk out/rose-agent.RUN/rose-agent.apk \
+  --preinstall-apk out/calculator.RUN/calculator.apk \
   --updater-url INSTALLED_CHANNEL_BASE_URL/ --check
 ```
 
@@ -107,10 +109,11 @@ purchases and account changes. The imported `--prototype-control` and
 `--locked-control` switches are historical capabilities, not release defaults.
 Their inclusion in source does not establish that broad control meets RoseOS's
 requirements. The current patcher installs the controller when policy is supplied;
-it does not preinstall the Rose Agent launcher APK. `--agent-tray` enables the
+`--preinstall-apk` adds the policy-pinned Rose Agent and Calculator APKs to the
+product partition. `--agent-tray` enables the
 status tray, which the patches otherwise leave off. See
 [OS integration](OS-INTEGRATION.md) for the tray, the Stop contract, the
-preinstall/default HOME proposal and the facts an existing-phone update needs.
+preinstall and default HOME behaviour and the facts an existing-phone update needs.
 
 ## 4. Build a release candidate
 

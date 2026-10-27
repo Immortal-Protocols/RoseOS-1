@@ -11,7 +11,7 @@ release. See [VALIDATION.md](VALIDATION.md) and [OS-RELEASE.md](OS-RELEASE.md).
 | Status tray (agent/mic glows, tap to talk, mute, end) | `os/patches/frameworks-base.patch`, `os/overlays/.../wm/shell/AgentTray*.java` | `persist.wm.debug.pixel_agent_tray=1` (`apply-os-changes.py --agent-tray`) |
 | Separate agent workspace | Background-control framework patches and the computer-control extension | `--background-policy` with `--background-agent` |
 | Viewer and Stop | `dev.pixel.backgroundcontrol` (`os/background-control/agent-pip`): ongoing notification with Stop, floating viewer | Privileged prebuilt `PixelBackgroundControl`, pinned by the policy |
-| Rose Agent app | `dev.pixel.voice`, built and signed separately | Not preinstalled; see below |
+| Rose Agent and Calculator | `dev.pixel.voice`, `dev.pixel.calculator.agent`, signed separately | `--preinstall-apk` (product partition); see below |
 | Update channel | Pinned `packages/apps/Updater`, whose `url` is `https://releases.grapheneos.org/` | `--updater-url` with the installed phone's channel |
 
 The tray binds `dev.pixel.voice/.AgentTrayService` (guarded by
@@ -104,13 +104,27 @@ exactly this pinned tree. Reconcile the candidate's source with the tree that
 built `2026102401` before building; keep the security patch level and rollback
 index at or above the baseline's.
 
-## Preinstall and default HOME (proposal, not implemented)
+## Preinstall and default HOME
 
-Rose Agent stays an independently updated app for this update. Preinstalling it
-does not help a phone that already has it and adds risk. An installed copy with a
-higher version code shadows the system copy. A different signer would conflict
-with existing data. For new installs later, add a presigned `android_app_import`
-pinned to the policy's Rose Agent certificate, and set the HOME default
-deliberately. This Permission module's HOME role has no configurable default; it
-falls back to the highest-priority HOME activity, and a tie produces a chooser
-(`HomeRoleBehavior.getFallbackHolderAsUser` at the pinned revision).
+For this milestone the OTA carries Rose Agent, the controller and Calculator, so
+the owner needs no separate installation; Rose Agent can still be updated as an
+app afterwards. `apply-os-changes.py --preinstall-apk APK` (repeatable, with
+`--background-policy`) adds each APK as a non-privileged, presigned
+`android_app_import` on the product partition (`packages/apps/RosePreinstall/`)
+and lists it in `target/product/handheld_product.mk`. Each APK must be
+byte-identical to Rose Agent or a target pinned in the policy receipt, so the
+image, the policy and the shipped apps cannot drift apart. The controller keeps
+its existing privileged `system_ext` prebuilt. Nothing is platform-signed.
+
+A preinstalled copy only takes effect when it is newer than the copy the phone
+already has, and it must carry the same signer. With the same signer and an
+equal or higher installed version, the installed copy keeps winning and the new
+code is not delivered. With a different signer, the installed copy and its data
+are at risk at first boot. Measure each package's installed version code, signer
+and code path before building a frankel candidate, and give every bundled APK a
+higher version code.
+
+An existing phone keeps its HOME role holder across an OTA (expected, not yet
+observed on this phone). This Permission module's HOME role has no configurable
+default; it falls back to the highest-priority HOME activity, and a tie produces
+a chooser (`HomeRoleBehavior.getFallbackHolderAsUser` at the pinned revision).

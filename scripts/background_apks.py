@@ -54,3 +54,33 @@ def validate_policy(policy, apk):
     if hashlib.sha256(Path(apk).read_bytes()).hexdigest() != agent['apkSha256']:
         raise ValueError('Agent APK differs from the APK verified in the policy receipt')
     return policy
+
+def preinstall_plan(policy, apks):
+    """Map APKs to product preinstalls; each must be byte-identical to Rose Agent or a policy target."""
+    pinned = {row['apkSha256']: row for row in [policy['voice'], *policy['targets']] if row.get('apkSha256')}
+    plan, names = [], set()
+    for apk in apks:
+        row = pinned.get(hashlib.sha256(Path(apk).read_bytes()).hexdigest())
+        if row is None:
+            raise ValueError(f'{Path(apk).name} is not Rose Agent or a target APK verified in the policy receipt')
+        if row['packageName'] in names:
+            raise ValueError(f'{row["packageName"]} is supplied more than once')
+        names.add(row['packageName'])
+        plan.append({'module': 'RosePreinstall_' + row['packageName'].replace('.', '_'),
+            'packageName': row['packageName'], 'apk': Path(apk)})
+    return sorted(plan, key=lambda p: p['module'])
+
+def preinstall_blueprint(module):
+    # Presigned keeps the existing app signer; not privileged, so no privapp allowlist is needed.
+    return ('package { default_applicable_licenses: ["Android-Apache-2.0"] }\n'
+        'android_app_import {\n'
+        f'    name: "{module}",\n'
+        '    apk: "app.apk",\n'
+        '    presigned: true,\n'
+        '    product_specific: true,\n'
+        '    dex_preopt: { enabled: false },\n'
+        '}\n')
+
+def preinstall_make_block(modules):
+    return ('\n# Rose Agent and allowed targets preinstalled from the exact APKs pinned by the background policy.\n'
+        'PRODUCT_PACKAGES += ' + ' '.join(modules) + '\n')
