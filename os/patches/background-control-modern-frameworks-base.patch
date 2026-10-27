@@ -1,0 +1,181 @@
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8100,4 +8100,6 @@
+     <!-- Exact package/signing-certificate pins are populated by apply-os-changes.py. -->
+     <string-array name="config_pixelComputerControlAgents" translatable="false" />
+     <string-array name="config_pixelComputerControlTargets" translatable="false" />
++    <string-array name="config_pixelComputerControlPrototypeAgents" translatable="false" />
++    <string name="config_pixelComputerControlReferenceDisplayAddress" translatable="false"></string>
+ </resources>
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6633,4 +6633,6 @@
+   <java-symbol type="bool" name="config_disable_video_capability_when_wfc_off" />
+       <java-symbol type="array" name="config_pixelComputerControlAgents" />
+     <java-symbol type="array" name="config_pixelComputerControlTargets" />
++    <java-symbol type="array" name="config_pixelComputerControlPrototypeAgents" />
++    <java-symbol type="string" name="config_pixelComputerControlReferenceDisplayAddress" />
+ </resources>
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+@@ -520,12 +520,18 @@
+     }
+ 
+     private DisplayInfo getTargetDisplayInfo() {
+-        if (TextUtils.isEmpty(mReferenceDisplayAddress)) {
++        // An optional product resource selects a reference before display and
++        // input construction, keeping mirror dimensions and tap coordinates aligned.
++        final String productReference = mRequest.ownerContext().getResources().getString(
++                R.string.config_pixelComputerControlReferenceDisplayAddress);
++        final String referenceAddress = TextUtils.isEmpty(mReferenceDisplayAddress)
++                ? productReference : mReferenceDisplayAddress;
++        if (TextUtils.isEmpty(referenceAddress)) {
+             Slog.i(TAG, "No configured reference display, using main display " + mMainDisplayId
+                     + " for Computer Control virtual display dimensions");
+             return mDisplayManagerGlobal.getDisplayInfo(mMainDisplayId);
+         }
+-        long configAddress = Long.parseLong(mReferenceDisplayAddress);
++        long configAddress = Long.parseLong(referenceAddress);
+         int[] displayIds = mDisplayManagerGlobal.getDisplayIds(/* includeDisabled= */ true);
+         for (int i = 0; i < displayIds.length; i++) {
+             DisplayInfo info = mDisplayManagerGlobal.getDisplayInfo(displayIds[i]);
+@@ -534,7 +540,7 @@
+                 if (physicalId == configAddress) {
+                     Slog.i(TAG,
+                             "Using configured reference display " + displayIds[i]
+-                                    + " (physical address: " + mReferenceDisplayAddress
++                                    + " (physical address: " + referenceAddress
+                                     + ") for Computer Control virtual display dimensions");
+                     return info;
+                 }
+@@ -658,7 +664,7 @@
+         }
+ 
+         synchronized (mAllowlistedPackages) {
+-            if (!mAllowlistedPackages.contains(packageName)) {
++            if (!isPrototypeSession() && !mAllowlistedPackages.contains(packageName)) {
+                 throw new IllegalArgumentException(
+                         "Trying to launch "
+                                 + packageName
+@@ -1106,8 +1112,8 @@
+         final ActivityAssistInfo top = activities == null || activities.isEmpty()
+                 ? null : activities.get(0);
+         final boolean allowed = top != null
+-                && mRequest.params().getTargetPackageNames()
+-                        .contains(top.getComponentName().getPackageName())
++                && (isPrototypeSession() || mRequest.params().getTargetPackageNames()
++                        .contains(top.getComponentName().getPackageName()))
+                 && isActivityLaunchAllowed(top.getComponentName(), top.getUserId())
+                 && mAllowlistController.isPackageAutomatable(
+                         top.getComponentName().getPackageName(), this);
+@@ -1297,10 +1303,16 @@
+         return new String(truncatedBytes, StandardCharsets.UTF_8);
+     }
+ 
++    private boolean isPrototypeSession() {
++        return mAllowlistController.hasPrototypeControl(mRequest.ownerPackageName(),
++                mRequest.ownerPackageManager());
++    }
++
+     private boolean isActivityLaunchAllowed(@NonNull ComponentName componentName,
+             @UserIdInt int userId) {
+         synchronized (mAllowlistedPackages) {
+-            if (!mAllowlistedPackages.contains(componentName.getPackageName())) {
++            if (!isPrototypeSession()
++                    && !mAllowlistedPackages.contains(componentName.getPackageName())) {
+                 return false;
+             }
+         }
+@@ -1406,7 +1418,10 @@
+         final var wm = mDisplayUiContext.getSystemService(WindowManager.class);
+         if (Insets.NONE.equals(mAppliedInsets)) {
+             if (mInsetsProviderView != null) {
+-                wm.removeView(mInsetsProviderView);
++                // Insets can be removed and added in consecutive queued updates when
++                // a mirror hides, resizes or changes displays. Complete removal before
++                // clearing the reference, or a replacement status-bar window collides.
++                wm.removeViewImmediate(mInsetsProviderView);
+                 mInsetsProviderView = null;
+             }
+             return;
+@@ -1463,8 +1478,9 @@
+             // If this new activity belongs to a package the session is authorized to control,
+             // we should trust it, even if it's a secondary task (like a new Chrome window).
+             synchronized (mAllowedTaskIds) {
+-                boolean isPackageAllowed = mRequest.params().getTargetPackageNames()
+-                        .contains(topActivity.getPackageName());
++                boolean isPackageAllowed = isPrototypeSession()
++                        || mRequest.params().getTargetPackageNames()
++                                .contains(topActivity.getPackageName());
+                 int taskId = isPackageAllowed ? getTopTaskId(mVirtualDisplayId) : -1;
+                 if (taskId != -1) {
+                     mAllowedTaskIds.add(taskId);
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
+@@ -348,6 +348,9 @@
+         if (targetPackage == null || agentPackage == null) {
+             return false;
+         }
++        if (hasPrototypeControl(agentPackage, packageManager)) {
++            return true;
++        }
+ 
+         final SigningDetails sessionOwnerPackageSigningDetails =
+                 getSigningDetails(agentPackage, packageManager);
+@@ -444,6 +447,10 @@
+         if (targetPackage == null || agentPackageName == null) {
+             return false;
+         }
++        if (hasPrototypeControl(agentPackageName,
++                getPackageManagerForUser(UserHandle.getUserId(agentUid)))) {
++            return true;
++        }
+         // TODO(b/483624078): Consider making per app consent APIs @TestApis and create
+         //  appropriate tests and CTS
+         // Allow test agents to automate test targets regardless of formal consent records.
+@@ -657,6 +664,19 @@
+      * can have a list of "super agents" (defined by a config resource) which are allowed to
+      * automate any app.
+      */
++    // This opt-in capability is bound to the builder's controller signing key.
++    boolean hasPrototypeControl(@Nullable String packageName,
++            @NonNull PackageManager packageManager) {
++        if (packageName == null) return false;
++        final SigningDetails signing = getSigningDetails(packageName, packageManager);
++        if (signing == null) return false;
++        for (String pin : mContext.getResources().getStringArray(
++                R.array.config_pixelComputerControlPrototypeAgents)) {
++            if (packageSignatureMatches(packageName, signing, parse(pin), false)) return true;
++        }
++        return false;
++    }
++
+     private boolean isSuperAgent(@NonNull String packageName,
+             @Nullable SigningDetails signingDetails) {
+         if (!mBuildIsDebuggable) {
+diff --git a/services/accessibility/java/com/android/server/accessibility/ProxyManager.java b/services/accessibility/java/com/android/server/accessibility/ProxyManager.java
+index f107647b5..69185fe54 100644
+--- a/services/accessibility/java/com/android/server/accessibility/ProxyManager.java
++++ b/services/accessibility/java/com/android/server/accessibility/ProxyManager.java
+@@ -623,6 +623,21 @@ public class ProxyManager {
+             // Calls A11yManager#setFocusAppearance
+             updateFocusAppearanceLocked(deviceId);
+             mSystemSupport.notifyClearAccessibilityCacheLocked();
++            // A reconnected proxy can observe an unchanged window hierarchy.
++            // Recompute it after client registration instead of waiting for a
++            // user input event to repopulate the cleared accessibility cache.
++            for (int i = 0; i < mProxyA11yServiceConnections.size(); i++) {
++                final ProxyAccessibilityServiceConnection proxy =
++                        mProxyA11yServiceConnections.valueAt(i);
++                if (proxy.getDeviceId() == deviceId) {
++                    final int displayId = proxy.getDisplayId();
++                    mMainHandler.post(() -> {
++                        final WindowManagerInternal wm =
++                                LocalServices.getService(WindowManagerInternal.class);
++                        wm.computeWindowsForAccessibility(displayId);
++                    });
++                }
++            }
+         }
+     }
+ 

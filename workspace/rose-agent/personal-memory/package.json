@@ -1,0 +1,1 @@
+{"name":"pixel-personal-memory-trial","version":"0.2.0","private":true,"type":"module","scripts":{"test":"node --test test.mjs context.test.mjs review.test.mjs voice-context.test.mjs","test:live":"node test-live.mjs","status":"node cli.mjs status","review":"node cli.mjs review"}}

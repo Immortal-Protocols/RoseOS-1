@@ -1,0 +1,56 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.voice" android:versionCode="297" android:versionName="295-conversation-work">
+<permission android:name="dev.pixel.voice.permission.MEMORY_REVIEW" android:protectionLevel="signature"/>
+<permission android:name="dev.pixel.voice.permission.MESSAGES_CONNECTION" android:protectionLevel="signature"/>
+<permission android:name="dev.pixel.voice.permission.MIGRATION_EXPORT" android:protectionLevel="signature"/>
+<uses-permission android:name="dev.pixel.voice.permission.MIGRATION_EXPORT"/>
+<permission android:name="dev.pixel.voice.permission.PODCAST_CONTEXT" android:protectionLevel="signature"/>
+<uses-permission android:name="dev.pixel.voice.permission.PODCAST_CONTEXT"/>
+<permission android:name="dev.pixel.voice.permission.BOOK_CONTEXT" android:protectionLevel="signature"/>
+<uses-permission android:name="dev.pixel.voice.permission.BOOK_CONTEXT"/>
+<permission android:name="dev.pixel.voice.permission.SKY_CONTEXT" android:protectionLevel="signature"/>
+<uses-permission android:name="dev.pixel.voice.permission.SKY_CONTEXT"/>
+<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+<uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+<uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+<uses-permission android:name="android.permission.WRITE_SETTINGS"/><uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/><uses-permission android:name="android.permission.CAMERA"/>
+<uses-feature android:name="android.hardware.camera" android:required="false"/>
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN"/><uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/><uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+<uses-permission android:name="android.permission.DUMP"/><uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+<uses-permission android:name="dev.pixel.podcasts.permission.DUCK_AUDIO"/>
+<uses-permission android:name="dev.pixel.clock.permission.CONTROL"/>
+<uses-permission android:name="dev.pixel.weather.permission.WIDGET"/>
+<uses-permission android:name="dev.pixel.weather.permission.AGENT"/>
+<uses-permission android:name="dev.pixel.compass.permission.AGENT"/>
+<uses-feature android:name="android.software.companion_device_setup" android:required="false"/>
+<uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35"/>
+<uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION"/><uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/><uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.RECORD_AUDIO"/><uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/><uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/><uses-permission android:name="android.permission.WAKE_LOCK"/><uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/><uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+<queries><intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent></queries>
+<permission android:name="dev.pixel.voice.permission.CAMERA_CONTEXT" android:protectionLevel="signature"/>
+<application android:label="Rose Agent" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:networkSecurityConfig="@xml/mac_screen_network" android:usesCleartextTraffic="false" android:icon="@drawable/icon">
+<provider android:name=".MemoriesConnectionProvider" android:authorities="dev.pixel.voice.memories" android:exported="true" android:permission="dev.pixel.voice.permission.MEMORY_REVIEW"/>
+<provider android:name=".MessagesConnectionProvider" android:authorities="dev.pixel.voice.messages" android:exported="true" android:permission="dev.pixel.voice.permission.MESSAGES_CONNECTION"/>
+<provider android:name=".BookIllustrationProvider" android:authorities="dev.pixel.voice.book-illustrations" android:exported="true" android:permission="dev.pixel.voice.permission.BOOK_CONTEXT"/>
+<provider android:name=".CameraMicrophoneProvider" android:authorities="dev.pixel.voice.camera-microphone" android:exported="true" android:permission="dev.pixel.voice.permission.CAMERA_CONTEXT"/>
+<provider android:name=".SettingsAgentProvider" android:authorities="dev.pixel.voice.agent" android:exported="true"/>
+<activity android:name=".ServerConnectionActivity" android:exported="false"/>
+<activity android:name=".PairingActivity" android:exported="false"/>
+<activity android:name=".SettingsAccessActivity" android:exported="false"/>
+<provider android:name=".GlassesPhotoProvider" android:authorities="dev.pixel.voice.glasses" android:exported="true"/>
+<activity android:name=".PodcastEntryActivity" android:exported="true" android:permission="dev.pixel.voice.permission.PODCAST_CONTEXT" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
+<activity android:name=".CameraEntryActivity" android:exported="true" android:permission="dev.pixel.voice.permission.CAMERA_CONTEXT" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
+<activity android:name=".BookEntryActivity" android:exported="true" android:permission="dev.pixel.voice.permission.BOOK_CONTEXT" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
+<activity android:name=".SkyEntryActivity" android:exported="true" android:permission="dev.pixel.voice.permission.SKY_CONTEXT" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
+<activity android:name=".MigrationBackupActivity" android:exported="false"/>
+<activity android:name=".BluetoothProbeActivity" android:exported="true"/>
+<activity android:name=".MainActivity" android:launchMode="singleTask" android:exported="true" android:configChanges="orientation|screenSize" android:windowSoftInputMode="adjustResize"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.HOME"/><category android:name="android.intent.category.DEFAULT"/></intent-filter></activity>
+<activity android:name=".WorkspaceAppsActivity" android:label="Your apps" android:launchMode="singleTask" android:taskAffinity="dev.pixel.voice.workspaceapps" android:exported="true" android:resizeableActivity="true" android:configChanges="orientation|screenSize" android:windowSoftInputMode="adjustResize"/>
+<service android:name=".PhoneAccessibility" android:label="Rose Agent phone controls" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true"><intent-filter><action android:name="android.accessibilityservice.AccessibilityService"/></intent-filter><meta-data android:name="android.accessibilityservice" android:resource="@xml/phone_accessibility"/></service>
+<service android:name=".ScreenTile" android:label="Rose Agent screen" android:icon="@drawable/screen_tile" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE" android:exported="true"><intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter><meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true"/></service>
+<service android:name=".AgentTrayService" android:exported="true" android:permission="android.permission.STATUS_BAR_SERVICE"/>
+<service android:name=".VoiceService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="specialUse|microphone|location"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User enabled glasses voice assistant and background app delivery"/></service>
+<receiver android:name=".StartupReceiver" android:exported="false"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/></intent-filter></receiver>
+<receiver android:name=".MediaButtonReceiver" android:exported="false"><intent-filter><action android:name="android.intent.action.MEDIA_BUTTON"/></intent-filter></receiver>
+<receiver android:name=".InstallReceiver" android:exported="false"/><receiver android:name=".PixelAdmin" android:exported="true" android:permission="android.permission.BIND_DEVICE_ADMIN"><meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin"/><intent-filter><action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/></intent-filter></receiver><activity android:name=".ConversationModeActivity" android:exported="false"/>
+</application></manifest>

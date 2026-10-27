@@ -1,0 +1,4 @@
+// A capability description for the task agent, not a router or another model.
+export function launcherVisualCapability(directory) {
+ return `Launcher meal cards are installed. For a current request to show meals or nutrition on the Pixel home screen, read ${directory}/README.md, prepare the documented JSON from actual source values, then use python3 ${directory}/control.py set /absolute/private/visual.json. This replaces the single current card. Use status to verify stored/visible state; clear only when requested. Keep private data outside source control, preserve estimates and unknown values, and never invent nutrients. The user's Visual cards off switch stays authoritative. This renderer supports meal/nutrition cards only; other layouts require implementation or another suitable display tool. This is an optional capability, not a required route or a reason to restrict other tools.`;
+}

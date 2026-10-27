@@ -1,0 +1,162 @@
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java
+index 83e23b3a5..11bf152bf 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java
+@@ -73,6 +73,15 @@ public class RootTaskDisplayAreaOrganizer extends DisplayAreaOrganizer {
+ 
+     private final Context mContext;
+ 
++    private com.android.wm.shell.common.DisplayInsetsController mAgentInsetsController;
++
++    public RootTaskDisplayAreaOrganizer(@NonNull Executor executor, @NonNull Context context,
++            @NonNull ShellInit shellInit,
++            com.android.wm.shell.common.DisplayInsetsController insetsController) {
++        this(executor, context, shellInit);
++        mAgentInsetsController = insetsController;
++    }
++
+     public RootTaskDisplayAreaOrganizer(@NonNull Executor executor, @NonNull Context context,
+             @NonNull ShellInit shellInit) {
+         super(executor);
+@@ -87,6 +96,13 @@ public class RootTaskDisplayAreaOrganizer extends DisplayAreaOrganizer {
+         for (int i = infos.size() - 1; i >= 0; --i) {
+             onDisplayAreaAppeared(infos.get(i).getDisplayAreaInfo(), infos.get(i).getLeash());
+         }
++        // Pixel agent tray: reserved system area.
++        if (android.os.SystemProperties.getBoolean("persist.wm.debug.pixel_agent_tray", false)) {
++            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
++                try { new AgentTrayPrototype(mContext, this, mAgentInsetsController); }
++                catch (RuntimeException e) { android.util.Log.e("AgentTrayPrototype", "Tray initialization failed", e); }
++            });
++        }
+     }
+ 
+     /**
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java
+index b0a5d4e52..246137bda 100644
+--- a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java
+@@ -982,8 +982,9 @@ public abstract class WMShellBaseModule {
+     @WMSingleton
+     @Provides
+     static RootTaskDisplayAreaOrganizer provideRootTaskDisplayAreaOrganizer(
+-            @ShellMainThread ShellExecutor mainExecutor, Context context, ShellInit shellInit) {
+-        return new RootTaskDisplayAreaOrganizer(mainExecutor, context, shellInit);
++            @ShellMainThread ShellExecutor mainExecutor, Context context, ShellInit shellInit,
++            DisplayInsetsController insetsController) {
++        return new RootTaskDisplayAreaOrganizer(mainExecutor, context, shellInit, insetsController);
+     }
+ 
+     @WMSingleton
+diff --git a/packages/SystemUI/AndroidManifest.xml b/packages/SystemUI/AndroidManifest.xml
+index d2a7ba046..d36ec5030 100644
+--- a/packages/SystemUI/AndroidManifest.xml
++++ b/packages/SystemUI/AndroidManifest.xml
+@@ -41,6 +41,7 @@
+     <uses-permission android:name="android.permission.READ_DEVICE_CONFIG" />
+ 
+     <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
++    <uses-permission android:name="android.permission.SUBSCRIBE_TO_KEYGUARD_LOCKED_STATE" />
+     <uses-permission android:name="android.permission.STATUS_BAR" />
+     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+     <uses-permission android:name="android.permission.REMOTE_AUDIO_PLAYBACK" />
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
+index db91ce3c1..79b1220a8 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
+@@ -117,6 +117,11 @@ public class PhoneStatusBarView extends FrameLayout {
+         getViewRootImpl().setTouchableRegion(touchableRegion);
+     }
+ 
++    @Override
++    protected void dispatchDraw(android.graphics.Canvas canvas) {
++        PixelStatusBarFilter.draw(this, () -> super.dispatchDraw(canvas));
++    }
++
+     @Override
+     public void onFinishInflate() {
+         super.onFinishInflate();
+@@ -242,6 +247,14 @@ public class PhoneStatusBarView extends FrameLayout {
+             // non-interactive.
+             return true;
+         }
++        if (com.android.wm.shell.AgentTrayPrototype.onStatusBarTouch(event)) {
++            // Cancel the native tap/scroll-to-top gesture, but let real drags reach the shade.
++            MotionEvent cancel = MotionEvent.obtain(event);
++            cancel.setAction(MotionEvent.ACTION_CANCEL);
++            super.dispatchTouchEvent(cancel);
++            cancel.recycle();
++            return true;
++        }
+         return super.dispatchTouchEvent(event);
+     }
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
+index 013eae5ed..68606fa27 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt
+@@ -624,6 +624,9 @@ private fun addEndSideComposable(
+     val systemStatusIconsComposeView =
+         ComposeView(phoneStatusBarView.context).apply {
+             setContent {
++                val pixelMinimal = android.os.SystemProperties.getBoolean(
++                    "persist.wm.debug.pixel_agent_tray", false) &&
++                    android.app.ActivityManager.getCurrentUser() == 0
+                 val endSideWidth by rememberViewWidthAsState(endSideContainerView)
+ 
+                 Row(
+@@ -639,6 +642,7 @@ private fun addEndSideComposable(
+                         modifier = Modifier.weight(1f, fill = false).sysuiResTag("system_icons"),
+                         systemStatusIconBlockListInteractor =
+                             statusBarViewModel.systemStatusIconBlockListInteractor,
++                        pixelMinimal = pixelMinimal,
+                     )
+ 
+                     val height =
+@@ -649,7 +653,7 @@ private fun addEndSideComposable(
+                         rememberViewModel(traceName = "UnifiedBattery") {
+                             statusBarViewModel.unifiedBatteryViewModel.create()
+                         }
+-                    UnifiedBattery(
++                    if (!pixelMinimal) UnifiedBattery(
+                         viewModel = viewModel,
+                         isDarkProvider = { statusBarViewModel.areaDark },
+                         modifier = Modifier.height(height).wrapContentWidth(),
+@@ -669,6 +673,7 @@ private fun SystemStatusIconsContainer(
+     isDark: IsAreaDark,
+     modifier: Modifier = Modifier,
+     systemStatusIconBlockListInteractor: SystemStatusIconBlocklistInteractor,
++    pixelMinimal: Boolean = false,
+ ) {
+     var bounds by remember { mutableStateOf(Rect()) }
+     val tint = if (isDark.isDarkTheme(bounds)) Color.White else Color.Black
+@@ -681,6 +686,7 @@ private fun SystemStatusIconsContainer(
+                     with(relativeLayoutBounds.boundsInScreen) { Rect(left, top, right, bottom) }
+             },
+         systemStatusIconBlocklistInteractor = systemStatusIconBlockListInteractor,
++        pixelMinimal = pixelMinimal,
+     )
+ }
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt b/packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt
+index 0131aab45..8ba883695 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt
+@@ -49,6 +49,7 @@ fun SystemStatusIcons(
+     systemStatusIconBlocklistInteractor: SystemStatusIconBlocklistInteractor,
+     tint: Color,
+     modifier: Modifier = Modifier,
++    pixelMinimal: Boolean = false,
+ ) {
+     val context = LocalContext.current
+     val viewModel =
+@@ -59,7 +60,8 @@ fun SystemStatusIcons(
+     CompositionLocalProvider(LocalContentColor provides tint) {
+         EllipsizingRow(spacing = 6.dp, modifier = modifier.sysuiResTag("statusIcons")) {
+             viewModel.iconViewModels
+-                .filter { it.visible }
++                .filter { it.visible && (!pixelMinimal ||
++                    it.slotName in setOf("camera", "microphone", "location", "vpn", "screen_record")) }
+                 .forEach { iconViewModel ->
+                     when (iconViewModel) {
+                         is SystemStatusIconViewModel.Default ->

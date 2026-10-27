@@ -1,0 +1,7 @@
+diff --git a/release_configs/cur.textproto b/release_configs/cur.textproto
+--- a/release_configs/cur.textproto
++++ b/release_configs/cur.textproto
+@@ -1,2 +1,3 @@
+ name: "cur"
+ inherits: "aosp_current"
++aconfig_value_sets: "aconfig_value_set-pixel-background-control"

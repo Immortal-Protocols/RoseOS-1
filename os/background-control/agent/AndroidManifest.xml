@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.backgroundcontrol" android:versionCode="6" android:versionName="2.0.3-live">
+  <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="35" />
+  <uses-permission android:name="android.permission.ACCESS_COMPUTER_CONTROL" />
+  <uses-permission android:name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <queries><intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent></queries>
+  <application android:label="Background Control" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
+    <uses-library android:name="com.android.extensions.computercontrol" android:required="true" />
+    <activity android:name=".MainActivity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+      <intent-filter><action android:name="android.intent.action.ASSIST" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+    </activity>
+    <provider android:name=".AgentProvider" android:authorities="dev.pixel.backgroundcontrol.agent" android:exported="true" />
+    <receiver android:name=".StopReceiver" android:exported="false" />
+  </application>
+</manifest>

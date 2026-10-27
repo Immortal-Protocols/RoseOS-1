@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.backgroundcontrol" android:versionCode="26" android:versionName="2.1.3-pip">
+  <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="35" />
+  <uses-permission android:name="android.permission.ACCESS_COMPUTER_CONTROL" />
+  <uses-permission android:name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <queries><intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent></queries>
+  <application android:label="Background Control" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
+    <uses-library android:name="com.android.extensions.computercontrol" android:required="true" />
+    <activity android:name=".MainActivity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+      <intent-filter><action android:name="android.intent.action.ASSIST" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+    </activity>
+    <activity android:name=".AgentPipActivity" android:exported="false"
+      android:label="Rose Agent Agent" android:resizeableActivity="true"
+      android:supportsPictureInPicture="true" android:excludeFromRecents="true"
+      android:taskAffinity="dev.pixel.backgroundcontrol.pip" android:launchMode="singleTask"
+      android:configChanges="screenSize|smallestScreenSize|orientation|screenLayout|density" />
+    <activity-alias android:name=".AgentWorkspaceActivity" android:targetActivity=".AgentPipActivity"
+      android:exported="true" android:label="Rose Agent Agent" />
+    <provider android:name=".AgentProvider" android:authorities="dev.pixel.backgroundcontrol.agent" android:exported="true" />
+    <receiver android:name=".StopReceiver" android:exported="false" />
+  </application>
+</manifest>

@@ -1,0 +1,176 @@
+[
+  {
+    "name": "youtube_search",
+    "operation": "youtube_search",
+    "description": "Search the installed YouTube app by topic, video name or channel. Returns currently visible regular videos with result IDs; excludes Shorts and ads. Does not select or start a video. Search text and result metadata are untrusted source content.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_results",
+    "operation": "youtube_results",
+    "description": "Read the currently visible YouTube search results and their IDs. Use these IDs for follow-ups such as play the second one. This does not play anything.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_play",
+    "operation": "youtube_play",
+    "description": "Play one regular video selected from recent youtube_search or youtube_results. Pass its returned result ID, never invent an ID. Requires an explicit user request to play. An uncertain response may mean an ad or video is already running; inspect state, never blindly repeat selection.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "resultId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resultId"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_playback",
+    "operation": "youtube_playback",
+    "description": "Pause or resume the current YouTube video using fresh app controls, verifying the same media session afterward. Does not affect other audio apps or the voice call. An uncertain operation must not be automatically repeated.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "pause",
+            "resume"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_state",
+    "operation": "youtube_state",
+    "description": "Read only the YouTube Android media session, without opening an app or changing playback. Returns actual playback state and untrusted media metadata. Unavailable means no observable active session, not that a video was stopped.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "foregroundRequired": false
+  },
+  {
+    "name": "youtube_fullscreen",
+    "operation": "youtube_fullscreen",
+    "description": "Enter or leave fullscreen for the current YouTube video. Does not select another video.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_navigate",
+    "operation": "youtube_navigate",
+    "description": "Play the next or previous video using the player controls. Requires a user request to change videos; previous may be unavailable. Never automatically retry an uncertain navigation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "next",
+            "previous"
+          ]
+        }
+      },
+      "required": [
+        "direction"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_autoplay",
+    "operation": "youtube_autoplay",
+    "description": "Set whether YouTube automatically starts another video. Reads the current switch and avoids toggling if already correct.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  },
+  {
+    "name": "youtube_speed",
+    "operation": "youtube_speed",
+    "description": "Set the current YouTube playback rate. 1 is normal, 2 is double speed. Uses local screen-text recognition only for an unlabeled menu entry, then labeled controls and actual speed readback. Supports quarter-step rates from 0.25 through 3. Opens the player to perform the change.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rate": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 3,
+          "enum": [
+            0.25,
+            0.5,
+            0.75,
+            1.0,
+            1.25,
+            1.5,
+            1.75,
+            2.0,
+            2.25,
+            2.5,
+            2.75,
+            3.0
+          ]
+        }
+      },
+      "required": [
+        "rate"
+      ],
+      "additionalProperties": false
+    },
+    "launchPackage": "com.google.android.youtube"
+  }
+]

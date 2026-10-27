@@ -1,0 +1,288 @@
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 6c7d52a..01b107b 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8102,4 +8102,11 @@
+     <string-array name="config_pixelComputerControlTargets" translatable="false" />
+     <string-array name="config_pixelComputerControlPrototypeAgents" translatable="false" />
+     <string name="config_pixelComputerControlReferenceDisplayAddress" translatable="false"></string>
++    <!-- Owner opt-in: let the pinned prototype agent create a session while the device is
++         locked or its screen is off. apply-os-changes.py sets this only for its locked-control option.
++         Creation still requires an unlocked user, a secure lock screen, no strong-auth
++         requirement, and a recent PIN, password, pattern or strong biometric authentication. -->
++    <bool name="config_pixelComputerControlLockedSessions">false</bool>
++    <!-- Maximum age of that authentication, in milliseconds. Zero disables locked creation. -->
++    <integer name="config_pixelComputerControlLockedAuthMaxAgeMs">14400000</integer>
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+index a4cd6ae..3cecf6a 100644
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6635,4 +6635,6 @@
+     <java-symbol type="array" name="config_pixelComputerControlTargets" />
+     <java-symbol type="array" name="config_pixelComputerControlPrototypeAgents" />
+     <java-symbol type="string" name="config_pixelComputerControlReferenceDisplayAddress" />
++    <java-symbol type="bool" name="config_pixelComputerControlLockedSessions" />
++    <java-symbol type="integer" name="config_pixelComputerControlLockedAuthMaxAgeMs" />
+ </resources>
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
+index 9789eb4..e60fbd2 100644
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
+@@ -27,19 +27,25 @@ import android.app.KeyguardManager;
+ import android.app.role.RoleManager;
+ import android.companion.virtual.VirtualDeviceManager;
+ import android.content.BroadcastReceiver;
++import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+ import android.content.pm.ApplicationInfo;
+ import android.content.pm.PackageInfo;
+ import android.content.pm.PackageManager;
++import android.content.pm.PackageManagerInternal;
++import android.content.pm.ResolveInfo;
+ import android.content.pm.SigningDetails;
+ import android.content.res.Resources;
++import android.hardware.biometrics.BiometricManager;
+ import android.os.Binder;
+ import android.os.Build;
+ import android.os.Environment;
+ import android.os.Process;
++import android.os.SystemClock;
+ import android.os.UserHandle;
++import android.os.UserManager;
+ import android.provider.DeviceConfig;
+ import android.text.TextUtils;
+ import android.util.ArrayMap;
+@@ -53,7 +59,9 @@ import com.android.internal.R;
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.internal.os.BackgroundThread;
++import com.android.internal.widget.LockPatternUtils;
+ import com.android.server.LocalServices;
++import com.android.server.pm.KnownPackages;
+ import com.android.server.pm.permission.PermissionManagerServiceInterface;
+ 
+ import java.io.File;
+@@ -677,6 +685,105 @@ final class ComputerControlAllowlistController implements DeviceConfig.OnPropert
+         return false;
+     }
+ 
++    /**
++     * Whether the pinned prototype agent may create a session while the owner's device is
++     * locked or its screen is off. This never unlocks the keyguard: the session runs only on its
++     * own always-unlocked virtual display. Every condition below is re-evaluated at creation.
++     */
++    boolean isLockedSessionAllowed(@Nullable String packageName,
++            @NonNull PackageManager packageManager, @UserIdInt int userId) {
++        final Resources resources = mContext.getResources();
++        if (!resources.getBoolean(R.bool.config_pixelComputerControlLockedSessions)) {
++            return false;
++        }
++        if (!hasPrototypeControl(packageName, packageManager)) {
++            Slog.w(TAG, "Locked session refused: agent is not the pinned prototype agent");
++            return false;
++        }
++        // Credential-encrypted storage must already be unlocked by the owner since boot.
++        final UserManager userManager = mContext.getSystemService(UserManager.class);
++        if (userManager == null || !userManager.isUserUnlocked(UserHandle.of(userId))) {
++            Slog.w(TAG, "Locked session refused: user storage is still locked");
++            return false;
++        }
++        final LockPatternUtils lockPatternUtils = new LockPatternUtils(mContext);
++        if (!lockPatternUtils.isSecure(userId)) {
++            Slog.w(TAG, "Locked session refused: no secure lock screen");
++            return false;
++        }
++        // Refuse whenever Android would refuse a biometric unlock: after boot, lockdown,
++        // the strong-auth timeout, failed attempts or a device policy requirement.
++        if (lockPatternUtils.getStrongAuthForUser(userId)
++                != LockPatternUtils.StrongAuthTracker.STRONG_AUTH_NOT_REQUIRED) {
++            Slog.w(TAG, "Locked session refused: strong authentication is required");
++            return false;
++        }
++        final long maxAgeMs = resources.getInteger(
++                R.integer.config_pixelComputerControlLockedAuthMaxAgeMs);
++        final BiometricManager biometricManager =
++                mContext.getSystemService(BiometricManager.class);
++        final long lastAuthentication = biometricManager == null
++                ? BiometricManager.BIOMETRIC_NO_AUTHENTICATION
++                : biometricManager.getLastAuthenticationTime(userId,
++                        BiometricManager.Authenticators.DEVICE_CREDENTIAL
++                                | BiometricManager.Authenticators.BIOMETRIC_STRONG);
++        if (maxAgeMs <= 0 || lastAuthentication == BiometricManager.BIOMETRIC_NO_AUTHENTICATION
++                || SystemClock.elapsedRealtime() - lastAuthentication > maxAgeMs) {
++            Slog.w(TAG, "Locked session refused: no recent owner authentication");
++            return false;
++        }
++        return true;
++    }
++
++    /**
++     * Packages that hold Android's owner-facing gates: installation, removal, permissions,
++     * settings, setup, system dialogs and system UI. A locked session must not operate them.
++     */
++    boolean isOwnerGatedPackage(@NonNull String packageName,
++            @NonNull PackageManager packageManager, @UserIdInt int userId) {
++        final PackageManagerInternal packageManagerInternal =
++                LocalServices.getService(PackageManagerInternal.class);
++        if (packageManagerInternal != null && (
++                isKnownPackage(packageManagerInternal, KnownPackages.PACKAGE_SYSTEM,
++                        packageName, userId)
++                || isKnownPackage(packageManagerInternal, KnownPackages.PACKAGE_SETUP_WIZARD,
++                        packageName, userId)
++                || isKnownPackage(packageManagerInternal, KnownPackages.PACKAGE_INSTALLER,
++                        packageName, userId)
++                || isKnownPackage(packageManagerInternal, KnownPackages.PACKAGE_UNINSTALLER,
++                        packageName, userId)
++                || isKnownPackage(packageManagerInternal, KnownPackages.PACKAGE_VERIFIER,
++                        packageName, userId)
++                || isKnownPackage(packageManagerInternal,
++                        KnownPackages.PACKAGE_PERMISSION_CONTROLLER, packageName, userId))) {
++            return true;
++        }
++        final ComponentName systemUi = ComponentName.unflattenFromString(
++                mContext.getString(R.string.config_systemUIServiceComponent));
++        if (systemUi != null && packageName.equals(systemUi.getPackageName())) return true;
++        final ResolveInfo settings = packageManager.resolveActivity(
++                new Intent(android.provider.Settings.ACTION_SETTINGS),
++                PackageManager.MATCH_SYSTEM_ONLY);
++        if (settings != null && settings.activityInfo != null
++                && packageName.equals(settings.activityInfo.packageName)) {
++            return true;
++        }
++        // Privileged stores can install or remove apps without the installer's confirmation.
++        return packageManager.checkPermission(android.Manifest.permission.INSTALL_PACKAGES,
++                packageName) == PackageManager.PERMISSION_GRANTED
++                || packageManager.checkPermission(android.Manifest.permission.DELETE_PACKAGES,
++                        packageName) == PackageManager.PERMISSION_GRANTED;
++    }
++
++    private static boolean isKnownPackage(@NonNull PackageManagerInternal packageManagerInternal,
++            @KnownPackages.KnownPackage int knownPackage, @NonNull String packageName,
++            @UserIdInt int userId) {
++        for (String known : packageManagerInternal.getKnownPackageNames(knownPackage, userId)) {
++            if (packageName.equals(known)) return true;
++        }
++        return false;
++    }
++
+     private boolean isSuperAgent(@NonNull String packageName,
+             @Nullable SigningDetails signingDetails) {
+         if (!mBuildIsDebuggable) {
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+index 0a88d97..5f4a32d 100644
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+@@ -671,6 +671,9 @@ final class ComputerControlSessionImpl extends IComputerControlSession.Stub
+                                 + " which is not a target package for the current session");
+             }
+         }
++        if (isOwnerGatedWhileLocked(packageName)) {
++            throw new IllegalArgumentException("owner_unlock_required: " + packageName);
++        }
+ 
+         // TODO(b/444600407): Remove this once the consent model is per-target app. While the
+         // consent is general, the caller can extend the list of target packages dynamically.
+@@ -1316,6 +1319,11 @@ final class ComputerControlSessionImpl extends IComputerControlSession.Stub
+                 return false;
+             }
+         }
++        // While the owner's device is locked, installer, permission, settings and system
++        // screens block the session until the owner unlocks and takes over.
++        if (isOwnerGatedWhileLocked(componentName.getPackageName())) {
++            return false;
++        }
+ 
+         // TODO: b/451568055 - Support cross-user sessions.
+         return userId == UserHandle.USER_SYSTEM || userId == mRequest.ownerUserId();
+@@ -1357,9 +1365,33 @@ final class ComputerControlSessionImpl extends IComputerControlSession.Stub
+                     + callSite);
+             return true;
+         }
++        // The device can lock while an owner-gated screen is already on top.
++        final List<ActivityAssistInfo> activities = Binder.withCleanCallingIdentity(
++                () -> mActivityTaskManagerInternal.getTopVisibleActivities(mVirtualDisplayId));
++        final ActivityAssistInfo top = activities == null || activities.isEmpty()
++                ? null : activities.get(0);
++        final String topPackage = top == null || top.getComponentName() == null
++                ? null : top.getComponentName().getPackageName();
++        if (topPackage != null && isOwnerGatedWhileLocked(topPackage)) {
++            Slog.w(TAG, "Computer control interaction blocked on " + topPackage
++                    + " while the device is locked: " + callSite);
++            mLifecycle.updateLifecycleState(
++                    (config) -> config.mBlockingActivityPackage = topPackage);
++            return true;
++        }
+         return false;
+     }
+ 
++    private boolean isOwnerGatedWhileLocked(@NonNull String packageName) {
++        return Binder.withCleanCallingIdentity(() -> {
++            final KeyguardManager keyguardManager = getKeyguardManager();
++            return keyguardManager != null
++                    && keyguardManager.isDeviceLocked(mRequest.ownerUserId())
++                    && mAllowlistController.isOwnerGatedPackage(packageName,
++                            mRequest.ownerPackageManager(), mRequest.ownerUserId());
++        });
++    }
++
+     private static VirtualTouchEvent createTouchEvent(int x, int y,
+             @VirtualTouchEvent.Action int action) {
+         return new VirtualTouchEvent.Builder()
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java
+index 82fe674..079a2e4 100644
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java
+@@ -54,6 +54,7 @@ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.Parcel;
++import android.os.PowerManager;
+ import android.os.Process;
+ import android.os.RemoteException;
+ import android.os.ResultReceiver;
+@@ -62,6 +63,7 @@ import android.os.UserManager;
+ import android.security.authenticationpolicy.AuthenticationPolicyManager;
+ import android.util.ArraySet;
+ import android.util.Slog;
++import android.view.Display;
+ 
+ import com.android.internal.R;
+ import com.android.internal.annotations.GuardedBy;
+@@ -99,6 +101,7 @@ public final class ComputerControlSessionProcessor {
+     private final AppOpsManager mAppOpsManager;
+     private final PackageManager mPackageManager;
+     private final UserManager mUserManager;
++    private final PowerManager mPowerManager;
+     private final DevicePolicyManager mDevicePolicyManager;
+     private final DevicePolicyManagerInternal mDevicePolicyManagerInternal;
+     private final ActivityTaskManagerInternal mActivityTaskManagerInternal;
+@@ -144,6 +147,7 @@ public final class ComputerControlSessionProcessor {
+         mAppOpsManager = context.getSystemService(AppOpsManager.class);
+         mPackageManager = context.getPackageManager();
+         mUserManager = context.getSystemService(UserManager.class);
++        mPowerManager = context.getSystemService(PowerManager.class);
+         mDevicePolicyManager = context.getSystemService(DevicePolicyManager.class);
+         mDevicePolicyManagerInternal = LocalServices.getService(DevicePolicyManagerInternal.class);
+         mActivityTaskManagerInternal = LocalServices.getService(ActivityTaskManagerInternal.class);
+@@ -541,6 +545,18 @@ public final class ComputerControlSessionProcessor {
+         boolean isDeviceLocked =
+                 Binder.withCleanCallingIdentity(
+                         () -> mKeyguardManager.isDeviceLocked(request.ownerUserId(), deviceId));
++        // An owner-authorized agent may start while the owner is away from the screen. It
++        // replaces only the lock and visible-window checks; the keyguard stays in place.
++        final boolean ownerAwayFromScreen = isDeviceLocked || (mPowerManager != null
++                && !Binder.withCleanCallingIdentity(
++                        () -> mPowerManager.isInteractive(Display.DEFAULT_DISPLAY)));
++        if (ownerAwayFromScreen && Binder.withCleanCallingIdentity(
++                () -> mAllowlistController.isLockedSessionAllowed(request.ownerPackageName(),
++                        request.ownerPackageManager(), request.ownerUserId()))) {
++            Slog.i(TAG, "Allowing owner-authorized session for " + request.ownerPackageName()
++                    + " while the device is " + (isDeviceLocked ? "locked" : "not interactive"));
++            return true;
++        }
+         if (isDeviceLocked) {
+             dispatchSessionCreationFailed(request, ComputerControlSession.ERROR_DEVICE_LOCKED);
+             return false;

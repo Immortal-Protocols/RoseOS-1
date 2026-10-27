@@ -1,0 +1,1 @@
+<resources><string name="phone_control_description">Lets your paired Rose Agent assistant read visible controls and perform the phone actions you request. Screen contents are fetched only on request, and may be sent to your assistant for processing. Password fields are excluded. Disable this service here at any time.</string></resources>

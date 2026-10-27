@@ -1,0 +1,14 @@
+[
+  "server/server.mjs",
+  "server/phone.mjs",
+  "server/voice-instructions.mjs",
+  "server/codex.mjs",
+  "app/AndroidManifest.xml",
+  "app/assets/index.html",
+  "app/src/dev/pixel/voice/VoiceService.java",
+  "phone/control.py",
+  "phone/README.md",
+  "voice-providers/voice-commands.js",
+  "voice-providers/app-worker-policy.mjs",
+  "build.sh"
+]

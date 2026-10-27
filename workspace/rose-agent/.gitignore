@@ -1,0 +1,8 @@
+app/assets/connection.json
+app/classes/
+app/src/R.java
+app/*.apk
+app/*.dex
+server/node_modules/
+runtime/
+docs/protocol/

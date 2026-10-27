@@ -1,0 +1,12 @@
+[
+  "server/messages.mjs",
+  "server/server.mjs",
+  "voice-providers/app-worker-policy.mjs",
+  "voice-providers/voice-commands.js",
+  "app/assets/index.html",
+  "app/AndroidManifest.xml",
+  "app/src/dev/pixel/voice/VoiceService.java",
+  "build.sh",
+  "phone/control.py",
+  "tests/eleven-ui.cjs"
+]

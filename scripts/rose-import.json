@@ -1,0 +1,3458 @@
+{
+  "repository": "https://github.com/Immortal-Protocols/pixel-workspace",
+  "revision": "9f1261dd5aac9227ea4b16d3817f394bffa1cf5c",
+  "transformations": [
+    "workspace/pixel-voice -> workspace/rose-agent",
+    "path references pixel-voice/ -> rose-agent/",
+    "display name Pixel Voice -> Rose Agent; package IDs retained",
+    "private ~/.config/pixel-voice paths retained for compatibility",
+    "Linux unsigned Rose Agent build replaces original in-source signing build",
+    "background controller compilation uses the Java compiler module",
+    "backend source path joins updated; protocol names remain unchanged",
+    "omit generated Manifest.java and bundled eleven-client.js; regenerate in each build"
+  ],
+  "files": [
+    {
+      "source": "os/background-control/agent-pip/AndroidManifest.xml",
+      "destination": "os/background-control/agent-pip/AndroidManifest.xml",
+      "upstream_blob": "a29c53bd8c2f21381dacc04c6af64ac86872a4ca"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/AgentPipActivity.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/AgentPipActivity.java",
+      "upstream_blob": "48a6672c63078f54f7af786ce418d255a3057246"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/AgentProvider.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/AgentProvider.java",
+      "upstream_blob": "aec2e439c6f4880af8f8ea6a8a267d3784a7b50b"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/Controller.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/Controller.java",
+      "upstream_blob": "39a4b4178942752282ffa7a9b4fdf31fb98c53bd"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/LabelTargets.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/LabelTargets.java",
+      "upstream_blob": "9ac1d702563f103300948bfa8d69235401072b64"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MainActivity.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MainActivity.java",
+      "upstream_blob": "9421dae91aca4da52269abfcedbc6a6f8eb93708"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MirrorWindowContext.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MirrorWindowContext.java",
+      "upstream_blob": "b3a95059e35e2480aad22ee927ae921400033483"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MirrorWindowFrame.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MirrorWindowFrame.java",
+      "upstream_blob": "0ad5fbde8a0723ba93710a67cfd3b9488e5d8644"
+    },
+    {
+      "source": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/StopReceiver.java",
+      "destination": "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/StopReceiver.java",
+      "upstream_blob": "85cb8b3f22e63806d44f75c5cbab9b75dba18e04"
+    },
+    {
+      "source": "os/background-control/agent-split/AndroidManifest.xml",
+      "destination": "os/background-control/agent-split/AndroidManifest.xml",
+      "upstream_blob": "dae7bdf9ca790dac34a61882ccdc3ec890222ab1"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentPaneActivity.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentPaneActivity.java",
+      "upstream_blob": "e6920417eee6bf87fe5132cfa7a2f24bb86acb31"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentPaneFrame.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentPaneFrame.java",
+      "upstream_blob": "0dfdfae8a70335809bb7229a8004220a03a9f6eb"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentProvider.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentProvider.java",
+      "upstream_blob": "31fd755b70158de692a3b39e91b752ed0827ad34"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentWorkspaceActivity.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/AgentWorkspaceActivity.java",
+      "upstream_blob": "ccf55be645a4b3f5f20a23e88d7507a95b9d8c0c"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/Controller.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/Controller.java",
+      "upstream_blob": "46bbc6fb940b57841d223fe63dcafa768101a196"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/InstallerRecoveryPolicy.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/InstallerRecoveryPolicy.java",
+      "upstream_blob": "b1b90222c78f16d208de13957522f54f953272f4"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/LabelTargets.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/LabelTargets.java",
+      "upstream_blob": "9ac1d702563f103300948bfa8d69235401072b64"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/MainActivity.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/MainActivity.java",
+      "upstream_blob": "5230393e41c7b5f602b3c8b49dbcd4f670956781"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/MirrorWindowContext.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/MirrorWindowContext.java",
+      "upstream_blob": "b3a95059e35e2480aad22ee927ae921400033483"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/MirrorWindowFrame.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/MirrorWindowFrame.java",
+      "upstream_blob": "0ad5fbde8a0723ba93710a67cfd3b9488e5d8644"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/PaneCoordinator.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/PaneCoordinator.java",
+      "upstream_blob": "60f84e9745ee82d218c4c308db35362c1028e8b8"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/PanePolicy.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/PanePolicy.java",
+      "upstream_blob": "29d7afdab8228f6749dbefabb60c7c672a1bb27d"
+    },
+    {
+      "source": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/StopReceiver.java",
+      "destination": "os/background-control/agent-split/src/dev/pixel/backgroundcontrol/StopReceiver.java",
+      "upstream_blob": "85cb8b3f22e63806d44f75c5cbab9b75dba18e04"
+    },
+    {
+      "source": "os/background-control/agent/AndroidManifest.xml",
+      "destination": "os/background-control/agent/AndroidManifest.xml",
+      "upstream_blob": "fd120a303f57c9f4b2c435abaf4f42b39a0421bb"
+    },
+    {
+      "source": "os/background-control/agent/src/dev/pixel/backgroundcontrol/AgentProvider.java",
+      "destination": "os/background-control/agent/src/dev/pixel/backgroundcontrol/AgentProvider.java",
+      "upstream_blob": "aec2e439c6f4880af8f8ea6a8a267d3784a7b50b"
+    },
+    {
+      "source": "os/background-control/agent/src/dev/pixel/backgroundcontrol/Controller.java",
+      "destination": "os/background-control/agent/src/dev/pixel/backgroundcontrol/Controller.java",
+      "upstream_blob": "63d8d90eb1fa0813668485a5d3787e2f047012f1"
+    },
+    {
+      "source": "os/background-control/agent/src/dev/pixel/backgroundcontrol/LabelTargets.java",
+      "destination": "os/background-control/agent/src/dev/pixel/backgroundcontrol/LabelTargets.java",
+      "upstream_blob": "9ac1d702563f103300948bfa8d69235401072b64"
+    },
+    {
+      "source": "os/background-control/agent/src/dev/pixel/backgroundcontrol/MainActivity.java",
+      "destination": "os/background-control/agent/src/dev/pixel/backgroundcontrol/MainActivity.java",
+      "upstream_blob": "1b589e32d55f20b4070983c51647273649ddea7f"
+    },
+    {
+      "source": "os/background-control/agent/src/dev/pixel/backgroundcontrol/StopReceiver.java",
+      "destination": "os/background-control/agent/src/dev/pixel/backgroundcontrol/StopReceiver.java",
+      "upstream_blob": "85cb8b3f22e63806d44f75c5cbab9b75dba18e04"
+    },
+    {
+      "source": "os/background-control/tests/InstallerRecoveryPolicyTest.java",
+      "destination": "os/background-control/tests/InstallerRecoveryPolicyTest.java",
+      "upstream_blob": "087bf8f6b526247a0495de5d826d23e05e9678ca"
+    },
+    {
+      "source": "os/background-control/tests/LabelTargetsTest.java",
+      "destination": "os/background-control/tests/LabelTargetsTest.java",
+      "upstream_blob": "9380285a56e26769b905c4525322fc505a12f506"
+    },
+    {
+      "source": "os/background-control/tests/MirrorWindowFrameTest.java",
+      "destination": "os/background-control/tests/MirrorWindowFrameTest.java",
+      "upstream_blob": "02129e20786a67c5c31aa70d756e81b885d6dd70"
+    },
+    {
+      "source": "os/background-control/tests/PanePolicyTest.java",
+      "destination": "os/background-control/tests/PanePolicyTest.java",
+      "upstream_blob": "5f27c7b1fe38c4d0a1c37620500bf6f5f23ec325"
+    },
+    {
+      "source": "os/background-control/tests/test_policy.py",
+      "destination": "os/background-control/tests/test_policy.py",
+      "upstream_blob": "aa71bf405a7c6bbd1a0d1a29cb6f5a3445fd8c16"
+    },
+    {
+      "source": "os/fold-port/README.md",
+      "destination": "os/fold-port/README.md",
+      "upstream_blob": "59749ccd0f5c477dfcc1a7cffd20a840e12d34c6"
+    },
+    {
+      "source": "os/fold-port/allocator-va39.patch",
+      "destination": "os/fold-port/allocator-va39.patch",
+      "upstream_blob": "eb9a59d118005d1bcb4a3fdacc1b62d9a46ab41e"
+    },
+    {
+      "source": "os/fold-port/product-tray.patch",
+      "destination": "os/fold-port/product-tray.patch",
+      "upstream_blob": "639b3e21bd6fac6a351f7518334ae2574814fc5f"
+    },
+    {
+      "source": "os/fold-port/stock-kernel-flags.patch",
+      "destination": "os/fold-port/stock-kernel-flags.patch",
+      "upstream_blob": "69cfffb9febd7ba9781cedc8fb99e043ca9d2b3b"
+    },
+    {
+      "source": "os/optional-installer/README.md",
+      "destination": "os/optional-installer/README.md",
+      "upstream_blob": "9c6d9e41a143233339eafaa4f7cc52bc5858f5f6"
+    },
+    {
+      "source": "os/optional-installer/frameworks-base.patch",
+      "destination": "os/optional-installer/frameworks-base.patch",
+      "upstream_blob": "64bfafbd918bd87d019a0a0ef3740fadb393207e"
+    },
+    {
+      "source": "os/optional-installer/src/com/android/packageinstaller/AgentInstallProvider.kt",
+      "destination": "os/optional-installer/src/com/android/packageinstaller/AgentInstallProvider.kt",
+      "upstream_blob": "e78a02f65c67532c418b3265b3c6a0e5e0f52f25"
+    },
+    {
+      "source": "os/optional-installer/src/com/android/packageinstaller/AgentInstallUi.java",
+      "destination": "os/optional-installer/src/com/android/packageinstaller/AgentInstallUi.java",
+      "upstream_blob": "864394e7f0d15a86deccdb9d17d5498566433932"
+    },
+    {
+      "source": "os/overlays/build/release/aconfig/pixel_background_control/Android.bp",
+      "destination": "os/overlays/build/release/aconfig/pixel_background_control/Android.bp",
+      "upstream_blob": "77f96ff3cdce0e44941e189ece6f44e64b49a455"
+    },
+    {
+      "source": "os/overlays/build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+      "destination": "os/overlays/build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+      "upstream_blob": "64f7c618f9301cc3152abf9c3b8e69d8eb421dc9"
+    },
+    {
+      "source": "os/overlays/build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+      "destination": "os/overlays/build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+      "upstream_blob": "ae9570a532fa0e39088f840da12336bcbd5dcc72"
+    },
+    {
+      "source": "os/overlays/build/release/release_configs/pixel_background_control.textproto",
+      "destination": "os/overlays/build/release/release_configs/pixel_background_control.textproto",
+      "upstream_blob": "e6cee2ad1b68a3cf7d19a23ded1406745a55dd66"
+    },
+    {
+      "source": "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+      "destination": "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+      "upstream_blob": "b1981177d85f52fad987476dfa5507b3f74f2577"
+    },
+    {
+      "source": "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+      "destination": "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+      "upstream_blob": "2c04c5e189d50e88fe8590c9b9dab29040804763"
+    },
+    {
+      "source": "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+      "destination": "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+      "upstream_blob": "fd703ca185a339dff01ea8a55ff5f6531910a26b"
+    },
+    {
+      "source": "os/overlays/frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+      "destination": "os/overlays/frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+      "upstream_blob": "2ec1f4b0676c83ef33049db87b311171699e9192"
+    },
+    {
+      "source": "os/overlays/frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "destination": "os/overlays/frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "upstream_blob": "c8210f08ca3cece05b4f7baa428afe8e1abe3293"
+    },
+    {
+      "source": "os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+      "destination": "os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+      "upstream_blob": "c74ea35491eae7e5cc13d6e8e54013ea6f7cc01e"
+    },
+    {
+      "source": "os/overlays/packages/apps/PixelBackgroundControl/Android.bp",
+      "destination": "os/overlays/packages/apps/PixelBackgroundControl/Android.bp",
+      "upstream_blob": "679f311253bea98b81ecb14cd3284ef5a9bf62b5"
+    },
+    {
+      "source": "os/overlays/packages/apps/PixelBackgroundControl/privapp-permissions-pixel-background-control.xml",
+      "destination": "os/overlays/packages/apps/PixelBackgroundControl/privapp-permissions-pixel-background-control.xml",
+      "upstream_blob": "4f9285034faad262c3d145e12881164205d57681"
+    },
+    {
+      "source": "os/patches/background-control-build-make.patch",
+      "destination": "os/patches/background-control-build-make.patch",
+      "upstream_blob": "3083159200d2529bb8a5adaf01554b55993644f9"
+    },
+    {
+      "source": "os/patches/background-control-build-release.patch",
+      "destination": "os/patches/background-control-build-release.patch",
+      "upstream_blob": "1c2b716a8bc490ad45b2321580de1cfd42d262a8"
+    },
+    {
+      "source": "os/patches/background-control-frameworks-base.patch",
+      "destination": "os/patches/background-control-frameworks-base.patch",
+      "upstream_blob": "61bcfefa9367f6889f614f84784027adf297e953"
+    },
+    {
+      "source": "os/patches/background-control-modern-frameworks-base.patch",
+      "destination": "os/patches/background-control-modern-frameworks-base.patch",
+      "upstream_blob": "2ad127128d1ab9caed1611804e73394161fced41"
+    },
+    {
+      "source": "os/patches/background-control-resource-import-fix.patch",
+      "destination": "os/patches/background-control-resource-import-fix.patch",
+      "upstream_blob": "a29f8a6ebde996e415cf68810717acd88359cb5d"
+    },
+    {
+      "source": "os/patches/frameworks-base.patch",
+      "destination": "os/patches/frameworks-base.patch",
+      "upstream_blob": "9e39fde106ec26f4033b4e14014ed03df303ca4a"
+    },
+    {
+      "source": "os/patches/goldfish.patch",
+      "destination": "os/patches/goldfish.patch",
+      "upstream_blob": "6f63bb82275d87cc82b250f88897d17eddae6601"
+    },
+    {
+      "source": "os/patches/locked-control-frameworks-base.patch",
+      "destination": "os/patches/locked-control-frameworks-base.patch",
+      "upstream_blob": "5add1d54552e7e0eea356ac54337f481f7b04130"
+    },
+    {
+      "source": "os/pinned-manifest.xml",
+      "destination": "os/pinned-manifest.xml",
+      "upstream_blob": "b57648423ffb20af35d1c7058a3b7c58bb049770"
+    },
+    {
+      "source": "os/reference-scripts/build-release-mustang.sh",
+      "destination": "os/reference-scripts/build-release-mustang.sh",
+      "upstream_blob": "1eec30ca099c9cda9be52206634b97e74be0f8a3"
+    },
+    {
+      "source": "os/reference-scripts/build-tray-emulator-current.sh",
+      "destination": "os/reference-scripts/build-tray-emulator-current.sh",
+      "upstream_blob": "d0b4c038a8037b519a2debf009170551233a54a9"
+    },
+    {
+      "source": "os/reference-scripts/build-tray-emulator.sh",
+      "destination": "os/reference-scripts/build-tray-emulator.sh",
+      "upstream_blob": "fe16073decf54931025d15fc6f9a1973f395961a"
+    },
+    {
+      "source": "os/reference-scripts/build-tray-mustang.sh",
+      "destination": "os/reference-scripts/build-tray-mustang.sh",
+      "upstream_blob": "1e714618aa50ea1acf20d5c45d71d0ba75a7e31d"
+    },
+    {
+      "source": "os/reference-scripts/prepare-linux.sh",
+      "destination": "os/reference-scripts/prepare-linux.sh",
+      "upstream_blob": "802f4bf9752e6188285adb9c993c9af3d74ff9a0"
+    },
+    {
+      "source": "os/reference-scripts/prepare-migration.py",
+      "destination": "os/reference-scripts/prepare-migration.py",
+      "upstream_blob": "525528893d00beba63c52dc8bfd9c9a5bc14ba02"
+    },
+    {
+      "source": "os/reference-scripts/prepare-status-release-mustang.sh",
+      "destination": "os/reference-scripts/prepare-status-release-mustang.sh",
+      "upstream_blob": "5bce59895b080af89dbb6084b5b209a7c0d34d20"
+    },
+    {
+      "source": "os/reference-scripts/resume-tray-emulator.sh",
+      "destination": "os/reference-scripts/resume-tray-emulator.sh",
+      "upstream_blob": "edf0d9666964a17199d3b320155e4a14fef2de0f"
+    },
+    {
+      "source": "os/reference-scripts/sign-ready-mustang.sh",
+      "destination": "os/reference-scripts/sign-ready-mustang.sh",
+      "upstream_blob": "756425b39cbde3e39aef4eef686244899b3be324"
+    },
+    {
+      "source": "os/reference-scripts/tray-build-status.sh",
+      "destination": "os/reference-scripts/tray-build-status.sh",
+      "upstream_blob": "d264d5cd461554fd8f9eaa3e54cebfc4d72c60fb"
+    },
+    {
+      "source": "os/reference-scripts/verify-factory-mustang.py",
+      "destination": "os/reference-scripts/verify-factory-mustang.py",
+      "upstream_blob": "633d9b7c75a6771fc66ea118e907ada4334d78f0"
+    },
+    {
+      "source": "os/reference-scripts/verify-ready-mustang.sh",
+      "destination": "os/reference-scripts/verify-ready-mustang.sh",
+      "upstream_blob": "d67027d5255fc00c5f640c6f404236ebb0041320"
+    },
+    {
+      "source": "os/reference-scripts/verify-wireless-backup.py",
+      "destination": "os/reference-scripts/verify-wireless-backup.py",
+      "upstream_blob": "eb6d1ac92bed6ad7ba70fced4975b12b9134d577"
+    },
+    {
+      "source": "scripts/apply-os-changes.py",
+      "destination": "scripts/apply-os-changes.py",
+      "upstream_blob": "799c271ad75f29dbbb516855f6dc03f760395e8e"
+    },
+    {
+      "source": "scripts/background_apks.py",
+      "destination": "scripts/background_apks.py",
+      "upstream_blob": "0e4ff476c4df809c0bb3aa3beec3a596118ed681"
+    },
+    {
+      "source": "scripts/build-background-agent.py",
+      "destination": "scripts/build-background-agent.py",
+      "upstream_blob": "4d7a3d5c5793cc79faa5b2b94569e8957496f937"
+    },
+    {
+      "source": "scripts/configure-local.py",
+      "destination": "scripts/configure-local.py",
+      "upstream_blob": "1564ee8550cbe354bd18f5e09fcbfdcfc6a570a2"
+    },
+    {
+      "source": "scripts/prepare-background-policy.py",
+      "destination": "scripts/prepare-background-policy.py",
+      "upstream_blob": "0d5c77aa05af272f4f51484040264c00b8c8ee05"
+    },
+    {
+      "source": "scripts/prepare-installer-helper.py",
+      "destination": "scripts/prepare-installer-helper.py",
+      "upstream_blob": "a1f2e8f240abe36af5d3931701299938882fc777"
+    },
+    {
+      "source": "scripts/prepare-model-catalog.py",
+      "destination": "scripts/prepare-model-catalog.py",
+      "upstream_blob": "37234bbb35e821cc7e4bfa9a3df56f37c0e1089a"
+    },
+    {
+      "source": "workspace/experiments/guardian-voice/README.md",
+      "destination": "workspace/experiments/guardian-voice/README.md",
+      "upstream_blob": "1c59adf5a939ccc9bba860dc2d075d99802bb591"
+    },
+    {
+      "source": "workspace/experiments/guardian-voice/bridge.mjs",
+      "destination": "workspace/experiments/guardian-voice/bridge.mjs",
+      "upstream_blob": "01abe15c69e8d2e0908613448f3db593300abd7f"
+    },
+    {
+      "source": "workspace/experiments/guardian-voice/bridge.test.mjs",
+      "destination": "workspace/experiments/guardian-voice/bridge.test.mjs",
+      "upstream_blob": "0869af81ebbb333ca14647f0abbfd35730791b51"
+    },
+    {
+      "source": "workspace/experiments/guardian-voice/client.js",
+      "destination": "workspace/experiments/guardian-voice/client.js",
+      "upstream_blob": "8452a96ad437242e5eb3056c36ec2c0beeb0bc2b"
+    },
+    {
+      "source": "workspace/experiments/guardian-voice/client.test.cjs",
+      "destination": "workspace/experiments/guardian-voice/client.test.cjs",
+      "upstream_blob": "1feef640769e66f539c9930f663f06a5b9a0e0e9"
+    },
+    {
+      "source": "workspace/experiments/guardian-voice/live-test.mjs",
+      "destination": "workspace/experiments/guardian-voice/live-test.mjs",
+      "upstream_blob": "05c9ec5cb6a7cf86c3f373ceb658f5198da0ccc6"
+    },
+    {
+      "source": "workspace/experiments/maps-tools/fixtures/business-place.json",
+      "destination": "workspace/experiments/maps-tools/fixtures/business-place.json",
+      "upstream_blob": "e44d168268d481a91a339097e7e0968d26740ceb"
+    },
+    {
+      "source": "workspace/experiments/maps-tools/fixtures/map-home.json",
+      "destination": "workspace/experiments/maps-tools/fixtures/map-home.json",
+      "upstream_blob": "71f66c45886536f0ba450c41a26075750a98800c"
+    },
+    {
+      "source": "workspace/experiments/maps-tools/fixtures/search-empty.json",
+      "destination": "workspace/experiments/maps-tools/fixtures/search-empty.json",
+      "upstream_blob": "716b4bac213366ed154cf04958f6fe28545a9039"
+    },
+    {
+      "source": "workspace/experiments/maps-tools/fixtures/search-typed.json",
+      "destination": "workspace/experiments/maps-tools/fixtures/search-typed.json",
+      "upstream_blob": "83e85bc9fc1c6e3613744cb2c927f6ca2efe4e7b"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/README.md",
+      "destination": "workspace/experiments/phone-command-push/README.md",
+      "upstream_blob": "15249ba86a1c74194c890de32eaed7c3b07ecf7a"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/VALIDATION.md",
+      "destination": "workspace/experiments/phone-command-push/VALIDATION.md",
+      "upstream_blob": "b6d8006403034a8c256d5db5c5159af01d068671"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/delivery.js",
+      "destination": "workspace/experiments/phone-command-push/delivery.js",
+      "upstream_blob": "bba2141ee61642a147be161a15dae10eefe004f7"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/delivery.test.cjs",
+      "destination": "workspace/experiments/phone-command-push/delivery.test.cjs",
+      "upstream_blob": "c8bf1b7909d8a505a163b593683b71c95c5ab025"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/push.mjs",
+      "destination": "workspace/experiments/phone-command-push/push.mjs",
+      "upstream_blob": "43a89d3ea596c8ecb101c432560639d8f6b0b98a"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/push.test.mjs",
+      "destination": "workspace/experiments/phone-command-push/push.test.mjs",
+      "upstream_blob": "7852aa657ae4e96bf9c8a9f7473cb59030492c34"
+    },
+    {
+      "source": "workspace/experiments/phone-command-push/toggle.py",
+      "destination": "workspace/experiments/phone-command-push/toggle.py",
+      "upstream_blob": "d0d81cf8b221e7d60ae0e9735abf349abdb5e25b"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/GESTURES.md",
+      "destination": "workspace/experiments/phone-control-metrics/GESTURES.md",
+      "upstream_blob": "64b0558dc6ebc53f41f2855a596de4d18f4c7785"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/README.md",
+      "destination": "workspace/experiments/phone-control-metrics/README.md",
+      "upstream_blob": "1f881aafb8bfaec375e885bfa799524f50906c2f"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/analysis.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/analysis.mjs",
+      "upstream_blob": "a6af0342ef65966c818a23977d8ba12be85f881a"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/analysis.test.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/analysis.test.mjs",
+      "upstream_blob": "c9f67cef435ddba775f53e9ba3a7b5c0c0c56bf7"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/gesture.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/gesture.mjs",
+      "upstream_blob": "4d05287d03d4f7c5bee7a908323c28c410d75d70"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/gesture.test.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/gesture.test.mjs",
+      "upstream_blob": "afe89982b73ad754ee98fd457a2666bc52a4cd43"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/metrics.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/metrics.mjs",
+      "upstream_blob": "c59a0f99c882f90ba1c166791ca01b34c28351ee"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/metrics.test.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/metrics.test.mjs",
+      "upstream_blob": "527b6425162aa4643e68ad588298f0b87c95d582"
+    },
+    {
+      "source": "workspace/experiments/phone-control-metrics/report.mjs",
+      "destination": "workspace/experiments/phone-control-metrics/report.mjs",
+      "upstream_blob": "e9222a141b7599a153a0c4aaf4a97a24902619f3"
+    },
+    {
+      "source": "workspace/package-lock.json",
+      "destination": "workspace/package-lock.json",
+      "upstream_blob": "e6638fad5808e3e1cedf4647cc4962bc117d3d9e"
+    },
+    {
+      "source": "workspace/package.json",
+      "destination": "workspace/package.json",
+      "upstream_blob": "9bae2e555d261b9a06103d3c23cbc36377ec636d"
+    },
+    {
+      "source": "workspace/pixel-clipboard/.gitignore",
+      "destination": "workspace/pixel-clipboard/.gitignore",
+      "upstream_blob": "c9c1ebeb77cd4c1cf361a8d4c25bfbb828f0d059"
+    },
+    {
+      "source": "workspace/pixel-clipboard/ClipboardSync.java",
+      "destination": "workspace/pixel-clipboard/ClipboardSync.java",
+      "upstream_blob": "1d50142f51bef9a700f263fae1556b0a25e0539f"
+    },
+    {
+      "source": "workspace/pixel-clipboard/README.md",
+      "destination": "workspace/pixel-clipboard/README.md",
+      "upstream_blob": "40c031d610c505a190df4aa000c1f8e8f8911243"
+    },
+    {
+      "source": "workspace/pixel-clipboard/build_shortcut.py",
+      "destination": "workspace/pixel-clipboard/build_shortcut.py",
+      "upstream_blob": "328489b219eb636bf812e799f35d77e939953153"
+    },
+    {
+      "source": "workspace/pixel-clipboard/clipboard-connection.example.json",
+      "destination": "workspace/pixel-clipboard/clipboard-connection.example.json",
+      "upstream_blob": "f96b646b13c7c8844ed5f61a7d9d8a3d187f8c57"
+    },
+    {
+      "source": "workspace/pixel-clipboard/server.mjs",
+      "destination": "workspace/pixel-clipboard/server.mjs",
+      "upstream_blob": "29d831054b2b93b434cbc9cca382a87595e62b3d"
+    },
+    {
+      "source": "workspace/pixel-clipboard/store.mjs",
+      "destination": "workspace/pixel-clipboard/store.mjs",
+      "upstream_blob": "063fae745cca62d922af50a575b529b9f88e0502"
+    },
+    {
+      "source": "workspace/pixel-clipboard/store.test.mjs",
+      "destination": "workspace/pixel-clipboard/store.test.mjs",
+      "upstream_blob": "8b4f73188802005d9f3df56693d287304d0b670d"
+    },
+    {
+      "source": "workspace/pixel-clipboard/toggle.py",
+      "destination": "workspace/pixel-clipboard/toggle.py",
+      "upstream_blob": "2f3affdb659039876731dada0fa9f9595016649e"
+    },
+    {
+      "source": "workspace/pixel-hidden-world/assets/world.js",
+      "destination": "workspace/pixel-hidden-world/assets/world.js",
+      "upstream_blob": "4c53014379ce855054555c2a4f6c1ea7fe8baa05"
+    },
+    {
+      "source": "workspace/pixel-voice/.gitignore",
+      "destination": "workspace/rose-agent/.gitignore",
+      "upstream_blob": "ebdb7007d2a5dc72bdefbae74ded0c95e869cedc"
+    },
+    {
+      "source": "workspace/pixel-voice/README.md",
+      "destination": "workspace/rose-agent/README.md",
+      "upstream_blob": "74d386555a062e486b0cd49d2308ce888980649e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/AndroidManifest.xml",
+      "destination": "workspace/rose-agent/app/AndroidManifest.xml",
+      "upstream_blob": "2f2f8cdf08a550ad63bd5c46dd31ff068a05b546"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/apple-music-voice.js",
+      "destination": "workspace/rose-agent/app/assets/apple-music-voice.js",
+      "upstream_blob": "401833d014f709cb78ca16527e45d192e4eb4021"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/book-companion.js",
+      "destination": "workspace/rose-agent/app/assets/book-companion.js",
+      "upstream_blob": "9a471389f1399a62679a1a39948d4baf430ab85f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/clipboard-connection.example.json",
+      "destination": "workspace/rose-agent/app/assets/clipboard-connection.example.json",
+      "upstream_blob": "f96b646b13c7c8844ed5f61a7d9d8a3d187f8c57"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/clock-tool.js",
+      "destination": "workspace/rose-agent/app/assets/clock-tool.js",
+      "upstream_blob": "ae614c4641d9ef0d4e9aa5ab58e1145882b7a6b4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/connection.example.json",
+      "destination": "workspace/rose-agent/app/assets/connection.example.json",
+      "upstream_blob": "7c50f40ffef1a94f7d8839634f4a9305f0ed7da3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/fonts/nunito.ttf",
+      "destination": "workspace/rose-agent/app/assets/fonts/nunito.ttf",
+      "upstream_blob": "2ec1f4b0676c83ef33049db87b311171699e9192"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/guardian-voice.js",
+      "destination": "workspace/rose-agent/app/assets/guardian-voice.js",
+      "upstream_blob": "8452a96ad437242e5eb3056c36ec2c0beeb0bc2b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/index.html",
+      "destination": "workspace/rose-agent/app/assets/index.html",
+      "upstream_blob": "020dcded55b8f97b6abdbb27b5b8bf902880c3a1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/licenses/Nunito-OFL.txt",
+      "destination": "workspace/rose-agent/app/assets/licenses/Nunito-OFL.txt",
+      "upstream_blob": "c8210f08ca3cece05b4f7baa428afe8e1abe3293"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/licenses/weather-astronomy.txt",
+      "destination": "workspace/rose-agent/app/assets/licenses/weather-astronomy.txt",
+      "upstream_blob": "08ba7caae9ae798824a823e8bfd17d0a00dc069e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/luna-first.js",
+      "destination": "workspace/rose-agent/app/assets/luna-first.js",
+      "upstream_blob": "fb8e1cb46384c03a980dbd4cdfe65401fbd0f29b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/mac-screen-connection.example.json",
+      "destination": "workspace/rose-agent/app/assets/mac-screen-connection.example.json",
+      "upstream_blob": "7c50f40ffef1a94f7d8839634f4a9305f0ed7da3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/mac-screen.html",
+      "destination": "workspace/rose-agent/app/assets/mac-screen.html",
+      "upstream_blob": "a04c9c991260398f3d308ed46b70d390858ec189"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/mac-screen.js",
+      "destination": "workspace/rose-agent/app/assets/mac-screen.js",
+      "upstream_blob": "e296154dab471ea585c18062fdb131631c6af446"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/media-tool.js",
+      "destination": "workspace/rose-agent/app/assets/media-tool.js",
+      "upstream_blob": "a9afcbc6d138b50e44ebc886e7984707803adcba"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/messages-tool.js",
+      "destination": "workspace/rose-agent/app/assets/messages-tool.js",
+      "upstream_blob": "c66eb6d681004366e6608b8e7fef9ad14c7d2a2d"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/migration-build.txt",
+      "destination": "workspace/rose-agent/app/assets/migration-build.txt",
+      "upstream_blob": "2eff6fc2e505d3c1b81960f2d166e8719104b94f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/output-boost.js",
+      "destination": "workspace/rose-agent/app/assets/output-boost.js",
+      "upstream_blob": "a759b0f3c6eaa272b8a240947be4fee11fa93c7f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/phone-app-context.js",
+      "destination": "workspace/rose-agent/app/assets/phone-app-context.js",
+      "upstream_blob": "ed4f536451951b8e5e78925220e8a78b2be15422"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/phone-command-delivery.js",
+      "destination": "workspace/rose-agent/app/assets/phone-command-delivery.js",
+      "upstream_blob": "bba2141ee61642a147be161a15dae10eefe004f7"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/podcast-companion.js",
+      "destination": "workspace/rose-agent/app/assets/podcast-companion.js",
+      "upstream_blob": "80a120b1d6724db68c3a135964809f11164efab4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/settings-agent-tools.json",
+      "destination": "workspace/rose-agent/app/assets/settings-agent-tools.json",
+      "upstream_blob": "578b2efb3eda86e3b45e7d1951902cbd6dd26599"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/task-status-transport.js",
+      "destination": "workspace/rose-agent/app/assets/task-status-transport.js",
+      "upstream_blob": "06c6826c69d8156a3270b729609130abdf370ea3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/voice-commands.js",
+      "destination": "workspace/rose-agent/app/assets/voice-commands.js",
+      "upstream_blob": "16101605f0911253f1adb6c6a5cb147ea94fee22"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/voice-providers.js",
+      "destination": "workspace/rose-agent/app/assets/voice-providers.js",
+      "upstream_blob": "04c3d4701ba6e3b78e1f15f1f38801958ca4abba"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/voice-timing.js",
+      "destination": "workspace/rose-agent/app/assets/voice-timing.js",
+      "upstream_blob": "03784d004dcb968ed03d57d551b6ec44db506cb2"
+    },
+    {
+      "source": "workspace/pixel-voice/app/assets/youtube-agent-tools.json",
+      "destination": "workspace/rose-agent/app/assets/youtube-agent-tools.json",
+      "upstream_blob": "022fa3736502f88d5ac4ac891dcb72fa443faeb9"
+    },
+    {
+      "source": "workspace/pixel-voice/app/package.json",
+      "destination": "workspace/rose-agent/app/package.json",
+      "upstream_blob": "e048b9ae859f2241b6cfa99547a5ebbae2dbeebe"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_books.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_books.png",
+      "upstream_blob": "53ca61fae8bca25fc8ec98bc314870dd30d7b93f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_browser.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_browser.png",
+      "upstream_blob": "b507cc3e87d9221b2eb352754196dfa0d005c29b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_calculator.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_calculator.png",
+      "upstream_blob": "c52a45947fda32a8815e379eb88938ce286768a1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_calendar.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_calendar.png",
+      "upstream_blob": "218b0c2d8d8606ecf19f6ac076f130f3a90e6f22"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_camera.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_camera.png",
+      "upstream_blob": "34a7968bd879511d9833183ed9653d687ec2cf95"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_clock.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_clock.png",
+      "upstream_blob": "ea4cb3e04bc8bd9e1a89a1636873070169b8a5d8"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_compass.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_compass.png",
+      "upstream_blob": "1fd5c9129777d94d07dd2754ddb84c92cb04e956"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_contacts.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_contacts.png",
+      "upstream_blob": "54e46b1598de01022d77521f1cbf2772acd66dc2"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_files.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_files.png",
+      "upstream_blob": "6e1ef569a8cca71bb20af9b21ebf91a08865fe6b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_gallery.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_gallery.png",
+      "upstream_blob": "e72377e52520d945cda97fcb5d98e8a0215a297b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_mail.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_mail.png",
+      "upstream_blob": "19b72a81dc8550c03e863d4535e93d0d24f04ee4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_messages.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_messages.png",
+      "upstream_blob": "9d70425e2bf6a339445f4a69e46bb4cc8fd23dd2"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_news.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_news.png",
+      "upstream_blob": "4c34f540d2cd3433caaf8c572e138ddee622b5d5"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_notes.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_notes.png",
+      "upstream_blob": "30af510749369f7740b440f0a90c5292976176f6"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_phone.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_phone.png",
+      "upstream_blob": "cf153e40e0c05081ffdc7232f4f4008a2b75185e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_podcasts.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_podcasts.png",
+      "upstream_blob": "23199f403ab19369deda08284949e4b94ad18877"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_reminders.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_reminders.png",
+      "upstream_blob": "ba3a25e67ab360fb096201e1aea4413825e096d7"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_settings.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_settings.png",
+      "upstream_blob": "06776be946a52d50cedd27e9a721704f7e354bb3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_sky.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_sky.png",
+      "upstream_blob": "b52f70ff6a6f509f385de818fd6111ba8657a855"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable-nodpi/suite_weather.png",
+      "destination": "workspace/rose-agent/app/res/drawable-nodpi/suite_weather.png",
+      "upstream_blob": "0b482e4f2589008a33c52a5b1376d8f4ec448292"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/agent_connecting.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/agent_connecting.xml",
+      "upstream_blob": "50266fbd74c281409709ecaa7fd9b72f79ebee30"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/agent_listening.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/agent_listening.xml",
+      "upstream_blob": "0f852831261247a841357ae07cd790f37eb914c4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/agent_muted.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/agent_muted.xml",
+      "upstream_blob": "f479da4c5e505841bce3e50ffc5fe54a790c6829"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/agent_off.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/agent_off.xml",
+      "upstream_blob": "d0945788fcf23b3c053361e978b8c0f7474f5beb"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/icon.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/icon.xml",
+      "upstream_blob": "a7c89baf2c98783e3db0330973e9244900a1b0a2"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/screen_tile.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/screen_tile.xml",
+      "upstream_blob": "fa593bf625613be8f2b06e68e243fd2bbd712f68"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/drawable/suite_memories.xml",
+      "destination": "workspace/rose-agent/app/res/drawable/suite_memories.xml",
+      "upstream_blob": "21ebdafd7fa6e99bf4515b47fa4d628ff3fb66a8"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/values/phone_control_strings.xml",
+      "destination": "workspace/rose-agent/app/res/values/phone_control_strings.xml",
+      "upstream_blob": "ebb613d2c9bb2748328590782238c615a7eabab1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/xml/device_admin.xml",
+      "destination": "workspace/rose-agent/app/res/xml/device_admin.xml",
+      "upstream_blob": "c4f779812fa95fa4ac0103b110eaee0afdc33922"
+    },
+    {
+      "source": "workspace/pixel-voice/app/res/xml/phone_accessibility.xml",
+      "destination": "workspace/rose-agent/app/res/xml/phone_accessibility.xml",
+      "upstream_blob": "ccf2f3c647292efbfc152b127246ccaad6d0d1f4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AccessibilityHealth.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AccessibilityHealth.java",
+      "upstream_blob": "cace1ae2f2c913780d63fadf573f6a6b37e5bdff"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AgentAppTrust.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AgentAppTrust.java",
+      "upstream_blob": "03cf3a348d5020b348b05a574d7297a7a5b3181a"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AgentTrayService.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AgentTrayService.java",
+      "upstream_blob": "a369f77b2d3d4ecec175d22086845aaa9b49de32"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AppLabels.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AppLabels.java",
+      "upstream_blob": "e4b3db6652441dbd89e2b6b6bc85c60595b104c0"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AppStateSnapshot.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AppStateSnapshot.java",
+      "upstream_blob": "ee8f9c8209a73464fc57aee3439afc8645440e96"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AppleMusicMatch.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AppleMusicMatch.java",
+      "upstream_blob": "80a415b01057c1d18ac0cb79f05c30c5e5d5b8f2"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AppleMusicRetry.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AppleMusicRetry.java",
+      "upstream_blob": "4d68ebc0f98fb743a9be185f2ac63f2470b46ecc"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AppleMusicRoutine.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AppleMusicRoutine.java",
+      "upstream_blob": "a5430dae3ec9a93e5503f755b2eca5348140cbb7"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/AutoAgentPip.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/AutoAgentPip.java",
+      "upstream_blob": "048fedb916742cb580177defff566dae7d844baf"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/BluetoothCallState.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/BluetoothCallState.java",
+      "upstream_blob": "413b0b5730b4042248691a66c177b31f878837ed"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/BluetoothProbeActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/BluetoothProbeActivity.java",
+      "upstream_blob": "60b85adcce3ae179b48b541dcaed658d16e2850e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/BookEntryActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/BookEntryActivity.java",
+      "upstream_blob": "49ead2058bec6f2af0a71ba5a5e081ec023d6cdd"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/BookIllustrationProvider.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/BookIllustrationProvider.java",
+      "upstream_blob": "d6f89b390c258b94772446fc80d352c23af18e4f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/BookNarrator.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/BookNarrator.java",
+      "upstream_blob": "12c10a7a9d3abb7451e7024b8938601495579eec"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/BookmarkResearch.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/BookmarkResearch.java",
+      "upstream_blob": "2c53ef8d32ed74d3d5d3fddc15782b6ba5ba33a1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/CameraEntryActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/CameraEntryActivity.java",
+      "upstream_blob": "051c09200f1cb332c85e055d6b10fde4eb19ec3c"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/CameraEntryPolicy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/CameraEntryPolicy.java",
+      "upstream_blob": "90695652c845577eac5a5af2b6bcb2278073eab1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/CameraMicrophoneProvider.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/CameraMicrophoneProvider.java",
+      "upstream_blob": "19325ccaad95ba7c5573f3c4df5f5b281aaa67c3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ClipboardSync.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ClipboardSync.java",
+      "upstream_blob": "1d50142f51bef9a700f263fae1556b0a25e0539f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ClockControlRoutine.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ClockControlRoutine.java",
+      "upstream_blob": "81d8c0e88194386de8076fa8bc61fb63401ca0b5"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ClockTimerRoutine.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ClockTimerRoutine.java",
+      "upstream_blob": "85757c8b540b34fa81e2232ab59592e6a4202b92"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ClockWidgetView.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ClockWidgetView.java",
+      "upstream_blob": "84c81eabf12754fcae7732f1daeb1b7c4d448b8a"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ConversationModeActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ConversationModeActivity.java",
+      "upstream_blob": "211fa172d2aabd0f5c1522647a2eb3d6e23563d5"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/DebugBridge.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/DebugBridge.java",
+      "upstream_blob": "ab88c46d39ccbc0b36e68472639cd89b42df1f1c"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/Delivery.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/Delivery.java",
+      "upstream_blob": "17f4fa9445a7f1d302fa8bfa030bfba13aec30a4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/DeviceIdentity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/DeviceIdentity.java",
+      "upstream_blob": "86d435e0fc9cebf6d5eeb99661c80135a287e962"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/DragPath.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/DragPath.java",
+      "upstream_blob": "7f6be21f4672a3ed49f0101b1cac88022c7219b0"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/EditorTargetGuard.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/EditorTargetGuard.java",
+      "upstream_blob": "85940f9e23bcf1cfd1b5e3f64ef2dd91f186d7df"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GalleryWidgetView.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GalleryWidgetView.java",
+      "upstream_blob": "a8fc0c9b138934c21141cc0dc665f655f7c06f24"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GestureTrace.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GestureTrace.java",
+      "upstream_blob": "48f9a00ea4376dd41a5017a9e6d251cc024292c3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesAdvertisement.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesAdvertisement.java",
+      "upstream_blob": "670c3b655633f0ed2593ee9f307b27ba85bd78ad"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesAutoStartPolicy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesAutoStartPolicy.java",
+      "upstream_blob": "483f2a06e880d7efd4353b66135a8932bf12d2ef"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesButtonGate.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java",
+      "upstream_blob": "15ef3422ad6b88ee0089fc644f9c4d5b61c6047f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesDisconnectPolicy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesDisconnectPolicy.java",
+      "upstream_blob": "6d672b99dcd419a0263ed5678e0390f57e9aa20e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesPhotoProvider.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesPhotoProvider.java",
+      "upstream_blob": "72d0812db768f46aa7d644195d9c51ea41346744"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesReconnect.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesReconnect.java",
+      "upstream_blob": "2d921a3ee9d61979d68e1d6b8dd8bc2e5b607f4e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesReconnectTarget.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesReconnectTarget.java",
+      "upstream_blob": "367be9b1e87dd9ba8f36dec98dbd0ce3d5742af3"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesSetup.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesSetup.java",
+      "upstream_blob": "ea3d5887ad26f58b59d00ba2cf20e3b94f627d57"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/GlassesTransportTrace.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/GlassesTransportTrace.java",
+      "upstream_blob": "4310cac48e2228b49cd924027c971601328136bc"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/InstallReceiver.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/InstallReceiver.java",
+      "upstream_blob": "b09bdc186521a88de740ef96cf022298b6833282"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/KeyboardActionPolicy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/KeyboardActionPolicy.java",
+      "upstream_blob": "2848158a58d2a094424e2c3179edffb7ad99c5db"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/LabelTargets.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/LabelTargets.java",
+      "upstream_blob": "24a1ed26e3b6ffa4f1dc41da9e264e4e0b4453bf"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/LauncherPager.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/LauncherPager.java",
+      "upstream_blob": "76092e681321d1ec9beb3fea9a3a3d12d1907968"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/LocationCachePolicy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/LocationCachePolicy.java",
+      "upstream_blob": "6fe3d7fc19170f616b5e3073919d23afa28f0e23"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/LockedControl.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/LockedControl.java",
+      "upstream_blob": "012dbe9c40383b25a1fb5ad87cb720f92df9c2cf"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MacScreenPanel.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MacScreenPanel.java",
+      "upstream_blob": "4c694978de113a81734fd05ee2244f0868ed108e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MainActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MainActivity.java",
+      "upstream_blob": "d80baceebee610c8d22cd97abefcd359bd963714"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MediaButtonDiagnostics.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MediaButtonDiagnostics.java",
+      "upstream_blob": "4b46cbfd1631eb7cbd0685ba41198c81b132bd4b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MediaButtonReceiver.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MediaButtonReceiver.java",
+      "upstream_blob": "d5aac6aaf31627686074a81f67478769d0271aa4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MediaControlRoutine.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MediaControlRoutine.java",
+      "upstream_blob": "ac1477921819cabe417874c82da5010f0377b4ed"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MediaSnapshot.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MediaSnapshot.java",
+      "upstream_blob": "5fa267f4c10c51b59e28905e121271fc090f821f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MemoriesConnectionProvider.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MemoriesConnectionProvider.java",
+      "upstream_blob": "3e81b20106081f5af24f4be9ba637495d6d8f459"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MessagesConnectionProvider.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MessagesConnectionProvider.java",
+      "upstream_blob": "f588b8ffe2592931ae219576c73c6792feb8167f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MetaHeadsetSetup.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MetaHeadsetSetup.java",
+      "upstream_blob": "75eab34d2a04d18cc16eaacc53bedf36d0137448"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/MigrationBackupActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/MigrationBackupActivity.java",
+      "upstream_blob": "94f106849e8ac676673fb30cb64ff69a0cc8f818"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PairingActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PairingActivity.java",
+      "upstream_blob": "2423dd236a6baadbe7209556f83cf09615e71043"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PhoneAccessibility.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PhoneAccessibility.java",
+      "upstream_blob": "fc906e88f12ec033b7549c7df71ddba617f95b3b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PhoneAppContext.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PhoneAppContext.java",
+      "upstream_blob": "452ae492e0e06fd1003bbadcd961badd098160a6"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PhoneCommandStream.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PhoneCommandStream.java",
+      "upstream_blob": "dae856200448a229549ae6a9d91a42503a88e1bb"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PhoneControl.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PhoneControl.java",
+      "upstream_blob": "055b17209d52b6a817301ac152362a2242c4ef08"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PhoneDiagnostics.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PhoneDiagnostics.java",
+      "upstream_blob": "adc95fdf0e635eb874dcf7043b49c113bf94fe2c"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PhoneEnvironment.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PhoneEnvironment.java",
+      "upstream_blob": "7e43e11f8ecd3e9d69888c6d912c8f1002219fa5"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PixelAdmin.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PixelAdmin.java",
+      "upstream_blob": "242f8435bb0eb57ac778c2830b1e34348afd6320"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PixelAppearance.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PixelAppearance.java",
+      "upstream_blob": "c2d55c33d69c44774a0d825beb4ea756c9ced986"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PlayInstallBridge.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PlayInstallBridge.java",
+      "upstream_blob": "8977e4af3f6c628a0683b27f132fbbd6ce2cd892"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PlayfulTheme.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PlayfulTheme.java",
+      "upstream_blob": "f18c2876b14d342ff5a2278223063682a92906a4"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/PodcastEntryActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/PodcastEntryActivity.java",
+      "upstream_blob": "7df1ad573702149a3cb775dcbd24f5393d50aed6"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ScreenCapture.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ScreenCapture.java",
+      "upstream_blob": "eea29c6118d3a93b61d845b2bd2acd777b2b9791"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ScreenGesture.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ScreenGesture.java",
+      "upstream_blob": "cb8d22d49179d4988512b6027eac80648d6fa256"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ScreenPolicy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ScreenPolicy.java",
+      "upstream_blob": "701172882bc621b484de421ddc9f3933c8b87256"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ScreenRejectionDiagnostics.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ScreenRejectionDiagnostics.java",
+      "upstream_blob": "b9eb02b3fc4050da3df26fe0facbfba5df2ae290"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ScreenTile.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ScreenTile.java",
+      "upstream_blob": "43820090a01f4f9e547072359f8e1ec0edf3bd4c"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/ServerConnectionActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/ServerConnectionActivity.java",
+      "upstream_blob": "3c9c7feb152ce40475ed6678bb0287a44ed2819c"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/SettingsAccessActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/SettingsAccessActivity.java",
+      "upstream_blob": "2b093dc40de171d61ca1c1f2ed71c85ca1407da0"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/SettingsAgentProvider.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/SettingsAgentProvider.java",
+      "upstream_blob": "5ed6311abf87271c6edf7218ed34f89aec278874"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/SkyEntryActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/SkyEntryActivity.java",
+      "upstream_blob": "40fc94fb7cc513976f6816e732096c1f7f2337c6"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/StartupReceiver.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/StartupReceiver.java",
+      "upstream_blob": "cd9be458ec60f8d4137cd4dd9eb8ebf652c4fe28"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/StatusGlowOverlay.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/StatusGlowOverlay.java",
+      "upstream_blob": "3eeeaabeb08b77aa8de68fce97644c1c071d6d6c"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/StatusVoiceGlow.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/StatusVoiceGlow.java",
+      "upstream_blob": "0f269a1d8b38fd745c0ef6d848b2b8401e3e76d8"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/SwipePath.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/SwipePath.java",
+      "upstream_blob": "cf113056d9b6d4e4a3921d10f9254dbf2bb75347"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TapPoint.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TapPoint.java",
+      "upstream_blob": "ce543cc9bdb2c45a676a1d67a15961ae152db98f"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TargetSnapshotGuard.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TargetSnapshotGuard.java",
+      "upstream_blob": "12c25e55b9cde4b1a83c4a781202730f99181db1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TaskHtmlView.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TaskHtmlView.java",
+      "upstream_blob": "1c5fbe8e84aa73368f6bd4e47a087d0dfac84317"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TaskStatusCard.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TaskStatusCard.java",
+      "upstream_blob": "c23dd309087180e40182ecd2bf19d39c05fbfa2e"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TaskText.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TaskText.java",
+      "upstream_blob": "771f320dd27ec0578d37b9ef18659b4f339a2be0"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TaskWidgetView.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TaskWidgetView.java",
+      "upstream_blob": "8f921881f920828e731005a5ae418a56932ede76"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/TextInputGuard.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/TextInputGuard.java",
+      "upstream_blob": "103bfb8f46063f65301d0e7b42679d9f6970372b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/VisualStore.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/VisualStore.java",
+      "upstream_blob": "d4f7f9cf371b03ac759e624f5685ea3bb163a969"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/VoiceDucking.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/VoiceDucking.java",
+      "upstream_blob": "0ead5fb144ee71e7206f508a30f60e5e23ec9c15"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/VoiceLifecycleTrace.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/VoiceLifecycleTrace.java",
+      "upstream_blob": "8e9fa3dd9b73cc53b9fdf733b144bbfb66f9e8b1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/VoiceService.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/VoiceService.java",
+      "upstream_blob": "5e2b0bd2e0eb7672bcece0d5b1e713863eca1168"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/WeatherAstronomy.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/WeatherAstronomy.java",
+      "upstream_blob": "e43cc2798c89acfec3b7c3e394762d77baeb84b1"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/WeatherSkyView.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/WeatherSkyView.java",
+      "upstream_blob": "550662a7faa49dcbd0c83aaf53b9ec1e046fea38"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/WeatherWidgetView.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/WeatherWidgetView.java",
+      "upstream_blob": "e75611f91de5472e6a83289ea15b2bd90e44538b"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/WorkspaceAppsActivity.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceAppsActivity.java",
+      "upstream_blob": "87785c465b43fbb45285559ad058cfeee04b82df"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/WorkspaceLauncher.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceLauncher.java",
+      "upstream_blob": "2803316f7225d9943f85bd5785bcad69bc2e5c91"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/YouTubeAgent.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/YouTubeAgent.java",
+      "upstream_blob": "5649217b585c67c546ddae4b961fa50b6a4fd650"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/dev/pixel/voice/YouTubeVideo.java",
+      "destination": "workspace/rose-agent/app/src/dev/pixel/voice/YouTubeVideo.java",
+      "upstream_blob": "a9150494d480d6484146e965dbbcdc5f123bd84a"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/.gitignore",
+      "destination": "workspace/rose-agent/apple-music-worker/.gitignore",
+      "upstream_blob": "d0c5d2518e65303e3fbcfd7fb883ee030d1e8be7"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/AppleMusicMatchTest.java",
+      "destination": "workspace/rose-agent/apple-music-worker/AppleMusicMatchTest.java",
+      "upstream_blob": "e2d759a7f1f9ef7d37fcd50ae929eb9234b7755b"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/AppleMusicRetryTest.java",
+      "destination": "workspace/rose-agent/apple-music-worker/AppleMusicRetryTest.java",
+      "upstream_blob": "fe51ece94e7f811d6af9f156ab8ed9f140dee884"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/README.md",
+      "destination": "workspace/rose-agent/apple-music-worker/README.md",
+      "upstream_blob": "2485ba71488b95c30ac7bb95524a16a596a93336"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/local.py",
+      "destination": "workspace/rose-agent/apple-music-worker/local.py",
+      "upstream_blob": "288fc8307f0bd86d8d39f894f3779630b2fdb064"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/map.json",
+      "destination": "workspace/rose-agent/apple-music-worker/map.json",
+      "upstream_blob": "6ea1b99c3fc430b01e067464c55d4a52ce19bce8"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/queue.test.mjs",
+      "destination": "workspace/rose-agent/apple-music-worker/queue.test.mjs",
+      "upstream_blob": "07d1042761fbe7f39dcff4da2627bd1fcbcd7ff0"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/routine-test/android/os/Handler.java",
+      "destination": "workspace/rose-agent/apple-music-worker/routine-test/android/os/Handler.java",
+      "upstream_blob": "fa2e39b9ec212ad8a0c769cec0afdd8b9cb3673d"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/routine-test/android/os/Looper.java",
+      "destination": "workspace/rose-agent/apple-music-worker/routine-test/android/os/Looper.java",
+      "upstream_blob": "6a1195617b3f272a206dff60784512f74fdbb5f3"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/routine-test/android/os/SystemClock.java",
+      "destination": "workspace/rose-agent/apple-music-worker/routine-test/android/os/SystemClock.java",
+      "upstream_blob": "07d3c84e5c2bf3840fed60bd1611c72ab07304f5"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/routine-test/dev/pixel/voice/AppleMusicRoutineTest.java",
+      "destination": "workspace/rose-agent/apple-music-worker/routine-test/dev/pixel/voice/AppleMusicRoutineTest.java",
+      "upstream_blob": "53d3234f36a4eabc5ca9e82cf53e1eb54bb075dc"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/routine-test/dev/pixel/voice/PhoneControl.java",
+      "destination": "workspace/rose-agent/apple-music-worker/routine-test/dev/pixel/voice/PhoneControl.java",
+      "upstream_blob": "eb563569e2d598b2dbf0bb6354d1ecb52bd13420"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/routine-test/dev/pixel/voice/VoiceService.java",
+      "destination": "workspace/rose-agent/apple-music-worker/routine-test/dev/pixel/voice/VoiceService.java",
+      "upstream_blob": "a226c94864eced0698cdbf2c7eac99dbbee5ef27"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/test-routine.sh",
+      "destination": "workspace/rose-agent/apple-music-worker/test-routine.sh",
+      "upstream_blob": "f831a7d0e86ee50699e86ac283e6b3058e3840b2"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/test-voice-route.mjs",
+      "destination": "workspace/rose-agent/apple-music-worker/test-voice-route.mjs",
+      "upstream_blob": "8a7dbf05d1c111000ff98f9cbf0e5f232eac7fc5"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/test_worker.py",
+      "destination": "workspace/rose-agent/apple-music-worker/test_worker.py",
+      "upstream_blob": "dc561c73eeb350d1193ac76a6ea9582c0acb0dbf"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/unwire-voice.mjs",
+      "destination": "workspace/rose-agent/apple-music-worker/unwire-voice.mjs",
+      "upstream_blob": "aa5d0401f31948f733fc49d128244d94b8ff825f"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/voice.test.cjs",
+      "destination": "workspace/rose-agent/apple-music-worker/voice.test.cjs",
+      "upstream_blob": "a3dfa90211dab3ac501e08f31440d56ceca0c7ba"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/wire-voice.mjs",
+      "destination": "workspace/rose-agent/apple-music-worker/wire-voice.mjs",
+      "upstream_blob": "b01a36af9d8f38cb21757bac20e5831b1924a0c8"
+    },
+    {
+      "source": "workspace/pixel-voice/apple-music-worker/worker.py",
+      "destination": "workspace/rose-agent/apple-music-worker/worker.py",
+      "upstream_blob": "f329ec8006ab264db2388ae20d7e81ecf750833d"
+    },
+    {
+      "source": "workspace/pixel-voice/artemis-trial/adapter.mjs",
+      "destination": "workspace/rose-agent/artemis-trial/adapter.mjs",
+      "upstream_blob": "b8b1ae1d59a004fdfe14d8641eed86fe7a0969f2"
+    },
+    {
+      "source": "workspace/pixel-voice/artemis-trial/debug-bridge.mjs",
+      "destination": "workspace/rose-agent/artemis-trial/debug-bridge.mjs",
+      "upstream_blob": "ba92129e9a718de17c820885f3d1f6892a719fa9"
+    },
+    {
+      "source": "workspace/pixel-voice/artemis-trial/policy.mjs",
+      "destination": "workspace/rose-agent/artemis-trial/policy.mjs",
+      "upstream_blob": "306f00ccb4fe0a631a5df379aec422e5394f9162"
+    },
+    {
+      "source": "workspace/pixel-voice/bookmark-research/README.md",
+      "destination": "workspace/rose-agent/bookmark-research/README.md",
+      "upstream_blob": "bd757358a59f03364b100254b2484a852b0dcd21"
+    },
+    {
+      "source": "workspace/pixel-voice/bookmark-research/research.mjs",
+      "destination": "workspace/rose-agent/bookmark-research/research.mjs",
+      "upstream_blob": "7d9031539ab2e5a253baaa37e3e8124214900a74"
+    },
+    {
+      "source": "workspace/pixel-voice/bookmark-research/service.mjs",
+      "destination": "workspace/rose-agent/bookmark-research/service.mjs",
+      "upstream_blob": "ddd472b3a5a569491dd2e9d61fde298aa12d00e0"
+    },
+    {
+      "source": "workspace/pixel-voice/bookmark-research/service.test.mjs",
+      "destination": "workspace/rose-agent/bookmark-research/service.test.mjs",
+      "upstream_blob": "a6d855c6c2d31bf7b6985899d4649cab89548a7c"
+    },
+    {
+      "source": "workspace/pixel-voice/bookmark-research/store.mjs",
+      "destination": "workspace/rose-agent/bookmark-research/store.mjs",
+      "upstream_blob": "676f4993eb19036c4f692bb647ca785b2bf0a6ff"
+    },
+    {
+      "source": "workspace/pixel-voice/bookmark-research/text-delivery.mjs",
+      "destination": "workspace/rose-agent/bookmark-research/text-delivery.mjs",
+      "upstream_blob": "6efc3fb60acd99f6d0b0c4f6c7d188b034eff8ae"
+    },
+    {
+      "source": "workspace/pixel-voice/build.sh",
+      "destination": "workspace/rose-agent/build.sh",
+      "upstream_blob": "61be70b66ef84f960f67229047346ee068fbdd81"
+    },
+    {
+      "source": "workspace/pixel-voice/calendar/README.md",
+      "destination": "workspace/rose-agent/calendar/README.md",
+      "upstream_blob": "031d652f2bfa58ce557ae2747c919f330479593a"
+    },
+    {
+      "source": "workspace/pixel-voice/calendar/calendar.py",
+      "destination": "workspace/rose-agent/calendar/calendar.py",
+      "upstream_blob": "9b7d717875c52318f482c901f67db682836928b7"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/.gitignore",
+      "destination": "workspace/rose-agent/clock-worker/.gitignore",
+      "upstream_blob": "2e8b9703c48ee6a7981784c34aa0481954965c15"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/README.md",
+      "destination": "workspace/rose-agent/clock-worker/README.md",
+      "upstream_blob": "d124efad8992774fabe59ae8ee75b100a5237bfe"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/clock-tool.js",
+      "destination": "workspace/rose-agent/clock-worker/clock-tool.js",
+      "upstream_blob": "ae614c4641d9ef0d4e9aa5ab58e1145882b7a6b4"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/commands.mjs",
+      "destination": "workspace/rose-agent/clock-worker/commands.mjs",
+      "upstream_blob": "ae9c94521b2ba8b3ff5533290f9c349225b2894c"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/src/ClockControlRoutine.java",
+      "destination": "workspace/rose-agent/clock-worker/src/ClockControlRoutine.java",
+      "upstream_blob": "81d8c0e88194386de8076fa8bc61fb63401ca0b5"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/src/ClockTimerRoutine.java",
+      "destination": "workspace/rose-agent/clock-worker/src/ClockTimerRoutine.java",
+      "upstream_blob": "85757c8b540b34fa81e2232ab59592e6a4202b92"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/test-live.mjs",
+      "destination": "workspace/rose-agent/clock-worker/test-live.mjs",
+      "upstream_blob": "eb64cc7e91a06d0e179378f13487be583ef8fbf7"
+    },
+    {
+      "source": "workspace/pixel-voice/clock-worker/test.mjs",
+      "destination": "workspace/rose-agent/clock-worker/test.mjs",
+      "upstream_blob": "33e75969e0569d75ff56d7d5764dd2aa154e62e2"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/ConversationModeActivity.java",
+      "destination": "workspace/rose-agent/conversation/ConversationModeActivity.java",
+      "upstream_blob": "211fa172d2aabd0f5c1522647a2eb3d6e23563d5"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/README.md",
+      "destination": "workspace/rose-agent/conversation/README.md",
+      "upstream_blob": "d5b7a7d4e7d9ec6b1fd3c057bc60883c372563f5"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/control.py",
+      "destination": "workspace/rose-agent/conversation/control.py",
+      "upstream_blob": "46c9d45dc57db77bb3419ffa5c7839b9e6e470e2"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/menu-toggle.test.mjs",
+      "destination": "workspace/rose-agent/conversation/menu-toggle.test.mjs",
+      "upstream_blob": "000d13b78ef22a280010c1575aaca7a5a64de6a8"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/mode.mjs",
+      "destination": "workspace/rose-agent/conversation/mode.mjs",
+      "upstream_blob": "a5596e24ed4ac501d60f20627227ff95521a3d74"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/mode.test.mjs",
+      "destination": "workspace/rose-agent/conversation/mode.test.mjs",
+      "upstream_blob": "d95678f1137bda84f73e32286bd4bc595fdd8106"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/pixel10-codex-remote.service",
+      "destination": "workspace/rose-agent/conversation/pixel10-codex-remote.service",
+      "upstream_blob": "97376659720ed762ac9c1ac6bde8169060426a01"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/remote-work.mjs",
+      "destination": "workspace/rose-agent/conversation/remote-work.mjs",
+      "upstream_blob": "ef5ad5658f02e97d04724f8dbe4f4558eb7c9e9f"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/remote-work.test.mjs",
+      "destination": "workspace/rose-agent/conversation/remote-work.test.mjs",
+      "upstream_blob": "cdc6fd5abee6064d24cd40ceeb7fcf282dd47ffb"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/work.mjs",
+      "destination": "workspace/rose-agent/conversation/work.mjs",
+      "upstream_blob": "abac0fa71198a6cd71823e657f84395c2d15e6d9"
+    },
+    {
+      "source": "workspace/pixel-voice/conversation/work.test.mjs",
+      "destination": "workspace/rose-agent/conversation/work.test.mjs",
+      "upstream_blob": "69397f81f50415d7190854427f8304371b054bf5"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/action-loops.mjs",
+      "destination": "workspace/rose-agent/decisions/action-loops.mjs",
+      "upstream_blob": "e3e7996e8727139e15446973f832daa9e1e12bbd"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/action-loops.test.mjs",
+      "destination": "workspace/rose-agent/decisions/action-loops.test.mjs",
+      "upstream_blob": "e2af70c56e163b733dc282c764b2ca03935badc1"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/actions.mjs",
+      "destination": "workspace/rose-agent/decisions/actions.mjs",
+      "upstream_blob": "293bb2c607dc63cdbece93dc17032b10965f6c65"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/completion-reviewer.mjs",
+      "destination": "workspace/rose-agent/decisions/completion-reviewer.mjs",
+      "upstream_blob": "4db81669e0b6ccd6e65d326b25feac2a81f05727"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/config.mjs",
+      "destination": "workspace/rose-agent/decisions/config.mjs",
+      "upstream_blob": "ecc50c063e2ee16b83bd8b2de8fce33055c0484c"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/decisions.test.mjs",
+      "destination": "workspace/rose-agent/decisions/decisions.test.mjs",
+      "upstream_blob": "ee6e4eb5dbdcfbe7c1cd070b981b3a0e6ed72c41"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/execution-trace.mjs",
+      "destination": "workspace/rose-agent/decisions/execution-trace.mjs",
+      "upstream_blob": "5111186d1d680eff0101139b325204fdd4b3add5"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/execution-trace.test.mjs",
+      "destination": "workspace/rose-agent/decisions/execution-trace.test.mjs",
+      "upstream_blob": "5430c851d1ca2a9dea136b0284df5f1842408e17"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/executor.mjs",
+      "destination": "workspace/rose-agent/decisions/executor.mjs",
+      "upstream_blob": "902a2492ac276a3cca94b9d83834d796f0fbd81e"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/model.mjs",
+      "destination": "workspace/rose-agent/decisions/model.mjs",
+      "upstream_blob": "67273d4d1483a2d56283b42796baad85b1e2fecc"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/numbered-executor.mjs",
+      "destination": "workspace/rose-agent/decisions/numbered-executor.mjs",
+      "upstream_blob": "075d42567acb9758a9f0ba4561d67cd333be5577"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/numbered-executor.test.mjs",
+      "destination": "workspace/rose-agent/decisions/numbered-executor.test.mjs",
+      "upstream_blob": "ded25ea74a2d9392c6913e1c0c3dbe951dcb39a9"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/numbered-targets.mjs",
+      "destination": "workspace/rose-agent/decisions/numbered-targets.mjs",
+      "upstream_blob": "13fccc573917951c3ce699a64c6b7fac742bca4f"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/recovery.mjs",
+      "destination": "workspace/rose-agent/decisions/recovery.mjs",
+      "upstream_blob": "3c3041d2e2fce8955ac6e1aebf7075413c211a0d"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/task-definition.mjs",
+      "destination": "workspace/rose-agent/decisions/task-definition.mjs",
+      "upstream_blob": "efc1a3dfb74b1f11c475ddd39969cb797bd80179"
+    },
+    {
+      "source": "workspace/pixel-voice/decisions/task-definition.test.mjs",
+      "destination": "workspace/rose-agent/decisions/task-definition.test.mjs",
+      "upstream_blob": "4a304536dc5ba59f65e982a77a4bded573297ecf"
+    },
+    {
+      "source": "workspace/pixel-voice/delivery/publish.mjs",
+      "destination": "workspace/rose-agent/delivery/publish.mjs",
+      "upstream_blob": "28a61b0ed3ad7d06e1642fa6bd856000cd87f4cc"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/bird-target-freshness-2026-10-11.md",
+      "destination": "workspace/rose-agent/docs/bird-target-freshness-2026-10-11.md",
+      "upstream_blob": "79d0fe756e9f5b677e3c9c742abfd98c3975d2e1"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/elevenlabs.md",
+      "destination": "workspace/rose-agent/docs/elevenlabs.md",
+      "upstream_blob": "75309aa5abf93d63650a393278eb3b17c255194d"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/live-prompting.md",
+      "destination": "workspace/rose-agent/docs/live-prompting.md",
+      "upstream_blob": "aca7e12f1004cff7aff07fb69f60076a73f3a79f"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/mute-fix-2026-10-09.md",
+      "destination": "workspace/rose-agent/docs/mute-fix-2026-10-09.md",
+      "upstream_blob": "4a8a1bcde8873d5727a23e10c6b925dc039b6880"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/status-audio-levels.md",
+      "destination": "workspace/rose-agent/docs/status-audio-levels.md",
+      "upstream_blob": "839c06e18dec53ddb6376c12943fa6e2a53ad0b8"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/task-model-switching.md",
+      "destination": "workspace/rose-agent/docs/task-model-switching.md",
+      "upstream_blob": "0c25b6b19891b7efe9e95824f45ba5af214a80d4"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/voice-websockets.md",
+      "destination": "workspace/rose-agent/docs/voice-websockets.md",
+      "upstream_blob": "d1c9bb13d1225334eac2a1868232382e629db97b"
+    },
+    {
+      "source": "workspace/pixel-voice/docs/wireless-migration-backup.md",
+      "destination": "workspace/rose-agent/docs/wireless-migration-backup.md",
+      "upstream_blob": "770ece22f6425025b4229e747c7d0118d94d1af4"
+    },
+    {
+      "source": "workspace/pixel-voice/email/README.md",
+      "destination": "workspace/rose-agent/email/README.md",
+      "upstream_blob": "0f43f6b275d1a6d54a12ccb76c85c8f9b5db8976"
+    },
+    {
+      "source": "workspace/pixel-voice/email/gmail.py",
+      "destination": "workspace/rose-agent/email/gmail.py",
+      "upstream_blob": "1fceaabff01252772b5e756331ac07720b9e53ec"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/README.md",
+      "destination": "workspace/rose-agent/emulator/README.md",
+      "upstream_blob": "d1d95116aca4e64607971e402dba4ae1e505f2fa"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/assets/index.html",
+      "destination": "workspace/rose-agent/emulator/assets/index.html",
+      "upstream_blob": "1ef9fe36cb87b396c81681bb3c235ab1db019df3"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/build.sh",
+      "destination": "workspace/rose-agent/emulator/build.sh",
+      "upstream_blob": "485898a1f81c353cb5b2661824048e50652e4a99"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/server.mjs",
+      "destination": "workspace/rose-agent/emulator/server.mjs",
+      "upstream_blob": "c96b067f8209e808a0abd6fe24c0572fe448b346"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/src/dev/pixel/voice/AudioBridgeProbeReceiver.java",
+      "destination": "workspace/rose-agent/emulator/src/dev/pixel/voice/AudioBridgeProbeReceiver.java",
+      "upstream_blob": "d66c5bf5d2b90fa5216d2147a8c65fa710946866"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/src/dev/pixel/voice/WavePreviewReceiver.java",
+      "destination": "workspace/rose-agent/emulator/src/dev/pixel/voice/WavePreviewReceiver.java",
+      "upstream_blob": "2192e72433c8419df23f184ca5e4c71405c45e59"
+    },
+    {
+      "source": "workspace/pixel-voice/emulator/tunnel.py",
+      "destination": "workspace/rose-agent/emulator/tunnel.py",
+      "upstream_blob": "1462e6f67e2c3d0c576fbb59d9109b476b9dda61"
+    },
+    {
+      "source": "workspace/pixel-voice/evaluation/case.schema.json",
+      "destination": "workspace/rose-agent/evaluation/case.schema.json",
+      "upstream_blob": "bdce85bd4bcf8abb67209b1d149fd086022838d6"
+    },
+    {
+      "source": "workspace/pixel-voice/evaluation/export-case.mjs",
+      "destination": "workspace/rose-agent/evaluation/export-case.mjs",
+      "upstream_blob": "63bdecddc4dc028ae52f6e865e3598f2cbbb1abe"
+    },
+    {
+      "source": "workspace/pixel-voice/evaluation/recorder-worker.mjs",
+      "destination": "workspace/rose-agent/evaluation/recorder-worker.mjs",
+      "upstream_blob": "7ea07db6fad477e51f2614d23276d935923846b1"
+    },
+    {
+      "source": "workspace/pixel-voice/evaluation/recorder.mjs",
+      "destination": "workspace/rose-agent/evaluation/recorder.mjs",
+      "upstream_blob": "34a2b21b8d404f231d84da0bec31c9769936b523"
+    },
+    {
+      "source": "workspace/pixel-voice/evaluation/recorder.test.mjs",
+      "destination": "workspace/rose-agent/evaluation/recorder.test.mjs",
+      "upstream_blob": "f743692aeb1fe66aba1c8edfed3203b1f2f033fa"
+    },
+    {
+      "source": "workspace/pixel-voice/experiments/README.md",
+      "destination": "workspace/rose-agent/experiments/README.md",
+      "upstream_blob": "474643725a40c0608d5f16ac4a052c7346102108"
+    },
+    {
+      "source": "workspace/pixel-voice/experiments/baseline-2026-10-11-before-chat/manifest.json",
+      "destination": "workspace/rose-agent/experiments/baseline-2026-10-11-before-chat/manifest.json",
+      "upstream_blob": "542ef862091841c8e7e662348c4afaf8d58e8330"
+    },
+    {
+      "source": "workspace/pixel-voice/glasses-context/GlassesPhotoProvider.java",
+      "destination": "workspace/rose-agent/glasses-context/GlassesPhotoProvider.java",
+      "upstream_blob": "72d0812db768f46aa7d644195d9c51ea41346744"
+    },
+    {
+      "source": "workspace/pixel-voice/glasses-context/README.md",
+      "destination": "workspace/rose-agent/glasses-context/README.md",
+      "upstream_blob": "20248ce4d502009bb30d4c608ea1b7ce7c64cd20"
+    },
+    {
+      "source": "workspace/pixel-voice/glasses-context/codex-input.test.mjs",
+      "destination": "workspace/rose-agent/glasses-context/codex-input.test.mjs",
+      "upstream_blob": "c9c95b97c0fb8f3ec6fd1af1c88cb2d76c416213"
+    },
+    {
+      "source": "workspace/pixel-voice/glasses-context/store.mjs",
+      "destination": "workspace/rose-agent/glasses-context/store.mjs",
+      "upstream_blob": "60e99192519974c3c32218d00b3f416c15f6e0f6"
+    },
+    {
+      "source": "workspace/pixel-voice/glasses-context/store.test.mjs",
+      "destination": "workspace/rose-agent/glasses-context/store.test.mjs",
+      "upstream_blob": "b62a923eac61afd8c83d2bd7a4783b4e401e8018"
+    },
+    {
+      "source": "workspace/pixel-voice/launcher-visual/.gitignore",
+      "destination": "workspace/rose-agent/launcher-visual/.gitignore",
+      "upstream_blob": "7a60b85e148f80966a550e5ab6a762a907c69ca6"
+    },
+    {
+      "source": "workspace/pixel-voice/launcher-visual/CAPABILITY-CHECK.md",
+      "destination": "workspace/rose-agent/launcher-visual/CAPABILITY-CHECK.md",
+      "upstream_blob": "33008184e8695a79c3d1a7ebebf523057c4ccd0e"
+    },
+    {
+      "source": "workspace/pixel-voice/launcher-visual/README.md",
+      "destination": "workspace/rose-agent/launcher-visual/README.md",
+      "upstream_blob": "0a3573bfab2e735fda774551aa7d3feaf3dde575"
+    },
+    {
+      "source": "workspace/pixel-voice/launcher-visual/capability.mjs",
+      "destination": "workspace/rose-agent/launcher-visual/capability.mjs",
+      "upstream_blob": "6dd617a8bd5412f470ba9559911a78b20b55f625"
+    },
+    {
+      "source": "workspace/pixel-voice/launcher-visual/commands.test.mjs",
+      "destination": "workspace/rose-agent/launcher-visual/commands.test.mjs",
+      "upstream_blob": "7139c5df494741c57fc78f924700ed0bdea558b9"
+    },
+    {
+      "source": "workspace/pixel-voice/launcher-visual/control.py",
+      "destination": "workspace/rose-agent/launcher-visual/control.py",
+      "upstream_blob": "eec8310548f523089a06d3881df5208d39688e3a"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/README.md",
+      "destination": "workspace/rose-agent/media-worker/README.md",
+      "upstream_blob": "e19cde04c63befaf537e36e2c16698ac66e57e4e"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/baseline-files.json",
+      "destination": "workspace/rose-agent/media-worker/baseline-files.json",
+      "upstream_blob": "abff9554f4bb6376aa2c204490b0fac77f3cae97"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/config.mjs",
+      "destination": "workspace/rose-agent/media-worker/config.mjs",
+      "upstream_blob": "ee13fd6a3c5ada620513e4ff48d8663158a4682f"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/media-tool.js",
+      "destination": "workspace/rose-agent/media-worker/media-tool.js",
+      "upstream_blob": "a9afcbc6d138b50e44ebc886e7984707803adcba"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/rollback.sh",
+      "destination": "workspace/rose-agent/media-worker/rollback.sh",
+      "upstream_blob": "fd0d1e940e14bc1dca2420a0288916984d3837f6"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/src/dev/pixel/voice/MediaControlRoutine.java",
+      "destination": "workspace/rose-agent/media-worker/src/dev/pixel/voice/MediaControlRoutine.java",
+      "upstream_blob": "ac1477921819cabe417874c82da5010f0377b4ed"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/src/dev/pixel/voice/MediaSnapshot.java",
+      "destination": "workspace/rose-agent/media-worker/src/dev/pixel/voice/MediaSnapshot.java",
+      "upstream_blob": "5fa267f4c10c51b59e28905e121271fc090f821f"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/test-live.mjs",
+      "destination": "workspace/rose-agent/media-worker/test-live.mjs",
+      "upstream_blob": "85928c65f9b7fe291c173cb6f3d06ce2dd9f9556"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/test.sh",
+      "destination": "workspace/rose-agent/media-worker/test.sh",
+      "upstream_blob": "1a2373b46672f32a311903c4bc788ddbd0c24218"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/tests/MediaSnapshotTest.java",
+      "destination": "workspace/rose-agent/media-worker/tests/MediaSnapshotTest.java",
+      "upstream_blob": "e36340b782d7e59627b919723238f60db6ff0ce0"
+    },
+    {
+      "source": "workspace/pixel-voice/media-worker/tests/media.test.mjs",
+      "destination": "workspace/rose-agent/media-worker/tests/media.test.mjs",
+      "upstream_blob": "aef8111e0325bc7530961b0adc786057b3bd27f5"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/README.md",
+      "destination": "workspace/rose-agent/messages-worker/README.md",
+      "upstream_blob": "91e40183e3ad649fa7f7961cc00e51e0ae7f4bd7"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/baseline-files.json",
+      "destination": "workspace/rose-agent/messages-worker/baseline-files.json",
+      "upstream_blob": "5eb275379b5f9858297571b8acd9d41c15a8d830"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/config.mjs",
+      "destination": "workspace/rose-agent/messages-worker/config.mjs",
+      "upstream_blob": "7bde33cc1736cfe1bf7de15c179e9b7622b736a1"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/messages-tool.js",
+      "destination": "workspace/rose-agent/messages-worker/messages-tool.js",
+      "upstream_blob": "c66eb6d681004366e6608b8e7fef9ad14c7d2a2d"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/rollback.sh",
+      "destination": "workspace/rose-agent/messages-worker/rollback.sh",
+      "upstream_blob": "6d66841e9d38869528460586eb00ac87dbd02376"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/test-live.mjs",
+      "destination": "workspace/rose-agent/messages-worker/test-live.mjs",
+      "upstream_blob": "f83a972c863d327796ab34cf7aa15f95c05ead88"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/tests/worker.test.mjs",
+      "destination": "workspace/rose-agent/messages-worker/tests/worker.test.mjs",
+      "upstream_blob": "753b274eedaa5e46d0a6b7798c702742be544cef"
+    },
+    {
+      "source": "workspace/pixel-voice/messages-worker/worker.mjs",
+      "destination": "workspace/rose-agent/messages-worker/worker.mjs",
+      "upstream_blob": "42f8a2ce5d2f8fa6031cc7361ae7fad0d58ad828"
+    },
+    {
+      "source": "workspace/pixel-voice/network/README.md",
+      "destination": "workspace/rose-agent/network/README.md",
+      "upstream_blob": "1f41022348f35919829744f3add225d7311f70d7"
+    },
+    {
+      "source": "workspace/pixel-voice/network/router-service.xml",
+      "destination": "workspace/rose-agent/network/router-service.xml",
+      "upstream_blob": "d2d508fb2a1be8d4ba537a699479df00655f6226"
+    },
+    {
+      "source": "workspace/pixel-voice/network/router.py",
+      "destination": "workspace/rose-agent/network/router.py",
+      "upstream_blob": "d526c29507a85e53005b0984070a834cc60b0034"
+    },
+    {
+      "source": "workspace/pixel-voice/network/tcp_proxy.py",
+      "destination": "workspace/rose-agent/network/tcp_proxy.py",
+      "upstream_blob": "0d8a13fd949e8dcb8e22a0e8131ef521523769e3"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/.gitattributes",
+      "destination": "workspace/rose-agent/personal-memory/.gitattributes",
+      "upstream_blob": "405a6e520782f51ac110e78373687fe3385c31e6"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/.gitignore",
+      "destination": "workspace/rose-agent/personal-memory/.gitignore",
+      "upstream_blob": "6f4c20e7f49eeaec19dea0402e3d5f8320f9ef69"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/README.md",
+      "destination": "workspace/rose-agent/personal-memory/README.md",
+      "upstream_blob": "8300e232d3eefc423884228354ead2810e1e8266"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/cli.mjs",
+      "destination": "workspace/rose-agent/personal-memory/cli.mjs",
+      "upstream_blob": "18f366c59f35f186e1a41924088f5d2946857c88"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/compare.mjs",
+      "destination": "workspace/rose-agent/personal-memory/compare.mjs",
+      "upstream_blob": "8daf7ae286df2025d1b7473eae515425f968a555"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/compare.test.mjs",
+      "destination": "workspace/rose-agent/personal-memory/compare.test.mjs",
+      "upstream_blob": "20add06c9517eb3f3a9118dd5dbba9b76ad70a0e"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/context.mjs",
+      "destination": "workspace/rose-agent/personal-memory/context.mjs",
+      "upstream_blob": "55973a1bfd839ccd53c038ecdd8462b49b628699"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/context.test.mjs",
+      "destination": "workspace/rose-agent/personal-memory/context.test.mjs",
+      "upstream_blob": "c644924fa0bde2ca61cd62bfc82e77e5b1e08dad"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/install.mjs",
+      "destination": "workspace/rose-agent/personal-memory/install.mjs",
+      "upstream_blob": "ee8d77062d136335c0bb5c649aec0496f12eaa75"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/memory.mjs",
+      "destination": "workspace/rose-agent/personal-memory/memory.mjs",
+      "upstream_blob": "cf59c96110292888fa844b0b134e5ab44364a629"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/package.json",
+      "destination": "workspace/rose-agent/personal-memory/package.json",
+      "upstream_blob": "1e1a4f3f5efe9518101416de5090280aa4f5987f"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/review-state.mjs",
+      "destination": "workspace/rose-agent/personal-memory/review-state.mjs",
+      "upstream_blob": "f1ba2ce4e7ddc72a3bccfe309db47f2c8c0451d9"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/review-store.mjs",
+      "destination": "workspace/rose-agent/personal-memory/review-store.mjs",
+      "upstream_blob": "1fc770c8065c0dbcf9752c0d2905aef471a04594"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/review.test.mjs",
+      "destination": "workspace/rose-agent/personal-memory/review.test.mjs",
+      "upstream_blob": "0f6bb61fed34d869144df1a9d95b2f91c0de1c31"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/test-live.mjs",
+      "destination": "workspace/rose-agent/personal-memory/test-live.mjs",
+      "upstream_blob": "64f8743cc1f26cf4e062734e30bb0e1bfd1baf18"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/test-voice-live.mjs",
+      "destination": "workspace/rose-agent/personal-memory/test-voice-live.mjs",
+      "upstream_blob": "90197c018126a1c60c16f9fe57cf45bcda1ad172"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/test.mjs",
+      "destination": "workspace/rose-agent/personal-memory/test.mjs",
+      "upstream_blob": "2722cf28582114acaf435cddb1f15647b174b426"
+    },
+    {
+      "source": "workspace/pixel-voice/personal-memory/voice-context.test.mjs",
+      "destination": "workspace/rose-agent/personal-memory/voice-context.test.mjs",
+      "upstream_blob": "2ead11b48b58885fa7dce0167aeda87e8a62bd3e"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/README.md",
+      "destination": "workspace/rose-agent/phone/README.md",
+      "upstream_blob": "e94e3216d6bb57426679e063dba3f89f95b5ec7c"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/README.next.md",
+      "destination": "workspace/rose-agent/phone/README.next.md",
+      "upstream_blob": "20e14b978daa5410db1dbde9714b1a46eeb49113"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/STATUS.md",
+      "destination": "workspace/rose-agent/phone/STATUS.md",
+      "upstream_blob": "8a00430ae246786f5b526c1a932d2cba1c023a56"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/SYSTEM_TRAY_IPC.md",
+      "destination": "workspace/rose-agent/phone/SYSTEM_TRAY_IPC.md",
+      "upstream_blob": "657c3de2888ba920b280432ca09ea056f3e65871"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/control.py",
+      "destination": "workspace/rose-agent/phone/control.py",
+      "upstream_blob": "458bf4b1b15bb79d04c5802d93d75f1fd8eb4698"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/control_next.py",
+      "destination": "workspace/rose-agent/phone/control_next.py",
+      "upstream_blob": "800128cd46edb688550c78523f6220eabc9694fc"
+    },
+    {
+      "source": "workspace/pixel-voice/phone/observations.py",
+      "destination": "workspace/rose-agent/phone/observations.py",
+      "upstream_blob": "515417edeca76ee9de43cfa7b33e97c1c86cf69a"
+    },
+    {
+      "source": "workspace/pixel-voice/relay/Dockerfile",
+      "destination": "workspace/rose-agent/relay/Dockerfile",
+      "upstream_blob": "b6090d95aa0cd613f970e8b58289c0660dc26833"
+    },
+    {
+      "source": "workspace/pixel-voice/relay/README.md",
+      "destination": "workspace/rose-agent/relay/README.md",
+      "upstream_blob": "a92c53f76be4aae22a50c3863a860f4298311323"
+    },
+    {
+      "source": "workspace/pixel-voice/relay/mac-bridge.mjs",
+      "destination": "workspace/rose-agent/relay/mac-bridge.mjs",
+      "upstream_blob": "662c6c89684086db57f5056a5d7d5419538bbb91"
+    },
+    {
+      "source": "workspace/pixel-voice/relay/relay.mjs",
+      "destination": "workspace/rose-agent/relay/relay.mjs",
+      "upstream_blob": "92a3bf8bb75cb668da85494d9dc1c6562ead94f4"
+    },
+    {
+      "source": "workspace/pixel-voice/relay/relay.test.mjs",
+      "destination": "workspace/rose-agent/relay/relay.test.mjs",
+      "upstream_blob": "e426297633e5ca4f3763f6bf08ed8a2bd329001b"
+    },
+    {
+      "source": "workspace/pixel-voice/security/README.md",
+      "destination": "workspace/rose-agent/security/README.md",
+      "upstream_blob": "15bf656c57a537aed9c0829083acdeb9f5c73bd0"
+    },
+    {
+      "source": "workspace/pixel-voice/security/assert-public-assets.mjs",
+      "destination": "workspace/rose-agent/security/assert-public-assets.mjs",
+      "upstream_blob": "580bfdd399089416563c69e63fe2a09d84e2b2df"
+    },
+    {
+      "source": "workspace/pixel-voice/security/device-auth.mjs",
+      "destination": "workspace/rose-agent/security/device-auth.mjs",
+      "upstream_blob": "3e0e2f3a530a24463e4165a558ad1e4b6c6d18fe"
+    },
+    {
+      "source": "workspace/pixel-voice/security/device-auth.test.mjs",
+      "destination": "workspace/rose-agent/security/device-auth.test.mjs",
+      "upstream_blob": "dab5f3722f4dc8d4a3b7904a6770a1bcae15f51a"
+    },
+    {
+      "source": "workspace/pixel-voice/security/pair.mjs",
+      "destination": "workspace/rose-agent/security/pair.mjs",
+      "upstream_blob": "b78a239c6fbb62717607d1bbc7055e39b46aa250"
+    },
+    {
+      "source": "workspace/pixel-voice/security/recovery-download.mjs",
+      "destination": "workspace/rose-agent/security/recovery-download.mjs",
+      "upstream_blob": "d981093052e863a5d283bb827c55dc638cddb03e"
+    },
+    {
+      "source": "workspace/pixel-voice/security/recovery-download.test.mjs",
+      "destination": "workspace/rose-agent/security/recovery-download.test.mjs",
+      "upstream_blob": "2da2eeb750ad958c52074e2487b12ca201618009"
+    },
+    {
+      "source": "workspace/pixel-voice/server/anime-proxy.mjs",
+      "destination": "workspace/rose-agent/server/anime-proxy.mjs",
+      "upstream_blob": "bc41b126094063767a3c0995cf2f5cbdcbc7299f"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-asset-packaging.test.mjs",
+      "destination": "workspace/rose-agent/server/app-asset-packaging.test.mjs",
+      "upstream_blob": "1ad5bde422bf35b9e6f0d902c139cbd8b52015cf"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-generator/driver.mjs",
+      "destination": "workspace/rose-agent/server/app-generator/driver.mjs",
+      "upstream_blob": "215ed0da468d13335dcc82d6affe8a8c4e3d35ac"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-generator/generator.mjs",
+      "destination": "workspace/rose-agent/server/app-generator/generator.mjs",
+      "upstream_blob": "182e0c7ae53659bfa2d35b1234828782f7e7b4cf"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-generator/generator.test.mjs",
+      "destination": "workspace/rose-agent/server/app-generator/generator.test.mjs",
+      "upstream_blob": "6578da35d165f719afe8c28b0895f69e9104d6b2"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-generator/runtime.mjs",
+      "destination": "workspace/rose-agent/server/app-generator/runtime.mjs",
+      "upstream_blob": "9794b880546484835cab30b8aad88a8d9246df98"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-generator/store.mjs",
+      "destination": "workspace/rose-agent/server/app-generator/store.mjs",
+      "upstream_blob": "5c68a7363d49af550c51d2460af2ae8c8a2de36c"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-generator/workflow.mjs",
+      "destination": "workspace/rose-agent/server/app-generator/workflow.mjs",
+      "upstream_blob": "3df5412739bf589e484a239d23b8390a3c239717"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-tool-catalog.mjs",
+      "destination": "workspace/rose-agent/server/app-tool-catalog.mjs",
+      "upstream_blob": "a132818c4f1dccd7486fccc4d3a28122679f8289"
+    },
+    {
+      "source": "workspace/pixel-voice/server/app-tool-policy.mjs",
+      "destination": "workspace/rose-agent/server/app-tool-policy.mjs",
+      "upstream_blob": "edef7a405d6b2cacba33f64ef94a8e189d992fef"
+    },
+    {
+      "source": "workspace/pixel-voice/server/audit-fixes.test.mjs",
+      "destination": "workspace/rose-agent/server/audit-fixes.test.mjs",
+      "upstream_blob": "8e58765c7eae6bbe7ce21617812fee2078b76e19"
+    },
+    {
+      "source": "workspace/pixel-voice/server/background-app-policy.mjs",
+      "destination": "workspace/rose-agent/server/background-app-policy.mjs",
+      "upstream_blob": "a3a1c75b714f9d69ab46e3f6a0dd6435edc73ce8"
+    },
+    {
+      "source": "workspace/pixel-voice/server/background-app-policy.test.mjs",
+      "destination": "workspace/rose-agent/server/background-app-policy.test.mjs",
+      "upstream_blob": "07a72bc79e94d26aa60f50f0eb8b1dc39d651d7c"
+    },
+    {
+      "source": "workspace/pixel-voice/server/background-phone.mjs",
+      "destination": "workspace/rose-agent/server/background-phone.mjs",
+      "upstream_blob": "269d646c335f1d720123e38eb078ea6242cd3358"
+    },
+    {
+      "source": "workspace/pixel-voice/server/background-phone.test.mjs",
+      "destination": "workspace/rose-agent/server/background-phone.test.mjs",
+      "upstream_blob": "74a2f17e68628334fb2e4a70c7ea8fe2c6e1381e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/background-refresh.test.mjs",
+      "destination": "workspace/rose-agent/server/background-refresh.test.mjs",
+      "upstream_blob": "500203eecf91c6290a17a663af781c21e0897ff1"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/gateway.mjs",
+      "destination": "workspace/rose-agent/server/baseten/gateway.mjs",
+      "upstream_blob": "0ef3744183aaf1bc9f955c322857c026bf39d424"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/protocol.mjs",
+      "destination": "workspace/rose-agent/server/baseten/protocol.mjs",
+      "upstream_blob": "5cb7ba5c9c7f941a93f4cc9cef5db146ce53bbfb"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/protocol.test.mjs",
+      "destination": "workspace/rose-agent/server/baseten/protocol.test.mjs",
+      "upstream_blob": "febf7e4470b50d11d062266332c904f7aa7bf801"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/provider.test.mjs",
+      "destination": "workspace/rose-agent/server/baseten/provider.test.mjs",
+      "upstream_blob": "3e9a121add475b0baf1a55283c3dc7c4afcf0345"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/tools.mjs",
+      "destination": "workspace/rose-agent/server/baseten/tools.mjs",
+      "upstream_blob": "621b85ad5eb97b54a0259cbc77b13e12c69d05fb"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/web-lookup.mjs",
+      "destination": "workspace/rose-agent/server/baseten/web-lookup.mjs",
+      "upstream_blob": "5b75e66890445da915779bcdf4b9e3dc7cd07b12"
+    },
+    {
+      "source": "workspace/pixel-voice/server/baseten/web-lookup.test.mjs",
+      "destination": "workspace/rose-agent/server/baseten/web-lookup.test.mjs",
+      "upstream_blob": "556717419aba8540cbe370974c33c99ac7e15150"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/README.md",
+      "destination": "workspace/rose-agent/server/bluebubbles/README.md",
+      "upstream_blob": "5d9cd796448a9ababeda1d8858227c676b43b707"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/adapter.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/adapter.mjs",
+      "upstream_blob": "ae7ebd64e347f6dc4a30bc3786c9d5ae32ca8763"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/adapter.test.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/adapter.test.mjs",
+      "upstream_blob": "efe16f92849724e60151848e86605b9a4257213f"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/attachments.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/attachments.mjs",
+      "upstream_blob": "b6eef8f7f5f46e0a936ccd6962ba81bebe1345ad"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/attachments.test.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/attachments.test.mjs",
+      "upstream_blob": "7872c25765d24155eb4cd8a6c75b8d7ab0a51e93"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/client.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/client.mjs",
+      "upstream_blob": "f3cca04a8fe8419a7c6f4c20538169849732d8c5"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/unread-ui.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/unread-ui.mjs",
+      "upstream_blob": "a87adfe9d0071f44f67dabdd67226a5c63cf4da3"
+    },
+    {
+      "source": "workspace/pixel-voice/server/bluebubbles/unread-ui.test.mjs",
+      "destination": "workspace/rose-agent/server/bluebubbles/unread-ui.test.mjs",
+      "upstream_blob": "82ef8d8e08aed0dfb75ef69860b0a18756331121"
+    },
+    {
+      "source": "workspace/pixel-voice/server/calculator-capability.mjs",
+      "destination": "workspace/rose-agent/server/calculator-capability.mjs",
+      "upstream_blob": "75e924b76f47c5b5e7ae1288a06a0309ed7909b5"
+    },
+    {
+      "source": "workspace/pixel-voice/server/camera-tool-output.mjs",
+      "destination": "workspace/rose-agent/server/camera-tool-output.mjs",
+      "upstream_blob": "d04e757c2b7e6c5b8cf756ff95ac83906e2d54a1"
+    },
+    {
+      "source": "workspace/pixel-voice/server/cerebras/gateway.mjs",
+      "destination": "workspace/rose-agent/server/cerebras/gateway.mjs",
+      "upstream_blob": "d04be8c0e16d3e0fb81cf80941493244bf1f6f30"
+    },
+    {
+      "source": "workspace/pixel-voice/server/cerebras/protocol.mjs",
+      "destination": "workspace/rose-agent/server/cerebras/protocol.mjs",
+      "upstream_blob": "6ddfd1822038ead08826ed5cc37d0b83ce334cf1"
+    },
+    {
+      "source": "workspace/pixel-voice/server/cerebras/protocol.test.mjs",
+      "destination": "workspace/rose-agent/server/cerebras/protocol.test.mjs",
+      "upstream_blob": "9ca91a8656bff3956655645f20fcb27599fbeb99"
+    },
+    {
+      "source": "workspace/pixel-voice/server/cerebras/provider.test.mjs",
+      "destination": "workspace/rose-agent/server/cerebras/provider.test.mjs",
+      "upstream_blob": "89e0e801f15bdf19b0cdd660ee9f3384447a9108"
+    },
+    {
+      "source": "workspace/pixel-voice/server/checker-completion-retry.mjs",
+      "destination": "workspace/rose-agent/server/checker-completion-retry.mjs",
+      "upstream_blob": "c17c4380077046beedebe6f382a224a5f50b0b9b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/checker-completion-retry.test.mjs",
+      "destination": "workspace/rose-agent/server/checker-completion-retry.test.mjs",
+      "upstream_blob": "c5bb482d1c277ed69c88c1846f070f75474dd5f3"
+    },
+    {
+      "source": "workspace/pixel-voice/server/codex-audit.mjs",
+      "destination": "workspace/rose-agent/server/codex-audit.mjs",
+      "upstream_blob": "adf7d456c050cb6b6519c941dc468334faa52c1b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/codex-provider-start.test.mjs",
+      "destination": "workspace/rose-agent/server/codex-provider-start.test.mjs",
+      "upstream_blob": "d562992e0ab2eb0229abedeb6281dde11f72fd77"
+    },
+    {
+      "source": "workspace/pixel-voice/server/codex.mjs",
+      "destination": "workspace/rose-agent/server/codex.mjs",
+      "upstream_blob": "16711bebd3613172bef1e672f5e9d529c930d73c"
+    },
+    {
+      "source": "workspace/pixel-voice/server/completion-progress.test.mjs",
+      "destination": "workspace/rose-agent/server/completion-progress.test.mjs",
+      "upstream_blob": "dd8af0aa1effbc966307fea0bcadb7a75d3abe0d"
+    },
+    {
+      "source": "workspace/pixel-voice/server/configure-podcast-companion.mjs",
+      "destination": "workspace/rose-agent/server/configure-podcast-companion.mjs",
+      "upstream_blob": "a5028d795379df3d75275e25f52d814cf4961fa1"
+    },
+    {
+      "source": "workspace/pixel-voice/server/conversation-timeline.mjs",
+      "destination": "workspace/rose-agent/server/conversation-timeline.mjs",
+      "upstream_blob": "349491ea10dd5b34309cb6de733d9f6f2b281987"
+    },
+    {
+      "source": "workspace/pixel-voice/server/conversation.mjs",
+      "destination": "workspace/rose-agent/server/conversation.mjs",
+      "upstream_blob": "cd984db259663d1dc57d03fe98fd5314c790849d"
+    },
+    {
+      "source": "workspace/pixel-voice/server/delivery.mjs",
+      "destination": "workspace/rose-agent/server/delivery.mjs",
+      "upstream_blob": "2d43b599219c73dcdc36789b8d59ba92bc811263"
+    },
+    {
+      "source": "workspace/pixel-voice/server/delivery.test.mjs",
+      "destination": "workspace/rose-agent/server/delivery.test.mjs",
+      "upstream_blob": "b793c2e66d8f899a4ccdf028f509f2ed16065bb7"
+    },
+    {
+      "source": "workspace/pixel-voice/server/device-eval.mjs",
+      "destination": "workspace/rose-agent/server/device-eval.mjs",
+      "upstream_blob": "704b6bf65c6dd46a8c84982577b94fdf475153d8"
+    },
+    {
+      "source": "workspace/pixel-voice/server/device-preference.mjs",
+      "destination": "workspace/rose-agent/server/device-preference.mjs",
+      "upstream_blob": "ea3610569b841ca750de143b8f4b52fb1ea8e35f"
+    },
+    {
+      "source": "workspace/pixel-voice/server/eleven-entry.js",
+      "destination": "workspace/rose-agent/server/eleven-entry.js",
+      "upstream_blob": "8e3dc176dcb759cc41075891ad72b4c828f0434f"
+    },
+    {
+      "source": "workspace/pixel-voice/server/elevenlabs.mjs",
+      "destination": "workspace/rose-agent/server/elevenlabs.mjs",
+      "upstream_blob": "e3b30dc97bf9963a2e68996802a79fc3189c6c2c"
+    },
+    {
+      "source": "workspace/pixel-voice/server/elevenlabs.test.mjs",
+      "destination": "workspace/rose-agent/server/elevenlabs.test.mjs",
+      "upstream_blob": "85b1b70490110ccf511e335f18217fcf3d875a6b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/environment-tools.mjs",
+      "destination": "workspace/rose-agent/server/environment-tools.mjs",
+      "upstream_blob": "b68f19178af6496baee233d3b2b6dcf2559256ff"
+    },
+    {
+      "source": "workspace/pixel-voice/server/environment-tools.test.mjs",
+      "destination": "workspace/rose-agent/server/environment-tools.test.mjs",
+      "upstream_blob": "b16024e8ddfdb8ace2856674a45bd30f78ad8211"
+    },
+    {
+      "source": "workspace/pixel-voice/server/evaluation-gateway.mjs",
+      "destination": "workspace/rose-agent/server/evaluation-gateway.mjs",
+      "upstream_blob": "47885f25a5453fc86ce184d8e181b42549c2cdd1"
+    },
+    {
+      "source": "workspace/pixel-voice/server/evaluation-gateway.test.mjs",
+      "destination": "workspace/rose-agent/server/evaluation-gateway.test.mjs",
+      "upstream_blob": "dfca5197fca61ee00c54adf43258966c15b1e423"
+    },
+    {
+      "source": "workspace/pixel-voice/server/event-delivery.mjs",
+      "destination": "workspace/rose-agent/server/event-delivery.mjs",
+      "upstream_blob": "f465bb078c3a9669aac9c027b10a2966d937e469"
+    },
+    {
+      "source": "workspace/pixel-voice/server/hidden-world-location.mjs",
+      "destination": "workspace/rose-agent/server/hidden-world-location.mjs",
+      "upstream_blob": "42c596e7741d759041ec97927c8adc46955069de"
+    },
+    {
+      "source": "workspace/pixel-voice/server/hidden-world.mjs",
+      "destination": "workspace/rose-agent/server/hidden-world.mjs",
+      "upstream_blob": "6baab7f5827cdc8f8b22e40e7b0b1a832fc8c370"
+    },
+    {
+      "source": "workspace/pixel-voice/server/illustrations.mjs",
+      "destination": "workspace/rose-agent/server/illustrations.mjs",
+      "upstream_blob": "848af0e85c501fdb13cf3767a9cde4226c1f9f14"
+    },
+    {
+      "source": "workspace/pixel-voice/server/inspect-tiers.mjs",
+      "destination": "workspace/rose-agent/server/inspect-tiers.mjs",
+      "upstream_blob": "2d2b474204e9d989dda4b253d4b7604f6d8e9e61"
+    },
+    {
+      "source": "workspace/pixel-voice/server/launcher-task.mjs",
+      "destination": "workspace/rose-agent/server/launcher-task.mjs",
+      "upstream_blob": "6bf041bf9dddc58d2d7a59fcbef4a468de959a69"
+    },
+    {
+      "source": "workspace/pixel-voice/server/launcher-task.test.mjs",
+      "destination": "workspace/rose-agent/server/launcher-task.test.mjs",
+      "upstream_blob": "4a7099a1dbce79304ae1dd736936124f762e9a93"
+    },
+    {
+      "source": "workspace/pixel-voice/server/lithos-evaluation.mjs",
+      "destination": "workspace/rose-agent/server/lithos-evaluation.mjs",
+      "upstream_blob": "951f852aeeb8bd16fc16bfab3311fe6998048b96"
+    },
+    {
+      "source": "workspace/pixel-voice/server/lithos-evaluation.test.mjs",
+      "destination": "workspace/rose-agent/server/lithos-evaluation.test.mjs",
+      "upstream_blob": "77fbd6a769c6ff86ff50c41bf3014e5c98c010b5"
+    },
+    {
+      "source": "workspace/pixel-voice/server/live-handoff-trace.mjs",
+      "destination": "workspace/rose-agent/server/live-handoff-trace.mjs",
+      "upstream_blob": "3928ba12b4c0325bef3509262153957476324701"
+    },
+    {
+      "source": "workspace/pixel-voice/server/live-handoff-trace.test.mjs",
+      "destination": "workspace/rose-agent/server/live-handoff-trace.test.mjs",
+      "upstream_blob": "de99857527d89ff6e4e8c7e450575a52e9efe413"
+    },
+    {
+      "source": "workspace/pixel-voice/server/local-evaluation.mjs",
+      "destination": "workspace/rose-agent/server/local-evaluation.mjs",
+      "upstream_blob": "421f82d156d1e9e576fc31560157b49d936164fb"
+    },
+    {
+      "source": "workspace/pixel-voice/server/local-evaluation.test.mjs",
+      "destination": "workspace/rose-agent/server/local-evaluation.test.mjs",
+      "upstream_blob": "798a2e0dff398d3900abd1b133297568c7bb63bd"
+    },
+    {
+      "source": "workspace/pixel-voice/server/mail-calendar-wiring.test.mjs",
+      "destination": "workspace/rose-agent/server/mail-calendar-wiring.test.mjs",
+      "upstream_blob": "75d6bb228cededda46c371a0b0ac95463445c343"
+    },
+    {
+      "source": "workspace/pixel-voice/server/messages.mjs",
+      "destination": "workspace/rose-agent/server/messages.mjs",
+      "upstream_blob": "2e80812325019c23f65af7439691532b1e456a33"
+    },
+    {
+      "source": "workspace/pixel-voice/server/migration-backup.mjs",
+      "destination": "workspace/rose-agent/server/migration-backup.mjs",
+      "upstream_blob": "0051289e980ea5458aea6c938dfa1c4a84ecfc83"
+    },
+    {
+      "source": "workspace/pixel-voice/server/migration-backup.test.mjs",
+      "destination": "workspace/rose-agent/server/migration-backup.test.mjs",
+      "upstream_blob": "286c0e3e0da71bb143825defb067c20644ff25dd"
+    },
+    {
+      "source": "workspace/pixel-voice/server/model-switch.mjs",
+      "destination": "workspace/rose-agent/server/model-switch.mjs",
+      "upstream_blob": "75122ee02faaa2fb1450d2551df9d8a17fc23fce"
+    },
+    {
+      "source": "workspace/pixel-voice/server/model-switch.test.mjs",
+      "destination": "workspace/rose-agent/server/model-switch.test.mjs",
+      "upstream_blob": "b706f891d80081459a4a45e54fd79cc509ac5865"
+    },
+    {
+      "source": "workspace/pixel-voice/server/model-tools.mjs",
+      "destination": "workspace/rose-agent/server/model-tools.mjs",
+      "upstream_blob": "cf8bfc702f6bfda81485121ed28d8fec74a2e31e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/model-tools.test.mjs",
+      "destination": "workspace/rose-agent/server/model-tools.test.mjs",
+      "upstream_blob": "2d4f07874e7f39eee043e228f8e073560a5c99bf"
+    },
+    {
+      "source": "workspace/pixel-voice/server/music-pitch.mjs",
+      "destination": "workspace/rose-agent/server/music-pitch.mjs",
+      "upstream_blob": "9c66aec237895e009f1a93a72acbd1ab1a72bcab"
+    },
+    {
+      "source": "workspace/pixel-voice/server/music.mjs",
+      "destination": "workspace/rose-agent/server/music.mjs",
+      "upstream_blob": "f260e8ce0bca8415edcd2b467488c94d51577b38"
+    },
+    {
+      "source": "workspace/pixel-voice/server/native/youtube-menu-ocr.swift",
+      "destination": "workspace/rose-agent/server/native/youtube-menu-ocr.swift",
+      "upstream_blob": "b42aadcd9e7406d5b15e4465d90e532fc00bf6c5"
+    },
+    {
+      "source": "workspace/pixel-voice/server/observation-batching.mjs",
+      "destination": "workspace/rose-agent/server/observation-batching.mjs",
+      "upstream_blob": "962712045ece0ca0e5f59fbf73a939743b19f675"
+    },
+    {
+      "source": "workspace/pixel-voice/server/package-lock.json",
+      "destination": "workspace/rose-agent/server/package-lock.json",
+      "upstream_blob": "c43d375c3d12dfc6fd5193d4c8e83652d1a0139e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/package.json",
+      "destination": "workspace/rose-agent/server/package.json",
+      "upstream_blob": "05ce4eafd1a2f610b4412016995ea1242595c152"
+    },
+    {
+      "source": "workspace/pixel-voice/server/phone-app-context.mjs",
+      "destination": "workspace/rose-agent/server/phone-app-context.mjs",
+      "upstream_blob": "152cf7ae17fe4c4fd14c648aaef5cc4b83a2c870"
+    },
+    {
+      "source": "workspace/pixel-voice/server/phone-vision-policy.mjs",
+      "destination": "workspace/rose-agent/server/phone-vision-policy.mjs",
+      "upstream_blob": "c790517ee21cbef0303f2d96561a0ad82ec6fb5e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/phone-vision-policy.test.mjs",
+      "destination": "workspace/rose-agent/server/phone-vision-policy.test.mjs",
+      "upstream_blob": "fa57811362791298f13aade48e9671113dc6f22d"
+    },
+    {
+      "source": "workspace/pixel-voice/server/phone.mjs",
+      "destination": "workspace/rose-agent/server/phone.mjs",
+      "upstream_blob": "d6bcf4fe3502b80eef4feb730af8256a477bcda7"
+    },
+    {
+      "source": "workspace/pixel-voice/server/podcast-recommendations.mjs",
+      "destination": "workspace/rose-agent/server/podcast-recommendations.mjs",
+      "upstream_blob": "4fafe13658d098b2e164eb04aab9e162e121262e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/podcast-recommendations.test.mjs",
+      "destination": "workspace/rose-agent/server/podcast-recommendations.test.mjs",
+      "upstream_blob": "8992971574084c1cf1e645e4063270c70e4bd00b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/podcast-transcription.mjs",
+      "destination": "workspace/rose-agent/server/podcast-transcription.mjs",
+      "upstream_blob": "d10fee923c6d6422496db595c688d1810ee0ff11"
+    },
+    {
+      "source": "workspace/pixel-voice/server/podcast-transcription.test.mjs",
+      "destination": "workspace/rose-agent/server/podcast-transcription.test.mjs",
+      "upstream_blob": "d734e44f4f39457fee70022d561867b7da1d4f10"
+    },
+    {
+      "source": "workspace/pixel-voice/server/probe-decisions.mjs",
+      "destination": "workspace/rose-agent/server/probe-decisions.mjs",
+      "upstream_blob": "653fc9b38042e2b310c10a809aa29252e62fe2c9"
+    },
+    {
+      "source": "workspace/pixel-voice/server/probe-models.mjs",
+      "destination": "workspace/rose-agent/server/probe-models.mjs",
+      "upstream_blob": "19536c72cc52a37255c368f71c3047bf7b098c22"
+    },
+    {
+      "source": "workspace/pixel-voice/server/probe-tier-audit.mjs",
+      "destination": "workspace/rose-agent/server/probe-tier-audit.mjs",
+      "upstream_blob": "ac1216707516dcc7088e8a8738d61e90157d8a83"
+    },
+    {
+      "source": "workspace/pixel-voice/server/probe-ultrafast.mjs",
+      "destination": "workspace/rose-agent/server/probe-ultrafast.mjs",
+      "upstream_blob": "2d1731894330e8beeb8f6c0d29d32b99f18d7479"
+    },
+    {
+      "source": "workspace/pixel-voice/server/progress.mjs",
+      "destination": "workspace/rose-agent/server/progress.mjs",
+      "upstream_blob": "7a9783018d383bafff81f0cb2dd8bdb4ab156597"
+    },
+    {
+      "source": "workspace/pixel-voice/server/reader.mjs",
+      "destination": "workspace/rose-agent/server/reader.mjs",
+      "upstream_blob": "5b84d9febf3238a63825be815fd1fe4f439e94af"
+    },
+    {
+      "source": "workspace/pixel-voice/server/reconnect.mjs",
+      "destination": "workspace/rose-agent/server/reconnect.mjs",
+      "upstream_blob": "61d0b78361d6e911b197573e1f0ce2b3afddc15e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/room.mjs",
+      "destination": "workspace/rose-agent/server/room.mjs",
+      "upstream_blob": "22839f9050e7add2beac4f0cedb87d7cce67af2c"
+    },
+    {
+      "source": "workspace/pixel-voice/server/routing.mjs",
+      "destination": "workspace/rose-agent/server/routing.mjs",
+      "upstream_blob": "63d9fa298b6aa7d5d0d8ddcd887ce3353d8bf91e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/server.mjs",
+      "destination": "workspace/rose-agent/server/server.mjs",
+      "upstream_blob": "a92f6446d505b3f00250c38f7e1bed66eb7c01db"
+    },
+    {
+      "source": "workspace/pixel-voice/server/session-lease.mjs",
+      "destination": "workspace/rose-agent/server/session-lease.mjs",
+      "upstream_blob": "6e90d1c1d4da3d423471cb3b9aa7bb75398b99a8"
+    },
+    {
+      "source": "workspace/pixel-voice/server/session-lease.test.mjs",
+      "destination": "workspace/rose-agent/server/session-lease.test.mjs",
+      "upstream_blob": "7f2f3d2d447e8f2533079352437e54cf25f52f2a"
+    },
+    {
+      "source": "workspace/pixel-voice/server/set-voice-routing.mjs",
+      "destination": "workspace/rose-agent/server/set-voice-routing.mjs",
+      "upstream_blob": "e547f258d073a04214c04d6dbaacba2b4a855bc6"
+    },
+    {
+      "source": "workspace/pixel-voice/server/suite-native-catalogs.mjs",
+      "destination": "workspace/rose-agent/server/suite-native-catalogs.mjs",
+      "upstream_blob": "e349902d983fa199c4b1e370d3e77fe8d6a95aad"
+    },
+    {
+      "source": "workspace/pixel-voice/server/suite-native-catalogs.test.mjs",
+      "destination": "workspace/rose-agent/server/suite-native-catalogs.test.mjs",
+      "upstream_blob": "98a9459dfad331e08b9e8c271a5232271a2b5854"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-evidence.mjs",
+      "destination": "workspace/rose-agent/server/task-evidence.mjs",
+      "upstream_blob": "f9f819aadf6426168c422aa1f8bc127f7189d35f"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-evidence.test.mjs",
+      "destination": "workspace/rose-agent/server/task-evidence.test.mjs",
+      "upstream_blob": "ae94186f141d23043beb1e13452cbb3a5c807863"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-html.mjs",
+      "destination": "workspace/rose-agent/server/task-html.mjs",
+      "upstream_blob": "c28f3cbf805d65cb304645ca0cffd96c8f25d018"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-html.test.mjs",
+      "destination": "workspace/rose-agent/server/task-html.test.mjs",
+      "upstream_blob": "a4a3f8d6175d934804798842377179c9f041ec53"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-review.mjs",
+      "destination": "workspace/rose-agent/server/task-review.mjs",
+      "upstream_blob": "16f1ddb98d82d5fedd56cad98c8ee86c2393c6c9"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-setup.mjs",
+      "destination": "workspace/rose-agent/server/task-setup.mjs",
+      "upstream_blob": "cd2a6725318c77a222d300963ff40affd57da4c0"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-setup.test.mjs",
+      "destination": "workspace/rose-agent/server/task-setup.test.mjs",
+      "upstream_blob": "e88ee9def12fec8d81c92e80234c66505708b514"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-status-transport.test.mjs",
+      "destination": "workspace/rose-agent/server/task-status-transport.test.mjs",
+      "upstream_blob": "06b6de8f11114693dce24c7cf50a55e8a47fff58"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-title-generator.mjs",
+      "destination": "workspace/rose-agent/server/task-title-generator.mjs",
+      "upstream_blob": "6dc1500189868cd0ce791ab136f95dbceceeceec"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-title-generator.test.mjs",
+      "destination": "workspace/rose-agent/server/task-title-generator.test.mjs",
+      "upstream_blob": "b04b3209dab0ab2bac2509406df869093d78d642"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-widget.mjs",
+      "destination": "workspace/rose-agent/server/task-widget.mjs",
+      "upstream_blob": "89529c340cbf0c5321f59d6212090cc142bcd672"
+    },
+    {
+      "source": "workspace/pixel-voice/server/task-widget.test.mjs",
+      "destination": "workspace/rose-agent/server/task-widget.test.mjs",
+      "upstream_blob": "6b34e782d442eeac15103f1581d6e3b30f1a43a3"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-book-spoken-flow.mjs",
+      "destination": "workspace/rose-agent/server/test-book-spoken-flow.mjs",
+      "upstream_blob": "4b1a644eaf2c644850672f58242f63e06899f9a2"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-conversation-timeline.mjs",
+      "destination": "workspace/rose-agent/server/test-conversation-timeline.mjs",
+      "upstream_blob": "d69b7d7b5a5bd0a1261c638f9ac8e2d23c69a067"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-eleven-phone.mjs",
+      "destination": "workspace/rose-agent/server/test-eleven-phone.mjs",
+      "upstream_blob": "f8f0bfef5c01b8cb66097a5c4fdf30cd00fbd8b8"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-eleven-silence.mjs",
+      "destination": "workspace/rose-agent/server/test-eleven-silence.mjs",
+      "upstream_blob": "70f3d5d1ba4712e60b2484f342e09182b9efb193"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-live-book-reading.mjs",
+      "destination": "workspace/rose-agent/server/test-live-book-reading.mjs",
+      "upstream_blob": "f488c7f6cd589809621ff79d88588afbbf0f3b4d"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-luna-first-live.mjs",
+      "destination": "workspace/rose-agent/server/test-luna-first-live.mjs",
+      "upstream_blob": "4c6de9826cf3797d950492c35a1f1a74ec5f848a"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-model-switch-spoken.mjs",
+      "destination": "workspace/rose-agent/server/test-model-switch-spoken.mjs",
+      "upstream_blob": "3bf0a3af6d763d79cc2e68e46147b573631d2324"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-music-live.mjs",
+      "destination": "workspace/rose-agent/server/test-music-live.mjs",
+      "upstream_blob": "2df18dcceeb911f38df06598881a140f901c6a9d"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-reconnect-live.mjs",
+      "destination": "workspace/rose-agent/server/test-reconnect-live.mjs",
+      "upstream_blob": "5f0bc8d8b2aa40e800079ffec19d163aa30799bd"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-repeat-delegation-live.mjs",
+      "destination": "workspace/rose-agent/server/test-repeat-delegation-live.mjs",
+      "upstream_blob": "84e263576c94cdd5fa831a7c984f43cce46a989b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-spoken.mjs",
+      "destination": "workspace/rose-agent/server/test-spoken.mjs",
+      "upstream_blob": "f604363eff5895e8a35a042a2eb13f21e614769f"
+    },
+    {
+      "source": "workspace/pixel-voice/server/test-typed-context.mjs",
+      "destination": "workspace/rose-agent/server/test-typed-context.mjs",
+      "upstream_blob": "800653536dc947eed7bbe8aef4e791f55386ec71"
+    },
+    {
+      "source": "workspace/pixel-voice/server/tool-activity.mjs",
+      "destination": "workspace/rose-agent/server/tool-activity.mjs",
+      "upstream_blob": "77608ad6785bcc22dc1edfa17fd0a93138accfa5"
+    },
+    {
+      "source": "workspace/pixel-voice/server/tool-activity.test.mjs",
+      "destination": "workspace/rose-agent/server/tool-activity.test.mjs",
+      "upstream_blob": "96969af82dfa6cafa9f2d5c1b83c49654923d60a"
+    },
+    {
+      "source": "workspace/pixel-voice/server/transcripts.mjs",
+      "destination": "workspace/rose-agent/server/transcripts.mjs",
+      "upstream_blob": "04ba57dc8bc72f6a9a1e3ea91546a3b4d1106bde"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/apple-music.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/apple-music.mjs",
+      "upstream_blob": "407f1d468b458be1ef43256a0e569b4c626f3490"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/bird.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/bird.mjs",
+      "upstream_blob": "13314dadda26495bd80272b9ca2b3d0e3eeac9bf"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/controls.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/controls.mjs",
+      "upstream_blob": "448bab93647109ba244593252c4f8f82974fd629"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/maps.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/maps.mjs",
+      "upstream_blob": "ad54f2454dc29b8725f95684f2bbc97d1dd3d27b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/maps.test.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/maps.test.mjs",
+      "upstream_blob": "844e904da069cd8fadc5d08846ff7bcb9d8b56d2"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/play-store-approval.test.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/play-store-approval.test.mjs",
+      "upstream_blob": "afd77195ff75a10709d26b66117fd1036cbb9774"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/play-store.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/play-store.mjs",
+      "upstream_blob": "7021f00ead355366d8c87b687f4b4f529f4639e8"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/suite-browser.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/suite-browser.mjs",
+      "upstream_blob": "437a0746397a1e223a2fb9b34fb7b9150242c754"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/suite-common.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/suite-common.mjs",
+      "upstream_blob": "c6054b75492259d93645841cbece97fd1b3a55cc"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/suite-files-phone-browser.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/suite-files-phone-browser.mjs",
+      "upstream_blob": "b914056c716e8989e064ffcf9a0d7257e2ab9210"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/suite-files.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/suite-files.mjs",
+      "upstream_blob": "a60e09280bbc8f651869467fe440e2d5a74387db"
+    },
+    {
+      "source": "workspace/pixel-voice/server/ui-apps/suite-phone.mjs",
+      "destination": "workspace/rose-agent/server/ui-apps/suite-phone.mjs",
+      "upstream_blob": "99cc387389b113b87b62f2f066ecee4c7465e5ee"
+    },
+    {
+      "source": "workspace/pixel-voice/server/verify-live.mjs",
+      "destination": "workspace/rose-agent/server/verify-live.mjs",
+      "upstream_blob": "a77bf74be80f17fca5ad5ab57f2273379525022e"
+    },
+    {
+      "source": "workspace/pixel-voice/server/verify-steering.py",
+      "destination": "workspace/rose-agent/server/verify-steering.py",
+      "upstream_blob": "3bde506e7b6035a8acfb0dc5e4c2afa07e0bd2be"
+    },
+    {
+      "source": "workspace/pixel-voice/server/visual-verification.mjs",
+      "destination": "workspace/rose-agent/server/visual-verification.mjs",
+      "upstream_blob": "df02a26efde3f3506a47fec009af8f1a706e9abd"
+    },
+    {
+      "source": "workspace/pixel-voice/server/visual-verification.test.mjs",
+      "destination": "workspace/rose-agent/server/visual-verification.test.mjs",
+      "upstream_blob": "e304897943fb1d81add8fd843f5ffd79e909822b"
+    },
+    {
+      "source": "workspace/pixel-voice/server/voice-instructions.mjs",
+      "destination": "workspace/rose-agent/server/voice-instructions.mjs",
+      "upstream_blob": "7a77426c24ea8c5520d3069cda9bd180139a11d2"
+    },
+    {
+      "source": "workspace/pixel-voice/server/voice-request-context.mjs",
+      "destination": "workspace/rose-agent/server/voice-request-context.mjs",
+      "upstream_blob": "15a6796319050805eaeb60a146a0d647cd1d4c24"
+    },
+    {
+      "source": "workspace/pixel-voice/server/voice-request-context.test.mjs",
+      "destination": "workspace/rose-agent/server/voice-request-context.test.mjs",
+      "upstream_blob": "583526c49952c324f0f573cdb9c3f035570eaf54"
+    },
+    {
+      "source": "workspace/pixel-voice/server/voice-routing.mjs",
+      "destination": "workspace/rose-agent/server/voice-routing.mjs",
+      "upstream_blob": "95577eb5d60beca2412dcb3bfdbc507961cd589c"
+    },
+    {
+      "source": "workspace/pixel-voice/server/voice-routing.test.mjs",
+      "destination": "workspace/rose-agent/server/voice-routing.test.mjs",
+      "upstream_blob": "8fb64101420ca0669540e004e528a83204137da3"
+    },
+    {
+      "source": "workspace/pixel-voice/server/voice-timing.mjs",
+      "destination": "workspace/rose-agent/server/voice-timing.mjs",
+      "upstream_blob": "7d39c4f618362ad9b8938aae6e1ab40ebe1fd483"
+    },
+    {
+      "source": "workspace/pixel-voice/server/youtube-visual.mjs",
+      "destination": "workspace/rose-agent/server/youtube-visual.mjs",
+      "upstream_blob": "45f8fbad30c05e70bc1fc227ad7ab185edcc732d"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/agent-app-trust.test.cjs",
+      "destination": "workspace/rose-agent/tests/agent-app-trust.test.cjs",
+      "upstream_blob": "d707c52fc5990a338578aea3af0f67ad8949c61a"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/allowed-assets.test.mjs",
+      "destination": "workspace/rose-agent/tests/allowed-assets.test.mjs",
+      "upstream_blob": "9d0446207d76349622bb679c7f9e14f7784737f7"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/audio-start-order.mjs",
+      "destination": "workspace/rose-agent/tests/audio-start-order.mjs",
+      "upstream_blob": "37b02f8ff8e8eaf62a74401f458065e20c230b7b"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/book-companion.cjs",
+      "destination": "workspace/rose-agent/tests/book-companion.cjs",
+      "upstream_blob": "f957624b22baf367e9524c5fd71ff2b8d9d78379"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/conversation.mjs",
+      "destination": "workspace/rose-agent/tests/conversation.mjs",
+      "upstream_blob": "5b9a945206fa7685fec115e2c268a91dd8b57afe"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/eleven-ui.cjs",
+      "destination": "workspace/rose-agent/tests/eleven-ui.cjs",
+      "upstream_blob": "07895fc219e6b5ec7f0ced5844b6cc99ecce7652"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/event-delivery.mjs",
+      "destination": "workspace/rose-agent/tests/event-delivery.mjs",
+      "upstream_blob": "ca7e1d25e283d8cb0e6f10708fa9f3a20023c1a2"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/ButtonTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java",
+      "upstream_blob": "5ac0a7afe9395302068527ed2d9882e46718375d"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/DragPathTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/DragPathTest.java",
+      "upstream_blob": "adc97c5f35b47a5e518a58f89b984c3d50eb9e62"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/GestureTraceTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/GestureTraceTest.java",
+      "upstream_blob": "7b760e6b15d7c7bfd8e5c71ed2dab2635c756f56"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/GlassesAutoStartPolicyTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/GlassesAutoStartPolicyTest.java",
+      "upstream_blob": "dcf679268a2617ba1f394138287506364ad21a06"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/GlassesDisconnectPolicyTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/GlassesDisconnectPolicyTest.java",
+      "upstream_blob": "43f8f30978dbdaf4d3c0cf832deeb08ddd7176f7"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/LabelTargetsTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/LabelTargetsTest.java",
+      "upstream_blob": "9d0adf51f0cca8d36cc39482c81b9a6ce18473ae"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/SwipePathTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/SwipePathTest.java",
+      "upstream_blob": "fcf802d71cd7268f635c65e6d0ba7eee4b5ab4e9"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/TapPointTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/TapPointTest.java",
+      "upstream_blob": "71a4c38fd27f2b1d48ff137ea4dbecf31da56270"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/TargetSnapshotGuardTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/TargetSnapshotGuardTest.java",
+      "upstream_blob": "bd1240a45200ab4bc9f52ae9337322a9728851be"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/java/dev/pixel/voice/TextInputGuardTest.java",
+      "destination": "workspace/rose-agent/tests/java/dev/pixel/voice/TextInputGuardTest.java",
+      "upstream_blob": "aa5aff76a5e18a7dd4e732e3510005937e907eba"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/location-cache-policy.test.cjs",
+      "destination": "workspace/rose-agent/tests/location-cache-policy.test.cjs",
+      "upstream_blob": "5cb734ef837053a5dd7e1b436e279db1c7a8b2c5"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/media-buttons.mjs",
+      "destination": "workspace/rose-agent/tests/media-buttons.mjs",
+      "upstream_blob": "737d11e78124448e1a8094f74ced95d6ad2e515f"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/messages.mjs",
+      "destination": "workspace/rose-agent/tests/messages.mjs",
+      "upstream_blob": "1a109f7fbbe797c1da86bd4da1f2e76ee5bce261"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/mute-state.mjs",
+      "destination": "workspace/rose-agent/tests/mute-state.mjs",
+      "upstream_blob": "a5d8a460048faf4388cc80d68b840b48d8a92bf0"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/observations.py",
+      "destination": "workspace/rose-agent/tests/observations.py",
+      "upstream_blob": "ab90ddfabb0b0b6766ae5c246f37a5721ced4668"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/phone-app-context.test.cjs",
+      "destination": "workspace/rose-agent/tests/phone-app-context.test.cjs",
+      "upstream_blob": "ca7e31df50c073eaa13519a509eb12b95f8dc946"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/phone-cache.mjs",
+      "destination": "workspace/rose-agent/tests/phone-cache.mjs",
+      "upstream_blob": "8626e1dd42ca2b7d08dc48b2a634110f8ab69245"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/phone.mjs",
+      "destination": "workspace/rose-agent/tests/phone.mjs",
+      "upstream_blob": "38df23b48bd9625e8a74203c2cde36dcecf3add1"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/podcast-companion.cjs",
+      "destination": "workspace/rose-agent/tests/podcast-companion.cjs",
+      "upstream_blob": "30d864ea2636c529db7f748e4d5c1af57336603f"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/podcast-context-lifecycle.cjs",
+      "destination": "workspace/rose-agent/tests/podcast-context-lifecycle.cjs",
+      "upstream_blob": "39d5b7352769650387d71323cbf85855299011b6"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/podcast-generation.cjs",
+      "destination": "workspace/rose-agent/tests/podcast-generation.cjs",
+      "upstream_blob": "066812ba566857600d245c7eff7bba3415079cc0"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/progress.mjs",
+      "destination": "workspace/rose-agent/tests/progress.mjs",
+      "upstream_blob": "3ba4472fc2009bdd4c08965bd6cbaa30e4d7e206"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/reconnect.mjs",
+      "destination": "workspace/rose-agent/tests/reconnect.mjs",
+      "upstream_blob": "c520ee097fa4fe259feb79fe0a2fc9ff8a7df765"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/remote-playback.mjs",
+      "destination": "workspace/rose-agent/tests/remote-playback.mjs",
+      "upstream_blob": "7c4e8eccf6624b9f92dab2b7e302c09cfa292ccc"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/reply-mix.mjs",
+      "destination": "workspace/rose-agent/tests/reply-mix.mjs",
+      "upstream_blob": "39b0987e6b739aecca9039f1956aabf52a550612"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/routing.mjs",
+      "destination": "workspace/rose-agent/tests/routing.mjs",
+      "upstream_blob": "5bc4e59b979c2e951beaee194ead94a5ae0a7358"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/status-audio-levels.cjs",
+      "destination": "workspace/rose-agent/tests/status-audio-levels.cjs",
+      "upstream_blob": "172de365d6765925def372b4f351297e3643db0c"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/tray-mute.mjs",
+      "destination": "workspace/rose-agent/tests/tray-mute.mjs",
+      "upstream_blob": "543fbeac5489f92c48ce68cb722734cd43089e9e"
+    },
+    {
+      "source": "workspace/pixel-voice/tests/web-assets.test.cjs",
+      "destination": "workspace/rose-agent/tests/web-assets.test.cjs",
+      "upstream_blob": "ce8ca5f8bbaa92989968abc95d10a346b17b690e"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/.gitignore",
+      "destination": "workspace/rose-agent/voice-ducking/.gitignore",
+      "upstream_blob": "d14fbe9c3c8bcd69f93a7626aa34b039b3dbbc6d"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/README.md",
+      "destination": "workspace/rose-agent/voice-ducking/README.md",
+      "upstream_blob": "958c37d5486f2672c42c4af53176ed96c675c802"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/VoiceDucking.java",
+      "destination": "workspace/rose-agent/voice-ducking/VoiceDucking.java",
+      "upstream_blob": "0ead5fb144ee71e7206f508a30f60e5e23ec9c15"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/light-device-test.txt",
+      "destination": "workspace/rose-agent/voice-ducking/light-device-test.txt",
+      "upstream_blob": "f70907b14e3a09a1127d831676194c5d9fa0095e"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/test-audio-after.txt",
+      "destination": "workspace/rose-agent/voice-ducking/test-audio-after.txt",
+      "upstream_blob": "0733c8978b3bb13a5ea43008e18acd42d6d49082"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/test-audio-before.txt",
+      "destination": "workspace/rose-agent/voice-ducking/test-audio-before.txt",
+      "upstream_blob": "ef9976b790cc9b7562d8313ab05689c2c325aedc"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/test-audio-during.txt",
+      "destination": "workspace/rose-agent/voice-ducking/test-audio-during.txt",
+      "upstream_blob": "b661becca72fd66cf91789e702e7886e0ea2116d"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-ducking/test.py",
+      "destination": "workspace/rose-agent/voice-ducking/test.py",
+      "upstream_blob": "38e52377e18c7a08d79c46bf813f3fb0675361a4"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/.gitignore",
+      "destination": "workspace/rose-agent/voice-match/.gitignore",
+      "upstream_blob": "22c299312bd4b38f1a5dc09c0d7f9d6f6ce931dc"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/README.md",
+      "destination": "workspace/rose-agent/voice-match/README.md",
+      "upstream_blob": "7bc27f470d1a29264b44c8fd027a83afb8e835da"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/access.mjs",
+      "destination": "workspace/rose-agent/voice-match/access.mjs",
+      "upstream_blob": "3bd7977d352a12341d177a6dcb1939fb310174b1"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/access.test.mjs",
+      "destination": "workspace/rose-agent/voice-match/access.test.mjs",
+      "upstream_blob": "2dedb8ec9ff82911b55b3da9a149a3f772683b1e"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/client.test.cjs",
+      "destination": "workspace/rose-agent/voice-match/client.test.cjs",
+      "upstream_blob": "1140e5330e3c7f2015a00c7721cfc700478d7165"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/http.mjs",
+      "destination": "workspace/rose-agent/voice-match/http.mjs",
+      "upstream_blob": "094579ebef6eb5cfb46b25b3fc8acb1a75189194"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/package.json",
+      "destination": "workspace/rose-agent/voice-match/package.json",
+      "upstream_blob": "f9ec9b62f616f5c61144ef14c6cbbb1f8454f745"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/prepare-prompts.mjs",
+      "destination": "workspace/rose-agent/voice-match/prepare-prompts.mjs",
+      "upstream_blob": "255500bf006b3459b0e0b646f56e86891139e3f9"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/requirements.txt",
+      "destination": "workspace/rose-agent/voice-match/requirements.txt",
+      "upstream_blob": "e9bae9af8bea4c9c55790fbba1df2459340cabc9"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/rollback.sh",
+      "destination": "workspace/rose-agent/voice-match/rollback.sh",
+      "upstream_blob": "779d0f06fe3de05d63f9a11b17855831185337a1"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/service.mjs",
+      "destination": "workspace/rose-agent/voice-match/service.mjs",
+      "upstream_blob": "455d6360f915b97bed0cfdcf6e19fd6edb0ca271"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/service.test.mjs",
+      "destination": "workspace/rose-agent/voice-match/service.test.mjs",
+      "upstream_blob": "822dbb8d7f642b9c9c5882476e6a0ebe2239127c"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/speaker.py",
+      "destination": "workspace/rose-agent/voice-match/speaker.py",
+      "upstream_blob": "11635f5c78a6863297473f75c937ce8f8a413bb1"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/test-password-live.mjs",
+      "destination": "workspace/rose-agent/voice-match/test-password-live.mjs",
+      "upstream_blob": "db0c2d2e81aca172bcb58a1f2be33896a81aa769"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-match/voice-match.js",
+      "destination": "workspace/rose-agent/voice-match/voice-match.js",
+      "upstream_blob": "6f2f8e705e63f44ab9dfe48802b9632a98402f5b"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/.gitattributes",
+      "destination": "workspace/rose-agent/voice-providers/.gitattributes",
+      "upstream_blob": "24e115f5b2170dd3eaeaf95de74a012c0e856171"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/README.md",
+      "destination": "workspace/rose-agent/voice-providers/README.md",
+      "upstream_blob": "a5fe8a1cd980ddd8bfdb9e29bc6f89d57ca917c7"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/app-worker-policy.mjs",
+      "destination": "workspace/rose-agent/voice-providers/app-worker-policy.mjs",
+      "upstream_blob": "279820587d15f2f0432f8c813eb356b483a6078a"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/app-worker-policy.test.mjs",
+      "destination": "workspace/rose-agent/voice-providers/app-worker-policy.test.mjs",
+      "upstream_blob": "02f5ae4b797ed863092df21de8b907801a7e9385"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/config.mjs",
+      "destination": "workspace/rose-agent/voice-providers/config.mjs",
+      "upstream_blob": "75669d432122a827b1b6d2cb541d3e02da98d683"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/config.test.mjs",
+      "destination": "workspace/rose-agent/voice-providers/config.test.mjs",
+      "upstream_blob": "a47957aa3b716d838dbf062b74872c2e1a517e63"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/design-chicago-voice.mjs",
+      "destination": "workspace/rose-agent/voice-providers/design-chicago-voice.mjs",
+      "upstream_blob": "95379feca7b2b6ac48c65ac3fc5435ac567c617e"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/design-fairy-voice.mjs",
+      "destination": "workspace/rose-agent/voice-providers/design-fairy-voice.mjs",
+      "upstream_blob": "f426521ffbd5f73e8d83eb40d5cd6fd3b9869554"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/live-voice-config.mjs",
+      "destination": "workspace/rose-agent/voice-providers/live-voice-config.mjs",
+      "upstream_blob": "daf34d30c400a4bc91e4a1ad3daf03380432ab38"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/live-voice-config.test.mjs",
+      "destination": "workspace/rose-agent/voice-providers/live-voice-config.test.mjs",
+      "upstream_blob": "bc04e3ed4efa5465ea4081ef822bd15d5979420b"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/luna-first.js",
+      "destination": "workspace/rose-agent/voice-providers/luna-first.js",
+      "upstream_blob": "fb8e1cb46384c03a980dbd4cdfe65401fbd0f29b"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/luna-first.test.cjs",
+      "destination": "workspace/rose-agent/voice-providers/luna-first.test.cjs",
+      "upstream_blob": "dd6038334ee86c3646a06b4be2b85f198da31bdf"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/model-command-speech.test.mjs",
+      "destination": "workspace/rose-agent/voice-providers/model-command-speech.test.mjs",
+      "upstream_blob": "7a005a82dd8f1d3f73f105254c1b44f0d16d3b8e"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/openai-session.mjs",
+      "destination": "workspace/rose-agent/voice-providers/openai-session.mjs",
+      "upstream_blob": "8653a9fd9660b2c5daf41723e86266f92ce5b8f3"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/openai-session.test.mjs",
+      "destination": "workspace/rose-agent/voice-providers/openai-session.test.mjs",
+      "upstream_blob": "9d40bcde036a5763ca9122686524f5c021255b78"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/output-boost.js",
+      "destination": "workspace/rose-agent/voice-providers/output-boost.js",
+      "upstream_blob": "a759b0f3c6eaa272b8a240947be4fee11fa93c7f"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/output-boost.test.cjs",
+      "destination": "workspace/rose-agent/voice-providers/output-boost.test.cjs",
+      "upstream_blob": "426d21030de5bd8996aa63d408582c64f1d2e7f3"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/provider.py",
+      "destination": "workspace/rose-agent/voice-providers/provider.py",
+      "upstream_blob": "99c6e1b7fc94dc3c6ede3bfa3ed36ce170a23192"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/providers.test.cjs",
+      "destination": "workspace/rose-agent/voice-providers/providers.test.cjs",
+      "upstream_blob": "401c339b4739edd648c8d4e491dc230d3a92ba47"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/task-progress.test.cjs",
+      "destination": "workspace/rose-agent/voice-providers/task-progress.test.cjs",
+      "upstream_blob": "aadad405d158cfe19fca8d6acd167933a05752fa"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/test-designed-voice.mjs",
+      "destination": "workspace/rose-agent/voice-providers/test-designed-voice.mjs",
+      "upstream_blob": "288752340eddc4ff605e142a93bf5651c6595b6c"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/test-live-model-switch.mjs",
+      "destination": "workspace/rose-agent/voice-providers/test-live-model-switch.mjs",
+      "upstream_blob": "87680e8fd5d008c575001ab6d0ec4a7a6551b0e3"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/test-live-music.mjs",
+      "destination": "workspace/rose-agent/voice-providers/test-live-music.mjs",
+      "upstream_blob": "5853da194a4e19465fca87ee8e058850fa8ef895"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/test-live-prompt.mjs",
+      "destination": "workspace/rose-agent/voice-providers/test-live-prompt.mjs",
+      "upstream_blob": "bb38d116f14ad881fecf3dc0007307c416329b45"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/test-live-sequential-music.mjs",
+      "destination": "workspace/rose-agent/voice-providers/test-live-sequential-music.mjs",
+      "upstream_blob": "5fc515905f1094823c367af7717571ca5f003b52"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/voice-commands.js",
+      "destination": "workspace/rose-agent/voice-providers/voice-commands.js",
+      "upstream_blob": "16101605f0911253f1adb6c6a5cb147ea94fee22"
+    },
+    {
+      "source": "workspace/pixel-voice/voice-providers/voice-providers.js",
+      "destination": "workspace/rose-agent/voice-providers/voice-providers.js",
+      "upstream_blob": "04c3d4701ba6e3b78e1f15f1f38801958ca4abba"
+    }
+  ],
+  "omittedGeneratedFiles": [
+    {
+      "source": "workspace/pixel-voice/app/assets/eleven-client.js",
+      "destination": "workspace/rose-agent/app/assets/eleven-client.js",
+      "upstream_blob": "66dbf3fd96116be3aafb3783f9d42be7bbd869f0"
+    },
+    {
+      "source": "workspace/pixel-voice/app/src/Manifest.java",
+      "destination": "workspace/rose-agent/app/src/Manifest.java",
+      "upstream_blob": "3e1cb923b89bf93b26d52a9f054c5df09901f715"
+    }
+  ]
+}

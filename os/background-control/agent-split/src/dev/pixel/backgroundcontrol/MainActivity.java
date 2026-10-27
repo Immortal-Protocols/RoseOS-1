@@ -1,0 +1,8 @@
+package dev.pixel.backgroundcontrol;
+import android.app.Activity;import android.os.*;import android.widget.*;import java.lang.ref.WeakReference;
+public final class MainActivity extends Activity {
+ static WeakReference<MainActivity> visible=new WeakReference<>(null);final Handler h=new Handler();TextView status;
+ final Runnable refresh=new Runnable(){public void run(){try{status.setText(Controller.state(MainActivity.this).toString(2));}catch(Exception ignored){}h.postDelayed(this,500);}};
+ public void onCreate(Bundle b){super.onCreate(b);LinearLayout l=new LinearLayout(this);l.setOrientation(1);l.setPadding(24,36,24,24);TextView title=new TextView(this);title.setText("Rose Agent background control");title.setTextSize(24);l.addView(title);TextView help=new TextView(this);help.setText("Apps run on a separate background display. Android may require consent before a session starts.");l.addView(help);Button consent=new Button(this);consent.setText("Continue Android consent");consent.setOnClickListener(v->{try{Controller.requestConsent(this);}catch(Exception e){status.setText(e.toString());}});l.addView(consent);Button stop=new Button(this);stop.setText("Stop background session");stop.setOnClickListener(v->Controller.stop(this));l.addView(stop);Button pane=new Button(this);pane.setText("Open live agent pane");pane.setOnClickListener(v->startActivity(new android.content.Intent(this,AgentPaneActivity.class)));l.addView(pane);status=new TextView(this);l.addView(status);setContentView(l);}
+ public void onResume(){super.onResume();visible=new WeakReference<>(this);h.post(refresh);}public void onPause(){h.removeCallbacks(refresh);visible.clear();super.onPause();}
+}

@@ -1,0 +1,11 @@
+  AudioPlaybackConfiguration piid:935 deviceIds:[3] type:android.media.AudioTrack u/pid:10240/6120 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0xA00(FLAG_DEEP_BUFFER+FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:257 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=44100}
+
+  ducked players piids:
+	 uid:10240 piids: 935
+  ducked players piids:
+	 uid:10240 piids: 935
+
+  faded out players piids:
+Audio Focus stack entries (last is top of stack):
+  source:android.os.BinderProxy@963d329 -- pack: com.apple.android.music -- client: android.media.AudioManager@1429529com.apple.android.music.playback.controller.LocalMediaPlayerController@98230ae -- gain: GAIN -- flags:  -- loss: LOSS_TRANSIENT_CAN_DUCK -- notified: false -- limbofalse -- uid: 10240 -- attr: AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0x800(FLAG_MUTE_HAPTIC)  tags= bundle=null -- sdk:35
+  source:android.os.BinderProxy@e4b8647 -- pack: dev.pixel.voice -- client: android.media.AudioManager@41dd263dev.pixel.voice.VoiceDucking$$ExternalSyntheticLambda0@25eee60 -- gain: GAIN_TRANSIENT_MAY_DUCK -- flags:  -- loss: none -- notified: true -- limbofalse -- uid: 10209 -- attr: AudioAttributes: usage=USAGE_ASSISTANCE_NAVIGATION_GUIDANCE content=CONTENT_TYPE_SPEECH flags=0x800(FLAG_MUTE_HAPTIC)  tags= bundle=null -- sdk:35

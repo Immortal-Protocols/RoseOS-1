@@ -1,0 +1,16 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const html=fs.readFileSync(new URL('../app/assets/index.html',import.meta.url),'utf8');
+const fn=html.match(/async function waitForAudioRoute[^\n]+/)[0];
+let ready=false, timers=[];
+const c=vm.createContext({generation:1,ended:false,Native:{audioPrepared:()=>ready},setTimeout:f=>timers.push(f)});
+vm.runInContext(fn,c);
+let done=false;
+const first=vm.runInContext('waitForAudioRoute(1)',c).then(()=>{done=true});
+await Promise.resolve();assert.equal(done,false);
+ready=true;timers.shift()();await first;assert.equal(done,true);
+ready=false;const canceled=vm.runInContext('waitForAudioRoute(1)',c);
+c.generation=2;timers.shift()();await assert.rejects(canceled,/canceled/);
+assert.equal((html.match(/Native.audio\(true\);await waitForAudioRoute\(generation\);const stream=await navigator.mediaDevices.getUserMedia/g)||[]).length,2);
+console.log('PASS: cold and prepared starts wait for native route; End cancels pending wait');

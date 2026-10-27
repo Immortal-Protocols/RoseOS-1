@@ -1,0 +1,142 @@
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -8096,4 +8096,8 @@
+ 
+     <!-- Whether to explicitly disable the Video capability over IWLAN when Wi-Fi Calling is turned off. -->
+     <bool name="config_disable_video_capability_when_wfc_off">false</bool>
++
++    <!-- Exact package/signing-certificate pins are populated by apply-os-changes.py. -->
++    <string-array name="config_pixelComputerControlAgents" translatable="false" />
++    <string-array name="config_pixelComputerControlTargets" translatable="false" />
+ </resources>
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -6631,4 +6631,6 @@
+   <java-symbol type="drawable" name="ic_cross_device_sync_airplane" />
+   <!-- Disable the Video Capability over IWLAN when Wi-Fi Calling is turned off  -->
+   <java-symbol type="bool" name="config_disable_video_capability_when_wfc_off" />
+-  </resources>
++      <java-symbol type="array" name="config_pixelComputerControlAgents" />
++    <java-symbol type="array" name="config_pixelComputerControlTargets" />
++</resources>
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java
+@@ -129,9 +129,13 @@
+         mContext = context;
+         mBackgroundExecutor = executor;
+         mSessionOwnerAllowlist = new DeviceConfigRemoteList(agentAllowlistFile,
+-                COMPUTER_CONTROL_SESSION_OWNER_ALLOWLIST_KEY);
++                COMPUTER_CONTROL_SESSION_OWNER_ALLOWLIST_KEY,
++                String.join(",", context.getResources().getStringArray(
++                        R.array.config_pixelComputerControlAgents)));
+         mAutomatableAppAllowlist = new DeviceConfigRemoteList(automatableAppsAllowlistFile,
+-                COMPUTER_CONTROL_AUTOMATABLE_APP_ALLOWLIST_KEY);
++                COMPUTER_CONTROL_AUTOMATABLE_APP_ALLOWLIST_KEY,
++                String.join(",", context.getResources().getStringArray(
++                        R.array.config_pixelComputerControlTargets)));
+         mAutomatableAppDenylist = new DeviceConfigRemoteList(automatableAppsDenylistFile,
+                 COMPUTER_CONTROL_AUTOMATABLE_APP_DENYLIST_KEY);
+         mPermissionManager = permissionManager;
+@@ -815,10 +819,17 @@
+     private static final class DeviceConfigRemoteList extends SignedPackageList {
+         private final ValueStorage mStorage;
+         private final String mDeviceConfigKey;
++        @Nullable private final String mProductDefault;
+ 
+         DeviceConfigRemoteList(@NonNull File file, @NonNull String deviceConfigKey) {
++            this(file, deviceConfigKey, null);
++        }
++
++        DeviceConfigRemoteList(@NonNull File file, @NonNull String deviceConfigKey,
++                @Nullable String productDefault) {
+             mStorage = new ValueStorage(file);
+             mDeviceConfigKey = deviceConfigKey;
++            mProductDefault = productDefault;
+         }
+ 
+         @Override
+@@ -843,7 +854,11 @@
+             }
+ 
+             // Read last persisted value, if we didn't find a valid value in DeviceConfig.
+-            final SignedPackages storedSignedPackages = mStorage.readPersistedValue();
++            SignedPackages storedSignedPackages = mStorage.readPersistedValue();
++            // Explicit DeviceConfig and persisted policy retain precedence over product defaults.
++            if (storedSignedPackages == null && mProductDefault != null) {
++                storedSignedPackages = parseList(mProductDefault);
++            }
+             if (storedSignedPackages == null) {
+                 Slog.w(TAG, "No persisted value found for key " + mDeviceConfigKey);
+                 return;
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+@@ -678,10 +678,24 @@
+         // launch request comes in for a package that's not allowed to launch.
+         final Bundle options =
+                 ActivityOptions.makeBasic().setLaunchDisplayId(mVirtualDisplayId).toBundle();
+-        Binder.withCleanCallingIdentity(() -> mActivityTaskManagerInternal.startActivityAsUser(
+-                mRequest.appThread(), mRequest.ownerPackageName(),
+-                mRequest.attributionSource().getAttributionTag(), intent, null,
+-                Intent.FLAG_ACTIVITY_NEW_TASK, options, mRequest.ownerUserId()));
++        Binder.withCleanCallingIdentity(() -> {
++            // Do not move or reuse an app that the user is currently viewing.
++            final List<ActivityAssistInfo> foreground =
++                    mActivityTaskManagerInternal.getTopVisibleActivities(mMainDisplayId);
++            if (foreground == null) {
++                throw new IllegalStateException("foreground_state_unavailable");
++            }
++            for (ActivityAssistInfo visible : foreground) {
++                if (visible != null && visible.getComponentName() != null
++                        && packageName.equals(visible.getComponentName().getPackageName())) {
++                    throw new IllegalStateException("target_in_foreground: " + packageName);
++                }
++            }
++            mActivityTaskManagerInternal.startActivityAsUser(
++                    mRequest.appThread(), mRequest.ownerPackageName(),
++                    mRequest.attributionSource().getAttributionTag(), intent, null,
++                    Intent.FLAG_ACTIVITY_NEW_TASK, options, mRequest.ownerUserId());
++        });
+         mStatsController.onApplicationLaunched(packageName);
+     }
+ 
+@@ -1033,6 +1047,10 @@
+             return false;
+         }
+ 
++        // A top-activity callback can run before its task becomes visible. Revalidate
++        // the current visible task instead of retaining that early negative result.
++        refreshVisibleTaskForScreenshot();
++
+         // Limit screenshots to the task of allowlisted packages of the automated apps.
+         // In the Blocked state, this check ensures the agent only sees authorized content.
+         synchronized (mAllowedTaskIds) {
+@@ -1078,6 +1096,25 @@
+                 }
+                 mIsWaitingForScreenshotResult = false;
+                 trackWindowDrawFinishLocked();
++            }
++        }
++    }
++
++    private void refreshVisibleTaskForScreenshot() {
++        final List<ActivityAssistInfo> activities =
++                mActivityTaskManagerInternal.getTopVisibleActivities(mVirtualDisplayId);
++        final ActivityAssistInfo top = activities == null || activities.isEmpty()
++                ? null : activities.get(0);
++        final boolean allowed = top != null
++                && mRequest.params().getTargetPackageNames()
++                        .contains(top.getComponentName().getPackageName())
++                && isActivityLaunchAllowed(top.getComponentName(), top.getUserId())
++                && mAllowlistController.isPackageAutomatable(
++                        top.getComponentName().getPackageName(), this);
++        synchronized (mAllowedTaskIds) {
++            mIsTopActivityScreenshotAllowed = top == null ? null : allowed;
++            if (allowed) {
++                mAllowedTaskIds.add(top.getTaskId());
+             }
+         }
+     }

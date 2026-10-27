@@ -1,0 +1,12 @@
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+--- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
+@@ -523,7 +523,7 @@
+         // An optional product resource selects a reference before display and
+         // input construction, keeping mirror dimensions and tap coordinates aligned.
+         final String productReference = mRequest.ownerContext().getResources().getString(
+-                R.string.config_pixelComputerControlReferenceDisplayAddress);
++                com.android.internal.R.string.config_pixelComputerControlReferenceDisplayAddress);
+         final String referenceAddress = TextUtils.isEmpty(mReferenceDisplayAddress)
+                 ? productReference : mReferenceDisplayAddress;
+         if (TextUtils.isEmpty(referenceAddress)) {

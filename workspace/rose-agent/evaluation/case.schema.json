@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rose Agent evidence-only case, version 1",
+  "type": "object",
+  "required": ["schemaVersion", "caseId", "request", "window", "outcome", "replay", "evidence", "usage", "gaps"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "caseId": {"type": "string", "pattern": "^[a-zA-Z0-9_-]{1,100}$"},
+    "request": {"type": "string"},
+    "window": {"type": "object", "required": ["start", "end"], "properties": {"start": {"type": "string"}, "end": {"type": "string"}}},
+    "outcome": {"type": "object", "required": ["status"], "properties": {"status": {"const": "unassessed"}}},
+    "replay": {"type": "object", "required": ["ready", "reason"], "properties": {"ready": {"type": "boolean"}, "reason": {"type": "string"}}},
+    "evidence": {"type": "object", "required": ["events", "eventCount", "sha256", "artifacts", "provenance"], "properties": {"events": {"const": "events.jsonl"}, "eventCount": {"type": "integer", "minimum": 0}, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "artifacts": {"type": "array"}, "provenance": {"type": "array"}}},
+    "usage": {"type": "object", "required": ["scope", "costUsd"], "properties": {"scope": {"type": "string"}, "costUsd": {"type": ["number", "null"]}}},
+    "gaps": {"type": "array", "items": {"type": "string"}},
+    "versionSnapshots": {"type": "array"}
+  }
+}

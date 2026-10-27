@@ -1,0 +1,5 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {VoiceTasks} from './elevenlabs.mjs';
+test('retry cannot execute a task twice, even during submission',async()=>{const tasks=new VoiceTasks();let release,calls=0;const wait=new Promise(r=>release=r);const first=tasks.start('request-123','Open browser',async()=>{calls++;await wait});const retry=await tasks.start('request-123','Open browser',()=>calls++);assert.equal(retry.state,'starting');release();await first;assert.equal(calls,1);tasks.message('Browser verified','final');tasks.finish();assert.equal(tasks.get('request-123').state,'completed');assert.equal(tasks.get('request-123').text,'Browser verified');});
+test('submission failure and subsequent turn failure are reported',async()=>{const tasks=new VoiceTasks();await tasks.start('request-456','Open browser',async()=>{throw new Error('offline')});assert.equal(tasks.get('request-456').state,'failed');await tasks.start('request-789','Open browser',async()=>{});tasks.finish('Agent failed');assert.equal(tasks.get('request-789').text,'Agent failed');assert.equal(tasks.get('request-456').text,'offline');});

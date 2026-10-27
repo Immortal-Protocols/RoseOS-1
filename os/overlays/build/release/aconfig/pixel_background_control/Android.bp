@@ -1,0 +1,4 @@
+aconfig_value_set {
+    name: "aconfig_value_set-pixel-background-control",
+    srcs: ["*/Android.bp"],
+}

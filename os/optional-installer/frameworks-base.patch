@@ -1,0 +1,22 @@
+--- a/packages/PackageInstaller/AndroidManifest.xml
++++ b/packages/PackageInstaller/AndroidManifest.xml
+@@ -39,6 +39,8 @@
+             android:forceQueryable="true"
+             android:directBootAware="true">
+ 
++        <provider android:name=".AgentInstallProvider" android:authorities="com.android.packageinstaller.agent" android:exported="true" />
++
+         <receiver android:name=".common.TemporaryFileManager"
+             android:exported="false">
+             <intent-filter>
+diff --git a/packages/PackageInstaller/src/com/android/packageinstaller/PackageInstallerApplication.java b/packages/PackageInstaller/src/com/android/packageinstaller/PackageInstallerApplication.java
+index a0f0ae9fe..ff1a43fee 100644
+--- a/packages/PackageInstaller/src/com/android/packageinstaller/PackageInstallerApplication.java
++++ b/packages/PackageInstaller/src/com/android/packageinstaller/PackageInstallerApplication.java
+@@ -24,5 +24,6 @@ public class PackageInstallerApplication extends Application {
+     public void onCreate() {
+         super.onCreate();
+         PackageItemInfo.forceSafeLabels();
++        AgentInstallUi.register(this);
+     }
+ }

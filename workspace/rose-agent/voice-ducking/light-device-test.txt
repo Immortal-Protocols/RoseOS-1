@@ -1,0 +1,63 @@
+BEFORE
+VOICE_CALL: Muted: false
+   Muted Internally: false
+   Min: 0
+   Max: 15
+   streamVolume:15
+   Current: 1 (earpiece): 15, 2 (speaker): 13, 10 (bt_sco): 15, 20 (bt_sco_hs): 12, 80 (bt_a2dp): 15, 40000000 (default): 5
+   Devices: bt_sco(10)
+   Volume Group: AUDIO_STREAM_VOICE_CALL
+MUSIC: Muted: false
+   Muted Internally: false
+   Min: 0
+   Max: 25
+   streamVolume:25
+   Current: 1 (earpiece): 17, 2 (speaker): 22, 10 (bt_sco): 25, 20 (bt_sco_hs): 20, 80 (bt_a2dp): 23, 40000000 (default): 8
+   Devices: bt_sco(10)
+   Volume Group: AUDIO_STREAM_MUSIC
+AudioPlaybackConfiguration piid:991 deviceIds:[210] type:android.media.AudioTrack u/pid:10240/6120 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0xA00(FLAG_DEEP_BUFFER+FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:257 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=44100}
+AudioPlaybackConfiguration piid:999 deviceIds:[210] type:android.media.AudioTrack u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC flags=0x800(FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:1281 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x1, sampleRate=48000}
+AudioPlaybackConfiguration piid:1015 deviceIds:[210] type:AAudio u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_VOICE_COMMUNICATION content=CONTENT_TYPE_UNKNOWN source=DEFAULT flags=0x0 tags= bundle=null sessionId:-1 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=48000}
+AudioPlaybackConfiguration piid:1023 deviceIds:[210] type:AAudio u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_VOICE_COMMUNICATION content=CONTENT_TYPE_UNKNOWN source=DEFAULT flags=0x0 tags= bundle=null sessionId:-1 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=48000}
+DURING
+VOICE_CALL: Muted: false
+   Muted Internally: false
+   Min: 0
+   Max: 15
+   streamVolume:15
+   Current: 1 (earpiece): 15, 2 (speaker): 13, 10 (bt_sco): 15, 20 (bt_sco_hs): 12, 80 (bt_a2dp): 15, 40000000 (default): 5
+   Devices: bt_sco(10)
+   Volume Group: AUDIO_STREAM_VOICE_CALL
+MUSIC: Muted: false
+   Muted Internally: false
+   Min: 0
+   Max: 25
+   streamVolume:23
+   Current: 1 (earpiece): 17, 2 (speaker): 22, 10 (bt_sco): 23, 20 (bt_sco_hs): 20, 80 (bt_a2dp): 23, 40000000 (default): 8
+   Devices: bt_sco(10)
+   Volume Group: AUDIO_STREAM_MUSIC
+AudioPlaybackConfiguration piid:991 deviceIds:[210] type:android.media.AudioTrack u/pid:10240/6120 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0xA00(FLAG_DEEP_BUFFER+FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:257 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=44100}
+AudioPlaybackConfiguration piid:999 deviceIds:[210] type:android.media.AudioTrack u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC flags=0x800(FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:1281 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x1, sampleRate=48000}
+AudioPlaybackConfiguration piid:1015 deviceIds:[210] type:AAudio u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_VOICE_COMMUNICATION content=CONTENT_TYPE_UNKNOWN source=DEFAULT flags=0x0 tags= bundle=null sessionId:-1 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=48000}
+AudioPlaybackConfiguration piid:1023 deviceIds:[210] type:AAudio u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_VOICE_COMMUNICATION content=CONTENT_TYPE_UNKNOWN source=DEFAULT flags=0x0 tags= bundle=null sessionId:-1 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=48000}
+AFTER
+VOICE_CALL: Muted: false
+   Muted Internally: false
+   Min: 0
+   Max: 15
+   streamVolume:15
+   Current: 1 (earpiece): 15, 2 (speaker): 13, 10 (bt_sco): 15, 20 (bt_sco_hs): 12, 80 (bt_a2dp): 15, 40000000 (default): 5
+   Devices: bt_sco(10)
+   Volume Group: AUDIO_STREAM_VOICE_CALL
+MUSIC: Muted: false
+   Muted Internally: false
+   Min: 0
+   Max: 25
+   streamVolume:25
+   Current: 1 (earpiece): 17, 2 (speaker): 22, 10 (bt_sco): 25, 20 (bt_sco_hs): 20, 80 (bt_a2dp): 23, 40000000 (default): 8
+   Devices: bt_sco(10)
+   Volume Group: AUDIO_STREAM_MUSIC
+AudioPlaybackConfiguration piid:991 deviceIds:[210] type:android.media.AudioTrack u/pid:10240/6120 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0xA00(FLAG_DEEP_BUFFER+FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:257 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=44100}
+AudioPlaybackConfiguration piid:999 deviceIds:[210] type:android.media.AudioTrack u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC flags=0x800(FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:1281 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x1, sampleRate=48000}
+AudioPlaybackConfiguration piid:1015 deviceIds:[210] type:AAudio u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_VOICE_COMMUNICATION content=CONTENT_TYPE_UNKNOWN source=DEFAULT flags=0x0 tags= bundle=null sessionId:-1 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=48000}
+AudioPlaybackConfiguration piid:1023 deviceIds:[210] type:AAudio u/pid:10209/17259 state:started attr:AudioAttributes: usage=USAGE_VOICE_COMMUNICATION content=CONTENT_TYPE_UNKNOWN source=DEFAULT flags=0x0 tags= bundle=null sessionId:-1 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=48000}

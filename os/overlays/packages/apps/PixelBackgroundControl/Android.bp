@@ -1,0 +1,18 @@
+package { default_applicable_licenses: ["Android-Apache-2.0"] }
+android_app_import {
+    name: "PixelBackgroundControl",
+    apk: "Agent.apk",
+    presigned: true,
+    preprocessed: true,
+    privileged: true,
+    system_ext_specific: true,
+    uses_libs: ["com.android.extensions.computercontrol"],
+    required: ["privapp-permissions-pixel-background-control"],
+}
+prebuilt_etc {
+    name: "privapp-permissions-pixel-background-control",
+    src: "privapp-permissions-pixel-background-control.xml",
+    system_ext_specific: true,
+    sub_dir: "permissions",
+    filename_from_src: true,
+}

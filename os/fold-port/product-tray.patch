@@ -1,0 +1,9 @@
+--- a/vendor/google_devices/yogi/yogi.mk
++++ b/vendor/google_devices/yogi/yogi.mk
+@@ -2225,3 +2225,6 @@
+     vendor/google_devices/yogi/proprietary/vendor/etc/media_codecs.xml:$(TARGET_COPY_OUT_VENDOR)/etc/media_codecs.xml \
+     vendor/google_devices/yogi/proprietary/vendor/etc/media_profiles_V1_0.xml:$(TARGET_COPY_OUT_VENDOR)/etc/media_profiles_V1_0.xml \
+     vendor/google_devices/yogi/proprietary/vendor/etc/memory-limiter-config.xml:$(TARGET_COPY_OUT_VENDOR)/etc/memory-limiter-config.xml
++
++# Custom reserved Rose Agent system tray (same enablement as mustang)
++PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.pixel_agent_tray=1

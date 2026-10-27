@@ -1,0 +1,12 @@
+{
+  "createdAt": "2026-10-11T07:49:57.696397+00:00",
+  "device": "Pixel 10 Pro XL",
+  "package": "dev.pixel.voice",
+  "versionCode": 79,
+  "versionName": "0.71",
+  "files": {
+    "source-baseline.tar.gz": "10a0d048b796726e1cfbe0fa19aca91554634130ff9e3320ccf05b2a16b051fd",
+    "installed-baseline.apk": "c98c9e9c9d7ac107d26eef4c31da9bba5ee80c7a41b8a4ee72a499d976b61475"
+  },
+  "note": "Original installed APK plus code. Keep app data/conversation history on rollback; do not uninstall. No credentials copied as separate source files."
+}

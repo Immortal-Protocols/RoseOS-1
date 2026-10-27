@@ -1,0 +1,204 @@
+<!doctype html><html><head><title>Rose Agent</title><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f3;color:#151515;font-family:system-ui,-apple-system,sans-serif;padding:55px 23px 25px}header{display:flex;align-items:center;justify-content:space-between}h1{font-size:30px;letter-spacing:-1.3px;margin:8px 0}button,input{font:inherit}button{border:0;border-radius:20px;background:#e8e8e4;color:#111;padding:15px 22px;font-weight:650}button:disabled{opacity:.4}.eyebrow{font-size:11px;letter-spacing:2px;color:#73736d;text-transform:uppercase}#status{font-size:16px;color:#666;min-height:44px;margin:10px 0}#orb{width:146px;height:146px;border-radius:50%;background:#161616;margin:34px auto;display:flex;align-items:center;justify-content:center;gap:7px;box-shadow:0 15px 45px #0001}#orb i{width:7px;border-radius:10px;background:#fff;height:24px}#orb i:nth-child(2){height:55px}#orb i:nth-child(3){height:78px}#orb i:nth-child(4){height:45px}.live i{animation:pulse 1s ease-in-out infinite alternate}.live i:nth-child(2n){animation-delay:.3s}@keyframes pulse{to{transform:scaleY(.55)}}.controls{display:flex;justify-content:center;gap:10px}#talk{background:#151515;color:white;min-width:130px}#tasks{margin-top:32px;border-top:1px solid #ddd;padding-top:20px}.card{margin-top:10px;border-radius:18px;background:white;padding:15px;white-space:pre-wrap;font-size:14px;line-height:1.5}.speaker{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#777;margin-bottom:4px}#transcript{max-height:210px;overflow:auto}#notice{font-size:12px;color:#777;margin-top:16px}details{margin-top:25px;font-size:13px}input{border:1px solid #ddd;background:#fff;border-radius:12px;padding:13px;width:100%;margin-top:10px}#send{padding:10px 18px;margin-top:8px}.small{font-size:12px;color:#888}#connection{font-size:11px;border-radius:30px;padding:8px 12px;background:#e5e5df}
+</style></head><body><header><div><div class="eyebrow">Your voice. Your tools.</div><h1>Rose Agent</h1></div><span id="connection">Connecting</span></header><div id="guardianMode" hidden><strong id="guardianName"></strong> <button id="guardianBack">Back to Pixel</button></div><div id="status">Connecting to your Mac…</div><div id="micLevel" class="small" aria-live="polite"></div><div id="orb"><i></i><i></i><i></i><i></i><i></i></div><div class="controls"><button id="talk" disabled>Talk</button><button id="mute" disabled>Mute</button><button id="end" disabled>End</button></div><div id="tasks"><div class="eyebrow">Codex on your Mac</div><div id="task" class="card">Your requests and task progress will appear here.</div></div><section id="apps"><div class="eyebrow" style="margin-top:24px">Apps ready to install</div><div id="appList"></div><div id="installStatus" class="small" style="margin-top:12px"></div></section><div id="transcript"></div><div id="notice"></div><details><summary>Connection & typed request</summary><button id="revertRouting" hidden>Use previous voice routing</button><label class="small">Mac service address</label><input id="address"><button id="save">Reconnect</button><input id="prompt" placeholder="Ask Codex to do something"><button id="send">Send to Codex</button><p class="small">This prototype keeps the screen awake during use. The API key stays on your Mac.</p></details><script src="eleven-client.js"></script><script src="voice-timing.js"></script><script src="apple-music-voice.js"></script><script src="output-boost.js"></script><script src="guardian-voice.js"></script><script src="phone-app-context.js"></script><script src="luna-first.js"></script><script src="voice-providers.js"></script><script src="media-tool.js"></script><script src="messages-tool.js"></script><script src="clock-tool.js"></script><script src="phone-command-delivery.js"></script><script src="task-status-transport.js"></script><script>const $=id=>document.getElementById(id);
+let requestSeq=0,pending=new Map(),lastEvent=0,serverEpoch=null,conversation=null,ready=false,starting=false,muted=false,ended=true,parked=true,generation=0,liveSessionId=null,meterTimer,startTimer,micLevel=0,timingStart=0;
+const taskStatusTransport=new window.TaskStatusTransport({state:s=>Native.taskState?.(JSON.stringify(s||{version:1,current:null})),stream:on=>Native.taskStateStream?.(on)});
+const voiceTiming=window.VoiceTiming?new window.VoiceTiming({emit:e=>console.log('VOICE_TIMING '+JSON.stringify(e))}):null;
+let speechStats={vadEvents:0,maxVad:0,lastVadAt:0,lastTranscriptAt:0},lastSpeechLog=0;
+let providerStartPromise=null;let voiceEndPromise=Promise.resolve();let apiChain=Promise.resolve();const waitingTasks=new Set(),completedTasks=new Set();
+window.nativeResponse=(id,status,raw)=>{const p=pending.get(id);if(!p)return;pending.delete(id);clearTimeout(p.timer);let data;try{data=JSON.parse(raw);}catch{data={error:raw};}if(status>=200&&status<300)p.resolve(data);else{const e=new Error(data.error||'Connection failed');e.status=status;p.reject(e);}};
+function api(method,route,data={}){return new Promise((resolve,reject)=>{const id=String(++requestSeq),timer=setTimeout(()=>{pending.delete(id);reject(new Error('Mac request timed out'));},40000);pending.set(id,{resolve,reject,timer});Native.request(id,method,route,JSON.stringify(data));});}
+const runAppleMusic=window.createAppleMusicVoiceTool?window.createAppleMusicVoiceTool({api}):async()=>JSON.stringify({status:'unavailable',reason:'Update Rose Agent to use Apple Music playback.'});
+const runMedia=window.createMediaTool({api}),runMessages=window.createMessagesTool({api}),runClock=window.createClockTool({api});
+let guardianMode=null;
+const phoneAppContext=window.PhoneAppContext?.create({read:()=>Native.appContext(),isActive:()=>ready&&!!conversation&&!guardianMode,sendContext:text=>conversation.sendContext(text)})||{sample:()=>({status:'unavailable',observedAt:Date.now()}),captureRequest:()=>({status:'unavailable',observedAt:Date.now()}),changed(){},connect(){},disconnect(){}};
+window.refreshAppContext=()=>phoneAppContext.changed();
+let personalMemoryRevision=null,voiceProvider='elevenlabs',mediaWorkerEnabled=false,messagesWorkerEnabled=false,clockWorkerEnabled=false,generalRoutingEnabled=false,artemisTrialEnabled=false;
+function applyPersonalMemory(memory,inInitialHistory=false){
+ if(guardianMode||!ready||!conversation||!memory||memory.unchanged||!memory.revision||memory.revision===personalMemoryRevision)return;
+ if(!inInitialHistory)conversation.sendContext(memory.text);
+ personalMemoryRevision=memory.revision;
+ api('POST','/memory/delivered',{sessionId:liveSessionId,revision:memory.revision}).catch(()=>{});
+}
+function mark(stage){Native.timing(stage,performance.now()-timingStart);}
+// Levels come from the SDK's actual local/remote WebRTC audio tracks, never
+// from connection state, a speech timer, or a synthetic animation.
+function measuredVolume(getter){try{const value=getter();return Number.isFinite(value)?Math.max(0,Math.min(1,value)):0;}catch{return 0;}}
+function publishAudioLevels(){
+ const active=ready&&conversation;
+ const input=active&&!muted?measuredVolume(()=>conversation.inputLevel()):0;
+ const output=active?measuredVolume(()=>conversation.outputLevel()):0;
+ if(active)voiceTiming?.levels(input,output,muted);
+ Native.trayAudio?.(input,output);
+ micLevel=Math.min(100,Math.round(input*350));
+ $('micLevel').textContent='Microphone level: '+micLevel+'%';
+ Native.assistantSpeaking?.(output>.008);
+ return {input,output};
+}
+function relay(data){const sessionId=liveSessionId;if(!sessionId)return;apiChain=apiChain.then(()=>api('POST','/voice/event',{...data,sessionId,guardian:!!guardianMode})).catch(e=>console.log('VOICE_EVENT_FAILED '+e.message));}
+function say(role,text){const card=document.createElement('div');card.className='card';card.textContent=role+': '+text;$('transcript').append(card);while($('transcript').children.length>80)$('transcript').firstChild.remove();$('transcript').scrollTop=$('transcript').scrollHeight;}
+function diagnostic(){relay({type:'diagnostic',status:$('status').textContent,ready,starting,muted,audioRoute:Native.audioRoute(),connection:ready?'connected':'disconnected',channel:voiceProvider,lastButton:Native.lastButton?.(),voiceTiming:voiceTiming?.snapshot()});}
+function cleanup(reason="cleanup"){phoneAppContext.disconnect();Native.voiceLifecycle?.("cleanup",reason);if(ready||starting)voiceTiming?.stop();window.podcastDisconnected?.();bookDisconnected();pendingSkyContext=null;latestSkyContext=null;skyIntroductionPending=false;skyRequestPending=false;const old=conversation;const opening=providerStartPromise;conversation=null;++generation;clearInterval(meterTimer);clearTimeout(startTimer);ready=false;starting=false;ended=true;parked=true;muted=false;micLevel=0;Native.trayAudio?.(0,0);Native.assistantSpeaking?.(false);const closed=old?old.close().catch(()=>{}):Promise.resolve();Native.audio(false);$('talk').disabled=false;$('end').disabled=true;$('mute').disabled=true;$('mute').textContent='Mute';$('orb').classList.remove('live');const sessionId=liveSessionId;liveSessionId=null;voiceEndPromise=Promise.all([closed,opening?.catch(()=>{})]).then(()=>sessionId?api('POST','/voice-ended',{sessionId,voiceTiming:voiceTiming?.snapshot()}).catch(()=>{}):null);}
+function endConversation(){Native.voiceLifecycle?.("user_end","");if(ready||starting)Native.sessionCue?.('end');cleanup();$('status').textContent='Ready when you are';}
+function voiceLost(message,reason="other"){cleanup(reason);$('status').textContent=message;}
+async function waitForAudioRoute(g){for(let i=0;i<120;i++){if(g!==generation||ended)throw new Error('Voice start canceled');if(Native.audioPrepared())return;await new Promise(r=>setTimeout(r,50));}throw new Error('Glasses audio is not ready. Tap Talk to retry.');}
+async function runTask(params){
+ voiceTiming?.record('task_started');const id=crypto.randomUUID();waitingTasks.add(id);$('task').textContent='Sending request to Mac…';let lastProgress='';
+ try{
+  let result=await api('POST','/voice/task',{id,request:params.request,appContext:params.appContext||phoneAppContext.captureRequest(),routingMode:params.routingMode,voiceContext:params.voiceContext});const until=Date.now()+100000;
+  while(['starting','running'].includes(result.state)&&Date.now()<until){
+   $('task').textContent=result.progress||'Codex is working…';
+   if(typeof result.progress==='string'&&result.progress.trim()&&result.progress!==lastProgress){
+    lastProgress=result.progress;
+    try{params.onProgress?.(result.progress);voiceTiming?.record('task_progress_forwarded');}catch{}
+   }
+   await new Promise(r=>setTimeout(r,800));result=await api('GET','/voice/task/'+id);
+  }
+  if(['completed','failed'].includes(result.state)){completedTasks.add(id);$('task').textContent=result.text;}
+  voiceTiming?.record('task_result_received');return JSON.stringify(result);
+ }catch(e){voiceTiming?.record('task_failed');return JSON.stringify({state:'error',message:e.message});}
+ finally{waitingTasks.delete(id);}
+}
+function showGuardian(){
+ $('guardianMode').hidden=!guardianMode;$('guardianName').textContent=guardianMode?guardianMode.client.name+"’s Guardian":'';
+}
+let switchingGuardian=false;
+async function switchGuardian(mode){
+ if(switchingGuardian)return;
+ switchingGuardian=true;
+ const wasMuted=muted;Native.voiceLifecycle?.("handoff","");cleanup("handoff");await voiceEndPromise;guardianMode=mode;showGuardian();await start(wasMuted);
+ switchingGuardian=false;
+ if(ready)conversation?.announce?.(mode?'The connection has switched to '+mode.client.name+"’s Guardian. Briefly confirm that and invite their question. Do not send a Guardian message yet.":'The connection has returned to Rose Agent. Briefly confirm.');
+}
+async function guardianRequest(request){
+ if(GuardianVoice.back(request)){await api('POST','/guardian/back');return {handled:true,transition:true,mode:null};}
+ const query=GuardianVoice.selection(request);
+ if(query){try{const mode=await api('POST','/guardian/select',{query});return {handled:true,transition:true,mode};}catch(e){return {handled:true,result:{error:e.message}};}}
+ if(!guardianMode)return null;
+ const mode=guardianMode,id=crypto.randomUUID();
+ try{
+  let task=await api('POST','/guardian/ask',{id,request,generation:mode.generation,sessionId:liveSessionId});
+  const until=Date.now()+200000;
+  while(task.state==='running'&&Date.now()<until&&guardianMode===mode){
+   $('task').textContent=task.progress||'Guardian is preparing a reply…';
+   await new Promise(r=>setTimeout(r,500));task=await api('GET','/guardian/task/'+id);
+  }
+  if(guardianMode!==mode)return {handled:true,result:{error:'The conversation changed. Do not speak the previous Guardian reply.'}};
+  $('task').textContent=task.text||'Still waiting for Guardian.';
+  return {handled:true,result:{state:task.state,text:task.text||'The reply has not arrived yet. Do not resend automatically.'}};
+ }catch(e){return {handled:true,result:{error:e.message}};}
+}
+window.sendGuardianTyped=async text=>{say('You',text);const result=await guardianRequest(text);if(result.transition)await switchGuardian(result.mode);else {const reply=result.result?.text||result.result?.error||'No reply received';conversation?.announce?.('Guardian returned this reply to the typed message. Speak it faithfully: '+reply);}};
+window.connectGuardian=async query=>{const result=await guardianRequest("Talk to "+query+"’s Guardian");if(result.transition)await switchGuardian(result.mode);else {$('notice').textContent=result.result?.error||'Could not connect';Native.guardianNotice?.($('notice').textContent);}};
+window.changeVoiceRouting=async mode=>{await api('POST','/voice/routing',{mode});Native.voiceRoutingState?.(mode==='luna');$('revertRouting').hidden=mode!=='luna';const wasActive=ready||starting,wasMuted=muted;if(wasActive){cleanup('routing_change');await voiceEndPromise;await start(wasMuted);}};
+window.toggleLunaFirst=async()=>{try{const config=await api('GET','/voice/config');await window.changeVoiceRouting(config.voiceRouting?.mode==='luna'?'live':'luna');}catch(e){$('notice').textContent='Voice routing change failed: '+e.message;}};
+$('revertRouting').onclick=()=>window.changeVoiceRouting('live');
+$('guardianBack').onclick=async()=>{await api('POST','/guardian/back');await switchGuardian(null);};
+async function start(initialMuted=false){if(ready||starting)return;const g=++generation;let appsNotified=false;const notifyApps=()=>{if(appsNotified||!ready||!conversation||g!==generation||guardianMode)return;appsNotified=true;flushSkyContext();bookConnected();window.podcastConnected?.();};timingStart=performance.now();mark('start');starting=true;ended=false;parked=false;muted=initialMuted===true;$('talk').disabled=true;$('end').disabled=false;$('status').textContent='Connecting voice…';$('notice').textContent='';startTimer=setTimeout(()=>{if(g===generation)voiceLost('Voice did not connect. Tap Talk to retry.','start_timeout');},35000);try{
+ Native.audio(true);await waitForAudioRoute(g);mark('audio_route_ready');
+ const config=await api('GET','/voice/config');if(g!==generation||ended)return;voiceProvider=config.provider;Native.voiceRoutingState?.(config.voiceRouting?.mode==='luna');$('revertRouting').hidden=config.voiceRouting?.mode!=='luna';mediaWorkerEnabled=config.mediaWorkerEnabled===true;messagesWorkerEnabled=config.messagesWorkerEnabled===true;clockWorkerEnabled=config.clockWorkerEnabled===true;applyRoutingConfig(config);let session;
+ const opening=VoiceProviders.start({provider:voiceProvider,api,decisionOwner:config.voiceRouting?.mode,captureAppContext:()=>phoneAppContext.captureRequest(),sampleAppContext:()=>phoneAppContext.sample(),initialMuted:muted,initialInputSuspended:Native.cameraMicrophoneSuspended?.()===true,guardianMode,onVoiceRequest:guardianRequest,onGuardianSwitch:mode=>{void switchGuardian(mode);},outputBoostDb:Native.voiceBoostEnabled()?6:0,onOutputBoostState:s=>Native.voiceBoostState(JSON.stringify(s)),tools:{delegate_task:runTask,apple_music_play:runAppleMusic,media_control:runMedia,messages_read:runMessages,clock_control:runClock,book_control:bookControl,podcast_control:params=>window.podcastControl(params)},toolContext:()=>({appRoutinesEnabled:!generalRoutingEnabled,messages:messagesWorkerEnabled,clock:clockWorkerEnabled,media:mediaWorkerEnabled,book:!artemisTrialEnabled&&!!bookContext&&bookContext.visible!==false,podcast:!artemisTrialEnabled&&!!window.hasActivePodcast?.()}),onTaskResult:(result,id,options)=>bookTaskResult(result,id,options),onOutputTranscript:text=>{bookOutputText(text);},onSession:s=>{session=s;if(g===generation)liveSessionId=s.sessionId;},
+ onConversationCreated:c=>{if(g===generation)conversation=c;else c.close();},
+ onConnect:()=>{if(g!==generation)return;clearTimeout(startTimer);mark('session_started');voiceTiming?.start();ready=true;starting=false;personalMemoryRevision=null;applyPersonalMemory(session.personalMemory,true);$('status').textContent=muted?'Microphone muted':'Listening · speak naturally';$('mute').textContent=muted?'Unmute':'Mute';$('mute').disabled=false;$('orb').classList.add('live');Native.readyChime();phoneAppContext.connect();notifyApps();publishAudioLevels();meterTimer=setInterval(()=>{if(!conversation||!ready)return;publishAudioLevels();if(Date.now()-lastSpeechLog>2000){lastSpeechLog=Date.now();console.log('SPEECH_PROBE '+JSON.stringify({...speechStats,inputLevel:micLevel,muted}));}},80);diagnostic();},
+ onMessage:message=>{if(g!==generation)return;lastSkyActivity=Date.now();const role=message.role==='user'?'user':'assistant';voiceTiming?.message(role,message.message);if(!guardianMode)bookMessage(role,message.message);if(role==='user'){speechStats.lastTranscriptAt=Date.now();console.log('SPEECH_TRANSCRIPT '+speechStats.lastTranscriptAt);window.podcastUserSpeech?.();}skyRequestPending=false;say(role==='user'?'You':guardianMode?'Guardian':'Pixel',message.message);relay({type:'message',role,text:message.message,source:message.kind==='book_narration'?'book_narration':'voice'});},
+ onDisconnect:details=>{if(g===generation&&!ended){const reason=details?.reason||'unknown';Native.voiceLifecycle?.('provider_disconnect',reason);voiceLost('Voice disconnected. Tap Talk to reconnect.','provider_disconnect');}},
+ onError:(message)=>{console.log('ELEVEN_ERROR '+message);if(g===generation)$('notice').textContent=message;},
+ onVadScore:({vadScore})=>{if(g===generation){speechStats.vadEvents++;speechStats.maxVad=Math.max(speechStats.maxVad,vadScore);speechStats.lastVadAt=Date.now();bookVad(vadScore);window.podcastVad?.(vadScore);}},
+ onInterruption:()=>{if(g===generation){bookUserSpeech();window.podcastUserSpeech?.();}},
+ onPing:({ping_ms})=>{if(g===generation)voiceTiming?.ping(ping_ms);},
+ onModeChange:({mode})=>{if(g===generation&&ready){voiceTiming?.mode(mode);bookOutputMode(mode);$('status').textContent=muted?'Microphone muted':mode==='speaking'?'Speaking':'Listening · speak naturally';}}
+ });providerStartPromise=opening;const result=await opening;if(providerStartPromise===opening)providerStartPromise=null;if(g!==generation||ended){await result.close();return;}conversation=result;publishAudioLevels();notifyApps();
+ }catch(e){if(g===generation){Native.voiceLifecycle?.("start_error",String(e.status||e.name||"other"));voiceLost(e.message,"start_error");}}}
+window.cameraMicrophoneHandoff=async(token,suspended)=>{
+ let result;
+ try{
+  if(!conversation){if(starting)throw Error('Voice is still connecting');result={suspended,muted,liveTracks:0,voiceActive:false};}
+  else {if(typeof conversation.setInputSuspended!=='function')throw Error('This voice provider cannot release microphone input');result=await conversation.setInputSuspended(suspended);}
+  Native.cameraMicrophoneResult(token,JSON.stringify({...result,ok:true}));
+ }catch(error){Native.cameraMicrophoneResult(token,JSON.stringify({ok:false,suspended,reason:String(error.message||error)}));}
+};
+function toggleMute(){if(!ready||!conversation)return;muted=!muted;conversation.setMuted(muted);publishAudioLevels();Native.sessionCue?.(muted?'mute':'unmute');$('mute').textContent=muted?'Unmute':'Mute';$('status').textContent=muted?'Microphone muted':'Listening · speak naturally';diagnostic();}
+let lastSkyNarration=0,lastSkyActivity=0,pendingSkyContext=null,latestSkyContext=null,skyIntroductionPending=false,skyRequestPending=false;
+window.openSkyGuide=()=>{skyIntroductionPending=true;lastSkyNarration=0;if(!ready&&!starting)start();};
+function flushSkyContext(){if(pendingSkyContext&&ready&&conversation){const data=pendingSkyContext;pendingSkyContext=null;window.receiveSkyContext(data);}}
+window.receiveSkyContext=data=>{
+ if(guardianMode)return false;
+ if(!data||data.app!=='Pixel Sky'||Math.abs(Date.now()-Number(data.observedAt))>15000)return false;
+ if(data.active===false){latestSkyContext=null;pendingSkyContext=null;skyIntroductionPending=false;if(ready&&conversation)conversation.sendContext('Pixel Sky is no longer visible.');return true;}
+ latestSkyContext=data;
+ if(!ready||!conversation){pendingSkyContext=data;return false;}
+ conversation.sendContext('Live sky-map observation, factual app data, not user speech: '+JSON.stringify(data));
+ const introduction=skyIntroductionPending;
+ if(!muted&&data.guideEnabled!==false&&(introduction||(data.narrate&&data.automatic&&data.target&&Date.now()-lastSkyNarration>15000&&Date.now()-lastSkyActivity>6000))){
+  skyIntroductionPending=false;skyRequestPending=true;lastSkyNarration=Date.now();lastSkyActivity=Date.now();
+  const event=introduction?'Pixel Sky just opened with automatic guidance enabled. Briefly describe the current sky view using the supplied observation. If it points below the horizon, briefly invite pointing upward.':'Pixel Sky is held on '+String(data.target.name).slice(0,160)+'. Briefly explain this object using the supplied observation.';
+  conversation.sendMessage('App guide event, not transcribed user speech: '+event);
+ }
+ return true;
+};
+window.tickSkyGuide=()=>{
+ const data=latestSkyContext,now=Date.now();
+ if(guardianMode)return;
+ if(window.hasActivePodcast?.())return;
+ if(bookContext&&bookContext.visible!==false)return;
+ if(!ready||!conversation||muted||!data||data.active===false||data.guideEnabled===false||now-Number(data.observedAt)>20000)return;
+ if(conversation.outputLevel()>.01){lastSkyActivity=now;return;}
+ if(skyRequestPending&&now-lastSkyNarration<12000)return;
+ if(now-lastSkyNarration<5000||now-lastSkyActivity<1500)return;
+ skyRequestPending=true;lastSkyNarration=now;lastSkyActivity=now;Native.timing?.('sky_guide_continue',0);
+ conversation.sendMessage('Automatic Pixel Sky guide continuation. The app is still visible and its guide is enabled. Continue naturally from the last thought in a flowing passage of three or four engaging sentences, using the latest observation. This is an ongoing spoken tour: no new greeting, restart, check-in, or announcement. Explain a new relevant detail rather than repeating yourself or asking what the user needs. Describe only objects actually identified by the observation, and distinguish general astronomy facts from the current view. If the phone is moving or aimed below the horizon, continue the tour naturally without repeatedly instructing the user to move. This is an authorized app narration event, not transcribed speech.');
+};
+setInterval(window.tickSkyGuide,1000);
+window.autoStartFromGlasses=()=>{if(!ready&&!starting)start();};
+window.startFromGlasses=()=>{if(ready){if(muted)toggleMute();}else if(!starting)start();};
+window.setTrayMuted=value=>{if(ready&&muted!==value)toggleMute();};
+let lastGlassesTap=-Infinity;window.glassesTap=()=>{const now=performance.now();if(now-lastGlassesTap<400)return;lastGlassesTap=now;if(ready)toggleMute();else window.startFromGlasses();};
+if(navigator.mediaSession){for(const action of ['play','pause'])navigator.mediaSession.setActionHandler(action,()=>Native.glassesMediaAction(action));navigator.mediaSession.setActionHandler('nexttrack',()=>Native.glassesMediaAction('next'));if(typeof MediaMetadata!=='undefined')navigator.mediaSession.metadata=new MediaMetadata({title:'Rose Agent',artist:'Tap to mute or unmute'});}
+$('talk').onclick=window.startFromGlasses;$('mute').onclick=toggleMute;$('end').onclick=endConversation;
+$('address').value=Native.endpoint();$('save').onclick=()=>{Native.setEndpoint($('address').value);check();};$('send').onclick=async()=>{const text=$('prompt').value.trim();if(!text)return;try{await api('POST','/task',{text});$('prompt').value='';$('task').textContent='Codex is working…';}catch(e){$('task').textContent=e.message;}};
+async function check(){try{const h=await api('GET','/health');const vc=await api('GET','/voice/config');Native.voiceRoutingState?.(vc.voiceRouting?.mode==='luna');applyRoutingConfig(vc);Native.taskModelState?.(JSON.stringify(h.taskModel||{label:'Model unavailable'}));taskStatusTransport.polling(h.taskStatus);$('connection').textContent=h.ready?'Mac connected':'Mac starting';if(!ready&&!starting){$('status').textContent=h.ready?'Ready when you are':'Starting Codex…';$('talk').disabled=!h.ready;}}catch(e){taskStatusTransport.failed();$('connection').textContent='Mac offline';if(!ready&&!starting)$('status').textContent='Cannot reach Mac. Check connection settings.';}}
+function applyRoutingConfig(config){if(config.taskCardMode)Native.resultCardMode?.(config.taskCardMode);artemisTrialEnabled=config.artemisTrial?.enabled===true;Native.artemisTrialState?.(artemisTrialEnabled);generalRoutingEnabled=config.generalRoutingEnabled===true;if(!artemisTrialEnabled)Native.decisionsRoutingState?.(generalRoutingEnabled);}
+window.setResultCardMode=async mode=>{try{const next=await api('POST','/task-widgets/config',{mode});Native.resultCardMode(next.mode);}catch(e){Native.guardianNotice?.('Could not change result card style.');}};
+window.toggleTaskWidgets=async()=>{try{const current=await api('GET','/task-widgets/config');const next=await api('POST','/task-widgets/config',{enabled:!current.enabled});Native.taskWidgetSetting(next.enabled);}catch(e){Native.guardianNotice?.('Could not change result card setting.');}};
+let modeSwitching=false;
+window.toggleConversationMode=async()=>{
+ if(modeSwitching)return;modeSwitching=true;
+ try{
+  endConversation();await voiceEndPromise;
+  const current=await api('GET','/conversation-mode');
+  const next=await api('POST','/conversation-mode',{action:current.active?'end':'start'});
+  Native.conversationModeState?.(next.active);
+  guardianMode=null;
+  await start();
+ }catch(e){$('notice').textContent='Conversation mode: '+e.message;Native.guardianNotice?.($('notice').textContent);}
+ finally{modeSwitching=false;}
+};
+async function syncConversationMode(){try{const mode=await api('GET','/conversation-mode');Native.conversationModeState?.(mode.active);}catch{}setTimeout(syncConversationMode,5000);}
+syncConversationMode();
+window.toggleArtemisTrial=async()=>{try{const current=await api('GET','/artemis/config');if(ready||starting){endConversation();await voiceEndPromise;}const next=await api('POST','/artemis/config',{enabled:!current.enabled});artemisTrialEnabled=next.enabled;Native.artemisTrialState?.(next.enabled);$('notice').textContent=next.enabled?'ARTEMIS trial enabled. Reconnecting…':'Original phone tools restored. Reconnecting…';Native.guardianNotice?.($('notice').textContent);}catch(e){$('notice').textContent='ARTEMIS switch: '+e.message;Native.guardianNotice?.($('notice').textContent);}};
+window.toggleDeepseekTrial=async()=>{try{const h=await api('GET','/health');const current=h.taskModel?.model==='deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast';const next=await api('POST','/task-model',{model:current?'gpt-6-luna':'deepseek-ai/DeepSeek-V4.1-Flash-1017-Fast',stopCurrent:current});Native.taskModelState?.(JSON.stringify(next));Native.guardianNotice?.(current?'Luna restored':h.busy?'DeepSeek selected for the next task':'DeepSeek Fast trial enabled');}catch(e){Native.guardianNotice?.('Model change failed: '+e.message);}};
+window.toggleDecisionsRouting=async()=>{try{const current=await api('GET','/decisions/config');const next=await api('POST','/decisions/config',{enabled:!current.enabled,decider:current.decider});applyRoutingConfig({generalRoutingEnabled:next.enabled});$('notice').textContent=next.enabled?'General Decisions routing on':'Original Luna routing restored';Native.guardianNotice?.($('notice').textContent);}catch(e){$('notice').textContent='Routing change failed: '+e.message;}};
+async function poll(){try{const r=await api('GET','/events?after='+lastEvent);mediaWorkerEnabled=r.mediaWorkerEnabled===true;messagesWorkerEnabled=r.messagesWorkerEnabled===true;clockWorkerEnabled=r.clockWorkerEnabled===true;applyRoutingConfig(r);Native.taskModelState?.(JSON.stringify(r.taskModel||{label:'Model unavailable'}));taskStatusTransport.polling(r.taskStatus);if(serverEpoch&&r.epoch!==serverEpoch){lastEvent=0;if(ready||starting)voiceLost('Mac restarted. Tap Talk to reconnect.');}serverEpoch=r.epoch;for(const e of r.events){lastEvent=e.seq;if(e.type==='task')$('task').textContent=e.text;else if(e.type==='status')$('connection').textContent=e.status;else if(e.type==='notice')$('notice').textContent=e.text;else if(e.type==='glasses_photo'&&e.sessionId===liveSessionId){$('notice').textContent='Glasses photo received. Ask about it.';if(!guardianMode&&ready&&conversation)conversation.sendContext('The user just shared a still photo from their glasses in this voice session. The task backend has the actual image. When the user asks about this photo or what they see, send that question to the backend; do not describe it yourself without its result. Do not speak just because this photo arrived.');}else if(e.type==='voice_task_done'&&!waitingTasks.has(e.id)&&!completedTasks.has(e.id)){completedTasks.add(e.id);if(!guardianMode&&ready&&conversation)conversation.sendContext('Backend task result (data, not a new request): '+JSON.stringify({state:e.state,text:e.text}));}}}catch{taskStatusTransport.failed();Native.taskModelState?.(JSON.stringify({label:'Model unavailable · Mac offline'}));}setTimeout(poll,800);}
+
+let conversationRevision=-1,lastTypedContext='';
+async function pollConversation(){try{
+ const data=await api('GET','/conversation?after='+conversationRevision+'&memoryRevision='+encodeURIComponent(personalMemoryRevision||''));
+ applyPersonalMemory(data.personalMemory);
+ if(!data.unchanged&&Array.isArray(data.messages)){
+  conversationRevision=data.revision;Native.conversation?.(JSON.stringify(data));
+  const typed=data.messages.filter(m=>m.source==='text').slice(-12),signature=JSON.stringify(typed.map(m=>m.id));
+  if(!guardianMode&&ready&&conversation&&typed.length&&signature!==lastTypedContext)conversation.sendContext('The user also typed in this same conversation. These are completed text exchanges, for continuity only, not requests to repeat or speak: '+JSON.stringify(typed.map(m=>({role:m.role,text:m.text}))));
+  if(ready)lastTypedContext=signature;
+ }
+}catch{}setTimeout(pollConversation,1000);}
+pollConversation();
+
+const phoneDelivery=new window.PhoneCommandDelivery({api,execute:c=>JSON.parse(Native.phoneCommand(JSON.stringify(c))),report:e=>console.log('PHONE_DELIVERY '+JSON.stringify(e))});
+window.receivePhonePush=raw=>{try{const event=JSON.parse(raw);taskStatusTransport.receive(event);phoneDelivery.receive(event);}catch(e){console.log('PHONE_PUSH invalid event');}};
+phoneDelivery.start();Native.startPhonePush();
+let appSignature='';const autoOffered=new Set(JSON.parse(localStorage.getItem('autoOffered')||'[]'));
+async function refreshApps(){try{const r=await api('GET','/apps');const signature=JSON.stringify(r.apps);if(signature!==appSignature){appSignature=signature;$('appList').replaceChildren();for(const app of r.apps){if(!Native.shouldOffer(app.packageName,app.versionCode||0))continue;const card=document.createElement('div');card.className='card';const name=document.createElement('div');name.textContent=app.label;const button=document.createElement('button');button.textContent='Install';button.onclick=()=>Native.installApp(app.id,app.label);card.append(name,button);$('appList').append(card);if(!autoOffered.has(app.id)){autoOffered.add(app.id);localStorage.setItem('autoOffered',JSON.stringify([...autoOffered]));Native.installApp(app.id,app.label);}}}$('installStatus').textContent=Native.installStatus();}catch{}setTimeout(refreshApps,3000);}
+setInterval(()=>{Native.state(JSON.stringify({status:$('status').textContent,guardianName:guardianMode?.client.name||'',task:$('task').textContent,ready,muted,connected:ready,level:micLevel}));},250);setInterval(diagnostic,10000);check();poll();refreshApps();
+</script><script src="book-companion.js"></script><script src="podcast-companion.js"></script></body></html>
+
+<script>window.updateVoiceBoost=enabled=>conversation?.setOutputBoost?.(enabled?6:0);</script>

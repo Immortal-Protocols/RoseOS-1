@@ -1,0 +1,25 @@
+import {createAppControls} from './controls.mjs';
+import {visibleText,hasId,rawId,unique,requireText,tool,descendants,writeField,assertKnown} from './suite-common.mjs';
+const PKG='com.android.dialer';
+export const phoneTools=[
+ tool('phone_find','Find people or numbers in the Phone app and return the visible matching rows. Does not select a person or place a call.',{query:{type:'string'}}),
+ tool('phone_recent','Open Phone call history and return visible recent-call names, numbers and labels. Does not redial or modify history.'),
+ tool('phone_dialpad','Open the Phone dialpad with an exact number and verify its digits. Does not call. Preserves a different existing dialpad entry by asking for assistance.',{number:{type:'string'}})
+];
+export function normalizePhoneNumber(value){value=requireText(value,'Phone number',40);if(!/^\+?[0-9 ()-]+$/.test(value))throw Error('Use an exact phone number; service codes, extensions and letters are unsupported');const digits=value.replace(/[ ()-]/g,'');if(!/^\+?\d{3,15}$/.test(digits))throw Error('Phone number must contain 3–15 digits');return digits;}
+export function readPhoneRows(s,mode){
+ if(mode==='find')return rawId(s,PKG,'primary').map(n=>({name:n.text,details:s.nodes.filter(x=>x.parentId===n.parentId&&hasId(x,PKG,'secondary')).map(visibleText)}));
+ const containerIds=['call_log_list_item'];
+ return s.nodes.filter(n=>containerIds.some(id=>hasId(n,PKG,id))).map(n=>{const children=descendants(s,n);return {labels:[...new Set(children.map(visibleText).filter(Boolean))]};});
+}
+export function createPhoneAdapter(phone){
+ const ui=createAppControls({phone,packageName:PKG,timeoutMs:45000});
+ const digits=s=>unique(rawId(s,PKG,'digits'),'Dialpad digits');
+ async function closeDialpad(){let s=await ui.screen();if(rawId(s,PKG,'digits').length){const r=await phone({action:'back'});if(r.status!=='action_accepted')throw Error('Could not close dialpad');s=await ui.wait(x=>!rawId(x,PKG,'digits').length);}return s;}
+
+ async function dialpad({number}){number=normalizePhoneNumber(number);let s=await ui.screen();if(rawId(s,PKG,'search_view').some(n=>n.editable)&&!rawId(s,PKG,'digits').length){await ui.tap(s,ui.id(s,'search_back_button'),{physical:false});s=await ui.wait(x=>!rawId(x,PKG,'search_view').some(n=>n.editable));}if(!rawId(s,PKG,'digits').length){await ui.tap(s,ui.label(s,'key pad')||ui.label(s,'Dialpad'),{physical:false});s=await ui.wait(s=>rawId(s,PKG,'digits').length===1);}const old=digits(s).text.trim();if(old&&normalizePhoneNumber(old)!==number)throw Error('Dialpad already contains a different number; clear it on the phone before replacing it');if(!old)await writeField(ui,digits,number,{verify:(actual,expected)=>normalizePhoneNumber(actual)===expected});s=await ui.screen();const actual=normalizePhoneNumber(digits(s).text);if(actual!==number)throw Error('Dialpad number does not match');return {status:'verified',number:actual,callPlaced:false,verification:'Exact digits read from the Phone dialpad'};}
+ async function find({query}){query=requireText(query,'Phone search',100);let s=await closeDialpad();if(!rawId(s,PKG,'search_view').some(n=>n.editable)){await ui.tap(s,ui.label(s,'Search contacts & places')||ui.label(s,'Search contacts'),{physical:false});s=await ui.wait(x=>rawId(x,PKG,'search_view').some(n=>n.editable));}const normalize=value=>value.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');const matching=rows=>normalize(query).length>0&&rows.length&&rows.every(row=>normalize([row.name,...row.details].join(' ')).includes(normalize(query)));if(rawId(s,PKG,'search_view')[0]?.text===query&&matching(readPhoneRows(s,'find')))return {status:'verified',query,results:readPhoneRows(s,'find'),scope:'Visible matching rows only',callPlaced:false};await writeField(ui,s=>unique(rawId(s,PKG,'search_view').filter(n=>n.editable),'Phone search field'),query);s=await ui.wait(x=>{const rows=readPhoneRows(x,'find');return rawId(x,PKG,'search_view')[0]?.text===query&&(matching(rows)||x.nodes.some(n=>visibleText(n)==='No results'));});return {status:'verified',query,results:readPhoneRows(s,'find'),scope:'Visible matching rows only',callPlaced:false};}
+ async function recent(){let s=await closeDialpad();if(rawId(s,PKG,'search_view').some(n=>n.editable)){const n=ui.id(s,'search_back_button');await ui.tap(s,n,{physical:false});s=await ui.wait(x=>!rawId(x,PKG,'search_view').some(n=>n.editable));}await ui.tap(s,ui.label(s,'Recents')||ui.label(s,'Call history'),{physical:false});s=await ui.wait(x=>readPhoneRows(x,'recent').length||x.nodes.some(n=>visibleText(n)==='Your call history is empty'));return {status:'verified',calls:readPhoneRows(s,'recent'),scope:'Visible recent call rows only',callPlaced:false};}
+ const handlers={phone_find:find,phone_recent:recent,phone_dialpad:dialpad};
+ return {packageName:PKG,reuseForeground:true,voiceContext:"Phone can find contacts, show visible recents, and prepare an exact dialpad number. These tools never place calls or send messages.",tools:phoneTools,execute:(name,args={})=>ui.run(()=>assertKnown(name,handlers)(args))};
+}

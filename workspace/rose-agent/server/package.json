@@ -1,0 +1,18 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "dependencies": {
+    "@elevenlabs/client": "^1.27.0",
+    "@elevenlabs/elevenlabs-js": "^2.71.0",
+    "esbuild": "^0.28.2",
+    "openai": "^7.31.0",
+    "ws": "^8.22.0"
+  }
+}

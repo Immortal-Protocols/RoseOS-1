@@ -1,0 +1,19 @@
+[Unit]
+Description=Pixel 10 remote Codex daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pixelhub
+Environment=HOME=/home/pixelhub/pixel10
+Environment=PATH=/home/pixelhub/pixel10/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/pixelhub/pixel10/Projects/pixel-workspace-fork/workspace
+ExecStart=/usr/local/bin/codex remote-control start --json
+ExecStop=/usr/local/bin/codex remote-control stop --json
+RemainAfterExit=yes
+TimeoutStartSec=120
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

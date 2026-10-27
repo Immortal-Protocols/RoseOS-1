@@ -1,0 +1,97 @@
+[
+  {
+    "name": "settings_state",
+    "operation": "get_state",
+    "description": "Read actual phone settings: stored brightness preference and automatic mode, auto-rotation, flashlight availability/state, airplane mode. Use for relative requests and verification.",
+    "foregroundRequired": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "settings_brightness",
+    "operation": "brightness",
+    "description": "Set screen brightness without leaving the current app. percent is a manual brightness preference from 0 to 100 (0 uses minimum readable brightness), not measured luminance; it disables automatic brightness. Or enable automatic brightness alone. Read returned state.",
+    "foregroundRequired": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "automatic": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "settings_rotation",
+    "operation": "rotation",
+    "description": "Enable or disable automatic screen rotation without leaving the current app. Repeated identical requests are idempotent.",
+    "foregroundRequired": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "settings_flashlight",
+    "operation": "flashlight",
+    "description": "Turn the rear flashlight on or off without leaving the current app. Reports actual torch callback state; may fail if another app owns the camera. Repeated identical requests are idempotent.",
+    "foregroundRequired": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "settings_open_panel",
+    "operation": "open_panel",
+    "description": "Open an Android settings panel and verify its foreground. This does NOT change a setting. Airplane mode has no direct tool control; use its panel and screen controls if requested. Read settings_state afterward to verify changes.",
+    "foregroundRequired": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "panel": {
+          "type": "string",
+          "enum": [
+            "airplane",
+            "internet",
+            "wifi",
+            "bluetooth",
+            "display",
+            "sound"
+          ]
+        }
+      },
+      "required": [
+        "panel"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

@@ -1,0 +1,8 @@
+const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
+class Audio {play(){return Promise.resolve();}pause(){}}
+const sandbox={module:{exports:{}},Audio,setTimeout,clearTimeout,Float32Array,Int16Array,Uint8Array,btoa:s=>Buffer.from(s,'binary').toString('base64')};sandbox.globalThis=sandbox;
+vm.runInNewContext(fs.readFileSync(__dirname+'/voice-match.js','utf8'),sandbox);const {create,pcm16}=sandbox.module.exports;
+test('disabled trial never opens microphone or blocks voice',async()=>{let calls=0;const client=create({api:async()=>{calls++;return {required:false};},admin:async()=>{},native:{}});const r=await client.check();assert.equal(r.scope,'owner');assert.equal(r.grant,null);assert.equal(calls,1);});
+test('resamples actual PCM to 16k and preserves silence',()=>{const data=pcm16(new Float32Array(48000),48000);assert.equal(Buffer.from(data,'base64').length,32000);assert.equal(Buffer.from(data,'base64').some(x=>x!==0),false);});
+test('owner Skip interrupts greeting and returns granted session',async()=>{const client=create({api:async(m,p)=>p.endsWith('/begin')?{required:true,attempt:'x'}:{audio:''},admin:async()=>({scope:'owner',grant:'approved'}),native:{}});const result=client.check();await new Promise(r=>setImmediate(r));await client.skip();const grant=await result;assert.equal(grant.grant,'approved');assert.equal(grant.scope,'owner');});
+test('ending a pending check cancels it instead of starting a late session',async()=>{const client=create({api:async(m,p)=>p.endsWith('/begin')?{required:true,attempt:'x'}:{audio:''},admin:async()=>{},native:{}});const result=client.check();await new Promise(r=>setImmediate(r));client.cancel();await assert.rejects(result,/Canceled/);});

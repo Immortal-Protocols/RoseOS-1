@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {TypedConversation} from '../server/conversation.mjs';
+const c=new TypedConversation();
+c.input('Draft an email. Do not send it.');c.add('assistant','What should it say?');
+const followup=c.input('Hi');
+assert(followup.includes('Draft an email. Do not send it.'));
+assert(followup.includes('What should it say?'));
+assert(followup.endsWith('"text":"Hi"}]'));
+for(let i=0;i<30;i++)c.input('message '+i);
+assert.equal(c.messages.length,16);
+console.log('Typed conversation follow-up context and bounded history pass');

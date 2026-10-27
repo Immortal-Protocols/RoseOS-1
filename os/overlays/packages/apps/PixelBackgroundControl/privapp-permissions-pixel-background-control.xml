@@ -1,0 +1,6 @@
+<permissions>
+  <privapp-permissions package="dev.pixel.backgroundcontrol">
+    <permission name="android.permission.ACCESS_COMPUTER_CONTROL" />
+    <permission name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
+  </privapp-permissions>
+</permissions>

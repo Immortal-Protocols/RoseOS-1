@@ -1,0 +1,29 @@
+--- a/external/selinux/libselinux/src/android/android_device.c
++++ b/external/selinux/libselinux/src/android/android_device.c
+@@ -135,8 +135,24 @@
+ 		snprintf(buf_for_hex_uint64, sizeof buf_for_hex_uint64, "%" PRIx64 , grapheneos_flags);
+ 
+ 		rc = setgrapheneos_flags(buf_for_hex_uint64);
+-		if (rc < 0)
+-			goto err;
++		if (rc < 0) {
++			/* The experimental yogi port uses Google's stock kernel, which
++			 * lacks this GrapheneOS-specific process attribute. Keep normal
++			 * SELinux context validation and transition; tolerate only the
++			 * verified absence of this one interface on that device. */
++			char device[PROP_VALUE_MAX];
++			if (errno != ENOENT ||
++			    __system_property_get("ro.product.device", device) <= 0 ||
++			    strcmp(device, "yogi") != 0 ||
++			    access("/proc/self/attr/grapheneos_flags", F_OK) == 0 ||
++			    errno != ENOENT)
++				goto err;
++			selinux_log(SELINUX_WARNING,
++				"%s: yogi stock kernel lacks grapheneos_flags; "
++				"per-process kernel restrictions unavailable; "
++				"continuing with enforced SELinux context transition\n",
++				__FUNCTION__);
++		}
+ 	}
+ 
+ 	if (strcmp(ctx_str, orig_ctx_str)) {

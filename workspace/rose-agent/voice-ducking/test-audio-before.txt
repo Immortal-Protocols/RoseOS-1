@@ -1,0 +1,10 @@
+  AudioPlaybackConfiguration piid:935 deviceIds:[3] type:android.media.AudioTrack u/pid:10240/6120 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0xA00(FLAG_DEEP_BUFFER+FLAG_MUTE_HAPTIC)  tags= bundle=null sessionId:257 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=44100}
+
+  ducked players piids:
+
+  ducked players piids:
+
+  faded out players piids:
+
+Audio Focus stack entries (last is top of stack):
+  source:android.os.BinderProxy@963d329 -- pack: com.apple.android.music -- client: android.media.AudioManager@1429529com.apple.android.music.playback.controller.LocalMediaPlayerController@98230ae -- gain: GAIN -- flags:  -- loss: none -- notified: true -- limbofalse -- uid: 10240 -- attr: AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_UNKNOWN flags=0x800(FLAG_MUTE_HAPTIC)  tags= bundle=null -- sdk:35

@@ -1,0 +1,6 @@
+torch==2.8.0
+torchaudio==2.8.0
+speechbrain==1.0.3
+huggingface_hub==0.36.2
+numpy==2.5.4
+soundfile==0.14.0

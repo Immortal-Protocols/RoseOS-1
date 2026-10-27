@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "package": "com.apple.android.music",
+  "observedVersion": "6.5.3 (1599)",
+  "workflow": "search_exact_song_and_verify_player",
+  "selectors": {
+    "searchTab": "Search",
+    "searchFieldClass": "android.widget.AutoCompleteTextView",
+    "songArtistPrefix": "Song \u2022 ",
+    "playerMarker": "Player Queue",
+    "pause": "Pause",
+    "play": "Play",
+    "fullPlayerContentViews": [
+      "com.apple.android.music:id/song_lyrics_word"
+    ]
+  },
+  "limits": {
+    "readWaitSeconds": 8,
+    "navigationSteps": 3
+  },
+  "provenance": "Learned by inspecting this Pixel's Apple Music search results, title/artist row targets, and player. Runtime uses fresh semantic nodes, never saved coordinates or node IDs."
+}

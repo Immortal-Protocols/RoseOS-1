@@ -1,0 +1,10 @@
+import OpenAI from 'openai';
+import {LiveWS} from 'openai/resources/live/ws';
+import {readFileSync} from 'node:fs';
+const apiKey=readFileSync((process.env.HOME + "/.config/pixel-voice/openai-api-key"),'utf8').trim();
+const ws=new LiveWS(new OpenAI({apiKey,maxRetries:0}));
+ws.on('error',()=>{});
+const timeout=setTimeout(()=>{console.log('Live test timeout');process.exit(1)},20000);
+ws.socket.on('open',()=>ws.send({type:'session.start',session:{model:'gpt-live-1',instructions:'Stay silent. This is a connection test.',audio:{format:{type:'audio/pcm',rate:24000}},delegation:{type:'client'}}}));
+ws.on('event',e=>{if(e.type==='session.started'){console.log('LIVE_STARTED',e.session.id);ws.send({type:'session.close'});}else if(e.type==='session.closed'){console.log('LIVE_CLOSED',JSON.stringify(e.usage));clearTimeout(timeout);ws.close();process.exit(0);}else if(e.type==='error'){console.log('LIVE_NOTICE',JSON.stringify(e.error));}});
+ws.socket.on('error',()=>{console.log('Live socket connection error');clearTimeout(timeout);process.exit(1)});
