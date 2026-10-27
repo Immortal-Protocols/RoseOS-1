@@ -72,6 +72,12 @@ Source review at OS `4b5af1f` cannot prove these; they require the built target-
    controller at `/system_ext/priv-app` with versionCode 27; Rose Agent and Calculator at
    `/product/app` with the expected versionCode and signer; provider capabilities
    `schemaVersion` 3; framework `config_pixelComputerControlTargets` lists Calculator only.
+   `pm path` for each package shows `/product` or `/system_ext` (not `/data`), and the pulled APK's
+   SHA-256 equals the policy receipt `apkSha256` and the target-files copy (OS M019). Proposed
+   candidate table (OS M019, not yet in the tested App head): `dev.pixel.voice` 298,
+   `dev.pixel.calculator.agent` 4, `dev.pixel.backgroundcontrol` 27, all signer `650d47f9…0bfb`.
+   A clean VM cannot test `/data` overrides; the phone keeps a separate read-only gate for each
+   package's installed versionCode, signer and code path.
 4. A VM candidate signed with a disposable test key (OS M017 recipe) proves placement and
    behaviour only. It does not prove RT-9 signer continuity; that needs the real candidate
    APKs compared with the installed signers.
