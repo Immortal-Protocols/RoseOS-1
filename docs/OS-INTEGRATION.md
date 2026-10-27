@@ -41,6 +41,15 @@ a new session after a Stop. The controller now records why a session ended:
 - Agent `stop` or `home` records `"agent"` and never replaces the owner's report
   for the same session. The ten-minute limit records `"deadline"`.
 
+- The owner's Stop also sends broadcast
+  `dev.pixel.backgroundcontrol.action.OWNER_STOP` to package `dev.pixel.voice`
+  with `sessionId`, `taskId` and `stoppedAt` (epoch milliseconds), so Rose Agent can
+  end the task even if the agent makes no further phone call. The sender shares its
+  identity (Android 14 `BroadcastOptions.setShareIdentityEnabled`). The receiver
+  must be exported, check that `getSentFromPackage()` is `dev.pixel.backgroundcontrol`
+  and that its signature matches, and ignore anything else. Delivery is best effort;
+  `get_state` remains authoritative.
+
 The backend must send a `taskId` per user request and end the task on
 `user_stopped` or `stopReason: "user"`. Only the `agent-pip` viewer variant
 implements schema 3; the split and original controllers remain schema 2.
