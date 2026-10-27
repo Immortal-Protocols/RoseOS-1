@@ -20,6 +20,8 @@ p.add_argument('--locked-control', action='store_true',
     help='Owner opt-in: let the pinned prototype controller start background sessions while locked')
 p.add_argument('--agent-tray', action='store_true',
     help='Enable the Rose Agent status tray in the system image (persist.wm.debug.pixel_agent_tray=1)')
+p.add_argument('--updater-url',
+    help='Release channel base URL for the system Updater; must match the installed phone (https, ends with /)')
 p.add_argument('--check', action='store_true', help='Run all preflight checks without changing source')
 a = p.parse_args()
 if bool(a.background_policy) != bool(a.background_agent):
@@ -29,6 +31,9 @@ if a.locked_control and not a.background_policy:
 if a.reference_display_address and (not a.background_policy or not a.reference_display_address.isdecimal()
         or not 0 < int(a.reference_display_address) < 2**63):
     p.error('Reference display needs background policy and a positive signed-64-bit physical address')
+if a.updater_url and (not a.updater_url.startswith('https://') or not a.updater_url.endswith('/')
+        or any(c in a.updater_url for c in '<>&"\' \n')):
+    p.error('--updater-url must be an https URL ending with / and without XML special characters')
 source = Path(a.source).resolve()
 bundle = Path(__file__).resolve().parents[1]/'os'
 manifest = ET.parse(bundle/'pinned-manifest.xml')
@@ -36,6 +41,10 @@ revisions = {n.get('path', n.get('name')): n.get('revision') for n in manifest.f
 projects = {'frameworks/base': ['frameworks-base.patch']}
 if a.agent_tray:projects['build/make'] = ['agent-tray-build-make.patch']
 if a.emulator:projects['device/generic/goldfish'] = ['goldfish.patch']
+# Upstream Updater polls GrapheneOS; a differently signed build must name its own channel.
+UPDATER_CONFIG = 'packages/apps/Updater/res/values/config.xml'
+UPDATER_MARKER = '    <string name="url" translatable="false">https://releases.grapheneos.org/</string>'
+if a.updater_url:projects['packages/apps/Updater'] = []
 policy = None
 if a.background_policy:
     policy = validate_policy(json.loads(a.background_policy.read_text()), a.background_agent)
@@ -81,6 +90,10 @@ for project, patches in projects.items():
     if subprocess.check_output(['git', '-C', str(dest), 'status', '--porcelain']):
         raise SystemExit(f'Local changes present in {project}; refusing to overwrite them')
     check_patch_sequence(dest, [(bundle/'patches'/patch).resolve() for patch in patches])
+if a.updater_url:
+    config = subprocess.check_output(['git', '-C', str(source/'packages/apps/Updater'), 'show',
+        'HEAD:res/values/config.xml'], text=True)
+    if config.count(UPDATER_MARKER) != 1:raise SystemExit('Updater channel URL setting not found as expected')
 copies = []
 for file in (bundle/'overlays').rglob('*'):
     if not file.is_file():continue
@@ -101,6 +114,10 @@ for project, patches in projects.items():
 for file, target in copies:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(file, target)
+if a.updater_url:
+    config = source/UPDATER_CONFIG
+    config.write_text(config.read_text().replace(UPDATER_MARKER,
+        f'    <string name="url" translatable="false">{a.updater_url}</string>'))
 if policy:
     config = source/'frameworks/base/core/res/res/values/config.xml'
     text = config.read_text()

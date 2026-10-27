@@ -14,6 +14,7 @@ node --test \
  workspace/experiments/phone-control-metrics/metrics.test.mjs \
  workspace/experiments/guardian-voice/bridge.test.mjs
 python3 os/background-control/tests/test_policy.py
+python3 os/background-control/tests/test_stop_wiring.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT

@@ -96,7 +96,8 @@ python3 scripts/prepare-background-policy.py \
   --output out/background-policy.json
 python3 scripts/apply-os-changes.py /path/to/os-source \
   --background-policy out/background-policy.json \
-  --background-agent out/rose-controller/Agent.apk --agent-tray --check
+  --background-agent out/rose-controller/Agent.apk --agent-tray \
+  --updater-url INSTALLED_CHANNEL_BASE_URL/ --check
 ```
 
 Substitute actual artifact paths and the target OS's SDK number. Confirm the

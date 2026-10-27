@@ -12,6 +12,7 @@ release. See [VALIDATION.md](VALIDATION.md) and [OS-RELEASE.md](OS-RELEASE.md).
 | Separate agent workspace | Background-control framework patches and the computer-control extension | `--background-policy` with `--background-agent` |
 | Viewer and Stop | `dev.pixel.backgroundcontrol` (`os/background-control/agent-pip`): ongoing notification with Stop, floating viewer | Privileged prebuilt `PixelBackgroundControl`, pinned by the policy |
 | Rose Agent app | `dev.pixel.voice`, built and signed separately | Not preinstalled; see below |
+| Update channel | Pinned `packages/apps/Updater`, whose `url` is `https://releases.grapheneos.org/` | `--updater-url` with the installed phone's channel |
 
 The tray binds `dev.pixel.voice/.AgentTrayService` (guarded by
 `STATUS_BAR_SERVICE`) and only accepts replies from that package's UID. The
@@ -24,6 +25,13 @@ Only the historical Mustang scripts and the Fold patch set the property for one
 device. The new patch sets it in `generic_system.mk`. Confirm that the target
 product inherits that file by checking the built `system/build.prop` for the
 property, as the historical Mustang verification did.
+
+The repository does not change the Updater, so a build made without
+`--updater-url` would poll GrapheneOS, whose releases this phone cannot verify,
+and lose the existing channel. Pass the base URL the installed phone already uses;
+`frankel-stable` metadata and OTA assets must be served under it. The URL is a
+device and release-channel fact to obtain first, not something to infer from
+`pixel-ota` asset names.
 
 ## Stop contract (controller schema 3)
 
@@ -61,7 +69,8 @@ installed phone and current release channel, not from this repository:
 
 1. Installed OS build number, device, and that the OTA signer and AVB key match the
    existing chain. The new build number must be greater.
-2. The Updater's configured channel URL and the metadata it accepts.
+2. The Updater's configured channel URL (to pass as `--updater-url`) and the
+   metadata it accepts.
 3. Installed `dev.pixel.voice` and `dev.pixel.backgroundcontrol` version codes and
    signing certificates. The controller prebuilt must have a greater version code
    than any installed copy, or Android keeps the installed one. `agent-pip` is now
