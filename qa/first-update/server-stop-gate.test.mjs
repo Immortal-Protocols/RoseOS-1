@@ -17,13 +17,19 @@ const has=fs.existsSync(new URL('task-stop.mjs',dir));
 const {TaskStop}=has?await import(new URL('task-stop.mjs',dir)):{};
 const {LauncherTask}=await import(new URL('launcher-task.mjs',dir));
 const {BackgroundPhone}=await import(new URL('background-phone.mjs',dir));
+// TURN-REGISTRATION ADAPTER: App 2749a76 binds a worker turn to its task at creation via
+// TaskStop.bindTurn(turnId, taskId) (codex 'turnCreated'); earlier heads used addTurn(turnId).
+const registerTurn=(ts,turnId,taskId)=>ts.bindTurn?ts.bindTurn(turnId,taskId):ts.addTurn?.(turnId);
 const CONTROLLER='dev.pixel.backgroundcontrol', CALCULATOR='dev.pixel.calculator.agent';
 
 function world(){
  const server=fs.readFileSync(new URL('server.mjs',dir),'utf8');
  // WIRING ADAPTER: App b51ddf9+ defines phone origin (phoneCommandRejection .. fastPhone) as one block.
  const originStart=server.indexOf('function phoneCommandRejection(');
- const fastPhoneSrc=server.slice(originStart>=0?originStart:server.indexOf('async function fastPhone('),server.indexOf('async function rawFastPhone('));
+ let fastPhoneSrc=server.slice(originStart>=0?originStart:server.indexOf('async function fastPhone('),server.indexOf('async function rawFastPhone('));
+ // App 2749a76 declares phoneOrigin/readOnlyPhoneActions before startup use, outside that block.
+ const lineOf=i=>server.slice(server.lastIndexOf('\n',i)+1,server.indexOf('\n',i));
+ for(const decl of ['const phoneOrigin=','const readOnlyPhoneActions=']){const i=server.indexOf(decl);if(i>=0&&!fastPhoneSrc.includes(decl))fastPhoneSrc=lineOf(i)+'\n'+fastPhoneSrc;}
  const route=name=>{const s=server.indexOf(" if(url.pathname==='"+name+"'){");assert.ok(s>0,name);return server.slice(s,server.indexOf('\n',s));};
  const log=[];let seq=0;const hold=new Map();
  const holdFor=expr=>{let release;const promise=new Promise(r=>release=r);hold.set(expr,{promise,release});return release;};
@@ -65,7 +71,7 @@ function world(){
  const call=async(name,data,headers={})=>{await context[name]({pathname:name},data,{},{headers});await new Promise(r=>setTimeout(r,25));return responses.at(-1);};
  // Mirrors server.mjs dispatch() for a new explicit user request when no worker is active.
  // Also mirrors codex toolActivity turn/started -> taskStop.addTurn for the new task's worker turn.
- const newRequest=(text,{turnStarted=true}={})=>{backgroundPhone.beginTask?.();launcher.start(text);taskStop.begin(launcher.current.id);if(turnStarted)taskStop.addTurn?.('turn-'+launcher.current.id);return launcher.current.id;};
+ const newRequest=(text,{turnStarted=true}={})=>{backgroundPhone.beginTask?.();launcher.start(text);taskStop.begin(launcher.current.id);if(turnStarted)registerTurn(taskStop,'turn-'+launcher.current.id,launcher.current.id);return launcher.current.id;};
  // PROTOCOL ADAPTER (App b51ddf9 APP-001-M007): agent task phone work runs in-process inside
  // phoneOrigin.run({taskId}) (registered tool / executor). Older trees: plain fastPhone.
  const O=()=>context.__origin;

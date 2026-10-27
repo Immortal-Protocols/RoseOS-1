@@ -18,6 +18,9 @@ const wrapped=server.includes(WRAP);
 const has=fs.existsSync(new URL('task-stop.mjs',dir))&&(server.includes(marker)||wrapped);
 const {TaskStop}=has?await import(new URL('task-stop.mjs',dir)):{};
 
+// TURN-REGISTRATION ADAPTER: App 2749a76 binds a worker turn to its task at creation via
+// TaskStop.bindTurn(turnId, taskId) (codex 'turnCreated'); earlier heads used addTurn(turnId).
+const registerTurn=(ts,turnId,taskId)=>ts.bindTurn?ts.bindTurn(turnId,taskId):ts.addTurn?.(turnId);
 function gate(){
  const ran=[];let current={id:'task-A',state:'running'};
  const taskStop=new TaskStop({task:()=>current,stopping:()=>{current={...current,state:'stopping'};},interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{}});
@@ -37,7 +40,7 @@ function gate(){
 
 test('after Stop is acknowledged, a tool call from the stopped turn A runs no handler',{skip:!has&&'no tool-call gate in this tree'},async()=>{
  const g=gate();
- g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ g.taskStop.begin('task-A');registerTurn(g.taskStop,'turn-A','task-A');
  const control=await g.handle({tool:'web_lookup',turnId:'turn-A',arguments:{query:'tip'}});
  assert.deepEqual(g.ran,['web_lookup'],'control: before Stop the tool runs');assert.equal(control.success,true);
  await g.taskStop.request({taskId:'task-A',source:'app'});
@@ -47,9 +50,9 @@ test('after Stop is acknowledged, a tool call from the stopped turn A runs no ha
 
 test('a tool call from turn A after fresh B begins runs no handler; a turn-B call runs',{skip:!has&&'no tool-call gate in this tree'},async()=>{
  const g=gate();
- g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ g.taskStop.begin('task-A');registerTurn(g.taskStop,'turn-A','task-A');
  await g.taskStop.request({taskId:'task-A',source:'app'});
- g.setCurrent({id:'task-B',state:'running'});g.taskStop.begin('task-B');g.taskStop.addTurn('turn-B');
+ g.setCurrent({id:'task-B',state:'running'});g.taskStop.begin('task-B');registerTurn(g.taskStop,'turn-B','task-B');
  await g.handle({tool:'web_lookup',turnId:'turn-A',arguments:{query:'old'}});
  assert.deepEqual(g.ran,[],'turn A ran a tool after B began');
  await g.handle({tool:'web_lookup',turnId:'turn-B',arguments:{query:'new'}});
@@ -58,7 +61,7 @@ test('a tool call from turn A after fresh B begins runs no handler; a turn-B cal
 
 test('a stale A tool call after B begins but before B\'s turn is registered runs no handler',{skip:!has&&'no tool-call gate in this tree'},async()=>{
  const g=gate();
- g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ g.taskStop.begin('task-A');registerTurn(g.taskStop,'turn-A','task-A');
  await g.taskStop.request({taskId:'task-A',source:'app'});
  g.setCurrent({id:'task-B',state:'running'});g.taskStop.begin('task-B');
  await g.handle({tool:'web_lookup',turnId:'turn-A',arguments:{query:'stale'}});
@@ -67,7 +70,7 @@ test('a stale A tool call after B begins but before B\'s turn is registered runs
 
 test('a tool call with no turn ID runs no handler while a task is current',{skip:!has&&'no tool-call gate in this tree'},async()=>{
  const g=gate();
- g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ g.taskStop.begin('task-A');registerTurn(g.taskStop,'turn-A','task-A');
  await g.handle({tool:'web_lookup',arguments:{query:'no turn'}});
  assert.deepEqual(g.ran,[],'a tool call without a turn ID ran');
 });

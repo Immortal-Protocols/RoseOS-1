@@ -15,6 +15,9 @@ const has=fs.existsSync(new URL('task-stop.mjs',dir));
 const {TaskStop}=has?await import(new URL('task-stop.mjs',dir)):{};
 const {LauncherTask}=await import(new URL('launcher-task.mjs',dir));
 
+// TURN-REGISTRATION ADAPTER: App 2749a76 binds a worker turn to its task at creation via
+// TaskStop.bindTurn(turnId, taskId) (codex 'turnCreated'); earlier heads used addTurn(turnId).
+const registerTurn=(ts,turnId,taskId)=>ts.bindTurn?ts.bindTurn(turnId,taskId):ts.addTurn?.(turnId);
 function world(){
  const server=fs.readFileSync(new URL('server.mjs',dir),'utf8');
  const onMessage=server.slice(server.indexOf("codex.on('message',"),server.indexOf('async function finishAgentTurn('));
@@ -60,10 +63,10 @@ const emitWorker=(w,text,phase,turnId)=>w.messageWithOrigin(text,phase,turnId);
 
 test('a late worker result from stopped A emitted after fresh B begins reaches neither display nor voice; B output still does',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
- w.launcher.start('A: 84.50 plus 15%');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-A');
+ w.launcher.start('A: 84.50 plus 15%');w.taskStop.begin(w.launcher.current.id);registerTurn(w.taskStop,'turn-A',w.launcher.current.id);
  await w.taskStop.request({taskId:w.launcher.current.id,source:'app'});
  await w.finishTurn({status:'interrupted'});
- w.launcher.start('B: 12 times 7');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-B');
+ w.launcher.start('B: 12 times 7');w.taskStop.begin(w.launcher.current.id);registerTurn(w.taskStop,'turn-B',w.launcher.current.id);
  const mark=w.out.length;
  emitWorker(w,'A total is 97.18','final_answer','turn-A');
  assert.equal(JSON.stringify(w.out.slice(mark)).includes('97.18'),false,'stale A result reached output after B began: '+JSON.stringify(w.out.slice(mark)));
@@ -73,7 +76,7 @@ test('a late worker result from stopped A emitted after fresh B begins reaches n
 
 test('a stale A result arriving after B begins but before B\'s worker turn starts is not delivered',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
- w.launcher.start('A: 10 plus 5');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-A');
+ w.launcher.start('A: 10 plus 5');w.taskStop.begin(w.launcher.current.id);registerTurn(w.taskStop,'turn-A',w.launcher.current.id);
  await w.taskStop.request({taskId:w.launcher.current.id,source:'app'});
  await w.finishTurn({status:'interrupted'});
  w.launcher.start('B: 2 times 3');w.taskStop.begin(w.launcher.current.id);
@@ -84,7 +87,7 @@ test('a stale A result arriving after B begins but before B\'s worker turn start
 
 test('worker output with no turn ID is not delivered once the current task\'s turn is registered',{skip:!has&&'no task-stop.mjs'},async()=>{
  const w=world();
- w.launcher.start('B: 2 times 3');w.taskStop.begin(w.launcher.current.id);w.taskStop.addTurn?.('turn-B');
+ w.launcher.start('B: 2 times 3');w.taskStop.begin(w.launcher.current.id);registerTurn(w.taskStop,'turn-B',w.launcher.current.id);
  const mark=w.out.length;
  emitWorker(w,'unattributed 99','final_answer',undefined);
  assert.equal(JSON.stringify(w.out.slice(mark)).includes('99'),false,'output without a turn ID was delivered');
