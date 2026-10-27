@@ -40,12 +40,13 @@ final class TaskStatusCard extends LinearLayout {
  private void draw(){
    if(current==null)return;removeAllViews();dispose();setVisibility(VISIBLE);
    String state=current.optString("state"),stateLabel;
-   switch(state){case "running":stateLabel="Running";break;case "checking":stateLabel="Checking result";break;case "completed":stateLabel="Finished";break;case "failed":stateLabel="Failed";break;case "interrupted":stateLabel="Stopped";break;default:stateLabel="Status unavailable";}
-   boolean active=state.equals("running")||state.equals("checking");
+   switch(state){case "running":stateLabel="Running";break;case "checking":stateLabel="Checking result";break;case "stopping":stateLabel="Stopping";break;case "completed":stateLabel="Finished";break;case "failed":stateLabel="Failed";break;case "interrupted":stateLabel="Stopped";break;default:stateLabel="Status unavailable";}
+   boolean active=state.equals("running")||state.equals("checking")||state.equals("stopping");
    String heading=available?(active?"CURRENT TASK · ":"LAST TASK · ")+stateLabel:"TASK · Status unavailable";
    String update=active?current.optString("activity"):current.optString("result");
    if(active&&update.isEmpty())update=current.optString("progress");
    if(available&&state.equals("checking"))update="Checking the result before finishing.";
+   if(available&&state.equals("stopping"))update="Stop received. Waiting for Rose to confirm it has stopped.";
    if(!available)update="Connection lost. Showing the last received task.";
    if(update.isEmpty())update=active?"Working on your request.":"No additional details.";
    String display=presentation(current);

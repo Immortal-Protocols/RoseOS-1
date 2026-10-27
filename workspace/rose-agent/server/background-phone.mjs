@@ -7,6 +7,11 @@ const directActions=new Set(['environment','diagnostics','list_apps','control_st
 const PACKAGE='dev.pixel.backgroundcontrol';
 const nodeActions=new Set(['tap','long_press','touch_point','set_text','ime_enter','scroll','swipe','drag']);
 const labelActions=new Set(['tap_label','touch_label']);
+// Controller.stop keeps the last session ID with status "stopped". For the
+// session this workspace opened, that is the owner's Stop unless the agent
+// closed it or the controller's 600 s deadline expired it.
+const DEADLINE_MS=600000;
+const ownerStopped=(s,session)=>!!session&&s?.status==='stopped'&&s.sessionId===session.sessionId&&(s.stopReason?s.stopReason==='user':Number(s.elapsedMs)<DEADLINE_MS);
 // Rose Agent refuses background work while the owner is away unless they armed locked control,
 // and Android refuses or blocks locked sessions at owner gates. Neither is a retryable failure.
 const ownerUnlockRequired=s=>s?.status==='locked'||s?.reason==='owner_unlock_required'||s?.reason==='device_locked';
@@ -14,8 +19,19 @@ const lockedResult=(details,extra={})=>({status:'locked',actionExecuted:false,ba
 const nodeKey=n=>JSON.stringify([n.packageName??'',n.className??n.class??'',n.viewId??'',n.text??'',n.description??'',n.bounds??[],!!n.clickable,!!n.editable,!!n.scrollable,!!n.password]);
 
 export class BackgroundPhone {
- constructor({send,enabled=()=>false,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),record=()=>{}}){
-  Object.assign(this,{send,enabled,now,sleep,record});this.queue=Promise.resolve();this.session=null;this.observations=new Map();
+ constructor({send,enabled=()=>false,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),record=()=>{},onOwnerStop=()=>{}}){
+  Object.assign(this,{send,enabled,now,sleep,record,onOwnerStop});this.queue=Promise.resolve();this.session=null;this.observations=new Map();this.stoppedByOwner=null;
+ }
+ // A new task may open a workspace again after an owner Stop ended the previous one.
+ beginTask(){this.stoppedByOwner=null;}
+ ownerStop(state){
+  const sessionId=this.stoppedByOwner??this.session?.sessionId;
+  if(!this.stoppedByOwner){
+   this.stoppedByOwner=sessionId;this.session=null;this.observations.clear();
+   this.record({stage:'background_owner_stop',sessionId,stopReason:state?.stopReason??'inferred'});
+   try{this.onOwnerStop({sessionId,stopReason:state?.stopReason??null});}catch{/* Reporting cannot reopen the workspace. */}
+  }
+  return {status:'stopped_by_owner',actionExecuted:false,backgroundExecution:true,sessionId,reason:'The owner stopped the background workspace. Rose does not reopen it for this task.'};
  }
  execute(command){
   if(!this.enabled())return this.send(command);
@@ -50,6 +66,7 @@ export class BackgroundPhone {
  }
  async start(packageName){
   let state=await this.call('get_state');
+  if(ownerStopped(state,this.session))return this.ownerStop(state);
   // Reopening the same app while Android's installer blocks it must not
   // destroy the live workspace. Approval/status tools can finish the pending
   // operation and the next observation will resume that same session.
@@ -80,6 +97,8 @@ export class BackgroundPhone {
  }
  async run(command){
   if(command.display!==undefined&&command.display!=='background'&&command.display!=='phone')throw Error('Unknown display; choose background or phone');
+  // After an owner Stop no workspace or phone-screen action runs until the next task.
+  if(this.stoppedByOwner&&!directActions.has(command.action))return this.ownerStop();
   if(command.display==='phone'){
    const {display,...request}=command;
    if(!uiActions.has(request.action)&&request.action!=='open_app')throw Error('Display selection applies to phone UI commands');
@@ -88,7 +107,11 @@ export class BackgroundPhone {
    return {...result,scope:'phone_display',backgroundExecution:false};
   }
   if(command.action==='open_app')return this.start(command.packageName);
-  if(command.action==='app_command')return isBackgroundSafeAppCommand(command)?this.send(command):backgroundAppCommandRejection(command);
+  if(command.action==='app_command'){
+   if(!isBackgroundSafeAppCommand(command))return backgroundAppCommandRejection(command);
+   if(this.session){const state=await this.call('get_state');if(ownerStopped(state,this.session))return this.ownerStop(state);}
+   return this.send(command);
+  }
   if(directActions.has(command.action)){
    const result=await this.send(command);
    return command.action==='control_status'?{...result,backgroundControl:this.state()}:result;
@@ -118,6 +141,7 @@ export class BackgroundPhone {
   let result=await this.call('command',request);
   // The controller reports a blocked session as not ready; its state says whether the owner must act.
   if(result.status==='error'&&/not ready: blocked/.test(result.error||'')){const state=await this.call('get_state');if(ownerUnlockRequired(state))result=state;}
+  if(result.status==='error'&&/not ready: stopped/.test(result.error||'')){const state=await this.call('get_state');if(ownerStopped(state,this.session))return this.ownerStop(state);}
   if(ownerUnlockRequired(result)){this.record({stage:'background_locked',action:command.action,packageName:this.session.targetPackage,lockedControl:result.lockedControl??result.reason});return lockedResult(result,{sessionId:this.session.sessionId});}
   this.remember(result);
   this.record({stage:'background_action',action:command.action,packageName:this.session.targetPackage,sessionId:this.session.sessionId,status:result.status});

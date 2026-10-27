@@ -1,6 +1,7 @@
 import {ConversationMode,conversationSession} from '../conversation/mode.mjs';
 import {taskSetupPolicy} from './task-setup.mjs';
 import {BackgroundPhone} from './background-phone.mjs';
+import {TaskStop} from './task-stop.mjs';
 import {filterBackgroundNativeCatalogs} from './background-app-policy.mjs';
 import {taskReviewTarget,taskReviewMatches} from './task-review.mjs';
 import {EvidenceRecorder} from '../evaluation/recorder.mjs';
@@ -217,7 +218,9 @@ const phone=new PhoneCommands(Date.now,()=>mediaWorkerConfig.read().enabled,()=>
 const phoneMetrics=new PhoneMetrics({write:boundedWriter(priv+'/phone-command-metrics.jsonl')});
 const phonePush=new PhonePush({file:priv+'/phone-push.json',epoch,pending:()=>phone.pending(),offered:(c,channel)=>measurePhone('offered',c,channel),taskStatus:()=>launcherTask.snapshot()});
 publishTaskState=snapshot=>phonePush.publishTaskStatus(snapshot);
-const backgroundPhone=new BackgroundPhone({send:rawFastPhone,enabled:()=>backgroundEnabled,record:data=>capture.record('phone.background',data,captureContext())});
+const backgroundPhone=new BackgroundPhone({send:rawFastPhone,enabled:()=>backgroundEnabled,record:data=>capture.record('phone.background',data,captureContext()),onOwnerStop:()=>void taskStop.request({source:'workspace_notification'})});
+// Owner Stop: acknowledged once, then no phone action runs for the task until the next task starts.
+const taskStop=new TaskStop({task:()=>launcherTask.current,stopping:details=>launcherTask.stopping(details),interrupt:()=>codex.active?codex.rpc('turn/interrupt',{threadId:codex.thread,turnId:codex.active}):undefined,abortReview:()=>reviewAbort?.abort(),closeWorkspace:()=>backgroundEnabled?backgroundPhone.close():undefined,record:data=>{logDecision(data);capture.record('task.stop',data,captureContext());}});
 const debugBridge=new DebugBridge({dispatch:data=>fastPhone(data),isTrustedPeer:(req,id)=>deviceAuth.paired(req)&&peerIdentity(req)?.id===id});
 function measurePhone(method,...args){try{phoneMetrics[method](...args);}catch{/* Metrics never change command results. */}if(method==='created'||method==='completed')capture.record('phone.'+method,{command:args[0]},captureContext());}
 const messages=messagesBridge(priv,(process.env.PIXEL_MESSAGES_BRIDGE_BIN||path.join(process.env.HOME,'Applications/Pixel Messages Bridge.app/Contents/MacOS/PixelMessagesBridge')));
@@ -250,7 +253,7 @@ const spokenProgress=new SpokenProgress(speakProgress);
 const taskEvidence=new TaskEvidence();
 const visualGuard=new VisualVerification({phone:data=>fastPhone(data,true),directory:priv+'/visual-verification',review:createVisualReviewer(client),evidence:taskEvidence,enabled:visualTrial,background:backgroundEnabled,log:logDecision});
 const rawVisualCaptures=new Map();
-let pendingVisualAnswer='',visualReview=null,reviewAbort=null,taskStopRequested=false;
+let pendingVisualAnswer='',visualReview=null,reviewAbort=null;
 setInterval(()=>spokenProgress.tick(),1000).unref();
 codex.on('status',status=>emit('status',{status}));
 const toolActivity=new ToolActivity(text=>{
@@ -262,6 +265,8 @@ codex.on('toolEvidence',item=>{if(visualTrial&&busy)taskEvidence.observe(item);}
 codex.on('imageView',item=>{visualGuard.saw(item.path);logDecision({stage:'agent_image_view',model:lastRoute?.model,imagePath:item.path});});
 function deliverAgentMessage(text,phase){if(phase==='commentary')launcherTask.progress(text);else launcherTask.result(text);capture.record('worker.message',{text,phase},captureContext());voiceTasks.message(text,phase);if(phase!=='commentary'&&activeRequestSource==='typed')conversationTimeline.add('assistant',text,'text');if(lastRoute&&taskStarted){const elapsed=Date.now()-taskStarted;if(phase==='commentary')lastRoute.firstProgressMs??=elapsed;else lastRoute.firstAnswerMs??=elapsed;}emit('task',{text,phase});if(phase==='commentary')spokenProgress.update(text);else spokenProgress.finish();if(activeSession)emit('live',{event:{type:phase==='commentary'?'session.thinking.append':'session.commentary.append',delegation_id:delegation,content:text.slice(0,1500)}});}
 codex.on('message',(text,phase)=>{
+ // After an acknowledged Stop the worker's late output is not shown or spoken.
+ if(taskStop.active()){capture.record('worker.message_after_stop',{phase},captureContext());return;}
  // Review only the proposed final answer. The voice still needs progress while
  // the worker runs or corrects a rejected answer; withholding it hides task state.
  if(phase!=='commentary'&&visualTrial&&(visualGuard.needsReview()||launcherTask.current?.visualization?.html)){pendingVisualAnswer=text;return;}
@@ -269,15 +274,15 @@ codex.on('message',(text,phase)=>{
 });
 async function finishAgentTurn(turn){
  let failure=turn.status==='completed'?null:turn.error?.message||'Task '+turn.status;
- if(!failure&&!taskStopRequested&&visualTrial&&(visualGuard.needsReview()||launcherTask.current?.visualization?.html)){
+ if(!failure&&!taskStop.active()&&visualTrial&&(visualGuard.needsReview()||launcherTask.current?.visualization?.html)){
   launcherTask.checking();
   try{
    await taskEvidence.collectDelegated(threadId=>codex.rpc('thread/read',{threadId,includeTurns:false}));
    reviewAbort=new AbortController();
-   if(taskStopRequested)reviewAbort.abort();
+   if(taskStop.active())reviewAbort.abort();
    const target=taskReviewTarget(launcherTask.current,pendingVisualAnswer);
    const checked=await visualGuard.assess(pendingVisualAnswer,evaluation?.checkerRoute||lastRoute,{signal:reviewAbort.signal,artifact:target.artifact,force:!!target.artifact});
-   if(taskStopRequested)throw Error('Task stopped');
+   if(taskStop.active())throw Error('Task stopped');
    if(!taskReviewMatches(target,launcherTask.current,pendingVisualAnswer))throw Error('The task answer or card changed during verification; the changed result was not approved.');
    if(checked.status==='continue'){
     pendingVisualAnswer='';spokenProgress.start();launcherTask.running();
@@ -288,12 +293,12 @@ async function finishAgentTurn(turn){
    const text=checked.status==='complete'?pendingVisualAnswer:(checked.summary||pendingVisualAnswer);
    if(!failure)deliverAgentMessage(text,'final_answer');
    if(checked.status==='blocked')failure=text||'Phone task is not verified complete.';
-  }catch(error){failure=taskStopRequested?'Task stopped':'Task is not verified complete: '+error.message;if(!taskStopRequested)deliverAgentMessage(failure,'final_answer');}
+  }catch(error){failure=taskStop.active()?'Task stopped':'Task is not verified complete: '+error.message;if(!taskStop.active())deliverAgentMessage(failure,'final_answer');}
   finally{reviewAbort=null;}
  }
- if(taskStopRequested)failure='Task stopped';
+ if(taskStop.active())failure='Task stopped';
  if(backgroundEnabled)await backgroundPhone.close().catch(error=>logDecision({stage:'background_close_failed',reason:error.message}));
- launcherTask.finish(failure?(taskStopRequested||turn.status==='interrupted'?'interrupted':'failed'):'completed',failure);
+ launcherTask.finish(failure?(taskStop.active()||turn.status==='interrupted'?'interrupted':'failed'):'completed',failure);
  for(const result of voiceTasks.finish(failure))emit('voice_task_done',result);
  spokenProgress.finish();if(failure)speakProgress('The task stopped: '+failure);
  if(lastRoute&&taskStarted)lastRoute.completedMs=Date.now()-taskStarted;
@@ -332,6 +337,7 @@ function answer(res,status,obj){res.writeHead(status,{'content-type':'applicatio
 function checkPausedApp(data){if(birdPaused&&data.packageName==='co.bird.android')throw Error('Bird actions are stopped at the user’s request');}
 async function fastPhone(data,genericVisual=false){
  checkPausedApp(data);
+ const stopped=taskStop.guard(data);if(stopped)return stopped;
  return backgroundEnabled?backgroundPhone.execute(data):rawFastPhone(data,genericVisual);
 }
 async function rawFastPhone(data,genericVisual=false){
@@ -366,7 +372,7 @@ async function dispatch(text,source,rawRequest,ids,appContext,decisionOwner,voic
  if((artemisEnabled||backgroundEnabled)&&selected.route==='fast')selected={route:'deep',...(modelSelection.preferred(config)||ROUTES.deep),source:backgroundEnabled?'background-phone':'artemis-trial',routingMs:selected.routingMs};
  const displayRequest=source==='voice'&&rawRequest.startsWith('Voice conversation context follows.')?(transcript.filter(t=>t.role==='user').at(-1)?.text||rawRequest):rawRequest;
  if(!codex.active&&selected.route!=='fast')await codex.prepareRoute(selected);
- if(!codex.active){taskStopRequested=false;launcherTask.start(displayRequest,taskWidgets.mode());captureCaseId=crypto.randomUUID();capture.record('request.started',{request:rawRequest,source,model:selected,appContext,context:requestConversation,observationBatching:observationBatchingConfig},captureContext());if(evaluation?.phase!=='preflight')void taskTitles.start(launcherTask.current.id,displayRequest,captureContext());activeTaskRequest=rawRequest;taskEvidence.reset(codex.transcriptPath,{threadId:codex.thread});visualGuard.reset(rawRequest,requestConversation.slice(-12));rawVisualCaptures.clear();pendingVisualAnswer='';spokenProgress.start();taskStarted=requestStarted;lastRoute={...selected,at:taskStarted};emit('routing',lastRoute);}else{launcherTask.followup(displayRequest);capture.record('request.followup',{request:rawRequest,source,model:selected,appContext},captureContext());visualGuard.correct(rawRequest);}
+ if(!codex.active){taskStop.begin();backgroundPhone.beginTask();launcherTask.start(displayRequest,taskWidgets.mode());captureCaseId=crypto.randomUUID();capture.record('request.started',{request:rawRequest,source,model:selected,appContext,context:requestConversation,observationBatching:observationBatchingConfig},captureContext());if(evaluation?.phase!=='preflight')void taskTitles.start(launcherTask.current.id,displayRequest,captureContext());activeTaskRequest=rawRequest;taskEvidence.reset(codex.transcriptPath,{threadId:codex.thread});visualGuard.reset(rawRequest,requestConversation.slice(-12));rawVisualCaptures.clear();pendingVisualAnswer='';spokenProgress.start();taskStarted=requestStarted;lastRoute={...selected,at:taskStarted};emit('routing',lastRoute);}else{launcherTask.followup(displayRequest);capture.record('request.followup',{request:rawRequest,source,model:selected,appContext},captureContext());visualGuard.correct(rawRequest);}
  logDecision({stage:'route',route:selected.route,source:selected.source,model:selected.model,effort:selected.effort,serviceTier:selected.serviceTier,elapsedMs:selected.routingMs});
  if(!artemisEnabled&&config.enabled&&selected.route==='fast'){
   activeRequestSource=source;busy=true;emit('status',{status:'Running phone actions'});
@@ -510,7 +516,7 @@ const server=https.createServer({requestCert:!pairingRecovery,rejectUnauthorized
  if(req.method!=='POST')return answer(res,404,{error:'Not found'});
  const data=await body(req);
  if(url.pathname==='/task-model'){
-  try{const route=modelRoute(data.model,data.effort,data.serviceTier);if(!codex.modelAvailable(route.model))throw Error('The selected trial is not configured or its daily budget is exhausted.');modelSelection.set({route,scope:'default'},!!codex.active);emit('task_model',taskModelState());if(data.stopCurrent&&busy){taskStopRequested=true;reviewAbort?.abort();if(codex.active)await codex.rpc('turn/interrupt',{threadId:codex.thread,turnId:codex.active});}return answer(res,200,taskModelState());}catch(error){return answer(res,400,{error:error.message});}
+  try{const route=modelRoute(data.model,data.effort,data.serviceTier);if(!codex.modelAvailable(route.model))throw Error('The selected trial is not configured or its daily budget is exhausted.');modelSelection.set({route,scope:'default'},!!codex.active);emit('task_model',taskModelState());if(data.stopCurrent&&busy)await taskStop.request({source:'model_switch'});return answer(res,200,taskModelState());}catch(error){return answer(res,400,{error:error.message});}
  }
  if(url.pathname==='/task-widgets/config'){try{return answer(res,200,data.mode!==undefined?taskWidgets.setMode(data.mode):taskWidgets.setEnabled(data.enabled));}catch(error){return answer(res,400,{error:error.message});}}
  if(url.pathname==='/artemis/config'){
@@ -552,7 +558,7 @@ const server=https.createServer({requestCert:!pairingRecovery,rejectUnauthorized
  if(url.pathname==='/hidden-world/chat'){const result=await hiddenWorldReply(data,client);return answer(res,result.status,result.body);}
  if(url.pathname==='/hidden-world/adventure'){const result=await hiddenWorldAdventure(data,client);return answer(res,result.status,result.body);}
  if(await messages.post(req,res,url,data))return;
- if(url.pathname==='/phone/commands'){try{if(autoGenerator.active)await autoGenerator.interrupt();checkPausedApp(data);if(backgroundEnabled){const c=phone.create(data);c.internalOnly=true;c.expires=Date.now()+120000;setImmediate(async()=>{try{const result=visualTrial&&busy&&genericUiActions.has(data.action)?await visualGuard.execute(data):await fastPhone(data,true);if(visualTrial&&busy&&data.action==='screenshot')visualGuard.record(result);phone.complete(c.id,result);}catch(error){phone.complete(c.id,{status:'uncertain',reason:error.message,actionExecutionUnknown:true});}});return answer(res,201,c);}if(decisionsConfig.read().enabled&&['apple_music_run','clock_timer_start','clock_control','media_control'].includes(data.action))throw Error('App recipes are disabled in general Decisions mode');if(visualTrial&&busy&&genericUiActions.has(data.action)){const result=await visualGuard.execute(data);return answer(res,201,{id:crypto.randomUUID(),action:data.action,status:'completed',result});}const c=phone.create(data);if(visualTrial&&busy&&data.action==='screenshot')rawVisualCaptures.set(c.id,visualGuard.generation);measurePhone('created',c,{taskStartedAt:busy?taskStarted:null,model:busy?lastRoute?.model:null,effort:busy?lastRoute?.effort:null});phonePush.publish(c);return answer(res,201,c);}catch(e){return answer(res,400,{error:e.message});}}
+ if(url.pathname==='/phone/commands'){try{if(autoGenerator.active)await autoGenerator.interrupt();checkPausedApp(data);const stopped=taskStop.guard(data);if(stopped)return answer(res,201,{id:crypto.randomUUID(),action:data.action,status:'completed',result:stopped});if(backgroundEnabled){const c=phone.create(data);c.internalOnly=true;c.expires=Date.now()+120000;setImmediate(async()=>{try{const result=visualTrial&&busy&&genericUiActions.has(data.action)?await visualGuard.execute(data):await fastPhone(data,true);if(visualTrial&&busy&&data.action==='screenshot')visualGuard.record(result);phone.complete(c.id,result);}catch(error){phone.complete(c.id,{status:'uncertain',reason:error.message,actionExecutionUnknown:true});}});return answer(res,201,c);}if(decisionsConfig.read().enabled&&['apple_music_run','clock_timer_start','clock_control','media_control'].includes(data.action))throw Error('App recipes are disabled in general Decisions mode');if(visualTrial&&busy&&genericUiActions.has(data.action)){const result=await visualGuard.execute(data);return answer(res,201,{id:crypto.randomUUID(),action:data.action,status:'completed',result});}const c=phone.create(data);if(visualTrial&&busy&&data.action==='screenshot')rawVisualCaptures.set(c.id,visualGuard.generation);measurePhone('created',c,{taskStartedAt:busy?taskStarted:null,model:busy?lastRoute?.model:null,effort:busy?lastRoute?.effort:null});phonePush.publish(c);return answer(res,201,c);}catch(e){return answer(res,400,{error:e.message});}}
  if(url.pathname.startsWith('/phone/commands/')){try{if(!targetPhone(req))return answer(res,403,{error:'Wrong phone for command completion'});const id=url.pathname.split('/').pop();const {_delivery,...result}=data;measurePhone('executed',id,_delivery);const c=phone.complete(id,result);if(rawVisualCaptures.has(id)){const generation=rawVisualCaptures.get(id);rawVisualCaptures.delete(id);if(visualTrial&&busy&&generation===visualGuard.generation&&result.status==='ok'){visualGuard.active=true;visualGuard.record(result);}}measurePhone('completed',c);return answer(res,200,c);}catch(e){return answer(res,400,{error:e.message});}}
  if(url.pathname==='/reader/illustration')return answer(res,200,await readerIllustration(data));
  if(url.pathname==='/messages-review/presentation')return answer(res,410,{error:'The guided unread-review workflow has been removed.'});
@@ -627,6 +633,7 @@ const server=https.createServer({requestCert:!pairingRecovery,rejectUnauthorized
   return answer(res,200,result);
  }
  if(url.pathname==='/voice-ended'){if(data.sessionId===activeSession)voiceTimingLog.accept(activeSession,data.voiceTiming);if(!data.sessionId||data.sessionId===activeSession){liveHandoffTrace.close();sessionLease.clear(activeSession);activeSession=null;}return answer(res,200,{ok:true});}
+ if(url.pathname==='/task/stop'){const taskId=typeof data.taskId==='string'?data.taskId:undefined;return answer(res,200,await taskStop.request({taskId,source:typeof data.source==='string'?data.source:'app'}));}
  if(url.pathname==='/task'){if(typeof data.text!=='string'||data.text.length>12000)return answer(res,400,{error:'Invalid task'});const appContext=requestAppContext(data.appContext);logDecision({stage:'request_app_context',source:'typed',appContext:appContext.value});await submit(data.text+'\n'+appContext.text,'typed',data.text,[],appContext);return answer(res,200,{ok:true});}
  answer(res,404,{error:'Not found'});
  }catch(e){console.error('REQUEST_ERROR',e.status||'',e.message?.replace(/sk[-_][\w-]+/g,'[redacted]'));answer(res,e.status||500,{error:e.message?.replace(/sk[-_][\w-]+/g,'[redacted]')||'Request failed'});}});
