@@ -1,5 +1,10 @@
 # First Update — runtime acceptance runbook (QA, prepared, not executed)
 
+**Advisory status (Chief WORKFLOW-002, user direction 2026-10-27 19:30 UTC):** QA is advisory, not a
+merge, build or release gate. Nothing below blocks execution. Unperformed checks are labelled
+UNVERIFIED, never passed. Concrete data-loss, signing, device-compatibility or broken-update hazards
+are escalated directly to the owner and Chief.
+
 Prepared under Chief assignment CHIEF-STAGING-001-QA. Nothing here has been run against a VM,
 device, provider or deployment. Each step runs only at the authorized checkpoint and by the role
 that owns that access: Infra for VMs and the hub, Nathan for the phone. QA analyses the evidence
@@ -81,9 +86,29 @@ Source review at OS `4b5af1f` cannot prove these; they require the built target-
 4. A VM candidate signed with a disposable test key (OS M017 recipe) proves placement and
    behaviour only. It does not prove RT-9 signer continuity; that needs the real candidate
    APKs compared with the installed signers.
-5. Known conditional issue: two packages whose names differ only in `.` and `_` map to the same
+5. Pre-build structure check: `apk-soong-precheck.py APK…` reports the properties that decide a
+   rewrite in the pinned Soong ordinary presigned path (INFRA-BUILDER-008, `app_import.go`
+   443–445, 488–495 and 537–542): native libraries, compressed dex, zipalign `-c -p 4` alignment.
+   From the source build scripts at App `2b6b0d6`, both apps have no native libraries, deflated
+   `classes.dex` and `zipalign -f 4` (UNVERIFIED on the built bytes). Whether that path copies
+   or rewrites them then depends on two details that the pinned source must confirm: the
+   zipalign rule copies an input that already passes the check, and the dex-uncompress decision
+   is false with dex preopt off on a non-privileged product app. If OS moves to
+   `preprocessed: true`, its validator decides instead: the build fails loudly rather than
+   silently re-signing.
+6. Known conditional issue: two packages whose names differ only in `.` and `_` map to the same
    `RosePreinstall_` module. The current pair does not collide, so this does not block this
    delivery; gate 1 reports any collision.
+
+## Risk-based VM recommendations (advisory)
+
+| Change class | VM smoke recommended? | Why / cheapest sufficient evidence |
+| --- | --- | --- |
+| OTA packaging of the three apps (blueprint, `preprocessed`, placement, versions, signing) | Yes, once per built candidate | Signing/broken-update hazard: a rewritten presigned APK fails signature verification and the app is missing after the OTA. First run `verify-target-files.py` on target-files (no VM); then in a clean guest `pm path` plus pulled-APK hash and signer |
+| Background policy, controller, framework computer-control targets | Yes | Device-compatibility hazard; offline tests cover logic, not boot-time policy loading |
+| Backend-only server changes covered by the offline suite (Stop/turn gates, tools) | No VM; offline `run.sh` | Advisory exact-head retest; the runtime Stop/audio rows (RT-1…RT-4) remain UNVERIFIED until run |
+| Version-code-only bumps | No VM | Offline retest; installed-version comparison is a phone/delivery-record fact, not a VM fact |
+| Docs or workflow-only changes | No | None |
 
 ## Scenarios
 

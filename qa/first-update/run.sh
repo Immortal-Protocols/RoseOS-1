@@ -46,6 +46,7 @@ run startup-order node --test qa/first-update/startup-order.test.mjs
 run startup-full node --test qa/first-update/startup/startup.test.mjs
 run runtime-analyzer-selftest node --test qa/first-update/runtime/stop-evidence.test.mjs
 run target-files-selftest node --test qa/first-update/runtime/verify-target-files.test.mjs
+run apk-precheck-selftest node --test qa/first-update/runtime/apk-soong-precheck.test.mjs
 
 python3 - "$OUT" <<'PY'
 import json, subprocess, sys, pathlib, platform
