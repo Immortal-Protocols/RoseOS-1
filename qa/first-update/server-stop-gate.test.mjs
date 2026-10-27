@@ -109,3 +109,59 @@ test('a duplicate Stop is not acknowledged before queued canceled-task work is b
  releaseX();await Promise.all([x,y,first]);
  assert.deepEqual(w.log.slice(ackMark).filter(e=>e==='calculator:2+2'),[],'queued Y ran after the duplicate Stop acknowledgment; log after ack: '+JSON.stringify(w.log.slice(ackMark)));
 });
+
+// ---- Generation identity (Chief decision ROS-FIRST-UPDATE-CHIEF-GENERATION-001) ----
+// The decision does not prescribe a field. ADAPTER: until App documents its interface, an agent
+// command is tagged with the launcher task ID under `taskId`. Update ONLY tag() once App posts
+// the interface; the expectations below must not change.
+const tag=(command,taskId)=>({...command,taskId});
+
+test('generation: after A is stopped and B is running, A-tagged commands are denied and B-tagged commands run',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Add 10 and 5');
+ await w.fastPhone(tag({action:'open_app',packageName:CALCULATOR},A));
+ await w.call('/task/stop',{taskId:A,source:'workspace_notification'});
+ await w.turnEnds();
+ const B=w.newRequest('Multiply 6 by 7');
+ await w.fastPhone(tag({action:'open_app',packageName:CALCULATOR},B));
+ const mark=w.log.length;
+ const staleCalc=await w.fastPhone(tag({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'10+5'}},A));
+ const staleOpen=await w.fastPhone(tag({action:'open_app',packageName:CALCULATOR},A));
+ await w.call('/phone/commands',tag({action:'app_command',packageName:CALCULATOR,operation:'continue',params:{suffix:'+1'}},A));
+ assert.deepEqual(w.log.slice(mark),[],'stale task-A commands executed while B runs: '+JSON.stringify({staleCalc,staleOpen}));
+ await w.fastPhone(tag({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'6*7'}},B));
+ assert.deepEqual(w.log.slice(mark),['calculator:6*7'],'B must still run');
+});
+
+test('generation: a command tagged with an unknown generation fails closed in task paths',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Add 1 and 1');
+ await w.fastPhone(tag({action:'open_app',packageName:CALCULATOR},A));
+ const mark=w.log.length;
+ await w.fastPhone(tag({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9+9'}},'not-a-real-task'));
+ await w.call('/phone/commands',tag({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'8+8'}},'not-a-real-task'));
+ assert.deepEqual(w.log.slice(mark),[]);
+});
+
+test('generation: canceled-A work queued before Stop does not run after fresh B begins',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Two calculations');
+ await w.fastPhone(tag({action:'open_app',packageName:CALCULATOR},A));
+ const releaseX=w.holdFor('3+3');
+ const x=w.fastPhone(tag({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'3+3'}},A));
+ const y=w.fastPhone(tag({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'4+4'}},A));
+ await new Promise(r=>setImmediate(r));
+ const stop=w.taskStop.request({taskId:A,source:'app'});
+ // Release in-flight X only after B has begun, so queued Y would run under B's authority.
+ const B=w.newRequest('Fresh request');
+ const mark=w.log.length;
+ releaseX();await Promise.all([x,y,stop]);
+ assert.deepEqual(w.log.slice(mark).filter(e=>e==='calculator:4+4'),[],'queued A work ran after B began: '+JSON.stringify(w.log.slice(mark)));
+ void B;
+});
+
+test('generation: an intentional non-task command still works with no task running',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const r=await w.fastPhone({action:'control_status'});
+ assert.notEqual(r?.status,'task_stopped');
+});

@@ -34,7 +34,18 @@ and `/phone/commands` route bodies (extracted from source, like App's own test) 
 state, then late canceled-task commands; denial while stopping; and a duplicate Stop that must
 not be acknowledged before queued work is barred. It skips on trees without `task-stop.mjs`.
 
-Speech after Stop, the Android
+Generation identity (Chief decision CHIEF-GENERATION-001): `server-stop-gate.test.mjs` also
+requires that after task A is stopped and fresh task B runs, A-tagged commands (direct, queued
+before Stop, or via `/phone/commands`) are denied, B-tagged commands run, unknown generations
+fail closed, and an intentional non-task command still works. The field is not prescribed;
+only the `tag()` adapter changes once App documents its interface.
+
+`speech-gate.test.mjs` runs the real worker-message handler and `finishAgentTurn` from
+`server.mjs`: after the Stop acknowledgment a late result must not be shown or spoken, and only
+the Stop acknowledgment may be spoken. Cancelling audio already playing is an explicit `todo`
+(needs App's client contract or VM audio evidence).
+
+Real voice audio, the Android
 controller itself and real device behaviour are outside this harness and need a VM run.
 
 None of these checks builds Android, uses the Pixel Voice VM, touches a phone,
