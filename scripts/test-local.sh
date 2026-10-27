@@ -29,3 +29,7 @@ for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-
   "os/background-control/tests/${name}Test.java"
  java -cp "$JAVA_TESTS/$name" "dev.pixel.backgroundcontrol.${name}Test"
 done
+# Pure Rose Agent app logic, compiled the same way.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
+java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
