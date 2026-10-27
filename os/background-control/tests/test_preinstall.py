@@ -4,8 +4,23 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]/'scripts'))
-from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan
+from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan, preprocessed_issues
+
+def apk_bytes(tag, dex_compressed=False, misalign=False):
+    """A minimal APK-shaped ZIP whose classes.dex is stored and 4-byte aligned unless asked otherwise."""
+    path = Path(tempfile.mkstemp(suffix='.zip')[1])
+    with zipfile.ZipFile(path, 'w') as archive:
+        archive.writestr('AndroidManifest.xml', tag)
+        info = zipfile.ZipInfo('classes.dex')
+        info.compress_type = zipfile.ZIP_DEFLATED if dex_compressed else zipfile.ZIP_STORED
+        data_offset = archive.fp.tell() + 30 + len(info.filename)
+        info.extra = b'\0' * ((-data_offset) % 4 + (1 if misalign else 0))
+        archive.writestr(info, b'dex\n' + tag.encode() * 64)
+    data = path.read_bytes()
+    path.unlink()
+    return data
 
 class PreinstallTest(unittest.TestCase):
     def setUp(self):
@@ -15,9 +30,10 @@ class PreinstallTest(unittest.TestCase):
             path = Path(self.temp.name)/name
             path.write_bytes(data)
             return path, hashlib.sha256(data).hexdigest()
-        self.agent, agent_sha = apk('Agent.apk', b'controller')
-        self.voice, voice_sha = apk('rose-agent.apk', b'rose agent')
-        self.calc, calc_sha = apk('calculator.apk', b'calculator')
+        self.apk = apk
+        self.agent, agent_sha = apk('Agent.apk', apk_bytes('controller'))
+        self.voice, voice_sha = apk('rose-agent.apk', apk_bytes('rose agent'))
+        self.calc, calc_sha = apk('calculator.apk', apk_bytes('calculator'))
         self.policy = {'schemaVersion': 1, 'sdk': 37,
             'agent': {'packageName': 'dev.pixel.backgroundcontrol', 'certificates': ['A'*64], 'apkSha256': agent_sha},
             'voice': {'packageName': 'dev.pixel.voice', 'certificates': ['A'*64], 'apkSha256': voice_sha},
@@ -32,7 +48,7 @@ class PreinstallTest(unittest.TestCase):
 
     def test_rejects_unpinned_controller_duplicate_and_altered_bytes(self):
         altered = Path(self.temp.name)/'altered.apk'
-        altered.write_bytes(b'rose agent, re-signed')
+        altered.write_bytes(apk_bytes('rose agent, re-signed'))
         for apks in ([self.agent], [self.voice, self.voice], [altered]):
             with self.subTest(apks=apks), self.assertRaises(ValueError):
                 preinstall_plan(self.policy, apks)
@@ -40,10 +56,31 @@ class PreinstallTest(unittest.TestCase):
     def test_blueprint_keeps_existing_signature_and_is_not_privileged(self):
         text = preinstall_blueprint('RosePreinstall_dev_pixel_voice')
         for required in ('android_app_import {', 'name: "RosePreinstall_dev_pixel_voice"', 'apk: "app.apk"',
-                'presigned: true', 'product_specific: true'):
+                'presigned: true', 'preprocessed: true', 'product_specific: true'):
             self.assertIn(required, text)
         for forbidden in ('privileged', 'certificate', 'platform'):
             self.assertNotIn(forbidden, text)
+
+    def test_rejects_packages_sharing_a_module_name(self):
+        first, first_sha = self.apk('first.apk', apk_bytes('first'))
+        second, second_sha = self.apk('second.apk', apk_bytes('second'))
+        self.policy['targets'] = [
+            {'packageName': 'dev.foo_bar', 'certificates': ['A'*64], 'apkSha256': first_sha},
+            {'packageName': 'dev_foo.bar', 'certificates': ['A'*64], 'apkSha256': second_sha}]
+        self.assertEqual(len(preinstall_plan(self.policy, [first])), 1)
+        with self.assertRaisesRegex(ValueError, 'RosePreinstall_dev_foo_bar'):
+            preinstall_plan(self.policy, [first, second])
+
+    def test_preprocessed_import_needs_stored_aligned_dex(self):
+        self.assertEqual(preprocessed_issues(self.voice), [])
+        for name, data, problem in (('deflated.apk', apk_bytes('rose agent', dex_compressed=True), 'compressed'),
+                ('misaligned.apk', apk_bytes('rose agent', misalign=True), 'not aligned')):
+            with self.subTest(name):
+                path, sha = self.apk(name, data)
+                self.assertIn(problem, ' '.join(preprocessed_issues(path)))
+                self.policy['voice']['apkSha256'] = sha
+                with self.assertRaisesRegex(ValueError, 'cannot be imported unchanged'):
+                    preinstall_plan(self.policy, [path])
 
     def test_make_block_lists_modules(self):
         block = preinstall_make_block(['RosePreinstall_a', 'RosePreinstall_b'])
