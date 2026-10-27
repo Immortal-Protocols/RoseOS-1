@@ -78,10 +78,11 @@ installed phone and current release channel, not from this repository:
 1. Installed OS build number, device, and that the OTA signer and AVB key match the
    existing chain. The new build number must be greater.
 2. The Updater's configured channel URL (to pass as `--updater-url`) and the
-   metadata it accepts. The published `frankel-2026102401` notes give the feed as
+   metadata it accepts. The published `frankel-2026102401` notes state the feed as
    `https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/`
    with channel `frankel-stable`; because the feed follows GitHub's "latest"
-   release, a candidate is offered only once it is the latest release.
+   release, a candidate is offered only once it is the latest release. This is
+   the documented value, not a reading of the phone's configuration.
 3. Installed `dev.pixel.voice` and `dev.pixel.backgroundcontrol` version codes and
    signing certificates. The controller prebuilt must have a greater version code
    than any installed copy, or Android keeps the installed one. `agent-pip` is now
@@ -91,15 +92,17 @@ installed phone and current release channel, not from this repository:
 5. How Rose Agent reaches the existing Pixel Voice VM (endpoint and pinned
    certificate already configured in the installed app, or a new app build).
 
-Published baseline (user reported as installed, not measured on the phone):
-`frankel-2026102401`, fingerprint
-`google/frankel/frankel:17/CP3A.261005.005/2026102401:user/release-keys`, AVB
-rollback index `1791158400` (2026-10-05). The pinned `os/pinned-manifest.xml`
-source has security patch level `2026-10-05` (`build/release` `cp2a`) but
-`BUILD_ID` `CP2A.260605.016`, so the installed build was not produced from exactly
-this pinned tree. Reconcile the candidate's source with the tree that built
-`2026102401` before building; keep the security patch level and rollback index at
-or above the installed values.
+Planning baseline: `frankel-2026102401`, which the owner reports as installed (not
+measured on the phone). Its release notes, whose bytes match the published
+`SHA256SUMS`, state fingerprint
+`google/frankel/frankel:17/CP3A.261005.005/2026102401:user/release-keys` and AVB
+rollback index `1791158400` (2026-10-05); these are release-author statements,
+not checks of the OTA payload. The pinned `os/pinned-manifest.xml` source has
+security patch level `2026-10-05` (`build/release` `cp2a`) but `BUILD_ID`
+`CP2A.260605.016`, so the published `2026102401` build was not produced from
+exactly this pinned tree. Reconcile the candidate's source with the tree that
+built `2026102401` before building; keep the security patch level and rollback
+index at or above the baseline's.
 
 ## Preinstall and default HOME (proposal, not implemented)
 
