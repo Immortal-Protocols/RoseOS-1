@@ -10,20 +10,56 @@ This is the private source and build repository. Public, signed Pixel 10
 [Immortal-Protocols/pixel-ota](https://github.com/Immortal-Protocols/pixel-ota).
 The public channel is separate from the private source and signing materials.
 
-## APK build storage experiment
+## APK builds and sharing
 
-The shared APK storage workflow is **not yet accepted**. A private GitHub Release
-was created, but direct asset uploads from the agent environment returned HTTP
-401. No APK was uploaded or published by that attempt. Do not rely on its empty
-draft as a build source.
+Internal APK builds are stored in [this private repository's Releases](https://github.com/Immortal-Protocols/RoseOS-1/releases).
+**Upload from GitHub Actions using its repository-scoped token; download with
+an authorized GitHub account.** Direct asset uploads from the current agent
+container return HTTP 401 even though repository API calls work. The tested CI
+route does not require a personal access token or sharing credentials between agents.
+Library copies are optional; approved public OS releases remain in `pixel-ota`.
 
-The manually triggered `APK storage test` workflow tests GitHub Releases using
-GitHub Actions' repository-scoped token. It builds an unsigned Calculator APK,
-attaches checksums and build evidence, downloads and compares every asset, and
-only publishes an experimental prerelease after verification. It uses no signing
-keys and does not establish installation or runtime acceptance. The workflow
-must succeed, and a separate agent must retrieve and verify the assets, before
-we document this as the team's working build store.
+### Run the verified storage test
+
+The manual workflow builds an **unsigned Calculator APK** without signing secrets:
+
+```sh
+gh workflow run apk-storage-test.yml --repo Immortal-Protocols/RoseOS-1 --ref main
+gh run list --repo Immortal-Protocols/RoseOS-1 --workflow apk-storage-test.yml
+```
+
+Each run creates a unique `apps-storage-test-RUN_ID-ATTEMPT` tag at its source
+commit. It uploads the individual APK, APK metadata, Java version, build receipt
+and relative-path `SHA256SUMS` to a draft. It downloads all assets and compares
+them byte-for-byte before publishing an experimental prerelease (not Latest),
+then verifies another download. Failed verification leaves the draft unpublished.
+The job has only `contents: write`, a 15-minute timeout and no signing credentials.
+
+To retrieve a successful build, replace `TAG` with its exact release tag and use
+a fresh destination directory:
+
+```sh
+gh release download TAG --repo Immortal-Protocols/RoseOS-1 --dir downloads/TAG
+(cd downloads/TAG && sha256sum -c SHA256SUMS)
+```
+
+Verified on 2026-10-26: [workflow run 40451235322](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/40451235322)
+passed. Its [private prerelease](https://github.com/Immortal-Protocols/RoseOS-1/releases/tag/apps-storage-test-40451235322-1)
+was independently downloaded into the agent workspace; every checksum passed,
+and APK ZIP integrity and alignment passed. APK SHA-256:
+`ae07cfa8891ce4e0d626631c4a3f1f23fd2d2cf677a9f6f815984f29fd82157a`.
+This proves artifact storage/retrieval, not app installation or runtime behavior.
+The unsigned test APK is not a signed installable release.
+
+### Build records
+
+Use a new tag for each build and preserve uploaded bytes. Receipts must record
+source commit/worktree state, package/version, tool versions, signing status,
+full public certificate fingerprint (or explicitly unsigned), actual checks and
+runtime-test limits. Clearly label experimental, tested or approved status.
+Signed APK workflows must additionally verify the expected full signing identity;
+this unsigned storage test does not implement signing. Never upload private keys,
+passwords, tokens or private runtime configuration.
 
 ## Start here
 
