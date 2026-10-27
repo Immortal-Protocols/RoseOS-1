@@ -5,8 +5,9 @@ device, provider or deployment. Each step runs only at the authorized checkpoint
 that owns that access: Infra for VMs and the hub, Nathan for the phone. QA analyses the evidence
 offline and stays independent.
 
-Frozen offline baseline: App `2749a76358b1e97412bd47ae8419202513ac1e17` + OS
-`9ce7e3d23d202b1b0944303c7e61da19497f5d49`, QA harness on `claude/focused-volta-e07218`.
+Tested offline heads: App `2749a76358b1e97412bd47ae8419202513ac1e17` + OS packaging candidate
+`4b5af1f7460bd86d689fd716b8d936e6318a66e8` (earlier frozen OS baseline `9ce7e3d`), QA harness on
+`claude/focused-volta-e07218`.
 Any change to those heads, or a packaging or version change, requires the offline harness
 (`qa/first-update/run.sh`, including `startup/startup.test.mjs`) to be re-run first.
 
@@ -31,11 +32,52 @@ Any change to those heads, or a packaging or version change, requires the offlin
   `decisions-routing.jsonl`. It reports a violation for any phone action, tool, web lookup or
   worker message after `task_stop_acknowledged`, until the next `request.started`. It is
   self-tested in `stop-evidence.test.mjs`.
+- `verify-target-files.py TARGET_FILES.zip POLICY_RECEIPT.json [--apksigner PATH]`: read-only
+  check of a built target-files zip against the `--preinstall-apk` policy receipt. Controller at
+  `SYSTEM_EXT/priv-app/PixelBackgroundControl/`, Rose Agent and Calculator at
+  `PRODUCT/app/RosePreinstall_<pkg>/`; each APK byte-identical to the receipt `apkSha256`;
+  each marked `PRESIGNED` in `META/apkcerts.txt` (otherwise release signing re-signs it);
+  optional signer digest match; preinstall module-name collisions. Self-tested with synthetic
+  zips in `verify-target-files.test.mjs`.
 - `audio-window.py WAV START ACK`: 50 ms RMS segments relative to the Stop acknowledgment, with a
   threshold of 0.008 to match App’s OpenAI quiet threshold.
 
 Time base: record the epoch offset between the backend host, the VM (`adb shell date +%s.%N`)
 and the audio recorder at the start and end of every run.
+
+## Staging isolation and rollback (Chief ROLLBACK-001)
+
+- Staging runs (RT-5…RT-7, RT-1…RT-4, fresh task) use an isolated test configuration and a
+  test Codex thread. Never start the candidate against the saved production Codex thread:
+  `thread/inject_items` is not reversible.
+- Before and after each staging run, record the production config and saved-thread identifiers
+  (names and hashes only, never contents or tokens) to show they were not touched.
+- Preserve the original thread and the pairing/TLS state. No deletion, hidden reset or
+  production migration in staging.
+- RT-8 (deployment, later checkpoint) requires a reversible config/thread switch with the original
+  thread and pairing/TLS state retained, and a recorded rollback path back to them.
+- The missing-pair-token `/health` 500 (QA startup finding) is recorded but is not automatically a
+  milestone blocker.
+
+## Built-artifact packaging gates (Chief PACKAGING-001 / PACKAGING-REVIEW-001)
+
+Source review at OS `4b5af1f` cannot prove these; they require the built target-files and OTA.
+
+1. `verify-target-files.py` passes on the candidate target-files with the policy receipt that
+   produced it: paths, byte identity, `PRESIGNED`, signer, no collisions.
+2. The generated preinstall blueprint omits `preprocessed: true` (the controller's own
+   Android.bp has it). Byte identity in gate 1 is therefore the evidence that no zipalign or
+   uncompress step rewrote the Rose Agent or Calculator APKs.
+3. Image checks in the candidate VM (OS M017 step 6): `persist.wm.debug.pixel_agent_tray=1`; the
+   controller at `/system_ext/priv-app` with versionCode 27; Rose Agent and Calculator at
+   `/product/app` with the expected versionCode and signer; provider capabilities
+   `schemaVersion` 3; framework `config_pixelComputerControlTargets` lists Calculator only.
+4. A VM candidate signed with a disposable test key (OS M017 recipe) proves placement and
+   behaviour only. It does not prove RT-9 signer continuity; that needs the real candidate
+   APKs compared with the installed signers.
+5. Known conditional issue: two packages whose names differ only in `.` and `_` map to the same
+   `RosePreinstall_` module. The current pair does not collide, so this does not block this
+   delivery; gate 1 reports any collision.
 
 ## Scenarios
 

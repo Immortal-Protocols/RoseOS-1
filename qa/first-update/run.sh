@@ -45,6 +45,7 @@ run voice-mute-gate node --test qa/first-update/voice-mute-gate.test.mjs
 run startup-order node --test qa/first-update/startup-order.test.mjs
 run startup-full node --test qa/first-update/startup/startup.test.mjs
 run runtime-analyzer-selftest node --test qa/first-update/runtime/stop-evidence.test.mjs
+run target-files-selftest node --test qa/first-update/runtime/verify-target-files.test.mjs
 
 python3 - "$OUT" <<'PY'
 import json, subprocess, sys, pathlib, platform
