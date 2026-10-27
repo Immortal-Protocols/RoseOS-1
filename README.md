@@ -10,45 +10,20 @@ This is the private source and build repository. Public, signed Pixel 10
 [Immortal-Protocols/pixel-ota](https://github.com/Immortal-Protocols/pixel-ota).
 The public channel is separate from the private source and signing materials.
 
-## APK builds and sharing
+## APK build storage experiment
 
-Use [GitHub Releases in this private repository](https://github.com/Immortal-Protocols/RoseOS-1/releases)
-as the canonical store for internal APK builds. Engineers and agents retrieve
-artifacts with their own authorized repository access. ChatGPT Library may hold
-optional copies; it is not the primary build store. Approved public OS artifacts
-remain in `Immortal-Protocols/pixel-ota`.
+The shared APK storage workflow is **not yet accepted**. A private GitHub Release
+was created, but direct asset uploads from the agent environment returned HTTP
+401. No APK was uploaded or published by that attempt. Do not rely on its empty
+draft as a build source.
 
-For each build:
-
-1. Create a uniquely tagged draft targeting the exact source commit. Upload APKs
-   individually, not only inside a bundle. Never overwrite an existing build's bytes.
-2. Attach `SHA256SUMS` with relative filenames, APK metadata and a build receipt
-   recording source commit/worktree state, package/version, tool versions, signing
-   status, full public signing-certificate fingerprint (or explicitly unsigned),
-   actual checks and runtime-test limits. Never upload private signing material.
-3. Download all assets to a fresh directory and compare them with the originals;
-   run `sha256sum -c SHA256SUMS`. For signed APKs, independently verify the signature
-   and compare the full certificate fingerprint with the expected identity.
-4. Publish internal experimental builds as prereleases without marking them
-   Latest. Label experimental, tested or approved status in the notes and describe
-   what was tested. Storage verification alone is not app/runtime acceptance.
-
-To retrieve a published build, replace `TAG` with its exact release tag:
-
-```sh
-gh release download TAG --repo Immortal-Protocols/RoseOS-1 --dir downloads/TAG
-(cd downloads/TAG && sha256sum -c SHA256SUMS)
-```
-
-Storage test on 2026-10-26: a fresh unsigned Calculator APK was built from
-`ff87296384f30497e87e0fcb73f2e638af1bba68`; compilation, ZIP integrity and alignment
-passed, and signature verification rejected it as expected. GitHub created draft
-release `apps-storage-test-ff87296-1` (release ID `425037883`), but asset upload to
-`uploads.github.com` returned HTTP 401 "Bad credentials". Inspection confirmed
-zero assets; the draft remains unpublished. Upload/download round-trip acceptance
-is **blocked**, not passed. Repository read/admin permission does not prove asset
-upload authentication. Resolve that authentication before retrying; the signed
-app Library download is a separate blocked transfer.
+The manually triggered `APK storage test` workflow tests GitHub Releases using
+GitHub Actions' repository-scoped token. It builds an unsigned Calculator APK,
+attaches checksums and build evidence, downloads and compares every asset, and
+only publishes an experimental prerelease after verification. It uses no signing
+keys and does not establish installation or runtime acceptance. The workflow
+must succeed, and a separate agent must retrieve and verify the assets, before
+we document this as the team's working build store.
 
 ## Start here
 

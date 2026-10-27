@@ -1,0 +1,89 @@
+name: APK storage test
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: apk-storage-test
+  cancel-in-progress: false
+
+jobs:
+  calculator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build unsigned Calculator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          unset ANDROID_SDK_ROOT
+          bash scripts/setup-android-sdk.sh
+          bash workspace/pixel-calculator-agent/build.sh
+          mkdir -p out/release-assets
+          mapfile -t apks < <(find out -path 'out/calculator.*/calculator-unsigned.apk')
+          test "${#apks[@]}" -eq 1
+          apk="${apks[0]}"
+          build_dir="$(dirname "$apk")"
+          unzip -t "$apk"
+          .tools/android-sdk/build-tools/android-15/zipalign -c 4 "$apk"
+          if .tools/android-sdk/build-tools/android-15/apksigner verify "$apk"; then
+            echo 'Expected an unsigned APK' >&2
+            exit 1
+          fi
+          cp "$apk" "$build_dir/apk-metadata.txt" "$build_dir/java-version.txt" out/release-assets/
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('out/release-assets')
+          apk = out / 'calculator-unsigned.apk'
+          receipt = {
+              'source_commit': os.environ['GITHUB_SHA'],
+              'source_clean': not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip(),
+              'workflow_run': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
+              'artifact': apk.name,
+              'artifact_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
+              'package': 'dev.pixel.calculator.agent', 'version_name': '1.2', 'version_code': 3,
+              'min_sdk': 30, 'target_sdk': 35,
+              'signing_status': 'unsigned', 'signing_certificate_sha256': None,
+              'status': 'experimental', 'android_platform': '35 revision 2', 'build_tools': '35.0.0',
+              'checks_passed': ['compilation', 'DEX packaging', 'ZIP integrity', 'ZIP alignment', 'unsigned signature rejection'],
+              'runtime_testing': 'not performed',
+          }
+          assert receipt['source_clean'], 'Source checkout must be clean'
+          (out / 'build-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          (out / 'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in sorted(out.iterdir()) if p.name != 'SHA256SUMS'))
+          PY
+      - name: Upload, download and verify private prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="apps-storage-test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          notes="$RUNNER_TEMP/apk-release-notes.md"
+          cat > "$notes" <<EOF
+          Experimental unsigned Calculator APK storage test.
+
+          Source: $GITHUB_SHA. Build evidence: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID.
+          Compilation, DEX packaging, ZIP integrity and alignment passed; signature verification rejects this unsigned APK as expected.
+          No signing keys, installation or runtime tests. This APK is not a signed installable release.
+          Asset download verification is pending; keep this release as a draft until it passes.
+          EOF
+          gh release create "$tag" out/release-assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease --latest=false --title 'Experimental: unsigned Calculator storage test' --notes-file "$notes"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir out/download-verification
+          (cd out/download-verification && sha256sum -c SHA256SUMS)
+          diff -qr out/release-assets out/download-verification
+          sed -i 's/Asset download verification is pending; keep this release as a draft until it passes./Every uploaded asset was downloaded and matched byte-for-byte; SHA-256 checks passed. This verifies storage, not app runtime behavior./' "$notes"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false --notes-file "$notes"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir out/published-verification
+          (cd out/published-verification && sha256sum -c SHA256SUMS)
+          diff -qr out/release-assets out/published-verification
+          printf 'Verified private prerelease: %s/%s/releases/tag/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
