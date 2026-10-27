@@ -134,6 +134,8 @@ not a claim that this older baseline is suitable for a current stable release.
   reconstruct exact source, prepare policy, build, sign, validate and publish.
 - [Use rose-workspace](infra/rose-workspace/README.md): startup, prerequisites,
   cache paths, vault boundaries and current connectivity limitations.
+- [Integrate Rose Agent with the OS](docs/OS-INTEGRATION.md): status tray, agent
+  workspace, viewer/Stop contract and existing-phone update compatibility.
 - [Check what is actually verified](docs/VALIDATION.md): fresh results versus
   inherited evidence, pending acceptance and concrete blockers.
 
