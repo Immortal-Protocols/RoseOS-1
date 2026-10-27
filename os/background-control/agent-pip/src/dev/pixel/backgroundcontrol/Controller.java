@@ -37,9 +37,11 @@ public final class Controller {
  // Shared sender identity lets the receiver check this package and its signing certificate.
  static void announceOwnerStop(Context c,String session,String task){try{Intent i=new Intent("dev.pixel.backgroundcontrol.action.OWNER_STOP").setPackage("dev.pixel.voice").putExtra("sessionId",session).putExtra("taskId",task).putExtra("stoppedAt",System.currentTimeMillis());BroadcastOptions o=BroadcastOptions.makeBasic();o.setShareIdentityEnabled(true);c.sendBroadcast(i,null,o.toBundle());}catch(RuntimeException e){Log.w("BackgroundControl","Owner stop notice not delivered",e);}}
  static void requestConsent(Activity a)throws Exception{IntentSender pending; synchronized(Controller.class){pending=consent;}if(pending!=null)a.startIntentSenderForResult(pending,3,null,0,0,0);}
+ // The refused task is named on its own; the running workspace, if any, is only under "current".
+ static JSONObject refusal(String task,JSONObject current)throws Exception{JSONObject r=new JSONObject();for(Map.Entry<String,Object> f:stops.refusal(task).entrySet())r.put(f.getKey(),f.getValue());return r.put("current",current);}
  static synchronized JSONObject start(Context context,JSONObject p)throws Exception{
   Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=StopLedger.taskId(p.has("taskId")&&!p.isNull("taskId")?p.getString("taskId"):null);
-  if(stops.refuses(task))return state(c).put("status","user_stopped").put("actionExecuted",false);
+  if(stops.refuses(task))return refusal(task,state(c));
   if(pkg.equals(c.getPackageName())||c.getPackageManager().getLaunchIntentForPackage(pkg)==null)throw new IllegalArgumentException("Target must be an installed launchable app");
   if(session!=null&&pkg.equals(target)&&"ready".equals(status)){if(task!=null)taskId=task;return state(c);}
   stop(c,StopLedger.AGENT);if(session!=null)throw new IllegalStateException("Previous session cleanup is incomplete");stops.started();final long token=++generation;target=pkg;taskId=task;id=UUID.randomUUID().toString();started=SystemClock.elapsedRealtime();operations=0;width=height=0;error="";blocked=false;status="starting";

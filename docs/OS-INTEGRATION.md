@@ -43,8 +43,10 @@ a new session after a Stop. The controller now records why a session ended:
   `stoppedSessionId`, `taskId` and `stoppedTaskId`. Status `"stopped"` with
   `stopReason: "user"` acknowledges the owner's Stop. `"cleanup_failed"` does not.
 - `start` accepts an optional `taskId` (1–128 characters of `[A-Za-z0-9._:-]`).
-  If the owner stopped that task, `start` returns status `"user_stopped"` and
-  opens nothing. A start without `taskId` behaves as before, which old backends
+  If the owner stopped that task, `start` opens nothing and returns
+  `{"status": "user_stopped", "actionExecuted": false, "rejectedTaskId": ..., "stopReason": "user", "current": {...}}`.
+  The top level names only the rejected task. Any workspace still running for a
+  newer task is reported, unchanged, under `current`; it was not stopped. A start without `taskId` behaves as before, which old backends
   rely on.
 - Agent `stop` or `home` records `"agent"` and never replaces the owner's report
   for the same session. The ten-minute limit records `"deadline"`.

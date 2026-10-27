@@ -40,6 +40,21 @@ final class StopLedger {
     void started() { reason = ""; sessionId = null; taskId = null; }
 
     boolean refuses(String task) { return task != null && userStopped.contains(task); }
+
+    /**
+     * Fields for a refused start, or null if the task may start. Names only the rejected task;
+     * the caller reports the unchanged current workspace separately, so a refusal of an old task
+     * cannot be read as a stop of whatever task is running now.
+     */
+    java.util.Map<String, Object> refusal(String task) {
+        if (!refuses(task)) return null;
+        java.util.Map<String, Object> fields = new java.util.LinkedHashMap<>();
+        fields.put("status", "user_stopped");
+        fields.put("actionExecuted", Boolean.FALSE);
+        fields.put("rejectedTaskId", task);
+        fields.put("stopReason", USER);
+        return fields;
+    }
     String reason() { return reason; }
     String sessionId() { return sessionId; }
     String taskId() { return taskId; }

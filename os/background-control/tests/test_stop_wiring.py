@@ -33,6 +33,16 @@ class StopWiringTest(unittest.TestCase):
         # A failed close leaves status cleanup_failed, never "stopped".
         self.assertRegex(text, r'catch\(Throwable e\)\{session=old;error=root\(e\)\.toString\(\);status="cleanup_failed";\}')
 
+    def test_refused_start_names_rejected_task_not_current_workspace(self):
+        text = (SOURCE/'Controller.java').read_text()
+        start = text[text.index('static synchronized JSONObject start('):text.index('static void attachLifecycle(')]
+        refusal = start.index('if(stops.refuses(task))return refusal(task,state(c));')
+        # Refusal returns before anything about the current workspace (task B) changes.
+        for mutation in ('stop(c,', 'stops.started()', 'taskId=', 'target=pkg', 'generation'):
+            self.assertLess(refusal, start.index(mutation), mutation)
+        self.assertNotIn('state(c).put("status","user_stopped")', text)
+        self.assertIn('static JSONObject refusal(String task,JSONObject current)', text)
+
     def test_schema_advertised(self):
         self.assertIn('.put("schemaVersion",3)', (SOURCE/'AgentProvider.java').read_text())
 

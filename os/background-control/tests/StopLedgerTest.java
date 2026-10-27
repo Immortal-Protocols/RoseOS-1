@@ -26,6 +26,14 @@ public final class StopLedgerTest {
         l.started();
         expect(l.reason().isEmpty() && l.sessionId() == null && l.taskId() == null, "New session clears report");
         expect(l.refuses("t2"), "A new session does not undo the owner's stop of t2");
+        java.util.Map<String, Object> refused = l.refusal("t2");
+        expect(refused != null && "user_stopped".equals(refused.get("status"))
+                && "t2".equals(refused.get("rejectedTaskId")) && StopLedger.USER.equals(refused.get("stopReason"))
+                && Boolean.FALSE.equals(refused.get("actionExecuted")), "Refusal names the rejected task");
+        expect(!refused.containsKey("taskId") && !refused.containsKey("sessionId")
+                && !refused.containsKey("stoppedTaskId"), "Refusal carries no current-workspace identity");
+        expect(l.refusal("t9") == null && l.refusal(null) == null, "A different or absent task is not refused");
+        expect(l.reason().isEmpty() && l.sessionId() == null, "Building a refusal changes nothing");
         l.stopped(StopLedger.USER, "s3", null);
         expect(StopLedger.USER.equals(l.reason()) && !l.refuses(null), "Owner stop without taskId is reported only");
         for (int i = 0; i < StopLedger.REMEMBERED_TASKS; i++) l.stopped(StopLedger.USER, "s", "bulk" + i);
