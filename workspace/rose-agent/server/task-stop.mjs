@@ -31,7 +31,13 @@ export class TaskStop {
   const result={status:'stopping',taskId:current.id,requestedAt:this.requested.at,
    worker:worker.status==='fulfilled'?'interrupt_requested':'interrupt_failed: '+reason(worker.reason),
    workspace:workspace.status==='fulfilled'?'closed':'close_failed: '+reason(workspace.reason)};
+  this.requested.outcome=result;
   this.record({stage:'task_stop_acknowledged',...result});
   return result;
+ }
+ // Truthful terminal text: a workspace that did not close is reported, not hidden.
+ summary(){
+  const workspace=this.requested?.outcome?.workspace;
+  return workspace&&workspace!=='closed'?'Task stopped, but the background workspace did not confirm it closed ('+workspace+').':'Task stopped';
  }
 }

@@ -16,7 +16,7 @@ async function fixture(review){
  const reviewed=new Promise(resolve=>{resolveReview=resolve;});
  const launcherUpdates=[];
  const context=vm.createContext({codex,voiceTasks,visualTrial:true,
-  taskStop:{stopped:false,active(){return this.stopped;}},backgroundEnabled:false,AbortController,reviewAbort:null,evaluation:null,taskReviewTarget,taskReviewMatches,
+  taskStop:{stopped:false,active(){return this.stopped;},summary:()=>'Task stopped'},backgroundEnabled:false,AbortController,reviewAbort:null,evaluation:null,taskReviewTarget,taskReviewMatches,
   taskEvidence:{collectDelegated:async()=>{}},
   capture:{record(){}},captureContext:()=>({}),launcherTask:{progress:t=>launcherUpdates.push(['progress',t]),result:t=>launcherUpdates.push(['result',t]),checking:()=>launcherUpdates.push(['checking']),running:()=>launcherUpdates.push(['running']),finish:(state)=>launcherUpdates.push(['finish',state])},
   visualGuard:{needsReview:()=>true,assess:()=>reviewed},pendingVisualAnswer:'',

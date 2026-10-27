@@ -45,15 +45,38 @@ test('owner Stop is detected by a UI action in the stopped workspace',async()=>{
  assert.equal(stops.length,1);
 });
 
-test('workspace expiry and agent-closed sessions keep the existing reopen behavior',async()=>{
- const expired=controller({elapsed:600001});const stops=[];
- const phone=new BackgroundPhone({send:expired.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
- await phone.execute({action:'open_app',packageName:'maps'});expired.ownerStop();
- assert.equal((await phone.execute({action:'open_app',packageName:'maps'})).status,'opened');
- const device=controller();const closing=new BackgroundPhone({send:device.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
+test('an agent-closed workspace can be reopened; a deadline expiry ends the task instead',async()=>{
+ const device=controller();const stops=[];
+ const closing=new BackgroundPhone({send:device.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
  await closing.execute({action:'open_app',packageName:'maps'});await closing.execute({action:'home'});
  assert.equal((await closing.execute({action:'open_app',packageName:'maps'})).status,'opened');
  assert.equal(stops.length,0);
+ const expired=controller({elapsed:600001});
+ const phone=new BackgroundPhone({send:expired.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
+ await phone.execute({action:'open_app',packageName:'maps'});expired.ownerStop('deadline');
+ assert.equal((await phone.execute({action:'open_app',packageName:'maps'})).status,'stopped_by_owner');
+ assert.deepEqual(stops,[{sessionId:'session-1',stopReason:'deadline'}]);assert.equal(expired.starts(),1);
+});
+
+test('schema 3: each start carries the task ID and a user_stopped refusal ends the task',async()=>{
+ const calls=[];const stops=[];
+ const send=async c=>{calls.push(c);if(c.operation==='get_state')return {status:'stopped',sessionId:null,stopReason:'user',stoppedSessionId:'session-9',stoppedTaskId:'task-1'};
+  if(c.operation==='start')return {status:'user_stopped',stopReason:'user',stoppedSessionId:'session-9'};throw Error('unexpected '+c.operation);};
+ const phone=new BackgroundPhone({send,enabled:()=>true,taskId:()=>'task-1',onOwnerStop:e=>stops.push(e)});
+ const result=await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'});
+ assert.equal(calls.find(c=>c.operation==='start').params.taskId,'task-1');
+ assert.equal(result.status,'stopped_by_owner');assert.equal(result.actionExecuted,false);
+ assert.deepEqual(stops,[{sessionId:'session-9',stopReason:'user'}]);
+ assert.equal((await phone.execute({action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate',params:{}})).status,'stopped_by_owner');
+ assert.equal(calls.filter(c=>c.packageName==='dev.pixel.calculator.agent').length,0);
+ phone.beginTask();
+});
+
+test('an agent stop reported by a schema 3 controller is not mistaken for the owner',async()=>{
+ const device=controller();const stops=[];
+ const phone=new BackgroundPhone({send:device.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
+ await phone.execute({action:'open_app',packageName:'maps'});device.ownerStop('agent');
+ assert.equal((await phone.execute({action:'open_app',packageName:'maps'})).status,'opened');assert.equal(stops.length,0);
 });
 
 function task(){
@@ -68,7 +91,7 @@ test('Stop is acknowledged once, interrupts the worker, closes the workspace and
  assert.equal(stop.guard({action:'tap_label'}),null);
  const ack=await stop.request({taskId:launcher.current.id,source:'tray'});
  assert.equal(ack.status,'stopping');assert.equal(ack.taskId,launcher.current.id);assert.equal(ack.requestedAt,1000);
- assert.equal(launcher.current.state,'stopping');assert.deepEqual(events.sort(),['abort','close','interrupt']);
+ assert.equal(launcher.current.state,'stopping');assert.deepEqual(events.sort(),['abort','close','interrupt']);assert.equal(stop.summary(),'Task stopped');
  const blocked=stop.guard({action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate'});
  assert.equal(blocked.status,'task_stopped');assert.equal(blocked.actionExecuted,false);
  const again=await stop.request({source:'notification'});
@@ -95,4 +118,5 @@ test('a failed interrupt or workspace close keeps the gate closed and reports it
  const ack=await stop.request({});
  assert.equal(ack.status,'stopping');assert.equal(ack.worker,'interrupt_failed: turn/interrupt timed out');assert.equal(ack.workspace,'close_failed: cleanup_failed');
  assert.equal(stop.guard({action:'tap'}).status,'task_stopped');
+ assert.match(stop.summary(),/did not confirm it closed \(close_failed: cleanup_failed\)/);
 });

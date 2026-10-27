@@ -218,9 +218,9 @@ const phone=new PhoneCommands(Date.now,()=>mediaWorkerConfig.read().enabled,()=>
 const phoneMetrics=new PhoneMetrics({write:boundedWriter(priv+'/phone-command-metrics.jsonl')});
 const phonePush=new PhonePush({file:priv+'/phone-push.json',epoch,pending:()=>phone.pending(),offered:(c,channel)=>measurePhone('offered',c,channel),taskStatus:()=>launcherTask.snapshot()});
 publishTaskState=snapshot=>phonePush.publishTaskStatus(snapshot);
-const backgroundPhone=new BackgroundPhone({send:rawFastPhone,enabled:()=>backgroundEnabled,record:data=>capture.record('phone.background',data,captureContext()),onOwnerStop:()=>void taskStop.request({source:'workspace_notification'})});
+const backgroundPhone=new BackgroundPhone({send:rawFastPhone,enabled:()=>backgroundEnabled,record:data=>capture.record('phone.background',data,captureContext()),onOwnerStop:({stopReason})=>void taskStop.request({source:stopReason==='deadline'?'workspace_deadline':'workspace_notification'}),taskId:()=>launcherTask.active()?launcherTask.current.id:null});
 // Owner Stop: acknowledged once, then no phone action runs for the task until the next task starts.
-const taskStop=new TaskStop({task:()=>launcherTask.current,stopping:details=>launcherTask.stopping(details),interrupt:()=>codex.active?codex.rpc('turn/interrupt',{threadId:codex.thread,turnId:codex.active}):undefined,abortReview:()=>reviewAbort?.abort(),closeWorkspace:()=>backgroundEnabled?backgroundPhone.close():undefined,record:data=>{logDecision(data);capture.record('task.stop',data,captureContext());}});
+const taskStop=new TaskStop({task:()=>launcherTask.current,stopping:details=>launcherTask.stopping(details),interrupt:()=>codex.active?codex.rpc('turn/interrupt',{threadId:codex.thread,turnId:codex.active}):undefined,abortReview:()=>reviewAbort?.abort(),closeWorkspace:async()=>{if(!backgroundEnabled)return;const state=await backgroundPhone.close();if(state?.status==='cleanup_failed')throw Error('cleanup_failed '+String(state.error||'').slice(0,120));},record:data=>{logDecision(data);capture.record('task.stop',data,captureContext());}});
 const debugBridge=new DebugBridge({dispatch:data=>fastPhone(data),isTrustedPeer:(req,id)=>deviceAuth.paired(req)&&peerIdentity(req)?.id===id});
 function measurePhone(method,...args){try{phoneMetrics[method](...args);}catch{/* Metrics never change command results. */}if(method==='created'||method==='completed')capture.record('phone.'+method,{command:args[0]},captureContext());}
 const messages=messagesBridge(priv,(process.env.PIXEL_MESSAGES_BRIDGE_BIN||path.join(process.env.HOME,'Applications/Pixel Messages Bridge.app/Contents/MacOS/PixelMessagesBridge')));
@@ -293,10 +293,10 @@ async function finishAgentTurn(turn){
    const text=checked.status==='complete'?pendingVisualAnswer:(checked.summary||pendingVisualAnswer);
    if(!failure)deliverAgentMessage(text,'final_answer');
    if(checked.status==='blocked')failure=text||'Phone task is not verified complete.';
-  }catch(error){failure=taskStop.active()?'Task stopped':'Task is not verified complete: '+error.message;if(!taskStop.active())deliverAgentMessage(failure,'final_answer');}
+  }catch(error){failure=taskStop.active()?taskStop.summary():'Task is not verified complete: '+error.message;if(!taskStop.active())deliverAgentMessage(failure,'final_answer');}
   finally{reviewAbort=null;}
  }
- if(taskStop.active())failure='Task stopped';
+ if(taskStop.active())failure=taskStop.summary();
  if(backgroundEnabled)await backgroundPhone.close().catch(error=>logDecision({stage:'background_close_failed',reason:error.message}));
  launcherTask.finish(failure?(taskStop.active()||turn.status==='interrupted'?'interrupted':'failed'):'completed',failure);
  for(const result of voiceTasks.finish(failure))emit('voice_task_done',result);
