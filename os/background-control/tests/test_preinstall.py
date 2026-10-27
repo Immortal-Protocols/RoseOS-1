@@ -8,16 +8,23 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]/'scripts'))
 from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan, preprocessed_issues
 
-def apk_bytes(tag, dex_compressed=False, misalign=False):
-    """A minimal APK-shaped ZIP whose classes.dex is stored and 4-byte aligned unless asked otherwise."""
+def apk_bytes(tag, dex_compressed=False, misalign=False, native=None):
+    """A minimal APK-shaped ZIP: classes.dex stored and 4-byte aligned unless asked otherwise, and an
+    optional lib/ entry ('stored' page aligned, or 'deflated')."""
     path = Path(tempfile.mkstemp(suffix='.zip')[1])
     with zipfile.ZipFile(path, 'w') as archive:
-        archive.writestr('AndroidManifest.xml', tag)
+        archive.writestr('AndroidManifest.xml', tag, compress_type=zipfile.ZIP_DEFLATED)
         info = zipfile.ZipInfo('classes.dex')
         info.compress_type = zipfile.ZIP_DEFLATED if dex_compressed else zipfile.ZIP_STORED
         data_offset = archive.fp.tell() + 30 + len(info.filename)
         info.extra = b'\0' * ((-data_offset) % 4 + (1 if misalign else 0))
         archive.writestr(info, b'dex\n' + tag.encode() * 64)
+        if native:
+            lib = zipfile.ZipInfo('lib/arm64-v8a/libx.so')
+            lib.compress_type = zipfile.ZIP_STORED if native == 'stored' else zipfile.ZIP_DEFLATED
+            data_offset = archive.fp.tell() + 30 + len(lib.filename)
+            lib.extra = b'\0' * ((-data_offset) % 4096)
+            archive.writestr(lib, b'\x7fELF' + tag.encode() * 64)
     data = path.read_bytes()
     path.unlink()
     return data
@@ -71,9 +78,13 @@ class PreinstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'RosePreinstall_dev_foo_bar'):
             preinstall_plan(self.policy, [first, second])
 
-    def test_preprocessed_import_needs_stored_aligned_dex(self):
-        self.assertEqual(preprocessed_issues(self.voice), [])
-        for name, data, problem in (('deflated.apk', apk_bytes('rose agent', dex_compressed=True), 'compressed'),
+    def test_preprocessed_import_follows_pinned_validator(self):
+        # Matches the builder's pinned validator: compressed dex is fine for a non-privileged import.
+        for name, data in (('stored.apk', apk_bytes('a')), ('deflated-dex.apk', apk_bytes('b', dex_compressed=True)),
+                ('stored-lib.apk', apk_bytes('c', native='stored'))):
+            with self.subTest(name):
+                self.assertEqual(preprocessed_issues(self.apk(name, data)[0]), [])
+        for name, data, problem in (('compressed-lib.apk', apk_bytes('rose agent', native='deflated'), 'compressed'),
                 ('misaligned.apk', apk_bytes('rose agent', misalign=True), 'not aligned')):
             with self.subTest(name):
                 path, sha = self.apk(name, data)

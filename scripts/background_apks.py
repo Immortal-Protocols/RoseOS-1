@@ -58,22 +58,21 @@ def validate_policy(policy, apk):
     return policy
 
 def preprocessed_issues(apk):
-    """Problems that stop Soong from copying a preprocessed APK unchanged: dex and native libraries
-    must be stored uncompressed, at 4-byte (dex) and 4096-byte (.so) aligned offsets."""
+    """Problems the pinned Soong validator rejects for a preprocessed, non-privileged import: native
+    libraries must be stored, and the APK must pass zipalign -c -p 4 (stored entries 4-byte aligned,
+    stored .so files page aligned). Compressed dex is accepted for non-privileged apps."""
     issues = []
     with open(apk, 'rb') as raw, zipfile.ZipFile(raw) as archive:
         for info in archive.infolist():
             name = info.filename
-            dex = name.endswith('.dex') and '/' not in name
             native = name.startswith('lib/') and name.endswith('.so')
-            if not dex and not native:continue
             if info.compress_type != zipfile.ZIP_STORED:
-                issues.append(f'{name} is compressed; store it uncompressed')
+                if native:issues.append(f'{name} is compressed; store native libraries uncompressed')
                 continue
             raw.seek(info.header_offset + 26)
             name_length, extra_length = struct.unpack('<HH', raw.read(4))
             offset = info.header_offset + 30 + name_length + extra_length
-            if offset % (4096 if native else 4):issues.append(f'{name} is not aligned; zipalign the APK')
+            if offset % (4096 if native else 4):issues.append(f'{name} is not aligned; run zipalign -f -p 4')
     return issues
 
 def preinstall_plan(policy, apks):

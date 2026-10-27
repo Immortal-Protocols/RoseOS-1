@@ -116,8 +116,9 @@ byte-identical to Rose Agent or a target pinned in the policy receipt, so the
 image, the policy and the shipped apps cannot drift apart. The imports are
 `preprocessed`, so Soong copies each APK unchanged; an ordinary presigned import
 uncompresses native libraries and re-zipaligns (`build/soong/java/app_import.go` on
-the builder). Each APK must therefore store `classes*.dex` and `lib/**/*.so`
-uncompressed and aligned, which the patcher checks before writing anything. The
+the builder). As that pinned validator requires, each APK must store `lib/**/*.so`
+uncompressed and pass `zipalign -c -p 4`; compressed dex is accepted for these
+non-privileged imports. The patcher checks this before writing anything. The
 controller keeps its existing privileged, preprocessed `system_ext` prebuilt.
 Nothing is platform-signed. Built-image bytes and signatures still need checking
 against the receipt.
