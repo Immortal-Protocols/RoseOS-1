@@ -113,8 +113,15 @@ app afterwards. `apply-os-changes.py --preinstall-apk APK` (repeatable, with
 `android_app_import` on the product partition (`packages/apps/RosePreinstall/`)
 and lists it in `target/product/handheld_product.mk`. Each APK must be
 byte-identical to Rose Agent or a target pinned in the policy receipt, so the
-image, the policy and the shipped apps cannot drift apart. The controller keeps
-its existing privileged `system_ext` prebuilt. Nothing is platform-signed.
+image, the policy and the shipped apps cannot drift apart. The imports are
+`preprocessed`, so Soong copies each APK unchanged; an ordinary presigned import
+uncompresses native libraries and re-zipaligns (`build/soong/java/app_import.go` on
+the builder). As that pinned validator requires, each APK must store `lib/**/*.so`
+uncompressed and pass `zipalign -c -p 4`; compressed dex is accepted for these
+non-privileged imports. The patcher checks this before writing anything. The
+controller keeps its existing privileged, preprocessed `system_ext` prebuilt.
+Nothing is platform-signed. Built-image bytes and signatures still need checking
+against the receipt.
 
 A preinstalled copy only takes effect when it is newer than the copy the phone
 already has, and it must carry the same signer. With the same signer and an

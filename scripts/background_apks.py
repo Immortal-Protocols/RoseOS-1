@@ -2,7 +2,9 @@
 import hashlib
 from pathlib import Path
 import re
+import struct
 import subprocess
+import zipfile
 
 AGENT = 'dev.pixel.backgroundcontrol'
 VOICE = 'dev.pixel.voice'
@@ -55,10 +57,28 @@ def validate_policy(policy, apk):
         raise ValueError('Agent APK differs from the APK verified in the policy receipt')
     return policy
 
+def preprocessed_issues(apk):
+    """Problems the pinned Soong validator rejects for a preprocessed, non-privileged import: native
+    libraries must be stored, and the APK must pass zipalign -c -p 4 (stored entries 4-byte aligned,
+    stored .so files page aligned). Compressed dex is accepted for non-privileged apps."""
+    issues = []
+    with open(apk, 'rb') as raw, zipfile.ZipFile(raw) as archive:
+        for info in archive.infolist():
+            name = info.filename
+            native = name.startswith('lib/') and name.endswith('.so')
+            if info.compress_type != zipfile.ZIP_STORED:
+                if native:issues.append(f'{name} is compressed; store native libraries uncompressed')
+                continue
+            raw.seek(info.header_offset + 26)
+            name_length, extra_length = struct.unpack('<HH', raw.read(4))
+            offset = info.header_offset + 30 + name_length + extra_length
+            if offset % (4096 if native else 4):issues.append(f'{name} is not aligned; run zipalign -f -p 4')
+    return issues
+
 def preinstall_plan(policy, apks):
     """Map APKs to product preinstalls; each must be byte-identical to Rose Agent or a policy target."""
     pinned = {row['apkSha256']: row for row in [policy['voice'], *policy['targets']] if row.get('apkSha256')}
-    plan, names = [], set()
+    plan, names, modules = [], set(), set()
     for apk in apks:
         row = pinned.get(hashlib.sha256(Path(apk).read_bytes()).hexdigest())
         if row is None:
@@ -66,17 +86,26 @@ def preinstall_plan(policy, apks):
         if row['packageName'] in names:
             raise ValueError(f'{row["packageName"]} is supplied more than once')
         names.add(row['packageName'])
-        plan.append({'module': 'RosePreinstall_' + row['packageName'].replace('.', '_'),
-            'packageName': row['packageName'], 'apk': Path(apk)})
+        module = 'RosePreinstall_' + row['packageName'].replace('.', '_')
+        # dev.foo_bar and dev_foo.bar are distinct packages but would share one module and directory.
+        if module in modules:
+            raise ValueError(f'{row["packageName"]} maps to module {module}, already used by another package')
+        modules.add(module)
+        issues = preprocessed_issues(apk)
+        if issues:
+            raise ValueError(f'{Path(apk).name} cannot be imported unchanged: ' + '; '.join(issues))
+        plan.append({'module': module, 'packageName': row['packageName'], 'apk': Path(apk)})
     return sorted(plan, key=lambda p: p['module'])
 
 def preinstall_blueprint(module):
-    # Presigned keeps the existing app signer; not privileged, so no privapp allowlist is needed.
+    # Presigned keeps the existing app signer; preprocessed makes Soong copy the APK unchanged
+    # (otherwise it uncompresses native libraries and re-zipaligns). Not privileged, so no allowlist.
     return ('package { default_applicable_licenses: ["Android-Apache-2.0"] }\n'
         'android_app_import {\n'
         f'    name: "{module}",\n'
         '    apk: "app.apk",\n'
         '    presigned: true,\n'
+        '    preprocessed: true,\n'
         '    product_specific: true,\n'
         '    dex_preopt: { enabled: false },\n'
         '}\n')
