@@ -31,7 +31,8 @@ test('explicit phone-display observations and actions retain the background work
  const before=phone.state().session;calls.length=0;
  const seen=await phone.execute({action:'screenshot',display:'phone'});
  assert.equal(seen.scope,'phone_display');assert.equal(seen.backgroundExecution,false);
- assert.deepEqual(calls,[{action:'screenshot'}]);
+ // The held workspace is checked for an undetected owner Stop before touching the phone screen.
+ assert.deepEqual(calls.filter(c=>c.operation!=='get_state'),[{action:'screenshot'}]);
  await phone.execute({action:'screen_gesture',display:'phone',screenshotId:'phone-frame',points:[12,34]});
  assert.deepEqual(calls.at(-1),{action:'screen_gesture',screenshotId:'phone-frame',points:[12,34]});
  assert.deepEqual(phone.state().session,before);

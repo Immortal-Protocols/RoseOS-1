@@ -1,12 +1,19 @@
 /* Shared contract: close, setMuted, sendContext, sendMessage, inputLevel, outputLevel. */
 (function(root){
- const facade=raw=>({close:()=>raw.endSession(),setMuted:v=>raw.setMicMuted(v),sendContext:t=>raw.sendContextualUpdate(t),sendMessage:t=>raw.sendUserMessage(t),inputLevel:()=>raw.getInputVolume(),outputLevel:()=>raw.getOutputVolume()});
+ // ElevenLabs WebRTC has no client interrupt, so a stopped task's speech is muted
+ // locally until the agent returns to listening (or resumeSpeech, or a cap).
+ function speechGate(){
+  let raw=null,muted=false,timer=null;
+  const restore=()=>{clearTimeout(timer);timer=null;if(muted){muted=false;raw?.setVolume?.({volume:1});}};
+  return {attach(c){raw=c;},stop(){if(!raw)return;muted=true;raw.setVolume?.({volume:0});clearTimeout(timer);timer=setTimeout(restore,12000);},resume:restore,mode(m){if(muted&&m?.mode==='listening')restore();},muted:()=>muted};
+ }
+ const facade=(raw,speech)=>{speech.attach(raw);return {close:()=>raw.endSession(),setMuted:v=>raw.setMicMuted(v),sendContext:t=>raw.sendContextualUpdate(t),sendMessage:t=>raw.sendUserMessage(t),inputLevel:()=>raw.getInputVolume(),outputLevel:()=>raw.getOutputVolume(),stopSpeech:()=>speech.stop(),resumeSpeech:()=>speech.resume()};};
  async function eleven(o){
   const session=await o.api('POST','/eleven/session');o.onSession?.({...session,provider:'elevenlabs'});
-  let handle;
+  let handle;const speech=speechGate();
   const raw=await root.ElevenConversation.startSession({conversationToken:session.token,connectionType:'webrtc',dynamicVariables:{recent_history:session.history},clientTools:o.tools,
-   onConversationCreated:c=>{handle=facade(c);o.onConversationCreated?.(handle);},onConnect:o.onConnect,onMessage:o.onMessage,onDisconnect:o.onDisconnect,onError:o.onError,onVadScore:o.onVadScore,onInterruption:o.onInterruption,onPing:o.onPing,onModeChange:o.onModeChange});
-  return handle||facade(raw);
+   onConversationCreated:c=>{handle=facade(c,speech);o.onConversationCreated?.(handle);},onConnect:o.onConnect,onMessage:o.onMessage,onDisconnect:o.onDisconnect,onError:o.onError,onVadScore:o.onVadScore,onInterruption:o.onInterruption,onPing:o.onPing,onModeChange:m=>{speech.mode(m);o.onModeChange?.(m);}});
+  return handle||facade(raw,speech);
  }
  // Muting changes user intent; suspension releases the physical microphone.
  // Serialize capture replacement so a late getUserMedia result cannot reacquire
@@ -73,6 +80,8 @@
    }else begin();
   };
   handle.readText=(text,options={})=>handle.speakPassage(text,{...options,kind:'book_narration'});
+  // Ends playback muting from stopSpeech so the next authorized reply (a Stop acknowledgment) is heard.
+  handle.resumeSpeech=()=>{if(luna)return;pendingReading=null;outputSuppressed=false;quietSince=0;setPlaybackMuted(false);};
   handle.stopSpeech=()=>{flush();narrationActive=false;if(luna){luna.interrupt();return;}readingGeneration++;pendingReading=null;outputSuppressed=true;quietSince=0;setPlaybackMuted(true);send({type:'session.instructions.append',delegation_id:null,content:'The application stopped this spoken passage. Stop speaking and wait silently for the next user request or authorized passage.'});};
   handle.stopReading=()=>{
    flush();narrationActive=false;if(luna){luna.interrupt();return;}

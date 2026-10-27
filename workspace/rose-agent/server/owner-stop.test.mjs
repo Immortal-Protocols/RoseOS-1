@@ -99,7 +99,7 @@ test('Stop is acknowledged once, interrupts the worker, closes the workspace and
  launcher.progress('Opening Calculator');launcher.result('41.40');
  assert.equal(launcher.current.progress,'');assert.equal(launcher.current.result,'','no result is shown after Stop');
  launcher.finish('interrupted','Task stopped');assert.equal(launcher.current.state,'interrupted');
- assert.equal(stop.guard({action:'tap_label'}),null,'work after the stopped task ended is not blocked');assert.equal(stop.active(),true);
+ assert.equal(stop.guard({action:'tap_label'}).status,'task_stopped','late actions stay denied after the terminal state');assert.equal(stop.active(),true);
  stop.begin();assert.equal(stop.guard({action:'tap_label'}),null);
 });
 
@@ -137,4 +137,80 @@ test('TaskStop answers stale_task for an owner-stop report naming another task',
  const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>calls++,abortReview:()=>{},closeWorkspace:async()=>calls++});
  assert.equal((await stop.request({taskId:'task-A',source:'workspace_notification'})).status,'stale_task');
  assert.equal(launcher.current.state,'running');assert.equal(calls,0);
+});
+
+test('physical phone-screen actions are refused after an undetected owner Stop',async()=>{
+ const device=controller();const stops=[];
+ const phone=new BackgroundPhone({send:device.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
+ await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'});device.ownerStop('user');
+ const before=device.calls.length;
+ const tapped=await phone.execute({action:'tap',display:'phone',nodeId:1,snapshotId:'phone-frame'});
+ assert.equal(tapped.status,'stopped_by_owner');
+ assert.deepEqual(device.calls.slice(before).filter(c=>c.packageName!=='dev.pixel.backgroundcontrol'),[],'nothing reached the owner\'s screen');
+ assert.equal(stops.length,1);
+});
+
+test('schema 2: home after an undetected owner Stop does not unlock a replacement workspace',async()=>{
+ const device=controller();const stops=[];
+ const phone=new BackgroundPhone({send:device.send,enabled:()=>true,onOwnerStop:e=>stops.push(e)});
+ await phone.execute({action:'open_app',packageName:'maps'});device.ownerStop();
+ assert.equal((await phone.execute({action:'home'})).status,'stopped_by_owner');
+ assert.equal((await phone.execute({action:'open_app',packageName:'maps'})).status,'stopped_by_owner');
+ await phone.close();
+ assert.equal((await phone.execute({action:'open_app',packageName:'maps'})).status,'stopped_by_owner','a backend close keeps the latch');
+ assert.equal(device.starts(),1);assert.equal(stops.length,1);
+});
+
+test('a backend Stop latches the workspace through close, even without a task ID, until a new task',async()=>{
+ const device=controller();
+ const phone=new BackgroundPhone({send:device.send,enabled:()=>true,taskId:()=>null});
+ await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'});
+ await phone.endForStop();
+ for(const command of [{action:'open_app',packageName:'dev.pixel.calculator.agent'},{action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate',params:{expression:'1+1'}},{action:'tap_label',label:'='},{action:'screenshot',display:'phone'}])
+  assert.equal((await phone.execute(command)).status,'stopped_by_owner',command.action);
+ assert.equal(device.starts(),1);assert.equal(device.calls.filter(c=>c.packageName==='dev.pixel.calculator.agent').length,0);
+ phone.beginTask();assert.equal(phone.state().session,null,'a new task starts without the old session');
+ assert.equal((await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'})).status,'opened');
+});
+
+test('Stop announces speech cancellation for the task before awaiting the worker',async()=>{
+ const launcher=task();const order=[];
+ const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),announce:e=>order.push('announce:'+e.taskId),interrupt:()=>new Promise(r=>setTimeout(()=>{order.push('interrupt');r();},5)),abortReview:()=>{},closeWorkspace:async()=>{}});
+ const pending=stop.request({});assert.deepEqual(order,['announce:'+launcher.current.id]);
+ await pending;assert.deepEqual(order,['announce:'+launcher.current.id,'interrupt']);
+});
+
+test('work queued behind an in-flight action is refused once Stop latches, even before the close runs',async()=>{
+ let release;const held=new Promise(r=>release=r);const ran=[];
+ const send=async c=>{if(c.packageName==='dev.pixel.calculator.agent'){if(c.params.expression==='1+1')await held;ran.push(c.params.expression);return {status:'completed'};}
+  if(c.operation==='get_state')return {status:'ready',sessionId:'s1',targetPackage:'dev.pixel.calculator.agent'};if(c.operation==='start')return {status:'ready',sessionId:'s1',targetPackage:c.params.packageName};if(c.operation==='stop')return {status:'stopped',stopReason:'agent'};return {status:'ok',packageName:'dev.pixel.calculator.agent',snapshotId:'x',nodes:[]};};
+ const phone=new BackgroundPhone({send,enabled:()=>true});
+ await phone.execute({action:'open_app',packageName:'dev.pixel.calculator.agent'});
+ const x=phone.execute({action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate',params:{expression:'1+1'}});
+ const y=phone.execute({action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate',params:{expression:'2+2'}});
+ await new Promise(r=>setImmediate(r));
+ const closing=phone.endForStop();release();
+ assert.equal((await y).status,'stopped_by_owner');await x;await closing;
+ assert.deepEqual(ran,['1+1'],'only the action already running before Stop completed');
+});
+
+test('PhoneCommands withdraws undelivered commands on Stop',async()=>{
+ const {PhoneCommands}=await import('./phone.mjs');
+ const commands=new PhoneCommands();const c=commands.create({action:'screenshot'});
+ assert.equal(commands.pending().length,1);
+ assert.equal(commands.cancelPending({status:'task_stopped',actionExecuted:false}),1);
+ assert.equal(commands.pending().length,0);assert.equal(commands.get(c.id).status,'cancelled');assert.equal(commands.get(c.id).result.status,'task_stopped');
+ assert.equal(commands.complete(c.id,{status:'ok'}).status,'cancelled','a late completion does not resurrect it');
+});
+
+test('task generations: only turns and task IDs of the current request are authorized',async()=>{
+ const launcher=task();const published=[];
+ const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{},onBegin:id=>published.push(id)});
+ assert.equal(stop.authorize({taskId:'anything'}),null,'no generation yet: legacy behavior');
+ stop.begin('task-A');stop.addTurn('turn-A1');
+ assert.equal(stop.authorize({taskId:'task-A'}),null);assert.equal(stop.authorize({turnId:'turn-A1'}),null);assert.equal(stop.authorize({}),null);
+ stop.begin('task-B');stop.addTurn('turn-B1');
+ assert.equal(stop.authorize({taskId:'task-A'}).status,'stale_task');assert.equal(stop.authorize({turnId:'turn-A1'}).status,'stale_task');
+ assert.equal(stop.authorize({turnId:'turn-unknown'}).status,'stale_task');assert.equal(stop.authorize({turnId:'turn-B1'}),null);
+ assert.deepEqual(published,['task-A','task-B']);
 });

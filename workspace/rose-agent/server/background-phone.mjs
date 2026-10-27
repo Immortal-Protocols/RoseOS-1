@@ -25,10 +25,17 @@ const nodeKey=n=>JSON.stringify([n.packageName??'',n.className??n.class??'',n.vi
 
 export class BackgroundPhone {
  constructor({send,enabled=()=>false,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),record=()=>{},onOwnerStop=()=>{},taskId=()=>null}){
-  Object.assign(this,{send,enabled,now,sleep,record,onOwnerStop,taskId});this.queue=Promise.resolve();this.session=null;this.observations=new Map();this.stoppedByOwner=null;
+  Object.assign(this,{send,enabled,now,sleep,record,onOwnerStop,taskId});this.queue=Promise.resolve();this.session=null;this.observations=new Map();this.stoppedByOwner=null;this.closeGeneration=0;
  }
  // A new task may open a workspace again after an owner Stop ended the previous one.
- beginTask(){this.stoppedByOwner=null;}
+ // Only an explicit new user task reopens the workspace; it starts without the old task's session.
+ beginTask(){this.stoppedByOwner=null;this.session=null;this.observations.clear();}
+ // A backend Stop (POST /task/stop) latches at once, so work already queued behind an
+ // in-flight action is refused when it reaches the front; the close then waits its turn.
+ latchStop(){this.stoppedByOwner??=this.session?.sessionId||'task_stop';}
+ endForStop(){this.latchStop();this.closeGeneration++;const work=this.queue.catch(()=>{}).then(()=>this.closeNow());this.queue=work;return work;}
+ // An owner Stop not yet seen by an action: check before acting on the phone screen or closing.
+ async undetectedOwnerStop(){if(!this.session)return null;const state=await this.call('get_state');return ownerStopped(state,this.session)?state:null;}
  // Reports which task the controller says was stopped, so a late report cannot stop a newer task.
  ownerStop(state,taskId=state?.stoppedTaskId||null){
   const sessionId=this.stoppedByOwner??this.session?.sessionId??state?.stoppedSessionId??null;
@@ -42,7 +49,9 @@ export class BackgroundPhone {
  execute(command){
   if(!this.enabled())return this.send(command);
   // Serialize selection and UI operations, including calls from separate APIs.
-  const work=this.queue.catch(()=>{}).then(()=>this.run(command));this.queue=work;return work;
+  // An action admitted before close() was called is refused when it reaches the front.
+  const generation=this.closeGeneration;
+  const work=this.queue.catch(()=>{}).then(()=>generation===this.closeGeneration?this.run(command):this.superseded(command));this.queue=work;return work;
  }
  state(){return {enabled:this.enabled(),mode:this.enabled()?'background':'foreground',session:this.session?{...this.session}:null};}
  call(operation,params={}){return this.send({action:'app_command',packageName:PACKAGE,operation,params});}
@@ -114,6 +123,7 @@ export class BackgroundPhone {
   if(command.display!==undefined&&command.display!=='background'&&command.display!=='phone')throw Error('Unknown display; choose background or phone');
   // After an owner Stop no workspace or phone-screen action runs until the next task.
   if(this.stoppedByOwner&&!directActions.has(command.action))return this.ownerStop();
+  if(command.display==='phone'&&this.session){const state=await this.undetectedOwnerStop();if(state)return this.ownerStop(state);}
   if(command.display==='phone'){
    const {display,...request}=command;
    if(!uiActions.has(request.action)&&request.action!=='open_app')throw Error('Display selection applies to phone UI commands');
@@ -132,7 +142,7 @@ export class BackgroundPhone {
    return command.action==='control_status'?{...result,backgroundControl:this.state()}:result;
   }
   if(!uiActions.has(command.action))return {status:'not_executed',actionExecuted:false,reason:'This operation is not verified for background control. Use background phone UI controls.',backgroundExecution:true};
-  if(command.action==='home'){await this.closeNow();return {status:'action_accepted',actionExecuted:true,backgroundExecution:true,workspaceClosed:true};}
+  if(command.action==='home'){const state=await this.undetectedOwnerStop();if(state)return this.ownerStop(state);await this.closeNow();return {status:'action_accepted',actionExecuted:true,backgroundExecution:true,workspaceClosed:true};}
   if(!this.session){
    const state=await this.call('get_state');
    if(state.status==='ready'&&state.sessionId&&state.targetPackage)this.session={sessionId:state.sessionId,targetPackage:state.targetPackage};
@@ -164,6 +174,15 @@ export class BackgroundPhone {
   return {...result,backgroundExecution:true,sessionId:this.session.sessionId};
  }
  // Returns the controller's stop state; "cleanup_failed" means the workspace may still be open.
- async closeNow(){try{return await this.call('stop');}finally{this.session=null;this.observations.clear();}}
- close(){const work=this.queue.catch(()=>{}).then(()=>this.closeNow());this.queue=work;return work;}
+ async closeNow(){
+  // Clearing the session would otherwise forget an owner Stop nobody has acted on yet (schema 2).
+  try{const state=await this.undetectedOwnerStop();if(state)this.ownerStop(state);}catch{/* Closing must still be attempted. */}
+  try{return await this.call('stop');}finally{this.session=null;this.observations.clear();}
+ }
+ superseded(command){
+  if(this.stoppedByOwner&&!directActions.has(command.action))return this.ownerStop();
+  this.record({stage:'background_action_superseded',action:command.action});
+  return {status:'not_executed',actionExecuted:false,backgroundExecution:true,reason:'The background workspace was closed before this action ran.'};
+ }
+ close(){this.closeGeneration++;const work=this.queue.catch(()=>{}).then(()=>this.closeNow());this.queue=work;return work;}
 }

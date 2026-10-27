@@ -214,3 +214,24 @@ test('Luna-first output starts muted when the WebRTC track arrives after control
  const c=await f.context.VoiceProviders.start({provider:'openai',decisionOwner:'luna',api:async()=>({session:{id:'s'},transport:{sdp:'answer'}}),tools:{}});
  f.pc.ontrack({track:{}});assert.equal(audios[0].muted,true);await c.close();
 });
+
+test('ElevenLabs stopSpeech mutes a stopped task until the agent listens again or resumeSpeech',async()=>{
+ const f=setup(),volumes=[];let options;
+ f.context.ElevenConversation={startSession:async o=>{options=o;const raw={endSession:async()=>{},setMicMuted(){},sendContextualUpdate(){},sendUserMessage(){},getInputVolume:()=>0,getOutputVolume:()=>.4,setVolume:({volume})=>volumes.push(volume)};o.onConversationCreated(raw);return raw;}};
+ const modes=[];const c=await f.context.VoiceProviders.start({provider:'elevenlabs',api:async()=>({token:'t'}),tools:{},onModeChange:m=>modes.push(m.mode)});
+ c.stopSpeech();assert.deepEqual(volumes,[0]);
+ options.onModeChange({mode:'speaking'});assert.deepEqual(volumes,[0],'still muted while the stopped reply plays');
+ options.onModeChange({mode:'listening'});assert.deepEqual(volumes,[0,1]);assert.deepEqual(modes,['speaking','listening']);
+ c.stopSpeech();c.resumeSpeech();c.resumeSpeech();assert.deepEqual(volumes,[0,1,0,1]);
+ await c.close();
+});
+
+test('OpenAI stopSpeech mutes playback and resumeSpeech unmutes it for the Stop acknowledgment',async()=>{
+ const f=setup(),audios=[];f.context.Audio=class{constructor(){audios.push(this);}play(){return Promise.resolve();}pause(){}};
+ const c=await f.context.VoiceProviders.start({provider:'openai',api:async()=>({session:{id:'s'},transport:{sdp:'answer'}}),tools:{}});
+ f.emit({type:'session.started'});
+ c.stopSpeech();assert.equal(audios[0].muted,true);
+ assert.ok(f.sent.some(e=>e.type==='session.instructions.append'&&/Stop speaking/.test(e.content)));
+ c.resumeSpeech();assert.equal(audios[0].muted,false);
+ await c.close();
+});

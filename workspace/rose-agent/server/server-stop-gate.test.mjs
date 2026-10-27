@@ -27,8 +27,8 @@ function fixture({backgroundEnabled}){
   answer:(res,status,body)=>responses.push({status,body}),
  });
  vm.runInContext(phoneFunctions,context);
- for(const name of ['/phone/commands','/task/stop'])vm.runInContext('globalThis['+JSON.stringify(name)+']=async(url,data,res)=>{'+route(name)+'};',context);
- const call=(name,data)=>context[name]({pathname:name},data,{});
+ for(const name of ['/phone/commands','/task/stop'])vm.runInContext('globalThis['+JSON.stringify(name)+']=async(url,data,res,req)=>{'+route(name)+'};',context);
+ const call=(name,data,headers={})=>context[name]({pathname:name},data,{},{headers});
  return {launcher,context,executed,responses,call};
 }
 
@@ -55,4 +55,50 @@ test('POST /task/stop for a stale task leaves the running task untouched',async(
  assert.equal(f.responses.at(-1).body.status,'stale_task');assert.equal(f.launcher.current.state,'running');
  await f.call('/phone/commands',{action:'screenshot'});
  assert.equal(f.responses.at(-1).body.status,'pending');
+});
+
+test('acknowledged Stop stays in force through the terminal state until an explicit new task',async()=>{
+ const f=fixture({backgroundEnabled:true});
+ const taskA=f.launcher.current.id;
+ await f.call('/task/stop',{taskId:taskA,source:'workspace_notification'});
+ f.launcher.finish('interrupted','Task stopped');assert.equal(f.launcher.current.state,'interrupted');
+ f.executed.length=0;
+ for(const command of [{action:'app_command',packageName:'dev.pixel.calculator.agent',operation:'evaluate',params:{expression:'34.50+20%'}},{action:'open_app',packageName:'dev.pixel.calculator.agent'}])
+  assert.equal((await f.context.fastPhone(command)).status,'task_stopped',command.action);
+ await f.call('/phone/commands',{action:'tap_label',label:'='});
+ assert.equal(f.responses.at(-1).body.result.status,'task_stopped');
+ assert.deepEqual(f.executed,[]);
+ // dispatch() calls taskStop.begin() only for an explicit new user request.
+ f.launcher.start('Explicit new request B');f.context.taskStop.begin(f.launcher.current.id);
+ assert.equal((await f.context.fastPhone({action:'open_app',packageName:'dev.pixel.calculator.agent'})).status,'ok');
+ assert.equal((await f.call('/task/stop',{taskId:taskA}),f.responses.at(-1).body.status),'stale_task','a late Stop for A cannot stop B');
+ assert.equal(f.launcher.current.state,'running');
+});
+
+test('the Stop gate is reopened only where a new user request starts a task',()=>{
+ const begins=[...server.matchAll(/taskStop\.begin\(/g)];
+ assert.equal(begins.length,1);
+ const dispatch=server.slice(server.indexOf('async function dispatch('),server.indexOf('async function submitLuna('));
+ assert.match(dispatch,/if\(!codex\.active\)\{backgroundPhone\.beginTask\(\);launcherTask\.start\(displayRequest,taskWidgets\.mode\(\)\);taskStop\.begin\(launcherTask\.current\.id\);/);
+});
+
+test('phone commands naming another task generation fail closed; untagged legacy commands keep the Stop gate only',async()=>{
+ const f=fixture({backgroundEnabled:false});
+ const taskA=f.launcher.current.id;f.context.taskStop.begin(taskA);
+ await f.call('/phone/commands',{action:'screenshot'},{'x-rose-task':taskA});
+ assert.equal(f.responses.at(-1).body.status,'pending','the current generation runs');
+ f.launcher.start('Explicit new request B');f.context.taskStop.begin(f.launcher.current.id);
+ f.executed.length=0;
+ await f.call('/phone/commands',{action:'tap_label',label:'='},{'x-rose-task':taskA});
+ assert.equal(f.responses.at(-1).body.result.status,'stale_task');assert.deepEqual(f.executed,[],'stale task A did not run under B');
+ await f.call('/phone/commands',{action:'screenshot'},{'x-rose-task':'unknown-task'});
+ assert.equal(f.responses.at(-1).body.result.status,'stale_task');
+ await f.call('/phone/commands',{action:'screenshot'});
+ assert.equal(f.responses.at(-1).body.status,'pending','an untagged legacy command is not relabelled, only Stop-gated');
+});
+
+test('dynamic tool calls from another worker turn are refused before any tool runs',()=>{
+ const handler=server.slice(server.indexOf('handleToolCall:async request=>{'),server.indexOf('handleToolCall:async request=>{')+400);
+ assert.match(handler,/^handleToolCall:async request=>\{\n \/\/ .*\n \{const stale=taskStop\.authorize\(\{turnId:request\.turnId\}\);if\(stale\)return/);
+ assert.match(server,/codex\.on\('toolActivity',\(method,params\)=>\{if\(method==='turn\/started'\)taskStop\.addTurn\(params\.turn\?\.id\);\}\);/);
 });

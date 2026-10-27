@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 """Authenticated phone tools: list_apps, open_app PACKAGE_NAME."""
-import json, ssl, time, sys, urllib.request
+import json, re, ssl, time, sys, urllib.request
 from observations import compact_command
 from pathlib import Path
 p=Path.home()/'.config/pixel-voice'
 ctx=ssl.create_default_context(cafile=str(p/'server-cert.pem'));ctx.check_hostname=False
 
+def task_generation():
+    # Read once at start: a tool launched for task A keeps naming A, so the backend refuses it after a Stop or once task B begins.
+    try:value=(p/'task-generation').read_text().strip()
+    except OSError:return None
+    return value if re.fullmatch(r'[A-Za-z0-9._:-]{1,128}',value) else None
+TASK_GENERATION=task_generation()
+
+def request_headers():
+    headers={'Authorization':'Bearer '+(p/'pair-token').read_text().strip(),'Content-Type':'application/json'}
+    if TASK_GENERATION:headers['X-Rose-Task']=TASK_GENERATION
+    return headers
+
 def call(route,data=None):
-    req=urllib.request.Request('https://localhost:9443'+route,data=None if data is None else json.dumps(data).encode(),headers={'Authorization':'Bearer '+(p/'pair-token').read_text().strip(),'Content-Type':'application/json'})
+    req=urllib.request.Request('https://localhost:9443'+route,data=None if data is None else json.dumps(data).encode(),headers=request_headers())
     with urllib.request.urlopen(req,context=ctx,timeout=30) as r:return json.load(r)
 
 def run_phone_command(request):
