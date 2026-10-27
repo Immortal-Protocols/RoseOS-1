@@ -206,11 +206,46 @@ test('PhoneCommands withdraws undelivered commands on Stop',async()=>{
 test('task generations: only turns and task IDs of the current request are authorized',async()=>{
  const launcher=task();const published=[];
  const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{},onBegin:id=>published.push(id)});
- assert.equal(stop.authorize({taskId:'anything'}),null,'no generation yet: legacy behavior');
+ assert.equal(stop.authorize({taskId:launcher.current.id}),null,'before begin(), the displayed task is the generation');
+ assert.equal(stop.authorize({taskId:'anything'}).status,'stale_task');assert.equal(stop.authorize({required:true}).status,'stale_task','a task path with no identity fails closed');
  stop.begin('task-A');stop.addTurn('turn-A1');
- assert.equal(stop.authorize({taskId:'task-A'}),null);assert.equal(stop.authorize({turnId:'turn-A1'}),null);assert.equal(stop.authorize({}),null);
+ assert.equal(stop.authorize({taskId:'task-A'}),null);assert.equal(stop.authorize({turnId:'turn-A1'}),null);assert.equal(stop.authorize({}),null,'identity optional unless required');
  stop.begin('task-B');stop.addTurn('turn-B1');
  assert.equal(stop.authorize({taskId:'task-A'}).status,'stale_task');assert.equal(stop.authorize({turnId:'turn-A1'}).status,'stale_task');
  assert.equal(stop.authorize({turnId:'turn-unknown'}).status,'stale_task');assert.equal(stop.authorize({turnId:'turn-B1'}),null);
  assert.deepEqual(published,['task-A','task-B']);
+});
+
+test('controller start, command and stop carry the originating task ID; non-task work carries none',async()=>{
+ const device=controller();
+ const phone=new BackgroundPhone({send:device.send,enabled:()=>true});
+ await phone.execute({action:'open_app',packageName:'maps'},{taskId:'task-A'});
+ await phone.execute({action:'screenshot'},{taskId:'task-A'});
+ await phone.close('task-A');
+ const ops=device.calls.filter(c=>['start','command','stop'].includes(c.operation));
+ assert.ok(ops.length>=3);assert.ok(ops.every(c=>c.params.taskId==='task-A'),JSON.stringify(ops.map(c=>[c.operation,c.params.taskId])));
+ device.calls.length=0;
+ await phone.execute({action:'list_apps'});await phone.close();
+ assert.ok(device.calls.every(c=>c.params?.taskId===undefined),'non-task calls are not labelled with any task');
+});
+
+test('a schema 3 stale_task refusal from the controller is reported as not executed',async()=>{
+ const send=async c=>{if(c.operation==='get_state')return {status:'ready',sessionId:'s1',targetPackage:'maps'};
+  if(c.operation==='command')return {status:'stale_task',actionExecuted:false,rejectedTaskId:'task-A',current:{status:'ready',taskId:'task-B'}};return {status:'ok'};};
+ const phone=new BackgroundPhone({send,enabled:()=>true});
+ const result=await phone.execute({action:'screenshot'},{taskId:'task-A'});
+ assert.equal(result.status,'not_executed');assert.equal(result.actionExecuted,false);assert.equal(result.rejectedTaskId,'task-A');
+});
+
+test('worker output and tool calls are accepted only from turns of the current, unstopped generation',async()=>{
+ const launcher=task();
+ const stop=new TaskStop({task:()=>launcher.current,stopping:()=>launcher.stopping(),interrupt:async()=>{},abortReview:()=>{},closeWorkspace:async()=>{}});
+ stop.begin('task-A');stop.addTurn('turn-A');
+ assert.equal(stop.acceptsOutput('turn-A'),true);assert.equal(stop.ownsTurn('turn-A'),true);
+ await stop.request({});
+ assert.equal(stop.acceptsOutput('turn-A'),false,'no output after Stop, even from the current turn');
+ assert.equal(stop.guard({action:'tool:web_lookup'}).status,'task_stopped','tool calls of the stopped turn are refused');
+ stop.begin('task-B');stop.addTurn('turn-B');
+ assert.equal(stop.acceptsOutput('turn-A'),false);assert.equal(stop.ownsTurn('turn-A'),false);assert.equal(stop.authorize({turnId:'turn-A'}).status,'stale_task');
+ assert.equal(stop.acceptsOutput('turn-B'),true);assert.equal(stop.guard({action:'tool:web_lookup'}),null);
 });

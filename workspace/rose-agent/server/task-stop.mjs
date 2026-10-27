@@ -11,17 +11,25 @@ export class TaskStop {
  }
  // An explicit new user request starts generation taskId; only it reopens the Stop gate.
  begin(taskId=null){this.requested=null;this.generation=taskId;this.turns=new Set();try{this.onBegin(taskId);}catch(error){this.record({stage:'task_generation_publish_failed',reason:reason(error)});}}
- addTurn(turnId){if(this.generation&&turnId)this.turns.add(turnId);}
- // Fails closed for work that names another generation (a phone command's task ID, or a
- // tool call's worker turn). Calls carrying no identity keep the legacy path and the Stop gate.
- authorize({taskId,turnId}={}){
-  if(!this.generation)return null;
-  const stale=taskId?taskId!==this.generation:turnId?!this.turns.has(turnId):false;
+ addTurn(turnId){if(turnId)this.turns.add(turnId);}
+ // Fails closed for work that names another or no generation: a phone command's taskId, or a
+ // tool call's worker turn once this generation's turn is known. The current generation is
+ // the one begin() named, else the displayed task.
+ current(){return this.generation??this.task()?.id??null;}
+ // required: a task path (agent phone command) with no identity fails closed instead of
+ // running as the legacy path.
+ authorize({taskId,turnId,required=false}={}){
+  const current=this.current();
+  const stale=taskId?taskId!==current:turnId?this.turns.size>0&&!this.turns.has(turnId):required;
   if(!stale)return null;
-  this.record({stage:'task_generation_rejected',taskId:taskId||null,turnId:turnId||null,currentTaskId:this.generation});
-  return {status:'stale_task',actionExecuted:false,reason:'This action belongs to an earlier or unknown task and was not run.',currentTaskId:this.generation};
+  this.record({stage:'task_generation_rejected',taskId:taskId||null,turnId:turnId||null,currentTaskId:current});
+  return {status:'stale_task',actionExecuted:false,reason:'This action belongs to an earlier or unknown task and was not run.',currentTaskId:current};
  }
  active(){return !!this.requested;}
+ // Output (progress, results, speech) from the worker: accepted only from a turn of the
+ // current, unstopped generation. Without a turn identity, only the Stop latch applies.
+ ownsTurn(turnId){return !turnId||this.turns.size===0||this.turns.has(turnId);}
+ acceptsOutput(turnId){return !this.requested&&(!turnId||this.turns.size===0||this.turns.has(turnId));}
  // Blocks phone actions from an acknowledged Stop until an explicit new user task
  // calls begin(), including after the stopped task reaches its terminal state.
  guard(command){
@@ -34,19 +42,20 @@ export class TaskStop {
   if(!current||!activeStates.has(current.state))return {status:'not_active'};
   if(taskId&&taskId!==current.id)return {status:'stale_task',taskId:current.id};
   if(this.requested)return {status:'stopping',taskId:current.id,requestedAt:this.requested.at,duplicate:true};
-  this.requested={taskId:current.id,source:String(source).slice(0,40),at:this.now()};
-  this.stopping(this.requested);
+  // Captured locally: a fresh begin() while this Stop awaits cleanup must not lose its acknowledgment.
+  const requested=this.requested={taskId:current.id,source:String(source).slice(0,40),at:this.now()};
+  this.stopping(requested);
   // Bar queued work synchronously, before any acknowledgment (including a duplicate) can return.
-  try{this.cancelQueued(this.requested);}catch(error){this.record({stage:'task_stop_cancel_queued_failed',reason:reason(error)});}
+  try{this.cancelQueued(requested);}catch(error){this.record({stage:'task_stop_cancel_queued_failed',reason:reason(error)});}
   // Cancel speech already queued or playing for this task before anything else is awaited.
-  try{this.announce({taskId:current.id,requestedAt:this.requested.at});}catch{/* Speech cancellation is best effort. */}
-  this.record({stage:'task_stop_requested',taskId:current.id,source:this.requested.source});
+  try{this.announce({taskId:current.id,requestedAt:requested.at});}catch{/* Speech cancellation is best effort. */}
+  this.record({stage:'task_stop_requested',taskId:current.id,source:requested.source});
   try{this.abortReview();}catch{/* A finished review has nothing to abort. */}
   const [worker,workspace]=await Promise.allSettled([this.interrupt(),this.closeWorkspace()]);
-  const result={status:'stopping',taskId:current.id,requestedAt:this.requested.at,
+  const result={status:'stopping',taskId:current.id,requestedAt:requested.at,
    worker:worker.status==='fulfilled'?'interrupt_requested':'interrupt_failed: '+reason(worker.reason),
    workspace:workspace.status==='fulfilled'?'closed':'close_failed: '+reason(workspace.reason)};
-  this.requested.outcome=result;
+  requested.outcome=result;
   this.record({stage:'task_stop_acknowledged',...result});
   return result;
  }
