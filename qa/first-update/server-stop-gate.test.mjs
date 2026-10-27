@@ -34,6 +34,9 @@ function world(){
   if(c.operation==='get_state')return state();
   if(c.operation==='start'){const t=c.params.taskId??null;if(t&&userStopped.has(t))return {status:'user_stopped',rejectedTaskId:t,actionExecuted:false,current:state()};
    ctl.status='ready';ctl.sessionId='session-'+(++seq);ctl.taskId=t;ctl.target=c.params.packageName;ctl.stopReason='';ctl.stoppedSessionId=null;log.push('start:'+ctl.sessionId+':'+t);return state();}
+  // OS 3fdd843: command/stop tagged for a task other than the workspace's are refused; untagged = legacy.
+  const tagged=c.params?.taskId??null;
+  if((c.operation==='stop'||c.operation==='command')&&tagged&&tagged!==ctl.taskId)return {status:userStopped.has(tagged)?'user_stopped':'stale_task',actionExecuted:false,rejectedTaskId:tagged,current:state()};
   if(c.operation==='stop'){rec('agent');ctl.status='stopped';return state();}
   if(c.operation==='command'){if(ctl.status!=='ready'||c.params.sessionId!==ctl.sessionId)return {status:'error',error:'Session not ready: '+ctl.status};log.push('ui:'+c.params.action);return {status:'ok',packageName:ctl.target,sessionId:ctl.sessionId,snapshotId:'s'+seq,nodes:[]};}
   throw Error('unexpected '+c.operation);
@@ -54,12 +57,14 @@ function world(){
   rawFastPhone:async c=>{log.push('raw:'+c.action);return {status:'ok'};},answer:(res,status,body)=>responses.push({status,body})});
  vm.runInContext(fastPhoneSrc,context);
  for(const name of ['/phone/commands','/task/stop'])vm.runInContext('globalThis['+JSON.stringify(name)+']=async(url,data,res,req)=>{'+route(name)+'};',context);
+ const callNoWait=(name,data,headers={})=>context[name]({pathname:name},data,{},{headers});
  const call=async(name,data,headers={})=>{await context[name]({pathname:name},data,{},{headers});await new Promise(r=>setTimeout(r,25));return responses.at(-1);};
  // Mirrors server.mjs dispatch() for a new explicit user request when no worker is active.
  const newRequest=text=>{backgroundPhone.beginTask?.();launcher.start(text);taskStop.begin(launcher.current.id);return launcher.current.id;};
  // Mirrors server.mjs finishAgentTurn() after a stopped turn ends.
+ // Mirrors finishAgentTurn() for the stopped task (A). launcher.finish is a no-op if B already replaced A.
  const turnEnds=async()=>{await backgroundPhone.close();launcher.finish('interrupted',taskStop.summary());};
- return {log,launcher,taskStop,fastPhone:c=>context.fastPhone(c),call,newRequest,turnEnds,ctl,holdFor};
+ return {log,launcher,taskStop,fastPhone:c=>context.fastPhone(c),call,newRequest,turnEnds,ctl,holdFor,callNoWait};
 }
 
 test('acknowledged /task/stop -> terminal interrupted -> late Calculator, open_app and raw command are all denied; fresh B allowed',{skip:!has&&'tree has no task-stop.mjs (App PR #3 not present)'},async()=>{
@@ -195,4 +200,34 @@ test('legacy fallback (assessment): an UNTAGGED task-path command from stopped A
  const mark=w.log.length;
  await untagged(w,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'2+2'}});
  assert.deepEqual(w.log.slice(mark),[],'untagged command from A executed under B: '+JSON.stringify(w.log.slice(mark)));
+});
+
+test('generation: an HTTP command for A accepted before Stop, dispatched after B begins, is not run',{skip:!has&&'no task-stop.mjs'},async()=>{
+ // Chief review APP-004 item 3: admission validates X-Rose-Task, execution happens later in setImmediate.
+ const w=world();
+ const A=w.newRequest('Add 7 and 7');
+ await tagged(w,{action:'open_app',packageName:CALCULATOR},A);
+ const mark=w.log.length;
+ // Admit A's command (route returns after scheduling dispatch), then Stop A and begin B before dispatch runs.
+ const admitted=w.callNoWait('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'7+7'}},{'x-rose-task':A});
+ const stop=w.taskStop.request({taskId:A,source:'app'});
+ w.newRequest('Fresh request B');
+ await admitted;await stop.catch(()=>{});await new Promise(r=>setTimeout(r,40));
+ assert.deepEqual(w.log.slice(mark).filter(e=>e.startsWith('calculator')),[],'A command accepted before Stop ran after B began: '+JSON.stringify(w.log.slice(mark)));
+});
+
+test('generation: a late cleanup from stopped A does not close task B\'s workspace',{skip:!has&&'no task-stop.mjs'},async()=>{
+ // Chief review APP-004 item 4: A's turn-end close() arriving after B opened its workspace.
+ const w=world();
+ const A=w.newRequest('Add 3 and 4');
+ await tagged(w,{action:'open_app',packageName:CALCULATOR},A);
+ await w.call('/task/stop',{taskId:A,source:'app'});
+ const B=w.newRequest('Multiply 3 by 4');
+ await tagged(w,{action:'open_app',packageName:CALCULATOR},B);
+ const bSession=w.ctl.sessionId;
+ await w.turnEnds();
+ assert.equal(w.ctl.status,'ready','B workspace was closed by A\'s late cleanup');assert.equal(w.ctl.sessionId,bSession);
+ const mark=w.log.length;
+ await tagged(w,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'3*4'}},B);
+ assert.deepEqual(w.log.slice(mark),['calculator:3*4'],'B must remain usable');
 });

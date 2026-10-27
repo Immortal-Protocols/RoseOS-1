@@ -39,6 +39,7 @@ run agent-app-trust-system-jdk trust
 run stop-gate node --test qa/first-update/stop-gate.test.mjs
 run server-stop-gate node --test qa/first-update/server-stop-gate.test.mjs
 run speech-gate node --test qa/first-update/speech-gate.test.mjs
+run tool-identity node --test qa/first-update/tool-identity.test.mjs
 
 python3 - "$OUT" <<'PY'
 import json, subprocess, sys, pathlib, platform
