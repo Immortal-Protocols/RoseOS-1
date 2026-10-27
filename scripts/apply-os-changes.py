@@ -18,6 +18,8 @@ p.add_argument('--background-agent', type=Path, help='The exact signed Agent.apk
 p.add_argument('--reference-display-address', help='Optional physical cover display address for a Fold build')
 p.add_argument('--locked-control', action='store_true',
     help='Owner opt-in: let the pinned prototype controller start background sessions while locked')
+p.add_argument('--agent-tray', action='store_true',
+    help='Enable the Rose Agent status tray in the system image (persist.wm.debug.pixel_agent_tray=1)')
 p.add_argument('--check', action='store_true', help='Run all preflight checks without changing source')
 a = p.parse_args()
 if bool(a.background_policy) != bool(a.background_agent):
@@ -32,6 +34,7 @@ bundle = Path(__file__).resolve().parents[1]/'os'
 manifest = ET.parse(bundle/'pinned-manifest.xml')
 revisions = {n.get('path', n.get('name')): n.get('revision') for n in manifest.findall('project')}
 projects = {'frameworks/base': ['frameworks-base.patch']}
+if a.agent_tray:projects['build/make'] = ['agent-tray-build-make.patch']
 if a.emulator:projects['device/generic/goldfish'] = ['goldfish.patch']
 policy = None
 if a.background_policy:
@@ -42,7 +45,7 @@ if a.background_policy:
     projects['frameworks/base'].append('background-control-modern-frameworks-base.patch')
     projects['frameworks/base'].append('background-control-resource-import-fix.patch')
     if a.locked_control:projects['frameworks/base'].append('locked-control-frameworks-base.patch')
-    projects['build/make'] = ['background-control-build-make.patch']
+    projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
 
 def is_background_overlay(path):

@@ -1,0 +1,13 @@
+diff --git a/target/product/generic_system.mk b/target/product/generic_system.mk
+--- a/target/product/generic_system.mk
++++ b/target/product/generic_system.mk
+@@ -114,6 +114,9 @@ PRODUCT_PACKAGES += \
+ # Enable dynamic partition size
+ PRODUCT_USE_DYNAMIC_PARTITION_SIZE := true
+ 
++# Rose Agent status tray from frameworks-base.patch; Mustang/Fold builds set this per device.
++PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.pixel_agent_tray=1
++
+ PRODUCT_ENFORCE_RRO_TARGETS := *
+ 
+ PRODUCT_NAME := generic_system

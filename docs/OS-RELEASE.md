@@ -96,7 +96,7 @@ python3 scripts/prepare-background-policy.py \
   --output out/background-policy.json
 python3 scripts/apply-os-changes.py /path/to/os-source \
   --background-policy out/background-policy.json \
-  --background-agent out/rose-controller/Agent.apk --check
+  --background-agent out/rose-controller/Agent.apk --agent-tray --check
 ```
 
 Substitute actual artifact paths and the target OS's SDK number. Confirm the
@@ -106,8 +106,10 @@ purchases and account changes. The imported `--prototype-control` and
 `--locked-control` switches are historical capabilities, not release defaults.
 Their inclusion in source does not establish that broad control meets RoseOS's
 requirements. The current patcher installs the controller when policy is supplied;
-it does not automatically preinstall the Rose Agent launcher APK. Integrating
-that prebuilt/default HOME role must be checked against the actual product tree.
+it does not preinstall the Rose Agent launcher APK. `--agent-tray` enables the
+status tray, which the patches otherwise leave off. See
+[OS integration](OS-INTEGRATION.md) for the tray, the Stop contract, the
+preinstall/default HOME proposal and the facts an existing-phone update needs.
 
 ## 4. Build a release candidate
 

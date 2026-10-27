@@ -18,24 +18,28 @@ public final class Controller {
  static final String EXT="com.android.extensions.computercontrol.";
  static final Handler main=new Handler(Looper.getMainLooper());
  static final Executor worker=Executors.newSingleThreadExecutor();
- static Object session; static long generation,started; static String id,target,status="idle",error="",snapshotId; static int width,height,operations; static boolean blocked; static IntentSender consent;
+ static Object session; static long generation,started; static String id,target,taskId,status="idle",error="",snapshotId;
+ static final StopLedger stops=new StopLedger(); static int width,height,operations; static boolean blocked; static IntentSender consent;
  static final Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();
  static final Map<Integer,Integer> parents=new HashMap<>(); static final Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>(); static boolean truncated;
  static long snapshotTime; static final long DEADLINE=600000;
  static Throwable root(Throwable e){while(e instanceof InvocationTargetException&&e.getCause()!=null)e=e.getCause();return e;}
- static synchronized JSONObject state(Context c)throws Exception{return new JSONObject().put("status",status).put("sessionId",id==null?JSONObject.NULL:id).put("targetPackage",target==null?JSONObject.NULL:target).put("error",error).put("reason",reason(c)).put("deviceLocked",locked(c)).put("blocked",blocked).put("width",width).put("height",height).put("operationCount",operations).put("elapsedMs",started==0?0:SystemClock.elapsedRealtime()-started).put("foregroundFallback",false);}
+ static synchronized JSONObject state(Context c)throws Exception{return new JSONObject().put("status",status).put("sessionId",id==null?JSONObject.NULL:id).put("targetPackage",target==null?JSONObject.NULL:target).put("error",error).put("reason",reason(c)).put("deviceLocked",locked(c)).put("blocked",blocked).put("width",width).put("height",height).put("operationCount",operations).put("elapsedMs",started==0?0:SystemClock.elapsedRealtime()-started).put("foregroundFallback",false).put("taskId",nullable(taskId)).put("stopReason",stops.reason()).put("stoppedSessionId",nullable(stops.sessionId())).put("stoppedTaskId",nullable(stops.taskId()));}
+ static Object nullable(String s){return s==null?JSONObject.NULL:s;}
  static boolean locked(Context c){KeyguardManager k=c.getSystemService(KeyguardManager.class);return k!=null&&k.isDeviceLocked();}
  // Android refuses locked creation with ERROR_DEVICE_LOCKED (2) unless the OS build and owner
  // allow it; a locked session blocks on installer, permission, settings and secure screens.
  static String reason(Context c){if(error.contains("target_in_foreground"))return "target_in_foreground";if(error.contains("owner_unlock_required")||blocked&&locked(c))return "owner_unlock_required";if("rejected".equals(status)&&error.equals("Android session error 2"))return "device_locked";return "";}
  static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;}
- static synchronized void stop(Context c){++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
+ // Only the owner's notification/viewer Stop is "user"; it also refuses later starts of that task.
+ static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
  static void requestConsent(Activity a)throws Exception{IntentSender pending; synchronized(Controller.class){pending=consent;}if(pending!=null)a.startIntentSenderForResult(pending,3,null,0,0,0);}
  static synchronized JSONObject start(Context context,JSONObject p)throws Exception{
-  Context c=context.getApplicationContext();String pkg=p.getString("packageName");
+  Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=StopLedger.taskId(p.has("taskId")&&!p.isNull("taskId")?p.getString("taskId"):null);
+  if(stops.refuses(task))return state(c).put("status","user_stopped").put("actionExecuted",false);
   if(pkg.equals(c.getPackageName())||c.getPackageManager().getLaunchIntentForPackage(pkg)==null)throw new IllegalArgumentException("Target must be an installed launchable app");
-  if(session!=null&&pkg.equals(target)&&"ready".equals(status))return state(c);
-  stop(c);if(session!=null)throw new IllegalStateException("Previous session cleanup is incomplete");final long token=++generation;target=pkg;id=UUID.randomUUID().toString();started=SystemClock.elapsedRealtime();operations=0;width=height=0;error="";blocked=false;status="starting";
+  if(session!=null&&pkg.equals(target)&&"ready".equals(status)){if(task!=null)taskId=task;return state(c);}
+  stop(c,StopLedger.AGENT);if(session!=null)throw new IllegalStateException("Previous session cleanup is incomplete");stops.started();final long token=++generation;target=pkg;taskId=task;id=UUID.randomUUID().toString();started=SystemClock.elapsedRealtime();operations=0;width=height=0;error="";blocked=false;status="starting";
   main.post(()->{
    try{
     synchronized(Controller.class){if(token!=generation)return;}
@@ -64,7 +68,7 @@ public final class Controller {
     type.getMethod("requestSession",Class.forName(EXT+"ComputerControlSession$Params"),Executor.class,cb).invoke(ext,b.getMethod("build").invoke(builder),(Executor)(r->main.post(r)),callback);
    }catch(Throwable e){synchronized(Controller.class){if(token==generation){status="failed";error=root(e).toString();}}}
   });
-  main.postDelayed(()->{synchronized(Controller.class){if(token==generation)stop(c);}},DEADLINE);
+  main.postDelayed(()->{synchronized(Controller.class){if(token==generation)stop(c,StopLedger.DEADLINE);}},DEADLINE);
   return state(c);
  }
  static void attachLifecycle(long token)throws Exception{
@@ -88,7 +92,7 @@ public final class Controller {
  static void fresh(JSONObject p)throws Exception{if(snapshotId==null||SystemClock.elapsedRealtime()-snapshotTime>30000||!snapshotId.equals(p.optString("snapshotId",p.optString("screenshotId"))))throw new IllegalArgumentException("Fresh background snapshot required");}
  static synchronized JSONObject command(Context c,JSONObject p)throws Exception{
   require(p);String action=p.getString("action");
-  if(action.equals("screenshot"))return capture();if(action.equals("inspect_ui"))return inspect();if(action.equals("app_context"))return base().put("packageName",target);if(action.equals("setup_ui_control"))return base().put("uiControlEnabled",true);if(action.equals("home")){stop(c);return state(c);}
+  if(action.equals("screenshot"))return capture();if(action.equals("inspect_ui"))return inspect();if(action.equals("app_context"))return base().put("packageName",target);if(action.equals("setup_ui_control"))return base().put("uiControlEnabled",true);if(action.equals("home")){stop(c,StopLedger.AGENT);return state(c);}
   fresh(p);if(operations>=200)throw new IllegalStateException("Session operation limit reached");
   if(action.equals("screen_gesture")){JSONArray points=p.getJSONArray("points");if(points.length()!=2&&points.length()!=4)throw new IllegalArgumentException("Expected point or endpoints");for(int i=0;i<points.length();i++)checkPoint(points.getInt(i),i%2==0?width:height);if(points.length()==2)session.getClass().getMethod("tap",int.class,int.class).invoke(session,points.getInt(0),points.getInt(1));else swipe(points);}
   else if(action.equals("tap")||action.equals("long_press")||action.equals("tap_label")||action.equals("touch_label")||action.equals("touch_point")){
