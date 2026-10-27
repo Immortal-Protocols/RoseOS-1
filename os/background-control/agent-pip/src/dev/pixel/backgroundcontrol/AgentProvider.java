@@ -10,7 +10,7 @@ public final class AgentProvider extends ContentProvider {
    case "start":result=Controller.start(getContext(),p);break;
    case "get_state":result=Controller.state(getContext());break;
    case "command":result=Controller.command(getContext(),p);break;
-   case "stop":Controller.stop(getContext(),StopLedger.AGENT);result=Controller.state(getContext());break;
+   case "stop":result=Controller.agentStop(getContext(),p);break;
    default:throw new IllegalArgumentException("Unknown background operation");
   }}catch(Throwable e){try{String message=Controller.root(e).toString();result=new JSONObject().put("status",message.contains("snapshot")||message.contains("Snapshot")||message.contains("stale")||message.contains("changed; inspect")?"stale_screen":"error").put("error",message).put("foregroundFallback",false);}catch(Exception impossible){throw new IllegalStateException(impossible);}}
   Bundle out=new Bundle();out.putString("result",result.toString());return out;

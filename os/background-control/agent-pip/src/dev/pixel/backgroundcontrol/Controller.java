@@ -38,9 +38,13 @@ public final class Controller {
  static void announceOwnerStop(Context c,String session,String task){try{Intent i=new Intent("dev.pixel.backgroundcontrol.action.OWNER_STOP").setPackage("dev.pixel.voice").putExtra("sessionId",session).putExtra("taskId",task).putExtra("stoppedAt",System.currentTimeMillis());BroadcastOptions o=BroadcastOptions.makeBasic();o.setShareIdentityEnabled(true);c.sendBroadcast(i,null,o.toBundle());}catch(RuntimeException e){Log.w("BackgroundControl","Owner stop notice not delivered",e);}}
  static void requestConsent(Activity a)throws Exception{IntentSender pending; synchronized(Controller.class){pending=consent;}if(pending!=null)a.startIntentSenderForResult(pending,3,null,0,0,0);}
  // The refused task is named on its own; the running workspace, if any, is only under "current".
- static JSONObject refusal(String task,JSONObject current)throws Exception{JSONObject r=new JSONObject();for(Map.Entry<String,Object> f:stops.refusal(task).entrySet())r.put(f.getKey(),f.getValue());return r.put("current",current);}
+ static JSONObject refusal(String task,JSONObject current)throws Exception{return refusal(stops.refusal(task),current);}
+ static JSONObject refusal(Map<String,Object> fields,JSONObject current)throws Exception{JSONObject r=new JSONObject();for(Map.Entry<String,Object> f:fields.entrySet())r.put(f.getKey(),f.getValue());return r.put("current",current);}
+ static String taskParam(JSONObject p)throws Exception{return StopLedger.taskId(p.has("taskId")&&!p.isNull("taskId")?p.getString("taskId"):null);}
+ // An agent stop tagged for another task (for example a late turn-end cleanup) leaves this workspace alone.
+ static synchronized JSONObject agentStop(Context c,JSONObject p)throws Exception{String task=taskParam(p);Map<String,Object> stale=stops.taskMismatch(task,taskId);if(stale!=null)return refusal(stale,state(c));stop(c,StopLedger.AGENT);return state(c);}
  static synchronized JSONObject start(Context context,JSONObject p)throws Exception{
-  Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=StopLedger.taskId(p.has("taskId")&&!p.isNull("taskId")?p.getString("taskId"):null);
+  Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=taskParam(p);
   if(stops.refuses(task))return refusal(task,state(c));
   if(pkg.equals(c.getPackageName())||c.getPackageManager().getLaunchIntentForPackage(pkg)==null)throw new IllegalArgumentException("Target must be an installed launchable app");
   if(session!=null&&pkg.equals(target)&&"ready".equals(status)){if(task!=null)taskId=task;return state(c);}
@@ -96,6 +100,7 @@ public final class Controller {
  static void require(JSONObject p)throws Exception{if(session==null||!"ready".equals(status)||blocked)throw new IllegalStateException("Background session is not ready: "+status);if(!id.equals(p.getString("sessionId")))throw new IllegalArgumentException("Stale session ID");if(SystemClock.elapsedRealtime()-started>DEADLINE)throw new IllegalStateException("Session expired");}
  static void fresh(JSONObject p)throws Exception{if(snapshotId==null||SystemClock.elapsedRealtime()-snapshotTime>30000||!snapshotId.equals(p.optString("snapshotId",p.optString("screenshotId"))))throw new IllegalArgumentException("Fresh background snapshot required");}
  static synchronized JSONObject command(Context c,JSONObject p)throws Exception{
+  Map<String,Object> stale=stops.taskMismatch(taskParam(p),taskId);if(stale!=null)return refusal(stale,state(c));
   require(p);String action=p.getString("action");
   if(action.equals("screenshot"))return capture();if(action.equals("inspect_ui"))return inspect();if(action.equals("app_context"))return base().put("packageName",target);if(action.equals("setup_ui_control"))return base().put("uiControlEnabled",true);if(action.equals("home")){stop(c,StopLedger.AGENT);return state(c);}
   fresh(p);if(operations>=200)throw new IllegalStateException("Session operation limit reached");

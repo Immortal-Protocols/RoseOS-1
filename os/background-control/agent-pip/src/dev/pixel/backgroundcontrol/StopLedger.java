@@ -55,6 +55,21 @@ final class StopLedger {
         fields.put("stopReason", USER);
         return fields;
     }
+    /**
+     * Fields refusing a command or agent stop tagged for a task other than the one holding the
+     * workspace, or null if it may act. Untagged requests keep legacy behaviour; a tagged request
+     * fails closed when the workspace has no task, so stale work is never relabelled as current.
+     */
+    java.util.Map<String, Object> taskMismatch(String requested, String current) {
+        if (requested == null || requested.equals(current)) return null;
+        java.util.Map<String, Object> fields = refusal(requested);
+        if (fields != null) return fields;
+        fields = new java.util.LinkedHashMap<>();
+        fields.put("status", "stale_task");
+        fields.put("actionExecuted", Boolean.FALSE);
+        fields.put("rejectedTaskId", requested);
+        return fields;
+    }
     String reason() { return reason; }
     String sessionId() { return sessionId; }
     String taskId() { return taskId; }

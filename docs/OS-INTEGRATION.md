@@ -48,6 +48,12 @@ a new session after a Stop. The controller now records why a session ended:
   The top level names only the rejected task. Any workspace still running for a
   newer task is reported, unchanged, under `current`; it was not stopped. A start without `taskId` behaves as before, which old backends
   rely on.
+- `command` and provider `stop` also accept an optional `taskId`. When it names a
+  task other than the one holding the workspace (or the workspace has no task),
+  nothing runs and the result is `{"status": "stale_task", "actionExecuted": false,
+  "rejectedTaskId": ..., "current": {...}}`, or the `user_stopped` refusal if the
+  owner stopped that task. A late cleanup from task A therefore cannot close task
+  B's workspace. Requests without `taskId` behave as before.
 - Agent `stop` or `home` records `"agent"` and never replaces the owner's report
   for the same session. The ten-minute limit records `"deadline"`.
 
@@ -72,7 +78,10 @@ installed phone and current release channel, not from this repository:
 1. Installed OS build number, device, and that the OTA signer and AVB key match the
    existing chain. The new build number must be greater.
 2. The Updater's configured channel URL (to pass as `--updater-url`) and the
-   metadata it accepts.
+   metadata it accepts. The published `frankel-2026102401` notes give the feed as
+   `https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/`
+   with channel `frankel-stable`; because the feed follows GitHub's "latest"
+   release, a candidate is offered only once it is the latest release.
 3. Installed `dev.pixel.voice` and `dev.pixel.backgroundcontrol` version codes and
    signing certificates. The controller prebuilt must have a greater version code
    than any installed copy, or Android keeps the installed one. `agent-pip` is now
@@ -81,6 +90,16 @@ installed phone and current release channel, not from this repository:
    expected, not yet observed on this phone.
 5. How Rose Agent reaches the existing Pixel Voice VM (endpoint and pinned
    certificate already configured in the installed app, or a new app build).
+
+Published baseline (user reported as installed, not measured on the phone):
+`frankel-2026102401`, fingerprint
+`google/frankel/frankel:17/CP3A.261005.005/2026102401:user/release-keys`, AVB
+rollback index `1791158400` (2026-10-05). The pinned `os/pinned-manifest.xml`
+source has security patch level `2026-10-05` (`build/release` `cp2a`) but
+`BUILD_ID` `CP2A.260605.016`, so the installed build was not produced from exactly
+this pinned tree. Reconcile the candidate's source with the tree that built
+`2026102401` before building; keep the security patch level and rollback index at
+or above the installed values.
 
 ## Preinstall and default HOME (proposal, not implemented)
 

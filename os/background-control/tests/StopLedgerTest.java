@@ -34,6 +34,18 @@ public final class StopLedgerTest {
                 && !refused.containsKey("stoppedTaskId"), "Refusal carries no current-workspace identity");
         expect(l.refusal("t9") == null && l.refusal(null) == null, "A different or absent task is not refused");
         expect(l.reason().isEmpty() && l.sessionId() == null, "Building a refusal changes nothing");
+        // Commands and agent stops for another generation never act on the current workspace.
+        java.util.Map<String, Object> stale = l.taskMismatch("t1", "t3");
+        expect(stale != null && "stale_task".equals(stale.get("status")) && "t1".equals(stale.get("rejectedTaskId"))
+                && Boolean.FALSE.equals(stale.get("actionExecuted")) && !stale.containsKey("taskId"),
+                "A command for task t1 is refused while t3 holds the workspace");
+        java.util.Map<String, Object> ownerStopped = l.taskMismatch("t2", "t3");
+        expect(ownerStopped != null && "user_stopped".equals(ownerStopped.get("status")),
+                "A command for an owner-stopped task reports the owner stop");
+        expect(l.taskMismatch("t3", "t3") == null, "The current task's own commands pass");
+        expect(l.taskMismatch(null, "t3") == null && l.taskMismatch(null, null) == null,
+                "Commands without taskId keep legacy behaviour");
+        expect(l.taskMismatch("t3", null) != null, "A tagged command fails closed when the workspace has no task");
         l.stopped(StopLedger.USER, "s3", null);
         expect(StopLedger.USER.equals(l.reason()) && !l.refuses(null), "Owner stop without taskId is reported only");
         for (int i = 0; i < StopLedger.REMEMBERED_TASKS; i++) l.stopped(StopLedger.USER, "s", "bulk" + i);

@@ -18,9 +18,10 @@ class StopWiringTest(unittest.TestCase):
         self.assertEqual(self.reasons('MainActivity.java'), ['USER'])
 
     def test_agent_and_deadline_paths(self):
-        self.assertEqual(self.reasons('AgentProvider.java'), ['AGENT'])
-        # Close before a new start, the 600 s deadline, and the agent's home command.
-        self.assertEqual(self.reasons('Controller.java'), ['AGENT', 'DEADLINE', 'AGENT'])
+        # The provider's stop goes through Controller.agentStop (generation-checked).
+        self.assertEqual(self.reasons('AgentProvider.java'), [])
+        # agentStop, close before a new start, the 600 s deadline, and the agent's home command.
+        self.assertEqual(self.reasons('Controller.java'), ['AGENT', 'AGENT', 'DEADLINE', 'AGENT'])
 
     def test_no_untyped_stop_remains(self):
         for path in SOURCE.glob('*.java'):
@@ -42,6 +43,15 @@ class StopWiringTest(unittest.TestCase):
             self.assertLess(refusal, start.index(mutation), mutation)
         self.assertNotIn('state(c).put("status","user_stopped")', text)
         self.assertIn('static JSONObject refusal(String task,JSONObject current)', text)
+
+    def test_tagged_commands_and_agent_stops_check_generation_first(self):
+        text = (SOURCE/'Controller.java').read_text()
+        command = text[text.index('static synchronized JSONObject command('):text.index('static AccessibilityNodeInfo node(')]
+        self.assertLess(command.index('stops.taskMismatch(taskParam(p),taskId)'), command.index('require(p)'))
+        provider = (SOURCE/'AgentProvider.java').read_text()
+        self.assertIn('case "stop":result=Controller.agentStop(getContext(),p);break;', provider)
+        stop = text[text.index('static synchronized JSONObject agentStop('):]
+        self.assertLess(stop.index('stops.taskMismatch(task,taskId)'), stop.index('stop(c,StopLedger.AGENT)'))
 
     def test_schema_advertised(self):
         self.assertIn('.put("schemaVersion",3)', (SOURCE/'AgentProvider.java').read_text())
