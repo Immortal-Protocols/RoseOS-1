@@ -45,6 +45,14 @@ only the `tag()` adapter changes once App documents its interface.
 the Stop acknowledgment may be spoken. Cancelling audio already playing is an explicit `todo`
 (needs App's client contract or VM audio evidence).
 
+Immutable origin (Chief ruling CHIEF-ORIGIN-001): `server-stop-gate.test.mjs` requires that an
+A-origin command presenting B's task ID gains no authority while a B-origin command runs, that
+an untagged task-mutating command without trusted origin is refused even while a task runs,
+and that an untagged non-task read still works. `tool-call-gate.test.mjs` requires stopped or
+superseded worker turns to run no tool while the current turn's tools run. Protocol adapters
+(`tagged`, `originHeaders`, `launchEnvFor`, `emitWorker`) are the only parts that track App's
+interface; expectations never change.
+
 Real voice audio, the Android
 controller itself and real device behaviour are outside this harness and need a VM run.
 

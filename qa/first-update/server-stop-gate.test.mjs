@@ -231,3 +231,43 @@ test('generation: a late cleanup from stopped A does not close task B\'s workspa
  await tagged(w,{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'3*4'}},B);
  assert.deepEqual(w.log.slice(mark),['calculator:3*4'],'B must remain usable');
 });
+
+// ---- Immutable origin (Chief ruling ROS-FIRST-UPDATE-CHIEF-ORIGIN-001) ----
+// ORIGIN PROTOCOL ADAPTER: headers a phone tool sends to prove which task ORIGINATED it while
+// presenting a task ID. At App 2f1d6e2 the only protocol is a bare X-Rose-Task value, so the origin
+// argument cannot be expressed and is ignored. When App documents an origin-bound credential (e.g.
+// a per-turn token bound at worker/tool launch), change only this adapter; expectations stay.
+const originHeaders=(_w,_originTask,presentedTask)=>({'x-rose-task':presentedTask});
+
+test('origin: a delayed A-origin command presenting B\'s task ID gains no authority; B-origin command runs',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Add 9 and 9');
+ await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},originHeaders(w,A,A));
+ await w.call('/task/stop',{taskId:A,source:'app'});
+ await w.turnEnds();
+ const B=w.newRequest('Subtract 2 from 9');
+ await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},originHeaders(w,B,B));
+ const mark=w.log.length;
+ // A's late tool read B's ID from mutable shared state and presents it.
+ await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9+9'}},originHeaders(w,A,B));
+ assert.deepEqual(w.log.slice(mark),[],'A-origin command presenting B\'s ID ran with B\'s authority');
+ await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'9-2'}},originHeaders(w,B,B));
+ assert.deepEqual(w.log.slice(mark),['calculator:9-2'],'B-origin command must run');
+});
+
+test('origin: an untagged task-mutating command with no trusted origin is refused even while a task runs',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ const A=w.newRequest('Add 4 and 4');
+ await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},originHeaders(w,A,A));
+ const mark=w.log.length;
+ await w.call('/phone/commands',{action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'4+4'}},{});
+ await w.call('/phone/commands',{action:'open_app',packageName:CALCULATOR},{});
+ assert.deepEqual(w.log.slice(mark).filter(e=>!e.startsWith('ui:inspect')),[],'untagged mutating command ran without trusted origin: '+JSON.stringify(w.log.slice(mark)));
+});
+
+test('origin: an untagged non-task read (control_status) is still answered while a task runs',{skip:!has&&'no task-stop.mjs'},async()=>{
+ const w=world();
+ w.newRequest('Any task');
+ const r=await w.call('/phone/commands',{action:'control_status'},{});
+ assert.notEqual(r?.body?.result?.status,'task_stopped');assert.notEqual(r?.body?.result?.status,'stale_task');
+});

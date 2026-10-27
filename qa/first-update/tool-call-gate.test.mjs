@@ -33,3 +33,14 @@ test('after Stop is acknowledged, a tool call from the stopped turn A runs no ha
  await g.handle({tool:'web_lookup',turnId:'turn-A',arguments:{query:'tip'}});
  assert.deepEqual(g.ran,['web_lookup'],'stopped turn A ran a tool after the Stop acknowledgment');
 });
+
+test('a tool call from turn A after fresh B begins runs no handler; a turn-B call runs',{skip:!has&&'no tool-call gate in this tree'},async()=>{
+ const g=gate();
+ g.taskStop.begin('task-A');g.taskStop.addTurn('turn-A');
+ await g.taskStop.request({taskId:'task-A',source:'app'});
+ g.setCurrent({id:'task-B',state:'running'});g.taskStop.begin('task-B');g.taskStop.addTurn('turn-B');
+ await g.handle({tool:'web_lookup',turnId:'turn-A',arguments:{query:'old'}});
+ assert.deepEqual(g.ran,[],'turn A ran a tool after B began');
+ await g.handle({tool:'web_lookup',turnId:'turn-B',arguments:{query:'new'}});
+ assert.deepEqual(g.ran,['web_lookup'],'turn B tool must run');
+});
