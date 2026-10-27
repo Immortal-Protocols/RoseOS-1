@@ -2,7 +2,8 @@
 // "stop an in-progress task without further agent actions after Stop is acknowledged".
 // Test-only harness: it drives the real BackgroundPhone against a fake controller that
 // follows os/background-control/agent-pip Controller.java semantics (owner Stop closes
-// the session and reports status "stopped"; start opens a fresh session). The owner
+// the session and reports status "stopped" while keeping the last sessionId, as
+// Controller.state() reports `id`; start opens a fresh session). The owner
 // Stop also reports stopReason "user", the field proposed in ROS-FIRST-UPDATE-OS-001-M003;
 // code that ignores the field behaves exactly as at 01c5d8f.
 // Offline only. This is not VM or device evidence.
@@ -14,15 +15,15 @@ const CONTROLLER='dev.pixel.backgroundcontrol', CALCULATOR='dev.pixel.calculator
 
 function fakePhone(){
  const log=[];let seq=0;
- const ctl={status:'stopped',sessionId:null,targetPackage:null,stopReason:''};
- const state=()=>({status:ctl.status,sessionId:ctl.sessionId,targetPackage:ctl.targetPackage,stopReason:ctl.stopReason});
+ const ctl={status:'stopped',sessionId:null,targetPackage:null,stopReason:'',started:0};
+ const state=()=>({status:ctl.status,sessionId:ctl.sessionId,targetPackage:ctl.targetPackage,stopReason:ctl.stopReason,elapsedMs:ctl.started?1000:0});
  const send=async c=>{
   if(c.packageName===CALCULATOR){log.push({kind:'calculator',operation:c.operation});return {status:'completed',result:{status:'verified',entry:'0'}};}
   if(c.action!=='app_command'||c.packageName!==CONTROLLER){log.push({kind:'physical',action:c.action});return {status:'ok'};}
   switch(c.operation){
    case 'get_state':return state();
-   case 'start':ctl.status='ready';ctl.sessionId='session-'+(++seq);ctl.targetPackage=c.params.packageName;ctl.stopReason='';log.push({kind:'start',sessionId:ctl.sessionId});return state();
-   case 'stop':ctl.status='stopped';ctl.sessionId=null;ctl.stopReason='agent';return state();
+   case 'start':ctl.status='ready';ctl.sessionId='session-'+(++seq);ctl.targetPackage=c.params.packageName;ctl.stopReason='';ctl.started=1;log.push({kind:'start',sessionId:ctl.sessionId});return state();
+   case 'stop':ctl.status='stopped';ctl.stopReason='agent';return state();
    case 'command':
     if(ctl.status!=='ready'||c.params.sessionId!==ctl.sessionId)return {status:'error',error:'Session not ready: '+ctl.status};
     log.push({kind:'ui',action:c.params.action,sessionId:ctl.sessionId});
@@ -31,7 +32,8 @@ function fakePhone(){
   throw Error('unexpected controller operation '+c.operation);
  };
  // StopReceiver -> Controller.stop: closes the session; nothing is sent to the backend.
- const ownerStop=()=>{ctl.status='stopped';ctl.sessionId=null;ctl.stopReason='user';return log.length;};
+ // Controller.stop keeps `id`, so get_state still reports the stopped sessionId.
+ const ownerStop=()=>{ctl.status='stopped';ctl.stopReason='user';return log.length;};
  return {log,ownerStop,phone:new BackgroundPhone({send,enabled:()=>true,sleep:async()=>{}})};
 }
 const executedAfter=(log,mark)=>log.slice(mark).filter(e=>e.kind==='calculator'||e.kind==='start'||e.kind==='ui'||e.kind==='physical');
@@ -66,5 +68,24 @@ test('after owner Stop, background UI actions are not executed',async()=>{
  const mark=ownerStop();
  await phone.execute({action:'tap_label',label:'='});
  await phone.execute({action:'back'});
+ assert.deepEqual(executedAfter(log,mark),[]);
+});
+
+test('after owner Stop, a physical phone-display action for the stopped task is not executed',async()=>{
+ const {log,ownerStop,phone}=fakePhone();
+ await phone.execute({action:'open_app',packageName:CALCULATOR});
+ const mark=ownerStop();
+ const r=await phone.execute({action:'tap',display:'phone',x:10,y:10});
+ assert.deepEqual(executedAfter(log,mark),[],'Physical action after owner Stop: '+JSON.stringify(r));
+});
+
+test('a controller without stopReason: owner Stop is still honoured before the deadline',async()=>{
+ const {log,ownerStop,phone}=fakePhone();
+ await phone.execute({action:'open_app',packageName:CALCULATOR});
+ const mark=ownerStop();
+ // Simulate the 01c5d8f controller, which has no stopReason field.
+ const send=phone.send;phone.send=async c=>{const r=await send(c);if(r&&'stopReason' in r){const {stopReason,...rest}=r;return rest;}return r;};
+ await phone.execute({action:'app_command',packageName:CALCULATOR,operation:'evaluate',params:{expression:'1+1'}});
+ await phone.execute({action:'open_app',packageName:CALCULATOR});
  assert.deepEqual(executedAfter(log,mark),[]);
 });

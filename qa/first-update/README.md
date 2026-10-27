@@ -17,8 +17,10 @@ versions, results) under the ignored `out/qa-first-update/`.
 
 `stop-gate.test.mjs` drives the real `BackgroundPhone` against a fake controller
 that follows `Controller.java`'s Stop behaviour. After an owner Stop it requires that
-no Calculator command, replacement workspace or UI action executes. At 01c5d8f the
-Calculator and `open_app` cases fail, which reproduces the Stop gap. The fake reports
+no Calculator command, replacement workspace, workspace UI action or physical
+phone-display action executes, with and without the controller's `stopReason` field.
+The fake keeps the stopped `sessionId`, as `Controller.state()` does. At 01c5d8f four of
+six cases fail, which reproduces the Stop gap. The fake reports
 `stopReason: "user"` as proposed by OS. Server routes (`/phone/commands`, fast/raw
 paths), speech after Stop, and real Android behaviour are outside this harness and
 need a VM run.
