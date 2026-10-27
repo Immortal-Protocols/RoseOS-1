@@ -18,6 +18,7 @@ node --test \
 python3 os/background-control/tests/test_policy.py
 python3 os/background-control/tests/test_stop_wiring.py
 python3 os/background-control/tests/test_preinstall.py
+python3 scripts/tests/test_release_manifest.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT
