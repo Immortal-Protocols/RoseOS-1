@@ -82,14 +82,36 @@
         ".git",
         ".repo"
       ],
-      "externalLinks": [
+      "externalLinks": [],
+      "cacheBoundaries": [
         {
-          "path": "vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor_boot/vendor_ramdisk00__unpacked/d",
-          "target": "/sys/kernel/debug"
-        },
-        {
-          "path": "vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/system/d",
-          "target": "/sys/kernel/debug"
+          "path": "vendor/adevtool/dl/unpacked",
+          "pruneMarker": "vendor/adevtool/dl/.find-ignore",
+          "referenceMarkers": [
+            "adevtool/dl/unpacked",
+            "dl/unpacked/"
+          ],
+          "reason": "adevtool's extracted factory-image cache, not a build input",
+          "provenance": {
+            "adevtool": {
+              "project": "vendor/adevtool",
+              "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+              "facts": [
+                "src/config/paths.ts (sha256 418823cc...): IMAGE_DOWNLOAD_DIR = vendor/adevtool/dl and UNPACKED_IMAGES_DIR = dl/unpacked",
+                "src/frontend/source.ts: images are unpacked to dl/unpacked/<device>-<buildId> and made read-only (chmod -R a-w)",
+                "src/blobs/copy.ts (sha256 4d87c11b...) and src/build/make.ts (sha256 313f962c...): vendor blobs are byte-copied into vendor/<vendor>/<device>/proprietary and PRODUCT_COPY_FILES name that copy, not the cache",
+                ".gitignore (sha256 555789bf...): /dl/* ignored except /dl/.find-ignore, an empty tracked file"
+              ]
+            },
+            "soong": {
+              "project": "build/soong",
+              "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+              "facts": [
+                "ui/build/finder.go (sha256 2d77fa64...): PruneFiles .out-dir and .find-ignore make the module finder skip that directory and its subdirectories, so no build definition under vendor/adevtool/dl is discovered"
+              ]
+            },
+            "builder": "INFRA-ALPHA-090: the failed prepare named absolute links under dl/unpacked/frankel-CP3A.261005.005 to device paths; 95 absolute links there (receipt alpha089-recipe-3c048b45/absolute-links.json, sha256 f6b8af249ab1feafe020bba1ac12a656c2c3e4d862a905a67e0b6983df8c3a1a), including the two /sys/kernel/debug links formerly listed in externalLinks"
+          }
         }
       ]
     },
@@ -101,7 +123,7 @@
     "baseEvidence": {
       "resolvedManifest": {
         "path": "/home/pixelbuild/rose-actions/frankel-2026102804/release/resolved-manifest.xml",
-        "sha256": null
+        "sha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888"
       },
       "policy": {
         "path": "/home/pixelbuild/rose-actions/frankel-2026102804/release/background-policy.json",
@@ -115,7 +137,7 @@
       "frameworks/base",
       "packages/apps/Updater"
     ],
-    "basis": "INFRA-ALPHA-085 against the 084 interface (OS-ALPHA-001). Measured 2026-10-28 11:53Z on the builder's ext4: reflink unsupported; the selection without .repo, keys, releases, out, out-*, out_* and .git/.repo everywhere allocates 120.16 GiB (1,696,997 files), so copyBudgetGiB 150 includes metadata and slack, and build.minFreeGiB 300 must remain free after it. 6,680 symlinks: 6,543 resolve inside, 135 dangle (contained fixtures, kept), the two listed extracted-image links to /sys/kernel/debug are non-inputs and excluded by exact path and target; any other escape stops preparation. The resolved-manifest digest is to be read from the retained 2804 release directory before preparation; the policy digest is the 2804 background-policy.json. The delta and its changed files come from OS's contract at osDelta.commit (OS-ALPHA-001 E006: build/make media_system.mk and target/product/generic/Android.bp, patch e000da0d)"
+    "basis": "INFRA-ALPHA-085 against the 084 interface (OS-ALPHA-001). Measured 2026-10-28 11:53Z on the builder's ext4: reflink unsupported; the selection without .repo, keys, releases, out, out-*, out_* and .git/.repo everywhere allocates 120.16 GiB (1,696,997 files), so copyBudgetGiB 150 includes metadata and slack, and build.minFreeGiB 300 must remain free after it. 6,680 symlinks: 6,543 resolve inside, 135 dangle (contained fixtures, kept), the extracted factory-image cache vendor/adevtool/dl/unpacked (where the absolute device-path links live, including both /sys/kernel/debug links) is excluded as an exact cache boundary (INFRA-ALPHA-090, provenance in cacheBoundaries); any other escape stops preparation. The resolved-manifest digest was read from the retained 2804 release directory by the lead (INFRA-ALPHA-090); the policy digest is the 2804 background-policy.json. The delta and its changed files come from OS's contract at osDelta.commit (OS-ALPHA-001 E006: build/make media_system.mk and target/product/generic/Android.bp, patch e000da0d)"
   },
   "prepared": {
     "preparationId": null,
@@ -191,13 +213,17 @@
     },
     "tools": {
       "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
-      "lpunpack": null,
+      "lpunpack": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/lpunpack",
       "debugfs": "/usr/sbin/debugfs",
-      "fsckErofs": null,
+      "fsckErofs": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs",
       "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
       "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner"
     },
-    "basis": "INFRA-ALPHA-087/088: the current OS alpha contract (os/alpha/cuttlefish-product-contract.json at preparation.osDelta, contract c825aa19, delta f21bf683, OS PR61) checked from the partitions in the built super.img, never from loose files. Rose app paths follow the contract: PRODUCT/app/RosePreinstall_*, SYSTEM_EXT/priv-app/PixelBackgroundControl, system framework-res and build.prop (system-as-root, as release-pipeline IMAGE_LOCATIONS). closure is the contract's Seedvault requirement (SYSTEM/priv-app/Seedvault and SYSTEM/app/LocalContactsBackup with their etc XML): module names, privileged flag, sub_dir and src file names from the pinned Android.bp files (OS fixtures os/tests/fixtures/cuttlefish-alpha/seedvault), packages from the pinned manifests and XML root elements and packages from the pinned XML files (scripts/tests/fixtures/seedvault-7cfffed7). These are compiled OS modules: their APKs must be readable with the pinned package; no version, digest or certificate is pinned for them and the Rose app signer does not apply. Pinned Cuttlefish shared/BoardConfig.mk packs product, system, system_ext, vendor and others into an A/B super image and leaves their file system to TARGET_RO_FILE_SYSTEM_TYPE, so the probe records BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE and the guard requires its extractor (ext4: debugfs, erofs: fsck.erofs). simg2img, debugfs, aapt and apksigner are the Pixel pipeline's retained paths; lpunpack and fsck.erofs have no verified builder path yet and stay null (fail closed). No host path, probe or image has been verified"
+    "toolSha256": {
+      "lpunpack": "51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b",
+      "fsckErofs": "37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901"
+    },
+    "basis": "INFRA-ALPHA-087/088: the current OS alpha contract (os/alpha/cuttlefish-product-contract.json at preparation.osDelta, contract c825aa19, delta f21bf683, OS PR61) checked from the partitions in the built super.img, never from loose files. Rose app paths follow the contract: PRODUCT/app/RosePreinstall_*, SYSTEM_EXT/priv-app/PixelBackgroundControl, system framework-res and build.prop (system-as-root, as release-pipeline IMAGE_LOCATIONS). closure is the contract's Seedvault requirement (SYSTEM/priv-app/Seedvault and SYSTEM/app/LocalContactsBackup with their etc XML): module names, privileged flag, sub_dir and src file names from the pinned Android.bp files (OS fixtures os/tests/fixtures/cuttlefish-alpha/seedvault), packages from the pinned manifests and XML root elements and packages from the pinned XML files (scripts/tests/fixtures/seedvault-7cfffed7). These are compiled OS modules: their APKs must be readable with the pinned package; no version, digest or certificate is pinned for them and the Rose app signer does not apply. Pinned Cuttlefish shared/BoardConfig.mk packs product, system, system_ext, vendor and others into an A/B super image and leaves their file system to TARGET_RO_FILE_SYSTEM_TYPE, so the probe records BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE and the guard requires its extractor (ext4: debugfs, erofs: fsck.erofs). simg2img, debugfs, aapt and apksigner are the Pixel pipeline's retained paths; lpunpack and fsck.erofs are the retained P1 release bin/ executables the lead measured (INFRA-ALPHA-090) and are pinned by sha256 in toolSha256; a different file fails the gate. No probe or image has been verified"
   },
   "artifact": {
     "name": "emulator-alpha-receipt-{run_id}",

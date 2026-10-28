@@ -345,8 +345,21 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
   - **Exclusions:** the exact policy `preparation.exclusions`:
     - root `.repo`, `keys`, `releases`, `out`, `out-*` and `out_*`;
     - `.git` and `.repo` anywhere;
-    - the two listed extracted-image links to `/sys/kernel/debug`, matched by
-      path and exact target.
+    - the cache boundary `vendor/adevtool/dl/unpacked`
+      (`exclusions.cacheBoundaries`, INFRA-ALPHA-090). This is adevtool's
+      extracted factory-image cache. Its absolute links point at device paths
+      (`/system/bin`, `/vendor/...`, `/sys/kernel/debug`), not host inputs. The
+      evidence that it is not a build input comes from pinned sources:
+      - adevtool `17df3b79` unpacks images there read-only, byte-copies vendor
+        blobs into `vendor/<vendor>/<device>/proprietary`, and tracks only an
+        empty `dl/.find-ignore`;
+      - Soong `250710f7`'s module finder prunes any directory that contains
+        `.find-ignore`.
+
+      The boundary holds only while that marker is an empty regular file in the
+      base, the cache is a real directory, and no `.mk`, `.bp` or `.go` file in
+      the copied selection names the cache. Otherwise the preparation stops and
+      names the cause. The cache itself is never changed.
 
     Pixel release keys are never copied.
   - **Links:** relative links that stay inside are kept, and absolute links into
@@ -477,10 +490,12 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
 - reconcile receipt `0004-2026102804.json` and its sha256;
 - apps 302/4/28, in the 2804 dispatch order.
 
-`preparation.baseEvidence.resolvedManifest.sha256`, `prepared` and
-`hostEvidence` stay null until the lead records them from real runs. Until then
-`prepare` fails with exit 4 naming the manifest digest. The guard also fails with
-exit 4 before the builder starts, so no dispatch can compile.
+The resolved-manifest digest and the `lpunpack` and `fsck.erofs` paths, with
+their sha256 in `imageVerification.toolSha256`, were measured by the lead
+(INFRA-ALPHA-090). A different tool file fails the image gate. `prepared` and
+`hostEvidence` stay null until the lead records them from real runs, and until
+then the guard fails with exit 4 before the builder starts, so no dispatch can
+compile.
 
 The lead's sequence on the builder, through existing access, needs approved
 capacity (the copy budget plus 300 GiB free after it) and no other job holding
@@ -495,9 +510,7 @@ the lock:
 4. Record the preparation id and receipt sha256 in `prepared`, and the passing
    probe's sha256 and `lunch` values (including
    `BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE`) in `hostEvidence`, in one config
-   commit. In the same commit, record the verified builder paths of `lpunpack`
-   and, for an erofs system, `fsck.erofs` in `imageVerification.tools`. Until
-   then the guard names them.
+   commit.
 
 Source-only contract for the OS owner:
 

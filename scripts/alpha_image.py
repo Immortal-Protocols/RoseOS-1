@@ -196,6 +196,9 @@ def verify(product_out, spec, contract, policy, signer, filesystem, locked, defa
     """Returns the content report; raises ImageCheckFailed (or ToolMissing) on the first structural problem and
     ImageCheckFailed listing every content failure otherwise. default_value is release-pipeline.py's parser."""
     tools, used = spec['tools'], {}
+    for name, pin in spec.get('toolSha256', {}).items():  # measured on the builder; a different file is not the verified tool
+        if tools.get(name) and Path(tools[name]).is_file() and sha256_path(tools[name]) != pin:
+            raise ImageCheckFailed(f'imageVerification.tools.{name} {tools[name]} differs from its pinned sha256')
     if filesystem not in EXTRACTORS:
         raise ImageCheckFailed(f'recorded system file system {filesystem!r} has no supported extractor')
     aapt, apksigner = tool(tools, 'aapt', used), tool(tools, 'apksigner', used)

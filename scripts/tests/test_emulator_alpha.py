@@ -146,6 +146,12 @@ def framework_dump(agents, targets, prototype=(), locked=False):
         + f'      resource 0x01050001 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x{0xffffffff if locked else 0:08x} (s=0x0008 r=0x00)\n'
         + f'          (boolean) {"true" if locked else "false"}\n')
 
+# The actual absolute link cases INFRA-ALPHA-090 recorded under the extracted image (targets are device paths).
+CACHE_LINKS = [('vendor_boot/vendor_ramdisk00__unpacked/adb_keys', '/product/etc/security/adb_keys'), ('bin', '/system/bin'),
+    ('init', '/system/bin/init'), ('odm/app', '/vendor/odm/app'), ('vendor/lib/modules', '/vendor_dlkm/lib/modules'),
+    ('system/apex/com.android.runtime/lib64/libc.so', '/system/lib64/bootstrap/libc.so'),
+    ('vendor_boot/vendor_ramdisk00__unpacked/d', '/sys/kernel/debug'), ('system/d', '/sys/kernel/debug'), ('system/etc/missing', 'nowhere')]
+
 class AlphaTreeTest(unittest.TestCase):
     """A synthetic retained base (2804-shaped build/make, pinned Cuttlefish files, integrated apps, reconcile receipt and
     release evidence), prepared for real by emulator-alpha.py prepare; probe and build then use only the prepared tree."""
@@ -168,9 +174,19 @@ class AlphaTreeTest(unittest.TestCase):
         (src/'build/make'/GENERIC).parent.mkdir(parents=True)  # not integrated by 2804: the pinned upstream bytes
         (src/'build/make'/GENERIC).write_bytes((ROOT/'os/tests/fixtures/cuttlefish-alpha/build-make'/GENERIC).read_bytes())
         (src/'build/envsetup.sh').write_text(ENVSETUP)
-        for link in CHECKED_IN['preparation']['exclusions']['externalLinks']:  # as on the builder: non-input extracted-image links
-            (src/link['path']).parent.mkdir(parents=True, exist_ok=True)
-            os.symlink(link['target'], src/link['path'])
+        # adevtool's extracted factory-image cache, as the failed INFRA-ALPHA-090 prepare met it: device-path absolute links.
+        (src/'vendor/adevtool/dl').mkdir(parents=True)
+        (src/'vendor/adevtool/dl/.find-ignore').write_bytes(b'')
+        self.cache = src/'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005'
+        for rel, target in CACHE_LINKS:
+            (self.cache/rel).parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(target, self.cache/rel)
+        (self.cache/'vendor/etc/init.rc').parent.mkdir(parents=True, exist_ok=True)
+        (self.cache/'vendor/etc/init.rc').write_text('extracted, read-only in the real cache')
+        # A generated vendor input adevtool wrote from that cache: a byte copy outside it, which is copied.
+        (src/'vendor/google_devices/frankel/proprietary/vendor/etc').mkdir(parents=True)
+        (src/'vendor/google_devices/frankel/proprietary/vendor/etc/init.rc').write_text('extracted, read-only in the real cache')
+        (src/'vendor/google_devices/frankel/Android.bp').write_text('prebuilt_etc { name: "init_vendor", src: "proprietary/vendor/etc/init.rc" }\n')
         (src/'keys').mkdir()
         (src/'keys/releasekey.pk8').write_text('PRIVATE PIXEL KEY')
         # Revisions come from git in the base; these fixtures carry no repositories, so report the contract pins.
@@ -248,6 +264,7 @@ class AlphaTreeTest(unittest.TestCase):
             aapt=script(self.tools/'aapt', AAPT), apksigner=script(self.tools/'apksigner', APKSIGNER),
             lpunpack=script(self.tools/'lpunpack', LPUNPACK), simg2img=script(self.tools/'simg2img', SIMG2IMG), fsckErofs=None,
             debugfs=shutil.which('debugfs'))
+        self.data['imageVerification']['toolSha256'] = {}  # the fake tools are not the measured builder executables
         self.write()
         self.partitions = self.root/'built-partitions'
         self.env['FAKE_LP_DIR'] = str(self.partitions)
@@ -349,6 +366,64 @@ class AlphaTreeTest(unittest.TestCase):
         self.assertEqual(alpha.verify_prepared(alpha.load(self.config_path), receipt['preparationId'])['verdict'], 'OK')
         with self.assertRaisesRegex(alpha.CheckFailed, 'already exists; preparations are immutable'):
             alpha.prepare(alpha.load(self.config_path))
+
+    def test_extracted_image_cache_is_an_exact_proven_boundary(self):
+        receipt = self.preparation
+        self.assertIn({'path': 'vendor/adevtool/dl/unpacked', 'reason': "cache boundary: adevtool's extracted factory-image cache, not a build input"},
+            receipt['excluded'])
+        self.assertFalse(os.path.lexists(self.tree/'vendor/adevtool/dl/unpacked'), 'the cache is not copied')
+        self.assertTrue((self.tree/'vendor/adevtool/dl/.find-ignore').is_file(), 'the prune marker is copied with the rest of dl/')
+        generated = 'vendor/google_devices/frankel/proprietary/vendor/etc/init.rc'
+        self.assertEqual((self.tree/generated).read_bytes(), (self.src/generated).read_bytes())
+        self.assertNotEqual(os.lstat(self.tree/generated).st_ino, os.lstat(self.src/generated).st_ino)
+        self.assertEqual(receipt['exclusionPolicy']['cacheBoundaries'], CHECKED_IN['preparation']['exclusions']['cacheBoundaries'])
+        self.assertEqual(sorted(os.readlink(self.cache/rel) for rel, _ in CACHE_LINKS), sorted(target for _, target in CACHE_LINKS),
+            'the original cache and its links stay untouched')
+        self.base_untouched()
+
+    def test_cache_boundary_refusals_and_unknown_escapes_stop_before_any_write(self):
+        marker = self.src/'vendor/adevtool/dl/.find-ignore'
+        unpacked = self.src/'vendor/adevtool/dl/unpacked'
+        bp = self.src/'vendor/google_devices/frankel/Android.bp'
+        def no_marker():
+            marker.unlink()
+        def marker_with_content():
+            marker.write_text('x')
+        def cache_is_a_link():
+            os.rename(unpacked, self.src/'vendor/adevtool/dl/moved')
+            os.symlink('moved', unpacked)
+        def build_file_references_cache():
+            bp.write_text('prebuilt_etc { name: "x", src: "../../adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor/etc/init.rc" }\n')
+        def device_path_link_outside_cache():
+            os.symlink('/system/bin', self.src/'vendor/google_devices/frankel/proprietary/bin')
+        def link_into_cache():
+            os.symlink('../../adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor/etc/init.rc', self.src/'vendor/google_devices/frankel/cached.rc')
+        def unknown_host_link():
+            os.symlink('/etc/hostname', self.src/'vendor/google_devices/frankel/host')
+        cases = ((no_marker, 'prune marker vendor/adevtool/dl/.find-ignore is not an empty regular file'),
+                 (marker_with_content, 'prune marker vendor/adevtool/dl/.find-ignore is not an empty regular file'),
+                 (cache_is_a_link, 'cache boundary vendor/adevtool/dl/unpacked is not a real directory'),
+                 (build_file_references_cache, 'vendor/google_devices/frankel/Android.bp references the excluded cache'),
+                 (device_path_link_outside_cache, 'proprietary/bin -> /system/bin leaves the source tree'),
+                 (link_into_cache, 'cached.rc -> .* reaches excluded vendor/adevtool/dl/unpacked'),
+                 (unknown_host_link, 'host -> /etc/hostname leaves the source tree'))
+        for index, (damage, message) in enumerate(cases):
+            root = self.root/f'alpha-source-{index}'
+            self.data['preparation']['root'] = str(root)
+            self.write()
+            saved_bp, saved_marker = bp.read_bytes(), marker.read_bytes() if marker.exists() else b''
+            damage()
+            with self.assertRaisesRegex(alpha.CheckFailed, message):
+                alpha.prepare(alpha.load(self.config_path))
+            self.assertEqual(sorted(root.iterdir()) if root.exists() else [], [], 'nothing staged or prepared')
+            for extra in ('vendor/google_devices/frankel/proprietary/bin', 'vendor/google_devices/frankel/cached.rc', 'vendor/google_devices/frankel/host'):
+                if os.path.lexists(self.src/extra):
+                    os.unlink(self.src/extra)
+            if os.path.islink(unpacked):
+                os.unlink(unpacked)
+                os.rename(self.src/'vendor/adevtool/dl/moved', unpacked)
+            bp.write_bytes(saved_bp)
+            marker.write_bytes(saved_marker)
 
     def test_prepare_refuses_wrong_base_contract_or_evidence_before_copying(self):
         cases = []
@@ -538,6 +613,12 @@ class AlphaTreeTest(unittest.TestCase):
         self.data['imageVerification']['tools']['debugfs'] = str(self.root/'absent-debugfs')
         self.write()
         self.image_failure('imageVerification.tools.debugfs .* is not an executable file', receipt='g')
+        self.data['imageVerification']['tools']['debugfs'] = shutil.which('debugfs')
+        self.data['imageVerification']['toolSha256'] = {'lpunpack': '0' * 64}
+        self.write()
+        self.image_failure('imageVerification.tools.lpunpack .* differs from its pinned sha256', receipt='pin')
+        self.data['imageVerification']['toolSha256'] = {}
+        self.write()
         # An erofs system needs its extractor configured before any build starts.
         lunch = dict(LUNCH, BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE='erofs')
         self.data['hostEvidence']['lunch'] = lunch
@@ -728,9 +809,10 @@ class CheckedInAlphaTest(unittest.TestCase):
         result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch',
-            'prepared.preparationId', 'prepared.receiptSha256', 'imageVerification.tools.lpunpack'])
+            'prepared.preparationId', 'prepared.receiptSha256'])
+        # Every preparation input is recorded now; off the builder, prepare stops at the base checks or the lock.
         prepare = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'prepare'], capture_output=True, text=True)
-        self.assertEqual((prepare.returncode, json.loads(prepare.stderr)['missing']), (4, ['preparation.baseEvidence.resolvedManifest.sha256']))
+        self.assertEqual((prepare.returncode, json.loads(prepare.stderr)['verdict']), (1, 'FAIL'))
         build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
             '--run-id', '1', '--build-timestamp', TS, '--receipt-dir', '/nonexistent/alpha-receipt'], capture_output=True, text=True)
         self.assertEqual(build.returncode, 4, 'a dispatch cannot compile speculatively')
@@ -789,15 +871,20 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual(preparation['root'], '/home/pixelbuild/rose-actions/alpha-source')
         self.assertEqual((preparation['copyBudgetGiB'], CHECKED_IN['build']['minFreeGiB']), (150, 300))
         self.assertEqual(preparation['exclusions'], {'rootNames': ['.repo', 'keys', 'releases', 'out'], 'rootPrefixes': ['out-', 'out_'],
-            'anywhereNames': ['.git', '.repo'], 'externalLinks': [
-                {'path': 'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor_boot/vendor_ramdisk00__unpacked/d', 'target': '/sys/kernel/debug'},
-                {'path': 'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/system/d', 'target': '/sys/kernel/debug'}]})
+            'anywhereNames': ['.git', '.repo'], 'externalLinks': [], 'cacheBoundaries': preparation['exclusions']['cacheBoundaries']})
+        boundary, = preparation['exclusions']['cacheBoundaries']
+        self.assertEqual((boundary['path'], boundary['pruneMarker'], boundary['referenceMarkers']),
+            ('vendor/adevtool/dl/unpacked', 'vendor/adevtool/dl/.find-ignore', ['adevtool/dl/unpacked', 'dl/unpacked/']))
+        self.assertEqual((boundary['provenance']['adevtool']['revision'], boundary['provenance']['soong']['revision']),
+            tuple(alpha.pinned_revision(p) for p in ('vendor/adevtool', 'build/soong')))
+        self.assertIn('f6b8af249ab1feafe020bba1ac12a656c2c3e4d862a905a67e0b6983df8c3a1a', boundary['provenance']['builder'])
         self.assertEqual(preparation['osDelta']['commit'], 'f21bf68322b3fa0a8924840554ab3e9398f79125')
         self.assertEqual(hashlib.sha256((ROOT/preparation['osDelta']['contract']).read_bytes()).hexdigest(), preparation['osDelta']['contractSha256'])
         document, delta = alpha.contract(alpha.load())
         self.assertEqual(delta['changedFiles'], [{'project': 'build/make', 'path': GENERIC}, {'project': 'build/make', 'path': MEDIA}])
         self.assertEqual(preparation['baseEvidence']['policy']['sha256'], document['policySha256'])
-        self.assertIsNone(preparation['baseEvidence']['resolvedManifest']['sha256'], 'read from the retained 2804 release before preparing')
+        self.assertEqual(preparation['baseEvidence']['resolvedManifest']['sha256'], '32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888')
+        self.assertEqual((CHECKED_IN['prepared']['preparationId'], CHECKED_IN['hostEvidence']['lunch']), (None, None), 'never filled without a real run')
         self.assertTrue(CHECKED_IN['build']['outDir'].startswith('out-'), 'the alpha OUT_DIR is never copied by a preparation')
 
     def test_preparation_never_links_mounts_reflinks_or_changes_ownership(self):
@@ -822,7 +909,10 @@ class CheckedInAlphaTest(unittest.TestCase):
         tools = spec['tools']
         for name in ('simg2img', 'debugfs', 'aapt', 'apksigner'):
             self.assertEqual(tools[name], FRANKEL['host']['tools'][name], name)
-        self.assertEqual((tools['lpunpack'], tools['fsckErofs']), (None, None), 'no verified builder path yet: fail closed')
+        bindir = '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/'
+        self.assertEqual((tools['lpunpack'], tools['fsckErofs']), (bindir + 'lpunpack', bindir + 'fsck.erofs'), 'the lead-measured executables')
+        self.assertEqual(spec['toolSha256'], {'lpunpack': '51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b',
+            'fsckErofs': '37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901'})
         self.assertIn('BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE', alpha.LUNCH_VARS)
         code = (SCRIPTS/'alpha_image.py').read_text().split('"""', 2)[2]
         for absent_text in ('apt-get', 'pip install', 'curl', 'wget', 'shell=True'):
