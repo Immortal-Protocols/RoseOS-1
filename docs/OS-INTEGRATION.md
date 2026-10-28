@@ -33,6 +33,35 @@ and lose the existing channel. Pass the base URL the installed phone already use
 device and release-channel fact to obtain first, not something to infer from
 `pixel-ota` asset names.
 
+### Release channels (alpha, beta, prod)
+
+With `--updater-url`, the patcher also applies `os/patches/updater-rose-channels.patch`
+and copies `RoseChannels.java` into the Updater. The selector offers:
+
+| Label | Stored `channel` | Wire channel (`DEVICE-channel`, metadata token) |
+| --- | --- | --- |
+| Prod | `prod` | `prod` (default for new installations) |
+| Beta | `stable` | `stable`: the existing Pixel feed `frankel-stable` |
+| Alpha | `alpha` | `alpha` |
+
+Beta keeps the legacy `stable` wire channel, so existing phones and existing
+metadata keep working; nothing requests `frankel-beta`. Only channels listed with
+`--updater-published-channel` (default `stable`, the feed Infra verified) are
+fetched. Any other choice is labelled "not available yet" in the selector, a
+manual check reports it, and periodic checks make no request. The Updater's
+device, channel and newer-build checks are unchanged, and an explicit
+`sys.update.channel` override keeps its stock behaviour.
+
+The stock Updater stores `channel` only after its settings screen is opened, so
+a missing key does not mean a new installation. On the first boot of a build with
+these rules, a phone that arrived through an OTA
+(`PackageManager.isDeviceUpgrading()`) and has no stored channel is given `stable`
+(Beta). A new installation stores nothing and follows the Prod default. A marker
+makes this run once, so a later OTA never moves a phone. An explicit choice,
+including a legacy `stable`, always survives. A leftover upstream `beta` value has
+no RoseOS feed and shows as unavailable until the owner picks another channel.
+Publish `prod` or `alpha` metadata before listing them as published.
+
 ## Stop contract (controller schema 3)
 
 The owner's Stop (notification action or controller screen) must end the task,
