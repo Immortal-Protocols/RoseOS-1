@@ -75,3 +75,27 @@ test('a provider without announce() is left alone',async()=>{
  reply(page,[live(1,'Still running.')]);await poll(page);
  assert.equal(page.run('lastEvent'),1,'the event cursor still advances');
 });
+
+test('DEFECT-008: a retained task_stopped, notice or task from before page load has no effect',async()=>{
+ const page=livePage();
+ page.run(`ready=false;$('notice').textContent='';$('task').textContent='';`);
+ // First poll after load: the server's retained queue, including an old Owner Stop.
+ reply(page,[{seq:1,type:'task_stopped',taskId:'old'},{seq:2,type:'notice',text:'Old notice'},{seq:3,type:'task',text:'Old task text'}]);await poll(page);
+ assert.equal(page.run('globalThis.taskStopSpeechPending===true'),false,'old Stop does not hold speech');
+ assert.equal(page.run(`$('notice').textContent`),'','old notice is not shown again');
+ assert.equal(page.run(`$('task').textContent`),'','old task text is not shown again');
+ page.run('ready=true;');reply(page,[]);await poll(page); // the call connects
+ reply(page,[live(4,'Still running.'),live(5,'The task stopped: Calculator was not available.')]);await poll(page);
+ assert.deepEqual(spoken(page),['Still running.','The task stopped: Calculator was not available.']);
+ reply(page,[{seq:6,type:'notice',text:'Fresh notice'}]);await poll(page);
+ assert.equal(page.run(`$('notice').textContent`),'Fresh notice','later notices still apply');
+});
+
+test('a fresh Owner Stop during the call still holds speech and stops playback',async()=>{
+ const page=livePage();
+ page.run(`fake.stopSpeech=()=>spoken.push('[stopSpeech]');`);
+ reply(page,[]);await poll(page);
+ reply(page,[{seq:1,type:'task_stopped',taskId:'t1'},live(2,'The task stopped: Task stopped')]);await poll(page);
+ assert.equal(page.run('globalThis.taskStopSpeechPending===true'),true);
+ assert.deepEqual(spoken(page),['[stopSpeech]'],'playback stopped and nothing further spoken for the stopped task');
+});
