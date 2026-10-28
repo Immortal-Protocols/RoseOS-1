@@ -38,6 +38,7 @@ impl Step {
             served_model: None,
             request_id: None,
             usage: None,
+            reasoning: None,
         })
     }
 

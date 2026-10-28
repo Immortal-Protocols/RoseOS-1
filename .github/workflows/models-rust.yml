@@ -1,0 +1,53 @@
+name: Models Rust chat core
+
+# Builds and tests workspace/models/rose-chat-core, including its loopback tests against the
+# QA fixture (qa/models/fixture_server.py). Proves client behaviour only: no model, endpoint,
+# secrets, cloud access or release interaction.
+on:
+  pull_request:
+    paths:
+      - 'workspace/models/rose-chat-core/**'
+      - 'qa/models/**'
+      - '.github/workflows/models-rust.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/models/rose-chat-core/**'
+      - 'qa/models/**'
+      - '.github/workflows/models-rust.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rose-chat-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workspace/models/rose-chat-core
+    env:
+      CARGO_TERM_COLOR: never
+      ROSE_CHAT_SOURCE_REV: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.0
+          rustc --version
+          cargo --version
+          python3 --version
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Tests (unit, in-process fixture, loopback fixture)
+        run: cargo test --locked --no-fail-fast

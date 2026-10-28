@@ -57,11 +57,42 @@ never stores the Authorization value, only its class, so records can be shared.
 | `truncated` | Content-Length larger than the body, then close | M04 |
 | `401`, `403`, `404`, `400-context` | Auth, route and context-length errors | E01–E03, C04 |
 | `429`, `429-no-retry-after`, `500`, `502`, `503`, `504` | Rate limit and server errors (`Retry-After` on 429 and 503) | E04, E05 |
+| `reasoning`, `reasoning-only` | Separate `message.reasoning` (vLLM style), with or without content | M10 |
+| `invalid-utf8`, `oversized` | Invalid UTF-8 in content; `--big-mib` MiB content | M07, M08 |
+| `redirect-cross-origin`, `redirect-same-origin` | 307 to `localhost` or `127.0.0.1` `/s/ok/...` | E07 |
 | `no-headers` | Reads the request, sends nothing for `--hold` s | T02 |
 | `stall-after-headers` | Headers and half the body, then holds | T03 |
 | `slow-body` | Headers, then one body byte every `--drip` s | T04 |
 
-## Client checks
+## Direct Rust CLI checks
+
+```bash
+python3 qa/models/rust_cli_checks.py --bin PATH/TO/rose-chat --raw-predict-toml 'request_url = "{base}"
+protocol = "openai-chat-candidate"' --out results.json
+```
+
+The `rose-chat` binary opens every socket itself. The script starts the fixture,
+writes a config (`bearer-env` with the sentinel, `request_ms` 1500) and a turn
+script, runs `rose-chat chat --config --script --transcript`, and judges each
+case from the fixture's records, the exit code, wall time, peak RSS and a
+sentinel grep of stdout/stderr/transcript. It covers two-turn and system
+ordering, reproducible bodies, failed-turn rollback (`seq:ok,500,ok`), model
+mismatch, every HTTP status and malformed body, a 64 MiB body, reasoning
+separation, refused connection, no-headers/stall/slow-drip against the deadline,
+SIGINT/SIGTERM, redirects, an untrusted TLS certificate (`openssl` self-signed),
+loopback proxy bypass and a verbatim `:rawPredict` URL. Use `--argv` and
+`--endpoint-toml` if the CLI contract changes. A binary whose `chat` exits 5 is
+reported UNAVAILABLE.
+
+`harness_standin.py` is a Python stand-in client used only to self-test this
+harness; `QA_STANDIN_BUG=no-deadline|commit-failed|leak-token|follow-redirect-with-auth|show-reasoning`
+injects one defect that the harness must report as FAIL. Its results are never
+evidence about rose-chat.
+
+The seq selector `/s/seq:a,b,c/` answers the Nth request with scenario N (the last
+repeats). `--tls-cert/--tls-key` serve HTTPS; `--big-mib` sizes `oversized`.
+
+## Bridged client checks (Python bridge, not Rust HTTP evidence)
 
 ```bash
 python3 qa/models/client_checks.py --crate workspace/models/rose-chat-core --out results.json
@@ -76,6 +107,6 @@ fixture over loopback. Neither kind exercises a Rust socket transport, timeouts,
 cancellation, a model or an endpoint. Those cases print as UNAVAILABLE. It needs
 cargo and the crate's dependencies, so it is not part of `scripts/test-local.sh`.
 
-Not covered yet: streaming (only if Product chooses it), user cancellation
-(needs Product's cancel surface), invalid UTF-8 and oversized bodies,
-cross-origin redirects, and anything requiring a real endpoint or model.
+Not covered: streaming (only if Product chooses it), connect timeout to a
+non-answering host, proxy use for non-loopback hosts, and anything requiring a
+real endpoint or model.

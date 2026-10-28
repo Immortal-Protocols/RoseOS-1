@@ -18,12 +18,14 @@ GET /__qa/requests returns the record; POST /__qa/reset clears it.
 import argparse
 import json
 import socket
+import ssl
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SENTINEL = 'QA-SENTINEL-NOT-A-SECRET'
+REASONING_SENTINEL = 'QA-REASONING-SENTINEL'
 FIXTURE_MODEL_HEADER = 'X-QA-Fixture'
 
 
@@ -151,6 +153,60 @@ for _name, _status_code, _kind, _msg, _headers in [
     SCENARIOS[_name] = (f'HTTP {_status_code} {_kind} JSON error', _status(_status_code, _kind, _msg, _headers))
 
 
+@scenario('reasoning', 'Answer in content plus a separate vLLM-style message.reasoning field')
+def _reasoning(h, body, model):
+    h.send_json(200, completion(model, reply_text(body), reasoning=f'{REASONING_SENTINEL} hidden thinking'))
+
+
+@scenario('reasoning-only', 'content is null and only message.reasoning is present')
+def _reasoning_only(h, body, model):
+    h.send_json(200, completion(model, None, reasoning=f'{REASONING_SENTINEL} hidden thinking'))
+
+
+@scenario('invalid-utf8', 'JSON body whose content string contains invalid UTF-8 bytes')
+def _invalid_utf8(h, body, model):
+    data = json.dumps(completion(model, 'BADBYTES')).encode().replace(b'BADBYTES', b'bad \xff\xfe bytes')
+    h.send_raw(200, data, 'application/json')
+
+
+@scenario('oversized', 'Valid JSON completion whose content is --big-mib MiB, written in 1 MiB chunks')
+def _oversized(h, body, model):
+    head, tail = json.dumps(completion(model, 'FILL')).encode().split(b'FILL')
+    size = h.server.big_bytes
+    h.send_response(200)
+    h.send_header('Content-Type', 'application/json')
+    h.send_header('Content-Length', str(len(head) + size + len(tail)))
+    h.end_headers()
+    h.mark_first_byte()
+    chunk = b'x' * (1 << 20)
+    sent = 0
+    try:
+        h.wfile.write(head)
+        while sent < size:
+            piece = chunk[: min(len(chunk), size - sent)]
+            h.wfile.write(piece)
+            sent += len(piece)
+        h.wfile.write(tail)
+        h.wfile.flush()
+    except OSError:
+        h.record['client_disconnected'] = True
+    h.record['body_bytes_sent'] = len(head) + sent
+    h.close_connection = True
+
+
+def _redirect(cross_origin):
+    def handler(h, body, model):
+        rest = h.path.split('/', 3)[3] if h.path.count('/') >= 3 else 'v1/chat/completions'
+        port = h.server.server_address[1]
+        host = 'localhost' if cross_origin else '127.0.0.1'
+        h.send_raw(307, b'', 'text/plain', {'Location': f'http://{host}:{port}/s/ok/{rest}'})
+    return handler
+
+
+SCENARIOS['redirect-cross-origin'] = ('307 to http://localhost:<port>/s/ok/... (different origin)', _redirect(True))
+SCENARIOS['redirect-same-origin'] = ('307 to http://127.0.0.1:<port>/s/ok/... (same origin)', _redirect(False))
+
+
 @scenario('no-headers', 'Reads the request, then sends nothing for --hold seconds')
 def _no_headers(h, body, model):
     h.wait_for_disconnect(h.server.hold)
@@ -252,7 +308,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/__qa/requests':
             with self.server.lock:
-                payload = {'connections': self.server.connections, 'requests': list(self.server.requests)}
+                payload = {'connections': self.server.connections, 'tcp_accepts': self.server.tcp_accepts,
+                           'tls_handshake_failures': self.server.tls_handshake_failures,
+                           'requests': list(self.server.requests)}
             self.send_json(200, payload)
         elif self.path == '/__qa/scenarios':
             self.send_json(200, {name: desc for name, (desc, _) in SCENARIOS.items()})
@@ -265,10 +323,21 @@ class Handler(BaseHTTPRequestHandler):
             with self.server.lock:
                 self.server.requests.clear()
                 self.server.connections = 0
+                self.server.seq_counters.clear()
+                self.server.tcp_accepts = 0
+                self.server.tls_handshake_failures = 0
             self.send_json(200, {'reset': True})
             return
         parts = self.path.split('/')
-        name = parts[2] if len(parts) > 2 and parts[1] == 's' else self.server.default_scenario
+        selector = parts[2] if len(parts) > 2 and parts[1] == 's' else self.server.default_scenario
+        name = selector
+        if selector.startswith('seq:'):
+            # seq:a,b,c answers the Nth request on this selector with the Nth name; the last repeats.
+            names = selector[4:].split(',')
+            with self.server.lock:
+                index = self.server.seq_counters.get(selector, 0)
+                self.server.seq_counters[selector] = index + 1
+            name = names[min(index, len(names) - 1)]
         length = int(self.headers.get('Content-Length') or 0)
         raw = self.rfile.read(length) if length else b''
         try:
@@ -279,6 +348,7 @@ class Handler(BaseHTTPRequestHandler):
         self.record = {
             'seq': None,
             'scenario': name,
+            'selector': selector,
             'path': self.path,
             'auth': self.classify_auth(),
             'content_type': self.headers.get('Content-Type'),
@@ -307,8 +377,17 @@ class Handler(BaseHTTPRequestHandler):
 class FixtureServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port=0, default_scenario='ok', hold=30.0, drip=0.5, require_auth=False, verbose=False):
+    def __init__(self, port=0, default_scenario='ok', hold=30.0, drip=0.5, require_auth=False, verbose=False,
+                 big_mib=64, tls_cert=None, tls_key=None):
         super().__init__(('127.0.0.1', port), Handler)
+        self.tls = None
+        if tls_cert:
+            self.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.tls.load_cert_chain(tls_cert, tls_key)
+        self.big_bytes = int(big_mib * (1 << 20))
+        self.seq_counters = {}
+        self.tcp_accepts = 0
+        self.tls_handshake_failures = 0
         self.default_scenario = default_scenario
         self.hold = hold
         self.drip = drip
@@ -318,9 +397,31 @@ class FixtureServer(ThreadingHTTPServer):
         self.requests = []
         self.connections = 0
 
+    def get_request(self):
+        sock, addr = self.socket.accept()
+        with self.lock:
+            self.tcp_accepts += 1
+        if self.tls is None:
+            return sock, addr
+        sock.settimeout(5)
+        try:
+            tls_sock = self.tls.wrap_socket(sock, server_side=True)
+        except (ssl.SSLError, OSError):
+            with self.lock:
+                self.tls_handshake_failures += 1
+            sock.close()
+            raise OSError('fixture: TLS handshake failed')
+        tls_sock.settimeout(None)
+        return tls_sock, addr
+
+    def handle_error(self, request, client_address):
+        if self.verbose:
+            super().handle_error(request, client_address)
+
     @property
     def base(self):
-        return f'http://127.0.0.1:{self.server_address[1]}'
+        scheme = 'https' if self.tls else 'http'
+        return f'{scheme}://127.0.0.1:{self.server_address[1]}'
 
     def url(self, name):
         return f'{self.base}/s/{name}/v1'
@@ -332,6 +433,9 @@ def main(argv=None):
     parser.add_argument('--scenario', default='ok', help='scenario for paths outside /s/<scenario>/')
     parser.add_argument('--hold', type=float, default=30.0, help='seconds to hold no-headers/stall scenarios')
     parser.add_argument('--drip', type=float, default=0.5, help='seconds between slow-body bytes')
+    parser.add_argument('--big-mib', type=float, default=64, help='content size for the oversized scenario')
+    parser.add_argument('--tls-cert', help='serve HTTPS with this PEM certificate (e.g. self-signed)')
+    parser.add_argument('--tls-key', help='PEM private key for --tls-cert')
     parser.add_argument('--require-auth', action='store_true', help=f'answer 401 unless Bearer {SENTINEL}')
     parser.add_argument('--list', action='store_true', help='list scenarios and exit')
     parser.add_argument('--verbose', action='store_true')
@@ -340,7 +444,8 @@ def main(argv=None):
         for name, (desc, _) in SCENARIOS.items():
             print(f'{name:22} {desc}')
         return 0
-    server = FixtureServer(args.port, args.scenario, args.hold, args.drip, args.require_auth, args.verbose)
+    server = FixtureServer(args.port, args.scenario, args.hold, args.drip, args.require_auth, args.verbose,
+                           args.big_mib, args.tls_cert, args.tls_key)
     # One machine-readable line so a harness can discover the ephemeral port.
     print(json.dumps({'fixture': 'rose-models-qa', 'base': server.base, 'example': server.url('ok')}), flush=True)
     try:

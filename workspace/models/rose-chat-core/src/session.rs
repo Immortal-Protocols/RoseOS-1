@@ -132,6 +132,7 @@ impl<T: ChatTransport> ChatSession<T> {
             served_model: response.served_model,
             request_id: response.request_id,
             usage: response.usage,
+            reasoning_chars: response.reasoning.as_ref().map(|r| r.chars().count()),
             latency,
         })
     }
