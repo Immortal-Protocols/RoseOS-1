@@ -280,32 +280,29 @@ class CuttlefishAlphaProductTest(unittest.TestCase):
         self.assertEqual(cut(patched), cut(pinned))
 
     def test_alpha099_incremental_delta_takes_the_prepared_tree_to_the_new_patch(self):
-        # Infra's prepared root holds f21bf683's generic/Android.bp; this one-file delta brings it to the new full patch.
+        # Infra's prepared root holds f21bf683's generic/Android.bp (a8fd1327, recorded in its receipt); this one-file
+        # delta brings it to the new full patch. Rebuilt from fixtures by hash, so no git history is needed.
         generic = self.make/'target/product/generic/Android.bp'
-        old = [f for f in CONTRACT['osDelta']['changedFiles'] if f['path'] == 'target/product/generic/Android.bp'][0]
+        new = [f for f in CONTRACT['osDelta']['changedFiles'] if f['path'] == 'target/product/generic/Android.bp'][0]
         step = CONTRACT['alpha099IncrementalDelta']
+        digest = lambda: hashlib.sha256(generic.read_bytes()).hexdigest()
         self.assertEqual(step['sha256'], hashlib.sha256(INCREMENTAL.read_bytes()).hexdigest())
         self.assertEqual(re.findall(r'^diff --git a/(\S+) ', INCREMENTAL.read_text(), re.M), ['target/product/generic/Android.bp'])
-        previous = self.root/'previous.patch'
-        previous.write_bytes(git('show', 'f21bf68322b3fa0a8924840554ab3e9398f79125:os/patches/cuttlefish-alpha-no-updater.patch',
-            cwd=ROOT).stdout.encode())
-        self.assertEqual(hashlib.sha256(previous.read_bytes()).hexdigest(), step['fromPatchSha256'])
-        git('apply', str(previous), cwd=self.make)
-        self.assertEqual(hashlib.sha256(generic.read_bytes()).hexdigest(), step['beforeSha256'])
+        self.apply_alpha()
+        self.assertEqual(digest(), new['fixtureAfterSha256'])
+        self.assertEqual(step['afterSha256'], new['fixtureAfterSha256'])
+        # Reverse it: exactly the previously prepared bytes, then forward once onto those bytes.
+        git('apply', '-R', str(INCREMENTAL), cwd=self.make)
+        self.assertEqual(digest(), step['beforeSha256'])
+        self.assertEqual(step['beforeSha256'], 'a8fd132718822798e00693d09492e4dce9e3b04922acf7434c24a1d2c3bb9bfa')
         git('apply', '--check', str(INCREMENTAL), cwd=self.make)
         git('apply', str(INCREMENTAL), cwd=self.make)
-        self.assertEqual(hashlib.sha256(generic.read_bytes()).hexdigest(), step['afterSha256'])
-        self.assertEqual(step['afterSha256'], old['fixtureAfterSha256'])
+        self.assertEqual(digest(), step['afterSha256'])
         # Idempotence: a second application is refused, never applied twice.
         self.assertNotEqual(git('apply', '--check', str(INCREMENTAL), cwd=self.make, check=False).returncode, 0)
-        # The same bytes as applying the new full patch to the 2804 base.
-        fresh = self.root/'fresh'
-        shutil.copytree(FIXTURES/'build-make', fresh)
-        git('init', '-q', cwd=fresh)
-        for patch in ROSE:
-            git('apply', str(ROOT/'os/patches'/patch), cwd=fresh)
-        git('apply', str(ALPHA), cwd=fresh)
-        self.assertEqual((fresh/'target/product/generic/Android.bp').read_bytes(), generic.read_bytes())
+        # media_system.mk is not part of the step: the old and new full patches leave the same bytes.
+        self.assertEqual(hashlib.sha256((self.make/'target/product/media_system.mk').read_bytes()).hexdigest(),
+            '63f7639d0ecb87e6f08b2c4a99aa0a045b7f97fcf67521c1ccf72540963d8475')
 
     def test_tray_property_reaches_the_soong_system_build_prop(self):
         self.apply_alpha()
