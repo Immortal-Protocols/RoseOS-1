@@ -18,6 +18,8 @@ Symlinks are resolved hop by hop inside the tree before anything is written: rel
 kept as they are, absolute links into the tree are rebased onto the prepared tree, links whose target is absent in
 the base (dangling) are kept only if their target is contained in the tree, and any other escape, a link into an
 excluded path that exists, a loop or an unsupported file type stops the preparation and is named.
+git apply rewrites each patched file, so under a restrictive umask it would lose the copied mode; the mode recorded
+for exactly each declared changed file is restored afterwards (and listed in the receipt), never any other file.
 Staging happens in <root>/.staging-<id>-<nonce>/, renamed to <root>/<id>/ (tree/ and preparation.json) only after
 the delta applied with the expected hashes and the base was seen unchanged. On failure this run removes only the
 staging directory it created (it carries this run's marker); a leftover from an interrupted run is never removed
@@ -209,6 +211,24 @@ def predict_changes(base, delta, scratch):
             raise PreparationFailed(f'{change["project"]}/{change["path"]} is unchanged by the delta')
     return changes
 
+def restore_changed_modes(tree, changes, plan):
+    """git apply writes each patched file anew, so under a restrictive umask (the builder runs with 0077) it loses the
+    copied mode. Restore the mode the copy recorded, on exactly the delta's declared changed files and nothing else."""
+    recorded = {e['path']: e['mode'] for e in plan['entries'] if e['type'] == 'file'}
+    modes = []
+    for change in changes:
+        rel = f'{change["project"]}/{change["path"]}'
+        if rel not in recorded:
+            raise PreparationFailed(f'{rel} is not a copied regular file; its mode is not recorded')
+        info = os.lstat(Path(tree)/rel)
+        if not stat.S_ISREG(info.st_mode):
+            raise PreparationFailed(f'{rel} is not a regular file after the delta')
+        after = stat.S_IMODE(info.st_mode)
+        if after != recorded[rel]:
+            os.chmod(Path(tree)/rel, recorded[rel])
+        modes.append({'path': rel, 'recordedMode': f'{recorded[rel]:o}', 'modeAfterDelta': f'{after:o}', 'restored': after != recorded[rel]})
+    return modes
+
 def preparation_id(binding, delta, changes):
     return sha256_bytes(canonical({'base': binding, 'osDelta': {'commit': delta['commit'],
         'patchDigests': [{'path': p['path'], 'project': p['project'], 'sha256': p['sha256']} for p in delta['patches']]},
@@ -299,6 +319,7 @@ def prepare(base, reserved_root, binding, delta, policy, extra, free_needed_byte
             f.write(manifest)
         for patch in delta['patches']:
             apply_patch(staging/'tree'/patch['project'], patch['file'], staging)
+        modes = restore_changed_modes(staging/'tree', changes, plan)
         for change in changes:
             actual = sha256_path(staging/'tree'/change['project']/change['path'])
             if actual != change['afterSha256']:
@@ -311,7 +332,7 @@ def prepare(base, reserved_root, binding, delta, policy, extra, free_needed_byte
             'preparedRoot': str(final/'tree'), 'baseRoot': str(base), **binding,
             'osDeltaCommit': delta['commit'],
             'patchDigests': [{'path': p['path'], 'project': p['project'], 'sha256': p['sha256']} for p in delta['patches']],
-            'changedFiles': changes, 'selectionSha256': selection, 'manifest': 'manifest.tsv',
+            'changedFiles': changes, 'changedFileModes': modes, 'selectionSha256': selection, 'manifest': 'manifest.tsv',
             'effectiveSourceIdentity': sha256_bytes(canonical({'base': binding, 'selectionSha256': selection,
                 'osDeltaCommit': delta['commit'], 'changedFiles': changes})),
             'sourceCopyMethod': 'ordinary byte copy into new inodes (no reflink, hardlink, symlink forest or mount); modes and mtimes kept',

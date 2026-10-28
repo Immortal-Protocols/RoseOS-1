@@ -32,6 +32,9 @@ DELTA = {'commit': 'f21bf68322b3fa0a8924840554ab3e9398f79125', 'changedFiles': [
     'patches': [{'path': 'os/patches/cuttlefish-alpha-no-updater.patch', 'project': 'build/make',
         'sha256': hashlib.sha256(PATCH.read_bytes()).hexdigest(), 'file': str(PATCH)}]}
 
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
 def snapshot(root, directory_mtimes=True):
     """Every entry under root with its type, mode, inode, mtime and content or link text."""
     result = {}
@@ -195,6 +198,53 @@ class PreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(alpha_source.PreparationFailed, 'listed external link vendor/dl/unpacked/x/system/d not found'):
             self.prepare()
         self.assert_nothing_prepared()
+
+    def test_patched_files_keep_their_recorded_modes_under_a_restrictive_umask(self):
+        # INFRA-ALPHA-094: the builder prepares with umask 0077; git apply rewrote both changed files as 0600 while the
+        # copy manifest recorded 0644, and the full re-hash failed on exactly those two files.
+        for path in (GENERIC, MEDIA):
+            os.chmod(self.base/'build/make'/path, 0o644)
+        before = snapshot(self.base)
+        old = os.umask(0o077)
+        try:
+            receipt = self.prepare()
+        finally:
+            os.umask(old)
+        final = self.reserved/receipt['preparationId']
+        tree, manifest = final/'tree', (final/'manifest.tsv').read_text()
+        self.assertEqual(alpha_source.verify_tree(tree, manifest, receipt['changedFiles']), [])
+        self.assertEqual(receipt['changedFileModes'], [{'path': f'build/make/{path}', 'recordedMode': '644', 'modeAfterDelta': '600',
+            'restored': True} for path in (GENERIC, MEDIA)])
+        for path in (GENERIC, MEDIA):
+            self.assertEqual(stat.S_IMODE(os.lstat(tree/'build/make'/path).st_mode), 0o644)
+            self.assertEqual(digest(tree/'build/make'/path), next(c['afterSha256'] for c in receipt['changedFiles'] if c['path'] == path))
+        self.assertEqual(stat.S_IMODE(os.lstat(tree/'tools/run.sh').st_mode), 0o755, 'other files keep their copied modes')
+        self.assertEqual(snapshot(self.base), before, 'the base is only read')
+        # Mode drift elsewhere, or on a changed file after preparation, is still a difference.
+        os.chmod(tree/'tools/run.sh', 0o700)
+        os.chmod(tree/'build/make'/MEDIA, 0o600)
+        self.assertEqual(sorted(alpha_source.verify_tree(tree, manifest, receipt['changedFiles'])),
+            [f'build/make/{MEDIA}: file differs', 'tools/run.sh: file differs'])
+
+    def test_mode_restoration_is_limited_to_the_declared_changed_files(self):
+        old = os.umask(0o077)
+        chmods = []
+        real_chmod = os.chmod
+        def record(path, mode, *args, **kwargs):
+            chmods.append(str(path))
+            return real_chmod(path, mode, *args, **kwargs)
+        real_apply = alpha_source.apply_patch
+        def apply_then_watch(directory, patch, ceiling):
+            real_apply(directory, patch, ceiling)
+            if 'staging' in str(directory):
+                chmods.clear()  # count only what happens after the delta is applied in the copy
+        try:
+            with mock.patch.object(alpha_source, 'apply_patch', apply_then_watch), mock.patch.object(alpha_source.os, 'chmod', record):
+                receipt = self.prepare()
+        finally:
+            os.umask(old)
+        self.assertEqual(sorted(p.split('/tree/', 1)[1] for p in chmods), sorted(f'build/make/{path}' for path in (GENERIC, MEDIA)))
+        self.assertEqual([m['path'] for m in receipt['changedFileModes']], [f'build/make/{path}' for path in (GENERIC, MEDIA)])
 
     def test_wrong_base_for_the_delta_fails_before_copying(self):
         (self.base/'build/make'/MEDIA).write_bytes((ROOT/'os/tests/fixtures/cuttlefish-alpha/build-make'/MEDIA).read_bytes())

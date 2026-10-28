@@ -805,17 +805,36 @@ class AlphaTreeTest(unittest.TestCase):
             alpha.probe(alpha.load(self.config_path), None, '40680000002', TS, self.root/'probe3.json')
 
 class CheckedInAlphaTest(unittest.TestCase):
-    def test_checked_in_config_fails_closed_naming_the_missing_evidence(self):
+    def test_checked_in_config_admits_the_guard_and_fails_closed_off_the_builder(self):
+        # With the lead's measured bindings the guard passes; everything after it needs the real prepared tree.
         result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard'], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 4)
-        self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch',
-            'prepared.preparationId', 'prepared.receiptSha256'])
-        # Every preparation input is recorded now; off the builder, prepare stops at the base checks or the lock.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        builder = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'builder'], capture_output=True, text=True)
+        self.assertEqual((builder.returncode, json.loads(builder.stderr)['verdict']), (1, 'FAIL'))
+        self.assertIn('no preparation with this id', builder.stderr)
         prepare = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'prepare'], capture_output=True, text=True)
         self.assertEqual((prepare.returncode, json.loads(prepare.stderr)['verdict']), (1, 'FAIL'))
         build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
             '--run-id', '1', '--build-timestamp', TS, '--receipt-dir', '/nonexistent/alpha-receipt'], capture_output=True, text=True)
-        self.assertEqual(build.returncode, 4, 'a dispatch cannot compile speculatively')
+        self.assertEqual(build.returncode, 1, 'no build without the real prepared tree')
+
+    def test_missing_host_inputs_still_fail_closed_by_name(self):
+        data = json.loads(json.dumps(CHECKED_IN))
+        data['hostEvidence'].update(probeReceiptSha256=None, lunch=None)
+        data['prepared'].update(preparationId=None, receiptSha256=None)
+        data['imageVerification']['tools']['lpunpack'] = None
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'alpha.json'
+            path.write_text(json.dumps(data))
+            result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard', '--config', str(path)],
+                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 4)
+        self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch',
+            'prepared.preparationId', 'prepared.receiptSha256', 'imageVerification.tools.lpunpack'])
+        config = alpha.load()
+        config['hostEvidence']['lunch'] = dict(config['hostEvidence']['lunch'])
+        config['imageVerification']['tools']['fsckErofs'] = None
+        self.assertEqual(alpha.missing_evidence(config), ['imageVerification.tools.fsckErofs'], 'the recorded EROFS needs its extractor')
 
     def test_source_binding_is_the_lead_evidenced_2804_integration(self):
         binding = CHECKED_IN['sourceBinding']
@@ -825,8 +844,9 @@ class CheckedInAlphaTest(unittest.TestCase):
         # The documented order is the 2804 dispatch contract's.
         self.assertIn("APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]",
             (SCRIPTS/'tests/test_release_candidate_contract.py').read_text())
-        self.assertEqual((CHECKED_IN['hostEvidence']['probeReceiptSha256'], CHECKED_IN['hostEvidence']['lunch']), (None, None))
-        self.assertEqual((CHECKED_IN['prepared']['preparationId'], CHECKED_IN['prepared']['receiptSha256']), (None, None))
+        self.assertEqual(CHECKED_IN['hostEvidence']['probeReceiptSha256'], '9c19b5cbcb731fb6dfc0eaf05845a6be1bc4a2a2990b4f650ff60a012c91750e')
+        self.assertEqual((CHECKED_IN['prepared']['preparationId'], CHECKED_IN['prepared']['receiptSha256']),
+            ('b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87', '18582916250d5cc7236a4813fba0c758d9cee3c199681b0ac6ee11b953ca206e'))
         config = alpha.load()
         with self.assertRaisesRegex(alpha.CheckFailed, 'based on ae9cfd4d'):
             alpha.check_dispatch(config, SHA, APPS)
@@ -884,7 +904,13 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual(delta['changedFiles'], [{'project': 'build/make', 'path': GENERIC}, {'project': 'build/make', 'path': MEDIA}])
         self.assertEqual(preparation['baseEvidence']['policy']['sha256'], document['policySha256'])
         self.assertEqual(preparation['baseEvidence']['resolvedManifest']['sha256'], '32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888')
-        self.assertEqual((CHECKED_IN['prepared']['preparationId'], CHECKED_IN['hostEvidence']['lunch']), (None, None), 'never filled without a real run')
+        # The lead's measured probe (INFRA-ALPHA-094), exactly; the guard re-checks the build's lunch against it.
+        self.assertEqual(CHECKED_IN['hostEvidence']['lunch'], {'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE': 'erofs',
+            'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86', 'PRODUCT_DEVICE': 'vsoc_x86_64_only',
+            'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only', 'TARGET_BOARD_PLATFORM': 'vsoc_x86_64',
+            'TARGET_BUILD_VARIANT': 'userdebug', 'TARGET_PRODUCT': 'aosp_cf_x86_64_only_phone', 'TARGET_RELEASE': 'cur'})
+        self.assertEqual(sorted(CHECKED_IN['hostEvidence']['lunch']), sorted(alpha.LUNCH_VARS))
+        self.assertIn('historical and distinct from the source fix', CHECKED_IN['prepared']['evidence'])
         self.assertTrue(CHECKED_IN['build']['outDir'].startswith('out-'), 'the alpha OUT_DIR is never copied by a preparation')
 
     def test_preparation_never_links_mounts_reflinks_or_changes_ownership(self):
@@ -968,7 +994,8 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual(result['commands'][1][-1],
             'source build/envsetup.sh && lunch aosp_cf_x86_64_only_phone-cur-userdebug && m -j48 droid hosttar')
         self.assertEqual(result['environment'], {'OUT_DIR': 'out-rose-cf-alpha', 'BUILD_NUMBER': 'rose-cf-alpha-40680000003', 'BUILD_DATETIME': TS})
-        self.assertTrue(result['missingEvidence'])
+        self.assertEqual(result['missingEvidence'], [])
+        self.assertEqual(result['cwd'], '/home/pixelbuild/rose-actions/alpha-source/b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87/tree')
 
     def test_adapter_never_reconciles_signs_publishes_cleans_or_uses_the_reference_scripts(self):
         code = (SCRIPTS/'emulator-alpha.py').read_text().split('"""', 2)[2]
