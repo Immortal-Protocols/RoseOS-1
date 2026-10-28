@@ -2,9 +2,14 @@
 //!
 //! It records identities and per-turn outcomes so a run can be compared and reproduced. It never
 //! records message text, reasoning text, credential values or URL query strings.
+//!
+//! Each record is written to the file as one complete line with a single unbuffered write before
+//! the next turn starts. A run killed by SIGINT/SIGTERM during a later turn therefore keeps every
+//! earlier record. The interrupted turn and the summary are absent. Nothing is fsynced, so
+//! durability across power loss or an OS crash is not claimed.
 
 use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,7 +20,7 @@ use crate::error::ChatError;
 use crate::model::{FinishReason, Reply};
 
 pub struct Transcript {
-    out: BufWriter<File>,
+    out: File,
     turns: usize,
     failed: usize,
 }
@@ -26,7 +31,7 @@ pub const SOURCE_REV: Option<&str> = option_env!("ROSE_CHAT_SOURCE_REV");
 impl Transcript {
     pub fn create(path: &Path, config: &Config, label: Option<&str>) -> io::Result<Transcript> {
         let mut t = Transcript {
-            out: BufWriter::new(File::create(path)?),
+            out: File::create(path)?,
             turns: 0,
             failed: 0,
         };
@@ -94,12 +99,12 @@ impl Transcript {
             "failed": self.failed,
             "finished_unix_ms": unix_ms(),
         });
-        self.line(summary)?;
-        self.out.flush()
+        self.line(summary)
     }
 
+    /// One record, written whole, with no user-space buffering.
     fn line(&mut self, value: Value) -> io::Result<()> {
-        writeln!(self.out, "{value}")
+        self.out.write_all(format!("{value}\n").as_bytes())
     }
 }
 
