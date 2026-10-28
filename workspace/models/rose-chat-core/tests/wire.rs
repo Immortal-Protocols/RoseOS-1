@@ -168,7 +168,7 @@ fn status_mapping() {
         ),
         (503, None, "", ChatError::Server { status: 503 }),
         (301, None, "", ChatError::UnexpectedStatus { status: 301 }),
-        (404, None, "", ChatError::UnexpectedStatus { status: 404 }),
+        (404, None, "", ChatError::NotFound { status: 404 }),
     ];
     for (status, retry_after, body, expected) in cases {
         assert_eq!(
@@ -306,4 +306,45 @@ fn retryable_classification() {
     ] {
         assert!(!e.is_retryable(), "{e:?}");
     }
+}
+
+#[test]
+fn reasoning_is_kept_apart_from_the_answer() {
+    let body = json!({
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": "answer", "reasoning": "thinking"}, "finish_reason": "stop"}],
+    });
+    let r = decode_response(200, None, body.to_string().as_bytes()).unwrap();
+    assert_eq!(r.content.as_deref(), Some("answer"));
+    assert_eq!(r.reasoning.as_deref(), Some("thinking"));
+
+    let alt = json!({"choices": [{"message": {"content": "a", "reasoning_content": "t"}}]});
+    let r = decode_response(200, None, alt.to_string().as_bytes()).unwrap();
+    assert_eq!(r.reasoning.as_deref(), Some("t"));
+
+    // Reasoning without content is never promoted to the answer.
+    let only = json!({"model": MODEL, "choices": [{"message": {"content": null, "reasoning": "thinking"}}]});
+    let mut s = ChatSession::new(
+        &config(),
+        ScriptedTransport::new([
+            Step::Wire { status: 200, retry_after: None, body: only.to_string() },
+            Step::Wire { status: 200, retry_after: None, body: json!({"model": MODEL, "choices": [{"message": {"content": "answer", "reasoning": "secret thoughts"}}]}).to_string() },
+            Step::wire_ok(MODEL, "a2"),
+        ]),
+        None,
+    );
+    assert_eq!(s.send("u1"), Err(ChatError::EmptyCompletion));
+    let reply = s.send("u1").unwrap();
+    assert_eq!(reply.content, "answer");
+    assert_eq!(reply.reasoning_chars, Some(15));
+    s.send("u2").unwrap();
+    let replayed: Value = serde_json::from_str(&s.transport().wire_bodies[2]).unwrap();
+    assert!(
+        !replayed.to_string().contains("secret thoughts"),
+        "reasoning must not be replayed"
+    );
+    assert_eq!(
+        replayed["messages"][1],
+        json!({"role": "assistant", "content": "answer"})
+    );
 }
