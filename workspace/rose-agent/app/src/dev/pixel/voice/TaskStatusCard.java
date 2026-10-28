@@ -11,6 +11,8 @@ final class TaskStatusCard extends LinearLayout {
  private String lastRender="",observedId="",observedState="",observedPresentation="";
  private boolean available,expanded,detailsTouched;
  private TaskHtmlView htmlView;
+ // The task whose HTML card lost its renderer: it falls back to the text result rather than a blank or dead view.
+ private String htmlLostFor="";
  private final int ink=PixelAppearance.color(0xff29385d),muted=PixelAppearance.color(0xff576f90);
  TaskStatusCard(MainActivity activity){
   super(activity);this.activity=activity;setOrientation(VERTICAL);setPadding(dp(20),dp(18),dp(20),dp(22));
@@ -61,7 +63,7 @@ final class TaskStatusCard extends LinearLayout {
     JSONObject widget=current.optJSONObject("widget");
     JSONObject visualization=current.optJSONObject("visualization");
     View rich=state.equals("completed")&&activity.getSharedPreferences("task-card",0).getBoolean("rich",true)&&widget!=null?TaskWidgetView.create(activity,widget,()->toggleDetails()):null;
-    if(state.equals("completed")&&richMode()&&visualization!=null&&"html".equals(visualization.optString("type"))){htmlView=new TaskHtmlView(activity,visualization.optString("html"));rich=htmlView;}
+    if(state.equals("completed")&&richMode()&&visualization!=null&&"html".equals(visualization.optString("type"))&&!current.optString("id").equals(htmlLostFor)){htmlView=new TaskHtmlView(activity,visualization.optString("html"));htmlView.onRendererGone=()->{htmlView=null;htmlLostFor=current==null?"":current.optString("id");draw();};rich=htmlView;}
     if(rich!=null)addSpaced(rich,18);
     else{TextView result=label("",18,600,ink);result.setLineSpacing(dp(7),1);TaskText.set(result,update);result.setTextIsSelectable(false);result.setOnClickListener(v->toggleDetails());addSpaced(result,18);}
    }else{

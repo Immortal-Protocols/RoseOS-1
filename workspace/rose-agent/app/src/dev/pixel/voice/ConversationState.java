@@ -30,7 +30,7 @@ final class ConversationState {
   switch(endReason){
    case "start_timeout":return Failure.NOT_CONNECTED;
    case "start_error":return "409".equals(startError)?Failure.BUSY:Failure.NOT_CONNECTED;
-   case "provider_disconnect":case "other":return Failure.DISCONNECTED;
+   case "provider_disconnect":case "other":case "renderer_gone":return Failure.DISCONNECTED; // renderer_gone: VoiceService.voiceRendererGone
    default:return Failure.NONE; // cleanup (user end), handoff, routing_change, or nothing yet
   }
  }

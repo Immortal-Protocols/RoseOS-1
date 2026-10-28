@@ -110,6 +110,15 @@ public final class ConversationStateTest {
             expect(x.trayConnected() == x.active() && (x.trayListening() == (x.active() && !x.muted)),
                     "Tray and conversation agree on active and listening");
 
+        // Voice page renderer loss (VoiceService.voiceRendererGone): live/connected cleared, typed reason recorded.
+        ConversationState rendererGone = s(false, false, false, false, "renderer_gone");
+        expect(rendererGone.phase == ConversationState.Phase.ERROR && rendererGone.failure == ConversationState.Failure.DISCONNECTED,
+                "Renderer loss is shown as a disconnect, not idle and not still connected");
+        ConversationState.Notices r = new ConversationState.Notices();
+        r.observe(ACTIVE);
+        expect("Call ended".equals(r.observe(rendererGone)), "The lost call ends with Call ended");
+        expect("talk".equals(rendererGone.primaryCommand()), "Speak is offered again; nothing restarts on its own");
+
         System.out.println("ConversationStateTest: " + checks + " checks passed");
     }
 }
