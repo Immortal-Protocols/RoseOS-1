@@ -36,10 +36,24 @@ test('Home comes first and the existing conversation page follows it',()=>{
  assert.match(pages,/drawer=index!=voicePage;/);
 });
 
-test('the Rose entry only navigates; it never starts, mutes or ends voice',()=>{
- assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),\(\)->launcherPager\.showPage\(voicePage,true\),this::apps,/);
+test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
+ assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),this::openRoseConversation,this::apps,/);
+ // APP-P2-002-HOOK-001: plain explicit Intent, same task, no flags or extras.
+ const hook=main.match(/void openRoseConversation\(\)\{([^}]*)\}/)[1];
+ assert.equal(hook,'startActivity(new Intent(this,RoseConversationActivity.class));');
+ const activity=manifest.match(/<activity android:name="\.RoseConversationActivity"[^>]*\/>/)[0];
+ assert.match(activity,/android:exported="false"/);
+ assert.ok(!/launchMode|taskAffinity/.test(activity),'stays in the launcher task so HOME and Back return Home');
  for(const forbidden of ['VoiceService','command(','toggleVoice','startForegroundService','"talk"','"end"','"mute"'])
   assert.ok(!home.includes(forbidden),forbidden);
+ // The conversation surface sends voice commands only from its own controls, never on open.
+ const conversation=read('../app/src/dev/pixel/voice/RoseConversationActivity.java');
+ for(const hook of ['onCreate','onResume']){
+  // Tap listeners (setOnClickListener(v->...)) run on the owner's tap, not on open.
+  const body=conversation.slice(conversation.indexOf(`void ${hook}(`)).split('\n @Override')[0].split('\n void ')[0]
+   .replace(/setOnClickListener\(v->[^;]*;/g,'');
+  assert.ok(!/send\(|startForegroundService|setAction\(/.test(body),hook);
+ }
 });
 
 test('the dock shows real installed apps through the existing launch path',()=>{
