@@ -24,6 +24,7 @@ python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_tray_contract.py
 python3 scripts/tests/test_release_manifest.py
+python3 scripts/tests/test_release_stage.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT

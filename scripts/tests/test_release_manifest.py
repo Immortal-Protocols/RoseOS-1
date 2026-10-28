@@ -6,10 +6,12 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1]/'release-manifest.py'
+sys.path.insert(0, str(SCRIPT.parent))
 spec = importlib.util.spec_from_file_location('release_manifest', SCRIPT)
 release_manifest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release_manifest)

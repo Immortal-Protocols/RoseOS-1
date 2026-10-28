@@ -10,13 +10,13 @@ expected pins is not a cryptographic signature check, and no output says otherwi
 Exit status: 0 pass, 1 verification failed, 2 invalid input.
 """
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sys
-import tempfile
+import release_receipts
+from release_receipts import sha256_file
 
 SCHEMA = 1
 KIND = 'rose-os-candidate-manifest'
@@ -34,13 +34,6 @@ CLAIMED = 'claimed metadata; matched against expected pins, not cryptographicall
 
 class InputError(Exception):
     pass
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for block in iter(lambda: f.read(1 << 20), b''):
-            digest.update(block)
-    return digest.hexdigest()
 
 def positive_int(value, name):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -85,28 +78,10 @@ def metadata_line(build, device, feed_channel):
     return f'{build["number"]} {build["timestamp"]} {device} {feed_channel}'
 
 def write_once(path, document):
-    """Atomically create path with the JSON document; refuse to replace any existing file."""
-    path = Path(path).resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode()
-    fd, temporary = tempfile.mkstemp(prefix='.'+path.name+'.', dir=path.parent)
     try:
-        with os.fdopen(fd, 'wb') as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(temporary, 0o644)
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            raise InputError(f'{path.name} already exists; receipts are immutable, choose a new path')
-    finally:
-        os.unlink(temporary)
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+        release_receipts.write_once(path, document)
+    except release_receipts.ReceiptExists as error:
+        raise InputError(str(error))
 
 def asset_record(path):
     path = Path(path)
