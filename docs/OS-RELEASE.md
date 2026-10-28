@@ -260,6 +260,36 @@ host still returns 401.
    the receipts. On failure, leave the draft for cleanup, and never reuse a tag
    with different bytes.
 
+`.github/workflows/os-release.yml` is the unattended path. It is implemented, but
+its setup is missing and it has not been proven by a real release run. It runs
+only on a manual dispatch from main, for an exact candidate SHA, build number and
+timestamp, channel and expected app versions. The jobs are:
+
+1. **guard:** validates the inputs and the candidate's ancestry, and checks every
+   bootstrap input.
+2. **controller:** starts `immortal-os-builder` using GitHub OIDC (no key files).
+3. **builder:** runs on a repository-scoped self-hosted runner, under the
+   existing lock and `release-stage.py` receipts. It runs the lead-managed
+   integration entry point, then `installclean` plus the make goals. It verifies
+   the build identity and every `META/misc_info.txt` AVB fingerprint, app bytes,
+   PRESIGNED state and signers, and the compiled framework policy. It runs the
+   lead-managed signing entry point, then verifies again: OTA metadata, OTA
+   package and payload signatures, the vbmeta signature and AVB key, and the
+   public pins. Finally it transfers only the allowlisted public files and
+   receipts as a 3-day Actions artifact.
+4. **publisher:** a hosted job that revalidates the artifact, creates a draft,
+   checks the draft by download, and promotes only when asked.
+5. **cleanup:** stops the builder, whatever happened. The 12-hour automatic stop
+   stays as the fallback.
+
+Configuration, the host recipe used as adapter input, the public pins and the
+exact bootstrap input names are in `os/release-pipeline/frankel.json`. Until they
+exist, `scripts/release-pipeline.py preflight` fails with exit 4 and lists them.
+No publisher mechanism is supported until the publisher credential decision is
+made. The fake adapter, used only in `scripts/tests/test_release_pipeline.py`,
+runs the real verification code against synthetic artifacts. Everything it
+produces is marked simulated, and production refuses it.
+
 A successful build is never release completion. Recovery is explicit:
 `mark-interrupted`, then run the stage again. Receipts hold hashes, times and exit
 codes, not command output, arguments or environment.

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "target": {"device": "frankel", "variant": "user", "lunch": "frankel-cur-user"},
+  "host": {
+    "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
+    "outDir": "out-rose-first-update-2026102701",
+    "lockPath": "/home/pixelbuild/frankel-build.lock",
+    "installclean": true,
+    "makeJobs": 48,
+    "makeGoals": ["vendorbootimage", "vendorkernelbootimage", "target-files-package", "otatools-package"],
+    "integrateCommand": null,
+    "signCommand": null,
+    "tools": {
+      "checkOtaSignature": "build/make/tools/releasetools/check_ota_package_signature.py",
+      "avbtool": "external/avb/avbtool.py",
+      "apksigner": null,
+      "aapt": null
+    }
+  },
+  "identities": {
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "otaCertificateSha256": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a",
+    "avbPublicKeySha256": "7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822"
+  },
+  "framework": {"computerControlTargets": ["dev.pixel.calculator.agent"], "prototypeAgentsEmpty": true, "lockedSessions": false},
+  "publication": {
+    "repository": "Immortal-Protocols/pixel-ota",
+    "tag": "frankel-{build}",
+    "channels": {"beta": {"promoteLatest": true, "feedChannel": "stable"}, "prod": null}
+  },
+  "bootstrap": {
+    "repositoryVariables": {
+      "ROSEOS_BUILDER_RUNNER_READY": "'true' only after the repository-scoped runner labelled roseos-frankel-builder is registered on immortal-os-builder",
+      "GCP_WORKLOAD_IDENTITY_PROVIDER": "Full resource name of the GitHub OIDC provider restricted to this repository, main and os-release.yml",
+      "GCP_CONTROLLER_SERVICE_ACCOUNT": "Identity limited to get/start/stop of immortal-os-builder",
+      "GCP_SIGNER_SERVICE_ACCOUNT": "Identity limited to reading the six existing signing secrets",
+      "PIXEL_OTA_PUBLISHER": "Publisher credential mechanism; unset until the publisher credential decision is made"
+    },
+    "repositorySecrets": "Depend on the chosen publisher mechanism; none are read until PIXEL_OTA_PUBLISHER names a supported one",
+    "hostInputs": {
+      "host.integrateCommand": "Lead-managed builder entry point that reconciles the candidate into the retained tree and writes $ROSE_RELEASE_DIR/background-policy.json",
+      "host.signCommand": "Lead-managed builder entry point that signs with the existing identities and writes $ROSE_RELEASE_DIR/signed-target_files.zip and $ROSE_RELEASE_DIR/public/",
+      "host.tools.apksigner": "apksigner path on the builder",
+      "host.tools.aapt": "aapt path on the builder"
+    }
+  }
+}
