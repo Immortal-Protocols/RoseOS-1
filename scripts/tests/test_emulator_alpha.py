@@ -77,6 +77,7 @@ def jobs(text):
     return {m[1]: m[2] for m in re.finditer(r'^  ([\w-]+):\n((?:(?:    .*)?\n)*)', body, re.M)}
 
 MEDIA = 'target/product/media_system.mk'
+GENERIC = 'target/product/generic/Android.bp'
 CONTRACT = json.loads((ROOT/'os/alpha/cuttlefish-product-contract.json').read_text())
 
 def media_2804(directory):
@@ -160,6 +161,8 @@ class AlphaTreeTest(unittest.TestCase):
         (cf/'.git').mkdir()
         (cf/'.git/HEAD').write_text('pinned\n')
         media_2804(src/'build/make')
+        (src/'build/make'/GENERIC).parent.mkdir(parents=True)  # not integrated by 2804: the pinned upstream bytes
+        (src/'build/make'/GENERIC).write_bytes((ROOT/'os/tests/fixtures/cuttlefish-alpha/build-make'/GENERIC).read_bytes())
         (src/'build/envsetup.sh').write_text(ENVSETUP)
         for link in CHECKED_IN['preparation']['exclusions']['externalLinks']:  # as on the builder: non-input extracted-image links
             (src/link['path']).parent.mkdir(parents=True, exist_ok=True)
@@ -308,18 +311,24 @@ class AlphaTreeTest(unittest.TestCase):
         self.assertEqual({k: receipt[k] for k in ('baseCandidate', 'baseReconcileReceipt', 'baseReconcileSha256', 'osDeltaCommit',
             'target', 'updaterMode', 'updaterEndpoint', 'outDir', 'preparedRoot')},
             {'baseCandidate': BOUND, 'baseReconcileReceipt': '0004-2026102804.json', 'baseReconcileSha256': sha(self.receipt),
-             'osDeltaCommit': '620d51601d9b3569ec0378787da677a06a8c2b65', 'target': 'aosp_cf_x86_64_only_phone-cur-userdebug',
+             'osDeltaCommit': 'f21bf68322b3fa0a8924840554ab3e9398f79125', 'target': 'aosp_cf_x86_64_only_phone-cur-userdebug',
              'updaterMode': 'excluded-no-compatible-feed', 'updaterEndpoint': None, 'outDir': 'out-rose-cf-alpha', 'preparedRoot': str(self.tree)})
         self.assertEqual(receipt['baseResolvedManifestSha256'], self.data['preparation']['baseEvidence']['resolvedManifest']['sha256'])
         self.assertEqual(receipt['policySha256'], self.data['preparation']['baseEvidence']['policy']['sha256'])
         self.assertEqual(receipt['patchDigests'], [{'path': 'os/patches/cuttlefish-alpha-no-updater.patch', 'project': 'build/make',
-            'sha256': 'c643e50f154dd527ff46c9ff7b2702bb7accb08f23ae75eebb6186fb575c76d0'}])
+            'sha256': 'e000da0d1247dfcb341bc97df3098a2ed57faed31af0e5a837733537ae567858'}])
         self.assertEqual([(a['package'], a['version'], a['path']) for a in receipt['apps']],
             [('dev.pixel.voice', 302, self.app_paths[0]), ('dev.pixel.calculator.agent', 4, self.app_paths[1]),
              ('dev.pixel.backgroundcontrol', 28, self.app_paths[2])])
         self.assertEqual(receipt['baseGitHeads']['device/google/cuttlefish'], '283645aacf6cdb56cc31a9362f54d412dbc132a1')
-        change, = receipt['changedFiles']
-        self.assertEqual((change['beforeSha256'], change['afterSha256']), (sha(self.src/'build/make'/MEDIA), sha(self.tree/'build/make'/MEDIA)))
+        # Both changed files, in contract order, with the before/after bytes OS's fixtures record.
+        self.assertEqual([(c['project'], c['path'], c['beforeSha256'], c['afterSha256']) for c in receipt['changedFiles']],
+            [(c['project'], c['path'], sha(self.src/c['project']/c['path']), sha(self.tree/c['project']/c['path']))
+             for c in CONTRACT['osDelta']['changedFiles']])
+        self.assertEqual([(c['beforeSha256'], c['afterSha256']) for c in receipt['changedFiles']],
+            [(c['fixtureBeforeSha256'], c['fixtureAfterSha256']) for c in CONTRACT['osDelta']['changedFiles']])
+        self.assertIn(b'"Seedvault",', (self.tree/'build/make'/GENERIC).read_bytes())
+        self.assertIn(b'PRODUCT_PACKAGES += Seedvault', (self.tree/'build/make'/MEDIA).read_bytes())
         self.assertNotIn(b'PRODUCT_PACKAGES += Updater\n\nPRODUCT_PACKAGES += Seedvault', (self.tree/'build/make'/MEDIA).read_bytes())
         self.assertFalse((self.tree/'keys').exists(), 'Pixel release keys are never copied')
         self.assertFalse((self.tree/'device/google/cuttlefish/.git').exists())
@@ -387,7 +396,7 @@ class AlphaTreeTest(unittest.TestCase):
              'makeGoals': ['droid', 'hosttar'], 'lunch': LUNCH})
         self.assertEqual(receipt['preparation'], {'preparationId': self.preparation['preparationId'],
             'receiptSha256': sha(self.prepared_dir/'preparation.json'), 'effectiveSourceIdentity': self.preparation['effectiveSourceIdentity'],
-            'osDeltaCommit': '620d51601d9b3569ec0378787da677a06a8c2b65', 'updaterMode': 'excluded-no-compatible-feed', 'preparedRoot': str(self.tree)})
+            'osDeltaCommit': 'f21bf68322b3fa0a8924840554ab3e9398f79125', 'updaterMode': 'excluded-no-compatible-feed', 'preparedRoot': str(self.tree)})
         self.assertEqual(sorted(receipt['images']), ['boot.img', 'init_boot.img', 'super.img', 'userdata.img', 'vbmeta.img', 'vendor_boot.img'])
         self.assertEqual(receipt['images']['super.img'], {'size': (out/'super.img').stat().st_size, 'sha256': sha(out/'super.img')})
         self.assertEqual(receipt['hostOutputs']['cvd-host_package.tar.gz']['sha256'], sha(self.tree/LUNCH['HOST_OUT']/'cvd-host_package.tar.gz'))
@@ -503,12 +512,13 @@ class AlphaTreeTest(unittest.TestCase):
         cases = (
             (lambda: (self.tree/self.app_paths[0]).write_text('voice 303'), 'dev.pixel.voice APK in the prepared tree differs'),
             (lambda: (self.tree/'build/make'/MEDIA).write_text('PRODUCT_PACKAGES += Updater\n'), 'media_system.mk differs from its prepared afterSha256'),
+            (lambda: (self.tree/'build/make'/GENERIC).write_bytes((self.src/'build/make'/GENERIC).read_bytes()), 'Android.bp differs from its prepared afterSha256'),
             (lambda: (self.tree/'frameworks/base/core/res/res/values/config.xml').write_text('x'), 'drifted from the base reconcile entries'),
             (lambda: (self.prepared_dir/'manifest.tsv').write_text('x'), 'manifest differs from selectionSha256'),
             (lambda: (self.tree/'device/google/cuttlefish/build/cvd-host-package.go').write_text('x'), 'differs from the pinned plugin'),
         )
         for damage, message in cases:
-            saved = {p: p.read_bytes() for p in [self.tree/self.app_paths[0], self.tree/'build/make'/MEDIA, self.prepared_dir/'manifest.tsv',
+            saved = {p: p.read_bytes() for p in [self.tree/self.app_paths[0], self.tree/'build/make'/MEDIA, self.tree/'build/make'/GENERIC, self.prepared_dir/'manifest.tsv',
                 self.tree/'frameworks/base/core/res/res/values/config.xml', self.tree/'device/google/cuttlefish/build/cvd-host-package.go']}
             damage()
             with self.assertRaisesRegex(alpha.CheckFailed, message):
@@ -722,10 +732,10 @@ class CheckedInAlphaTest(unittest.TestCase):
             'anywhereNames': ['.git', '.repo'], 'externalLinks': [
                 {'path': 'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor_boot/vendor_ramdisk00__unpacked/d', 'target': '/sys/kernel/debug'},
                 {'path': 'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/system/d', 'target': '/sys/kernel/debug'}]})
-        self.assertEqual(preparation['osDelta']['commit'], '620d51601d9b3569ec0378787da677a06a8c2b65')
+        self.assertEqual(preparation['osDelta']['commit'], 'f21bf68322b3fa0a8924840554ab3e9398f79125')
         self.assertEqual(hashlib.sha256((ROOT/preparation['osDelta']['contract']).read_bytes()).hexdigest(), preparation['osDelta']['contractSha256'])
         document, delta = alpha.contract(alpha.load())
-        self.assertEqual(delta['changedFiles'], [{'project': 'build/make', 'path': 'target/product/media_system.mk'}])
+        self.assertEqual(delta['changedFiles'], [{'project': 'build/make', 'path': GENERIC}, {'project': 'build/make', 'path': MEDIA}])
         self.assertEqual(preparation['baseEvidence']['policy']['sha256'], document['policySha256'])
         self.assertIsNone(preparation['baseEvidence']['resolvedManifest']['sha256'], 'read from the retained 2804 release before preparing')
         self.assertTrue(CHECKED_IN['build']['outDir'].startswith('out-'), 'the alpha OUT_DIR is never copied by a preparation')

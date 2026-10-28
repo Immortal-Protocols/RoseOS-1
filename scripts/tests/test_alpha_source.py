@@ -20,12 +20,15 @@ import alpha_source  # noqa: E402
 
 PATCH = ROOT/'os/patches/cuttlefish-alpha-no-updater.patch'
 MEDIA = 'target/product/media_system.mk'
+GENERIC = 'target/product/generic/Android.bp'
+FIXTURES = ROOT/'os/tests/fixtures/cuttlefish-alpha'
+CONTRACT = json.loads((ROOT/'os/alpha/cuttlefish-product-contract.json').read_text())
 POLICY = {'rootNames': ['.repo', 'keys', 'releases', 'out'], 'rootPrefixes': ['out-', 'out_'], 'anywhereNames': ['.git', '.repo'],
     'externalLinks': [{'path': 'vendor/dl/unpacked/x/vendor_boot/r__unpacked/d', 'target': '/sys/kernel/debug'},
                       {'path': 'vendor/dl/unpacked/x/system/d', 'target': '/sys/kernel/debug'}]}
 BINDING = {'baseCandidate': 'ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9', 'baseResolvedManifestSha256': 'f' * 64,
     'baseReconcileReceipt': '0004-2026102804.json', 'baseReconcileSha256': 'db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0'}
-DELTA = {'commit': '620d51601d9b3569ec0378787da677a06a8c2b65', 'changedFiles': [{'project': 'build/make', 'path': MEDIA}],
+DELTA = {'commit': 'f21bf68322b3fa0a8924840554ab3e9398f79125', 'changedFiles': [{'project': 'build/make', 'path': GENERIC}, {'project': 'build/make', 'path': MEDIA}],
     'patches': [{'path': 'os/patches/cuttlefish-alpha-no-updater.patch', 'project': 'build/make',
         'sha256': hashlib.sha256(PATCH.read_bytes()).hexdigest(), 'file': str(PATCH)}]}
 
@@ -68,6 +71,8 @@ class PreparationTest(unittest.TestCase):
             (base/path).parent.mkdir(parents=True, exist_ok=True)
             (base/path).write_text(text)
         media_2804(base/'build/make')
+        (base/'build/make'/GENERIC).parent.mkdir(parents=True)  # not integrated by 2804: the pinned upstream bytes
+        (base/'build/make'/GENERIC).write_bytes((FIXTURES/'build-make'/GENERIC).read_bytes())
         os.chmod(base/'tools/run.sh', 0o755)
         os.chmod(base/'prebuilts/readonly/tool', 0o444)
         os.chmod(base/'prebuilts/readonly', 0o555)
@@ -83,7 +88,7 @@ class PreparationTest(unittest.TestCase):
         os.symlink('../.repo/projects/fw.git', base/'frameworks/base/.git')    # repo-style .git link: excluded by name
         self.reserved = self.root/'alpha-source'
         self.extra = {'target': 'aosp_cf_x86_64_only_phone-cur-userdebug', 'updaterMode': 'excluded-no-compatible-feed', 'updaterEndpoint': None,
-            'preservationPaths': ['build/make/' + MEDIA, 'frameworks/base/core/res/res/values/config.xml', 'packages/apps/RosePreinstall/voice.apk']}
+            'preservationPaths': ['build/make/' + GENERIC, 'build/make/' + MEDIA, 'frameworks/base/core/res/res/values/config.xml', 'packages/apps/RosePreinstall/voice.apk']}
 
     def prepare(self, **overrides):
         args = dict(base=self.base, reserved_root=self.reserved, binding=BINDING, delta=DELTA, policy=POLICY, extra=self.extra,
@@ -128,11 +133,14 @@ class PreparationTest(unittest.TestCase):
         self.assertEqual(receipt['danglingLinks'], [{'path': 'tools/dangling', 'target': 'tools/missing/fixture.txt'}])
         self.assertEqual({k: receipt['counts'][k] for k in ('linksInternal', 'linksRebased', 'linksDangling')},
             {'linksInternal': 4, 'linksRebased': 1, 'linksDangling': 1})
-        # The delta: only the Rose Updater block leaves media_system.mk, in the copy only.
-        change, = receipt['changedFiles']
-        self.assertEqual((change['project'], change['path'], change['beforeSha256']),
-            ('build/make', MEDIA, hashlib.sha256((self.base/'build/make'/MEDIA).read_bytes()).hexdigest()))
-        self.assertEqual(change['afterSha256'], hashlib.sha256((tree/'build/make'/MEDIA).read_bytes()).hexdigest())
+        # The delta, in the copy only: the Rose Updater block leaves media_system.mk and the Seedvault closure joins the
+        # Soong system image; before/after are the base and copy bytes and equal OS's contract fixture digests.
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual([(c['project'], c['path'], c['beforeSha256'], c['afterSha256']) for c in receipt['changedFiles']],
+            [('build/make', path, digest(self.base/'build/make'/path), digest(tree/'build/make'/path)) for path in (GENERIC, MEDIA)])
+        self.assertEqual([(c['project'], c['path'], c['beforeSha256'], c['afterSha256']) for c in receipt['changedFiles']],
+            [(c['project'], c['path'], c['fixtureBeforeSha256'], c['fixtureAfterSha256']) for c in CONTRACT['osDelta']['changedFiles']])
+        self.assertIn(b'"Seedvault",', (tree/'build/make'/GENERIC).read_bytes())
         self.assertEqual((tree/'build/make'/MEDIA).read_bytes(), (ROOT/'os/tests/fixtures/cuttlefish-alpha/build-make'/MEDIA).read_bytes())
         self.assertIn(b'PRODUCT_PACKAGES += Updater\n\nPRODUCT_PACKAGES += Seedvault', (self.base/'build/make'/MEDIA).read_bytes().replace(
             b'# RoseOS ships the existing Updater in every build whose channel apply-os-changes.py sets\n'
