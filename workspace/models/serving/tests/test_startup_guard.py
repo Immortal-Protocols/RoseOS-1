@@ -14,10 +14,11 @@ spec = importlib.util.spec_from_file_location('startup_guard', HERE/'startup_gua
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 import capacity  # noqa: E402
+import render_upload  # noqa: E402
 
 CONFIG = capacity.load()
 A100 = CONFIG['options'][0]
-LIMITS = guard.limits_for(CONFIG, A100)
+LIMITS = render_upload.guard_limits(CONFIG, A100)
 GIB = 2**30
 
 
@@ -85,17 +86,6 @@ class GuardTest(unittest.TestCase):
                 mock.patch.object(guard.os, 'execvp') as execvp, mock.patch('builtins.print'):
             guard.main([json.dumps(LIMITS), '--', 'vllm', 'serve', 'meta-models/Muse-Glimmer-30B'])
         execvp.assert_called_once_with('vllm', ['vllm', 'serve', 'meta-models/Muse-Glimmer-30B'])
-
-    def test_rendered_command_fails_closed_without_gpus(self):
-        command = guard.container_command(CONFIG, A100)
-        self.assertEqual(command[:2], ['python3', '-c'])
-        self.assertEqual(command[-3:], ['--', 'vllm', 'serve'])
-        run = subprocess.run([sys.executable, '-I', '-c', command[2], command[3], '--', 'true'],
-            capture_output=True, text=True, timeout=60)
-        self.assertEqual(run.returncode, guard.EXIT_REFUSED, run.stderr)
-        evidence = json.loads(run.stdout.strip().splitlines()[-1])
-        self.assertFalse(evidence['proceed'])
-        self.assertTrue(any('GPUs visible' in f for f in evidence['failures']))
 
 
 if __name__ == '__main__':

@@ -89,28 +89,5 @@ def main(argv):
     os.execvp(command[0], command)
 
 
-def limits_for(config, option):
-    """Thresholds from the pinned config: weights and KV at the configured context, 3 GiB reserve, one sequence."""
-    import capacity
-    text = config['model']['text_config']
-    _, weights = capacity.weight_bytes_per_gpu(config['model'], option)
-    tp = option['machine_spec']['acceleratorCount']
-    kv = capacity.kv_bytes_per_sequence(text, config['demo_assumptions']['max_model_len'], tp, sliding_aware=False)*option['max_num_seqs']
-    util = option['gpu_memory_utilization']
-    fetch = config['model']['weights_fetch']['total_bytes_including_small_files']
-    return {'driver_major_min': option['runtime']['driver_major_min'], 'gpu_count': tp,
-            'gpu_total_min_bytes': int((weights + kv + option['runtime_reserve_bytes_per_gpu'])/util),
-            'gpu_memory_utilization': util, 'cache_dir': option['runtime']['weights_cache_dir'],
-            'cache_free_min_bytes': int(fetch*1.05) + 2**30,
-            'shm_min_bytes': int(int(option['container_spec']['sharedMemorySizeMb'])*2**20*0.9)}
-
-
-def container_command(config, option):
-    """containerSpec.command: this guard inline, then the image's own `vllm serve`; containerSpec.args follow."""
-    with open(__file__) as f:
-        source = f.read()
-    return ['python3', '-c', source, json.dumps(limits_for(config, option), sort_keys=True), '--', 'vllm', 'serve']
-
-
 if __name__ == '__main__':
     main(sys.argv[1:])
