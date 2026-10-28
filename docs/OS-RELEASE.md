@@ -580,8 +580,9 @@ the 2804 base. Instead the existing tree moves in place, with its alpha
     re-probed before `hostEvidence` is recorded.
   - Until the lead records those values, the guard exits 4 and names them. The
     predecessor alone is refused for the new delta.
-- **Capacity:** the transition writes no new space and skips the capacity
-  check. The build keeps `build.minFreeGiB` 300 unchanged.
+- **Capacity:** the transition writes no new space, but it still enforces the
+  unchanged `build.minFreeGiB` 300 before writing (INFRA-ALPHA-108), as the
+  build does.
 
 **The Actions route** (INFRA-ALPHA-108) runs this preparation through the same
 private `os-release.yml` `workflow_dispatch` on main. It uses the same runner
@@ -621,6 +622,25 @@ group, controller OIDC start and always-cleanup stop, shared lock and
     and the `hostEvidence` probe sha256, `lunch` and `probedSuccessorId`.
 - **Normal alpha mode:** it stays fail-closed (exit 4) until those values are
   recorded in a config commit.
+
+**Measured successor (INFRA-ALPHA-111).** The lead's run 40757989353 (job
+123062259059, recipe `eca1fef9`) completed at 20:15:45 UTC on 2026-10-28.
+
+- **Transition:** `b02dafbb…` moved in place to `156ccb8e` (contract
+  `a9c757c0`) by the incremental patch `c9350590`. `alreadyTransitioned` and
+  `recoveredFrom` were both unset.
+- **Checks:** the full re-hash was OK with 0 failures, and the probe found no
+  tree failures. No make, compile, signing, publication or config write ran.
+- **Recorded in `cuttlefish-alpha.json`, from the job log's `summary.toRecord`:**
+  - `prepared.successor`: `1497d493…` with receipt `5ea7f216…`;
+  - `hostEvidence.probeReceiptSha256`: `e4aaa1d6…`;
+  - `hostEvidence.probedSuccessorId`: `1497d493…`;
+  - `lunch`: identical to the earlier probe, including `erofs`.
+- **History:** the predecessor's probe `9c19b5cb…` stays as history only.
+- **Guard:** it now passes.
+- **Builder and build:** they re-check the real successor tree and receipts on
+  the builder.
+- **Unproven:** the alpha compile, `file_list_diff`, image and boot.
 
 Dispatch fields for the lead:
 
