@@ -107,9 +107,20 @@ The product Home implements the delivered Fold prototype:
   `differs-from-reference`. Overlays (status bar, Rose presence, dock) lower
   coverage. Always look at the side-by-side PNG it writes.
 
-If someone retrieves the prototype HTML through the supported Library flow,
-record its full SHA-256 before rendering it. Then render the narrow Home in an
-approved browser at the device's logical size and compare it with `--reference`.
+To compare a screen with the prototype itself, not just its wallpaper:
+
+1. Retrieve `Rose-Fold-v3.html` through the supported Library flow or its
+   native Notion attachment (OS-P1-001), and check its SHA-256 first.
+2. Render it in the pre-installed headless Chromium (Playwright) with every
+   non-`file:`/`data:` request blocked and reduced motion. Use the Folded
+   layout and screenshot the `#device` phone frame. Then click
+   `#presence-hit` and screenshot the Conversation view.
+3. Record the page's renderer label (WebGL or static fallback).
+4. Put the prototype frames side by side with the device screenshots and
+   write down what matches and what differs. That written interpretation is
+   the visual evidence; `compare` covers only the wallpaper.
+
+`qa/verification/rose-agent-304-infra-runtime-100.md` is the first example.
 
 Never publish screenshots, wallpapers or dumps from a personal phone, or any
 device identifier. `runtime` refuses to write inside the repository. It never

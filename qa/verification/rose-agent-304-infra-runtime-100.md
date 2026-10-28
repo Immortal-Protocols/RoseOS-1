@@ -2,10 +2,13 @@
 
 **Who measured what.**
 - **Infra lead:** executed the runtime window and reported the results below.
-- **Verifier:** recorded the results and their limits, and added an expectation
-  file for 304 (`expectations/app-rose-agent-304.json`). The verifier has *not*
-  yet inspected the screenshots or receipts in the evidence bundle. That
-  bundle is listed under unavailable inputs.
+- **Verifier:**
+  - recorded the results and their limits, and added an expectation file for
+    304 (`expectations/app-rose-agent-304.json`);
+  - independently retrieved the two original screenshots (hashes verified),
+    inspected them, re-ran the heuristic comparison, and rendered the
+    prototype to compare against them. See "Independent visual inspection";
+  - has not inspected the rest of the bundle (receipts, XML, step records).
 
 **What this is not.**
 - It is not the new alpha. Alpha Actions 40719075730 failed at `file_list_diff`
@@ -89,15 +92,109 @@ Reported heuristic comparison (`compare`, Home against bundled reference
 **Two kinds of visual evidence, kept separate:**
 - *Heuristic comparison* (a 0.833 coverage number): it only says the screen's
   wallpaper regions match the reference crop.
-- *Actual visual interpretation* (a person looking at the PNGs against
-  `Rose-Fold-v3.html`): the lead reports an inspection. The verifier has not
-  repeated it yet.
+- *Actual visual interpretation*: a person looking at the PNGs against the
+  rendered `Rose-Fold-v3.html`. That is below.
+
+## Independent visual inspection (verifier, 18:08–18:20 UTC)
+
+### Inputs
+
+| Input | Value |
+| --- | --- |
+| `explicit-rose-home.png` | Retrieved through the native Notion attachment on the verifier inbox (`notion-get-file-download-urls`). 890,898 bytes, SHA-256 `04077aba09bc15e8f47730c7e5afe86a96ad3e852e53a4f8a57c535c240cccaf` (matches). 720×1280 RGBA. Explicit MAIN/HOME component, not the system HOME |
+| `rose-presence.png` | Same route. 34,152 bytes, SHA-256 `d50b66a57864df394f5c354634eae9f8fe6d7d911a33799bdca938aab036e33e` (matches). 720×1280 RGBA. `RoseConversationActivity` after Open Rose |
+| Prototype | `Rose-Fold-v3.html` from the native Notion attachment on OS-P1-001 (OS-MGR-ASSET-M002). 859,202 bytes, SHA-256 `67bf7a505ffdd64087c76e6be496043afb7576c081b2fe8ed1c6642aec9405ee` (matches Library v2) |
+| Prototype render | Headless Chromium 1243 (pre-installed Playwright). Network blocked (`file:`/`data:` only), viewport 1280×1000, reduced motion. "Folded phone" layout; `#device` element 390×800. Renderer label: "WebGL procedural petals · static state (reduced motion)". Home, then `#presence-hit` for Conversation |
+
+The screenshots, comparison images and render stay in the verifier's scratch
+space. They contain no personal data, but are not committed.
+
+### Heuristic, re-run independently (method r3 `compare`)
+
+| Screenshot | Verdict | Coverage | Mean / p95 luminance |
+| --- | --- | --- | --- |
+| Rose Home | `wallpaper-consistent` | 0.833 | 195.0 / 240.0, the same as the lead's numbers |
+| Conversation | `differs-from-reference` | 0.197 | 246.9 / 249.3 |
+
+The conversation result is expected. That surface has no wallpaper, so the
+wallpaper heuristic does not apply to it. It is not a defect.
+
+The Home difference image is near-black everywhere except the Rose tile, the
+dock, the page dots, the status bar and the navigation arrow. So the wallpaper
+is drawn as the exact reference JPEG (`409c0dbf…`) with the centered cover crop
+of `RoseHomeView`, not an approximation.
+
+### Rose Home: observed, compared with the prototype's Folded Home
+
+Matches the prototype:
+- **Wallpaper:** the same shoreline image (misty mountains, clear water,
+  rocks) fills the screen with the same crop. The status bar draws over it.
+- **Presence:** a rounded light-ivory tile holding the Rose mark, centered
+  horizontally, about 40% of the screen width. That proportion is the same as
+  in the prototype.
+- **Dock:** a light, translucent, rounded dock at the bottom.
+- **No noise:** no status prose, simulation labels or titles on the phone
+  surface (the Fold brief's v1 review).
+
+Differs from the prototype (findings for OS, who owns Home):
+1. **Rose mark:** a flat, two-tone celadon leaf with an ivory opening, drawn
+   from the prototype's SVG fallback paths. The prototype's live rendering is
+   a shaded, three-dimensional folded-petal form (WebGL). The fallback is a
+   recorded design choice (OS-P1-001-E003). It is not the WebGL form.
+2. **Tile position:** the tile sits higher, its center about 38% from the top,
+   versus about 44% in the prototype.
+3. **Dock contents:** five entries (Phone, Messaging, Camera, Browser, All
+   apps), resolved from the guest's real apps, versus the prototype's three
+   fixtures. Two labels are truncated on this 720 px guest: "Messag…" and
+   "Camera…". The prototype's single-word labels fit.
+4. **Extras:** six page dots (Home is the first) and the Android back arrow
+   appear below the dock. The prototype has neither.
+
+### Conversation: observed, compared with the prototype's Folded Conversation
+
+Matches the prototype:
+- **Background:** a light ivory surface, with no wallpaper.
+- **Presence:** large and central, in pale celadon and ivory.
+- **Controls:** a single **Speak** control with a microphone. No typing
+  input, "Type instead", coaching filler, Interrupt button or popup
+  notification (the Fold brief's v1 review).
+- **Output area:** no presented output, which is correct with no task.
+
+Truthful unavailable state: "Can't reach the server" sits above Speak. This
+guest is unpaired and has no backend. The text says so rather than showing a
+connected or listening state. It is not evidence of a real outage.
+
+Differs from the prototype (App owns the conversation):
+1. **Presence form:** five overlapping translucent ellipses with a grey center
+   dot (a five-petal flower). The prototype shows the same folded-petal Rose
+   as its Home. The brief asks for "the same organism across contexts", yet
+   here the Home mark (leaf) and the conversation presence (flower) are
+   different shapes.
+2. **Header:** no header. The prototype has "‹ Home" at the top left and
+   "Rose" at the top right; the screenshot shows only an overflow "⋯" (More
+   options) at the top right. On this guest the return path is the system
+   back arrow, which the lead reports returns to Rose Home.
+3. **Agent screens route:** "View agent screens ↗" is absent. The prototype
+   shows it above Speak. With no task here, the screenshot cannot show whether
+   it appears once tasks exist.
+4. **Speak control:** a round button with a microphone emoji and the label
+   below it, versus the prototype's wide pill with a line microphone icon and
+   the label inside.
+
+### Not shown by these two frames
+
+- Motion, the listening/speaking/muted states, and mute or end controls
+  during a session.
+- The All apps page, beyond the lead's report.
+- The PR67 paired cold launch.
+- The system HOME default.
+- Anything outside this 720×1280 emulator density.
 
 ## Unavailable inputs (verifier)
 
 | Input | Exact status |
 | --- | --- |
-| Evidence bundle: Library `libfile_a551aca1ebf0819195084fda2792ec38`, file `file_00000000e14c8230850f2a0baa1616ed`, `Rose-Agent304-app-only-runtime-evidence.zip`, 927,791 bytes, SHA-256 `097b64c6c1d73ece027c23337407fedeeb7cfdcff1f684aa830d6139ff983379` | Not retrieved. This session has no Library skill or tool (ListSkills/SearchSkills: none; no session upload). No other route was tried. Supported alternative: attach the ZIP to a Notion page as a file; the verifier can then fetch it through `notion-get-file-download-urls` and check the SHA-256 |
+| Evidence bundle: Library `libfile_a551aca1ebf0819195084fda2792ec38`, file `file_00000000e14c8230850f2a0baa1616ed`, `Rose-Agent304-app-only-runtime-evidence.zip`, 927,791 bytes, SHA-256 `097b64c6c1d73ece027c23337407fedeeb7cfdcff1f684aa830d6139ff983379` | The ZIP itself was not retrieved: this session has no Library skill or tool (ListSkills/SearchSkills: none; no session upload), and no other route was tried. At 18:05 Chief attached its two screenshots as native Notion images; those were retrieved and verified (above). The bundle's receipts, XML and step records remain uninspected by the verifier |
 | Public `dev.pixel.voice-304.apk` and `SHA256SUMS` | One download attempt (about 17:50 UTC) was denied by this session's auto-mode permission classifier before any request was sent. It was not retried. The 304 identity is taken from Infra's receipt |
 
 ## Method follow-up (r3, INFRA-VERIFY-003)

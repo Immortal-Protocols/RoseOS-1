@@ -254,6 +254,14 @@ class CompareTests(unittest.TestCase):
         other = rv.compare(self.save(self.ImageOps.invert(self.ref), 'inv.png'), self.tmp/'out', label='i')
         self.assertEqual(other['verdict'], 'differs-from-reference')
 
+    def test_cli_side_by_side_is_named_after_each_screenshot(self):
+        a = self.save(self.ref, 'home.png')
+        b = self.save(self.ImageOps.invert(self.ref), 'conversation.png')
+        for shot in (a, b):
+            self.assertIn(run_cli('compare', str(shot), '--out', str(self.tmp/'o'))[0], (0, 1))
+        self.assertEqual(sorted(p.name for p in (self.tmp/'o').iterdir()),
+                         ['conversation-vs-reference.png', 'home-vs-reference.png'])
+
     def test_black_screen_fails_cli(self):
         shot = self.save(self.Image.new('RGB', (540, 1200), (0, 0, 0)), 'black.png')
         self.assertEqual(run_cli('compare', str(shot), '--out', str(self.tmp/'o'))[0], 1)

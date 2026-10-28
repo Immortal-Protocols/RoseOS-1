@@ -1096,7 +1096,7 @@ def main(argv=None):
             result = runtime(args.serial, args.handback, args.out, expectation, args.user, args.interactive,
                              args.physical_device, args.adb)
         else:
-            result = compare(args.screenshot, args.out, args.reference)
+            result = compare(args.screenshot, args.out, args.reference, label=Path(args.screenshot).stem)
     except Fail as err:
         print(f'rose-verify: {err}', file=sys.stderr)
         return err.code
