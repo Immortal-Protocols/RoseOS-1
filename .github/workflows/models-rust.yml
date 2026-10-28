@@ -1,8 +1,8 @@
 name: Models Rust chat core
 
-# Builds and tests workspace/models/rose-chat-core, including its loopback tests against the
-# QA fixture (qa/models/fixture_server.py). Proves client behaviour only: no model, endpoint,
-# secrets, cloud access or release interaction.
+# Builds and tests workspace/models/rose-chat-core, including its loopback and signal tests against
+# the QA fixture (qa/models/fixture_server.py), then runs QA's direct CLI harness on the binary.
+# Proves client behaviour only: no model, endpoint, secrets, cloud access or release interaction.
 on:
   pull_request:
     paths:
@@ -51,3 +51,9 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests (unit, in-process fixture, loopback fixture)
         run: cargo test --locked --no-fail-fast
+      - name: QA direct CLI loopback checks (qa/models/rust_cli_checks.py)
+        run: |
+          cargo build --locked --bin rose-chat
+          python3 -I -B ../../../qa/models/rust_cli_checks.py --bin target/debug/rose-chat \
+            --raw-predict-toml 'request_url = "{base}"
+          protocol = "openai-chat-candidate"'
