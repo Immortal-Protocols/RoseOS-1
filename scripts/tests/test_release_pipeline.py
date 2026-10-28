@@ -2,6 +2,7 @@
 tools exercise the real verification code end to end, plus fail-closed production preflight."""
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,7 @@ FRAMEWORK_DUMP = '''\
         resource 0x01110331 android:bool/config_useSystemWallpaperDuringUserSwitch: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
           (boolean) false
 '''
-APPS = [['dev.pixel.voice', 301], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
 PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
 WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
@@ -80,9 +81,20 @@ UPDATER_XML = ('SYSTEM_EXT/etc/permissions/privapp-permissions-updater.xml',
     'SYSTEM_EXT/etc/default-permissions/default-permissions-updater.xml', 'SYSTEM_EXT/etc/sysconfig/updater.xml')
 UPDATER_URL = 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/'
 
-def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.seamlessupdate.client'):
+def updater_apk(rose_channels=True):
+    """A stand-in Updater APK: an archive whose classes.dex names the RoseChannels type when it is compiled in."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as apk:
+        types = b'Lapp/seamlessupdate/client/Service;' + (b'Lapp/seamlessupdate/client/RoseChannels;' if rose_channels else b'')
+        apk.writestr(zipfile.ZipInfo('classes.dex', (2009, 1, 1, 0, 0, 0)), b'dex\n035\0' + types)
+        apk.writestr(zipfile.ZipInfo('AndroidManifest.xml', (2009, 1, 1, 0, 0, 0)), b'binary manifest')
+    return buffer.getvalue()
+
+UPDATER_APK_BYTES = updater_apk()
+
+def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.seamlessupdate.client', rose_channels=True):
     for apk in apk_paths:
-        z.writestr(apk, b'updater apk')
+        z.writestr(apk, updater_apk(rose_channels))
     for name in xml:
         z.writestr(name, f'<permissions><privapp-permissions package="{package}"/></permissions>\n')
 
@@ -108,7 +120,7 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None)
         embedded = {prefix + name: data for prefix, name, data in policy_apks}
         if not os.environ.get('FAKE_NO_UPDATER'):  # 077 shipped no Updater at all
             write_updater(z)
-            embedded[UPDATER_APK] = b'updater apk'
+            embedded[UPDATER_APK] = UPDATER_APK_BYTES
         embedded.update(image_override or {})
         z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
         z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
@@ -659,6 +671,10 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(self.check_updater(path, config=config), ['Updater is not signed by the expected certificate'])
         self.assertEqual(self.check_updater(path, apksigner=False, config=config), [])  # unsigned stage: no signer check
 
+    def test_updater_without_the_rose_channel_code_fails(self):
+        self.assertEqual(self.check_updater(self.updater_zip(rose_channels=False)),
+            ['Updater dex has no app.seamlessupdate.client.RoseChannels; the RoseOS channel code is not compiled in'])
+
     def test_updater_gate_fails_closed_without_the_os_layout(self):
         config = json.loads(self.config.read_text())
         for key in ('apkPath', 'signer', 'requiredFiles'):
@@ -696,8 +712,7 @@ class PipelineTest(unittest.TestCase):
         missing = json.loads(out)['missing']
         # Only the proposed admin setup remains; the host recipe in the checked-in config is complete.
         self.assertEqual(missing, ['ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
-            'GCP_SIGNER_SERVICE_ACCOUNT', 'PIXEL_OTA_PUBLISHER (must be github-app)',
-            'updater.signer'])  # awaiting the OS Updater inclusion layout
+            'GCP_SIGNER_SERVICE_ACCOUNT', 'PIXEL_OTA_PUBLISHER (must be github-app)'])
         code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app'))
         self.assertEqual(code, 4)
         self.assertEqual(json.loads(out)['missing'], ['PIXEL_OTA_APP_ID', 'PIXEL_OTA_APP_PRIVATE_KEY'])

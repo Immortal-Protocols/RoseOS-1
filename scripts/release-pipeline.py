@@ -13,6 +13,7 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -478,6 +479,8 @@ def framework_failures(dump, expected, signer):
     return failures
 
 UPDATER_REQUIRED = ('apkPath', 'signer', 'requiredFiles')
+# The RoseOS channel code the patcher copies into the Updater (os/overlays/.../RoseChannels.java), as a dex type.
+ROSE_CHANNELS_DEX = b'Lapp/seamlessupdate/client/RoseChannels;'
 
 def updater_expected(config):
     """Compiled values the Updater must carry, derived from the checked-in recipe: the reconcile applyArgs pass
@@ -520,6 +523,13 @@ def check_updater(path, config, aapt, apksigner=None):
             elif spec['packageName'] not in archive.read(required).decode(errors='replace'):
                 failures.append(f'Updater supporting file {required} does not name {spec["packageName"]}')
         data = archive.read(spec['apkPath'])
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as apk:
+            dexes = [n for n in apk.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+            if not any(ROSE_CHANNELS_DEX in apk.read(n) for n in dexes):
+                failures.append('Updater dex has no app.seamlessupdate.client.RoseChannels; the RoseOS channel code is not compiled in')
+    except zipfile.BadZipFile:
+        return failures + ['Updater APK is not a readable APK archive']
     extracted = Path(os.environ.get('RUNNER_TEMP', '/tmp'))/f'updater-{os.getpid()}.apk'
     extracted.write_bytes(data)
     try:

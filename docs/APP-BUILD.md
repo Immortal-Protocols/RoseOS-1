@@ -46,8 +46,8 @@ upstream generated `Manifest.java` is excluded from the staging directory;
 Outputs include `rose-agent-unsigned.apk`, `SHA256SUMS`, `apk-metadata.txt`,
 `java-version.txt`, `source-revision.txt` and `source-status.txt`. A nonempty
 source-status file means the build includes work outside the recorded commit.
-The app is `dev.pixel.voice`, version code 301 (`301-wave-beta`), min API 29,
-target API 35. The verified draft 2026102802 carried 300; the retained,
+The app is `dev.pixel.voice`, version code 302 (`302-wave-beta`), min API 29,
+target API 35. The draft 2026102803 carried 301; the verified draft 2026102802 carried 300; the retained,
 unpublished P1 build 2026102801 was 299; the published 2026102701 release
 carried 298. The imported source and the staged
 signed build were 297. Before distributing an

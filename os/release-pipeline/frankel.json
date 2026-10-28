@@ -147,6 +147,15 @@
           "dev.pixel.backgroundcontrol": 27
         },
         "basis": "Immutable verified draft frankel-2026102802 (pixel-ota draft, not promoted; apps 300/4/27); a newer candidate with changed Rose Agent and controller sources needs higher versionCodes, build number and BUILD_DATETIME. Calculator 4 is unchanged and may stay equal"
+      },
+      {
+        "build": "2026102803",
+        "source": "f0fae0ff6096d7f12306b2c0e2d8020b1c2cb0a2",
+        "buildTimestamp": 1793176860,
+        "mustExceed": {
+          "dev.pixel.voice": 301
+        },
+        "basis": "Immutable draft frankel-2026102803 (pixel-ota draft 426456114, not promoted, not beta-eligible: it shipped without the system Updater; apps 301/4/28). A newer candidate needs a higher Rose Agent versionCode (its source changed with PR50), build number and BUILD_DATETIME; controller 28 and Calculator 4 are unchanged in source and may stay equal"
       }
     ]
   },
@@ -159,13 +168,13 @@
       "alpha"
     ],
     "apkPath": "SYSTEM/priv-app/Updater/Updater.apk",
-    "signer": null,
+    "signer": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a",
     "requiredFiles": [
       "SYSTEM/etc/permissions/app.seamlessupdate.client.xml",
       "SYSTEM/etc/default-permissions/app.seamlessupdate.client.xml",
       "SYSTEM/etc/sysconfig/app.seamlessupdate.client.xml"
     ],
-    "basis": "Compiled Updater gate (077 shipped none). Package from the Updater source tree, channel default and values from os/patches/updater-rose-channels.patch, url and published set from the reconcile applyArgs; apkPath and requiredFiles as stated by the OS inclusion fix (#52, docs/OS-INTEGRATION.md). signer (otaCertificate or a sha256) awaits OS confirmation"
+    "basis": "Compiled Updater gate (077 shipped none). Package from the Updater source tree, channel default and values from os/patches/updater-rose-channels.patch, url and published set from the reconcile applyArgs; apkPath and requiredFiles as stated by the OS inclusion fix (#52, docs/OS-INTEGRATION.md). signer: the release key the upstream map assigns (Updater sets no certificate, so testkey maps to releasekey under sign_target_files_apks -d); equal to the OTA certificate pin. The actual signed APK's certificate is checked, not apkcerts text"
   },
   "identities": {
     "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
