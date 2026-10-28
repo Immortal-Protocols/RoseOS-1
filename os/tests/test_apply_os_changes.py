@@ -32,5 +32,11 @@ class UpdaterChannelTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn('mutually exclusive', result.stderr)
 
+class InstalledIdentitiesTest(unittest.TestCase):
+    def test_needs_the_background_policy(self):
+        result = run('--installed-identities', 'installed.json')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--installed-identities needs --background-policy', result.stderr)
+
 if __name__ == '__main__':
     unittest.main()

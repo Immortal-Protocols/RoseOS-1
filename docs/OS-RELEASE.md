@@ -123,6 +123,15 @@ would poll GrapheneOS and strand the installed phone. Pass
 `--keep-upstream-updater` only for a build that will never update an existing
 RoseOS phone.
 
+Add `--installed-identities FILE` (the `os/release-evidence/*/expected-identities.json`
+shape, describing what the phone has installed) to catch bundled apps the phone
+would ignore. Android keeps an installed app unless the image's copy has the
+same signer and a higher versionCode. A different signer or a lower version is
+refused. An equal version is normal for an unchanged app and is only reported as
+a note. It is refused only when the installed record also pins an `apkSha256`
+that differs. This needs a policy receipt that records `versionCode` (receipts
+from `prepare-background-policy.py` now do).
+
 Substitute actual artifact paths and the target OS's SDK number. Confirm the
 policy's final allowlist before applying. RoseOS's product baseline calls for a
 pinned app allowlist and explicit owner approval for installs, messages,

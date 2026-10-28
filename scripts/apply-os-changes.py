@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from integration_copy import Conflict, install_bytes, install_copy
-from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan, validate_policy
+from background_apks import (installed_precedence, preinstall_blueprint, preinstall_make_block,
+    preinstall_plan, validate_policy)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('source', help='Existing GrapheneOS checkout matching os/pinned-manifest.xml')
@@ -30,12 +31,17 @@ p.add_argument('--keep-upstream-updater', action='store_true',
     help='Deliberately leave the Updater polling GrapheneOS (not for a build that updates an existing RoseOS phone)')
 p.add_argument('--preinstall-apk', type=Path, action='append', default=[],
     help='Preinstall this exact signed Rose Agent or target APK from the policy receipt on the product partition (repeatable)')
+p.add_argument('--installed-identities', type=Path,
+    help='The phone\'s installed app identities (expected-identities.json shape); refuse bundled apps '
+    'that would not replace them (versionCode not higher, or a different signer)')
 p.add_argument('--check', action='store_true', help='Run all preflight checks without changing source')
 a = p.parse_args()
 if bool(a.background_policy) != bool(a.background_agent):
     p.error('--background-policy and --background-agent must be supplied together')
 if a.preinstall_apk and not a.background_policy:
     p.error('--preinstall-apk needs --background-policy and --background-agent')
+if a.installed_identities and not a.background_policy:
+    p.error('--installed-identities needs --background-policy and --background-agent')
 if a.locked_control and not a.background_policy:
     p.error('--locked-control needs --background-policy and --background-agent')
 if a.reference_display_address and (not a.background_policy or not a.reference_display_address.isdecimal()
@@ -82,6 +88,12 @@ if a.background_policy:
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
+if a.installed_identities:
+    bundled = [policy['agent']] + [row for row in [policy['voice'], *policy['targets']]
+        if row['packageName'] in {p['packageName'] for p in preinstalls}]
+    issues, notes = installed_precedence(bundled, json.loads(a.installed_identities.read_text()))
+    for note in notes:print('Note: ' + note)
+    if issues:raise SystemExit('Bundled apps would not replace the installed copies:\n  ' + '\n  '.join(issues))
 PRODUCT_MAKEFILE = 'target/product/handheld_product.mk'
 
 def is_updater_overlay(path):
