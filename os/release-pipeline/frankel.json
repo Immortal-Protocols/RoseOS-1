@@ -158,10 +158,14 @@
       "stable",
       "alpha"
     ],
-    "apkPath": null,
+    "apkPath": "SYSTEM/priv-app/Updater/Updater.apk",
     "signer": null,
-    "requiredFiles": null,
-    "basis": "Compiled Updater gate (077 shipped none). Package from the Updater source tree, channel default and values from os/patches/updater-rose-channels.patch, url and published set from the reconcile applyArgs. apkPath, signer (otaCertificate or a sha256) and requiredFiles (target-files paths of its default-permissions, permissions and sysconfig XML) await the OS product inclusion layout"
+    "requiredFiles": [
+      "SYSTEM/etc/permissions/app.seamlessupdate.client.xml",
+      "SYSTEM/etc/default-permissions/app.seamlessupdate.client.xml",
+      "SYSTEM/etc/sysconfig/app.seamlessupdate.client.xml"
+    ],
+    "basis": "Compiled Updater gate (077 shipped none). Package from the Updater source tree, channel default and values from os/patches/updater-rose-channels.patch, url and published set from the reconcile applyArgs; apkPath and requiredFiles as stated by the OS inclusion fix (#52, docs/OS-INTEGRATION.md). signer (otaCertificate or a sha256) awaits OS confirmation"
   },
   "identities": {
     "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",

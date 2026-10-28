@@ -42,7 +42,7 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertEqual(pipeline.preflight('guard', CONFIG, {'ROSEOS_BUILDER_RUNNER_READY': 'true',
             'GCP_WORKLOAD_IDENTITY_PROVIDER': 'x', 'GCP_CONTROLLER_SERVICE_ACCOUNT': 'x', 'GCP_SIGNER_SERVICE_ACCOUNT': 'x',
             'PIXEL_OTA_PUBLISHER': 'github-app', 'PIXEL_OTA_APP_ID': '1', 'PIXEL_OTA_APP_KEY_PRESENT': 'true'}, 'production'),
-            ['updater.apkPath', 'updater.signer', 'updater.requiredFiles'])  # the next candidate waits for the OS layout
+            ['updater.signer'])  # the next candidate waits for the OS layout
 
     def test_updater_expectations_follow_the_patch_and_the_recipe(self):
         patch = (ROOT/'os/patches/updater-rose-channels.patch').read_text()
@@ -55,6 +55,15 @@ class CheckedInCandidateTest(unittest.TestCase):
         expected = pipeline.updater_expected(CONFIG)
         self.assertEqual(expected[('string', 'url')], 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/')
         self.assertEqual(expected[('array', 'channel_published')], ['stable'])  # Beta keeps the existing stable wire channel
+
+    def test_updater_layout_is_the_one_the_os_inclusion_documents(self):
+        docs = ' '.join((ROOT/'docs/OS-INTEGRATION.md').read_text().split())
+        updater = CONFIG['updater']
+        self.assertIn(f'`{updater["apkPath"]}` (`{updater["packageName"]}`)', docs)
+        self.assertIn('`SYSTEM/etc/{permissions,default-permissions,sysconfig}/app.seamlessupdate.client.xml`', docs)
+        self.assertEqual(updater['requiredFiles'], [f'SYSTEM/etc/{kind}/app.seamlessupdate.client.xml'
+            for kind in ('permissions', 'default-permissions', 'sysconfig')])
+        self.assertIn('updater-product-build-make.patch', (ROOT/'scripts/apply-os-changes.py').read_text())
 
     def test_source_manifests_match_the_allocated_versions(self):
         self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 301, '301-wave-beta'))

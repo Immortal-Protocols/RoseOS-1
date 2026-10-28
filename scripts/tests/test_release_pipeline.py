@@ -697,7 +697,7 @@ class PipelineTest(unittest.TestCase):
         # Only the proposed admin setup remains; the host recipe in the checked-in config is complete.
         self.assertEqual(missing, ['ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
             'GCP_SIGNER_SERVICE_ACCOUNT', 'PIXEL_OTA_PUBLISHER (must be github-app)',
-            'updater.apkPath', 'updater.signer', 'updater.requiredFiles'])  # awaiting the OS Updater inclusion layout
+            'updater.signer'])  # awaiting the OS Updater inclusion layout
         code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app'))
         self.assertEqual(code, 4)
         self.assertEqual(json.loads(out)['missing'], ['PIXEL_OTA_APP_ID', 'PIXEL_OTA_APP_PRIVATE_KEY'])
