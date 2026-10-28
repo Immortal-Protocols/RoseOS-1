@@ -37,6 +37,8 @@ LUNCH = {'TARGET_PRODUCT': 'aosp_cf_x86_64_only_phone', 'TARGET_RELEASE': 'cur',
     'TARGET_BOARD_PLATFORM': 'vsoc_x86_64', 'PRODUCT_DEVICE': 'vsoc_x86_64_only', 'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only',
     'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86', 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE': 'ext4'}
 PIN = 'ab' * 32
+SUCCESSOR_MISSING = ['prepared.successor.successorId', 'prepared.successor.receiptSha256',
+    'hostEvidence.probedSuccessorId (a passing probe of the recorded successor)']
 CERT = PIN.upper()
 
 ENVSETUP = r'''
@@ -155,6 +157,19 @@ CACHE_LINKS = [('vendor_boot/vendor_ramdisk00__unpacked/adb_keys', '/product/etc
 class AlphaTreeTest(unittest.TestCase):
     """A synthetic retained base (2804-shaped build/make, pinned Cuttlefish files, integrated apps, reconcile receipt and
     release evidence), prepared for real by emulator-alpha.py prepare; probe and build then use only the prepared tree."""
+    CONTRACT_SOURCE, DELTA_COMMIT, PATCH_PATH = CONTRACT, CHECKED_IN['preparation']['osDelta']['commit'], None
+
+    def fixture_contract(self, source, patch_path=None):
+        """OS's contract with this fixture's receipt and app digests (the real ones belong to the real 2804 bytes)."""
+        contract = json.loads(json.dumps(source))
+        contract['base']['reconcileSha256'] = sha(self.receipt)
+        for app, path in zip(contract['apps'], self.app_paths):
+            app['sha256'] = sha(self.src/path)
+        contract['policySha256'] = sha(self.root/'frankel-2026102804/release/background-policy.json')
+        if patch_path:
+            contract['osDelta']['patches'][0]['path'] = patch_path
+        return contract
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -225,14 +240,8 @@ class AlphaTreeTest(unittest.TestCase):
             'agent': row('dev.pixel.backgroundcontrol', 'PixelBackgroundControl.apk'),
             'voice': row('dev.pixel.voice', 'RosePreinstall_dev_pixel_voice.apk'),
             'targets': [row('dev.pixel.calculator.agent', 'RosePreinstall_dev_pixel_calculator_agent.apk')]}))
-        # OS's contract with this fixture's receipt and app digests (the real ones belong to the real 2804 bytes).
-        contract = json.loads(json.dumps(CONTRACT))
-        contract['base']['reconcileSha256'] = sha(self.receipt)
-        for app, path in zip(contract['apps'], self.app_paths):
-            app['sha256'] = sha(src/path)
-        contract['policySha256'] = sha(release/'background-policy.json')
         self.contract = self.root/'contract.json'
-        self.contract.write_text(json.dumps(contract))
+        self.contract.write_text(json.dumps(self.fixture_contract(self.CONTRACT_SOURCE, self.PATCH_PATH)))
         self.lock = self.root/'frankel-build.lock'
         shared = self.root/'shared.json'
         shared.write_text(json.dumps({'framework': {'lockedSessions': False}, 'identities': {'appSignerSha256': PIN},
@@ -245,7 +254,9 @@ class AlphaTreeTest(unittest.TestCase):
         self.data['sourceBinding'].update(candidate=BOUND, reconcileReceipt=self.receipt.name, reconcileReceiptSha256=sha(self.receipt), apps=APPS)
         preparation = self.data['preparation']
         preparation.update(root=str(self.root/'alpha-source'), copyBudgetGiB=1)
-        preparation['osDelta'].update(contract=str(self.contract), contractSha256=sha(self.contract))
+        preparation['osDelta'].update(commit=self.DELTA_COMMIT, contract=str(self.contract), contractSha256=sha(self.contract))
+        preparation.pop('successorOf', None)  # a plain preparation; SuccessorTest pins a predecessor
+        self.data['prepared'].pop('successor', None)
         preparation['baseEvidence'] = {'resolvedManifest': {'path': str(release/'resolved-manifest.xml'), 'sha256': sha(release/'resolved-manifest.xml')},
             'policy': {'path': str(release/'background-policy.json'), 'sha256': sha(release/'background-policy.json')}}
         self.config_path = self.root/'alpha.json'
@@ -483,7 +494,8 @@ class AlphaTreeTest(unittest.TestCase):
              'makeGoals': ['droid', 'hosttar'], 'lunch': LUNCH})
         self.assertEqual(receipt['preparation'], {'preparationId': self.preparation['preparationId'],
             'receiptSha256': sha(self.prepared_dir/'preparation.json'), 'effectiveSourceIdentity': self.preparation['effectiveSourceIdentity'],
-            'osDeltaCommit': '156ccb8ed0bbc871222bfa206009560b1c9907be', 'updaterMode': 'excluded-no-compatible-feed', 'preparedRoot': str(self.tree)})
+            'osDeltaCommit': '156ccb8ed0bbc871222bfa206009560b1c9907be', 'updaterMode': 'excluded-no-compatible-feed', 'preparedRoot': str(self.tree),
+             'successor': None})
         self.assertEqual(sorted(receipt['images']), ['boot.img', 'init_boot.img', 'super.img', 'userdata.img', 'vbmeta.img', 'vendor_boot.img'])
         self.assertEqual(receipt['images']['super.img'], {'size': (out/'super.img').stat().st_size, 'sha256': sha(out/'super.img')})
         self.assertEqual(receipt['hostOutputs']['cvd-host_package.tar.gz']['sha256'], sha(self.tree/LUNCH['HOST_OUT']/'cvd-host_package.tar.gz'))
@@ -804,19 +816,279 @@ class AlphaTreeTest(unittest.TestCase):
         with self.assertRaisesRegex(alpha.InvalidInput, 'preparation-id'):
             alpha.probe(alpha.load(self.config_path), None, '40680000002', TS, self.root/'probe3.json')
 
+OLD_DELTA = SCRIPTS/'tests/fixtures/cuttlefish-alpha-f21bf683'  # OS's delta at f21bf683 (see its README)
+OLD_COMMIT = 'f21bf68322b3fa0a8924840554ab3e9398f79125'
+INCREMENTAL = CONTRACT['alpha099IncrementalDelta']
+
+class SuccessorTest(unittest.TestCase):
+    """A predecessor prepared for real from OS's earlier delta (f21bf683: the real patch e000da0d and contract c825aa19),
+    with a retained alpha OUT_DIR, then moved in place to the current delta (156ccb8e) by prepare-successor and the
+    contract's one-file incremental patch (c9350590)."""
+    CONTRACT_SOURCE, DELTA_COMMIT = json.loads((OLD_DELTA/'cuttlefish-product-contract.json').read_text()), OLD_COMMIT
+    PATCH_PATH = str((OLD_DELTA/'cuttlefish-alpha-no-updater.patch').relative_to(ROOT))
+    for name in ('fixture_contract', 'write', 'make_partitions', 'with_env', 'run_build', 'made'):
+        locals()[name] = getattr(AlphaTreeTest, name)
+
+    def setUp(self):
+        AlphaTreeTest.setUp(self)
+        self.predecessor = self.preparation
+        self.assertEqual(self.predecessor['osDeltaCommit'], OLD_COMMIT)
+        self.generic = self.tree/'build/make'/GENERIC
+        self.assertEqual(sha(self.generic), INCREMENTAL['beforeSha256'])
+        # The predecessor's own alpha build output, retained across the transition.
+        (self.tree/'out-rose-cf-alpha/soong').mkdir(parents=True)
+        (self.tree/'out-rose-cf-alpha/soong/build.ninja').write_text('retained alpha build state')
+        self.contract.write_text(json.dumps(self.fixture_contract(CONTRACT)))
+        preparation = self.data['preparation']
+        preparation['osDelta'].update(commit=CHECKED_IN['preparation']['osDelta']['commit'], contractSha256=sha(self.contract))
+        preparation['successorOf'] = {'preparationId': self.predecessor['preparationId'],
+            'receiptSha256': sha(self.prepared_dir/'preparation.json'), 'incrementalDelta': 'alpha099IncrementalDelta'}
+        self.data['prepared']['successor'] = {'successorId': None, 'receiptSha256': None}
+        self.data['hostEvidence']['probedSuccessorId'] = None
+        self.write()
+        self.history = {name: (self.prepared_dir/name).read_bytes() for name in ('preparation.json', 'manifest.tsv')}
+
+    def config(self):
+        return alpha.load(self.config_path)
+
+    def successor(self, **kwargs):
+        return alpha.prepare_successor(self.config(), **kwargs)
+
+    def record(self, receipt, probed=True):
+        path = self.prepared_dir/'successors'/receipt['successorId']/'successor.json'
+        self.data['prepared']['successor'] = {'successorId': receipt['successorId'], 'receiptSha256': sha(path)}
+        self.data['hostEvidence']['probedSuccessorId'] = receipt['successorId'] if probed else None
+        self.write()
+
+    def untouched(self):
+        for name, data in self.history.items():
+            self.assertEqual((self.prepared_dir/name).read_bytes(), data, f'{name} is immutable history')
+        self.assertEqual((self.tree/'out-rose-cf-alpha/soong/build.ninja').read_text(), 'retained alpha build state')
+
+    def test_transition_moves_one_file_in_place_and_equals_a_fresh_preparation(self):
+        mask = os.umask(0o077)  # as on the builder: git apply would leave 0600
+        try:
+            receipt = self.successor()
+        finally:
+            os.umask(mask)
+        self.untouched()
+        self.assertEqual((sha(self.generic), oct(self.generic.stat().st_mode & 0o777)), (INCREMENTAL['afterSha256'], '0o644'))
+        incremental = receipt['incremental']
+        self.assertEqual((incremental['sha256'], incremental['beforeSha256'], incremental['afterSha256'], incremental['recordedMode'],
+            incremental['modeAfterApply'], incremental['modeRestored'], incremental['secondCheckRefused']),
+            ('c935059085f780afea423df1466d65526eb00fe15d5438bbabb928c755df7c67', INCREMENTAL['beforeSha256'], INCREMENTAL['afterSha256'],
+             '644', '600', True, True))
+        self.assertEqual(receipt['predecessor'], {'preparationId': self.predecessor['preparationId'],
+            'receiptSha256': sha(self.prepared_dir/'preparation.json'), 'selectionSha256': self.predecessor['selectionSha256'],
+            'effectiveSourceIdentity': self.predecessor['effectiveSourceIdentity'], 'osDeltaCommit': OLD_COMMIT,
+            'patchDigests': self.predecessor['patchDigests'], 'contractSha256': self.predecessor['contractSha256']})
+        self.assertEqual(receipt['predecessor']['patchDigests'][0]['sha256'], 'e000da0d1247dfcb341bc97df3098a2ed57faed31af0e5a837733537ae567858')
+        self.assertEqual((receipt['osDeltaCommit'], receipt['patchDigests'][0]['sha256'], receipt['preparedRoot'], receipt['recoveredFrom']),
+            ('156ccb8ed0bbc871222bfa206009560b1c9907be', 'aa975499e15021cdae01665961c2cbb3037ea34a0dc173b3d1a488b3a5d0ff84', str(self.tree), None))
+        self.assertEqual(receipt['outDirPreserved']['before'], receipt['outDirPreserved']['after'])
+        self.assertTrue(receipt['outDirPreserved']['before']['present'])
+        self.assertNotEqual(receipt['successorId'], self.predecessor['preparationId'])
+        # A fresh preparation of the same base with the new delta has the same source identity and changed files.
+        self.data['preparation']['root'] = str(self.root/'fresh')
+        self.data['preparation'].pop('successorOf')
+        self.write()
+        fresh = alpha.prepare(self.config())
+        self.assertEqual((receipt['effectiveSourceIdentity'], receipt['changedFiles'], receipt['selectionSha256']),
+            (fresh['effectiveSourceIdentity'], fresh['changedFiles'], fresh['selectionSha256']))
+        self.assertEqual(sha(self.generic), sha(Path(fresh['preparedRoot'])/'build/make'/GENERIC))
+
+    def test_the_recorded_successor_is_verified_probed_and_built_from_the_same_tree(self):
+        receipt = self.successor()
+        self.record(receipt, probed=False)
+        with self.assertRaises(alpha.SetupMissing) as missing:
+            alpha.guard(self.config())
+        self.assertEqual(missing.exception.missing, ['hostEvidence.probedSuccessorId (a passing probe of the recorded successor)'])
+        self.assertEqual(alpha.successor_failures(self.config(), receipt['successorId'], self.data['prepared']['successor']['receiptSha256'])[2], [])
+        verified = alpha.verify_successor(self.config(), self.predecessor['preparationId'], receipt['successorId'])
+        self.assertEqual((verified['verdict'], verified['fullRehash']), ('OK', True))
+        probe = self.with_env(lambda: alpha.probe(self.config(), self.predecessor['preparationId'], '40680000004', TS, self.root/'probe.json',
+            receipt['successorId']))
+        self.assertEqual((probe['successorId'], probe['successorReceiptSha256'], probe['treeFailures'], probe['lunch']),
+            (receipt['successorId'], self.data['prepared']['successor']['receiptSha256'], [], LUNCH))
+        self.record(receipt)
+        built = self.run_build()
+        self.assertEqual(built['preparation']['successor'], self.data['prepared']['successor'])
+        self.assertEqual((built['preparation']['osDeltaCommit'], built['preparation']['effectiveSourceIdentity']),
+            ('156ccb8ed0bbc871222bfa206009560b1c9907be', receipt['effectiveSourceIdentity']))
+        self.assertEqual(len(self.made()), 1)
+        with self.assertRaisesRegex(alpha.CheckFailed, 'is not of preparation'):
+            alpha.verify_successor(self.config(), 'f' * 64, receipt['successorId'])
+
+    def test_rerun_is_a_verified_no_op_and_never_applies_twice(self):
+        first = self.successor()
+        listing = tree_listing(self.tree)
+        again = self.successor()
+        self.assertTrue(again['alreadyTransitioned'])
+        self.assertEqual({k: v for k, v in again.items() if k != 'alreadyTransitioned'}, first)
+        self.assertEqual(tree_listing(self.tree), listing)
+        self.generic.write_bytes(self.generic.read_bytes() + b'// drift\n')
+        with self.assertRaisesRegex(alpha.CheckFailed, 'no longer matches successor'):
+            self.successor()
+
+    def assert_refused(self, message, **kwargs):
+        before = tree_listing(self.tree)
+        with self.assertRaisesRegex(alpha.CheckFailed, message):
+            self.successor(**kwargs)
+        self.assertFalse((self.prepared_dir/'successors').exists() and list((self.prepared_dir/'successors').rglob('successor.json')))
+        return before
+
+    def test_drift_preimage_mode_and_links_stop_before_any_write(self):
+        media = self.tree/'build/make'/MEDIA
+        original = media.read_bytes()
+        media.write_bytes(original + b'# drift\n')
+        self.assert_refused('drifted from its predecessor receipt: build/make/target/product/media_system.mk: file differs')
+        self.assertFalse((self.prepared_dir/'successors').exists(), 'no journal before the full re-hash passes')
+        media.write_bytes(original)
+        app = self.tree/self.app_paths[0]
+        app.chmod(0o600)
+        self.assert_refused(f'{self.app_paths[0]}: file differs')
+        app.chmod(0o644)
+        bytes_before = self.generic.read_bytes()
+        self.generic.write_bytes(bytes_before + b'// other edit\n')
+        self.assert_refused('not the incremental preimage')
+        self.generic.write_bytes(bytes_before)
+        self.generic.chmod(0o600)
+        self.assert_refused('mode 600, not the recorded 644')
+        self.generic.chmod(0o644)
+        moved = self.root/'elsewhere.bp'
+        self.generic.rename(moved)
+        os.symlink(moved, self.generic)
+        self.assert_refused('reaches a symlink')
+        self.generic.unlink()
+        moved.rename(self.generic)
+        self.assertEqual(self.successor()['incremental']['afterSha256'], INCREMENTAL['afterSha256'])
+
+    def test_missing_or_different_ancestry_is_refused(self):
+        self.data['preparation']['successorOf']['receiptSha256'] = '0' * 64
+        self.write()
+        self.assert_refused('differs from preparation.successorOf.receiptSha256')
+        self.data['preparation']['successorOf']['receiptSha256'] = sha(self.prepared_dir/'preparation.json')
+        self.data['preparation']['successorOf']['preparationId'] = 'a' * 64
+        self.write()
+        self.assert_refused('is absent or differs from preparation.successorOf.receiptSha256')
+        self.data['preparation']['successorOf']['preparationId'] = self.predecessor['preparationId']
+        for edit, message in ((lambda c: c['alpha099IncrementalDelta'].update(fromOsDeltaCommit='1' * 40), 'not the incremental base'),
+                (lambda c: c['alpha099IncrementalDelta'].update(fromPatchSha256='1' * 64), 'not the incremental base patch'),
+                (lambda c: c['alpha099IncrementalDelta'].update(sha256='1' * 64), 'differs from its contract digest'),
+                (lambda c: c['alpha099IncrementalDelta'].update(afterSha256='1' * 64), 'not the contract\'s full-delta result'),
+                (lambda c: c['alpha099IncrementalDelta'].update(beforeSha256='1' * 64), 'not the incremental preimage'),
+                (lambda c: c.pop('alpha099IncrementalDelta'), 'contract has no alpha099IncrementalDelta')):
+            contract = self.fixture_contract(CONTRACT)
+            edit(contract)
+            self.contract.write_text(json.dumps(contract))
+            self.data['preparation']['osDelta']['contractSha256'] = sha(self.contract)
+            self.write()
+            self.assert_refused(message)
+        self.untouched()
+
+    def test_an_interrupted_transition_continues_only_with_recover_from_exactly_the_pre_or_postimage(self):
+        original = alpha.alpha_source.apply_patch
+        def crash_after(directory, patch, ceiling):
+            original(directory, patch, ceiling)
+            os.chmod(self.generic, 0o600)
+            raise KeyboardInterrupt('power lost after the apply')
+        def crash_before(directory, patch, ceiling):
+            raise KeyboardInterrupt('power lost before the apply')
+        for crash, state in ((crash_before, 'preimage'), (crash_after, 'postimage')):
+            alpha.alpha_source.apply_patch = crash
+            try:
+                with self.assertRaises(KeyboardInterrupt):
+                    self.successor()
+            finally:
+                alpha.alpha_source.apply_patch = original
+            with self.assertRaisesRegex(alpha.CheckFailed, 'interrupted transition .* rerun with --recover'):
+                self.successor()
+            receipt = self.successor(recover=True)
+            self.assertEqual((receipt['recoveredFrom'], sha(self.generic), oct(self.generic.stat().st_mode & 0o777)),
+                (state, INCREMENTAL['afterSha256'], '0o644'))
+            self.untouched()
+            shutil.rmtree(self.prepared_dir/'successors')
+            subprocess.run(['git', '-C', str(self.tree/'build/make'), 'apply', '-R', str(ROOT/INCREMENTAL['path'])], check=True,
+                env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.prepared_dir)))
+        alpha.alpha_source.apply_patch = crash_before
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                self.successor()
+        finally:
+            alpha.alpha_source.apply_patch = original
+        self.generic.write_bytes(b'neither image')
+        with self.assertRaisesRegex(alpha.CheckFailed, 'not the incremental preimage .* or postimage'):
+            self.successor(recover=True)
+        with self.assertRaisesRegex(alpha.CheckFailed, 'nothing to recover'):
+            shutil.rmtree(self.prepared_dir/'successors')
+            self.successor(recover=True)
+
+    def test_a_reapplicable_patch_or_a_touched_out_dir_is_not_recorded(self):
+        original_run, original_apply = alpha.alpha_source.subprocess.run, alpha.alpha_source.apply_patch
+        checks = []
+        def run(args, **kwargs):  # the postimage's second --check reports that the patch would apply again
+            result = original_run(args, **kwargs)
+            if '--check' in args and checks.append(1) is None and len(checks) == 2:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            return result
+        alpha.alpha_source.subprocess.run = run
+        try:
+            with self.assertRaisesRegex(alpha.CheckFailed, 'would apply again'):
+                self.successor()
+        finally:
+            alpha.alpha_source.subprocess.run = original_run
+        self.assertFalse(list((self.prepared_dir/'successors').rglob('successor.json')))
+        shutil.rmtree(self.prepared_dir/'successors')
+        subprocess.run(['git', '-C', str(self.tree/'build/make'), 'apply', '-R', str(ROOT/INCREMENTAL['path'])], check=True,
+            env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.prepared_dir)))
+        def touches_out(directory, patch, ceiling):
+            original_apply(directory, patch, ceiling)
+            (self.tree/'out-rose-cf-alpha/new-file').write_text('a build ran during the transition')
+        alpha.alpha_source.apply_patch = touches_out
+        try:
+            with self.assertRaisesRegex(alpha.CheckFailed, 'out-rose-cf-alpha changed during the transition'):
+                self.successor()
+        finally:
+            alpha.alpha_source.apply_patch = original_apply
+        self.assertFalse(list((self.prepared_dir/'successors').rglob('successor.json')))
+
+    def test_the_predecessor_alone_is_never_built_for_the_new_delta(self):
+        with self.assertRaises(alpha.SetupMissing):
+            self.run_build()
+        self.data['preparation'].pop('successorOf')
+        self.write()
+        _, failures = alpha.prepared_failures(self.config(), self.predecessor['preparationId'])
+        self.assertTrue(any('osDeltaCommit' in f for f in failures), failures)
+        self.assertEqual(self.made(), [])
+
 class CheckedInAlphaTest(unittest.TestCase):
     def test_checked_in_config_admits_the_guard_and_fails_closed_off_the_builder(self):
-        # With the lead's measured bindings the guard passes; everything after it needs the real prepared tree.
+        # The pinned preparation is the predecessor of the ALPHA-099 delta: the guard names the successor and its probe as
+        # missing until the lead records them; everything after it needs the real prepared tree.
         result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard'], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((result.returncode, json.loads(result.stderr)['missing']), (4, SUCCESSOR_MISSING))
         builder = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'builder'], capture_output=True, text=True)
+        self.assertEqual((builder.returncode, json.loads(builder.stderr)['verdict']), (4, 'SETUP_MISSING'))
+        recorded = json.loads(json.dumps(CHECKED_IN))
+        recorded['prepared']['successor'].update(successorId='c' * 64, receiptSha256='d' * 64)
+        recorded['hostEvidence']['probedSuccessorId'] = 'c' * 64
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'alpha.json'
+            path.write_text(json.dumps(recorded))
+            guard = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard', '--config', str(path)],
+                capture_output=True, text=True)
+            self.assertEqual(guard.returncode, 0, guard.stderr)
+            builder = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'builder', '--config', str(path)],
+                capture_output=True, text=True)
         self.assertEqual((builder.returncode, json.loads(builder.stderr)['verdict']), (1, 'FAIL'))
-        self.assertIn('no preparation with this id', builder.stderr)
+        self.assertIn('differs from preparation.successorOf.receiptSha256', builder.stderr)  # no predecessor on this runner
+        successor = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'prepare-successor'], capture_output=True, text=True)
+        self.assertEqual((successor.returncode, json.loads(successor.stderr)['verdict']), (1, 'FAIL'))
         prepare = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'prepare'], capture_output=True, text=True)
         self.assertEqual((prepare.returncode, json.loads(prepare.stderr)['verdict']), (1, 'FAIL'))
         build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
             '--run-id', '1', '--build-timestamp', TS, '--receipt-dir', '/nonexistent/alpha-receipt'], capture_output=True, text=True)
-        self.assertEqual(build.returncode, 1, 'no build without the real prepared tree')
+        self.assertEqual(build.returncode, 4, 'no build without the recorded successor and its probe')
 
     def test_missing_host_inputs_still_fail_closed_by_name(self):
         data = json.loads(json.dumps(CHECKED_IN))
@@ -830,8 +1102,9 @@ class CheckedInAlphaTest(unittest.TestCase):
                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch',
-            'prepared.preparationId', 'prepared.receiptSha256', 'imageVerification.tools.lpunpack'])
+            'prepared.preparationId', 'prepared.receiptSha256', *SUCCESSOR_MISSING, 'imageVerification.tools.lpunpack'])
         config = alpha.load()
+        config['preparation'].pop('successorOf')
         config['hostEvidence']['lunch'] = dict(config['hostEvidence']['lunch'])
         config['imageVerification']['tools']['fsckErofs'] = None
         self.assertEqual(alpha.missing_evidence(config), ['imageVerification.tools.fsckErofs'], 'the recorded EROFS needs its extractor')
@@ -996,7 +1269,7 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual(result['commands'][1][-1],
             'source build/envsetup.sh && lunch aosp_cf_x86_64_only_phone-cur-userdebug && m -j48 droid hosttar')
         self.assertEqual(result['environment'], {'OUT_DIR': 'out-rose-cf-alpha', 'BUILD_NUMBER': 'rose-cf-alpha-40680000003', 'BUILD_DATETIME': TS})
-        self.assertEqual(result['missingEvidence'], [])
+        self.assertEqual(result['missingEvidence'], SUCCESSOR_MISSING)
         self.assertEqual(result['cwd'], '/home/pixelbuild/rose-actions/alpha-source/b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87/tree')
 
     def test_adapter_never_reconciles_signs_publishes_cleans_or_uses_the_reference_scripts(self):

@@ -14,10 +14,15 @@ plan fails closed (exit 4) naming it.
                    --job builder: also the pinned preparation, read-only (no lunch, no make)
   prepare          on the builder, under the shared lock: base and capacity checks, then the independent copy plus
                    delta; prints the preparation receipt
-  verify-prepared  --preparation-id ID: full re-hash of a prepared tree against its manifest
-  probe            --preparation-id ID, under the shared lock: the prepared tree's checks plus lunch resolution (which
-                   writes build-system state only inside the alpha OUT_DIR of that tree); writes a probe receipt whose
-                   values the lead records in hostEvidence and prepared
+  prepare-successor
+                   on the builder, under the shared lock: move the pinned predecessor preparation (preparation.successorOf)
+                   in place to the configured delta by the contract's one-file incremental patch, after a full re-hash;
+                   writes the write-once successor receipt (alpha-source/<predecessorId>/successors/<successorId>/) and
+                   prints it. --recover continues an interrupted transition from exactly the preimage or postimage
+  verify-prepared  --preparation-id ID [--successor-id ID]: full re-hash of a prepared tree against its manifest
+  probe            --preparation-id ID [--successor-id ID], under the shared lock: the prepared (or successor) tree's
+                   checks plus lunch resolution (which writes build-system state only inside the alpha OUT_DIR of that
+                   tree); writes a probe receipt whose values the lead records in hostEvidence and prepared
   verify-image     under the shared lock: the image-content gate (scripts/alpha_image.py) on the pinned preparation's
                    existing build output; writes nothing
   build            under the shared lock: every check against the pinned preparation, lunch resolution equal to
@@ -124,6 +129,11 @@ def missing_evidence(config):
     if lunch:
         missing += [f'hostEvidence.lunch.{k}' for k in LUNCH_VARS if not lunch.get(k)]
     missing += [f'prepared.{k}' for k in ('preparationId', 'receiptSha256') if not prepared.get(k)]
+    if config['preparation'].get('successorOf'):
+        successor = prepared.get('successor') or {}
+        missing += [f'prepared.successor.{k}' for k in ('successorId', 'receiptSha256') if not successor.get(k)]
+        if not successor.get('successorId') or evidence.get('probedSuccessorId') != successor['successorId']:
+            missing.append('hostEvidence.probedSuccessorId (a passing probe of the recorded successor)')
     tools = config['imageVerification']['tools']
     needed = ['lpunpack', 'aapt', 'apksigner', 'simg2img']
     filesystem = lunch.get('BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE')
@@ -401,6 +411,162 @@ def verify_prepared(config, preparation_id):
     return {'verdict': 'FAIL' if failures else 'OK', 'preparationId': preparation_id, 'failures': failures[:200],
         'failureCount': len(failures), 'fullRehash': True}
 
+# ---------------------------------------------------------------- successor preparation (INFRA-ALPHA-104)
+
+def incremental_delta(config, document):
+    """The contract's one-file delta from the predecessor's delta to the configured one, with its patch on disk."""
+    successor = config['preparation']['successorOf']
+    item = document.get(successor['incrementalDelta'])
+    if not isinstance(item, dict):
+        raise CheckFailed(f'the contract has no {successor["incrementalDelta"]}')
+    patch = ROOT/item['path']
+    if not patch.is_file() or sha256_file(patch) != item['sha256']:
+        raise CheckFailed(f'{item["path"]} is absent or differs from its contract digest')
+    touched = sorted({line[6:].split('\t')[0] for line in patch.read_text().splitlines() if line.startswith(('--- a/', '+++ b/'))})
+    if touched != [item['file']]:
+        raise CheckFailed(f'{item["path"]} touches {touched}, not exactly {item["file"]}')
+    declared = {(c['project'], c['path']): c for c in document['osDelta']['changedFiles']}
+    if (item['project'], item['file']) not in declared or declared[(item['project'], item['file'])]['fixtureAfterSha256'] != item['afterSha256']:
+        raise CheckFailed('the incremental postimage is not the contract\'s full-delta result for that file')
+    return {**item, 'patchFile': str(patch)}
+
+def predecessor_receipt(config, document, item):
+    """The pinned predecessor preparation, unchanged, and its ancestry to the incremental delta."""
+    successor = config['preparation']['successorOf']
+    directory = preparation_dir(config, successor['preparationId'])
+    path = directory/'preparation.json'
+    if not path.is_file() or sha256_file(path) != successor['receiptSha256']:
+        raise CheckFailed(f'{path} is absent or differs from preparation.successorOf.receiptSha256')
+    receipt = json.loads(path.read_text())
+    problems = []
+    if receipt.get('preparationId') != successor['preparationId'] or receipt.get('kind') != 'rose-cuttlefish-source-preparation':
+        problems.append('the predecessor receipt is not that preparation')
+    if receipt.get('osDeltaCommit') != item['fromOsDeltaCommit']:
+        problems.append(f'the predecessor delta is {receipt.get("osDeltaCommit")}, not the incremental base {item["fromOsDeltaCommit"]}')
+    if [p['sha256'] for p in receipt.get('patchDigests', [])] != [item['fromPatchSha256']]:
+        problems.append('the predecessor patch is not the incremental base patch')
+    expected = {**base_binding(config), 'target': config['target']['lunch'], 'updaterMode': 'excluded-no-compatible-feed',
+        'updaterEndpoint': None, 'policySha256': config['preparation']['baseEvidence']['policy']['sha256'], 'outDir': config['build']['outDir'],
+        'preparedRoot': str(directory/'tree')}
+    problems += [f'predecessor {k} is {receipt.get(k)!r}, not {v!r}' for k, v in expected.items() if receipt.get(k) != v]
+    if [[a['package'], a['version']] for a in receipt.get('apps', [])] != config['sourceBinding']['apps']:
+        problems.append('predecessor apps differ from sourceBinding.apps')
+    contract_changes = {(c['project'], c['path']): c for c in document['osDelta']['changedFiles']}
+    for change in receipt.get('changedFiles', []):
+        declared = contract_changes.get((change['project'], change['path']))
+        if declared is None or declared['fixtureBeforeSha256'] != change['beforeSha256']:
+            problems.append(f'{change["project"]}/{change["path"]} has another base than the contract')
+        elif (change['project'], change['path']) != (item['project'], item['file']) and declared['fixtureAfterSha256'] != change['afterSha256']:
+            problems.append(f'{change["project"]}/{change["path"]} changes in the new delta but not through the incremental patch')
+    if sorted(contract_changes) != sorted((c['project'], c['path']) for c in receipt.get('changedFiles', [])):
+        problems.append('the predecessor and the new delta change different files')
+    if problems:
+        raise CheckFailed('; '.join(problems))
+    return directory, {**receipt, 'receiptSha256': successor['receiptSha256']}
+
+def successor_delta(config, delta):
+    return {'commit': delta['commit'], 'contractSha256': config['preparation']['osDelta']['contractSha256'], 'patches': delta['patches']}
+
+def prepare_successor(config, recover=False, now=time.time):
+    failures = config_failures(config)
+    if failures:
+        raise CheckFailed('; '.join(failures))
+    if not config['preparation'].get('successorOf'):
+        raise SetupMissing(['preparation.successorOf'])
+    document, delta = contract(config)
+    item = incremental_delta(config, document)
+    lock = locked(config)
+    try:
+        directory, predecessor = predecessor_receipt(config, document, item)
+        tree_failures = [f for f in source_failures(config, directory/'tree', (predecessor.get('baseGitHeads') or {}).get(CUTTLEFISH))
+            if 'below build.minFreeGiB' not in f]  # the transition writes no new space; the build keeps its guard
+        if tree_failures:
+            raise CheckFailed('; '.join(tree_failures))
+        extra = {k: predecessor[k] for k in ('target', 'apps', 'policySha256', 'updaterMode', 'updaterEndpoint', 'baseGitHeads',
+            'outDir', 'baseReconcileEntries')}
+        return alpha_source.transition(directory, predecessor, successor_delta(config, delta), item, extra, recover=recover, now=now)
+    except alpha_source.PreparationFailed as error:
+        raise CheckFailed(str(error))
+    finally:
+        lock.close()
+
+def successor_failures(config, successor_id, receipt_sha256=None):
+    """A successor against its receipt, its unchanged predecessor and this config. Returns (receipt, directory, failures)."""
+    if not re.fullmatch(r'[0-9a-f]{64}', successor_id or ''):
+        raise InvalidInput('--successor-id must be the 64-hex successor id')
+    if not config['preparation'].get('successorOf'):
+        return None, None, ['preparation.successorOf is not configured']
+    try:
+        document, delta = contract(config)
+        item = incremental_delta(config, document)
+        directory, predecessor = predecessor_receipt(config, document, item)
+    except CheckFailed as error:
+        return None, None, [str(error)]
+    path = directory/alpha_source.SUCCESSORS/successor_id/alpha_source.RECORD
+    if not path.is_file():
+        return None, directory, [f'{path} is absent: no completed successor with this id']
+    if receipt_sha256 and sha256_file(path) != receipt_sha256:
+        return None, directory, [f'{path} differs from prepared.successor.receiptSha256']
+    receipt = json.loads(path.read_text())
+    tree = directory/'tree'
+    failures = []
+    expected = {'schemaVersion': 1, 'kind': 'rose-cuttlefish-source-successor', 'successorId': successor_id, 'preparedRoot': str(tree),
+        **base_binding(config), 'osDeltaCommit': delta['commit'], 'contractSha256': config['preparation']['osDelta']['contractSha256'],
+        'patchDigests': [{'path': p['path'], 'project': p['project'], 'sha256': p['sha256']} for p in delta['patches']],
+        'target': config['target']['lunch'], 'updaterMode': 'excluded-no-compatible-feed', 'updaterEndpoint': None,
+        'policySha256': config['preparation']['baseEvidence']['policy']['sha256'], 'outDir': config['build']['outDir'],
+        'selectionSha256': predecessor['selectionSha256']}
+    failures += [f'successor {k} is {receipt.get(k)!r}, not {v!r}' for k, v in expected.items() if receipt.get(k) != v]
+    if (receipt.get('predecessor') or {}).get('receiptSha256') != predecessor['receiptSha256'] \
+            or (receipt.get('predecessor') or {}).get('preparationId') != predecessor['preparationId']:
+        failures.append('the successor names another predecessor')
+    if alpha_source.successor_id(predecessor, successor_delta(config, delta), item, receipt.get('changedFiles')) != successor_id:
+        failures.append('the successor id does not match its predecessor, delta, incremental patch and changed files')
+    declared = {(c['project'], c['path']): c['fixtureAfterSha256'] for c in document['osDelta']['changedFiles']}
+    for change in receipt.get('changedFiles', []):
+        file = tree/change['project']/change['path']
+        if declared.get((change['project'], change['path'])) != change['afterSha256']:
+            failures.append(f'{change["project"]}/{change["path"]} is not the contract\'s full-delta result')
+        if not file.is_file() or file.is_symlink() or sha256_file(file) != change['afterSha256']:
+            failures.append(f'{change["project"]}/{change["path"]} differs from its successor afterSha256')
+    if [[a['package'], a['version']] for a in receipt.get('apps', [])] != config['sourceBinding']['apps']:
+        failures.append('successor apps differ from sourceBinding.apps')
+    for app in receipt.get('apps', []):
+        file = tree/(app.get('path') or '-')
+        if not file.is_file() or sha256_file(file) != app['sha256']:
+            failures.append(f'{app["package"]} APK in the prepared tree differs from {app["sha256"][:12]}')
+    changed = {f'{c["project"]}/{c["path"]}' for c in receipt.get('changedFiles', [])}
+    failures += drift_failures(tree, {p: e for p, e in receipt.get('baseReconcileEntries', {}).items() if p not in changed},
+        'the base reconcile entries')
+    manifest = directory/predecessor['manifest']
+    if not manifest.is_file() or sha256_file(manifest) != receipt.get('selectionSha256'):
+        failures.append('the preparation manifest differs from selectionSha256')
+    failures += source_failures(config, tree, (receipt.get('baseGitHeads') or {}).get(CUTTLEFISH))
+    return receipt, directory, failures
+
+def pinned_failures(config):
+    """The tree the build uses: the recorded successor when the config names a predecessor, else the preparation.
+    Returns (receipt, tree, failures)."""
+    prepared = config['prepared']
+    if config['preparation'].get('successorOf'):
+        successor = prepared.get('successor') or {}
+        receipt, directory, failures = successor_failures(config, successor.get('successorId'), successor.get('receiptSha256'))
+        return receipt, (directory/'tree' if directory else None), failures
+    receipt, failures = prepared_failures(config, prepared['preparationId'], prepared['receiptSha256'])
+    return receipt, preparation_dir(config, prepared['preparationId'])/'tree', failures
+
+def verify_successor(config, preparation_id, successor_id):
+    receipt, directory, failures = successor_failures(config, successor_id)
+    if receipt is None:
+        raise CheckFailed('; '.join(failures))
+    if directory.name != preparation_id:
+        raise CheckFailed(f'successor {successor_id} is not of preparation {preparation_id}')
+    manifest = Path(os.path.normpath(directory/alpha_source.SUCCESSORS/successor_id/receipt['manifest']))
+    differences = alpha_source.verify_tree(directory/'tree', manifest.read_text(), receipt['changedFiles'], skip={config['build']['outDir']})
+    failures += differences
+    return {'verdict': 'FAIL' if failures else 'OK', 'successorId': successor_id, 'failures': failures[:200],
+        'failureCount': len(failures), 'fullRehash': True}
+
 # ---------------------------------------------------------------- probe and build
 
 def build_env(config, build_id, timestamp):
@@ -457,13 +623,18 @@ def guard(config):
     if missing:
         raise SetupMissing(missing)
 
-def probe(config, preparation_id, run_id, timestamp, receipt_path):
+def probe(config, preparation_id, run_id, timestamp, receipt_path, successor_id=None):
     failures = config_failures(config)
     if failures:
         raise CheckFailed('; '.join(failures))
     lock = locked(config)
     try:
-        receipt, failures = prepared_failures(config, preparation_id)
+        if successor_id:
+            receipt, directory, failures = successor_failures(config, successor_id)
+            if receipt is not None and directory.name != preparation_id:
+                raise CheckFailed(f'successor {successor_id} is not of preparation {preparation_id}')
+        else:
+            receipt, failures = prepared_failures(config, preparation_id)
         if receipt is None:
             raise CheckFailed('; '.join(failures))
         root = preparation_dir(config, preparation_id)/'tree'
@@ -473,6 +644,9 @@ def probe(config, preparation_id, run_id, timestamp, receipt_path):
     result = {'receiptType': 'emulator-alpha-probe', 'executedMake': False, 'preparationId': preparation_id,
         'preparationReceiptSha256': sha256_file(preparation_dir(config, preparation_id)/'preparation.json'),
         'treeFailures': failures, 'lunch': values, 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+    if successor_id:
+        result.update(successorId=successor_id, successorReceiptSha256=sha256_file(
+            preparation_dir(config, preparation_id)/alpha_source.SUCCESSORS/successor_id/alpha_source.RECORD))
     release_receipts.write_once(receipt_path, result)
     return result
 
@@ -536,10 +710,10 @@ def verify_image(config):
     prepared = config['prepared']
     lock = locked(config)
     try:
-        _, failures = prepared_failures(config, prepared['preparationId'], prepared['receiptSha256'])
+        _, tree, failures = pinned_failures(config)
         if failures:
             raise CheckFailed('; '.join(failures))
-        product_out = preparation_dir(config, prepared['preparationId'])/'tree'/config['hostEvidence']['lunch']['PRODUCT_OUT']
+        product_out = tree/config['hostEvidence']['lunch']['PRODUCT_OUT']
         return image_content(config, prepared['preparationId'], product_out)
     finally:
         lock.close()
@@ -556,10 +730,9 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
     prepared = config['prepared']
     lock = locked(config)
     try:
-        preparation, failures = prepared_failures(config, prepared['preparationId'], prepared['receiptSha256'])
+        preparation, root, failures = pinned_failures(config)
         if failures:
             raise CheckFailed('; '.join(failures))
-        root = preparation_dir(config, prepared['preparationId'])/'tree'
         env = build_env(config, identity, timestamp)
         values = resolve(config, env, root)
         recorded = config['hostEvidence']['lunch']
@@ -586,7 +759,9 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
         'candidate': sha, 'sourceBinding': {k: config['sourceBinding'][k] for k in ('candidate', 'reconcileReceipt', 'reconcileReceiptSha256', 'apps')},
         'preparation': {'preparationId': prepared['preparationId'], 'receiptSha256': prepared['receiptSha256'],
             'effectiveSourceIdentity': preparation['effectiveSourceIdentity'], 'osDeltaCommit': preparation['osDeltaCommit'],
-            'updaterMode': preparation['updaterMode'], 'preparedRoot': preparation['preparedRoot']},
+            'updaterMode': preparation['updaterMode'], 'preparedRoot': preparation['preparedRoot'],
+            'successor': ({k: (prepared.get('successor') or {}).get(k) for k in ('successorId', 'receiptSha256')}
+                if config['preparation'].get('successorOf') else None)},
         'emulatorBuildId': identity, 'buildDatetime': timestamp, 'lunch': values, 'outDir': config['build']['outDir'],
         'makeGoals': config['build']['makeGoals'], 'images': images, 'hostOutputs': hosts, 'imageContent': content,
         'buildProps': {k: props.get(k) for k in ('ro.build.fingerprint', 'ro.build.type', 'ro.build.version.incremental', 'ro.build.date.utc')},
@@ -599,7 +774,7 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['plan', 'preflight', 'prepare', 'verify-prepared', 'probe', 'verify-image', 'build'])
+    p.add_argument('command', choices=['plan', 'preflight', 'prepare', 'prepare-successor', 'verify-prepared', 'probe', 'verify-image', 'build'])
     p.add_argument('--job', choices=['guard', 'builder'], default='guard')
     p.add_argument('--config', default=str(CONFIG))
     p.add_argument('--candidate-sha')
@@ -609,6 +784,8 @@ def main(argv=None):
     p.add_argument('--receipt-dir')
     p.add_argument('--receipt')
     p.add_argument('--preparation-id')
+    p.add_argument('--successor-id')
+    p.add_argument('--recover', action='store_true', help='prepare-successor: continue an interrupted transition')
     a = p.parse_args(argv)
     try:
         config = load(a.config)
@@ -617,14 +794,19 @@ def main(argv=None):
         elif a.command == 'preflight':
             guard(config)
             if a.job == 'builder':
-                _, failures = prepared_failures(config, config['prepared']['preparationId'], config['prepared']['receiptSha256'])
+                _, _, failures = pinned_failures(config)
                 if failures:
                     raise CheckFailed('; '.join(failures))
             result = {'verdict': 'OK', 'job': a.job}
         elif a.command == 'prepare':
             result = prepare(config)
+        elif a.command == 'prepare-successor':
+            result = prepare_successor(config, recover=a.recover)
         elif a.command == 'verify-prepared':
-            result = verify_prepared(config, a.preparation_id)
+            if a.successor_id:
+                result = verify_successor(config, a.preparation_id, a.successor_id)
+            else:
+                result = verify_prepared(config, a.preparation_id)
             if result['verdict'] != 'OK':
                 print(json.dumps(result, indent=2, sort_keys=True))
                 return 1
@@ -633,7 +815,7 @@ def main(argv=None):
         elif a.command == 'probe':
             if not a.receipt:
                 raise InvalidInput('--receipt is required')
-            result = probe(config, a.preparation_id, a.run_id, a.build_timestamp or str(int(time.time())), a.receipt)
+            result = probe(config, a.preparation_id, a.run_id, a.build_timestamp or str(int(time.time())), a.receipt, a.successor_id)
         else:
             result = build(config, a.candidate_sha, json.loads(a.apps), a.run_id, a.build_timestamp, a.receipt_dir)
     except SetupMissing as error:
