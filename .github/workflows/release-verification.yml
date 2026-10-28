@@ -19,6 +19,7 @@ on:
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
       - 'scripts/alpha_image.py'
+      - 'scripts/permission_apex.py'
       - 'os/alpha/**'
       - 'os/pinned-manifest.xml'
       - 'workspace/rose-agent/delivery/catalog.mjs'
@@ -42,6 +43,9 @@ on:
       - 'scripts/tests/test_app_release_publisher.py'
       - 'scripts/tests/test_emulator_alpha.py'
       - 'scripts/tests/test_alpha_source.py'
+      - 'scripts/tests/test_permission_apex.py'
+      - 'scripts/tests/apex_fixture.py'
+      - 'os/tests/fixtures/rose-home-role/**'
       - 'os/tests/test_cuttlefish_alpha_product.py'
       - 'os/tests/fixtures/cuttlefish-alpha/**'
       - 'scripts/tests/fixtures/**'
@@ -74,6 +78,7 @@ on:
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
       - 'scripts/alpha_image.py'
+      - 'scripts/permission_apex.py'
       - 'os/alpha/**'
       - 'os/pinned-manifest.xml'
       - 'workspace/rose-agent/delivery/catalog.mjs'
@@ -97,6 +102,9 @@ on:
       - 'scripts/tests/test_app_release_publisher.py'
       - 'scripts/tests/test_emulator_alpha.py'
       - 'scripts/tests/test_alpha_source.py'
+      - 'scripts/tests/test_permission_apex.py'
+      - 'scripts/tests/apex_fixture.py'
+      - 'os/tests/fixtures/rose-home-role/**'
       - 'os/tests/test_cuttlefish_alpha_product.py'
       - 'os/tests/fixtures/cuttlefish-alpha/**'
       - 'scripts/tests/fixtures/**'
@@ -139,6 +147,7 @@ jobs:
           python3 scripts/tests/test_release_manifest.py
           python3 scripts/tests/test_release_stage.py
           python3 scripts/tests/test_release_pipeline.py
+          python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py

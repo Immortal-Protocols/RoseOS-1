@@ -8,7 +8,8 @@ APPS (exactly [["dev.pixel.voice", N]]) set, and the job's short-lived signer id
 2. sign it with scripts/sign-apk.py and the four pinned PIXEL_APP_SIGNING_* versions, read into owner-only RAM and
    removed on success or failure (the same helpers as the OS integrate adapter);
 3. verify the signed APK independently: package dev.pixel.voice, the dispatched versionCode, a versionCode above
-   appRelease.mustExceed (the published Rose Agent) and exactly the pinned app signer;
+   appRelease.mustExceed (the newest built or published Rose Agent) and exactly the pinned app signer. A version in
+   appRelease.reserved is accepted only for its app-only candidate; any other must exceed every reservation;
 4. write to the artifact directory only the signed APK, a nonsecret receipt and SHA256SUMS;
 5. remove the candidate worktree and every temporary input under ROSE_RELEASE_DIR, on success or failure.
 It holds the builder's shared source/output lock (host.lockPath) for the whole run, so it never overlaps an OS stage.
@@ -67,12 +68,20 @@ def signers(apksigner, apk):
         raise AdapterFailed(f'{Path(apk).name} does not verify')
     return re.findall(r'certificate SHA-256 digest: ([0-9a-f]{64})', result.stdout)
 
-def requested_version(config, apps):
+def requested_version(config, apps, sha=None):
     if len(apps) != 1 or apps[0][0] != PACKAGE or type(apps[0][1]) is not int:
         raise AdapterFailed(f'app-only mode releases exactly [["{PACKAGE}", versionCode]]')
     version, floor = apps[0][1], config['appRelease']['mustExceed']
     if version <= floor:
         raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed {floor}, the newest built or published')
+    # A reserved version belongs to one route and candidate; anything newer must pass every reservation.
+    reserved = config['appRelease'].get('reserved', [])
+    row = next((r for r in reserved if r['versionCode'] == version), None)
+    if row and (row['route'] != 'app-only' or row['candidate'] != sha):
+        raise AdapterFailed(f'{PACKAGE} versionCode {version} is reserved for the {row["route"]} route'
+            + (f' and candidate {row["candidate"]}' if row['candidate'] else ''))
+    if not row and reserved and version <= max(r['versionCode'] for r in reserved):
+        raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed the reserved {max(r["versionCode"] for r in reserved)}')
     return version
 
 def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', build=None):
@@ -82,7 +91,7 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
         raise AdapterSetupMissing(missing)
     tools = config['host']['tools']
     sha, work = env['ROSE_CANDIDATE_SHA'], Path(env['ROSE_RELEASE_DIR'])
-    version = requested_version(config, json.loads(env.get('APPS', '[]')))
+    version = requested_version(config, json.loads(env.get('APPS', '[]')), sha)
     aapt, apksigner = (str(host_path(config, tools[k])) for k in ('aapt', 'apksigner'))
     artifact = Path(artifact_dir)
     if artifact.exists():
