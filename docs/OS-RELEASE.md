@@ -325,7 +325,31 @@ The host adapters implement the retained recipe:
   - the uniquely discovered, pinned key directory;
   - RAM-only decryption through `host-decrypt-keys.py`.
 
-  It then maps the exact outputs.
+  It then maps the exact outputs. `UPDATE.md` is read from the selected
+  candidate commit (`os/release-notes/{device}-{build}.md`) and must name the
+  build.
+
+Before building, `build` checks the dispatched apps against
+`versionBaselines`. Each app must be at least the version in the delivered
+2026102701 identities, which reconcile also passes to `apply-os-changes.py` as
+`--installed-identities`. Rose Agent must be strictly above the retained,
+unpublished P1 (299, build 2026102801). The build number and `BUILD_DATETIME`
+must be greater than P1's. Publication evidence does not show which phones
+installed a release.
+
+The image gate records the path and sha256 of each tool it actually ran in
+`verification.json` (`imageTools`); `simg2img` runs only for sparse images.
+Builder start and stop are submitted with `--async` and confirmed by polling
+`instances describe` only. A failed request is reconciled against the observed
+state, never resubmitted.
+
+The configured tool paths come from the retained P1 run:
+
+- `simg2img`: P1 release `bin/`;
+- `debugfs`: `/usr/sbin/debugfs`;
+- `otatools`: the path relative to `OUT_DIR`.
+
+Their existence and versions are checked only in the coordinated host window.
 
 One-time host steps, run during a coordinated builder window:
 

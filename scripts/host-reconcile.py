@@ -179,6 +179,13 @@ def main(argv=None):
     config = json.loads(a.config.read_text())
     settings = config['host']['integrate']['reconcile']
     values = {'policy': str(a.policy), 'signed_apps': str(a.signed_apps)}
+    if settings.get('installedIdentities'):
+        # The delivered identities baseline comes from the selected candidate commit, not the trusted checkout.
+        installed = a.candidate/settings['installedIdentities']
+        if not installed.is_file():
+            print(json.dumps({'verdict': 'FAIL', 'error': f'candidate has no {settings["installedIdentities"]}'}), file=sys.stderr)
+            return 1
+        values['installed_identities'] = str(installed)
     apply_args = [part.format(**values) for part in settings['applyArgs']]
     try:
         record = reconcile(config['host']['sourceRoot'], a.candidate, a.release_dir, apply_args, settings['receiptDir'],
