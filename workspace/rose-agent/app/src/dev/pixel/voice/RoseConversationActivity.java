@@ -27,6 +27,10 @@ public final class RoseConversationActivity extends Activity {
  ConversationState state;
  Presence presence;LinearLayout notice;TextView noticeIcon,noticeText,failure;
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";
+ // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
+ LinearLayout taskActions;TextView watch,stopTask,stopNote;
+ volatile String ctlStatus="",ctlSession="",ctlTask="";volatile boolean ctlPolling;long ctlPolledAt;
+ String stopPendingFor,stopMessage="";boolean stopInFlight;
  Control primary,end;
  int noticeSerial;
  final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,150);}};
@@ -63,6 +67,13 @@ public final class RoseConversationActivity extends Activity {
   taskBody=presentedText(16,ink(),"sans-serif");taskBody.setLineSpacing(dp(6),1);
   LinearLayout.LayoutParams tbp=new LinearLayout.LayoutParams(-1,-2);tbp.topMargin=dp(14);presented.addView(taskBody,tbp);
   taskNote=presentedText(13,eyebrow(),"sans-serif");LinearLayout.LayoutParams tnp=new LinearLayout.LayoutParams(-1,-2);tnp.topMargin=dp(12);presented.addView(taskNote,tnp);
+  stopNote=presentedText(14,ink(),"sans-serif");stopNote.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+  LinearLayout.LayoutParams snp=new LinearLayout.LayoutParams(-1,-2);snp.topMargin=dp(12);presented.addView(stopNote,snp);
+  taskActions=new LinearLayout(this);taskActions.setGravity(Gravity.START);
+  watch=taskAction("View workspace",ink());watch.setContentDescription("View this task's background workspace");watch.setOnClickListener(v->openWorkspace());taskActions.addView(watch);
+  stopTask=taskAction("Stop task",endInk());stopTask.setOnClickListener(v->confirmStop());
+  LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.leftMargin=dp(12);taskActions.addView(stopTask,sp);
+  LinearLayout.LayoutParams tap=new LinearLayout.LayoutParams(-1,-2);tap.topMargin=dp(16);presented.addView(taskActions,tap);
   presentedScroll.addView(presented);content.addView(presentedScroll,new LinearLayout.LayoutParams(-1,0,1f));
   FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=statusInset()+dp(56);cp.bottomMargin=dp(190);root.addView(content,cp);
 
@@ -87,6 +98,8 @@ public final class RoseConversationActivity extends Activity {
   FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
   setContentView(root);
  }
+ TextView taskAction(String text,int color){TextView t=presentedText(15,color,"sans-serif-medium");t.setText(text);t.setGravity(Gravity.CENTER);t.setMinHeight(dp(44));
+  t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(22));g.setStroke(dp(1),line());t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
  static int eyebrow(){return c(0xff677c6f,0xffb6ccbc);}
  TextView presentedText(int size,int color,String family){TextView t=new TextView(this);t.setTextSize(size);t.setTextColor(color);t.setTypeface(Typeface.create(family,Typeface.NORMAL));return t;}
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
@@ -114,11 +127,15 @@ public final class RoseConversationActivity extends Activity {
  void renderTask(VoiceService s){
   String raw=s==null?null:s.taskStateJson;
   boolean available=s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000);
-  String key=raw+"|"+available;if(key.equals(lastTaskKey))return;lastTaskKey=key;
-  TaskPresentation t=TaskPresentation.NONE;
+  pollController();
+  String key=raw+"|"+available+"|"+ctlStatus+"|"+ctlSession+"|"+ctlTask+"|"+stopPendingFor+"|"+stopMessage+"|"+stopInFlight;if(key.equals(lastTaskKey))return;lastTaskKey=key;
+  TaskPresentation t=TaskPresentation.NONE;String state="";
   if(raw!=null)try{org.json.JSONObject cur=new org.json.JSONObject(raw).optJSONObject("current");
-   if(cur!=null)t=TaskPresentation.of(true,cur.optString("id"),cur.optString("state"),cur.optString("title"),cur.optString("activity"),cur.optString("progress"),cur.optString("result"),available);
+   if(cur!=null){state=cur.optString("state");t=TaskPresentation.of(true,cur.optString("id"),state,cur.optString("title"),cur.optString("activity"),cur.optString("progress"),cur.optString("result"),available);}
   }catch(org.json.JSONException e){t=TaskPresentation.NONE;}
+  // A pending Stop ends only on that task's own authoritative state, or when the task is gone/replaced.
+  if(stopPendingFor!=null&&TaskControl.settled(stopPendingFor,t.visible?t.id:null,state)){stopPendingFor=null;stopMessage="";}
+  if(!t.visible||!t.id.equals(shownTaskId))if(stopPendingFor==null&&!stopInFlight)stopMessage="";
   LinearLayout.LayoutParams pp=(LinearLayout.LayoutParams)presence.getLayoutParams();int size=dp(t.visible?132:240);
   if(pp.width!=size){pp.width=pp.height=size;presence.setLayoutParams(pp);}
   presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
@@ -127,6 +144,54 @@ public final class RoseConversationActivity extends Activity {
   taskEyebrow.setText(t.eyebrow);taskTitle.setText(t.title);
   taskBody.setVisibility(t.body.isEmpty()?View.GONE:View.VISIBLE);if(!t.body.isEmpty())TaskText.set(taskBody,t.body);
   taskNote.setVisibility(t.note.isEmpty()?View.GONE:View.VISIBLE);taskNote.setText(t.note);
+  boolean running=available&&(state.equals("running")||state.equals("checking"));
+  boolean canWatch=TaskControl.watchable(t.id,t.active(),ctlStatus,ctlSession,ctlTask);
+  boolean canStop=running&&stopPendingFor==null&&!stopInFlight;
+  watch.setVisibility(canWatch?View.VISIBLE:View.GONE);stopTask.setVisibility(canStop?View.VISIBLE:View.GONE);
+  taskActions.setVisibility(canWatch||canStop?View.VISIBLE:View.GONE);
+  stopNote.setText(stopInFlight?"Sending Stop…":stopMessage);stopNote.setVisibility(stopInFlight||!stopMessage.isEmpty()?View.VISIBLE:View.GONE);
+ }
+ /** Reads the background controller's session (same-signer provider) about once a second, off the UI thread. */
+ void pollController(){
+  if(ctlPolling||SystemClock.uptimeMillis()-ctlPolledAt<1000)return;ctlPolling=true;ctlPolledAt=SystemClock.uptimeMillis();
+  new Thread(()->{String st="",se="",tk="";
+   try{Bundle reply=getContentResolver().call(android.net.Uri.parse("content://dev.pixel.backgroundcontrol.agent"),"get_state",null,null);
+    org.json.JSONObject c=new org.json.JSONObject(reply==null?"{}":reply.getString("result","{}"));
+    st=c.optString("status");se=c.isNull("sessionId")?"":c.optString("sessionId");tk=c.isNull("taskId")?"":c.optString("taskId");
+   }catch(Exception unavailable){/* No controller, or not permitted: nothing to watch. */}
+   ctlStatus=st;ctlSession=se;ctlTask=tk;ctlPolling=false;
+  },"rose-controller-state").start();
+ }
+ /** The existing viewer for the background workspace; it shows whatever that live session shows. */
+ void openWorkspace(){
+  if(!TaskControl.watchable(shownTaskId,true,ctlStatus,ctlSession,ctlTask))return;
+  try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+  catch(Exception e){stopMessage="The workspace viewer couldn’t open.";lastTaskKey="";}
+ }
+ /** Confirms Stop for the task shown now. The id is captured here, so a later task is never stopped by this dialog. */
+ void confirmStop(){
+  final String id=shownTaskId;final String title=taskTitle.getText().toString();if(id.isEmpty())return;
+  new android.app.AlertDialog.Builder(this).setTitle("Stop this task?").setMessage(title+"\n\nThis stops only this task. Your voice conversation is not affected.")
+   .setNegativeButton("Cancel",null).setPositiveButton("Stop task",(d,w)->sendStop(id)).show();
+ }
+ /** The existing authenticated Owner Stop: POST /task/stop {taskId}. Its answer is shown as it is. */
+ void sendStop(String id){
+  VoiceService s=VoiceService.instance;stopInFlight=true;lastTaskKey="";
+  new Thread(()->{int status=0;org.json.JSONObject r=new org.json.JSONObject();
+   if(s!=null&&s.ssl!=null&&s.endpoint!=null)try{
+    javax.net.ssl.HttpsURLConnection c=(javax.net.ssl.HttpsURLConnection)new java.net.URL(s.endpoint+"/task/stop").openConnection();
+    try{c.setSSLSocketFactory(s.ssl);c.setHostnameVerifier((h,x)->true);c.setConnectTimeout(6000);c.setReadTimeout(12000);c.setRequestMethod("POST");
+     c.setRequestProperty("Content-Type","application/json");c.setDoOutput(true);
+     byte[] body=new org.json.JSONObject().put("taskId",id).put("source","conversation").toString().getBytes("UTF-8");c.setFixedLengthStreamingMode(body.length);
+     try(java.io.OutputStream o=c.getOutputStream()){o.write(body);}
+     status=c.getResponseCode();if(status==200)r=new org.json.JSONObject(VoiceService.read(c.getInputStream()));}
+    finally{c.disconnect();}
+   }catch(Exception e){status=0;android.util.Log.w("RoseStop","stop failed: "+e.getClass().getSimpleName());}
+   TaskControl result=TaskControl.stopResult(status,r.optString("status",null),r.optString("taskId",null),r.optString("worker",null),r.optString("workspace",null),r.optBoolean("duplicate"),id);
+   runOnUiThread(()->{stopInFlight=false;
+    boolean pending=result.outcome==TaskControl.Outcome.STOPPING||result.outcome==TaskControl.Outcome.ALREADY_STOPPING;
+    stopPendingFor=pending?id:null;stopMessage=result.message;lastTaskKey="";});
+  },"rose-task-stop").start();
  }
  void showNotice(String text){
   int serial=++noticeSerial;handler.removeCallbacksAndMessages(notice);notice.animate().cancel();

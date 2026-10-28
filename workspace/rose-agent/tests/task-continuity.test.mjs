@@ -40,13 +40,39 @@ test('the server task snapshot carries every field and state the surface present
  fs.rmSync(dir,{recursive:true,force:true});
 });
 
-test('neither the surface nor voice end can stop a task',()=>{
- for(const name of ['RoseConversationActivity.java','TaskPresentation.java','ConversationState.java']){
-  const text=source(name);
-  assert.ok(!/task\/stop|taskStop|"stop"/.test(text),`${name} has no task Stop path`);
+test('task Stop is only the confirmed owner action, never voice End or mute',()=>{
+ for(const name of ['TaskPresentation.java','ConversationState.java','TaskControl.java']){
+  assert.ok(!/"\/task\/stop"/.test(source(name)),`${name} sends no task Stop request`);
  }
+ const activity=source('RoseConversationActivity.java');
+ // The single /task/stop request lives in sendStop, reached only from the confirmation's Stop button.
+ assert.equal(activity.match(/"\/task\/stop"/g).length,1,'one Stop request');
+ const sendStop=activity.slice(activity.indexOf('void sendStop('));
+ assert.ok(sendStop.indexOf('"/task/stop"')>0&&sendStop.indexOf('"/task/stop"')<sendStop.indexOf('\n }'),'it is inside sendStop');
+ assert.deepEqual([...activity.matchAll(/sendStop\(([^)]*)\)/g)].map(m=>m[1]).filter(a=>a!=='String id'),['id'],'sendStop has one caller');
+ assert.match(activity,/setPositiveButton\("Stop task",\(d,w\)->sendStop\(id\)\)/,'that caller is the confirmation');
+ assert.match(activity,/setNegativeButton\("Cancel",null\)/,'Cancel sends nothing');
+ // Voice controls send only voice commands.
+ const sends=[...activity.matchAll(/send\("([a-z_]+)"\)/g)].map(m=>m[1]);
+ assert.ok(sends.every(c=>['talk','end','tray_mute','tray_unmute'].includes(c)),'voice controls send voice commands only');
  const server=fs.readFileSync(new URL('../server/server.mjs',import.meta.url),'utf8');
  const voiceEnded=server.match(/voice-ended'\)\{(.*?)return answer/s)?.[1];
  assert.ok(voiceEnded,'found /voice-ended handler');
  assert.ok(!/taskStop|launcherTask/.test(voiceEnded),'/voice-ended does not touch the task');
+});
+
+test('Stop answers from the real TaskStop are each handled by TaskControl',async()=>{
+ const {TaskStop}=await import('../server/task-stop.mjs');
+ const control=source('TaskControl.java');
+ let current={id:'t1',state:'running'};
+ const stop=new TaskStop({task:()=>current,stopping(){current={...current,state:'stopping'};},interrupt:async()=>{},abortReview(){},closeWorkspace:async()=>{throw new Error('timeout');}});
+ const stale=await stop.request({taskId:'t0',source:'conversation'});
+ const first=await stop.request({taskId:'t1',source:'conversation'});
+ const again=await stop.request({taskId:'t1',source:'conversation'});
+ current={id:'t1',state:'interrupted'};
+ const finished=await stop.request({taskId:'t1',source:'conversation'});
+ assert.equal(stale.status,'stale_task');assert.equal(first.status,'stopping');assert.equal(first.taskId,'t1');
+ assert.ok(first.workspace.startsWith('close_failed'),'workspace close failure is reported');assert.equal(again.duplicate,true);assert.equal(finished.status,'not_active');
+ for(const status of ['stale_task','not_active','stopping'])assert.ok(control.includes(`"${status}"`),`TaskControl handles ${status}`);
+ assert.ok(control.includes('"close_failed"')&&control.includes('"interrupt_failed"'),'TaskControl reads the failure prefixes the server uses');
 });
