@@ -6,6 +6,11 @@ name: OS release
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone (no OS stage, no publication)
+        type: choice
+        options: [os-release, app-only]
+        default: os-release
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
         required: true
@@ -53,6 +58,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  MODE: ${{ inputs.mode }}
   CANDIDATE_SHA: ${{ inputs.candidate_sha }}
   BUILD_NUMBER: ${{ inputs.build_number }}
   BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
@@ -74,6 +80,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Candidate is an exact commit on main
+        env:
+          PROMOTE: ${{ inputs.promote }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BUILD_NUMBER" =~ ^[0-9]{10}$ && "$BUILD_TIMESTAMP" =~ ^[0-9]{10}$ ]]
@@ -82,6 +90,9 @@ jobs:
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
           [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
+          # app-only: exactly Rose Agent, no resume and no promotion (it never reaches the publisher).
+          [[ "$MODE" == os-release || ( "$MODE" == app-only && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]
+          [[ "$MODE" == os-release ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
       - name: Bootstrap preflight
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
@@ -116,6 +127,7 @@ jobs:
 
   builder:
     needs: controller
+    if: inputs.mode == 'os-release'
     runs-on: [self-hosted, roseos-frankel-builder]
     timeout-minutes: 600
     permissions:
@@ -197,6 +209,51 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
+  # Rose Agent alone from the exact candidate: no reconcile, make or OS signing, no OS secrets, no controller or Calculator.
+  # Only the verified signed APK, its nonsecret receipt and SHA256SUMS leave the builder, as a private Actions artifact.
+  app-builder:
+    needs: controller
+    if: inputs.mode == 'app-only'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # the app release checks out the exact candidate commit as a worktree
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job builder
+      - run: python3 scripts/host-app-release.py --check
+      - name: Prepare the app attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/app-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Signer access for app signing
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Build, sign and verify Rose Agent
+        run: ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Private Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-release-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/artifact
+          retention-days: 3
+          if-no-files-found: error
+      - name: Remove the app attempt from the builder
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
   publisher:
     needs: builder
     runs-on: ubuntu-24.04
@@ -234,7 +291,7 @@ jobs:
             ${{ inputs.promote && '--promote' || '' }}
 
   cleanup:
-    needs: [controller, builder, publisher]
+    needs: [controller, builder, app-builder, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

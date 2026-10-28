@@ -7,6 +7,8 @@ build CANDIDATE RELEASE_DIR restore those five inputs into the candidate, then w
                             npm ci --ignore-scripts, both app build.sh scripts and the controller compile;
                             each new output is captured by before/after directory sets (exactly one each) and
                             copied to RELEASE_DIR/unsigned/{voice.apk,calculator.apk,controller/Agent-unsigned.apk}
+build-voice CANDIDATE RELEASE_DIR
+                            the same for Rose Agent only (app-only releases): RELEASE_DIR/unsigned/voice.apk
 No keys are read and no loopback or default assets are invented.
 """
 import hashlib
@@ -76,7 +78,7 @@ def capture(directory, pattern, before):
         raise SystemExit(f'expected exactly one new {pattern}, found {len(found)}')
     return found[0]
 
-def build(candidate, release_dir, sdk, java_home, asset_dir, pinned=None, run=subprocess.run):
+def build(candidate, release_dir, sdk, java_home, asset_dir, pinned=None, run=subprocess.run, voice_only=False):
     candidate, release_dir, sdk = Path(candidate), Path(release_dir), Path(sdk)
     tools = sdk/'build-tools/android-15'
     needed = [sdk/'platforms/android-35/android.jar', tools/'core-lambda-stubs.jar', tools/'apksigner',
@@ -93,6 +95,10 @@ def build(candidate, release_dir, sdk, java_home, asset_dir, pinned=None, run=su
     before = set(out.glob('rose-agent.*/rose-agent-unsigned.apk'))
     run(['bash', 'workspace/rose-agent/build.sh'], cwd=candidate, env=env, check=True)
     voice = capture(out, 'rose-agent.*/rose-agent-unsigned.apk', before)
+    if voice_only:
+        (release_dir/'unsigned').mkdir(parents=True)
+        shutil.copyfile(voice, release_dir/'unsigned/voice.apk')
+        return {'voice': sha256(release_dir/'unsigned/voice.apk')}
     before = set(out.glob('calculator.*/calculator-unsigned.apk'))
     run(['bash', 'workspace/pixel-calculator-agent/build.sh'], cwd=candidate, env=env, check=True)
     calculator = capture(out, 'calculator.*/calculator-unsigned.apk', before)
@@ -112,8 +118,8 @@ if __name__ == '__main__':
     apps = config['host']['integrate']
     if sys.argv[1:2] == ['stage'] and len(sys.argv) == 5:
         print(json.dumps(stage(sys.argv[2], sys.argv[3], sys.argv[4]), indent=2, sort_keys=True))
-    elif sys.argv[1:2] == ['build'] and len(sys.argv) == 4:
+    elif sys.argv[1:2] in (['build'], ['build-voice']) and len(sys.argv) == 4:
         print(json.dumps(build(sys.argv[2], sys.argv[3], apps['appSdkRoot'], apps['javaHome'], apps['publicAssetsDir'],
-            apps.get('publicAssetDigests')), indent=2, sort_keys=True))
+            apps.get('publicAssetDigests'), voice_only=sys.argv[1] == 'build-voice'), indent=2, sort_keys=True))
     else:
-        raise SystemExit('usage: host-app-build.py stage SOURCE DEST CANDIDATE | build CANDIDATE RELEASE_DIR')
+        raise SystemExit('usage: host-app-build.py stage SOURCE DEST CANDIDATE | build|build-voice CANDIDATE RELEASE_DIR')

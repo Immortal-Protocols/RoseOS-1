@@ -306,6 +306,47 @@ timestamp, channel and expected app versions. The jobs are:
 5. **cleanup:** stops the builder, whatever happened. The 12-hour automatic stop
    stays as the fallback.
 
+**App-only mode** (`mode: app-only`) uses the same dispatch, guard, controller
+and cleanup. The builder and publisher jobs are skipped, and an `app-builder`
+job runs on the same runner instead. The guard admits only `apps` of exactly
+`[["dev.pixel.voice", N]]`, with no resume and no promotion; `build_number` and
+`build_timestamp` keep their formats but are unused. `scripts/host-app-release.py`:
+
+- takes the builder lock and checks out the exact candidate as a worktree;
+- builds only Rose Agent (`host-app-build.py build-voice`), with the stable SDK
+  and the staged public connection inputs;
+- signs it with `sign-apk.py` and the four pinned `PIXEL_APP_SIGNING_*`
+  versions, held in owner-only RAM;
+- independently checks the package, the dispatched versionCode, a versionCode
+  above `appRelease.mustExceed` (the published 302) and exactly the pinned app
+  signer.
+
+It never reconciles, runs make or reads the OS signing secrets, and never builds
+the controller or the Calculator. The private 3-day artifact
+`app-release-dev.pixel.voice-<run id>` holds only the signed APK,
+`app-release-receipt.json` and `SHA256SUMS`. The receipt records the candidate,
+package, version, size, sha256, public signer, `appRelease.minimumTestedOs` and
+the checks run. The worktree and every temporary input are removed on success or
+failure, and cleanup stops the builder.
+
+`workspace/rose-agent/delivery/catalog.mjs` adds such an artifact to an existing
+`/apps` catalog directory (the layout `server/delivery.mjs` reads). Before it
+writes anything, it checks that:
+
+- `SHA256SUMS` covers exactly the APK and the receipt;
+- the receipt's size, sha256 and signer match the APK and the pin, with an
+  optional `--apksigner` re-check;
+- the version is above every record of the package.
+
+It then writes the APK, an optional verified `--idsig` and the JSON record last,
+each through a temporary file and a rename. It never alters retained records, and
+rerunning the same artifact changes nothing. It writes a write-once, nonsecret
+publish receipt. A paired-device id from `--device-id-file` goes only into the
+catalog record. The writer has no transport: copying the artifact to the service
+host is a separate, authorized step, and no persistent automated transport
+exists. A catalog entry is not a phone install; an install is verified only on
+an actual phone.
+
 Configuration, the host recipe used as adapter input, the public pins and the
 exact bootstrap input names are in `os/release-pipeline/frankel.json`. Until they
 exist, `scripts/release-pipeline.py preflight` fails with exit 4 and lists them.
