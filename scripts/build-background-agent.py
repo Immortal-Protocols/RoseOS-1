@@ -3,9 +3,9 @@
 import argparse
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
+from integration_copy import copy_fresh
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--android-jar', type=Path, required=True)
@@ -41,5 +41,5 @@ with tempfile.TemporaryDirectory(prefix='background-agent-') as directory:
         run(bt/'apksigner', 'verify', '--print-certs', out/'Agent.apk')
         print(f'Signed agent: {out / "Agent.apk"}; retain its .idsig for GrapheneOS app updates.')
     else:
-        shutil.copy2(tmp/'aligned.apk', out/'Agent-unsigned.apk')
+        copy_fresh(tmp/'aligned.apk', out/'Agent-unsigned.apk')
         print('Compile check passed; unsigned artifact cannot be used as the prebuilt or installed update.')

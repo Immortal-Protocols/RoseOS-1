@@ -14,19 +14,34 @@ OS release has already been built. Refer to [VALIDATION.md](VALIDATION.md).
 Project `protocols-465723`, instance `immortal-os-builder`, zone `us-west2-a`.
 Compute metadata verified `n2-standard-64`; the previously reported 1.5 TB disk
 and its contents need independent inspection. Nathan authorized starting and
-using this builder for this task, with no spending limit. Preserve existing
-sources, caches, disks, keys and outputs. Do not assume no jobs run after boot.
+using this builder. An early instruction said there was no spending limit; that
+has been superseded by an aggregate USD 5000 project cap (Wave 0–2 plan,
+2026-10-27). Dev Infra keeps the cost ledger. Preserve existing sources, caches,
+disks, keys and outputs. Do not assume no jobs run after boot.
 
 Use the authenticated Dev Infra account and supported IAP SSH. Before building,
 record OS/tool versions, free storage/memory, mounts, current jobs, source
 locations/revisions, local changes, vendor inputs, signing boundaries and output
-locations. Acquire an exclusive build lock and use a new output directory. Do
-not reset or clean existing trees to make a bootstrap script succeed.
+locations. Acquire an exclusive build lock. Do not reset or clean existing
+trees to make a bootstrap script succeed.
 
-The current environment's IAP connection is blocked by proxy CONNECT 403 at
-`tunnel.cloudproxy.app`. A supported network-policy update is pending. No remote
-shell command reached the builder during the failed connection. Do not replace
-IAP with direct network access to route around the denial.
+An existing `OUT_DIR` may be reused only for the same lunch target and variant,
+and only under the exclusive lock. The 2026102701 release reused one; never
+reuse the output directory of a different release. Reuse is safe only when all of
+the following hold:
+
+- inputs replaced in the source tree carry fresh modification times
+  (`scripts/apply-os-changes.py` now guarantees this);
+- version metadata is regenerated for the new build number;
+- the injected prebuilts in the built output are checked byte for byte against
+  their inputs, for example with `qa/first-update/runtime/verify-target-files.py`.
+
+A fresh mtime does not prove the image holds the right bytes.
+
+Historical (2026-10-26): IAP was then blocked by proxy CONNECT 403 at
+`tunnel.cloudproxy.app`. Dev Infra later restored supported IAP access and used
+it for the 2026102701 build (INFRA-WAVE-048). If a connection is denied again, do
+not replace IAP with direct network access to route around the denial.
 
 ## 2. Reconstruct and verify source
 
@@ -177,6 +192,14 @@ build number. Stage a draft release with verified OTA/factory artifacts, checksu
 and a concise validation report identifying source, device, signer, version and
 known limits. Verify uploaded bytes and metadata reference the same candidate.
 Never upload keys, private caches, config, source dumps or unsanitized logs.
+
+Current publication route, as of 2026-10-27: frankel-2026102701 was uploaded and
+promoted manually by Nathan from his Mac. Dev Infra then downloaded all seven
+public assets and checked them against the verified originals (INFRA-DELIVERY-047).
+From the cloud agent, release API reads and draft creation work, but asset
+upload to `uploads.github.com` returns 401 Bad credentials. The cause is
+unresolved: the successful manual upload does not show the cloud path works, so
+do not blind-retry it. No unattended cloud publication route exists yet.
 
 `scripts/release-manifest.py` records and checks the candidate offline. It never
 signs, uploads or downloads. `create` writes an immutable pre-publication manifest
