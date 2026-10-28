@@ -12,12 +12,37 @@ pub const CANDIDATE_PROTOCOL: &str = "openai-chat-candidate";
 
 /// Environment overrides, applied over the file and under command-line overrides.
 pub const ENV_BASE_URL: &str = "ROSE_CHAT_BASE_URL";
+pub const ENV_REQUEST_URL: &str = "ROSE_CHAT_REQUEST_URL";
 pub const ENV_MODEL_ID: &str = "ROSE_CHAT_MODEL_ID";
 
 const DEFAULT_CONNECT_MS: u64 = 10_000;
 const DEFAULT_REQUEST_MS: u64 = 120_000;
 const DEFAULT_MAX_TOKENS: u32 = 512;
 const DEFAULT_CONTEXT_BUDGET_CHARS: usize = 32_000;
+const DEFAULT_MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES_CEILING: u64 = 64 * 1024 * 1024;
+
+/// Suffix appended to `endpoint.base_url`. Never appended to `endpoint.request_url`.
+pub const CHAT_COMPLETIONS_SUFFIX: &str = "/chat/completions";
+
+/// Where requests are sent. Exactly one form is configured.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    /// OpenAI-compatible base such as `http://127.0.0.1:8080/v1`; `/chat/completions` is appended.
+    Base(String),
+    /// Complete request URL used verbatim, such as an Agent Platform `...:rawPredict` URL.
+    RequestUrl(String),
+}
+
+impl Endpoint {
+    /// The exact URL a request is POSTed to.
+    pub fn request_url(&self) -> String {
+        match self {
+            Endpoint::Base(b) => format!("{}{CHAT_COMPLETIONS_SUFFIX}", b.trim_end_matches('/')),
+            Endpoint::RequestUrl(u) => u.clone(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Protocol {
@@ -27,7 +52,7 @@ pub enum Protocol {
 /// Validated configuration. Holds no credential values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
-    pub base_url: String,
+    pub endpoint: Endpoint,
     pub protocol: Protocol,
     pub model: ModelId,
     /// Recorded in evidence only; never sent or checked.
@@ -38,6 +63,8 @@ pub struct Config {
     pub max_tokens: u32,
     /// Conservative client-side guard on total message characters (not tokens).
     pub context_budget_chars: usize,
+    /// Responses with larger bodies fail with `response_too_large`.
+    pub max_response_bytes: u64,
     pub system_prompt: Option<String>,
     pub temperature: Option<f32>,
 }
@@ -46,6 +73,7 @@ pub struct Config {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Overrides {
     pub base_url: Option<String>,
+    pub request_url: Option<String>,
     pub model_id: Option<String>,
 }
 
@@ -53,6 +81,7 @@ impl Overrides {
     pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Self {
         Overrides {
             base_url: env(ENV_BASE_URL),
+            request_url: env(ENV_REQUEST_URL),
             model_id: env(ENV_MODEL_ID),
         }
     }
@@ -74,6 +103,7 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct RawEndpoint {
     base_url: Option<String>,
+    request_url: Option<String>,
     protocol: Option<String>,
 }
 
@@ -104,6 +134,7 @@ struct RawTimeouts {
 struct RawLimits {
     max_tokens: Option<u32>,
     context_budget_chars: Option<usize>,
+    max_response_bytes: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -143,13 +174,30 @@ impl Config {
         let endpoint = raw.endpoint.unwrap_or_default();
         let model = raw.model.unwrap_or_default();
 
-        let base_url = cli
-            .base_url
-            .clone()
-            .or_else(|| env.base_url.clone())
-            .or(endpoint.base_url)
-            .ok_or_else(|| ChatError::Config("endpoint.base_url is required".into()))?;
-        validate_base_url(&base_url)?;
+        // The highest layer that names an endpoint replaces the whole endpoint below it.
+        let file = Overrides {
+            base_url: endpoint.base_url,
+            request_url: endpoint.request_url,
+            model_id: None,
+        };
+        let mut chosen = None;
+        for (layer, name) in [(cli, "command line"), (env, "environment"), (&file, "file")] {
+            match (&layer.base_url, &layer.request_url) {
+                (Some(_), Some(_)) => {
+                    return Err(ChatError::Config(format!(
+                        "the {name} sets both endpoint.base_url and endpoint.request_url; set one"
+                    )));
+                }
+                (Some(b), None) => chosen = Some(Endpoint::Base(b.clone())),
+                (None, Some(u)) => chosen = Some(Endpoint::RequestUrl(u.clone())),
+                (None, None) => continue,
+            }
+            break;
+        }
+        let endpoint_target = chosen.ok_or_else(|| {
+            ChatError::Config("endpoint.base_url or endpoint.request_url is required".into())
+        })?;
+        validate_endpoint(&endpoint_target)?;
 
         let protocol = match endpoint.protocol.as_deref() {
             Some(CANDIDATE_PROTOCOL) => Protocol::OpenAiChatCandidate,
@@ -200,6 +248,14 @@ impl Config {
         if max_tokens == 0 || context_budget_chars == 0 {
             return Err(ChatError::Config("limits must be greater than zero".into()));
         }
+        let max_response_bytes = limits
+            .max_response_bytes
+            .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES);
+        if max_response_bytes == 0 || max_response_bytes > MAX_RESPONSE_BYTES_CEILING {
+            return Err(ChatError::Config(format!(
+                "limits.max_response_bytes must be between 1 and {MAX_RESPONSE_BYTES_CEILING}"
+            )));
+        }
 
         match raw.retry.unwrap_or_default().max_attempts.unwrap_or(0) {
             0 => {}
@@ -222,7 +278,7 @@ impl Config {
         let system_prompt = chat.system_prompt.filter(|s| !s.trim().is_empty());
 
         Ok(Config {
-            base_url,
+            endpoint: endpoint_target,
             protocol,
             model: model_id,
             expected_revision: model.expected_revision,
@@ -231,6 +287,7 @@ impl Config {
             request_timeout: Duration::from_millis(request_ms),
             max_tokens,
             context_budget_chars,
+            max_response_bytes,
             system_prompt,
             temperature: chat.temperature,
         })
@@ -242,11 +299,16 @@ impl Config {
             Protocol::OpenAiChatCandidate => CANDIDATE_PROTOCOL,
         };
         let mut out = format!(
-            "endpoint.base_url = {}\nendpoint.protocol = {protocol} (candidate shape, not a final \
+            "{}\nrequest URL = {}\nendpoint.protocol = {protocol} (candidate shape, not a final \
              runtime claim)\nmodel.id = {}\nmodel.expected_revision = {}\nauth = {}\n\
              timeouts.connect_ms = {}\ntimeouts.request_ms = {}\nlimits.max_tokens = {}\n\
-             limits.context_budget_chars = {}\nretry.max_attempts = 0\n",
-            self.base_url,
+             limits.context_budget_chars = {}\nlimits.max_response_bytes = {}\n\
+             retry.max_attempts = 0\n",
+            match &self.endpoint {
+                Endpoint::Base(b) => format!("endpoint.base_url = {b}"),
+                Endpoint::RequestUrl(u) => format!("endpoint.request_url = {u} (used verbatim)"),
+            },
+            self.endpoint.request_url(),
             self.model,
             self.expected_revision
                 .as_deref()
@@ -256,6 +318,7 @@ impl Config {
             self.request_timeout.as_millis(),
             self.max_tokens,
             self.context_budget_chars,
+            self.max_response_bytes,
         );
         out.push_str(&format!(
             "chat.system_prompt = {}\nchat.temperature = {}\n",
@@ -272,28 +335,86 @@ impl Config {
     }
 }
 
-fn validate_base_url(url: &str) -> Result<(), ChatError> {
+fn validate_endpoint(endpoint: &Endpoint) -> Result<(), ChatError> {
+    let (field, url) = match endpoint {
+        Endpoint::Base(u) => ("endpoint.base_url", u),
+        Endpoint::RequestUrl(u) => ("endpoint.request_url", u),
+    };
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(ChatError::Config(format!("{field} contains whitespace")));
+    }
+    let (secure, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return Err(ChatError::Config(format!(
+            "{field} must start with http:// or https://"
+        )));
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return Err(ChatError::Config(format!("{field} has no host")));
+    }
+    if authority.contains('@') {
+        return Err(ChatError::Config(format!(
+            "{field} must not embed credentials; use the [auth] section"
+        )));
+    }
+    if !secure && !is_loopback_host(authority) {
+        return Err(ChatError::Config(format!(
+            "{field} uses plain http:// to a non-loopback host; use https:// (plain HTTP is allowed \
+             only for 127.0.0.0/8, ::1 and localhost)"
+        )));
+    }
+    if rest.contains('#') {
+        return Err(ChatError::Config(format!(
+            "{field} must not contain a fragment"
+        )));
+    }
+    if let Endpoint::Base(_) = endpoint {
+        let path = url.trim_end_matches('/');
+        if rest.contains('?') {
+            return Err(ChatError::Config(
+                "endpoint.base_url must not contain a query; use endpoint.request_url".into(),
+            ));
+        }
+        if path.ends_with(CHAT_COMPLETIONS_SUFFIX)
+            || path.ends_with(":rawPredict")
+            || path.ends_with(":streamRawPredict")
+            || path.ends_with(":predict")
+        {
+            return Err(ChatError::Config(format!(
+                "endpoint.base_url looks like a complete request URL; `{CHAT_COMPLETIONS_SUFFIX}` \
+                 would be appended to it. Use endpoint.request_url for a URL that is used verbatim"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// True for `localhost`, 127.0.0.0/8 and `[::1]`, with or without a port.
+pub fn is_loopback_host(authority: &str) -> bool {
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let host = host.to_ascii_lowercase();
+    host == "localhost"
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The authority (host and optional port) of an http(s) URL.
+pub fn url_authority(url: &str) -> &str {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| {
-            ChatError::Config("endpoint.base_url must start with http:// or https://".into())
-        })?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.is_empty() {
-        return Err(ChatError::Config("endpoint.base_url has no host".into()));
-    }
-    if authority.contains('@') {
-        return Err(ChatError::Config(
-            "endpoint.base_url must not embed credentials; use the [auth] section".into(),
-        ));
-    }
-    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(ChatError::Config(
-            "endpoint.base_url contains whitespace".into(),
-        ));
-    }
-    Ok(())
+        .unwrap_or(url);
+    rest.split(['/', '?', '#']).next().unwrap_or("")
 }
 
 fn parse_auth(raw: RawAuth) -> Result<AuthMode, ChatError> {

@@ -13,6 +13,7 @@ node --test workspace/rose-agent/tests/staged-copies.test.mjs
 node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-agent/server/event-delivery.test.mjs
 # APP-REMOVE-001: retired DeepSeek, Luna-first and ARTEMIS trial controls stay removed; shared paths stay.
 node --test workspace/rose-agent/tests/trial-removal.test.mjs
+node --test workspace/rose-agent/tests/trial-menu-removal.test.mjs
 # APP-BUG-OPEN-001: the shell open_app refusal stays fail-closed; registered launches keep their turn's task.
 node --test workspace/rose-agent/server/unbound-shell-open.test.mjs
 node --test \
@@ -52,7 +53,10 @@ python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py
+python3 scripts/tests/test_alpha_apk_diagnostic.py
 python3 scripts/tests/test_rose_verify.py
+# MODELS-QA: loopback chat-completions fixture self-tests (fixture behaviour only, no client or model).
+python3 qa/models/test_fixture_server.py
 # Models serving draft: pins, Agent Platform container shape and derived capacity stay consistent.
 python3 workspace/models/serving/tests/test_serving_config.py
 python3 os/tests/test_cuttlefish_alpha_product.py

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication)
         type: choice
-        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor]
+        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic]
         default: os-release
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
@@ -126,6 +126,10 @@ jobs:
       - name: Emulator-alpha successor preflight
         if: inputs.mode == 'emulator-alpha-successor'
         run: python3 scripts/emulator-alpha.py preflight --job successor-guard --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"
+      # The diagnostic reads the same pinned alpha output as the alpha build; its config gate is the alpha guard.
+      - name: Emulator-alpha APK diagnostic preflight
+        if: inputs.mode == 'emulator-alpha-apk-diagnostic'
+        run: python3 scripts/emulator-alpha.py preflight --job guard
 
   controller:
     needs: guard
@@ -347,6 +351,43 @@ jobs:
         if: always()
         run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
 
+  # INFRA-ALPHA-116-DIAG: aapt evidence for system/priv-app/Shell, system/priv-app/IntentResolver and
+  # system_ext/priv-app/Settings from the retained alpha super.img of run 40765631053, under the shared lock. No lunch,
+  # make, signing, secrets, cloud identity or publication; the image gate is unchanged and nothing is marked verified.
+  # Only the nonsecret diagnostic JSON leaves the builder, as a private artifact; the temporary extraction is removed.
+  alpha-apk-diagnostic:
+    needs: controller
+    if: inputs.mode == 'emulator-alpha-apk-diagnostic'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/emulator-alpha.py preflight --job builder
+      - name: Prepare the diagnostic attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/cf-alpha-apk-diagnostic-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Collect the three fixed APKs' aapt evidence
+        run: python3 scripts/alpha-apk-diagnostic.py run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --evidence-dir "$ROSE_BASE/evidence"
+      - name: Diagnostic evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-alpha-apk-diagnostic-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/evidence
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove the diagnostic attempt directory
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
   publisher:
     needs: builder
     runs-on: ubuntu-24.04
@@ -425,7 +466,7 @@ jobs:
           if-no-files-found: error
 
   cleanup:
-    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, publisher]
+    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

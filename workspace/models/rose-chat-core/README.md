@@ -1,16 +1,19 @@
 # rose-chat-core
 
-Rust chat core for the Rose Models demo (MODELS-PRODUCT-ONBOARD-001, Cycle A). It covers
-configuration, ordered multi-turn history and an injected transport boundary.
+Rust chat client for the Rose Models demo (MODELS-PRODUCT-ONBOARD-001, Cycles A and B). It covers
+configuration, ordered multi-turn history, a transport boundary, a real non-streaming HTTP
+transport and the `rose-chat` CLI.
 
-**What this build proves:** client behaviour against an in-process FIXTURE transport only.
-It has no network transport, no endpoint and no model. Nothing here is evidence about a
-served model, a GPU deployment or the final wire protocol.
+**What the tests prove:** client behaviour against in-process scripted responses and against
+loopback fixture servers on 127.0.0.1. Nothing here is evidence about a served model, a GPU
+deployment, Agent Platform or the final wire protocol. No live endpoint has been used.
 
 ## Build and test
 
-Requires Rust 1.97 or newer (`rust-version` in `Cargo.toml`; tested with rustc/cargo 1.97.0).
-The first build fetches `serde`, `serde_json` and `toml` from crates.io, pinned by `Cargo.lock`.
+Requires Rust 1.97 or newer (`rust-version` in `Cargo.toml`; CI pins rustc/cargo 1.97.0) and
+`python3` for the loopback tests, which start `qa/models/fixture_server.py` from this checkout.
+The first build fetches `serde`, `serde_json`, `toml` and `ureq` (rustls with the platform
+certificate verifier) from crates.io, pinned by `Cargo.lock`.
 
 ```sh
 cd workspace/models/rose-chat-core
@@ -19,7 +22,24 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo run --locked --bin rose-chat -- fixture-demo
 ```
 
-This crate is not yet part of `scripts/test-local.sh` or CI; that is a later coordinated change.
+CI: `.github/workflows/models-rust.yml` runs format, clippy and every test above on changes to
+this crate or `qa/models/`. The crate is deliberately not in `scripts/test-local.sh`, which stays
+offline; building this crate needs a crates.io fetch.
+
+### Chat against a server
+
+```sh
+cargo build --locked --bin rose-chat
+target/debug/rose-chat chat --config my.toml --script turns.txt --transcript run.jsonl
+```
+
+`turns.txt` holds one user message per line; blank lines and `#` lines are skipped. Without
+`--script`, messages are read from stdin. Against the QA fixture:
+
+```sh
+python3 qa/models/fixture_server.py      # prints {"base": "http://127.0.0.1:PORT", ...}
+# base_url = "http://127.0.0.1:PORT/s/ok/v1" in my.toml
+```
 
 ## Configuration
 
@@ -28,7 +48,8 @@ so typos and token-looking fields fail rather than being ignored.
 
 ```toml
 [endpoint]
-base_url = "http://127.0.0.1:8080/v1"   # required; http(s) only; no user:password@
+base_url = "http://127.0.0.1:8080/v1"   # either this: "/chat/completions" is appended
+# request_url = "https://.../endpoints/E:rawPredict"  # or this: POSTed verbatim
 protocol = "openai-chat-candidate"      # required; the only value this build accepts
 
 [model]
@@ -47,6 +68,7 @@ request_ms = 120000                     # default 120000; whole-turn deadline
 [limits]
 max_tokens = 512                        # default 512; sent as max_tokens
 context_budget_chars = 32000            # default 32000; client-side character guard
+max_response_bytes = 4194304            # default 4 MiB, at most 64 MiB
 
 [retry]
 max_attempts = 0                        # only 0 is supported: no automatic retry
@@ -56,8 +78,19 @@ max_attempts = 0                        # only 0 is supported: no automatic retr
 # temperature = 0.2                     # optional, 0..=2; omitted means server default
 ```
 
-Environment overrides: `ROSE_CHAT_BASE_URL`, `ROSE_CHAT_MODEL_ID`.
-CLI overrides (config-check): `--base-url`, `--model-id`.
+Environment overrides: `ROSE_CHAT_BASE_URL`, `ROSE_CHAT_REQUEST_URL`, `ROSE_CHAT_MODEL_ID`.
+CLI overrides (config-check and chat): `--base-url`, `--request-url`, `--model-id`.
+
+**Endpoint URL contract.** Exactly one of `base_url` and `request_url` is set per layer. The
+highest layer that names an endpoint replaces the whole endpoint from lower layers.
+- `base_url` gets exactly one `/chat/completions` appended (a trailing `/` is ignored). It must not
+  have a query or fragment. It must not already end in `/chat/completions`, `:rawPredict`,
+  `:streamRawPredict` or `:predict`; use `request_url` for those.
+- `request_url` is used verbatim. Use it for an Agent Platform URL such as
+  `https://us-central1-aiplatform.googleapis.com/v1/projects/P/locations/us-central1/endpoints/E:rawPredict`.
+  (`:rawPredict` comes from Models Core's draft; it is not verified against a live endpoint.)
+- `http://` is accepted only for loopback hosts (`127.0.0.0/8`, `::1`, `localhost`). Every other
+  host needs `https://`. No `user:password@` in either URL.
 
 ## Contract
 
@@ -87,6 +120,26 @@ CLI overrides (config-check): `--base-url`, `--model-id`.
 - **Retries.** None. `retry.max_attempts` other than 0 is a configuration error.
   `ChatError::is_retryable()` classifies errors for callers: connect, timeout, rate-limited and
   server errors are retryable.
+- **HTTP transport.** `POST` with `Content-Type: application/json`, `Accept: application/json`,
+  `User-Agent: rose-chat/VERSION` and, if configured, `Authorization: Bearer ...`. TLS
+  certificates are verified with the platform verifier; verification cannot be disabled.
+  Redirects are never followed (3xx is `unexpected_status`). Loopback hosts never use a proxy.
+  Other hosts use the standard `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` environment and honour
+  `NO_PROXY`. A response body larger than `limits.max_response_bytes` fails with
+  `response_too_large`. No compression is requested.
+- **Deadline coverage.** `connect_ms` bounds DNS, connect and TLS. The whole-turn `request_ms`
+  deadline bounds everything, including a server that never sends headers, stalls mid-body or
+  drips bytes. Loopback tests measure a 700 ms deadline ending at 0.69–1.1 s in each case.
+- **Cancellation measurement.** The exchange runs on a worker thread. The caller polls for
+  cancellation every 20 ms and returns `cancelled` at once; the loopback test requires less than
+  150 ms after cancel. The abandoned socket is not interrupted; it closes no later than the same
+  turn deadline.
+- **Reasoning.** If the server returns separate `message.reasoning` or
+  `message.reasoning_content`, it is never used as the answer, shown or replayed in history.
+  `Reply::reasoning_chars` reports only its length. Content that is null but has reasoning is
+  `empty_completion`.
+- **Sampling.** `temperature` is omitted unless configured. Models Core's draft says the candidate
+  model should use server defaults and never temperature 0; follow that in demo configs.
 - **Credentials.** Configuration holds only where a token comes from. `Secret` prints as
   `<redacted>`. Errors name the variable or program, never its output. Response bodies are
   never copied into errors.
@@ -107,8 +160,11 @@ CLI overrides (config-check): `--base-url`, `--model-id`.
 | `rate_limited` | HTTP 429; `retry_after` only when `Retry-After` is in whole seconds |
 | `bad_request` | Other HTTP 400/413/422 |
 | `server` | HTTP 5xx |
+| `not_found` | HTTP 404: check the endpoint URL |
 | `unexpected_status` | Any other status, including 3xx; redirects are not followed |
-| `malformed_response` | Success status whose body is not the expected shape |
+| `response_too_large` | Body exceeded `limits.max_response_bytes` |
+| `tls` | TLS handshake or certificate verification failed |
+| `malformed_response` | Success status whose body is not the expected shape, ended early or was cut off |
 | `empty_completion` | No assistant text |
 | `model_identity_mismatch` | Reported model differs from `model.id` |
 
@@ -124,18 +180,29 @@ serving runtime and Agent Platform invocation API, and only the adapter changes.
 
 | Command | Behaviour | Exit |
 | --- | --- | --- |
-| `config-check --config FILE [--base-url URL] [--model-id ID]` | Prints resolved settings. For bearer-env, reports only whether the variable is set. Never runs the token command. No network. | 0 OK, 3 config error |
-| `fixture-demo` | Two scripted turns through the candidate wire shape, labelled FIXTURE | 0 OK, 4 chat error |
-| `chat ...` | Live chat is not in this build | 5 |
-| anything else | Usage | 2 |
+| `config-check --config FILE [overrides]` | Prints resolved settings and the exact request URL. For bearer-env, reports only whether the variable is set. Never runs the token command. No network. | 0 OK, 3 config error |
+| `chat --config FILE [--script FILE] [--transcript FILE] [--label TEXT] [overrides]` | Sends each line as a turn over HTTP and prints `assistant> ...`. Failed turns are reported on stderr, history stays unchanged and the next line still runs. Resolves the credential once at start; bearer-command runs the configured program. | 0 all turns OK, 3 config or credential error, 4 one or more turns failed |
+| `fixture-demo` | Two in-process scripted turns, labelled FIXTURE | 0 OK, 4 chat error |
+| anything else | Usage (also unreadable script or transcript path) | 2 |
+
+### Transcript (`--transcript`)
+
+This is opt-in JSON Lines. There is one `run` record (client version, `source_rev` from build-time
+`ROSE_CHAT_SOURCE_REV`, label, protocol, request URL without query, model id, expected revision,
+auth mode, start time, `content_recorded: false`). Then there is one `turn` record per message
+(outcome kind, HTTP status, elapsed ms, user/reply character counts, finish reason, truncated,
+served model, request id, usage, reasoning character count) and a final `summary`. It never
+contains message text, reasoning text, credentials or URL queries. Same script, config and server
+give the same records apart from times, which a loopback test checks (C15).
 
 ## Test tiers
 
 | Tier | Files | Proves |
 | --- | --- | --- |
-| Unit | `tests/config.rs`, `tests/wire.rs` (encode/decode), `tests/redaction.rs` | Parsing, validation, status mapping, redaction |
-| FIXTURE | `tests/session.rs`, `tests/wire.rs` (session cases), `tests/cli.rs` | Client history and error handling against scripted in-process responses |
-| Live | none yet | Requires the selected model on an approved endpoint; never in generic test runs |
+| Unit | `tests/config.rs`, `tests/wire.rs` (encode/decode), `tests/redaction.rs` | Parsing, validation, URL contract, status mapping, redaction |
+| In-process FIXTURE | `tests/session.rs`, `tests/wire.rs` (session cases), `tests/cli.rs` (`fixture-demo`) | Client history and error handling against scripted responses |
+| LOOPBACK FIXTURE | `tests/http_loopback.rs`, `tests/cli.rs` (`chat`) | The real HTTP transport and CLI over 127.0.0.1 sockets, against QA's `fixture_server.py` and small in-test servers |
+| Live | none | Requires the selected model on an approved endpoint and an approved client identity. UNAVAILABLE; never in generic test runs |
 
-Not yet implemented: an HTTP transport, a loopback socket fixture (QA owns `qa/models/`),
-streaming, a transcript/receipt writer and interactive chat.
+Not implemented: streaming (`:streamRawPredict`), automatic retry, token-exact context
+budgeting and interruption of the abandoned socket on cancel.
