@@ -63,7 +63,7 @@ def apk_bytes(certificate, content=b'rose agent 306', scheme=0x7109871A, block=T
 class FakeGitHub(http.server.ThreadingHTTPServer):
     def __init__(self):
         super().__init__(('127.0.0.1', 0), Handler)
-        self.releases, self.blobs, self.next_id, self.log, self.latest, self.fail = [], {}, 1, [], 'frankel-2026102804', None
+        self.releases, self.blobs, self.next_id, self.log, self.latest, self.fail = [], {}, 1, [], 'frankel-2026102805', None
         self.move_latest_on_publish = False
 
     def url(self):
@@ -200,7 +200,8 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual((release['tag_name'], release['draft'], release['prerelease'], release['make_latest']),
             ('rose-agent-306', False, True, 'false'))
         self.assertEqual(sorted(a['name'] for a in release['assets']), ['SHA256SUMS', 'dev.pixel.voice-306.apk', 'dev.pixel.voice-306.receipt.json'])
-        self.assertEqual(self.server.latest, 'frankel-2026102804', 'OTA Latest is untouched')
+        self.assertEqual(self.server.latest, 'frankel-2026102805', 'OTA Latest is untouched')
+        self.assertEqual(release['make_latest'], 'false')
         apk = (self.artifact/'dev.pixel.voice-306.apk').read_bytes()
         published = {a['name']: self.server.blobs[a['id']] for a in release['assets']}
         self.assertEqual(published['dev.pixel.voice-306.apk'], apk)
@@ -292,16 +293,30 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(self.server.log, [])
 
     def test_latest_must_stay_the_ota_release(self):
-        self.server.latest = 'frankel-2026102803'
-        result = self.run_publisher()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('Latest is not frankel-2026102804; nothing is published', result.stderr)
-        self.assertEqual(self.api_writes(), [])
-        self.server.latest = 'frankel-2026102804'
+        # The verified Beta 2805 is Latest (published 2026-10-28 18:34:04 UTC); the earlier 2804 or any other is refused.
+        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102805')
+        for latest in ('frankel-2026102804', 'frankel-2026102803', 'rose-agent-304', None):
+            self.server.latest = latest
+            result = self.run_publisher(public=f'refused-{latest}')
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('Latest is not frankel-2026102805; nothing is published', result.stderr)
+            self.assertEqual(self.api_writes(), [])
+        self.server.latest = 'frankel-2026102805'
         self.server.move_latest_on_publish = True
         moved = self.run_publisher(public='public2')
         self.assertEqual(moved.returncode, 1)
-        self.assertIn('Latest moved away from frankel-2026102804', moved.stderr)
+        self.assertIn('Latest moved away from frankel-2026102805', moved.stderr)
+
+    def test_publishing_306_preserves_2805_and_promotes_nothing(self):
+        result = self.run_publisher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.server.latest, 'frankel-2026102805')
+        release, = self.server.releases
+        self.assertEqual((release['tag_name'], release['prerelease'], release['make_latest']), ('rose-agent-306', True, 'false'))
+        latest_reads = [e for e in self.server.log if e[:2] == ('GET', REPO + '/releases/latest')]
+        self.assertEqual(len(latest_reads), 2, 'Latest is read before and after publishing')
+        # The support floor stays the 2804 Beta: the 2805 promotion moves Latest, not minOsBuild.
+        self.assertEqual(json.loads(result.stdout)['compatibility']['minOsBuild'], '2026102804')
 
     def test_api_errors_never_print_bodies_or_the_token(self):
         self.server.fail = True

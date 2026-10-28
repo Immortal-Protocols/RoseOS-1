@@ -562,7 +562,10 @@ the action revokes at job end; the builder never receives it. The job then runs
   - the APK's size, sha256 and signer match the receipt, and the APK's own
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;
-- **requires** OTA Latest to be `frankel-2026102804` before and after;
+- **requires** OTA Latest to be `appRelease.publication.preserveLatest` before and
+  after: `frankel-2026102805` since that Beta was published at 18:34:04 UTC on
+  2026-10-28 (it was `frankel-2026102804` before then; `rose-agent-304` was
+  published under it). The check never moves or skips Latest;
 - **publishes** its own prerelease, `rose-agent-N`, with `make_latest` false.
   The prerelease holds only `dev.pixel.voice-N.apk`, a sanitized
   `dev.pixel.voice-N.receipt.json` and `SHA256SUMS`. The receipt carries
