@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -14,6 +15,8 @@ import sys
 import tarfile
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
 import zipfile
 
@@ -29,6 +32,7 @@ def load(name):
     return module
 
 host_sign, host_integrate = load('host-sign'), load('host-integrate')
+sign_trace = host_sign.sign_trace
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))
@@ -107,6 +111,7 @@ for arg in --extra_apex_payload_key com.android.mediaprovider.apex="$KEY_DIR/avb
   # Like apexer under sign_target_files_apks: the payload key is opened from a temporary working directory.
   (cd "$(mktemp -d)" && openssl pkey -in "${arg#*=}" -noout)
 done
+[[ -z ${ROSE_TEST_PAUSE:-} ]] || { : > "$ROSE_TEST_PAUSE.ready"; while [[ ! -e $ROSE_TEST_PAUSE.go ]]; do sleep 0.05; done; }
 # Like an APK nested in an APEX and the payload re-pack: same relative keys, another working directory.
 (cd "$(mktemp -d)" && java -jar signapk.jar $KEY_DIR/releasekey.x509.pem $KEY_DIR/releasekey.pk8 in.apk out.apk)
 (cd "$(mktemp -d)" && avbtool add_hashtree_footer --key $KEY_DIR/avb.pem --image payload.img)
@@ -185,6 +190,58 @@ class SignAdapterTest(Base):
         everything = b''.join(p.read_bytes() for p in self.release.rglob('*') if p.is_file())
         self.assertNotIn(b'synthetic-passphrase', everything)
         self.assertTrue((self.src/'releases/2026102802/.rose-actions-owner.json').is_file())
+        self.assert_secrets_gone()
+
+    def trace(self):
+        return [json.loads(line) for line in (self.release/'sign-trace.jsonl').read_text().splitlines()]
+
+    def test_trace_shows_the_key_family_readable_at_every_tool_start_and_removed_only_by_the_exit_trap(self):
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        records = self.trace()
+        events = [r['event'] for r in records]
+        tools = [r for r in records if r['event'] == 'tool']
+        self.assertEqual([t['tool'] for t in tools], ['java', 'openssl', 'java', 'avbtool'])
+        self.assertTrue(all(t['keys'] and all(t['keys'].values()) for t in tools), tools)
+        self.assertEqual(tools[0]['keys'], {'releasekey.x509.pem': True, 'releasekey.pk8': True})
+        linked = next(i for i, r in enumerate(records) if r['event'] == 'state' and r['state']['releaseLink'])
+        first_lost = next(i for i, r in enumerate(records) if i > linked and r['event'] == 'state' and not r['state']['releaseLink'])
+        self.assertLess(events.index('exit-trap'), first_lost)
+        self.assertLess(max(i for i, e in enumerate(events) if e == 'tool'), events.index('exit-trap'))
+        private_gone = next(i for i, r in enumerate(records) if r['event'] == 'state' and not r['state']['privateDir'])
+        self.assertLess(events.index('script-exited'), private_gone)
+        text = (self.release/'sign-trace.jsonl').read_text()
+        for secret in ('synthetic-passphrase', '/dev/shm', 'generate-release.', str(self.src), 'BEGIN'):
+            self.assertNotIn(secret, text)
+        self.assertTrue(sign_trace.summary(self.release/'sign-trace.jsonl')['keyFamilyLost']['scriptExiting'])
+
+    def test_external_removal_while_the_script_runs_is_named_in_the_failure_summary(self):
+        pause = self.root/'pause'
+        link = self.src/'releases/2026102802/release-frankel-2026102802/keys'
+        def remove_like_an_external_cleaner():
+            trace = self.release/'sign-trace.jsonl'
+            for _ in range(400):  # paused, and the watcher has recorded the family present
+                if Path(f'{pause}.ready').exists() and '"ramTarget": true' in trace.read_text():
+                    break
+                time.sleep(0.05)
+            shutil.rmtree(os.path.realpath(link))  # e.g. a logind RemoveIPC sweep of /dev/shm
+            time.sleep(0.5)
+            Path(f'{pause}.go').write_text('')
+        remover = threading.Thread(target=remove_like_an_external_cleaner)
+        remover.start()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaisesRegex(host_sign.AdapterFailed, 'derived release script exited'):
+            host_sign.main(self.config, dict(self.env, ROSE_TEST_PAUSE=str(pause)), self.gcloud)
+        remover.join()
+        summary = json.loads(stderr.getvalue().strip().splitlines()[-1])
+        lost = summary['keyFamilyLost']
+        self.assertTrue(lost['scriptAlive'])
+        self.assertFalse(lost['scriptExiting'])
+        self.assertIn('ramTarget', lost['roles'])
+        self.assertIn('removeIPC', summary['facts'])
+        self.assertEqual(summary['firstUnreadableToolStart']['keys'], {'releasekey.x509.pem': False, 'releasekey.pk8': False})
+        events = [r['event'] for r in self.trace()]
+        loss = next(i for i, r in enumerate(self.trace()) if r['event'] == 'state' and r['state']['releaseLink'] and not r['state']['ramTarget'])
+        self.assertTrue('exit-trap' not in events[:loss], 'the loss happened before the script began to exit')
         self.assert_secrets_gone()
 
     def test_nested_signers_fail_without_the_key_path_wrappers(self):

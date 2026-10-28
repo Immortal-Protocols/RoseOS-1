@@ -29,6 +29,7 @@ import sys
 import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_secrets  # noqa: E402
+import sign_trace  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,9 +45,21 @@ def sha256(data):
 # Signing tools that open key files given on their command line. releasetools passes them relative keys/... paths.
 KEY_TOOLS = ('java', 'openssl', 'avbtool', 'delta_generator')
 
-def key_path_wrapper(tool, wrapper_dir, release_keys):
-    """A PATH wrapper that runs the next `tool` on PATH with keys/... arguments (and --opt=keys/...) made absolute."""
+def key_path_wrapper(tool, wrapper_dir, release_keys, trace=None):
+    """A PATH wrapper that runs the next `tool` on PATH with keys/... arguments (and --opt=keys/...) made absolute.
+    With a trace file it appends one nonsecret event per start: tool, pid, ppid and, per rewritten key argument, its
+    basename and whether it was readable then (sign_trace.py)."""
     wrapper_dir, release_keys = shlex.quote(str(wrapper_dir)), shlex.quote(str(release_keys))
+    trace_line = '' if trace is None else f'''
+keys=
+for arg in ${{args[@]+"${{args[@]}}"}}; do
+  case $arg in {release_keys}/*|--*={release_keys}/*)
+    file=${{arg#*{release_keys}/}}; [[ $file =~ ^[A-Za-z0-9._-]+$ ]] || file=other
+    [[ -r ${{arg#*=}} ]] && ok=true || ok=false
+    keys+="${{keys:+,}}\\"$file\\":$ok" ;;
+  esac
+done
+printf '{{"event":"tool","wall":%s,"tool":"{tool}","pid":%d,"ppid":%d,"keys":{{%s}}}}\\n' "$EPOCHREALTIME" $$ $PPID "$keys" >> {shlex.quote(str(trace))} 2>/dev/null || true'''
     return f'''#!/bin/bash
 # RoseOS host-sign key-path wrapper for {tool}; see scripts/host-sign.py.
 set -o errexit -o nounset -o pipefail
@@ -64,18 +77,18 @@ for arg in "$@"; do
     --*=keys/*) args+=("${{arg%%=*}}="{release_keys}/"${{arg#*=keys/}}") ;;
     *) args+=("$arg") ;;
   esac
-done
+done{trace_line}
 exec "$real" ${{args[@]+"${{args[@]}}"}}
 '''
 
-def write_key_path_wrappers(wrapper_dir, release_keys):
+def write_key_path_wrappers(wrapper_dir, release_keys, trace=None):
     Path(wrapper_dir).mkdir(mode=0o700)
     for tool in KEY_TOOLS:
         path = Path(wrapper_dir)/tool
-        path.write_text(key_path_wrapper(tool, wrapper_dir, release_keys))
+        path.write_text(key_path_wrapper(tool, wrapper_dir, release_keys, trace))
         path.chmod(0o700)
 
-def derive_release_script(original, common_sh, key_dir, passfile, release_keys, wrapper_dir, python=sys.executable,
+def derive_release_script(original, common_sh, key_dir, passfile, release_keys, wrapper_dir, trace=None, python=sys.executable,
                           helper=str(ROOT/'scripts/host-decrypt-keys.py')):
     """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing.
 
@@ -117,6 +130,14 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
         if lines[i].count('--extra_apex_payload_key') != lines[i].count('$KEY_DIR/avb.pem'):
             raise AdapterFailed('an --extra_apex_payload_key argument does not use $KEY_DIR/avb.pem; not rewriting it')
         lines[i] = lines[i].replace('$KEY_DIR/avb.pem', f'{release_keys}/avb.pem')
+    if trace is not None:
+        # Diagnostic only: mark when the script's own EXIT trap starts (before it removes the RAM keys and link).
+        traps = [i for i, line in enumerate(lines) if re.fullmatch(r'trap "[^\n]*" EXIT\n?', line)]
+        if len(traps) == 1:
+            i = traps[0]
+            lines[i] = lines[i].replace('trap "', 'trap "rose_trace_exit_trap; ', 1)
+            lines.insert(i, 'rose_trace_exit_trap() { printf \'{"event":"exit-trap","wall":%s,"pid":%d}\\n\' '
+                f'"$EPOCHREALTIME" $$ >> {shlex.quote(str(trace))} 2>/dev/null || true; }}\n')
     return ''.join(lines)
 
 def candidate_file(sha, path):
@@ -188,23 +209,30 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         key_dir = host_secrets.discover_key_directory(extracted, config['identities'])
         release_keys = releases/f'release-{device}-{build}'/'keys'
         # The wrappers hold no secret, only paths; they live on the task-owned release disk (RAM may be noexec).
-        wrappers = release_dir/'key-path-tools'
-        write_key_path_wrappers(wrappers, release_keys)
+        wrappers, trace_path = release_dir/'key-path-tools', release_dir/'sign-trace.jsonl'
+        write_key_path_wrappers(wrappers, release_keys, trace_path)
         derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase,
-            release_keys, wrappers)
+            release_keys, wrappers, trace_path)
         script = private/'generate-release-derived.sh'
         script.write_text(derived)
         java = Path(sign['javaHome'])
+        trace = sign_trace.SignTrace(trace_path, private, key_dir, release_keys)
         try:
-            result = subprocess.run(['bash', str(script), device, build], cwd=str(source_root),
+            process = subprocess.Popen(['bash', str(script), device, build], cwd=str(source_root),
                 env=dict(env, JAVA_HOME=str(java), PATH=f'{java}/bin:' + env.get('PATH', '')))
+            trace.attach(process)
+            returncode = process.wait()
+            trace.mark('script-exited', returncode=returncode)
         finally:
             shutil.rmtree(wrappers, ignore_errors=True)
-        if result.returncode:
-            raise AdapterFailed(f'derived release script exited {result.returncode}')
+        if returncode:
+            trace.stop()
+            print(json.dumps(sign_trace.summary(trace_path), sort_keys=True), file=sys.stderr)
+            raise AdapterFailed(f'derived release script exited {returncode}')
         shutil.copyfile(key_dir/'releasekey.x509.pem', public/'releasekey.x509.pem')
         shutil.copyfile(key_dir/'avb_pkmd.bin', public/'avb_pkmd.bin')
         key_location = str(key_dir.relative_to(extracted))
+    trace.stop()  # after the private directory is gone, so its removal is in the trace
     output = releases/f'release-{device}-{build}'
     for produced, target in ((output/f'{device}-target_files.zip', release_dir/'signed-target_files.zip'),
                              (output/f'{device}-ota_update-{build}.zip', public/f'{device}-ota_update-{build}.zip')):
