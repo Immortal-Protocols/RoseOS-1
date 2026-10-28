@@ -13,6 +13,18 @@ final class TaskControl {
   return live&&sessionId!=null&&!sessionId.isEmpty()&&!"null".equals(sessionId)&&taskId.equals(controllerTaskId);
  }
 
+ /** Watch binding extras on the viewer intent (APP-OS-WATCH-002). Additive; an unbound launch has neither.
+  * The viewer attaches only while the controller's session id and task id both still equal these. */
+ static final String EXTRA_WATCH_TASK_ID="dev.pixel.backgroundcontrol.extra.WATCH_TASK_ID";
+ static final String EXTRA_WATCH_SESSION_ID="dev.pixel.backgroundcontrol.extra.WATCH_SESSION_ID";
+ /** The {taskId, sessionId} to bind Watch to, from controller state read after the tap; null when the task
+  * selected at the tap is no longer the one shown, or the live session no longer carries it. Never
+  * substitutes the controller's current task for the selected one. */
+ static String[] watchBinding(String selectedTaskId,boolean stillSelected,String controllerStatus,String sessionId,String controllerTaskId){
+  if(!stillSelected||!watchable(selectedTaskId,true,controllerStatus,sessionId,controllerTaskId))return null;
+  return new String[]{selectedTaskId,sessionId};
+ }
+
  enum Outcome { STOPPING, ALREADY_STOPPING, CHANGED, NOT_RUNNING, FAILED }
  final Outcome outcome;final String message;
  private TaskControl(Outcome outcome,String message){this.outcome=outcome;this.message=message;}

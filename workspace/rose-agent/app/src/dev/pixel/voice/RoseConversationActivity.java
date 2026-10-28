@@ -29,7 +29,7 @@ public final class RoseConversationActivity extends Activity {
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
- volatile String ctlStatus="",ctlSession="",ctlTask="";volatile boolean ctlPolling;long ctlPolledAt;
+ volatile String ctlStatus="",ctlSession="",ctlTask="";volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
  String stopPendingFor,stopMessage="";boolean stopInFlight;
  Control primary,end;
  int noticeSerial;
@@ -154,19 +154,30 @@ public final class RoseConversationActivity extends Activity {
  /** Reads the background controller's session (same-signer provider) about once a second, off the UI thread. */
  void pollController(){
   if(ctlPolling||SystemClock.uptimeMillis()-ctlPolledAt<1000)return;ctlPolling=true;ctlPolledAt=SystemClock.uptimeMillis();
-  new Thread(()->{String st="",se="",tk="";
-   try{Bundle reply=getContentResolver().call(android.net.Uri.parse("content://dev.pixel.backgroundcontrol.agent"),"get_state",null,null);
-    org.json.JSONObject c=new org.json.JSONObject(reply==null?"{}":reply.getString("result","{}"));
-    st=c.optString("status");se=c.isNull("sessionId")?"":c.optString("sessionId");tk=c.isNull("taskId")?"":c.optString("taskId");
-   }catch(Exception unavailable){/* No controller, or not permitted: nothing to watch. */}
-   ctlStatus=st;ctlSession=se;ctlTask=tk;ctlPolling=false;
-  },"rose-controller-state").start();
+  new Thread(()->{String[] c=controllerState();ctlStatus=c[0];ctlSession=c[1];ctlTask=c[2];ctlPolling=false;},"rose-controller-state").start();
  }
- /** The existing viewer for the background workspace; it shows whatever that live session shows. */
+ /** {status, sessionId, taskId} from the controller's get_state; empty strings when unavailable. Off the UI thread. */
+ String[] controllerState(){String st="",se="",tk="";
+  try{Bundle reply=getContentResolver().call(android.net.Uri.parse("content://dev.pixel.backgroundcontrol.agent"),"get_state",null,null);
+   org.json.JSONObject c=new org.json.JSONObject(reply==null?"{}":reply.getString("result","{}"));
+   st=c.optString("status");se=c.isNull("sessionId")?"":c.optString("sessionId");tk=c.isNull("taskId")?"":c.optString("taskId");
+  }catch(Exception unavailable){/* No controller, or not permitted: nothing to watch. */}
+  return new String[]{st,se,tk};
+ }
+ /** Opens the existing viewer bound to the selected task: the task id is captured at the tap, the controller
+  * is read fresh, and the viewer receives that task id with its own session id (TaskControl.watchBinding), so
+  * it can refuse to show a session that is gone or now carries another task. Opening never stops anything. */
  void openWorkspace(){
-  if(!TaskControl.watchable(shownTaskId,true,ctlStatus,ctlSession,ctlTask))return;
-  try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
-  catch(Exception e){stopMessage="The workspace viewer couldn’t open.";lastTaskKey="";}
+  final String selected=shownTaskId;if(selected.isEmpty()||watchOpening)return;watchOpening=true;
+  new Thread(()->{final String[] c=controllerState();runOnUiThread(()->{
+   watchOpening=false;ctlStatus=c[0];ctlSession=c[1];ctlTask=c[2];lastTaskKey="";
+   if(isFinishing()||isDestroyed())return;
+   String[] binding=TaskControl.watchBinding(selected,selected.equals(shownTaskId),c[0],c[1],c[2]);
+   if(binding==null){stopMessage="That task’s workspace is no longer available.";return;}
+   try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity"))
+    .putExtra(TaskControl.EXTRA_WATCH_TASK_ID,binding[0]).putExtra(TaskControl.EXTRA_WATCH_SESSION_ID,binding[1]).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
+   catch(Exception e){stopMessage="The workspace viewer couldn’t open.";}
+  });},"rose-watch-open").start();
  }
  /** Confirms Stop for the task shown now. The id is captured here, so a later task is never stopped by this dialog. */
  void confirmStop(){

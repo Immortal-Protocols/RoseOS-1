@@ -19,6 +19,23 @@ public final class TaskControlTest {
         expect(!TaskControl.watchable("t1", true, "ready", "null", "t1"), "JSON null session is no session");
         expect(!TaskControl.watchable("t1", false, "ready", "s1", "t1"), "Finished task has no live workspace");
 
+        // Watch binding (APP-FIX-004, V1): the selected task and its own session, read after the tap.
+        expect(java.util.Arrays.equals(TaskControl.watchBinding("A", true, "ready", "s1", "A"), new String[] {"A", "s1"}),
+                "Ordinary Watch binds the selected task to its live session");
+        expect(TaskControl.watchBinding("A", true, "ready", "s2", "B") == null,
+                "A replaced by B in a new session: Watch for A opens nothing, never B");
+        expect(TaskControl.watchBinding("A", true, "ready", "s1", "B") == null,
+                "A replaced by B reusing the same session: Watch for A opens nothing");
+        expect(TaskControl.watchBinding("A", false, "ready", "s1", "A") == null,
+                "The shown task changed while the controller was being read: the old tap opens nothing");
+        expect(TaskControl.watchBinding("A", true, "idle", "", "") == null, "Session ended before the tap was handled");
+        expect(TaskControl.watchBinding("", true, "ready", "s1", "") == null, "No selected task, no binding");
+        String[] bound = TaskControl.watchBinding("A", true, "launching", "s1", "A");
+        expect(bound != null && bound[0].equals("A") && bound[1].equals("s1"), "The binding carries the selected id, not whatever is current");
+        expect(TaskControl.EXTRA_WATCH_TASK_ID.equals("dev.pixel.backgroundcontrol.extra.WATCH_TASK_ID")
+                && TaskControl.EXTRA_WATCH_SESSION_ID.equals("dev.pixel.backgroundcontrol.extra.WATCH_SESSION_ID"),
+                "Extra names agreed with the OS viewer (APP-OS-WATCH-002)");
+
         // Stop outcomes.
         TaskControl ok = TaskControl.stopResult(200, "stopping", "t1", "interrupt_requested", "closed", false, "t1");
         expect(ok.outcome == TaskControl.Outcome.STOPPING && ok.message.startsWith("Stop requested") && !ok.message.startsWith("Stopped") && ok.message.contains("Waiting"),
