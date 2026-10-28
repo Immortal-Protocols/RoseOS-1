@@ -10,6 +10,7 @@ spec = importlib.util.spec_from_file_location('capacity', HERE/'capacity.py')
 capacity = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(capacity)
 CONFIG = capacity.load()
+PLATFORM = [o for o in CONFIG['options'] if 'local_launch' not in o]  # Agent Platform profiles
 SHA = re.compile(r'^[0-9a-f]{40}$')
 
 
@@ -42,7 +43,7 @@ class ServingConfigTest(unittest.TestCase):
         self.assertEqual(arg(args, '--served-model-name'), CONFIG['wire_contract']['model_field'])
 
     def test_container_matches_machine_and_platform_rules(self):
-        for option in CONFIG['options']:
+        for option in PLATFORM:
             spec, args = option['container_spec'], option['container_spec']['args']
             port = spec['ports'][0]['containerPort']
             self.assertEqual(arg(args, '--port'), str(port))
@@ -58,7 +59,7 @@ class ServingConfigTest(unittest.TestCase):
             a100['machine_spec']['acceleratorCount'])
 
     def test_image_pinned_by_digest_but_not_mirrored(self):
-        for option in CONFIG['options']:
+        for option in PLATFORM:
             self.assertNotIn('imageUri', option['container_spec'])  # supplied at render time from the regional mirror
             self.assertIsNone(option['runtime']['artifact_registry_image_uri'])
         runtime = CONFIG['options'][0]['runtime']
@@ -120,7 +121,7 @@ class ServingConfigTest(unittest.TestCase):
 
     def test_deployment_fits_test_window_and_probe(self):
         hours = CONFIG['test_envelope']['test_hours']
-        for option in CONFIG['options']:
+        for option in PLATFORM:
             spec = option['container_spec']
             timeout = int(spec['deploymentTimeout'].rstrip('s'))
             self.assertLessEqual(timeout, hours*3600/4)

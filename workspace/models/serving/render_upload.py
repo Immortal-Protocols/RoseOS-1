@@ -48,7 +48,14 @@ def guard_limits(config, option):
             'gpu_total_min_bytes': int((weights + kv + option['runtime_reserve_bytes_per_gpu'])/util),
             'gpu_memory_utilization': util, 'cache_dir': option['runtime']['weights_cache_dir'],
             'cache_free_min_bytes': int(fetch*1.05) + 2**30,
-            'shm_min_bytes': int(int(option['container_spec']['sharedMemorySizeMb'])*2**20*0.9)}
+            'shm_min_bytes': int(shm_mb(option)*2**20*0.9)}
+
+
+def shm_mb(option):
+    """Shared memory the runtime gives the container: Agent Platform sharedMemorySizeMb, or the local --shm-size."""
+    if 'local_launch' in option:
+        return option['local_launch']['shm_size_mb']
+    return int(option['container_spec']['sharedMemorySizeMb'])
 
 
 def check_image(uri, option):
@@ -58,6 +65,13 @@ def check_image(uri, option):
     pattern = rf'^{re.escape(region)}-docker\.pkg\.dev/{PROJECT}/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._/-]*@{re.escape(digest)}$'
     if not re.fullmatch(pattern, uri):
         raise Rejected(f'image URI must be a {region} Artifact Registry reference pinned to {digest} (no tag, no other digest)')
+
+
+def profile(config, profile_id):
+    for option in config['options']:
+        if option['id'] == profile_id:
+            return option
+    raise Rejected(f'unknown profile {profile_id}')
 
 
 def check_context(config, option):
