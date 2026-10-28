@@ -21,6 +21,9 @@ spec = importlib.util.spec_from_file_location('rose_verify', SCRIPT)
 rv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rv)
 CONTRACT = json.loads(rv.CONTRACT.read_text())
+EXPECTATIONS = rv.ROOT/'qa/verification/expectations'
+ALPHA = rv.load_expectation(EXPECTATIONS/'alpha-40719075730.json')
+BETA = rv.load_expectation(EXPECTATIONS/'beta-frankel-2026102804.json')
 
 try:
     import PIL  # noqa: F401
@@ -159,6 +162,20 @@ class ReleaseTests(unittest.TestCase):
         failed = {c['check'] for c in json.loads(out)['checks'] if c['result'] == 'fail'}
         self.assertEqual(failed, {'SHA256SUMS frankel-stable', 'candidate source', 'frankel-stable line matches candidate'})
 
+    def test_expectation_binds_candidate_build_and_device(self):
+        e = json.loads(Path(BETA['path']).read_text())
+        e.update(candidate='a'*40, build='2026102899')
+        path = self.tmp/'e.json'
+        path.write_text(json.dumps(e))
+        r = rv.release(self.rel, expectation=rv.load_expectation(path))
+        self.assertTrue(all(c['result'] == 'pass' for c in r['checks']), r['checks'])
+        self.assertEqual(r['expectation']['candidate'], 'a'*40)
+        e.update(build='2026102804', target={'device': 'vsoc_x86_64_only'})
+        path.write_text(json.dumps(e))
+        failed = {c['check'] for c in rv.release(self.rel, expectation=rv.load_expectation(path))['checks']
+                  if c['result'] == 'fail'}
+        self.assertEqual(failed, {'candidate build', 'OTA device equals expectation target'})
+
 
 class PayloadTests(unittest.TestCase):
     def setUp(self):
@@ -239,19 +256,33 @@ state = json.load(open(sys.argv[0] + '.json'))
 assert sys.argv[3] in ('shell', 'exec-out'), sys.argv
 cmd = sys.argv[4] if len(sys.argv) > 4 else ''
 log = open(sys.argv[0] + '.log', 'a'); log.write(cmd + '\n')
+words = cmd.split()
+user = words[words.index('--user') + 1] if '--user' in words else None
+if cmd.startswith(('pm path', 'cmd package resolve-activity', 'cmd role', 'am start')) and user is None:
+    sys.exit(3)  # every user-scoped command must name the tested user
 if cmd.startswith('getprop '):
-    print(state['props'].get(cmd.split()[1], ''))
+    print(state['props'].get(words[1], ''))
+elif cmd == 'am get-current-user':
+    print(state['current'])
+elif cmd == 'pm list users':
+    print('Users:')
+    for uid, name, flags, running in state['users']:
+        print('\tUserInfo{%s:%s:%s}%s' % (uid, name, flags, ' running' if running else ''))
 elif cmd.startswith('pm path '):
-    pkg = cmd.split()[2]
-    if pkg in state['paths']: print('package:' + state['paths'][pkg])
+    pkg = words[-1]
+    if int(user) in state['installed'].get(pkg, []): print('package:' + state['paths'][pkg])
 elif cmd.startswith('dumpsys package '):
-    print('Packages:\n  Package [%s]\n    versionCode=%s minSdk=29 targetSdk=35\n    versionName=x' % (cmd.split()[2], state['versions'].get(cmd.split()[2], 0)))
+    pkg = words[2]
+    print('Packages:\n  Package [%s]\n    versionCode=%s minSdk=29 targetSdk=35\n    versionName=x' % (pkg, state['versions'].get(pkg, 0)))
+    for uid, _, _, _ in state['users']:
+        print('    User %s: ceDataInode=1 installed=%s hidden=false suspended=false stopped=false enabled=0'
+              % (uid, 'true' if uid in state['installed'].get(pkg, []) else 'false'))
 elif cmd.startswith('sha256sum '):
-    print(state['digests'][cmd.split()[1]] + '  ' + cmd.split()[1])
+    print(state['digests'][words[1]] + '  ' + words[1])
 elif cmd.startswith('cmd package resolve-activity'):
-    print('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n' + state['home'])
+    print('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n' + state['home'][user])
 elif cmd.startswith('cmd role get-role-holders'):
-    print(state['home'].split('/')[0])
+    print(state['roles'][user])
 elif cmd.startswith('screencap'):
     sys.stdout.buffer.write(open(state['screenshot'], 'rb').read())
 elif cmd.startswith('cat /data/local/tmp/rose-verify-ui.xml'):
@@ -259,11 +290,13 @@ elif cmd.startswith('cat /data/local/tmp/rose-verify-ui.xml'):
 elif cmd.startswith('dumpsys activity activities'):
     print('  topResumedActivity=ActivityRecord{1a2b u0 %s t7}' % state['focus'].pop(0))
     json.dump(state, open(sys.argv[0] + '.json', 'w'))
-elif cmd.split()[0] in ('input', 'am', 'uiautomator', 'rm'):
+elif words[0] in ('input', 'am', 'uiautomator', 'rm'):
     pass
 else:
     sys.exit(3)
 '''
+READONLY_PREFIXES = ('getprop', 'am get-current-user', 'pm list users', 'pm path', 'dumpsys package', 'sha256sum',
+                     'cmd package resolve-activity', 'cmd role get-role-holders')
 
 
 class RuntimeTests(unittest.TestCase):
@@ -273,11 +306,15 @@ class RuntimeTests(unittest.TestCase):
         self.adb = self.tmp/'adb'
         self.adb.write_text(FAKE_ADB.replace('#!/usr/bin/env python3', '#!' + sys.executable))
         self.adb.chmod(self.adb.stat().st_mode | stat.S_IEXEC)
+        rose = 'dev.pixel.voice/.MainActivity'
         self.state = {'props': {'ro.product.device': 'vsoc_x86_64_only', 'sys.boot_completed': '1',
                                 'persist.wm.debug.pixel_agent_tray': '1', 'ro.product.cpu.abi': 'x86_64'},
-                      'paths': {}, 'versions': {}, 'digests': {}, 'home': 'dev.pixel.voice/.MainActivity'}
-        for a in CONTRACT['apps']:
+                      'current': 0, 'users': [[0, 'Private Owner Name', 'c13', True], [10, 'Private Work', '1030', False]],
+                      'installed': {}, 'paths': {}, 'versions': {}, 'digests': {},
+                      'home': {'0': rose, '10': rose}, 'roles': {'0': 'dev.pixel.voice', '10': 'dev.pixel.voice'}}
+        for a in ALPHA['apps']:
             path = f'/product/app/{a["package"]}/{a["package"]}.apk'
+            self.state['installed'][a['package']] = [0, 10]
             self.state['paths'][a['package']] = path
             self.state['versions'][a['package']] = a['version']
             self.state['digests'][path] = a['sha256']
@@ -285,8 +322,16 @@ class RuntimeTests(unittest.TestCase):
     def runtime(self, **kw):
         Path(str(self.adb) + '.json').write_text(json.dumps(self.state))
         return rv.runtime('emulator-0', kw.get('handback', 'INFRA-HANDBACK-TEST'), kw.get('out', self.tmp/'out'),
+                          kw.get('expectation', ALPHA), user=kw.get('user', 'current'),
                           interactive=kw.get('interactive', False), physical=kw.get('physical', False),
                           adb_path=str(self.adb), settle=0)
+
+    def commands(self):
+        log = Path(str(self.adb) + '.log')
+        return log.read_text().splitlines() if log.exists() else []
+
+    def failed(self, r):
+        return {c['check'] for c in r['checks'] if c['result'] == 'fail'}
 
     @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
     def test_interactive_home_conversation_and_launcher_entry(self):
@@ -301,47 +346,153 @@ class RuntimeTests(unittest.TestCase):
                                  'dev.pixel.voice/.MainActivity'])
         r = self.runtime(interactive=True)
         self.assertEqual(r['kind'], 'runtime-interactive')
-        self.assertTrue(r['ok'], [c for c in r['checks'] if c['result'] != 'pass'])
+        self.assertEqual(self.failed(r), set())
         self.assertEqual([s['step'] for s in r['steps']], ['home-key', 'home-to-conversation', 'conversation-back',
                                                             'launcher-icon-entry', 'home-key-again'])
+        self.assertEqual({s['user'] for s in r['steps']}, {0})
         self.assertEqual(r['steps'][0]['comparison']['verdict'], 'wallpaper-consistent')
         self.assertEqual(r['steps'][3]['focus'], 'dev.pixel.voice/.PairingActivity')
-        commands = Path(str(self.adb) + '.log').read_text()
+        commands = self.commands()
         self.assertIn('input tap 270 550', commands)
         self.assertIn('rm -f /data/local/tmp/rose-verify-ui.xml', commands)
+        self.assertTrue(any(c.startswith('am start --user 0 ') for c in commands))
+        self.assertEqual(commands.count('am get-current-user'), 2, 'foreground user read before and after')
 
-    def test_requires_handback_and_external_output(self):
+    def test_requires_handback_expectation_and_external_output(self):
         with self.assertRaisesRegex(rv.Fail, 'handback'):
             self.runtime(handback=' ')
+        with self.assertRaisesRegex(rv.Fail, '--expect'):
+            self.runtime(expectation=None)
         with self.assertRaisesRegex(rv.Fail, 'outside the repository'):
             self.runtime(out=rv.ROOT/'out/runtime')
-        self.assertFalse(Path(str(self.adb) + '.log').exists(), 'no adb call before the gates pass')
+        with self.assertRaisesRegex(rv.Fail, 'numeric user id'):
+            self.runtime(user='owner')
+        self.assertEqual(self.commands(), [], 'no adb call before the gates pass')
 
-    def test_readonly_capture_on_cuttlefish(self):
+    def test_readonly_capture_binds_every_observation_to_the_current_user(self):
         r = self.runtime()
         self.assertEqual(r['kind'], 'runtime-readonly')
-        self.assertTrue(r['ok'], [c for c in r['checks'] if c['result'] != 'pass'])
+        self.assertEqual(self.failed(r), set())
         self.assertEqual(r['device']['serial'], 'not recorded')
+        self.assertEqual((r['user']['tested'], r['user']['selection'], r['user']['foreground']), (0, 'current', 0))
+        self.assertEqual(r['user']['users'], [{'id': 0, 'flags': 'c13', 'running': True},
+                                              {'id': 10, 'flags': '1030', 'running': False}])
+        self.assertNotIn('Private', json.dumps(r), 'user names are never recorded')
+        self.assertEqual({a['user'] for a in r['apps']} | {r['home']['user']}, {0})
+        self.assertEqual([c['result'] for c in r['checks'] if c['check'] == 'user 10 observations'], ['unavailable'])
+        self.assertEqual((r['ok'], r['unmeasured']), (True, ['user 10 observations']))
+        self.assertEqual(r['expectation']['label'], ALPHA['label'])
+        self.assertTrue(r['method'].startswith('rose-verify r2'))
         self.assertTrue((self.tmp/'out/runtime-receipt.json').is_file())
-        commands = Path(str(self.adb) + '.log').read_text().splitlines()
-        mutating = [c for c in commands if c.split()[0] in ('input', 'am', 'uiautomator', 'screencap', 'rm', 'pm') and
-                    not c.startswith('pm path')]
-        self.assertEqual(mutating, [], 'read-only mode issues no input, launch, dump or removal')
+        commands = self.commands()
+        self.assertEqual([c for c in commands if not c.startswith(READONLY_PREFIXES)], [],
+                         'read-only mode issues no input, launch, dump or removal')
+        scoped = [c for c in commands if c.startswith(('pm path', 'cmd package resolve-activity', 'cmd role'))]
+        self.assertTrue(scoped and all('--user 0 ' in c for c in scoped), scoped)
+
+    def test_explicit_background_user_is_read_only_and_interactive_unavailable(self):
+        self.state['installed'][ALPHA['apps'][0]['package']] = [0]
+        self.state['home']['10'] = 'com.android.launcher3/.uioverrides.QuickstepLauncher'
+        self.state['roles']['10'] = 'com.android.launcher3'
+        r = self.runtime(user='10', interactive=True)
+        self.assertEqual((r['user']['tested'], r['user']['selection'], r['user']['notTested']), (10, 'explicit --user', [0]))
+        pkg = ALPHA['apps'][0]['package']
+        self.assertEqual(self.failed(r), {f'{pkg} installed for user 10',
+                                          f'{pkg} active bytes equal expectation (path for the tested user)', 'HOME role held by Rose Agent for user 10',
+                                          'unqualified MAIN/HOME resolves to Rose Agent for user 10'})
+        self.assertEqual([c['result'] for c in r['checks'] if c['check'] == 'interactive observations for user 10'],
+                         ['unavailable'])
+        self.assertNotIn('steps', r)
+        self.assertEqual([c for c in self.commands() if not c.startswith(READONLY_PREFIXES)], [])
+
+    def test_unknown_user_or_unreadable_current_user_fails_closed(self):
+        with self.assertRaisesRegex(rv.Fail, 'user 11 is not on the device'):
+            self.runtime(user='11')
+        self.state['current'] = ''
+        with self.assertRaisesRegex(rv.Fail, 'current user is unavailable'):
+            self.runtime()
 
     def test_wrong_bytes_and_other_home_are_reported(self):
-        pkg = CONTRACT['apps'][0]['package']
+        pkg = ALPHA['apps'][0]['package']
         self.state['digests'][self.state['paths'][pkg]] = '0'*64
-        self.state['home'] = 'com.android.launcher3/.uioverrides.QuickstepLauncher'
+        self.state['home']['0'] = 'com.android.launcher3/.uioverrides.QuickstepLauncher'
+        self.state['roles']['0'] = 'com.android.launcher3'
         r = self.runtime()
-        failed = {c['check'] for c in r['checks'] if c['result'] == 'fail'}
-        self.assertEqual(failed, {f'{pkg} active bytes equal the contract', 'HOME resolves to Rose Agent'})
+        self.assertEqual(self.failed(r), {f'{pkg} active bytes equal expectation (path for the tested user)', 'HOME role held by Rose Agent for user 0',
+                                          'unqualified MAIN/HOME resolves to Rose Agent for user 0'})
         self.assertEqual(r['home']['roleHolders'], ['com.android.launcher3'])
+
+    def test_guest_must_match_expectation_target(self):
+        self.state['props']['ro.product.device'] = 'vsoc_x86_64'
+        self.assertEqual(self.failed(self.runtime()), {'guest device equals expectation target'})
+
+    def test_release_extraction_without_image_path_fails_closed(self):
+        e = json.loads(Path(BETA['path']).read_text())
+        for app in e['apps']:
+            del app['imagePath']
+        path = self.tmp/'e.json'
+        path.write_text(json.dumps(e))
+        self.assertEqual(rv.image_location(rv.load_expectation(path)['apps'][0]), None)
 
     def test_physical_device_needs_explicit_flag(self):
         self.state['props']['ro.product.device'] = 'frankel'
         with self.assertRaisesRegex(rv.Fail, 'not a Cuttlefish guest'):
             self.runtime()
-        self.assertTrue(self.runtime(physical=True)['device']['privateEvidence'])
+        r = self.runtime(physical=True, expectation=BETA)
+        self.assertTrue(r['device']['privateEvidence'])
+        self.assertEqual(self.failed(r), set())
+
+
+class ExpectationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def write(self, obj):
+        path = self.tmp/'e.json'
+        path.write_text(json.dumps(obj))
+        return path
+
+    def test_checked_in_expectations_equal_the_existing_pins(self):
+        pipeline = json.loads(rv.PIPELINE.read_text())
+        for e in (ALPHA, BETA):
+            self.assertEqual([{k: a[k] for k in ('package', 'version', 'sha256')} for a in e['apps']], CONTRACT['apps'])
+            self.assertEqual(e['candidate'], CONTRACT['base']['candidate'])
+            self.assertEqual(e['appSignerSha256'], pipeline['identities']['appSignerSha256'])
+            self.assertEqual([a['imagePath'] for a in e['apps']], ['/'.join(rv.APP_PATHS[a['package']]) for a in e['apps']])
+        self.assertEqual(ALPHA['target']['device'], CONTRACT['target']['device'])
+        self.assertEqual(ALPHA['target']['lunch'], CONTRACT['target']['lunch'])
+        self.assertEqual((BETA['build'], BETA['target']['device']), ('2026102804', pipeline['target']['device']))
+        self.assertEqual(BETA['avbPublicKeySha256'], pipeline['identities']['avbPublicKeySha256'])
+
+    def test_malformed_expectations_are_rejected(self):
+        base = {k: v for k, v in json.loads(Path(ALPHA['path']).read_text()).items()}
+        cases = {
+            'unknown key appSigner': dict(base, appSigner='x'),
+            'appSignerSha256 must be 64': {k: v for k, v in base.items() if k != 'appSignerSha256'},
+            'candidate must be a full 40-hex': dict(base, candidate=base['candidate'][:8]),
+            'sha256 must be 64': dict(base, apps=[dict(base['apps'][0], sha256=None)]),
+            'version must be an integer': dict(base, apps=[dict(base['apps'][0], version='305')]),
+            'repeated': dict(base, apps=[base['apps'][0], base['apps'][0]]),
+            'apps must be a non-empty list': dict(base, apps=[]),
+            'channel must be': dict(base, channel='prod'),
+            'imagePath must be': dict(base, apps=[dict(base['apps'][0], imagePath='/data/app/x.apk')]),
+            'build must be a digit string': dict(base, build=2026102804),
+        }
+        for message, obj in cases.items():
+            with self.subTest(message):
+                with self.assertRaisesRegex(rv.Fail, message):
+                    rv.load_expectation(self.write(obj))
+        self.assertEqual(run_cli('expected', '--expect', str(self.tmp/'missing.json'))[0], 2)
+
+    def test_release_extraction_needs_expectation_and_consistent_source(self):
+        rel = self.tmp/'rel'
+        rel.mkdir()
+        (rel/'SHA256SUMS').write_text('')
+        self.assertEqual(run_cli('release', str(rel), '--extract-apps', str(self.tmp/'x'))[0], 2)
+        code, _, err = run_cli('release', str(rel), '--expect', ALPHA['path'], '--expect-source', 'b'*40)
+        self.assertEqual(code, 2)
+        self.assertIn('contradicts', err)
 
 
 class SourceTests(unittest.TestCase):

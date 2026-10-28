@@ -15,8 +15,9 @@ kind of evidence. One kind never stands in for another:
 The tool is `scripts/rose-verify.py`. It runs offline except `runtime`, and it
 prints JSON. Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
 A check reported as `unavailable` was not measured; it never counts as a pass.
-`python3 scripts/rose-verify.py expected` prints every identity below from the
-checked-in contracts.
+Every result carries `method`, the method revision that produced it (see
+[Method revisions](#method-revisions)). `python3 scripts/rose-verify.py expected`
+prints the repository's pinned identities.
 
 ## Targets
 
@@ -36,15 +37,59 @@ and controller 28 by SHA-256. It is a different OS product, though:
 So alpha runtime results speak for the apps on that guest. They do not speak
 for the frankel OS.
 
+## Candidate expectations (`--expect`)
+
+Identity checks compare a build with one explicit **expectation file**: the
+exact identities recorded for that candidate. There is no implicit default. A
+build is never checked against another build's pins, and pins are never
+loosened to make a build pass.
+
+- **Required:** `runtime` needs `--expect`. So does `release --extract-apps`.
+  `apk` without `--expect` reports identity only and compares nothing.
+- **Schema:** `scripts/rose-verify.py` documents it. Required fields are
+  `label`, `channel`, `candidate` (full SHA), `target`, `apps`
+  (`package`, `version`, `sha256`, and `imagePath`, which `--extract-apps`
+  needs), `appSignerSha256` and `basis`. `build` and `avbPublicKeySha256` are
+  optional.
+- **Fail-closed validation:**
+  - unknown keys, nulls, short hashes, non-integer versions, repeated packages
+    and empty app lists are rejected with exit 2;
+  - a package that is not in the expectation fails;
+  - an expectation app with no `imagePath` fails extraction; there is no
+    built-in location;
+  - a guest or OTA whose device differs from `target.device` fails;
+  - a `verification.json` whose candidate or build differs fails.
+- **Recorded:** every receipt records the expectation's label, candidate, path
+  and file SHA-256.
+
+Checked-in expectations live in `qa/verification/expectations/`:
+
+| File | Build | Apps |
+| --- | --- | --- |
+| `beta-frankel-2026102804.json` | Published beta 2804, candidate `ae9cfd4d` | 302/4/28 |
+| `alpha-40719075730.json` | Active alpha, Actions 40719075730 (recipe `2921d88d`, base `ae9cfd4d` + OS delta `f21bf683`) | 302/4/28 |
+
+Both copy the existing pins unchanged. The test suite fails if either diverges
+from `os/alpha/cuttlefish-product-contract.json` or
+`os/release-pipeline/frankel.json`.
+
+A **new candidate** (for example the next beta, or app-only 304) gets its own
+file. It is written from Infra's actual image/APK receipt only after Infra
+supplies it. Never write it from source, a planned version number or another
+build's hashes. `qa/verification/expectations/README.md` describes how.
+
 ## Reference: the Fold prototype
 
 The product Home implements the delivered Fold prototype:
 
 - **Prototype:** `Rose-Fold-v3.html`, Library item
-  `libfile_ff139fdeb5688191a918d4ca9210abe9`, version 2 (SHA-256
-  `67bf7a50…05ee`, delivery ROS-PROTOTYPE-FOLD-003-DELIVERY-001). Canonical
-  records are the Notion "RoseOS Interaction Prototype — Fold Brief" and the
-  Prototyper inbox.
+  `libfile_ff139fdeb5688191a918d4ca9210abe9`, version 2, 859,202 bytes, SHA-256
+  `67bf7a505ffdd64087c76e6be496043afb7576c081b2fe8ed1c6642aec9405ee` (delivery
+  ROS-PROTOTYPE-FOLD-003-DELIVERY-001).
+  - Canonical records are the Notion "RoseOS Interaction Prototype — Fold
+    Brief" and the Prototyper inbox.
+  - A copy is attached to the OS P1 task page; retrieve it only through that
+    supported attachment/Library path.
 - **Wallpaper:** its narrow Home wallpaper is the first embedded JPEG
   (461 × 1024). The repo carries it as
   `workspace/rose-agent/app/res/drawable-nodpi/rose_home_wallpaper.jpg`, SHA-256
@@ -84,16 +129,21 @@ records the adb serial. It marks any non-Cuttlefish device as private evidence.
 
    ```sh
    python3 -I scripts/rose-verify.py release DOWNLOAD_DIR \
-     --expect-source CANDIDATE_SHA --extract-apps /scratch/extracted \
+     --expect qa/verification/expectations/CANDIDATE.json --extract-apps /scratch/extracted \
      --partition product --partition system_ext --partition vendor --partition system \
      --receipt /scratch/release-inspection.json
    ```
 
    This checks:
    - every present file against `SHA256SUMS`;
-   - the listed AVB key against `identities.avbPublicKeySha256`;
-   - the candidate SHA in `verification.json`;
-   - the feed line against the candidate.
+   - the listed AVB key against the expectation's `avbPublicKeySha256`
+     (otherwise `identities.avbPublicKeySha256`);
+   - the candidate SHA and build in `verification.json` against the expectation;
+   - the feed line against the candidate;
+   - the OTA's `pre-device` against `target.device`.
+
+   `--expect-source SHA` (r1) still checks the candidate SHA alone. Combined
+   with `--expect`, it must agree with the expectation.
 
    It then reads OTA metadata and the payload partition table. The OTA's
    `pre-device` sets `runtime.cuttlefishBootable: false` for frankel.
@@ -104,11 +154,12 @@ records the adb serial. It marks any non-Cuttlefish device as private evidence.
    `fsck.erofs` (erofs) without mounting. It records:
    - **Target/API/ABI:** `build.prop` fingerprints, SDK, build type and
      `cpu.abilist` per partition.
-   - **App identity:** the contract APKs at their image paths:
-     `product/app/RosePreinstall_*`, `system_ext/priv-app/PixelBackgroundControl`.
+   - **App identity:** each expected app at its `imagePath`, for example
+     `product/app/RosePreinstall_*` or `system_ext/priv-app/PixelBackgroundControl`.
    - **Each APK:** package, versionCode/Name, min/target SDK, native ABIs,
-     launchable and HOME activities, the full signer SHA-256 against
-     `identities.appSignerSha256`, and bytes against the contract.
+     launchable and HOME activities, the full signer SHA-256 against the
+     expectation's `appSignerSha256`, and bytes and version against the
+     expectation.
    - **Rose Agent:** the Fold wallpaper resource bytes, and whether
      `RoseHomeView`/`RoseConversationActivity` are compiled in.
    - **HOME candidates:** every APK in `app/` and `priv-app/` whose manifest
@@ -117,9 +168,10 @@ records the adb serial. It marks any non-Cuttlefish device as private evidence.
 4. **Cost:** about 5 GB of scratch for these four partitions and 3 minutes
    locally. Delete the images afterwards; they are public, but large.
 
-`apk APK...` runs the same APK inspection on loose files, for example App
-release assets or a local build. A local rebuild of the same source is *not* the
-shipped artifact: it fails the contract byte and signer checks by design.
+`apk APK... [--expect FILE]` runs the same APK inspection on loose files, for
+example App release assets or a local build. A local rebuild of the same source
+is *not* the shipped artifact: it fails the expected byte and signer checks by
+design.
 
 ## B. Source inspection (no build)
 
@@ -161,21 +213,49 @@ serializes runtime work.
 
    ```sh
    python3 scripts/rose-verify.py runtime --serial SERIAL --handback 'HANDBACK REF' \
-     --out /scratch/runtime-RUN
+     --expect qa/verification/expectations/alpha-40719075730.json --out /scratch/runtime-RUN
    ```
 
    This records:
    - `ro.product.device`/`name`, `ro.hardware`, fingerprint, build type, SDK,
-     release and ABI list;
+     release and ABI list, with the device checked against `target.device`;
    - `sys.boot_completed` and the tray property;
-   - for each contract app: `pm path`, the `dumpsys package` versions, and the
-     on-device `sha256sum` of the active APK compared with the contract (an
-     updated `/data/app` copy shows here);
-   - the HOME resolution (`cmd package resolve-activity … HOME`) and the HOME
-     role holders.
+   - the **tested user** (see below), plus every user's id, flags and running
+     state from `pm list users` (names are never recorded);
+   - for each expected app:
+     - `pm path --user U`;
+     - the `User U:` state line of `dumpsys package` (installed, hidden,
+       suspended, stopped, enabled);
+     - the `dumpsys` versionCodes (device-wide);
+     - the on-device `sha256sum` of the active APK for that user, compared with
+       the expectation (an updated `/data/app` copy shows here);
+   - the HOME role holders (`cmd role get-role-holders --user U
+     android.app.role.HOME`);
+   - the **unqualified** MAIN/HOME resolution (`cmd package resolve-activity
+     --brief --user U -a MAIN -c HOME`, no component). An explicit component
+     launch never stands in for it.
 
    It issues no input, launch or file write.
+
+   **Tested user.**
+   - `--user current` (the default) resolves the foreground user with `am
+     get-current-user` and records that mechanism. `--user N` names a user
+     explicitly; it must appear in `pm list users`.
+   - An unreadable current user or an unknown id stops the run (exit 1 or 2)
+     rather than attributing results to an unknown user.
+   - Every user-scoped command and observation names the tested user. Every
+     other user and profile is listed as `unavailable` (not measured). Default
+     shell output is never read as proof for all users.
 3. **Interactive capture.** Add `--interactive` only within the handback window.
+   - Input, screenshots and UI dumps only reach the foreground user. So
+     interactive capture runs only when the tested user *is* the foreground
+     user. Otherwise it is reported `unavailable`: switching users is a guest
+     mutation this method does not perform.
+   - The foreground user is read again afterwards and must be unchanged.
+  - In the receipt, `ok` means no check failed. `unmeasured` lists every
+    `unavailable` check, such as other users.
+   - The icon launch uses `am start --user U`.
+
    Each step saves a screenshot, a UI dump and the focused window, then:
    1. presses the HOME key: the Rose Home page should have an `Open Rose`
       element, and the screenshot is compared with the reference;
@@ -210,14 +290,33 @@ where it came from.
 | 1 | Release checksums, candidate SHA, feed line, AVB key pin | artifact | All pass; candidate `ae9cfd4d` |
 | 2 | Payload partition hashes for the extracted partitions | artifact | Match the manifest |
 | 3 | Target/API/ABI from image `build.prop` | artifact / runtime-readonly | Beta: frankel, SDK 37, arm64-v8a, user. Alpha: vsoc_x86_64_only, x86_64, userdebug |
-| 4 | Contract APK bytes, versions and signer | artifact / runtime-readonly | 302/4/28 at contract SHA-256, signer `650d47f9…0bfb` |
+| 4 | Expected APK bytes, versions and signer (`--expect`) | artifact / runtime-readonly | The candidate's expectation. 2804 and the active alpha: 302/4/28 at the pinned SHA-256, signer `650d47f9…0bfb` |
 | 5 | Fold wallpaper bytes in Rose Agent; Home/conversation classes compiled in | artifact | `409c0dbf…d8c5`; both classes present |
-| 6 | HOME candidates in the image vs HOME role holder on the device | artifact vs runtime-readonly | Image lists them; the device decides. Report both, never infer one from the other |
+| 6 | HOME candidates in the image vs, for the tested user, the HOME role holder and the unqualified MAIN/HOME resolution | artifact vs runtime-readonly | The image lists candidates; the device decides per user. Report both, never infer one from the other or one user from another |
 | 7 | HOME key → Rose Home page with `Open Rose`, not black | runtime-interactive + comparison | Only when Rose holds HOME |
 | 8 | Launcher-icon entry → which page | runtime-interactive | 302 (beta 2804, alpha): `voicePage` ("Voice home"), not Rose Home. 304+ (`HomeEntry`, OS-HOME-2804-FIX-001): Rose Home, with the conversation opened over it when paired and launched fresh; Back returns to Home. Run `source REV` for the build's rule |
 | 9 | Home → conversation → back transition | runtime-interactive | `RoseConversationActivity`, then back to the launcher |
 | 10 | Truthful unavailable states | runtime-interactive | An unpaired guest opens `PairingActivity`; no backend means no fake connected/task state; alpha has no Updater |
 | 11 | Visual review of side-by-sides against the prototype | screenshot-comparison + human | Consistent with the delivered prototype, not "accepted" |
+| 12 | Tested user and the other users/profiles | runtime-readonly | One recorded tested user and how it was selected. Every other user/profile is `unavailable` unless run separately with `--user` |
+
+## Method revisions
+
+| Revision | Where | Change |
+| --- | --- | --- |
+| r1 (INFRA-VERIFY-001) | PR69, `f35b860c` | First method. App checks used the fixed alpha contract (302/4/28); HOME resolution and role holders were read without a user argument. The 2804 record (`qa/verification/frankel-2026102804.md`) was made with r1 and stays as recorded |
+| r2 (INFRA-VERIFY-002) | This revision | An explicit, fail-closed `--expect` replaces the fixed contract. Every runtime observation is bound to one recorded tested user. Interactive capture runs only for the foreground user. Every receipt carries `method`. Re-running r2 on the same 2804 bytes passed 26 of 26 checks (`qa/verification/expectations/README.md`) |
+
+**Limitations (r2):**
+- Only one user is measured per run. Other users and profiles stay
+  `unavailable`.
+- versionCode and APK bytes are device-wide, not per user.
+- Interactive capture never switches users.
+- No expectation exists yet for any candidate Infra has not supplied (next
+  beta, app-only 304).
+- Default-HOME migration, reboot and loop checks need a compatible image that
+  contains the change, plus Infra's handback. The active alpha (302, no PR67
+  and no migration) cannot show them.
 
 ## Never claim
 
@@ -226,3 +325,7 @@ where it came from.
 - Acceptance from a screenshot heuristic, or prototype acceptance that the Fold
   brief does not record.
 - Historical boots (`docs/upstream/`) as evidence for a current build.
+- One user's HOME, package state or screen as evidence for another user or
+  profile.
+- A candidate's identity from another candidate's expectation, from source, or
+  from a planned version number.
