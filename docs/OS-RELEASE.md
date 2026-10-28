@@ -178,6 +178,19 @@ and a concise validation report identifying source, device, signer, version and
 known limits. Verify uploaded bytes and metadata reference the same candidate.
 Never upload keys, private caches, config, source dumps or unsanitized logs.
 
+`scripts/release-manifest.py` records and checks the candidate offline. It never
+signs, uploads or downloads. `create` writes an immutable pre-publication manifest
+from explicit asset paths. It records the source revision, the resolved-manifest
+hash, the target device/variant, the semantic channel, the build number/timestamp,
+asset sizes/hashes and the claimed public app/OTA/AVB identities. The feed keeps
+its `DEVICE-stable` filename whatever the semantic channel is. `verify` checks a
+local directory against the exact asset allowlist, the expected public pins (a JSON
+file in the same shape as `--identities`) and the currently published feed line;
+use `--no-baseline` only for a channel with no release yet. `verify-published` compares a
+separately downloaded directory with the manifest and writes a delivery receipt.
+Matching identity fields against pins is not cryptographic signature verification.
+Record apksigner/OTA verifier results separately.
+
 Promote the candidate and channel metadata only after its acceptance gates pass.
 Publishing `frankel-stable` may make an update available to existing users; it is
 not a harmless documentation change. Nathan requested a released OS build, but a

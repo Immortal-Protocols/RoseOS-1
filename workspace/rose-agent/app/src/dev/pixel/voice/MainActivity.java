@@ -11,7 +11,7 @@ public class MainActivity extends Activity {
  boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
  LauncherPager launcherPager;LinearLayout homePageDots;final ArrayList<TextView> pageDots=new ArrayList<>();
- ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int widgetsPage=1,ourAppsPage=2;
+ ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
  boolean launcherReceiverRegistered;
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
  // The Quick Settings tile can change the choice while this activity stays resumed under the shade.
  final android.content.SharedPreferences.OnSharedPreferenceChangeListener screenPolicyChanged=(prefs,key)->{if(ScreenPolicy.KEEP_ON.equals(key))ScreenPolicy.apply(this,screenHostActive);};
  void toggleLockedControl(){if(LockedControl.enabled(this)){LockedControl.disable(this);Toast.makeText(this,"App control while locked is off.",0).show();}else LockedControl.enable(this,()->{});}
- @Override public void onCreate(Bundle b){PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);startForegroundService(new Intent(this,VoiceService.class));home();IntentFilter packages=new IntentFilter();packages.addAction(Intent.ACTION_PACKAGE_ADDED);packages.addAction(Intent.ACTION_PACKAGE_REMOVED);packages.addAction(Intent.ACTION_PACKAGE_CHANGED);packages.addAction(Intent.ACTION_PACKAGE_REPLACED);packages.addDataScheme("package");if(Build.VERSION.SDK_INT>=33)registerReceiver(launcherPackages,packages,Context.RECEIVER_EXPORTED);else registerReceiver(launcherPackages,packages);launcherReceiverRegistered=true;if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class));if(!PhoneEnvironment.permitted(this)&&!getSharedPreferences("location-context",0).getBoolean("asked",false))requestLocationContext();}
+ @Override public void onCreate(Bundle b){PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);startForegroundService(new Intent(this,VoiceService.class));home();showHomeFor(getIntent());IntentFilter packages=new IntentFilter();packages.addAction(Intent.ACTION_PACKAGE_ADDED);packages.addAction(Intent.ACTION_PACKAGE_REMOVED);packages.addAction(Intent.ACTION_PACKAGE_CHANGED);packages.addAction(Intent.ACTION_PACKAGE_REPLACED);packages.addDataScheme("package");if(Build.VERSION.SDK_INT>=33)registerReceiver(launcherPackages,packages,Context.RECEIVER_EXPORTED);else registerReceiver(launcherPackages,packages);launcherReceiverRegistered=true;if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class));if(!PhoneEnvironment.permitted(this)&&!getSharedPreferences("location-context",0).getBoolean("asked",false))requestLocationContext();}
  void requestLocationContext(){getSharedPreferences("location-context",0).edit().putBoolean("asked",true).apply();requestPermissions(new String[]{"android.permission.ACCESS_COARSE_LOCATION","android.permission.ACCESS_FINE_LOCATION"},72);}
  void requestPhotoAccess(){if(Build.VERSION.SDK_INT>=34)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES","android.permission.READ_MEDIA_VISUAL_USER_SELECTED"},74);else if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES"},74);else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},74);}
  @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==74){if(galleryWidget!=null)galleryWidget.reload();return;}if(r==72){VoiceService s=VoiceService.instance;if(s!=null){s.notification(s.communicating);PhoneEnvironment.get(this).setActive(s.communicating);s.appWindowChanged();}return;}if(checkSelfPermission("android.permission.RECORD_AUDIO")==PackageManager.PERMISSION_GRANTED){startForegroundService(new Intent(this,VoiceService.class));command("talk");}}
@@ -315,7 +315,7 @@ public class MainActivity extends Activity {
   if(screenDetail!=null||visualDetail!=null)return false;
   WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
   if(insets!=null&&insets.isVisible(WindowInsets.Type.ime()))return false;
-  if(launcherPager!=null&&launcherPager.currentPage()==0){
+  if(launcherPager!=null&&launcherPager.currentPage()==voicePage){
    if(touchInside(macPanel,event)||touchInside(composer,event))return false;
   }
   return true;
@@ -349,7 +349,7 @@ public class MainActivity extends Activity {
   }catch(PackageManager.NameNotFoundException|IllegalArgumentException|SecurityException unavailable){return false;}
  }
  void attachLauncherPages(boolean preservePage){
-  int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():0;
+  int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():voicePage;
   if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);
   Intent query=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
   ArrayList<ResolveInfo> ourApps=new ArrayList<>(),systemApps=new ArrayList<>(),storeApps=new ArrayList<>(),otherApps=new ArrayList<>();HashSet<String> seen=new HashSet<>(),suiteSeen=new HashSet<>();
@@ -369,8 +369,10 @@ public class MainActivity extends Activity {
   final int gridColumns=Math.max(4,Math.min(8,getResources().getConfiguration().screenWidthDp/104));
   int rows=Math.max(3,Math.min(6,(int)((height-250)/108))),perPage=rows*gridColumns;
   ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>(),subtitles=new ArrayList<>();
+  titles.add("Home");subtitles.add("");pages.add(new ArrayList<>());
   titles.add("Voice home");subtitles.add("");pages.add(new ArrayList<>());
-  titles.add("Widgets");subtitles.add("");pages.add(new ArrayList<>());widgetsPage=1;ourAppsPage=2;
+  titles.add("Widgets");subtitles.add("");pages.add(new ArrayList<>());widgetsPage=2;ourAppsPage=3;
+  ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,systemApps,storeApps,otherApps))launchable.addAll(group);
   addAppGroup(pages,titles,subtitles,ourApps,"Our apps","Your everyday apps",Math.max(1,ourApps.size()));
   addAppGroup(pages,titles,subtitles,systemApps,"Preinstalled","Included with this operating system",perPage);
   addAppGroup(pages,titles,subtitles,storeApps,"Play Store","Installed through Google Play",perPage);
@@ -378,12 +380,13 @@ public class MainActivity extends Activity {
   int count=pages.size();
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new PlayfulTheme.World());
   launcherPager.permission=this::canSwipePages;
-  launcherPager.listener=index->{drawer=index>0;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setAlpha(((Integer)dot.getTag())==index?1f:.27f);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
+  launcherPager.listener=index->{drawer=index!=voicePage;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setAlpha(((Integer)dot.getTag())==index?1f:.27f);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   page.setBackgroundColor(Color.TRANSPARENT);homePageDots=makePageDots(titles);page.addView(homePageDots,new LinearLayout.LayoutParams(-1,dp(30)));
+  launcherPager.addView(new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),()->launcherPager.showPage(voicePage,true),this::apps,makePageDots(titles)));
   launcherPager.addView(page);
-  for(int number=1;number<count;number++){
+  for(int number=voicePage+1;number<count;number++){
    LinearLayout appPage=new LinearLayout(this);appPage.setOrientation(1);
    appPage.setPadding(dp(18),dp(20),dp(18),dp(12));
    appPage.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(18)+i.getSystemWindowInsetLeft(),dp(20)+i.getSystemWindowInsetTop(),dp(18)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());return i;});
@@ -518,7 +521,7 @@ public class MainActivity extends Activity {
   starting=starting||SystemClock.uptimeMillis()<startFeedbackUntil;
   renderVoice(active,starting,isMuted,error,s==null?0:s.level);
   updateText(taskModel,s==null?"Model connecting…":s.guardianName.isEmpty()?s.taskModelLabel:s.guardianName+"’s Guardian");
-  if(taskCard!=null)taskCard.render(s==null?"{\"current\":null}":s.taskStateJson,s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000),screenHostActive&&hasWindowFocus()&&(launcherPager==null||launcherPager.currentPage()==0)&&visualDetail==null&&screenDetail==null);
+  if(taskCard!=null)taskCard.render(s==null?"{\"current\":null}":s.taskStateJson,s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000),screenHostActive&&hasWindowFocus()&&(launcherPager==null||launcherPager.currentPage()==voicePage)&&visualDetail==null&&screenDetail==null);
   if(s==null){task.setVisibility(View.GONE);return;}updateText(guardianName,s.guardianName.isEmpty()?(experimentalHome?"":"✦ Pixel"):s.guardianName+"’s Guardian");guardianName.setTextSize(s.guardianName.isEmpty()?28:18);guardianBack.setVisibility(s.guardianName.isEmpty()?View.GONE:View.VISIBLE);if(experimentalHome&&s.conversationRevision!=seenConversation){renderConversation(s.conversationJson);seenConversation=s.conversationRevision;}updateText(route,audioLabel(s));updateText(connection,active?"Voice connected":starting?"Connecting voice…":"Voice off");send.setEnabled(!s.typedSending);composer.setEnabled(!s.typedSending);
   if(s.typedFinished!=seenTypedFinished){seenTypedFinished=s.typedFinished;if(s.typedError.isEmpty()&&composer.getText().toString().trim().equals(s.typedLastSent)){composer.setText("");saveDraft();}}
   String progress=s.typedSending?"Sending…":!s.typedError.isEmpty()?s.typedError:s.task;task.setVisibility(s.typedSending||!s.typedError.isEmpty()?View.VISIBLE:View.GONE);updateText(task,progress);
@@ -546,8 +549,10 @@ public class MainActivity extends Activity {
  }
  @Override protected void onResume(){super.onResume();screenHostActive=true;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();if(clockWidget!=null&&launcherPager!=null)clockWidget.setActive(launcherPager.currentPage()==widgetsPage);if(weatherWidget!=null&&launcherPager!=null)weatherWidget.setActive(launcherPager.currentPage()==widgetsPage);if(galleryWidget!=null&&launcherPager!=null)galleryWidget.setActive(launcherPager.currentPage()==widgetsPage);handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onPause(){ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
- @Override public void onNewIntent(Intent i){super.onNewIntent(i);home();}
- @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(0,true);else if(experimentalHome&&chatMode){chatMode=false;home();}}
+ @Override public void onNewIntent(Intent i){super.onNewIntent(i);home();showHomeFor(i);}
+ /** HOME (boot, the Home button) lands on the launcher Home; other opens keep the conversation page. */
+ void showHomeFor(Intent intent){if(intent!=null&&intent.hasCategory(Intent.CATEGORY_HOME)&&launcherPager!=null)launcherPager.showPage(homePage,false);}
+ @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
  boolean macScreenEnabled(){return getPreferences(0).getBoolean("mac-screen-enabled",false);}
  void showMacCard(){

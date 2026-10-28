@@ -11,6 +11,7 @@ node --test \
  workspace/rose-agent/server/background-app-policy.test.mjs \
  workspace/rose-agent/server/owner-stop.test.mjs \
  workspace/rose-agent/server/server-stop-gate.test.mjs \
+ workspace/rose-agent/tests/home-launcher.test.mjs \
  workspace/experiments/phone-command-push/push.test.mjs \
  workspace/experiments/phone-command-push/delivery.test.cjs \
  workspace/experiments/phone-control-metrics/metrics.test.mjs \
@@ -20,6 +21,7 @@ python3 os/background-control/tests/test_stop_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_tray_contract.py
+python3 scripts/tests/test_release_manifest.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT
