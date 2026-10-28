@@ -406,21 +406,67 @@ def check_framework(path, config, aapt):
             text=True, check=True).stdout
     finally:
         extracted.unlink()
+    return framework_failures(dump, expected, config['identities']['appSignerSha256'])
+
+def compiled_values(dump, kind, name):
+    """Value blocks of one resource in `aapt dump --values resources` output, as [(config, header, body lines)].
+    Only `resource 0x...` rows count: the `spec resource` declarations listed before the values carry no value. A
+    block's body is the following lines indented deeper than its row, so it ends at the next resource, spec or config."""
+    blocks, config, current = [], None, None
+    for line in dump.splitlines():
+        indent = len(line) - len(line.lstrip())
+        if current is not None and line.strip() and indent > current[0]:
+            current[3].append(line.strip())
+            continue
+        current = None
+        header = re.match(r'\s*config (.+?) flags=', line)
+        if header:
+            config = header.group(1)
+            continue
+        row = re.match(rf'\s*resource 0x[0-9a-f]{{8}} [\w.]+:{kind}/{re.escape(name)}: ?(.*)$', line)
+        if row:
+            current = (indent, config, row.group(1), [])
+            blocks.append(current)
+    return [(c, h, body) for _, c, h, body in blocks]
+
+def default_value(dump, kind, name):
+    """(value, problem): the single default-config block; an override in another config or a malformed block is a
+    problem, never an empty or false value."""
+    blocks = compiled_values(dump, kind, name)
+    if [c for c, _, _ in blocks if c != '(default)']:
+        return None, f'{name} is overridden in config {sorted({c for c, _, _ in blocks if c != "(default)"})}'
+    if len(blocks) != 1:
+        return None, f'{name} has {len(blocks)} default values in framework-res'
+    _, header, body = blocks[0]
+    if kind == 'array':
+        count = re.fullmatch(r'Parent=0x[0-9a-f]{8}\(Resolved=0x[0-9a-f]{8}\), Count=(\d+)', body[0]) if header == '<bag>' and body else None
+        items = [re.fullmatch(r'#(\d+) \(Key=0x[0-9a-f]{8}\): \(string(?:8|16)\) "([^"]*)"', line) for line in body[1:]]
+        if not count or not all(items) or [int(i.group(1)) for i in items] != list(range(int(count.group(1)))):
+            return None, f'{name} is not a well-formed string array'
+        return [i.group(2) for i in items], None
+    values = [re.fullmatch(r'\(boolean\) (true|false)', line) for line in body]
+    if not header.startswith('t=0x12 ') or len(values) != 1 or not values[0]:
+        return None, f'{name} is not a well-formed boolean'
+    return values[0].group(1) == 'true', None
+
+def framework_failures(dump, expected, signer):
     failures = []
-    def array(name):
-        block = re.search(rf'array/{name}:.*?(?=\n\s*spec resource|\n\s*resource 0x|\Z)', dump, re.S)
-        return re.findall(r'"([^"]*)"', block.group(0)) if block else None
-    targets = array('config_pixelComputerControlTargets')
-    if targets is None or sorted(t.split(':')[0] for t in targets) != sorted(expected['computerControlTargets']):
+    targets, problem = default_value(dump, 'array', 'config_pixelComputerControlTargets')
+    if problem:
+        failures.append(problem)
+    elif sorted(t.split(':')[0] for t in targets) != sorted(expected['computerControlTargets']) or \
+            any(t.split(':', 1)[-1].lower() != signer.lower() for t in targets):
         failures.append(f'compiled computer-control targets are {targets}')
-    prototype = array('config_pixelComputerControlPrototypeAgents')
-    # A missing array means the dump was not understood; fail closed rather than read it as empty.
-    if expected['prototypeAgentsEmpty'] and prototype is None:
-        failures.append('compiled prototype agents not found in framework-res')
+    prototype, problem = default_value(dump, 'array', 'config_pixelComputerControlPrototypeAgents')
+    # A missing or unreadable array means the dump was not understood; fail closed rather than read it as empty.
+    if problem:
+        failures.append(problem)
     elif expected['prototypeAgentsEmpty'] and prototype:
         failures.append('compiled prototype agents are not empty')
-    locked = re.search(r'bool/config_pixelComputerControlLockedSessions:.*?\(bool\)\s*(\w+)', dump, re.S)
-    if not locked or (locked.group(1) == 'true') != expected['lockedSessions']:
+    locked, problem = default_value(dump, 'bool', 'config_pixelComputerControlLockedSessions')
+    if problem:
+        failures.append(problem)
+    elif locked != expected['lockedSessions']:
         failures.append('compiled locked-session switch differs from config')
     return failures
 

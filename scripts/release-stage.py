@@ -5,6 +5,9 @@ init               bind a state directory to one candidate (source revision, dev
 run STAGE -- CMD   run the next local stage under a non-blocking lock; record start and completion
 record STAGE       record evidence for an external stage (publication) that this tool does not run
 mark-interrupted   explicitly close a stage whose run died, so the same stage may run again
+resume             open a new state directory that carries the completed stages of a chain that failed at a
+                   builder stage, so that stage runs again on the same, hash-recorded artifacts (no rebuild);
+                   the failed chain is only read and stays as it is
 fail / abandon     explicit terminal outcomes; never inferred from missing or empty files
 status             derive RUNNING / INTERRUPTED / AWAITING / AWAITING_EXTERNAL / TERMINAL from receipts and lock
 
@@ -95,11 +98,18 @@ def replay(chain):
     if chain[0]['event'] != 'init':
         raise StateError('first receipt must be init')
     phase, stage, done = 'open', None, []
+    carrying = 'resumedFrom' in chain[0]
     for receipt in chain[1:]:
         event, name = receipt['event'], receipt.get('stage')
         expected = ORDER[len(done)] if len(done) < len(ORDER) else None
         if phase in ('failed', 'abandoned', 'complete'):
             raise StateError(f'receipt after terminal state: {event}')
+        # Carried stages come only first in a resumed chain, exactly as its init receipt lists them.
+        if event == 'carried' and carrying and phase == 'open' and name == expected \
+                and name in chain[0]['resumedFrom']['carriedStages']:
+            done.append(name)
+            continue
+        carrying = False
         if event == 'started' and phase == 'open' and name == expected:
             phase, stage = 'started', name
         elif event == 'interrupted' and phase == 'started' and name == stage:
@@ -300,6 +310,55 @@ def mark_interrupted(a):
         handle.close()
     return describe(a.state)
 
+def resume(a):
+    if not SHA1.fullmatch(a.source_revision):
+        raise StateError('resume needs a full source revision')
+    if LOCATION.get(a.stage) != 'builder' or a.stage == ORDER[0]:
+        raise StateError(f'{a.stage} cannot be resumed; only a builder stage after build')
+    source_chain, source_last = load_chain(a.source)
+    check_candidate(source_chain, a.source_revision)
+    if lock_view(a.source)['held']:
+        raise StateError('the source state is locked by a runner')
+    phase, _, done = replay(source_chain)
+    if phase != 'failed' or source_chain[-1].get('stage') != a.stage or ORDER[len(done)] != a.stage:
+        raise StateError(f'the source chain did not fail at {a.stage} after completing every earlier stage')
+    artifacts = [file_record(p) for p in a.artifact]
+    names = [r['name'] for r in artifacts]
+    if not artifacts or len(set(names)) != len(names):
+        raise StateError('resume needs each carried artifact once')
+    by_name = {r['name']: r for r in artifacts}
+    expected = {}
+    for item in a.expect:
+        name, _, digest = item.partition('=')
+        if not re.fullmatch(r'[0-9a-f]{64}', digest) or name not in by_name:
+            raise StateError(f'--expect must be NAME=SHA256 for a carried artifact: {name}')
+        if by_name[name]['sha256'] != digest:
+            raise StateError(f'{name} differs from its expected sha256; nothing resumed')
+        expected[name] = digest
+    # Outputs that the completed stages recorded must be carried unchanged.
+    for receipt in source_chain:
+        for output in receipt.get('outputs', []) if receipt.get('event') == 'completed' else []:
+            if by_name.get(output['name'], {}).get('sha256') != output['sha256']:
+                raise StateError(f'{output["name"]} differs from the source receipt; nothing resumed')
+    state = Path(a.state)
+    if state.exists() and any(state.iterdir()):
+        raise StateError('the new state directory must be new and empty')
+    state.mkdir(parents=True, exist_ok=True)
+    handle = acquire(state)
+    try:
+        receipt = {'kind': KIND, 'schemaVersion': SCHEMA, 'sequence': 0, 'previousSha256': None,
+            'candidate': source_chain[0]['candidate'], 'event': 'init', 'at': now(), 'stages': ORDER,
+            'resumedFrom': {'state': str(Path(a.source).resolve()), 'lastReceiptSha256': source_last,
+                'receipts': len(source_chain), 'failedStage': a.stage, 'carriedStages': done,
+                'artifacts': artifacts, 'expected': expected}}
+        release_receipts.write_once(state/'000-init.json', receipt)
+        chain, previous = [receipt], sha256_file(state/'000-init.json')
+        for name in done:
+            chain, previous = append(state, chain, previous, 'carried', stage=name, sourceReceiptSha256=source_last)
+    finally:
+        handle.close()
+    return describe(state)
+
 def terminal(a, event):
     if not REASON.fullmatch(a.reason):
         raise StateError('reason must be short plain text')
@@ -333,6 +392,11 @@ def main(argv=None):
     c = command('record', 'Record evidence for an external stage')
     c.add_argument('stage', choices=ORDER)
     c.add_argument('--evidence', type=Path, action='append', default=[])
+    c = command('resume', 'Carry the completed stages of a failed chain into a new state directory')
+    c.add_argument('stage', choices=ORDER, help='The failed builder stage to run again')
+    c.add_argument('--from', dest='source', type=Path, required=True, help='State directory of the failed chain')
+    c.add_argument('--artifact', type=Path, action='append', default=[], help='Carried file (hashed into the receipt)')
+    c.add_argument('--expect', action='append', default=[], help='NAME=SHA256 an artifact must match (e.g. from the run log)')
     c = command('mark-interrupted', 'Close a stage whose runner died')
     c.add_argument('stage', choices=ORDER)
     for name in ('fail', 'abandon'):
@@ -342,7 +406,7 @@ def main(argv=None):
     if getattr(a, 'command', None) and a.command[:1] == ['--']:
         a.command = a.command[1:]
     try:
-        report = {'init': init, 'run': run, 'record': record, 'mark-interrupted': mark_interrupted,
+        report = {'init': init, 'run': run, 'record': record, 'resume': resume, 'mark-interrupted': mark_interrupted,
             'fail': lambda a: terminal(a, 'failed'), 'abandon': lambda a: terminal(a, 'abandoned'),
             'status': lambda a: describe(a.state)}[a.command_name](a)
     except Locked as error:
