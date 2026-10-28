@@ -60,7 +60,7 @@
     "evidence": "Lead's read-only host inspection, 2026-10-28 (INFRA-ALPHA-082): reconcile receipt 0004-2026102804.json (written 2026-10-28T09:59:03Z) is the latest and none of its 15 entries has drifted; the immutable 2026102804 stage chain (000-init to 010-completed) names candidate ae9cfd4d; aapt and hashes of the integrated apps match 2804 (Rose Agent 302 01b184b4..., Calculator 4 9f46c1a2..., controller 28 f39936b1...). Rose Agent 303 never reconciled this tree. apps uses the order of the 2804 dispatch (scripts/tests/test_release_candidate_contract.py APPS), so the alpha dispatch passes exactly this list"
   },
   "hostEvidence": {
-    "probeReceiptSha256": "9c19b5cbcb731fb6dfc0eaf05845a6be1bc4a2a2990b4f650ff60a012c91750e",
+    "probeReceiptSha256": "e4aaa1d6b4576638cad93b6df747cbbed664d4d7d712d472f7a6962620315e2d",
     "lunch": {
       "BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE": "erofs",
       "HOST_OUT": "out-rose-cf-alpha/host/linux-x86",
@@ -72,8 +72,8 @@
       "TARGET_RELEASE": "cur"
     },
     "basis": "Values from a passing emulator-alpha.py probe on the builder under the lock: TARGET_PRODUCT, TARGET_BUILD_VARIANT, TARGET_BOARD_PLATFORM, PRODUCT_DEVICE, PRODUCT_OUT and HOST_OUT from get_build_var, and TARGET_RELEASE as exported by lunch into the shell (get_build_var returns it empty in this tree), with the alpha OUT_DIR. The failed first probe and the 081 diagnosis are not probe receipts. Until recorded, guard and builder fail closed",
-    "evidence": "Lead's probe (INFRA-ALPHA-094) on the prepared tree above, recipe 0f4a8db4, exit 0 with no treeFailures, 15:31:20 UTC; receipt /home/pixelbuild/rose-actions/alpha092-recipe-0f4a8db4/probe-receipt.json (readiness.json beside it). The probe's numeric run label 92 is not an Actions run or image identity. No compiler or build ran. 399568531456 bytes (372.1 GiB) free afterwards. Base ae9cfd4d, apps 302/4/28, OS delta f21bf683 and contract unchanged",
-    "probedSuccessorId": null
+    "evidence": "Probe of the recorded successor 1497d493... in the same run 40757989353 (INFRA-ALPHA-108 route, lunch only, no make): no tree failures; receipt alpha-source/b02dafbb.../successors/1497d493.../probe-rose-cf-alpha-40757989353.json, sha256 e4aaa1d6...; lunch identical to the earlier probe. History: the INFRA-ALPHA-094 probe 9c19b5cb... of the predecessor b02dafbb (delta f21bf683, recipe 0f4a8db4, 15:31:20 UTC) is not evidence for this delta. No compiler or image has run",
+    "probedSuccessorId": "1497d4930e2de56c1b1350cbee4dc7d47e035bf605d3d17c71029d6da1e38623"
   },
   "preparation": {
     "root": "/home/pixelbuild/rose-actions/alpha-source",
@@ -162,9 +162,10 @@
     "basis": "The immutable preparation the build uses (alpha-source/<preparationId>/tree with preparation.json), recorded after the lead runs prepare and a probe passes against it. Until then guard and builder fail closed; the build never falls back to the retained Pixel tree",
     "evidence": "Lead's actual run (INFRA-ALPHA-094) with recipe 0f4a8db4: prepare succeeded 15:16:05 UTC into /home/pixelbuild/rose-actions/alpha-source/b02dafbb.../tree. The first full verify-prepared failed only on build/make/target/product/media_system.mk and build/make/target/product/generic/Android.bp: bytes equal the contract after hashes, mode 0600 instead of the recorded 0644 (git apply under umask 0077). The lead restored only those two files to their recorded 0644 under the lock (mode-restoration.json; bytes, manifest and receipt unchanged; first attempt archived in alpha092-recipe-0f4a8db4/verify-attempt1). That host repair is historical and distinct from the source fix in this recipe, which restores recorded modes during preparation. The rerun full verify-prepared exited 0 with no differences This preparation and its probe bind the earlier delta f21bf683 (contract c825aa19, patch e000da0d) and stay as historical evidence of that source; after the ALPHA-099 delta (156ccb8e) its receipt osDeltaCommit no longer matches preparation.osDelta, so verify-prepared, guard and build refuse it until the lead records a successor preparation and probe.",
     "successor": {
-      "successorId": null,
-      "receiptSha256": null,
-      "basis": "The successor the build uses (INFRA-ALPHA-104), recorded by the lead after emulator-alpha.py prepare-successor succeeds on the builder and a probe of that successor passes (hostEvidence.probedSuccessorId). Until then guard and builder fail closed; preparationId above stays the predecessor's tree location, never relabelled as the new delta"
+      "successorId": "1497d4930e2de56c1b1350cbee4dc7d47e035bf605d3d17c71029d6da1e38623",
+      "receiptSha256": "5ea7f21660c4dc13a1c427cf892a5da295be09154b286ab39701bc230a3af5f1",
+      "basis": "The successor the build uses (INFRA-ALPHA-104), recorded by the lead after emulator-alpha.py prepare-successor succeeds on the builder and a probe of that successor passes (hostEvidence.probedSuccessorId). Until then guard and builder fail closed; preparationId above stays the predecessor's tree location, never relabelled as the new delta",
+      "evidence": "Lead's Actions run 40757989353 (job 123062259059, mode emulator-alpha-successor, recipe eca1fef9), completed 2026-10-28 20:15:45 UTC: prepare-successor moved b02dafbb in place to delta 156ccb8e (contract a9c757c0) by incremental c9350590 (alreadyTransitioned false, recoveredFrom null); the full re-hash of the successor passed (verdict OK, 0 failures); no make, compile, signing, publication or config write. Values from the run's summary.toRecord in the job log (INFRA-ALPHA-111); private evidence artifact 12847244920 (6205-byte zip, sha256 1b41e5be...87). The receipt is alpha-source/b02dafbb.../successors/1497d493.../successor.json on the builder"
     }
   },
   "imageVerification": {

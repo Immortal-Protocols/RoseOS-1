@@ -37,6 +37,10 @@ LUNCH = {'TARGET_PRODUCT': 'aosp_cf_x86_64_only_phone', 'TARGET_RELEASE': 'cur',
     'TARGET_BOARD_PLATFORM': 'vsoc_x86_64', 'PRODUCT_DEVICE': 'vsoc_x86_64_only', 'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only',
     'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86', 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE': 'ext4'}
 PIN = 'ab' * 32
+# The lead's measured successor and probe (Actions run 40757989353, job 123062259059; INFRA-ALPHA-111).
+MEASURED_SUCCESSOR = '1497d4930e2de56c1b1350cbee4dc7d47e035bf605d3d17c71029d6da1e38623'
+MEASURED_SUCCESSOR_RECEIPT = '5ea7f21660c4dc13a1c427cf892a5da295be09154b286ab39701bc230a3af5f1'
+MEASURED_PROBE = 'e4aaa1d6b4576638cad93b6df747cbbed664d4d7d712d472f7a6962620315e2d'
 SUCCESSOR_MISSING = ['prepared.successor.successorId', 'prepared.successor.receiptSha256',
     'hostEvidence.probedSuccessorId (a passing probe of the recorded successor)']
 CERT = PIN.upper()
@@ -1152,23 +1156,10 @@ class SuccessorTest(unittest.TestCase):
 
 class CheckedInAlphaTest(unittest.TestCase):
     def test_checked_in_config_admits_the_guard_and_fails_closed_off_the_builder(self):
-        # The pinned preparation is the predecessor of the ALPHA-099 delta: the guard names the successor and its probe as
-        # missing until the lead records them; everything after it needs the real prepared tree.
+        # The measured successor and its probe are recorded: the guard passes; everything after it needs the real tree.
         result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard'], capture_output=True, text=True)
-        self.assertEqual((result.returncode, json.loads(result.stderr)['missing']), (4, SUCCESSOR_MISSING))
+        self.assertEqual(result.returncode, 0, result.stderr)
         builder = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'builder'], capture_output=True, text=True)
-        self.assertEqual((builder.returncode, json.loads(builder.stderr)['verdict']), (4, 'SETUP_MISSING'))
-        recorded = json.loads(json.dumps(CHECKED_IN))
-        recorded['prepared']['successor'].update(successorId='c' * 64, receiptSha256='d' * 64)
-        recorded['hostEvidence']['probedSuccessorId'] = 'c' * 64
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp)/'alpha.json'
-            path.write_text(json.dumps(recorded))
-            guard = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard', '--config', str(path)],
-                capture_output=True, text=True)
-            self.assertEqual(guard.returncode, 0, guard.stderr)
-            builder = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'builder', '--config', str(path)],
-                capture_output=True, text=True)
         self.assertEqual((builder.returncode, json.loads(builder.stderr)['verdict']), (1, 'FAIL'))
         self.assertIn('differs from preparation.successorOf.receiptSha256', builder.stderr)  # no predecessor on this runner
         successor = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'prepare-successor'], capture_output=True, text=True)
@@ -1177,7 +1168,47 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual((prepare.returncode, json.loads(prepare.stderr)['verdict']), (1, 'FAIL'))
         build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
             '--run-id', '1', '--build-timestamp', TS, '--receipt-dir', '/nonexistent/alpha-receipt'], capture_output=True, text=True)
-        self.assertEqual(build.returncode, 4, 'no build without the recorded successor and its probe')
+        self.assertEqual((build.returncode, json.loads(build.stderr)['verdict']), (1, 'FAIL'), 'no build without the real successor tree')
+
+    def test_measured_successor_and_probe_are_bound_exactly(self):
+        prepared, evidence, preparation = CHECKED_IN['prepared'], CHECKED_IN['hostEvidence'], CHECKED_IN['preparation']
+        self.assertEqual((prepared['successor']['successorId'], prepared['successor']['receiptSha256']),
+            (MEASURED_SUCCESSOR, MEASURED_SUCCESSOR_RECEIPT))
+        self.assertEqual((evidence['probeReceiptSha256'], evidence['probedSuccessorId']), (MEASURED_PROBE, MEASURED_SUCCESSOR))
+        self.assertEqual(evidence['lunch'], {**LUNCH, 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE': 'erofs'})
+        # The predecessor, delta, contract and incremental patch the run transitioned are the ones still pinned.
+        self.assertEqual((prepared['preparationId'], prepared['receiptSha256']),
+            ('b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87', '18582916250d5cc7236a4813fba0c758d9cee3c199681b0ac6ee11b953ca206e'))
+        self.assertEqual((preparation['successorOf']['preparationId'], preparation['successorOf']['receiptSha256']),
+            (prepared['preparationId'], prepared['receiptSha256']))
+        self.assertEqual((preparation['osDelta']['commit'], preparation['osDelta']['contractSha256'], INCREMENTAL['sha256']),
+            ('156ccb8ed0bbc871222bfa206009560b1c9907be', 'a9c757c0bf50cbdaf78e3987b03cce507800f63448f2cfb306f9565b8c53ba8b',
+             'c935059085f780afea423df1466d65526eb00fe15d5438bbabb928c755df7c67'))
+        self.assertEqual(sha(ROOT/preparation['osDelta']['contract']), preparation['osDelta']['contractSha256'])
+        self.assertEqual((CHECKED_IN['sourceBinding']['candidate'], CHECKED_IN['sourceBinding']['apps']), (BOUND, APPS))
+        self.assertEqual(CHECKED_IN['build']['minFreeGiB'], 300)
+        for text in (prepared['successor']['evidence'], evidence['evidence']):
+            self.assertIn('40757989353', text)
+        self.assertIn('9c19b5cb', evidence['evidence'])  # the predecessor's probe is history, named as such
+        self.assertEqual(alpha.missing_evidence(alpha.load()), [])
+
+    def test_a_stale_or_mismatched_successor_binding_fails_closed(self):
+        def missing(edit):
+            data = json.loads(json.dumps(CHECKED_IN))
+            edit(data)
+            with tempfile.TemporaryDirectory() as temp:
+                path = Path(temp)/'alpha.json'
+                path.write_text(json.dumps(data))
+                result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard', '--config', str(path)],
+                    capture_output=True, text=True)
+            return result.returncode, (json.loads(result.stderr).get('missing') if result.returncode else None)
+        probe_missing = ['hostEvidence.probedSuccessorId (a passing probe of the recorded successor)']
+        # A probe of another successor, or none, is not evidence for the recorded one.
+        self.assertEqual(missing(lambda d: d['hostEvidence'].update(probedSuccessorId='f' * 64)), (4, probe_missing))
+        self.assertEqual(missing(lambda d: d['hostEvidence'].update(probedSuccessorId=None)), (4, probe_missing))
+        # The old binding (no successor recorded) is refused by name.
+        self.assertEqual(missing(lambda d: d['prepared']['successor'].update(successorId=None, receiptSha256=None)), (4, SUCCESSOR_MISSING))
+        self.assertEqual(missing(lambda d: d['hostEvidence'].update(probeReceiptSha256=None)), (4, ['hostEvidence.probeReceiptSha256']))
 
     def test_successor_preflights_admit_only_the_bound_base_and_need_the_predecessor_on_the_builder(self):
         run = lambda *args: subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', *args], capture_output=True, text=True)
@@ -1208,7 +1239,7 @@ class CheckedInAlphaTest(unittest.TestCase):
                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch',
-            'prepared.preparationId', 'prepared.receiptSha256', *SUCCESSOR_MISSING, 'imageVerification.tools.lpunpack'])
+            'prepared.preparationId', 'prepared.receiptSha256', 'imageVerification.tools.lpunpack'])
         config = alpha.load()
         config['preparation'].pop('successorOf')
         config['hostEvidence']['lunch'] = dict(config['hostEvidence']['lunch'])
@@ -1225,7 +1256,7 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual((published['source'], published['mustExceed']), (BOUND, {'dev.pixel.voice': dict(APPS)['dev.pixel.voice']}))
         self.assertIn('apps 302/4/28', published['basis'])
         self.assertEqual(APPS, [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]])
-        self.assertEqual(CHECKED_IN['hostEvidence']['probeReceiptSha256'], '9c19b5cbcb731fb6dfc0eaf05845a6be1bc4a2a2990b4f650ff60a012c91750e')
+        self.assertEqual(CHECKED_IN['hostEvidence']['probeReceiptSha256'], MEASURED_PROBE)  # the successor's probe (INFRA-ALPHA-111)
         self.assertEqual((CHECKED_IN['prepared']['preparationId'], CHECKED_IN['prepared']['receiptSha256']),
             ('b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87', '18582916250d5cc7236a4813fba0c758d9cee3c199681b0ac6ee11b953ca206e'))
         config = alpha.load()
@@ -1375,7 +1406,7 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual(result['commands'][1][-1],
             'source build/envsetup.sh && lunch aosp_cf_x86_64_only_phone-cur-userdebug && m -j48 droid hosttar')
         self.assertEqual(result['environment'], {'OUT_DIR': 'out-rose-cf-alpha', 'BUILD_NUMBER': 'rose-cf-alpha-40680000003', 'BUILD_DATETIME': TS})
-        self.assertEqual(result['missingEvidence'], SUCCESSOR_MISSING)
+        self.assertEqual(result['missingEvidence'], [])
         self.assertEqual(result['cwd'], '/home/pixelbuild/rose-actions/alpha-source/b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87/tree')
 
     def test_adapter_never_reconciles_signs_publishes_cleans_or_uses_the_reference_scripts(self):
