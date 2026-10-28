@@ -230,15 +230,17 @@ public final class RoseConversationActivity extends Activity {
  void send(String action){if("talk".equals(action))clearNotice();startForegroundService(new Intent(this,VoiceService.class).setAction(action));}
 
  /** "Update Rose Agent": one authenticated GET /apps over the voice service's existing pinned connection.
-  * Reports only; it never downloads or installs, so it cannot interrupt a call. */
+  * An available newer version can be installed only by tapping Install (SelfUpdate admission, then the
+  * service's verified delivery); checking alone never downloads or installs. */
  void checkForUpdate(){
   android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Update Rose Agent").setMessage("Checking for updates…")
-   .setNegativeButton("Close",null).setNeutralButton("Check again",null).create();
-  dialog.setOnShowListener(d->{Button again=dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL);again.setOnClickListener(v->runUpdateCheck(dialog,again));runUpdateCheck(dialog,again);});
+   .setNegativeButton("Close",null).setNeutralButton("Check again",null).setPositiveButton("Install",null).create();
+  dialog.setOnShowListener(d->{Button again=dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL),install=dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+   install.setVisibility(View.GONE);again.setOnClickListener(v->runUpdateCheck(dialog,again,install));runUpdateCheck(dialog,again,install);});
   dialog.show();
  }
- void runUpdateCheck(android.app.AlertDialog dialog,Button again){
-  dialog.setMessage("Checking for updates…");again.setEnabled(false);
+ void runUpdateCheck(android.app.AlertDialog dialog,Button again,Button install){
+  dialog.setMessage("Checking for updates…");again.setEnabled(false);install.setVisibility(View.GONE);
   boolean busy=state!=null&&(state.active()||state.phase==ConversationState.Phase.CONNECTING);
   String self=getPackageName();long installed;
   try{installed=getPackageManager().getPackageInfo(self,0).getLongVersionCode();}catch(Exception e){installed=-1;}
@@ -252,8 +254,27 @@ public final class RoseConversationActivity extends Activity {
     finally{c.disconnect();}
    }catch(Exception e){status=0;android.util.Log.w("RoseUpdate","check failed: "+e.getClass().getSimpleName());}
    UpdateCheck result=UpdateCheck.evaluate(status,apps,version,self,busy);
-   runOnUiThread(()->{if(dialog.isShowing()){dialog.setMessage(result.message);again.setEnabled(true);}});
+   runOnUiThread(()->{if(!dialog.isShowing())return;
+    String attempt=selfUpdateText(result.offered,version);dialog.setMessage(result.message+(attempt.isEmpty()?"":"\n\n"+attempt));again.setEnabled(true);
+    if(result.state==UpdateCheck.State.AVAILABLE&&result.offeredId!=null){install.setVisibility(View.VISIBLE);install.setOnClickListener(v->startSelfUpdate(dialog,install,result));}});
   },"rose-update-check").start();
+ }
+ /** The owner's explicit Install: admitted by the service (voice idle, newer, not already installing, install
+  * capability present), then followed from its recorded state until the dialog closes. */
+ void startSelfUpdate(android.app.AlertDialog dialog,Button install,UpdateCheck offer){
+  VoiceService s=VoiceService.instance;if(s==null){dialog.setMessage("Rose Agent’s voice service isn’t running, so nothing was installed.");return;}
+  SelfUpdate.Admission a=s.installSelf(offer.offeredId,offer.offered);
+  dialog.setMessage(SelfUpdate.admissionText(a));if(a!=SelfUpdate.Admission.START)return;
+  install.setVisibility(View.GONE);
+  Runnable follow=new Runnable(){public void run(){if(!dialog.isShowing())return;
+   long installed;try{installed=getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){installed=-1;}
+   String text=selfUpdateText(offer.offered,installed);if(!text.isEmpty())dialog.setMessage(text);content.postDelayed(this,500);}};
+  content.postDelayed(follow,500);
+ }
+ /** The recorded attempt for this offered version only; an earlier attempt for another version says nothing. */
+ String selfUpdateText(long offered,long installed){
+  android.content.SharedPreferences p=getSharedPreferences("self-update",0);
+  return p.getLong("target",-1)==offered?SelfUpdate.attemptText(offered,p.getString("state",""),installed):"";
  }
  /** {apps:[...]} → records, or null when the body is not that shape. Unknown fields (e.g. deviceId) are ignored. */
  static java.util.List<UpdateCheck.Record> parseApps(String body){

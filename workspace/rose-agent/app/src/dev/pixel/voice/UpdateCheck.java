@@ -4,7 +4,7 @@ import java.util.List;
 
 /** Decides what "Update Rose Agent" may truthfully say from one authenticated GET /apps.
  * Pure logic (no Android types) so it is testable. It never installs anything: an available version
- * is only reported, and a version read failure or unreadable publication is never "no update".
+ * is reported, and installing it is a separate explicit step (SelfUpdate), and a version read failure or unreadable publication is never "no update".
  * Record fields follow delivery/publish.mjs: id (APK SHA-256), label, packageName, versionCode, sha256. */
 final class UpdateCheck {
  enum State { NO_UPDATE, AVAILABLE, UNAVAILABLE, ERROR }
@@ -13,7 +13,7 @@ final class UpdateCheck {
   final String id,label,packageName,sha256;final Object versionCode;
   Record(String id,String label,String packageName,Object versionCode,String sha256){this.id=id;this.label=label;this.packageName=packageName;this.versionCode=versionCode;this.sha256=sha256;}
  }
- final State state;final long offered,installed;final String message;
+ final State state;final long offered,installed;final String message;String offeredId;
  private UpdateCheck(State state,long offered,long installed,String message){this.state=state;this.offered=offered;this.installed=installed;this.message=message;}
 
  /** status: HTTP status, or 0 when the request failed before a response. apps: parsed entries, or
@@ -30,7 +30,8 @@ final class UpdateCheck {
   boolean hash=mine.id!=null&&mine.id.matches("[a-f0-9]{64}")&&mine.id.equals(mine.sha256);
   if(offered<=0||!hash)return new UpdateCheck(State.UNAVAILABLE,-1,installed,"The published Rose Agent update record is incomplete, so it can’t be offered.");
   if(offered<=installed)return new UpdateCheck(State.NO_UPDATE,offered,installed,"Rose Agent is up to date (version "+installed+").");
-  return new UpdateCheck(State.AVAILABLE,offered,installed,"Version "+offered+" is available (installed "+installed+"). Installing from here isn’t enabled yet"+(voiceBusy?"; nothing will interrupt this call.":"."));
+  UpdateCheck available=new UpdateCheck(State.AVAILABLE,offered,installed,"Version "+offered+" is available (installed "+installed+")."+(voiceBusy?" Install after this call ends; nothing will interrupt it.":""));
+  available.offeredId=mine.id;return available;
  }
  private static UpdateCheck error(long installed,String message){return new UpdateCheck(State.ERROR,-1,installed,message);}
  /** A positive whole versionCode; anything else (fraction, string, missing, overflow) is invalid. */

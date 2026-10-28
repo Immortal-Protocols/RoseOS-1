@@ -284,6 +284,23 @@ public class VoiceService extends Service {
  static String read(InputStream in)throws IOException{ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)b.write(buf,0,n);in.close();return b.toString("UTF-8");}static String hex(byte[] a){StringBuilder s=new StringBuilder();for(byte b:a)s.append(String.format("%02x",b));return s.toString();}
  public void deliveryStatus(String message){getSharedPreferences("delivery",0).edit().putString("status",message).apply();}
  final java.util.concurrent.atomic.AtomicBoolean installing=new java.util.concurrent.atomic.AtomicBoolean(false);
+ /** A voice session is active or connecting; installing Rose Agent would replace this app and end it. */
+ boolean voiceBusy(){return live||connected||communicating;}
+ /** This app's installed versionCode, or -1 when it can't be read. */
+ long selfVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){return -1;}}
+ /** Explicit "Update Rose Agent" install of the offered record. Admission is decided here against the service's
+  * own voice state and the shared installing flag, so only one download/install runs at a time. */
+ SelfUpdate.Admission installSelf(String id,long version){
+  long installed=selfVersion();
+  SelfUpdate.Admission a=SelfUpdate.admit(id!=null&&id.matches("[a-f0-9]{64}")?version:-1,installed,voiceBusy(),installing.get(),getPackageManager().canRequestPackageInstalls());
+  if(a!=SelfUpdate.Admission.START)return a;
+  if(!installing.compareAndSet(false,true))return SelfUpdate.Admission.IN_PROGRESS;
+  recordSelfUpdate(version,"downloading");
+  requests.submit(()->{try{Delivery.installSelf(VoiceService.this,id,version,endpoint,ssl);}finally{installing.set(false);}});
+  return a;
+ }
+ /** The last explicit self-update attempt: its target version and state (see SelfUpdate.attemptText). */
+ void recordSelfUpdate(long target,String state){getSharedPreferences("self-update",0).edit().putLong("target",target).putString("state",state).apply();}
  ToneGenerator readyTone;
  /** Each voice view gets its own Bridge, bound to that view's generation: its asynchronous callbacks reach
   * the page only while that view is still the current one (CallbackOwner). */

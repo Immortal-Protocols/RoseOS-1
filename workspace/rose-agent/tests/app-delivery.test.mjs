@@ -2,6 +2,7 @@
 // backend replies. No device, provider or backend is used.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {loadPage} from './web-ui-harness.mjs';
 
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
@@ -45,4 +46,25 @@ test('every voice end reports its typed reason to native code',()=>{
  page.run(`ready=true;voiceLost('Mac restarted. Tap Talk to reconnect.');`);
  page.run(`ready=true;endConversation();`);
  assert.deepEqual(calls(page,'voiceLifecycle').filter(c=>c[0]==='cleanup').map(c=>c[1]),['start_timeout','other','cleanup']);
+});
+
+test('APP-UPDATER-002: explicit self-update is admitted by the service and verified before commit',()=>{
+ const dir=new URL('../app/src/dev/pixel/voice/',import.meta.url),src=n=>fs.readFileSync(new URL(n,dir),'utf8');
+ const delivery=src('Delivery.java'),voice=src('VoiceService.java'),activity=src('RoseConversationActivity.java'),receiver=src('InstallReceiver.java');
+ const generic=delivery.slice(delivery.indexOf('public static void install('),delivery.indexOf('static void installSelf('));
+ assert.ok(generic.indexOf('Use Update Rose Agent')>0&&generic.indexOf('Use Update Rose Agent')<generic.indexOf('createSession'),'the generic delivery path never installs Rose Agent itself');
+ const self=delivery.slice(delivery.indexOf('static void installSelf('),delivery.indexOf('static boolean sameSigners('));
+ const at=s=>{const i=self.indexOf(s);assert.ok(i>0,s);return i;};
+ assert.ok(at('SelfUpdate.verify(')<at('createSession'),'identity is verified before an installer session exists');
+ assert.ok(at('getPackageArchiveInfo(')<at('SelfUpdate.verify('),'the archive Android parses from the downloaded bytes is checked');
+ assert.ok(at('SelfUpdate.beforeCommit(version,a.selfVersion(),a.voiceBusy())')<at('session.commit('),'voice and version are rechecked right before commit');
+ assert.ok(at('abandonSession')>0,'a refused or failed attempt abandons its session');
+ assert.ok(!/canRequestPackageInstalls|ACTION_MANAGE_UNKNOWN_APP_SOURCES|setInstallerPackageName|grant/i.test(self),'the self path neither checks around nor changes install permission');
+ const admit=voice.slice(voice.indexOf('SelfUpdate.Admission installSelf('),voice.indexOf('void recordSelfUpdate('));
+ assert.ok(admit.indexOf('SelfUpdate.admit(')<admit.indexOf('installing.compareAndSet(false,true)'),'admission precedes taking the single install slot');
+ assert.match(admit,/voiceBusy\(\)/);assert.match(admit,/canRequestPackageInstalls\(\)/);
+ assert.match(receiver,/getLongExtra\(SELF_TARGET,-1\)/,'installer outcomes are recorded for the targeted version');
+ assert.match(activity,/install\.setOnClickListener\(v->startSelfUpdate\(dialog,install,result\)\)/,'Install runs only from the owner tapping it');
+ assert.ok(!/startSelfUpdate\(/.test(activity.slice(0,activity.indexOf('void checkForUpdate('))),'nothing starts an install on its own');
+ assert.match(activity,/p\.getLong\("target",-1\)==offered\?SelfUpdate\.attemptText/,'only an attempt for the offered version is shown');
 });
