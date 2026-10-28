@@ -102,6 +102,7 @@ def preflight(job, config, env, adapter):
             missing.append('versionBaselines')
         missing += [f'updater.{key}' for key in UPDATER_REQUIRED if not (config.get('updater') or {}).get(key)]
         missing += permission_apex.missing(config.get('permissionApex'))
+        missing += [f'systemUiTray.{key}' for key in SYSTEMUI_TRAY_REQUIRED if not (config.get('systemUiTray') or {}).get(key)]
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
@@ -571,6 +572,34 @@ def check_updater(path, config, aapt, apksigner=None):
         extracted.unlink()
     return failures
 
+SYSTEMUI_TRAY_REQUIRED = ('apkPath', 'markers')
+
+def check_systemui_tray(path, config):
+    """(failures, receipt): the Agent tray code compiled into the SystemUI APK of the target-files itself. The overlay
+    sources are only copied into frameworks/base; their dex names and literals in SystemUI (WindowManager-Shell is a
+    static library of it, and its proguard rules keep com.android.wm.shell.* class names and Log.w) show they built."""
+    spec = config.get('systemUiTray') or {}
+    missing = [f'systemUiTray.{key}' for key in SYSTEMUI_TRAY_REQUIRED if not spec.get(key)]
+    if missing:
+        raise SetupMissing(missing)
+    with zipfile.ZipFile(path) as archive:
+        if spec['apkPath'] not in archive.namelist():
+            return [f'SystemUI APK {spec["apkPath"]} is absent from the target-files'], None
+        data = archive.read(spec['apkPath'])
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as apk:
+            dexes = [apk.read(n) for n in sorted(apk.namelist()) if re.fullmatch(r'classes\d*\.dex', n)]
+    except zipfile.BadZipFile:
+        return ['SystemUI APK is not a readable APK archive'], None
+    receipt = {'apkPath': spec['apkPath'], 'sha256': hashlib.sha256(data).hexdigest(), 'dexFiles': len(dexes)}
+    if not dexes:
+        return ['SystemUI APK carries no classes*.dex, so the tray code cannot be read from this artifact'], receipt
+    absent = [m for m in spec['markers'] if not any(m.encode() in d for d in dexes)]
+    receipt['markers'] = [m for m in spec['markers'] if m not in absent]
+    if absent:
+        return [f'SystemUI dex lacks {absent}; the Agent tray lifecycle (AgentTrayLink, OS #85) is not compiled in'], receipt
+    return [], receipt
+
 def check_apps(path, policy, apksigner):
     result = subprocess.run([sys.executable, str(TARGET_FILES_VERIFIER), str(path), str(policy), '--apksigner', apksigner],
         capture_output=True, text=True)
@@ -619,12 +648,15 @@ def verify_build(a, config, cand, adapter):
     apex_tools = {}
     apex_failures, apex = check_permission_apex(target_files, config, apex_tools)
     failures += apex_failures
+    tray_failures, tray = check_systemui_tray(target_files, config)
+    failures += tray_failures
     if failures:
         raise CheckFailed('; '.join(failures))
     return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
         'Updater presence/identity/supporting XML/compiled channel config',
-        'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers'],
-        'permissionApex': apex, 'apexTools': apex_tools}
+        'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers',
+        'SystemUI Agent tray lifecycle code in dex'],
+        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray}
 
 def cert_sha256(pem):
     body = pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0]
@@ -758,6 +790,10 @@ def check_image_bytes(config, signed, policy_path, used):
         if updater and updater in archive.namelist() and hashlib.sha256(image_file(config, archive, updater, workdir, cache, used)).digest() \
                 != hashlib.sha256(archive.read(updater)).digest():
             failures.append(f'image bytes of {updater} differ from the checked target-files copy')
+        systemui = (config.get('systemUiTray') or {}).get('apkPath')
+        if systemui and systemui in archive.namelist() and hashlib.sha256(image_file(config, archive, systemui, workdir, cache, used)).digest() \
+                != hashlib.sha256(archive.read(systemui)).digest():
+            failures.append(f'image bytes of {systemui} differ from the checked target-files copy')
         apex = next((p for p in (config.get('permissionApex') or {}).get('paths', []) if p in archive.namelist()), None)
         if apex and hashlib.sha256(image_file(config, archive, apex, workdir, cache, used)).digest() != hashlib.sha256(archive.read(apex)).digest():
             failures.append(f'image bytes of {apex} differ from the checked target-files copy')
@@ -821,6 +857,8 @@ def verify_signed(a, config, cand, adapter):
         failures += check_updater(signed, config, tool(config, 'aapt'), tool(config, 'apksigner'))
         apex_failures, apex = check_permission_apex(signed, config, verifier_tools, tool(config, 'apksigner'))
         failures += apex_failures
+        tray_failures, tray = check_systemui_tray(signed, config)
+        failures += tray_failures
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
@@ -835,9 +873,9 @@ def verify_signed(a, config, cand, adapter):
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
             'Updater presence/identity/config/signer',
             'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
-            'image-embedded app/framework/Permission APEX bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'SystemUI Agent tray lifecycle code in dex', 'image-embedded app/framework/Permission APEX/SystemUI bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
-        'permissionApex': apex, 'imageTools': image_tools, 'verifierTools': verifier_tools}
+        'permissionApex': apex, 'systemUiTray': tray, 'imageTools': image_tools, 'verifierTools': verifier_tools}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)
     return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}

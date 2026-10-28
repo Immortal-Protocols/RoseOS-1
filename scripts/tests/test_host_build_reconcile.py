@@ -371,5 +371,82 @@ class PermissionReconcileTest(unittest.TestCase):
         self.assertTrue(target.read_bytes().endswith(b'// owner edit\n'))
         self.assertFalse(list(self.receipts.glob('*.json')))
 
+class TrayOverlayReconcileTest(unittest.TestCase):
+    """The checked-in tray overlay (OS #85) reaches frameworks/base through the sparse shadow: the stand-in patcher copies
+    os/overlays recursively and refuses a differing existing target, as apply-os-changes.py does. The previous candidate's
+    overlay (2026102805 source 7fb94ae6, before AgentTrayLink; fixtures/tray-2026102805) is installed first, so AgentTrayPrototype is task-owned and replaced while the
+    new AgentTrayLink is installed where nothing was; untracked files outside the sparse paths still reach the receipt."""
+    PROJECT = 'frameworks/base'
+    SHELL = 'libs/WindowManager/Shell/src/com/android/wm/shell'
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = self.root = Path(temp.name)
+        self.config = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['host']['integrate']['reconcile']
+        self.source, self.receipts, self.release = root/'R', root/'receipts', root/'release'
+        self.release.mkdir()
+        write(self.source/self.PROJECT/'core/res/res/values/config.xml', '<resources/>\n')
+        write(self.source/self.PROJECT/'libs/WindowManager/Shell/Android.bp', 'filegroup { name: "wm_shell-sources", srcs: ["src/**/*.java"] }\n')
+        git('init', '-q', cwd=self.source/self.PROJECT)
+        git('add', '-A', cwd=self.source/self.PROJECT)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'pinned', cwd=self.source/self.PROJECT)
+        self.overlay = SCRIPTS.parent/'os/overlays'/self.PROJECT/self.SHELL
+        self.current = {f.name: f.read_bytes() for f in self.overlay.iterdir()}
+        previous = SCRIPTS/'tests/fixtures/tray-2026102805/AgentTrayPrototype.java'
+        self.assertEqual(hashlib.sha256(previous.read_bytes()).hexdigest(), '2e3e86cb93f17aa2e3c56a4f0a004d19a8e37cf5fec24efb777f0b7df5e38c21')
+        self.previous = {**{n: d for n, d in self.current.items() if n != 'AgentTrayLink.java'}, previous.name: previous.read_bytes()}
+
+    def candidate(self, name, files):
+        candidate = self.root/name
+        for file, data in files.items():
+            (candidate/'os/overlays'/self.PROJECT/self.SHELL).mkdir(parents=True, exist_ok=True)
+            (candidate/'os/overlays'/self.PROJECT/self.SHELL/file).write_bytes(data)
+        write(candidate/'scripts/apply-os-changes.py', '''
+            import os, pathlib, sys
+            source, bundle = pathlib.Path(sys.argv[1]), pathlib.Path(__file__).resolve().parents[1]/'os/overlays'
+            for file in bundle.rglob('*'):
+                if not file.is_file():
+                    continue
+                target = source/file.relative_to(bundle)
+                if target.exists() and target.read_bytes() != file.read_bytes():
+                    sys.exit(f'Unexpected existing overlay target: {target}')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(file.read_bytes())''')
+        return candidate
+
+    def run_reconcile(self, candidate, label):
+        return reconcile.reconcile(self.source, candidate, self.release, [], self.receipts, [self.PROJECT],
+            self.config['integrationOwnedRoots'], self.config['sparsePaths'], label)
+
+    def test_agent_tray_link_and_updated_prototype_enter_the_receipt_and_source_tree(self):
+        self.assertIn('AgentTrayLink.java', self.current)
+        self.assertNotIn('AgentTrayLink.java', self.previous)
+        self.assertNotEqual(self.previous['AgentTrayPrototype.java'], self.current['AgentTrayPrototype.java'])
+        self.assertNotIn(self.SHELL, ' '.join(self.config['sparsePaths'][self.PROJECT]))  # reached as untracked files, not via sparse paths
+        self.run_reconcile(self.candidate('previous', self.previous), '2026102805')
+        record = self.run_reconcile(self.candidate('current', self.current), '2026102806')
+        link, prototype = (f'{self.PROJECT}/{self.SHELL}/{n}' for n in ('AgentTrayLink.java', 'AgentTrayPrototype.java'))
+        self.assertEqual(sorted(record['changed']), [link, prototype])
+        sha = lambda data: hashlib.sha256(data).hexdigest()
+        self.assertEqual((record['entries'][link]['before'], record['entries'][link]['after'], record['entries'][link]['action']),
+            (None, sha(self.current['AgentTrayLink.java']), 'installed'))
+        self.assertEqual((record['entries'][prototype]['before'], record['entries'][prototype]['after']),
+            (sha(self.previous['AgentTrayPrototype.java']), sha(self.current['AgentTrayPrototype.java'])))
+        for name, data in self.current.items():
+            self.assertEqual((self.source/self.PROJECT/self.SHELL/name).read_bytes(), data)
+        backup = self.receipts/f'0002-2026102806-backup/{prototype}'
+        self.assertEqual(backup.read_bytes(), self.previous['AgentTrayPrototype.java'])
+        self.assertEqual(self.run_reconcile(self.candidate('current', self.current), '2026102806-rerun')['changed'], [])
+
+    def test_owner_edit_to_the_tray_prototype_conflicts_and_the_link_is_not_installed(self):
+        self.run_reconcile(self.candidate('previous', self.previous), '2026102805')
+        target = self.source/self.PROJECT/self.SHELL/'AgentTrayPrototype.java'
+        target.write_bytes(target.read_bytes() + b'// owner edit\n')
+        with self.assertRaisesRegex(reconcile.Conflict, 'AgentTrayPrototype.java'):
+            self.run_reconcile(self.candidate('current', self.current), '2026102806')
+        self.assertFalse((self.source/self.PROJECT/self.SHELL/'AgentTrayLink.java').exists())
+        self.assertEqual(sorted(p.name for p in self.receipts.glob('*.json')), ['0001-2026102805.json'])
+
 if __name__ == '__main__':
     unittest.main()

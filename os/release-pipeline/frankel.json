@@ -170,12 +170,21 @@
           "dev.pixel.voice": 302
         },
         "basis": "Published Beta frankel-2026102804 (pixel-ota Latest until 2026-10-28 18:34:04 UTC, superseded by the verified 2026102805; apps 302/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME; its Rose Agent must also exceed every app-only version (appRelease: 303 and 304 delivered, 306 reserved). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
+      },
+      {
+        "build": "2026102805",
+        "source": "7fb94ae6ed535066d50879a99b7c8e427da8e853",
+        "buildTimestamp": 1793206861,
+        "mustExceed": {
+          "dev.pixel.voice": 305
+        },
+        "basis": "Published Beta frankel-2026102805 (pixel-ota Latest since 2026-10-28 18:34:04 UTC; apps 305/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 307 published). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
       }
     ]
   },
   "appRelease": {
     "packageName": "dev.pixel.voice",
-    "mustExceed": 306,
+    "mustExceed": 307,
     "published": {
       "versionCode": 302,
       "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
@@ -225,6 +234,22 @@
           "publicRelease": true
         },
         "basis": "INFRA-APP-102 app-only candidate c095566b (App #74 direct GitHub client, producer #76 and Latest-2805 #77; excludes the M008 dock fix #78): public prerelease rose-agent-306, release 427075167, run 40750475915, with a schemaVersion 1 receipt (frankel, universal, minSdk 29, minOsBuild 2026102804, minController 28; lead record 19:04 UTC). Delivered and immutable; never republished or relabelled"
+      },
+      {
+        "versionCode": 307,
+        "versionName": "307-dock-label-beta",
+        "sha256": "8fc7e46e32408a57d3f1f616d5c81a4b88aaa96b2f703b731bc79014bdfc4f60",
+        "size": 1393821,
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "candidate": "d27dded6acac8567ebe0084d928145521da4d3bf",
+        "run": 40765131690,
+        "release": 427169403,
+        "delivered": {
+          "route": "public GitHub prerelease rose-agent-307",
+          "at": "2026-10-28T20:40Z",
+          "publicRelease": true
+        },
+        "basis": "INFRA-APP-110 app-only candidate d27dded6 (dock-label fix), built, signed and published as prerelease rose-agent-307 (release 427169403) by run 40765131690 (workflow at e5c3eaa3, completed 20:40:55 UTC; lead record of the APK sha256, size and signer). Immutable; the reservation it consumed is removed"
       }
     ],
     "minimumTestedOs": {
@@ -240,7 +265,7 @@
       "minControllerVersion": 28,
       "basis": "INFRA-APP-102 / APP-GITHUB-002-SCHEMA-001: declared support policy for the public receipt's compatibility, a conservative floor on the published Beta and its controller (frankel 2026102804, controller 28), not inferred from minimumTestedOs and not a claim of phone acceptance. Signed 2804 OTA metadata: pre-device=frankel, post-build-incremental=2026102804; the app compares Build.DEVICE and Build.VERSION.INCREMENTAL. minSdk and abis are measured from each signed APK by the publisher"
     },
-    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 delivered through the authenticated catalog, 304 published on GitHub and catalog-delivered, 306 published on GitHub as the first direct-GitHub client) and outside other routes' reservations (305 is the 2026102805 OS candidate's), and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is provenance only, never an eligibility rule",
+    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 delivered through the authenticated catalog, 304 published on GitHub and catalog-delivered, 306 published on GitHub as the first direct-GitHub client, 307 published on GitHub) and outside other routes' reservations (305 is the 2026102805 OS candidate's, 308 the 2026102806 OS candidate's), and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is provenance only, never an eligibility rule",
     "publication": {
       "repository": "Immortal-Protocols/pixel-ota",
       "tag": "rose-agent-{versionCode}",
@@ -260,11 +285,11 @@
         "basis": "INFRA-HOME-098: bundled Rose Agent of the Frankel 2026102805 OS candidate 7fb94ae6 (admitted run 40741375683; excludes App #74). The app-only route may not reuse 305"
       },
       {
-        "versionCode": 307,
-        "versionName": "307-dock-label-beta",
+        "versionCode": 308,
+        "versionName": "308-home-tray-beta",
         "candidate": null,
-        "route": "app-only",
-        "basis": "INFRA-APP-110: the next app-only candidate, the direct GitHub client (#74, #76, #77) plus the merged OS M008 dock-label fix #78 (836204ec), without an OS rebuild; the lead records the exact SHA it dispatches. Only the app-only route may use 307"
+        "route": "os-release",
+        "basis": "INFRA-CANDIDATE-115: bundled Rose Agent of the Frankel 2026102806 OS candidate (the INFRA-CANDIDATE-115 merge on main, which cannot name its own commit; base e5c3eaa3 with OS #81/App #89 trial removal, #83 Home reuse and #85 tray lifecycle). The app-only route may not use 308"
       }
     ]
   },
@@ -347,5 +372,15 @@
     "containerSigner": "otaCertificate",
     "payloadKey": "avbPublicKey",
     "basis": "INFRA-HOME-098: OS #70 patches packages/modules/Permission 4d6005db RoleService (os/patches/rose-home-role-permission.patch) and ships in the com.android.permission APEX. The gate reads the target-files: exactly this module (no Google prebuilt), apex_manifest version from the pinned RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION (cur -> cp2a), the patch's setting and package constants in service-permission.jar, the payload AVB signature, and the payload key: the module's own key unsigned, avb.pem (avbPublicKeySha256) signed, with the container signed by releasekey (otaCertificateSha256), as generate-release.sh maps it. Derivations: scripts/tests/fixtures/permission-apex/README.md. Artifact inclusion only; selected HOME, boot and migration are runtime evidence"
+  },
+  "systemUiTray": {
+    "apkPath": "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk",
+    "markers": [
+      "Lcom/android/wm/shell/AgentTrayPrototype;",
+      "dev.pixel.voice.AgentTrayService",
+      "Lcom/android/wm/shell/AgentTrayLink;",
+      "Voice binding already released"
+    ],
+    "basis": "INFRA-CANDIDATE-115: the Agent tray overlays (os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell, OS #85 adds AgentTrayLink and changes AgentTrayPrototype) are only copied into frameworks/base; the gate reads the SystemUI APK's dex in the target-files and the system_ext image bytes. Pinned frameworks/base 84183aff: wm_shell-sources globs src/**/*.java into WindowManager-Shell, a static library of SystemUI (system_ext_specific, privileged); SystemUI's proguard keeps com.android.wm.shell.* class names and strips only verbose logs, so the class descriptors and the new Log.w literal survive. The last two markers exist only with OS #85; a 2805-shaped SystemUI has only the first two. Derivations: scripts/tests/fixtures/systemui-84183aff/README.md. Code inclusion only; screen-off/resume behavior is runtime evidence"
   }
 }
