@@ -94,9 +94,9 @@
       ]
     },
     "osDelta": {
-      "commit": "620d51601d9b3569ec0378787da677a06a8c2b65",
+      "commit": "f21bf68322b3fa0a8924840554ab3e9398f79125",
       "contract": "os/alpha/cuttlefish-product-contract.json",
-      "contractSha256": "fcb5f5e4dc29d36c6514fe09e947f78f25eabdcd2855391fa3310f1e335e1f91"
+      "contractSha256": "c825aa19d46e08fa59816d3b0b4b3588358b9df99e09e9b7ba476e1da70a7e9d"
     },
     "baseEvidence": {
       "resolvedManifest": {
@@ -115,7 +115,7 @@
       "frameworks/base",
       "packages/apps/Updater"
     ],
-    "basis": "INFRA-ALPHA-085 against the 084 interface (OS-ALPHA-001). Measured 2026-10-28 11:53Z on the builder's ext4: reflink unsupported; the selection without .repo, keys, releases, out, out-*, out_* and .git/.repo everywhere allocates 120.16 GiB (1,696,997 files), so copyBudgetGiB 150 includes metadata and slack, and build.minFreeGiB 300 must remain free after it. 6,680 symlinks: 6,543 resolve inside, 135 dangle (contained fixtures, kept), the two listed extracted-image links to /sys/kernel/debug are non-inputs and excluded by exact path and target; any other escape stops preparation. The resolved-manifest digest is to be read from the retained 2804 release directory before preparation; the policy digest is the 2804 background-policy.json. The delta and its changed files come from OS's contract at osDelta.commit"
+    "basis": "INFRA-ALPHA-085 against the 084 interface (OS-ALPHA-001). Measured 2026-10-28 11:53Z on the builder's ext4: reflink unsupported; the selection without .repo, keys, releases, out, out-*, out_* and .git/.repo everywhere allocates 120.16 GiB (1,696,997 files), so copyBudgetGiB 150 includes metadata and slack, and build.minFreeGiB 300 must remain free after it. 6,680 symlinks: 6,543 resolve inside, 135 dangle (contained fixtures, kept), the two listed extracted-image links to /sys/kernel/debug are non-inputs and excluded by exact path and target; any other escape stops preparation. The resolved-manifest digest is to be read from the retained 2804 release directory before preparation; the policy digest is the 2804 background-policy.json. The delta and its changed files come from OS's contract at osDelta.commit (OS-ALPHA-001 E006: build/make media_system.mk and target/product/generic/Android.bp, patch e000da0d)"
   },
   "prepared": {
     "preparationId": null,

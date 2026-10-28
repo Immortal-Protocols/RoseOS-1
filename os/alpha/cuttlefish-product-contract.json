@@ -10,7 +10,9 @@
  },
  "pinned": {
   "device/google/cuttlefish": "283645aacf6cdb56cc31a9362f54d412dbc132a1",
-  "build/make": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+  "build/make": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+  "build/soong": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+  "packages/apps/Seedvault": "7cfffed7ceeda60a10bf2a6d9818d6fda81828ba"
  },
  "base": {
   "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
@@ -23,15 +25,24 @@
    {
     "path": "os/patches/cuttlefish-alpha-no-updater.patch",
     "project": "build/make",
-    "sha256": "c643e50f154dd527ff46c9ff7b2702bb7accb08f23ae75eebb6186fb575c76d0",
+    "sha256": "e000da0d1247dfcb341bc97df3098a2ed57faed31af0e5a837733537ae567858",
     "apply": "git -C <preparedRoot>/build/make apply --check <patch> && git -C <preparedRoot>/build/make apply <patch>"
    }
   ],
   "changedFiles": [
    {
     "project": "build/make",
+    "path": "target/product/generic/Android.bp",
+    "change": "Adds Seedvault and its pinned required closure (LocalContactsBackup, com.stevesoltys.backup_allowlist, com.stevesoltys.backup_default-permissions, com.stevesoltys.backup_privapp_allowlist, default-permissions_app.grapheneos.backup.contacts) to aosp_shared_system_image deps only, so file_list_diff matches the media_system.mk Seedvault. No removal, allowlist or diff change; system_image_defaults untouched.",
+    "fixtureBeforeSha256": "ecf117e54e688472c9bd0706897638f3c52af77388adbad3687f07a3e1a09cb5",
+    "fixtureAfterSha256": "a8fd132718822798e00693d09492e4dce9e3b04922acf7434c24a1d2c3bb9bfa"
+   },
+   {
+    "project": "build/make",
     "path": "target/product/media_system.mk",
-    "change": "Removes only the RoseOS 'PRODUCT_PACKAGES += Updater' block; the upstream OFFICIAL_BUILD block stays and OFFICIAL_BUILD stays unset."
+    "change": "Removes only the RoseOS 'PRODUCT_PACKAGES += Updater' block; the upstream OFFICIAL_BUILD block stays and OFFICIAL_BUILD stays unset. Seedvault stays.",
+    "fixtureBeforeSha256": "3740f433a937882918750d7b209df8a5e570cecc8388bb2c9870b4a310f4a596",
+    "fixtureAfterSha256": "63f7639d0ecb87e6f08b2c4a99aa0a045b7f97fcf67521c1ccf72540963d8475"
    }
   ]
  },
@@ -41,7 +52,9 @@
    "handheld_system_ext.mk",
    "aosp_product.mk -> handheld_product.mk"
   ],
-  "systemImage": "aosp_cf.mk sets USE_SOONG_DEFINED_SYSTEM_IMAGE=true with aosp_shared_system_image (build/make target/product/generic/Android.bp), which lists no Updater; core/Makefile file_list_diff fails the build on system files installed by make but absent from that image (allowlist: init.environ.rc). Hence the Rose Updater line must not reach this target."
+  "systemImage": "aosp_cf.mk sets USE_SOONG_DEFINED_SYSTEM_IMAGE=true with aosp_shared_system_image (build/make target/product/generic/Android.bp), which lists no Updater; core/Makefile file_list_diff fails the build on system files installed by make but absent from that image (allowlist: init.environ.rc). Hence the Rose Updater line must not reach this target.",
+  "seedvault": "media_system.mk lists Seedvault (system priv-app, platform cert); its pinned required closure is 6 modules (Seedvault, LocalContactsBackup, three com.stevesoltys.backup_* prebuilt_etc, default-permissions_app.grapheneos.backup.contacts). None appears in any of the 69 build/make Android.bp files, so aosp_shared_system_image lacked it; the delta lists it there. A tree-wide search outside build/make was not possible (codeload archive 403, not retried); explicit deps are harmless if another path exists.",
+  "trayProperty": "aosp_shared_system_image -> system_image_defaults deps 'system-build.prop' -> build/soong build_prop product_config ':product_config' (merged soong.<DeviceProduct>.variables + extra.variables of the lunched product) -> core/soong_extra_config.mk PRODUCT_SYSTEM_PROPERTIES of that product -> gen_build_prop.py build_system_prop. The Rose line inherited from generic_system.mk is in that list; no override needed."
  },
  "updaterMode": "excluded-no-compatible-feed",
  "updaterEndpoint": null,
@@ -69,7 +82,8 @@
    "com.android.extensions.computercontrol",
    "RosePreinstall_dev_pixel_voice",
    "RosePreinstall_dev_pixel_calculator_agent",
-   "VirtualDeviceManager (with RELEASE_PACKAGE_COMPUTER_CONTROL=true)"
+   "VirtualDeviceManager (with RELEASE_PACKAGE_COMPUTER_CONTROL=true)",
+   "Seedvault"
   ],
   "PRODUCT_PACKAGES_absent": [
    "Updater"
@@ -84,7 +98,8 @@
    "PRODUCT/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk byte-identical to the dev.pixel.calculator.agent sha256 above",
    "SYSTEM_EXT/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk byte-identical to the dev.pixel.backgroundcontrol sha256 above",
    "framework-res config Agents/Targets matching the policy above",
-   "persist.wm.debug.pixel_agent_tray=1 in the system build.prop"
+   "persist.wm.debug.pixel_agent_tray=1 in the system build.prop",
+   "SYSTEM/priv-app/Seedvault/Seedvault.apk and SYSTEM/app/LocalContactsBackup/LocalContactsBackup.apk with their etc XML, as in the Frankel baseline"
   ],
   "absent": [
    "any */priv-app/Updater/* or */app/Updater/* path",
@@ -93,8 +108,8 @@
   ]
  },
  "knownRisks": [
-  "Pinned GrapheneOS media_system.mk lists Seedvault, a system priv-app that aosp_shared_system_image does not list; file_list_diff may reject it on Cuttlefish independently of Rose. Not changed here.",
-  "The tray property reaching a Soong-defined system image build.prop is expected, not verified."
+  "The tray property is shown reaching the generator input and output on fixtures; the built system build.prop still needs checking in the alpha image.",
+  "Seedvault closure: no reference outside build/make was searched (403 on the archive route); an unexpected extra Seedvault path would only duplicate an explicit dep."
  ],
  "pixelUnchanged": "apply-os-changes.py keeps applying updater-product-build-make.patch for Frankel; this patch is never applied by it and never to the retained Pixel root."
 }
