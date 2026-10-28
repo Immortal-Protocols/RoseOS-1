@@ -172,6 +172,15 @@ observed on this phone). This Permission module's HOME role has no configurable
 default; it falls back to the highest-priority HOME activity, and a tie produces
 a chooser (`HomeRoleBehavior.getFallbackHolderAsUser` at the pinned revision).
 
+Rose Agent never changes that choice: there is no role request, preferred-activity
+or wallpaper write. Its entries route in `MainActivity` (`HomeEntry`): a HOME
+intent shows Rose Home, and the app icon (MAIN/LAUNCHER) shows Rose Home with the
+Rose conversation (`RoseConversationActivity`) opened over it, so Back returns to
+Rose Home. Agent 302 (build 2026102804) kept the legacy voice page for the app
+icon, which is why its icon showed the blue "Tap to talk" screen. A phone whose
+owner kept another HOME app sees that app on HOME; Rose Home appears on HOME only
+when the owner selects Rose Agent in Settings > Apps > Default apps > Home app.
+
 ## Cuttlefish alpha product (no Updater)
 
 The first emulator alpha targets `aosp_cf_x86_64_only_phone-cur-userdebug`
