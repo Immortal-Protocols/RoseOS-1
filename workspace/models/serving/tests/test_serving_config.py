@@ -57,11 +57,30 @@ class ServingConfigTest(unittest.TestCase):
         self.assertEqual(int(arg(a100['container_spec']['args'], '--tensor-parallel-size')),
             a100['machine_spec']['acceleratorCount'])
 
-    def test_unresolved_image_blocks_deployment(self):
+    def test_image_pinned_by_digest_but_not_mirrored(self):
         for option in CONFIG['options']:
-            self.assertIsNone(option['container_spec']['imageUri'])
-            self.assertIsNone(option['runtime']['image_digest'])
+            self.assertIsNone(option['container_spec']['imageUri'])  # no Artifact Registry mirror exists
+        runtime = CONFIG['options'][0]['runtime']
+        digest = re.compile(r'^sha256:[0-9a-f]{64}$')
+        self.assertRegex(runtime['image_digest'], digest)
+        self.assertRegex(runtime['image_index_digest'], digest)
+        self.assertNotEqual(runtime['image_digest'], runtime['image_index_digest'])
+        self.assertEqual(runtime['image_platform'], 'linux/amd64')
+        self.assertIsNone(CONFIG['options'][1]['runtime']['image_digest'])
         self.assertIn('nothing deployed', CONFIG['status'])
+
+    def test_prompt_envelope_fits_context(self):
+        env = CONFIG['prompt_envelope']
+        self.assertEqual(env['max_model_len'], CONFIG['demo_assumptions']['max_model_len'])
+        self.assertEqual(env['acceptance_prompt_tokens_max']+env['acceptance_max_tokens']+env['slack_tokens'], env['max_model_len'])
+        self.assertTrue(any('12,288' in item and '2,048' in item for item in CONFIG['load_test']['accept_if']))
+
+    def test_single_attempt_and_verified_cleanup(self):
+        envelope = CONFIG['test_envelope']
+        self.assertEqual(envelope['attempts'], 1)
+        self.assertIn('any restart, retry or second deploy', envelope['alternatives_requiring_separate_scope'])
+        self.assertIn('aiplatform.endpoints.undeploy', CONFIG['cleanup']['operations'])
+        self.assertTrue(CONFIG['cleanup']['verify_with'])
 
     def test_no_credentials_in_config(self):
         text = json.dumps(CONFIG).lower()
