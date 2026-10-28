@@ -1,0 +1,100 @@
+{
+ "schemaVersion": 1,
+ "kind": "rose-cuttlefish-product-contract",
+ "basis": "OS-ALPHA-001. Source-only: pinned device/google/cuttlefish 283645aa and build/make b0f697df were read and the product chain evaluated on fixtures (os/tests/test_cuttlefish_alpha_product.py); no Android build, image or boot is claimed.",
+ "target": {
+  "lunch": "aosp_cf_x86_64_only_phone-cur-userdebug",
+  "product": "aosp_cf_x86_64_only_phone",
+  "device": "vsoc_x86_64_only",
+  "productMakefile": "device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk"
+ },
+ "pinned": {
+  "device/google/cuttlefish": "283645aacf6cdb56cc31a9362f54d412dbc132a1",
+  "build/make": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+ },
+ "base": {
+  "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+  "reconcileReceipt": "0004-2026102804.json",
+  "reconcileSha256": "db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0",
+  "requires": "An already independent source root holding the 2804 integration, including os/patches/updater-product-build-make.patch in build/make. Never the retained Pixel root."
+ },
+ "osDelta": {
+  "patches": [
+   {
+    "path": "os/patches/cuttlefish-alpha-no-updater.patch",
+    "project": "build/make",
+    "sha256": "c643e50f154dd527ff46c9ff7b2702bb7accb08f23ae75eebb6186fb575c76d0",
+    "apply": "git -C <preparedRoot>/build/make apply --check <patch> && git -C <preparedRoot>/build/make apply <patch>"
+   }
+  ],
+  "changedFiles": [
+   {
+    "project": "build/make",
+    "path": "target/product/media_system.mk",
+    "change": "Removes only the RoseOS 'PRODUCT_PACKAGES += Updater' block; the upstream OFFICIAL_BUILD block stays and OFFICIAL_BUILD stays unset."
+   }
+  ]
+ },
+ "inheritance": {
+  "aosp_cf.mk": [
+   "generic_system.mk -> handheld_system.mk -> media_system.mk",
+   "handheld_system_ext.mk",
+   "aosp_product.mk -> handheld_product.mk"
+  ],
+  "systemImage": "aosp_cf.mk sets USE_SOONG_DEFINED_SYSTEM_IMAGE=true with aosp_shared_system_image (build/make target/product/generic/Android.bp), which lists no Updater; core/Makefile file_list_diff fails the build on system files installed by make but absent from that image (allowlist: init.environ.rc). Hence the Rose Updater line must not reach this target."
+ },
+ "updaterMode": "excluded-no-compatible-feed",
+ "updaterEndpoint": null,
+ "apps": [
+  {
+   "package": "dev.pixel.voice",
+   "version": 302,
+   "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6"
+  },
+  {
+   "package": "dev.pixel.calculator.agent",
+   "version": 4,
+   "sha256": "9f46c1a2068acdaacc7436fa3f3f29d08938f2896de18948bb10fae6343fd1a8"
+  },
+  {
+   "package": "dev.pixel.backgroundcontrol",
+   "version": 28,
+   "sha256": "f39936b1c217504151aa79fe756d2ce0eda58a6014a6950a8979aaaef91b827a"
+  }
+ ],
+ "policySha256": "044b99e57fa97d73b77fc46a349c47f7f6003fa9a202558ad577d9a83a471423",
+ "productExpectations": {
+  "PRODUCT_PACKAGES_present": [
+   "PixelBackgroundControl",
+   "com.android.extensions.computercontrol",
+   "RosePreinstall_dev_pixel_voice",
+   "RosePreinstall_dev_pixel_calculator_agent",
+   "VirtualDeviceManager (with RELEASE_PACKAGE_COMPUTER_CONTROL=true)"
+  ],
+  "PRODUCT_PACKAGES_absent": [
+   "Updater"
+  ],
+  "PRODUCT_SYSTEM_PROPERTIES_present": [
+   "persist.wm.debug.pixel_agent_tray=1"
+  ]
+ },
+ "imageExpectations": {
+  "present": [
+   "PRODUCT/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk byte-identical to the dev.pixel.voice sha256 above",
+   "PRODUCT/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk byte-identical to the dev.pixel.calculator.agent sha256 above",
+   "SYSTEM_EXT/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk byte-identical to the dev.pixel.backgroundcontrol sha256 above",
+   "framework-res config Agents/Targets matching the policy above",
+   "persist.wm.debug.pixel_agent_tray=1 in the system build.prop"
+  ],
+  "absent": [
+   "any */priv-app/Updater/* or */app/Updater/* path",
+   "any app.seamlessupdate.client.xml (permissions, default-permissions, sysconfig)",
+   "any APK whose package is app.seamlessupdate.client"
+  ]
+ },
+ "knownRisks": [
+  "Pinned GrapheneOS media_system.mk lists Seedvault, a system priv-app that aosp_shared_system_image does not list; file_list_diff may reject it on Cuttlefish independently of Rose. Not changed here.",
+  "The tray property reaching a Soong-defined system image build.prop is expected, not verified."
+ ],
+ "pixelUnchanged": "apply-os-changes.py keeps applying updater-product-build-make.patch for Frankel; this patch is never applied by it and never to the retained Pixel root."
+}
