@@ -137,6 +137,12 @@ policy's final allowlist before applying. RoseOS's product baseline calls for a
 pinned app allowlist and explicit owner approval for installs, messages,
 purchases and account changes. The imported `--prototype-control` and
 `--locked-control` switches are historical capabilities, not release defaults.
+Every build with a background policy still applies
+`locked-control-frameworks-base.patch`. It adds the locked-session resources,
+their symbols and the owner-gated guards, with
+`config_pixelComputerControlLockedSessions=false`, so locked creation stays off.
+The retained tree and the release verifier both expect that state.
+`--locked-control` only switches the resource on.
 Their inclusion in source does not establish that broad control meets RoseOS's
 requirements. The current patcher installs the controller when policy is supplied;
 `--preinstall-apk` adds the policy-pinned Rose Agent and Calculator APKs to the
@@ -317,6 +323,12 @@ The host adapters implement the retained recipe:
   pristine, task-owned (according to its receipts) or under Rose-only roots, and
   backs each one up. Any owner change is a conflict and stops the run with
   nothing written.
+  - `patcher: trusted` runs this checkout's `apply-os-changes.py` against the
+    candidate's own `os/` bundle, with the hashes recorded. It is a recipe fix
+    for an already-pinned candidate whose patcher predates the default
+    locked-session patch.
+  - `adopt --path P --reason ...` adopts only the named conflicting files, for
+    example a makefile that differs only in package order.
 - **`host-sign.py`:** derives the release script from the source tree's
   `generate-release.sh`, each edit asserted to occur exactly once with hashes
   recorded:
@@ -358,7 +370,9 @@ One-time host steps, run during a coordinated builder window:
 2. `scripts/host-app-build.py stage <original inputs> /home/pixelbuild/rose-actions/public-assets <candidate>`
    stages the public connection inputs.
 3. `scripts/host-reconcile.py adopt ... --reason "..."` records the hand-made P1
-   integration as task-owned.
+   integration as task-owned. Rerun the read-only preview first, and use
+   `--path` for each remaining conflict that was reviewed; never adopt
+   everything blindly.
 
 The fake adapter,
 used only in `scripts/tests/test_release_pipeline.py`,

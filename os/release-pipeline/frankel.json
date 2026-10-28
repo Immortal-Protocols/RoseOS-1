@@ -93,6 +93,7 @@
           ]
         },
         "installedIdentities": "os/release-evidence/frankel-2026102701/expected-identities.json",
+        "patcher": "trusted",
         "applyArgs": [
           "--background-policy",
           "{policy}",
@@ -181,7 +182,7 @@
       "host.tools.simg2img": "Retained otatools simg2img referenced by the P1 verifier (existing output provenance); check existence, executable bit and version in the coordinated host window. Each run records the path and sha256 of the tools it actually used in verification.json imageTools",
       "host.tools.debugfs": "/usr/sbin/debugfs, used by the P1 independent image extraction; check existence and version in the coordinated host window",
       "host.sign.otatools": "Path copied by the successful P1 signing run (lead-supplied); check it exists under OUT_DIR after the build in the coordinated host window",
-      "reconcile adoption": "One-time: scripts/host-reconcile.py adopt ... --reason to record the hand-made P1 integration as task-owned"
+      "reconcile adoption": "One-time, after a fresh read-only preview: scripts/host-reconcile.py adopt ... --path P --reason R for each reviewed remaining conflict (e.g. order-only handheld_product.mk); never a blanket adoption"
     }
   }
 }

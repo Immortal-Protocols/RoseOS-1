@@ -78,6 +78,14 @@ def preprocessed_issues(apk):
             if offset % (4096 if native else 4):issues.append(f'{name} is not aligned; run zipalign -f -p 4')
     return issues
 
+# frameworks/base patches for every build with a background policy, in order. The locked-session patch adds
+# config_pixelComputerControlLockedSessions=false, its auth max-age, their symbols and the owner-gated guards
+# (installer, permission, settings and system screens block a session while the device is locked). With the
+# resource false, locked creation stays off; the release verifier requires the resource present and false.
+# Only --locked-control turns it on.
+BACKGROUND_FRAMEWORK_PATCHES = ['background-control-frameworks-base.patch', 'background-control-modern-frameworks-base.patch',
+    'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch']
+
 def preinstall_plan(policy, apks):
     """Map APKs to product preinstalls; each must be byte-identical to Rose Agent or a policy target."""
     pinned = {row['apkSha256']: row for row in [policy['voice'], *policy['targets']] if row.get('apkSha256')}

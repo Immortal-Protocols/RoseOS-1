@@ -1,6 +1,7 @@
 """host-app-build.py and host-reconcile.py with fake candidates and git source trees: public asset staging and
 digest checks, output capture by before/after sets, and receipt-based reconciliation that never overwrites
 owner changes."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -107,8 +108,13 @@ class SdkLayoutTest(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         source = self.source = self.root/'R'
-        for tool in ('aapt', 'aapt2', 'd8', 'zipalign'):
+        for tool in ('aapt', 'aapt2', 'zipalign'):
             write(source/'prebuilts/sdk/tools/linux/bin'/tool, '#!/bin/sh\nexit 0\n', 0o755)
+        # Like the prebuilt launcher: resolve symlinks to itself, then need lib/d8.jar or ../framework/d8.jar there.
+        write(source/'prebuilts/sdk/tools/linux/bin/d8', '#!/bin/sh\nprog="$0"\nwhile [ -h "$prog" ]; do prog=$(readlink "$prog"); done\n'
+            'dir=$(dirname "$prog")\nfor jar in "$dir/lib/d8.jar" "$dir/../framework/d8.jar"; do\n'
+            '  [ -r "$jar" ] && { echo "D8 from $jar"; exit 0; }\ndone\necho "d8: can\'t find d8.jar" >&2; exit 1\n', 0o755)
+        write(source/'prebuilts/sdk/tools/linux/lib/d8.jar', 'd8 jar')
         write(source/'prebuilts/sdk/tools/core-lambda-stubs.jar', 'stubs')
         write(source/'prebuilts/sdk/35/public/android.jar', 'android')
         write(source/'prebuilts/jdk/jdk21/linux-x86/bin/java', '#!/bin/sh\ntest "$1" = -jar && exit 0\n', 0o755)
@@ -117,7 +123,17 @@ class SdkLayoutTest(unittest.TestCase):
     def test_layout_links_existing_tools_and_runs_each(self):
         receipt = sdk_layout.install(self.root/'sdk', self.source, self.jar)
         tools = self.root/'sdk/build-tools/android-15'
-        self.assertTrue((tools/'d8').is_symlink() and (tools/'core-lambda-stubs.jar').is_symlink())
+        self.assertTrue((tools/'aapt2').is_symlink() and (tools/'core-lambda-stubs.jar').is_symlink())
+        # The copied launcher finds its JAR through the linked lib/d8.jar; the original launcher alone cannot.
+        self.assertFalse((tools/'d8').is_symlink())
+        self.assertEqual(os.readlink(tools/'lib/d8.jar'), str(self.source/'prebuilts/sdk/tools/linux/lib/d8.jar'))
+        self.assertIn('lib/d8.jar', subprocess.run([str(tools/'d8'), '--version'], capture_output=True, text=True, check=True).stdout)
+        self.assertNotEqual(subprocess.run([str(self.source/'prebuilts/sdk/tools/linux/bin/d8'), '--version'],
+            capture_output=True).returncode, 0)
+        os.symlink(self.source/'prebuilts/sdk/tools/linux/bin/d8', self.root/'linked-d8')
+        self.assertNotEqual(subprocess.run([str(self.root/'linked-d8'), '--version'], capture_output=True).returncode, 0)
+        self.assertEqual(receipt['d8Launcher']['copiedFrom'], str(self.source/'prebuilts/sdk/tools/linux/bin/d8'))
+        self.assertIn('build-tools/android-15/lib/d8.jar', receipt['files'])
         self.assertEqual((tools/'lib/apksigner.jar').read_text(), 'retained public apksigner jar')
         self.assertTrue(os.access(tools/'apksigner', os.X_OK))
         self.assertIn('platforms/android-35/android.jar', receipt['files'])
@@ -125,10 +141,11 @@ class SdkLayoutTest(unittest.TestCase):
             sdk_layout.install(self.root/'sdk', self.source, self.jar)
 
     def test_missing_existing_tool_installs_nothing(self):
-        (self.source/'prebuilts/sdk/tools/core-lambda-stubs.jar').unlink()
-        with self.assertRaisesRegex(SystemExit, 'core-lambda-stubs.jar'):
-            sdk_layout.install(self.root/'sdk', self.source, self.jar)
-        self.assertFalse((self.root/'sdk').exists())
+        for name in ('core-lambda-stubs.jar', 'linux/lib/d8.jar'):
+            (self.source/'prebuilts/sdk/tools'/name).unlink()
+            with self.assertRaisesRegex(SystemExit, name):
+                sdk_layout.install(self.root/'sdk', self.source, self.jar)
+            self.assertFalse((self.root/'sdk').exists())
 
 def git(*args, cwd):
     subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True)
@@ -208,6 +225,47 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.read('frameworks/base/core/res/res/values/config.xml'), '<resources p1="hand made"/>\n')
         self.run_reconcile('v1', '2026102901')
         self.assertEqual(self.read('frameworks/base/core/res/res/values/config.xml'), '<resources candidate="v1"/>\n')
+
+    def test_adoption_can_be_limited_to_named_conflicts(self):
+        write(self.source/'frameworks/base/core/res/res/values/config.xml', '<resources p1="hand made"/>\n')
+        write(self.source/'packages/apps/RosePreinstall/M/app.apk', 'voice p1')
+        def adopt(paths):
+            return reconcile.reconcile(self.source, self.candidate, self.release, ['v1'], self.receipts,
+                ['frameworks/base', 'build/make'], [], {}, 'adopt', 'adopt', 'order-only difference', only=paths)
+        with self.assertRaisesRegex(reconcile.Conflict, 'not current conflicts, nothing adopted: build/make/README'):
+            adopt(['frameworks/base/core/res/res/values/config.xml', 'build/make/README'])
+        self.assertFalse(list(self.receipts.glob('*.json')))
+        record = adopt(['frameworks/base/core/res/res/values/config.xml'])
+        self.assertEqual(record['adopted'], ['frameworks/base/core/res/res/values/config.xml'])
+        with self.assertRaisesRegex(reconcile.Conflict, 'RosePreinstall/M/app.apk'):  # still an owner change
+            reconcile.reconcile(self.source, self.candidate, self.release, ['v1'], self.receipts,
+                ['frameworks/base', 'build/make'], [], {}, 'apply')
+
+    def test_trusted_patcher_runs_against_the_candidate_bundle(self):
+        write(self.candidate/'os/pinned-manifest.xml', '<manifest/>\n')
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            script = Path(argv[1])
+            # The copied patcher reads os/ relative to itself: that must be the candidate's bundle.
+            self.assertEqual((script.resolve().parents[1]/'os').resolve(), (self.candidate/'os').resolve())
+            self.assertEqual(script.read_bytes(), (SCRIPTS/'apply-os-changes.py').read_bytes())
+            checked = subprocess.run([sys.executable, str(script), str(self.root/'missing'), '--installed-identities', 'x'],
+                capture_output=True, text=True)
+            self.assertIn('--installed-identities needs --background-policy', checked.stderr)  # its imports resolve
+            return subprocess.CompletedProcess(argv, 0, '', '')
+        record = reconcile.reconcile(self.source, self.candidate, self.release, ['v1'], self.receipts,
+            ['frameworks/base', 'build/make'], ['packages/apps/RosePreinstall'], {}, '2026102802', run=run, patcher='trusted')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(record['changed'], [])
+        self.assertEqual(record['patcher']['patcher'], 'trusted')
+        self.assertEqual(record['patcher']['sha256']['apply-os-changes.py'],
+            hashlib.sha256((SCRIPTS/'apply-os-changes.py').read_bytes()).hexdigest())
+        self.assertFalse((self.release/'reconcile-patcher').exists())
+        self.assertEqual(self.run_reconcile('v1', '2026102803')['patcher']['patcher'], 'candidate')
+        with self.assertRaisesRegex(reconcile.Conflict, 'unknown patcher'):
+            reconcile.reconcile(self.source, self.candidate, self.release, ['v1'], self.receipts,
+                ['frameworks/base'], [], {}, 'x', patcher='other')
 
     def test_retained_repositories_are_only_read(self):
         before = {p: subprocess.run(['git', '-C', str(self.source/p), 'worktree', 'list'], capture_output=True, text=True).stdout
