@@ -492,10 +492,22 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
 
 The resolved-manifest digest and the `lpunpack` and `fsck.erofs` paths, with
 their sha256 in `imageVerification.toolSha256`, were measured by the lead
-(INFRA-ALPHA-090). A different tool file fails the image gate. `prepared` and
-`hostEvidence` stay null until the lead records them from real runs, and until
-then the guard fails with exit 4 before the builder starts, so no dispatch can
-compile.
+(INFRA-ALPHA-090). A different tool file fails the image gate.
+
+`prepared` and `hostEvidence` hold the lead's measured run (INFRA-ALPHA-094):
+- **Preparation:** `b02dafbb…`, receipt `18582916…`, prepared with recipe
+  `0f4a8db4`.
+- **Verification:** a full `verify-prepared` passed with no differences.
+- **Probe:** passed with no tree failures; receipt `9c19b5cb…`. Its `lunch`
+  values include `BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE=erofs`.
+
+The first full verify had failed on the two patched files, which had mode 0600
+where the copy recorded 0644, because `git apply` ran under umask 0077. The lead
+restored those two modes on the host, which is recorded as a historical repair.
+Since then, `prepare` itself restores the recorded mode of exactly the declared
+changed files after the delta (`changedFileModes` in the receipt). Mode drift
+anywhere else still fails verification. Without these values the guard fails
+with exit 4 before the builder starts.
 
 The lead's sequence on the builder, through existing access, needs approved
 capacity (the copy budget plus 300 GiB free after it) and no other job holding
