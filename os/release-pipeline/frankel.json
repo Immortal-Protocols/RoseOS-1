@@ -175,7 +175,7 @@
   },
   "appRelease": {
     "packageName": "dev.pixel.voice",
-    "mustExceed": 304,
+    "mustExceed": 306,
     "published": {
       "versionCode": 302,
       "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
@@ -211,6 +211,20 @@
           "publicRelease": true
         },
         "basis": "INFRA-APP-096 app-only candidate a3d839e6: public prerelease rose-agent-304 (receipt and APK read back anonymously 2026-10-28 by INFRA-APP-102: the APK matches the receipt's sha256 and size and holds no native libraries) and catalog-verified at 17:27 UTC (lead record). Its receipt predates schemaVersion 1, so direct-GitHub clients report it unavailable; it is immutable and never republished or relabelled"
+      },
+      {
+        "versionCode": 306,
+        "versionName": "306-direct-github-beta",
+        "sha256": "23874658c1590472a1b687b198cb5d81f76134ee11b1a46bd5ba5611cfb3a2eb",
+        "size": 1393821,
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "candidate": "c095566b159b61417a7e9906408a50a518e69924",
+        "delivered": {
+          "route": "public GitHub prerelease rose-agent-306",
+          "at": "2026-10-28T19:04Z",
+          "publicRelease": true
+        },
+        "basis": "INFRA-APP-102 app-only candidate c095566b (App #74 direct GitHub client, producer #76 and Latest-2805 #77; excludes the M008 dock fix #78): public prerelease rose-agent-306, release 427075167, run 40750475915, with a schemaVersion 1 receipt (frankel, universal, minSdk 29, minOsBuild 2026102804, minController 28; lead record 19:04 UTC). Delivered and immutable; never republished or relabelled"
       }
     ],
     "minimumTestedOs": {
@@ -226,7 +240,7 @@
       "minControllerVersion": 28,
       "basis": "INFRA-APP-102 / APP-GITHUB-002-SCHEMA-001: declared support policy for the public receipt's compatibility, a conservative floor on the published Beta and its controller (frankel 2026102804, controller 28), not inferred from minimumTestedOs and not a claim of phone acceptance. Signed 2804 OTA metadata: pre-device=frankel, post-build-incremental=2026102804; the app compares Build.DEVICE and Build.VERSION.INCREMENTAL. minSdk and abis are measured from each signed APK by the publisher"
     },
-    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 delivered through the authenticated catalog, 304 published on GitHub and catalog-delivered) and outside other routes' reservations (305 is the 2026102805 OS candidate's), and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is provenance only, never an eligibility rule",
+    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 delivered through the authenticated catalog, 304 published on GitHub and catalog-delivered, 306 published on GitHub as the first direct-GitHub client) and outside other routes' reservations (305 is the 2026102805 OS candidate's), and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is provenance only, never an eligibility rule",
     "publication": {
       "repository": "Immortal-Protocols/pixel-ota",
       "tag": "rose-agent-{versionCode}",
@@ -246,11 +260,11 @@
         "basis": "INFRA-HOME-098: bundled Rose Agent of the Frankel 2026102805 OS candidate 7fb94ae6 (admitted run 40741375683; excludes App #74). The app-only route may not reuse 305"
       },
       {
-        "versionCode": 306,
-        "versionName": "306-direct-github-beta",
+        "versionCode": 307,
+        "versionName": "307-dock-label-beta",
         "candidate": null,
         "route": "app-only",
-        "basis": "INFRA-APP-102: the next app-only candidate, App #74's direct GitHub update client plus this schemaVersion 1 publisher (any merge at or after it; the lead records the exact SHA it dispatches). Only the app-only route may use 306"
+        "basis": "INFRA-APP-110: the next app-only candidate, the direct GitHub client (#74, #76, #77) plus the merged OS M008 dock-label fix #78 (836204ec), without an OS rebuild; the lead records the exact SHA it dispatches. Only the app-only route may use 307"
       }
     ]
   },

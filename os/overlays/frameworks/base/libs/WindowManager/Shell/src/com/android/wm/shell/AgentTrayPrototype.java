@@ -51,7 +51,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     }
 
     private boolean handleTouch(MotionEvent event) {
-        if (view == null || voice == null || screenOff || user != 0
+        if (view == null || voice == null || screenOff || link.user() != 0
                 || context.getSystemService(KeyguardManager.class).isKeyguardLocked()) {
             controls.cancel();
             return false;
@@ -67,7 +67,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         long now = SystemClock.elapsedRealtime();
         if (now - lastCommandAt >= 600) {
             lastCommandAt = now;
-            send(command);
+            if (!send(command)) link.disconnected();
             Log.i(TAG, "Status tap command=" + command);
         }
         return true;
@@ -75,16 +75,16 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private final Context context;
     private final Handler handler = new Handler(Looper.getMainLooper());
     // One pending retry at most; screen, user and binding events would otherwise each start a chain.
-    private final Runnable retryBind = this::bind;
+    private final Runnable retryBind = () -> this.link.retry(ActivityManager.getCurrentUser());
     private final WindowManager windows;
     private Messenger voice;
-    private boolean bound, listening, muted, connected, screenOff;
-    private int user = -1;
+    private boolean listening, muted, connected, screenOff;
     private float input, output;
     private long observed;
     private Waves view;
     private final Messenger reply = new Messenger(new Handler(Looper.getMainLooper(), message -> {
-        if (message.what != 100 || !trusted(message.sendingUid)) return true;
+        // A reply queued before screen-off unsubscribed must not repopulate the suspended tray.
+        if (message.what != 100 || !this.link.subscribed() || !trusted(message.sendingUid)) return true;
         Bundle data = message.getData();
         if (data.getInt("protocolVersion") != 1) return true;
         listening = data.getBoolean("listening");
@@ -100,12 +100,37 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
             voice = new Messenger(binder);
-            send(1);
+            link.connected();
         }
-        @Override public void onServiceDisconnected(ComponentName name) { clearAudio(); }
-        @Override public void onBindingDied(ComponentName name) { rebind(); }
-        @Override public void onNullBinding(ComponentName name) { rebind(); }
+        @Override public void onServiceDisconnected(ComponentName name) { link.disconnected(); }
+        @Override public void onBindingDied(ComponentName name) { link.bindingDied(); }
+        @Override public void onNullBinding(ComponentName name) { link.bindingDied(); }
     };
+    // Subscribed only while the screen is on (OS-TRAY-LIFECYCLE-001); see AgentTrayLink.
+    private final AgentTrayLink link = new AgentTrayLink(new AgentTrayLink.Port() {
+        @Override public boolean bind(int user) {
+            try {
+                return context.bindServiceAsUser(new Intent().setComponent(new ComponentName(
+                        "dev.pixel.voice", "dev.pixel.voice.AgentTrayService")), connection,
+                        Context.BIND_AUTO_CREATE, UserHandle.of(user));
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Voice binding unavailable", e);
+                return false;
+            }
+        }
+        @Override public void unbind() {
+            try { context.unbindService(connection); }
+            catch (IllegalArgumentException e) { Log.w(TAG, "Voice binding already released", e); }
+        }
+        @Override public boolean send(int what) { return AgentTrayPrototype.this.send(what); }
+        @Override public void scheduleRetry() {
+            handler.removeCallbacks(retryBind);
+            handler.postDelayed(retryBind, 3000);
+        }
+        @Override public void cancelRetry() { handler.removeCallbacks(retryBind); }
+        @Override public void resetState() { clearState(); }
+        @Override public void forgetService() { voice = null; }
+    });
 
     AgentTrayPrototype(Context source, RootTaskDisplayAreaOrganizer unused,
             DisplayInsetsController unusedInsets) {
@@ -124,30 +149,36 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         filter.addAction(Intent.ACTION_USER_SWITCHED);
         context.registerReceiver(new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent intent) {
-                if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) screenOff = true;
-                if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())
-                        || Intent.ACTION_USER_PRESENT.equals(intent.getAction())) screenOff = false;
-                if (Intent.ACTION_USER_SWITCHED.equals(intent.getAction())
-                        || Intent.ACTION_SCREEN_ON.equals(intent.getAction())
-                        || Intent.ACTION_USER_PRESENT.equals(intent.getAction())
-                        || Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
-                    bind();
-                    reconcile();
+                String action = intent.getAction();
+                if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                    screenOff = true;
+                    link.screenOff();
+                } else if (Intent.ACTION_SCREEN_ON.equals(action)
+                        || Intent.ACTION_USER_PRESENT.equals(action)) {
+                    screenOff = false;
+                    link.screenOn(ActivityManager.getCurrentUser());
+                } else if (Intent.ACTION_USER_SWITCHED.equals(action)) {
+                    link.userSwitched(ActivityManager.getCurrentUser());
+                } else {
+                    return;
                 }
+                reconcile();
             }
         }, filter, Context.RECEIVER_EXPORTED);
-        handler.post(() -> { bind(); reconcile(); });
+        handler.post(() -> {
+            if (!screenOff) link.screenOn(ActivityManager.getCurrentUser());
+            reconcile();
+        });
     }
 
     private boolean trusted(int uid) {
         try {
             return voice != null && uid == context.getPackageManager().getPackageUidAsUser(
-                    "dev.pixel.voice", user);
+                    "dev.pixel.voice", link.user());
         } catch (android.content.pm.PackageManager.NameNotFoundException e) { return false; }
     }
 
-    private void clearAudio() {
-        voice = null;
+    private void clearState() {
         connected = listening = muted = active = false;
         controls.cancel();
         input = output = 0;
@@ -155,38 +186,11 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         if (view != null) view.invalidate();
     }
 
-    private void rebind() {
-        if (bound) context.unbindService(connection);
-        bound = false;
-        clearAudio();
-        scheduleBind();
-    }
-
-    private void scheduleBind() {
-        handler.removeCallbacks(retryBind);
-        handler.postDelayed(retryBind, 3000);
-    }
-
-    private void bind() {
-        handler.removeCallbacks(retryBind);
-        int next = ActivityManager.getCurrentUser();
-        if (bound && next == user) return;
-        if (bound) { send(2); context.unbindService(connection); bound = false; }
-        clearAudio();
-        user = next;
-        try {
-            bound = context.bindServiceAsUser(new Intent().setComponent(new ComponentName(
-                    "dev.pixel.voice", "dev.pixel.voice.AgentTrayService")), connection,
-                    Context.BIND_AUTO_CREATE, UserHandle.of(user));
-        } catch (RuntimeException e) { Log.w(TAG, "Voice binding unavailable", e); }
-        if (!bound) scheduleBind();
-    }
-
-    private void send(int action) {
-        if (voice == null) return;
+    private boolean send(int action) {
+        if (voice == null) return false;
         Message message = Message.obtain(null, action);
         message.replyTo = reply;
-        try { voice.send(message); } catch (RemoteException e) { clearAudio(); }
+        try { voice.send(message); return true; } catch (RemoteException e) { return false; }
     }
 
     private int dp(float value) {
@@ -194,7 +198,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     }
 
     private void reconcile() {
-        boolean visible = !screenOff && user == 0
+        boolean visible = !screenOff && link.user() == 0
                 && !context.getSystemService(KeyguardManager.class).isKeyguardLocked();
         if (!visible) {
             if (view != null) windows.removeViewImmediate(view);

@@ -10,11 +10,11 @@ public class MainActivity extends Activity {
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
  boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
- LauncherPager launcherPager;LinearLayout homePageDots;final ArrayList<TextView> pageDots=new ArrayList<>();
+ LauncherPager launcherPager;LinearLayout homePageDots;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
- final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
+ final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){packageGeneration++;if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
  /** Home visual card trial. false removes the card, its detail view and its Home options entry. */
  static final boolean VISUAL_CARDS=true;
  MacScreenPanel macPanel;FrameLayout screenDetail;boolean screenHostActive;
@@ -419,6 +419,7 @@ public class MainActivity extends Activity {
    launcherPager.addView(appPage);
   }
   setContentView(launcherPager);launcherPager.showPage(selected,false);launcherPager.requestApplyInsets();
+  builtHomeStamp=homeStamp();
  }
  /** A small square uses one of two columns; wide screens do not inflate it. */
  ViewGroup smallWidgetShelf(View... widgets){
@@ -550,7 +551,11 @@ public class MainActivity extends Activity {
  }
  @Override protected void onResume(){super.onResume();screenHostActive=true;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();if(clockWidget!=null&&launcherPager!=null)clockWidget.setActive(launcherPager.currentPage()==widgetsPage);if(weatherWidget!=null&&launcherPager!=null)weatherWidget.setActive(launcherPager.currentPage()==widgetsPage);if(galleryWidget!=null&&launcherPager!=null)galleryWidget.setActive(launcherPager.currentPage()==widgetsPage);handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onPause(){ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
- @Override public void onNewIntent(Intent i){super.onNewIntent(i);home();showHomeFor(i,true);}
+ @Override public void onNewIntent(Intent i){super.onNewIntent(i);if(!reuseHome(i))home();showHomeFor(i,true);}
+ /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
+ String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
+ /** An unchanged HOME or app-icon return keeps the built Home, pager, catalog, conversation page and draft (OS-HOME-REUSE-001). */
+ boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,launcherPager!=null&&launcherPager.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null||screenDetail!=null,experimentalHome!=getPreferences(0).getBoolean("conversation-home",true));}
  /** The same snapshot RoseConversationActivity and AgentTrayService build: no service is inactive, never guessed. */
  static ConversationState conversationState(){VoiceService s=VoiceService.instance;return s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);}
