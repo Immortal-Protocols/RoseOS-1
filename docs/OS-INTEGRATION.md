@@ -242,10 +242,36 @@ fail on those too. The alpha keeps Seedvault and adds that six-module closure to
 `aosp_shared_system_image` deps; the allowlist, `file_list_diff` and the Soong
 image switch are unchanged.
 
+The first alpha build (Actions run 40719075730) then failed `file_list_diff` on
+29 more system paths. Traced in the pinned sources, they come from six packages
+that make installs but `system_image_defaults` omits:
+
+| Package | Selected by | Also brings |
+| --- | --- | --- |
+| `GmsCompat` | `handheld_system.mk` | `GmsCompatConfig`, `GmsCompatLib` and two XMLs |
+| `LogViewer` | `handheld_system.mk` | one XML |
+| `NetworkLocation` | `handheld_system.mk` | its Rust JNI library and two XMLs |
+| `HardeningTestApp`, `SecurePasteTestSystemApp` | `base_system.mk` `PRODUCT_PACKAGES_DEBUG` (eng and userdebug) | — |
+| `VirtualDeviceManager` | RoseOS `generic_system.mk`, unconditionally | — |
+
+Soong lists `VirtualDeviceManager` only under `RELEASE_PACKAGE_COMPUTER_CONTROL`,
+which is off in the alpha's release config. Pinned Soong packages a dependency's
+`required` and `jni_libs` closure itself, so the alpha adds only these six roots
+to `aosp_shared_system_image`. The two test apps are added under
+`select(product_variable("debuggable"))`, matching make.
+
+`os/alpha/cuttlefish-alpha-099-from-f21bf683.patch` takes a tree already prepared
+from the previous delta (`f21bf683`) to the same bytes in one step.
+`os/tests/fixtures/cuttlefish-alpha/alpha099-missing-system-paths.txt` keeps the
+29 paths as a regression input: the test rebuilds them from the pinned module
+definitions and shows the image lacks them before the patch and covers them after.
+That is a model of make's install paths. The real `file_list_diff`, the
+compilation and the image remain build evidence.
+
 `os/patches/cuttlefish-alpha-no-updater.patch` therefore makes two changes in
 `build/make`: it removes only the RoseOS `PRODUCT_PACKAGES += Updater` block from
-`target/product/media_system.mk` and adds the Seedvault closure to
-`target/product/generic/Android.bp`.
+`target/product/media_system.mk` and adds the Seedvault closure and the six
+packages above to `target/product/generic/Android.bp`.
 Infra applies it with `git apply` to an already independent alpha source root that
 holds the 2804 integration, never to the retained Pixel root; on any other base
 `git apply --check` fails. `apply-os-changes.py` never applies it, so Frankel keeps

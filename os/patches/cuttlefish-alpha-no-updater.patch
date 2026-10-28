@@ -1,11 +1,12 @@
 diff --git a/target/product/generic/Android.bp b/target/product/generic/Android.bp
-index b2ee0fe..d5447a5 100644
+index b2ee0fe..c5bbd5e 100644
 --- a/target/product/generic/Android.bp
 +++ b/target/product/generic/Android.bp
-@@ -1186,5 +1186,13 @@ android_system_image {
+@@ -1186,5 +1186,26 @@ android_system_image {
          // DO NOT update this list. Instead, update the system_image_defaults to
          // sync with the base_system.mk
          "logpersist.start", // cf only
+-    ],
 +        // RoseOS Cuttlefish alpha only (OS-ALPHA-001): GrapheneOS media_system.mk installs Seedvault on
 +        // system, so this image lists it and its required closure for file_list_diff to match.
 +        "Seedvault",
@@ -14,7 +15,20 @@ index b2ee0fe..d5447a5 100644
 +        "com.stevesoltys.backup_default-permissions",
 +        "com.stevesoltys.backup_privapp_allowlist",
 +        "default-permissions_app.grapheneos.backup.contacts",
-     ],
++        // RoseOS Cuttlefish alpha only (OS-ALPHA-099): system packages make installs for this product
++        // that system_image_defaults omits. Soong adds each one's required and jni_libs closure.
++        "GmsCompat", // handheld_system: GmsCompatConfig, GmsCompatLib and its two XMLs
++        "LogViewer", // handheld_system
++        "NetworkLocation", // handheld_system: libnetwork_location_position_estimation_rust and two XMLs
++        "VirtualDeviceManager", // RoseOS generic_system.mk, unconditional (not RELEASE_PACKAGE_COMPUTER_CONTROL)
++    ] + select(product_variable("debuggable"), {
++        // base_system PRODUCT_PACKAGES_DEBUG: eng and userdebug only, as in make.
++        true: [
++            "HardeningTestApp",
++            "SecurePasteTestSystemApp",
++        ],
++        default: [],
++    }),
  }
 diff --git a/target/product/media_system.mk b/target/product/media_system.mk
 index 8043916..424844a 100644
