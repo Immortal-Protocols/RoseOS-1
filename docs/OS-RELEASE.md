@@ -407,11 +407,23 @@ when the owner marker matches this candidate exactly and no
 `.rose-actions-signed.json` marker exists; a successful signing writes that
 marker, and a signed release is never moved or overwritten.
 
-The derived release script keeps `KEY_DIR=keys`, so certificate and
-otacerts paths stay relative and reproducible. Only the
-`--extra_apex_payload_key` arguments become the absolute path of the
-release-local `keys` link: the APEX re-pack opens them from another working
-directory, where `keys/avb.pem` failed to resolve in run 40641163775.
+The derived release script keeps `KEY_DIR=keys`, so every path
+releasetools records stays relative and reproducible: otacerts.zip entry
+names, apkcerts and the misc_info AVB key paths. Some signing subprocesses run
+where `keys/...` does not resolve. This happened to the APEX payload re-pack in
+run 40641163775 and to signapk for an APK nested in an APEX in run 40643229025,
+while top-level APKs signed with the same relative paths. So key paths are made
+absolute only at the subprocess boundary:
+
+- `host-sign.py` writes key-path wrappers for `java` (signapk), `openssl`,
+  `avbtool` and `delta_generator` into the task-owned release directory. They
+  hold only paths, no secrets, and are removed after the script runs. Each one runs
+  the next real tool on `PATH` with any `keys/...` or `--opt=keys/...` argument
+  rewritten to the absolute path of the release-local `keys` link.
+- The derived script puts the wrapper directory first on `PATH` after
+  `KEY_DIR=keys` and after every later `export PATH=`.
+- The `--extra_apex_payload_key` arguments also name that absolute path.
+- The RAM cleanup trap is unchanged.
 
 Receipts hold hashes, times and exit codes, not command output, arguments or
 environment.
