@@ -138,6 +138,9 @@ not a claim that this older baseline is suitable for a current stable release.
   workspace, viewer/Stop contract and existing-phone update compatibility.
 - [Check what is actually verified](docs/VALIDATION.md): fresh results versus
   inherited evidence, pending acceptance and concrete blockers.
+- [Verify an alpha or beta build](docs/VERIFY.md): artifact and source inspection,
+  handback-gated Cuttlefish runtime capture, Fold-reference screenshot comparison
+  and the per-build checklist. Records live under `qa/verification/`.
 
 See [structure decisions](docs/ARCHITECTURE.md) for why these boundaries were chosen.
 
