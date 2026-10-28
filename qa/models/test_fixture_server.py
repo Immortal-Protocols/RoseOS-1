@@ -8,15 +8,19 @@ about the Rust client or any model.
 import http.client
 import json
 import os
+import shutil
 import socket
+import ssl
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
 from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fixture_server import SCENARIOS, SENTINEL, FixtureServer  # noqa: E402
+from fixture_server import REASONING_SENTINEL, SCENARIOS, SENTINEL, FixtureServer  # noqa: E402
 
 MODEL = 'qa-explicit-model-id'
 
@@ -25,9 +29,11 @@ class Fixture(unittest.TestCase):
     hold = 3.0
     drip = 0.01
     require_auth = False
+    tls = (None, None)
 
     def setUp(self):
-        self.server = FixtureServer(hold=self.hold, drip=self.drip, require_auth=self.require_auth)
+        self.server = FixtureServer(hold=self.hold, drip=self.drip, require_auth=self.require_auth, big_mib=2,
+                                    tls_cert=self.tls[0], tls_key=self.tls[1])
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
 
@@ -254,6 +260,93 @@ class Timing(Fixture):
         self.assertTrue(head.startswith(b'HTTP/1.1 200'))
         self.assertGreater(len(body), 0)
         self.assertRaises(ValueError, json.loads, body)
+
+
+class CycleBScenarios(Fixture):
+    def body(self, name, path_suffix='/chat/completions'):
+        url = urlsplit(self.server.url(name))
+        conn = http.client.HTTPConnection(url.hostname, url.port, timeout=5)
+        try:
+            conn.request('POST', url.path + path_suffix, json.dumps({'model': MODEL, 'messages': []}).encode(),
+                         {'Content-Type': 'application/json'})
+            r = conn.getresponse()
+            return r.status, dict(r.getheaders()), r.read()
+        finally:
+            conn.close()
+
+    def test_seq_selector_answers_each_request_in_order_and_repeats_last(self):
+        statuses = [self.body('seq:ok,500,401')[0] for _ in range(4)]
+        self.assertEqual(statuses, [200, 500, 401, 401])
+        names = [r['scenario'] for r in self.records()['requests']]
+        self.assertEqual(names, ['ok', '500', '401', '401'])
+
+    def test_reasoning_is_separate_from_content(self):
+        message = json.loads(self.body('reasoning')[2])['choices'][0]['message']
+        self.assertTrue(message['content'].startswith('fixture reply'))
+        self.assertIn(REASONING_SENTINEL, message['reasoning'])
+        message = json.loads(self.body('reasoning-only')[2])['choices'][0]['message']
+        self.assertIsNone(message['content'])
+        self.assertIn(REASONING_SENTINEL, message['reasoning'])
+
+    def test_invalid_utf8_body(self):
+        status, _, raw = self.body('invalid-utf8')
+        self.assertEqual(status, 200)
+        self.assertIn(b'\xff\xfe', raw)
+        self.assertRaises(UnicodeDecodeError, raw.decode, 'utf-8')
+
+    def test_oversized_body_is_valid_json_of_configured_size(self):
+        status, headers, raw = self.body('oversized')
+        self.assertEqual(int(headers['Content-Length']), len(raw))
+        self.assertEqual(len(json.loads(raw)['choices'][0]['message']['content']), 2 << 20)
+
+    def test_redirects_point_at_ok_on_cross_and_same_origin(self):
+        port = self.server.server_address[1]
+        status, headers, _ = self.body('redirect-cross-origin')
+        self.assertEqual((status, headers['Location']), (307, f'http://localhost:{port}/s/ok/v1/chat/completions'))
+        status, headers, _ = self.body('redirect-same-origin')
+        self.assertEqual(headers['Location'], f'http://127.0.0.1:{port}/s/ok/v1/chat/completions')
+
+    def test_raw_predict_path_is_recorded_verbatim(self):
+        self.body('ok', '/projects/p/locations/l/endpoints/e:rawPredict')
+        self.assertEqual(self.records()['requests'][0]['path'], '/s/ok/v1/projects/p/locations/l/endpoints/e:rawPredict')
+
+
+def make_self_signed(directory):
+    cert, key = os.path.join(directory, 'cert.pem'), os.path.join(directory, 'key.pem')
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert,
+                    '-days', '1', '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1'],
+                   check=True, capture_output=True)
+    return cert, key
+
+
+@unittest.skipUnless(shutil.which('openssl'), 'openssl not available')
+class UntrustedTls(Fixture):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix='models-qa-tls-')
+        cls.tls = make_self_signed(cls.tmp)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp)
+
+    def https(self, context):
+        conn = http.client.HTTPSConnection('127.0.0.1', self.server.server_address[1], timeout=5, context=context)
+        try:
+            conn.request('POST', '/s/ok/v1/chat/completions', b'{}', {'Content-Type': 'application/json'})
+            return conn.getresponse().status
+        finally:
+            conn.close()
+
+    def test_default_verification_rejects_and_fixture_counts_the_failed_handshake(self):
+        self.assertTrue(self.server.base.startswith('https://'))
+        with self.assertRaises(ssl.SSLCertVerificationError):
+            self.https(ssl.create_default_context())
+        self.assertTrue(self.wait_for(lambda: self.server.tls_handshake_failures == 1))
+        self.assertEqual(self.server.requests, [])
+
+    def test_explicitly_trusted_cert_is_served(self):
+        self.assertEqual(self.https(ssl.create_default_context(cafile=self.tls[0])), 200)
 
 
 if __name__ == '__main__':
