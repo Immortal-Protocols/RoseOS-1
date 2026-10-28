@@ -81,26 +81,52 @@ for(const backgroundEnabled of [true,false]){
  });
 }
 
-// The worker policy names each command it offers through control.py. Every offered mutation is
-// one the server refuses on that path, so a request such as "open ChatGPT on the phone" can only
-// end in the refusal above. Known defect: the policy still offers them, and no registered tool
-// launches an arbitrary installed app (catalog routes launch only their own package, in the
-// background workspace). Remove the todo once the policy and the registered tools agree.
-const readOnly=vm.runInNewContext(line('const readOnlyPhoneActions=').replace('const readOnlyPhoneActions=','').replace(/;$/,'')+'.add("home").add("back")');
-const offeredShellMutations=policy=>{
- const list=policy.match(/Phone tools: Use python3 rose-agent\/phone\/control\.py\. Tools: ([^\n]*?)\. Read /)?.[1]||'';
- const offered=[...list.replace(/\([^)]*\)/g,'').matchAll(/(?:^|, )([a-z_]+)/g)].map(m=>m[1]).filter(name=>!readOnly.has(name));
- if(/control\.py --display phone followed by the normal command/.test(policy))offered.push('--display phone');
- return offered;
+// The worker policy must not prescribe a shell command the server refuses: control.py over HTTP
+// can only observe. Its boundary names every refused control.py command, derived here from the
+// real CLI and the server's read-only set rather than restated.
+const readOnly=vm.runInNewContext(line('const readOnlyPhoneActions=').replace('const readOnlyPhoneActions=','').replace(/;$/,''));
+const cli=fs.readFileSync(new URL('../phone/control.py',import.meta.url),'utf8');
+const cliCommands=[...new Set([...cli.matchAll(/add_parser\('([a-z_]+)'/g)].map(m=>m[1])
+ .concat(...[...cli.matchAll(/for name in \(([^)]*)\):\n\s+\w*=?sub\.add_parser\(name\)/g)].map(m=>[...m[1].matchAll(/'([a-z_]+)'/g)].map(n=>n[1]))))];
+// messages_read goes to the Mac worker (/messages-worker/read), not /phone/commands.
+const refusedCli=cliCommands.filter(name=>name!=='messages_read'&&!readOnly.has(name)).sort();
+const policies=[true,false].flatMap(backgroundEnabled=>[true,false].map(appToolsEnabled=>({backgroundEnabled,appToolsEnabled,
+ text:taskSetupPolicy({backgroundEnabled,appToolsEnabled,controlPath:'control',visualPath:'visual'})})));
+const observationList=policy=>{
+ const list=policy.match(/Phone tools: python3 rose-agent\/phone\/control\.py can only observe the phone\. Observation commands: ([^\n]*?)\. Read /)?.[1];
+ assert.ok(list,'the phone tools section lists its observation commands');
+ return [...list.replace(/\([^)]*\)/g,'').matchAll(/(?:^|, )([a-z_]+)/g)].map(m=>m[1]);
 };
-test('the reported request shape is the one the worker policy prescribes',()=>{
- const policy=taskSetupPolicy({backgroundEnabled:true,appToolsEnabled:true,controlPath:'control',visualPath:'visual'});
- assert.match(policy,/To inspect or operate the physical phone screen[^.]*, use python3 rose-agent\/phone\/control\.py --display phone followed by the normal command/);
- assert.match(policy,/Phone tools: Use python3 rose-agent\/phone\/control\.py\. Tools: [^\n]*open_app PACKAGE_NAME/);
+
+test('the CLI derivation sees the real command set',()=>{
+ for(const name of ['open_app','tap_label','drag','screenshot','inspect_ui','home','messages_read'])assert.ok(cliCommands.includes(name),name);
+ assert.ok(refusedCli.includes('open_app')&&refusedCli.includes('home')&&!refusedCli.includes('screenshot'));
 });
-test('the worker policy offers no shell mutation the server refuses',{todo:'APP-BUG-OPEN-001: policy and registered tools disagree; see the Notion bug record'},()=>{
- for(const backgroundEnabled of [true,false]){
-  const policy=taskSetupPolicy({backgroundEnabled,appToolsEnabled:true,controlPath:'control',visualPath:'visual'});
-  assert.deepEqual(offeredShellMutations(policy),[],'background '+backgroundEnabled);
+
+test('the worker policy offers control.py only for observations the server runs',()=>{
+ for(const {backgroundEnabled,appToolsEnabled,text} of policies){
+  const label='background '+backgroundEnabled+', app tools '+appToolsEnabled;
+  const offered=observationList(text);
+  assert.deepEqual(offered.filter(name=>!readOnly.has(name)),[],label);
+  assert.ok(offered.includes('screenshot')&&offered.includes('inspect_ui'),label);
+  assert.doesNotMatch(text,/open_app PACKAGE_NAME|control\.py --display phone followed by the normal command|operate the physical phone screen/,label);
+  assert.doesNotMatch(text,/Use the normal phone tools: open_app/,label);
  }
+});
+
+test('the policy states the refusal boundary for every refused control.py command and the missing launch capability',()=>{
+ for(const {backgroundEnabled,appToolsEnabled,text} of policies){
+  const label='background '+backgroundEnabled+', app tools '+appToolsEnabled;
+  const boundary=text.match(/Phone control boundary: [^\n]*/)?.[0];
+  assert.ok(boundary,label);
+  const named=boundary.match(/control\.py commands with not_executed and actionExecuted=false: ([a-z_, ]+)\./)[1].split(', ').sort();
+  assert.deepEqual(named,refusedCli,'the boundary names exactly the refused CLI commands: '+label);
+  assert.match(boundary,/supersedes every other instruction, README or capability text/);
+  assert.match(boundary,/never claim it ran/);
+  assert.match(boundary,/no tool in this session opens an arbitrary installed app or operates the phone screen/);
+  assert.match(boundary,/not available here/);
+ }
+ const background=policies.find(p=>p.backgroundEnabled).text;
+ assert.match(background,/with --display phone they read the physical phone screen instead/);
+ assert.match(background,/The shell cannot open apps, tap, type, install, go home or act in any other way on either display/);
 });
