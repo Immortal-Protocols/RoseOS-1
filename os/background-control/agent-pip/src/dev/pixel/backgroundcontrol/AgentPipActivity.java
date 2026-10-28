@@ -19,7 +19,8 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 import java.lang.reflect.Method;
 
-/** A PiP presentation of the existing session. Closing it never closes the agent. */
+/** A PiP presentation of the existing session. Closing it never closes the agent. A Watch from Rose
+ * Agent binds it to one task and session (WatchBinding); it then closes rather than show any other. */
 public final class AgentPipActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private View mirror;
@@ -27,9 +28,14 @@ public final class AgentPipActivity extends Activity {
     private Object attached;
     private FrameLayout frame;
     private boolean visible;
+    private WatchBinding binding = WatchBinding.UNBOUND;
+    private WatchBinding attachedBinding;
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        // A recreated viewer keeps the pair it was bound to; its original intent is not re-read.
+        binding = saved != null && saved.containsKey(KEY_MODE) ? restore(saved) : fromIntent(getIntent());
+        if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             fail("Picture-in-picture is unavailable on this phone", null);
             return;
@@ -39,6 +45,7 @@ public final class AgentPipActivity extends Activity {
                 fail("Start an agent task first, then tap its notification to watch", null);
                 return;
             }
+            if (!binding.allows(Controller.id, Controller.taskId)) { unavailable(); return; }
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         getWindow().setDecorFitsSystemWindows(false);
@@ -90,7 +97,34 @@ public final class AgentPipActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        // An unbound reopen keeps the current Watch; a new Watch replaces it only once validated below.
+        binding = WatchBinding.next(binding, fromIntent(intent));
+        if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
+        if (visible) { handler.removeCallbacks(refresh); handler.post(refresh); }
         if (frame != null) frame.post(() -> enterFloatingView());
+    }
+
+    private static final String KEY_MODE = "watchMode", KEY_TASK = "watchTask", KEY_SESSION = "watchSession";
+    static WatchBinding fromIntent(Intent intent) {
+        if (intent == null) return WatchBinding.UNBOUND;
+        // getStringExtra returns null for a non-String value, which makes the Watch invalid.
+        return WatchBinding.fromExtras(intent.hasExtra(WatchBinding.EXTRA_TASK), intent.getStringExtra(WatchBinding.EXTRA_TASK),
+            intent.hasExtra(WatchBinding.EXTRA_SESSION), intent.getStringExtra(WatchBinding.EXTRA_SESSION));
+    }
+    private static WatchBinding restore(Bundle saved) {
+        if (!WatchBinding.Mode.BOUND.name().equals(saved.getString(KEY_MODE))) return WatchBinding.UNBOUND;
+        return WatchBinding.fromExtras(true, saved.getString(KEY_TASK), true, saved.getString(KEY_SESSION));
+    }
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putString(KEY_MODE, binding.mode.name());
+        if (binding.mode == WatchBinding.Mode.BOUND) { out.putString(KEY_TASK, binding.task); out.putString(KEY_SESSION, binding.session); }
+    }
+    /** The selected task is not the one in the agent view now. Close the view only; the work continues. */
+    private void unavailable() {
+        detach();
+        Toast.makeText(this, "That task is no longer in the agent view", Toast.LENGTH_SHORT).show();
+        finishAndRemoveTask();
     }
 
     private static void placeBelowWindow(View view) throws Exception {
@@ -106,14 +140,26 @@ public final class AgentPipActivity extends Activity {
         @Override public void run() {
             if (!visible || isFinishing() || setSession == null) return;
             Object current;
-            synchronized (Controller.class) { current = Controller.session; }
+            boolean allowed;
+            synchronized (Controller.class) {
+                current = Controller.session;
+                allowed = binding.allows(Controller.id, Controller.taskId);
+            }
             if (current == null) { finishAndRemoveTask(); return; }
-            if (current != attached) {
+            // Same session re-tagged to another task, or a different session: never follow it.
+            if (!allowed) { unavailable(); return; }
+            if (current != attached || !binding.equals(attachedBinding)) {
                 try {
                     setSession.invoke(mirror, current);
                     attached = current;
-                    android.util.Log.i("PixelAgentPip", "attached session=" + Controller.id);
+                    attachedBinding = binding;
                 } catch (Throwable error) { fail("The agent view could not attach", error); return; }
+                // The controller may have moved on while attaching; re-check before showing a frame.
+                synchronized (Controller.class) {
+                    allowed = Controller.session == current && binding.allows(Controller.id, Controller.taskId);
+                }
+                if (!allowed) { unavailable(); return; }
+                android.util.Log.i("PixelAgentPip", "attached session=" + Controller.id);
             }
             handler.postDelayed(this, 500);
         }
@@ -125,6 +171,7 @@ public final class AgentPipActivity extends Activity {
             catch (Throwable error) { android.util.Log.w("PixelAgentPip", "detach", Controller.root(error)); }
             attached = null;
         }
+        attachedBinding = null;
     }
     private void fail(String message, Throwable error) {
         if (error != null) android.util.Log.e("PixelAgentPip", message, Controller.root(error));

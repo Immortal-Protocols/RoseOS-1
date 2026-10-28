@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.voice" android:versionCode="298" android:versionName="298-first-update">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.voice" android:versionCode="306" android:versionName="306-direct-github-beta">
 <permission android:name="dev.pixel.voice.permission.MEMORY_REVIEW" android:protectionLevel="signature"/>
 <permission android:name="dev.pixel.voice.permission.MESSAGES_CONNECTION" android:protectionLevel="signature"/>
 <permission android:name="dev.pixel.voice.permission.MIGRATION_EXPORT" android:protectionLevel="signature"/>
@@ -35,6 +35,7 @@
 <provider android:name=".CameraMicrophoneProvider" android:authorities="dev.pixel.voice.camera-microphone" android:exported="true" android:permission="dev.pixel.voice.permission.CAMERA_CONTEXT"/>
 <provider android:name=".SettingsAgentProvider" android:authorities="dev.pixel.voice.agent" android:exported="true"/>
 <activity android:name=".ServerConnectionActivity" android:exported="false"/>
+<activity android:name=".RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
 <activity android:name=".PairingActivity" android:exported="false"/>
 <activity android:name=".SettingsAccessActivity" android:exported="false"/>
 <provider android:name=".GlassesPhotoProvider" android:authorities="dev.pixel.voice.glasses" android:exported="true"/>

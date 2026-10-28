@@ -1,0 +1,8 @@
+aliases: {
+  name: "aosp_current"
+  target: "cp2a"
+}
+default_containers: "product"
+default_containers: "system"
+default_containers: "system_ext"
+default_containers: "vendor"

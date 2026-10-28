@@ -1,0 +1,32 @@
+# INFRA-ALPHA-099, run 40719075730 (17:07:08Z): file_list_diff for aosp_shared_system_image, paths make installs
+# on the system partition that the Soong image lacked. Expanded path by path from Infra's exact family list
+# (app/X/X.apk(+oat/x86_64 odex/vdex) and the named XMLs and libraries), relative to the system partition.
+app/GmsCompat/GmsCompat.apk
+app/GmsCompat/oat/x86_64/GmsCompat.odex
+app/GmsCompat/oat/x86_64/GmsCompat.vdex
+app/GmsCompatConfig/GmsCompatConfig.apk
+app/GmsCompatLib/GmsCompatLib.apk
+app/GmsCompatLib/oat/x86_64/GmsCompatLib.odex
+app/GmsCompatLib/oat/x86_64/GmsCompatLib.vdex
+app/HardeningTestApp/HardeningTestApp.apk
+app/HardeningTestApp/oat/x86_64/HardeningTestApp.odex
+app/HardeningTestApp/oat/x86_64/HardeningTestApp.vdex
+app/SecurePasteTestSystemApp/SecurePasteTestSystemApp.apk
+app/SecurePasteTestSystemApp/oat/x86_64/SecurePasteTestSystemApp.odex
+app/SecurePasteTestSystemApp/oat/x86_64/SecurePasteTestSystemApp.vdex
+app/VirtualDeviceManager/VirtualDeviceManager.apk
+app/VirtualDeviceManager/oat/x86_64/VirtualDeviceManager.odex
+app/VirtualDeviceManager/oat/x86_64/VirtualDeviceManager.vdex
+etc/default-permissions/app.grapheneos.gmscompat.xml
+etc/permissions/app.grapheneos.logviewer.xml
+etc/permissions/app.grapheneos.networklocation.xml
+etc/sysconfig/app.grapheneos.gmscompat.xml
+etc/sysconfig/app.grapheneos.networklocation.xml
+lib64/libnetwork_location_position_estimation_rust.so
+priv-app/LogViewer/LogViewer.apk
+priv-app/LogViewer/oat/x86_64/LogViewer.odex
+priv-app/LogViewer/oat/x86_64/LogViewer.vdex
+priv-app/NetworkLocation/NetworkLocation.apk
+priv-app/NetworkLocation/oat/x86_64/NetworkLocation.odex
+priv-app/NetworkLocation/oat/x86_64/NetworkLocation.vdex
+priv-app/NetworkLocation/lib/x86_64/libnetwork_location_position_estimation_rust.so

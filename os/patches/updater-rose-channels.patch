@@ -1,0 +1,191 @@
+diff --git a/res/values/arrays.xml b/res/values/arrays.xml
+index f2eec6a..7d5af12 100644
+--- a/res/values/arrays.xml
++++ b/res/values/arrays.xml
+@@ -1,14 +1,15 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
++    <!-- RoseOS: Beta keeps the existing "stable" wire channel; see RoseChannels. -->
+     <string-array name="channel_entries" translatable="false">
+-        <item>@string/channel_stable</item>
+-        <item>@string/channel_beta</item>
+-        <item>@string/channel_alpha</item>
++        <item>@string/rose_channel_prod</item>
++        <item>@string/rose_channel_beta</item>
++        <item>@string/rose_channel_alpha</item>
+     </string-array>
+ 
+     <string-array name="channel_values" translatable="false">
++        <item>prod</item>
+         <item>stable</item>
+-        <item>beta</item>
+         <item>alpha</item>
+     </string-array>
+ 
+diff --git a/res/values/config.xml b/res/values/config.xml
+index b3804bb..e4299eb 100644
+--- a/res/values/config.xml
++++ b/res/values/config.xml
+@@ -1,7 +1,11 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+     <string name="url" translatable="false">https://releases.grapheneos.org/</string>
+-    <string name="channel_default" translatable="false">stable</string>
++    <string name="channel_default" translatable="false">prod</string>
++    <!-- Wire channels with published DEVICE-channel metadata under the url above. -->
++    <string-array name="channel_published" translatable="false">
++        <item>stable</item>
++    </string-array>
+     <string name="network_type_default" translatable="false">1</string>
+     <string name="battery_not_low_default" translatable="false">true</string>
+     <string name="requires_charging_default" translatable="false">false</string>
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+index f5a1534..ef39a1c 100644
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -33,6 +33,12 @@
+     <string name="channel_stable">Stable</string>
+     <string name="channel_beta">Beta</string>
+     <string name="channel_alpha">Alpha</string>
++    <string name="rose_channel_prod">Prod</string>
++    <string name="rose_channel_beta">Beta</string>
++    <string name="rose_channel_alpha">Alpha</string>
++    <string name="rose_channel_unavailable_entry">%s (not available yet)</string>
++    <string name="rose_channel_unavailable_title">Release channel not available</string>
++    <string name="rose_channel_unavailable_text">No %s releases are published for this device yet. Choose another release channel.</string>
+     <string name="network_type_title">Permitted networks</string>
+     <string name="network_type_any">Any</string>
+     <string name="network_type_not_roaming">Not roaming</string>
+diff --git a/src/app/seamlessupdate/client/BootReceiver.java b/src/app/seamlessupdate/client/BootReceiver.java
+index 3be6d86..57b7c91 100644
+--- a/src/app/seamlessupdate/client/BootReceiver.java
++++ b/src/app/seamlessupdate/client/BootReceiver.java
+@@ -13,6 +13,7 @@ public class BootReceiver extends BroadcastReceiver {
+         if (context.getSystemService(UserManager.class).isSystemUser()) {
+             final SharedPreferences preferences = Settings.getPreferences(context);
+             preferences.edit().putBoolean(Settings.KEY_WAITING_FOR_REBOOT, false).apply();
++            Settings.migrateChannel(context, context.getPackageManager().isDeviceUpgrading());
+             PeriodicJob.schedule(context);
+ 
+             if (!preferences.contains(Settings.KEY_USE_SECURITY_PREVIEW_CHANNEL)) {
+diff --git a/src/app/seamlessupdate/client/NotificationHandler.java b/src/app/seamlessupdate/client/NotificationHandler.java
+index 8f44d94..235707b 100644
+--- a/src/app/seamlessupdate/client/NotificationHandler.java
++++ b/src/app/seamlessupdate/client/NotificationHandler.java
+@@ -122,16 +122,7 @@ public class NotificationHandler {
+     }
+ 
+     void showUpdatedNotification(final String channel) {
+-        final String channelText;
+-        if ("stable".equals(channel)) {
+-            channelText = service.getString(R.string.channel_stable);
+-        } else if ("beta".equals(channel)) {
+-            channelText = service.getString(R.string.channel_beta);
+-        } else if ("alpha".equals(channel)) {
+-            channelText = service.getString(R.string.channel_alpha);
+-        } else {
+-            channelText = channel;
+-        }
++        final String channelText = Settings.getChannelLabel(service, channel);
+ 
+         notificationManager.notify(NOTIFICATION_ID_UPDATED, new Notification.Builder(service, NOTIFICATION_CHANNEL_ID_UPDATED)
+                 .setContentIntent(getPendingSettingsIntent())
+@@ -142,6 +133,16 @@ public class NotificationHandler {
+                 .build());
+     }
+ 
++    void showChannelUnavailableNotification(final String channelLabel) {
++        notificationManager.notify(NOTIFICATION_ID_UPDATED, new Notification.Builder(service, NOTIFICATION_CHANNEL_ID_UPDATED)
++                .setContentIntent(getPendingSettingsIntent())
++                .setContentTitle(service.getString(R.string.rose_channel_unavailable_title))
++                .setContentText(service.getString(R.string.rose_channel_unavailable_text, channelLabel))
++                .setShowWhen(true)
++                .setSmallIcon(R.drawable.system_update_fill0_wght400_grad0_opsz48)
++                .build());
++    }
++
+     void showDownloadNotification(long progress, long max) {
+         phase = Phase.DOWNLOAD;
+         notificationManager.notify(NOTIFICATION_ID_PROGRESS,
+diff --git a/src/app/seamlessupdate/client/Service.java b/src/app/seamlessupdate/client/Service.java
+index c54c036..b81a7e5 100644
+--- a/src/app/seamlessupdate/client/Service.java
++++ b/src/app/seamlessupdate/client/Service.java
+@@ -290,6 +290,16 @@ public class Service extends IntentService {
+             }
+ 
+             final String channel = SystemProperties.get("sys.update.channel", Settings.getChannel(this));
++            if (!RoseChannels.shouldFetch(SystemProperties.get("sys.update.channel", ""), channel,
++                    Settings.getPublishedChannels(this))) {
++                // No publisher metadata exists for this channel: report it instead of requesting a guessed feed.
++                Log.d(TAG, "channel " + channel + " is not published for " + DEVICE);
++                if (serviceIsUserInitiated) {
++                    notificationHandler.showChannelUnavailableNotification(Settings.getChannelLabel(this, channel));
++                }
++                mUpdating = false;
++                return;
++            }
+ 
+             Log.d(TAG, "fetching metadata for " + DEVICE + "-" + channel);
+             connection = fetchData(network, DEVICE + "-" + channel);
+diff --git a/src/app/seamlessupdate/client/Settings.java b/src/app/seamlessupdate/client/Settings.java
+index 700d1cc..97fa048 100644
+--- a/src/app/seamlessupdate/client/Settings.java
++++ b/src/app/seamlessupdate/client/Settings.java
+@@ -50,6 +50,37 @@ public class Settings extends CollapsingToolbarBaseActivity {
+         }
+     }
+ 
++    static java.util.Set<String> getPublishedChannels(final Context context) {
++        return new java.util.HashSet<>(java.util.Arrays.asList(
++                context.getResources().getStringArray(R.array.channel_published)));
++    }
++
++    /** The product label for a wire channel; Beta is the legacy "stable" feed. */
++    static String getChannelLabel(final Context context, final String channel) {
++        switch (channel) {
++            case RoseChannels.PROD:
++                return context.getString(R.string.rose_channel_prod);
++            case RoseChannels.LEGACY_BETA:
++                return context.getString(R.string.rose_channel_beta);
++            case RoseChannels.ALPHA:
++                return context.getString(R.string.rose_channel_alpha);
++            default:
++                return channel;
++        }
++    }
++
++    /** Called on every boot, before scheduling; see RoseChannels.migration. */
++    static void migrateChannel(final Context context, final boolean firstBootAfterOta) {
++        final SharedPreferences preferences = getPreferences(context);
++        final String channel = RoseChannels.migration(preferences.contains(KEY_CHANNEL),
++                preferences.getBoolean(RoseChannels.KEY_MIGRATED, false), firstBootAfterOta);
++        final SharedPreferences.Editor editor = preferences.edit().putBoolean(RoseChannels.KEY_MIGRATED, true);
++        if (channel != null) {
++            editor.putString(KEY_CHANNEL, channel);
++        }
++        editor.commit();
++    }
++
+     static boolean shouldUseSecurityPreviewChannel(final Context context) {
+         int val = getPreferences(context).getInt(KEY_USE_SECURITY_PREVIEW_CHANNEL, -1);
+         switch (val) {
+@@ -126,6 +157,18 @@ public class Settings extends CollapsingToolbarBaseActivity {
+             getPreferenceManager().setStorageDeviceProtected();
+             setPreferencesFromResource(R.xml.settings, rootKey);
+ 
++            // Mark choices without published metadata so the selector never implies an update path.
++            final ListPreference channel = requirePreference(KEY_CHANNEL);
++            final java.util.Set<String> published = getPublishedChannels(requireContext());
++            final CharSequence[] entries = channel.getEntries().clone();
++            final CharSequence[] values = channel.getEntryValues();
++            for (int i = 0; i < entries.length; i++) {
++                if (!published.contains(values[i].toString())) {
++                    entries[i] = getString(R.string.rose_channel_unavailable_entry, entries[i]);
++                }
++            }
++            channel.setEntries(entries);
++
+             requirePreference(KEY_CHECK_FOR_UPDATES).setOnPreferenceClickListener(pref -> {
+                 final Context context = requireContext();
+                 if (!getPreferences(context).getBoolean(KEY_WAITING_FOR_REBOOT, false)) {

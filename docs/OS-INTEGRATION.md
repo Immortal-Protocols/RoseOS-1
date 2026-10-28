@@ -33,6 +33,42 @@ and lose the existing channel. Pass the base URL the installed phone already use
 device and release-channel fact to obtain first, not something to infer from
 `pixel-ota` asset names.
 
+### Release channels (alpha, beta, prod)
+
+With `--updater-url`, the patcher also applies `os/patches/updater-rose-channels.patch`
+and copies `RoseChannels.java` into the Updater. It also applies
+`os/patches/updater-product-build-make.patch`, because upstream lists the `Updater`
+module only for `OFFICIAL_BUILD` (`media_system.mk`), so RoseOS builds shipped
+without it (candidate 2026102803). The patch adds `PRODUCT_PACKAGES += Updater` next
+to that block; `OFFICIAL_BUILD` stays unset. A signed build must then contain
+`SYSTEM/priv-app/Updater/Updater.apk` (`app.seamlessupdate.client`) and its
+`SYSTEM/etc/{permissions,default-permissions,sysconfig}/app.seamlessupdate.client.xml`.
+A `--keep-upstream-updater` build includes no Updater. The selector offers:
+
+| Label | Stored `channel` | Wire channel (`DEVICE-channel`, metadata token) |
+| --- | --- | --- |
+| Prod | `prod` | `prod` (default for new installations) |
+| Beta | `stable` | `stable`: the existing Pixel feed `frankel-stable` |
+| Alpha | `alpha` | `alpha` |
+
+Beta keeps the legacy `stable` wire channel, so existing phones and existing
+metadata keep working; nothing requests `frankel-beta`. Only channels listed with
+`--updater-published-channel` (default `stable`, the feed Infra verified) are
+fetched. Any other choice is labelled "not available yet" in the selector, a
+manual check reports it, and periodic checks make no request. The Updater's
+device, channel and newer-build checks are unchanged, and an explicit
+`sys.update.channel` override keeps its stock behaviour.
+
+The stock Updater stores `channel` only after its settings screen is opened, so
+a missing key does not mean a new installation. On the first boot of a build with
+these rules, a phone that arrived through an OTA
+(`PackageManager.isDeviceUpgrading()`) and has no stored channel is given `stable`
+(Beta). A new installation stores nothing and follows the Prod default. A marker
+makes this run once, so a later OTA never moves a phone. An explicit choice,
+including a legacy `stable`, always survives. A leftover upstream `beta` value has
+no RoseOS feed and shows as unavailable until the owner picks another channel.
+Publish `prod` or `alpha` metadata before listing them as published.
+
 ## Stop contract (controller schema 3)
 
 The owner's Stop (notification action or controller screen) must end the task,
@@ -86,7 +122,7 @@ installed phone and current release channel, not from this repository:
 3. Installed `dev.pixel.voice` and `dev.pixel.backgroundcontrol` version codes and
    signing certificates. The controller prebuilt must have a greater version code
    than any installed copy, or Android keeps the installed one. `agent-pip` is now
-   27 (`2.1.4-pip`). The policy must pin the same certificate as Rose Agent.
+   28 (`2.1.5-pip`); the verified draft 2026102802 carried 27. The policy must pin the same certificate as Rose Agent.
 4. Which app holds the HOME role. Android keeps the role holder across an OTA;
    expected, not yet observed on this phone.
 5. How Rose Agent reaches the existing Pixel Voice VM (endpoint and pinned
@@ -131,7 +167,122 @@ are at risk at first boot. Measure each package's installed version code, signer
 and code path before building a frankel candidate, and give every bundled APK a
 higher version code.
 
-An existing phone keeps its HOME role holder across an OTA (expected, not yet
-observed on this phone). This Permission module's HOME role has no configurable
-default; it falls back to the highest-priority HOME activity, and a tie produces
-a chooser (`HomeRoleBehavior.getFallbackHolderAsUser` at the pinned revision).
+At the pinned Permission module (`4d6005db`) the HOME role has no configurable
+default. With no holder it falls back to the highest-priority HOME activity, and a
+tie produces a chooser (`HomeRoleBehavior.getFallbackHolderAsUser`). Rose Agent is
+a non-privileged import, so its HOME filter priority counts as 0. The default grant
+that runs after an update (`RoleControllerServiceImpl.onGrantDefaultRoles`) keeps
+any holder that still qualifies. So a phone updated from 2804 keeps the launcher
+it had, and neither a filter priority nor a fresh-install default can move it.
+
+A product build that preinstalls Rose Agent therefore also applies
+`os/patches/rose-home-role-permission.patch` to `packages/modules/Permission`
+(`apply-os-changes.py`, via `rose_home_projects`). The patch changes only
+`RoleService`, and its effect is as follows:
+
+- **When it runs.** On each user start, right after the existing default grant,
+  `maybeSelectRoseHomeSync` makes Rose Agent the HOME holder **once per user**.
+- **How it selects.** It asks the role controller for `ROLE_HOME`. This is the same
+  `onAddRoleHolder` path that Settings > Apps > Default apps > Home app uses. That
+  path replaces the exclusive holder and points the preferred HOME activity at
+  `dev.pixel.voice/.MainActivity`.
+- **The marker.** It records the attempt as `rose_home_role_selected=1` in that
+  user's `Settings.Secure`. It never runs again for that user, so the owner can
+  later pick another Home and it stays picked across reboots and updates.
+- **What it never does.** It never selects a non-preinstalled (non-system) app named
+  `dev.pixel.voice`.
+- **When Rose Agent doesn't qualify.** If it is absent, disabled or has no HOME
+  activity, the current holder stays and the attempt is still recorded.
+  Re-enabling Rose Agent later does not take the Home.
+- **Profiles.** Profiles have no HOME role, so each full user is handled on its own
+  start.
+- **If the controller doesn't answer.** If it doesn't answer within 30 s, nothing is
+  recorded and the next start retries.
+- **What it doesn't add.** No new permission, device or profile owner, preferred
+  activity write or wallpaper change. Rose Home draws its own bundled image.
+- **Where it runs.** It runs inside `system_server` (`RoleService`) with the
+  authority that service already has. The patched APEX `com.android.permission`
+  must be built from this source, and it is signed like the rest of the image.
+
+`os/tests/test_rose_home_role.py` applies the patch to the pinned
+`RoleService.java` and runs the added method against stand-ins for the role
+controller, settings and package manager. That covers source and fixture logic, not
+an image or a device.
+
+Rose Agent's own entries route in `MainActivity` (`HomeEntry`):
+
+- A HOME intent shows Rose Home.
+- The app icon (MAIN/LAUNCHER) shows Rose Home with the Rose conversation
+  (`RoseConversationActivity`) opened over it, so Back returns to Rose Home.
+
+Agent 302 (build 2026102804) kept the legacy voice page for the app icon, which is
+why its icon showed the blue "Tap to talk" screen.
+
+## Cuttlefish alpha product (no Updater)
+
+The first emulator alpha targets `aosp_cf_x86_64_only_phone-cur-userdebug`
+(`device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk`, pinned `283645aa`).
+`aosp_cf.mk` inherits `generic_system.mk` → `handheld_system.mk` →
+`media_system.mk`, `handheld_system_ext.mk` and `aosp_product.mk` →
+`handheld_product.mk`, so the 2804 Rose integration (tray property, controller,
+`VirtualDeviceManager`, Rose Agent and Calculator preinstalls) reaches it unchanged.
+
+There is no emulator update feed, so the phone Updater is excluded:
+`updaterMode` is `excluded-no-compatible-feed` and there is no endpoint. This is
+also required for the build: `aosp_cf.mk` uses the Soong-defined
+`aosp_shared_system_image`, which does not list `Updater`, and `file_list_diff`
+fails on system files installed by make but missing from that image.
+
+GrapheneOS `media_system.mk` also installs `Seedvault` on system, and no
+`build/make` `Android.bp` lists it or its `required` closure (pinned
+`packages/apps/Seedvault` `7cfffed7`: `LocalContactsBackup`, the three
+`com.stevesoltys.backup_*` permission files and
+`default-permissions_app.grapheneos.backup.contacts`), so `file_list_diff` would
+fail on those too. The alpha keeps Seedvault and adds that six-module closure to
+`aosp_shared_system_image` deps; the allowlist, `file_list_diff` and the Soong
+image switch are unchanged.
+
+The first alpha build (Actions run 40719075730) then failed `file_list_diff` on
+29 more system paths. Traced in the pinned sources, they come from six packages
+that make installs but `system_image_defaults` omits:
+
+| Package | Selected by | Also brings |
+| --- | --- | --- |
+| `GmsCompat` | `handheld_system.mk` | `GmsCompatConfig`, `GmsCompatLib` and two XMLs |
+| `LogViewer` | `handheld_system.mk` | one XML |
+| `NetworkLocation` | `handheld_system.mk` | its Rust JNI library and two XMLs |
+| `HardeningTestApp`, `SecurePasteTestSystemApp` | `base_system.mk` `PRODUCT_PACKAGES_DEBUG` (eng and userdebug) | — |
+| `VirtualDeviceManager` | RoseOS `generic_system.mk`, unconditionally | — |
+
+Soong lists `VirtualDeviceManager` only under `RELEASE_PACKAGE_COMPUTER_CONTROL`,
+which is off in the alpha's release config. Pinned Soong packages a dependency's
+`required` and `jni_libs` closure itself, so the alpha adds only these six roots
+to `aosp_shared_system_image`. The two test apps are added under
+`select(product_variable("debuggable"))`, matching make.
+
+`os/alpha/cuttlefish-alpha-099-from-f21bf683.patch` takes a tree already prepared
+from the previous delta (`f21bf683`) to the same bytes in one step.
+`os/tests/fixtures/cuttlefish-alpha/alpha099-missing-system-paths.txt` keeps the
+29 paths as a regression input: the test rebuilds them from the pinned module
+definitions and shows the image lacks them before the patch and covers them after.
+That is a model of make's install paths. The real `file_list_diff`, the
+compilation and the image remain build evidence.
+
+`os/patches/cuttlefish-alpha-no-updater.patch` therefore makes two changes in
+`build/make`: it removes only the RoseOS `PRODUCT_PACKAGES += Updater` block from
+`target/product/media_system.mk` and adds the Seedvault closure and the six
+packages above to `target/product/generic/Android.bp`.
+Infra applies it with `git apply` to an already independent alpha source root that
+holds the 2804 integration, never to the retained Pixel root; on any other base
+`git apply --check` fails. `apply-os-changes.py` never applies it, so Frankel keeps
+its Updater. The exact delta, base, app and policy hashes and the image
+expectations are in `os/alpha/cuttlefish-product-contract.json`, checked by
+`os/tests/test_cuttlefish_alpha_product.py` on pinned fixtures. That test evaluates
+product variables only; image contents and boot need the alpha build.
+
+The tray property needs no override for the Soong image: its `system-build.prop`
+(`build/soong` `250710f7`) reads `:product_config`, which carries the product's
+`PRODUCT_SYSTEM_PROPERTIES` (`core/soong_extra_config.mk`), and
+`gen_build_prop.py` writes them into the system `build.prop`. The test runs the
+pinned `gen_build_prop.py` on the evaluated product to show
+`persist.wm.debug.pixel_agent_tray=1` reaches that output.

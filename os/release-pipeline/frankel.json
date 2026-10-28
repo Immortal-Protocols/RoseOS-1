@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 1,
+  "target": {
+    "device": "frankel",
+    "variant": "user",
+    "lunch": "frankel-cur-user"
+  },
+  "host": {
+    "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
+    "outDir": "out-rose-first-update-2026102701",
+    "lockPath": "/home/pixelbuild/frankel-build.lock",
+    "installclean": true,
+    "makeJobs": 48,
+    "makeGoals": [
+      "vendorbootimage",
+      "vendorkernelbootimage",
+      "target-files-package",
+      "otatools-package"
+    ],
+    "integrateCommand": [
+      "{python}",
+      "{checkout}/scripts/host-integrate.py"
+    ],
+    "signCommand": [
+      "{python}",
+      "{checkout}/scripts/host-sign.py"
+    ],
+    "tools": {
+      "checkOtaSignature": "build/make/tools/releasetools/check_ota_package_signature.py",
+      "avbtool": "external/avb/avbtool.py",
+      "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
+      "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+      "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
+      "debugfs": "/usr/sbin/debugfs",
+      "otatoolsBin": "releases/{build}/release-{device}-{build}/bin",
+      "fsckErofs": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs"
+    },
+    "integrate": {
+      "project": "protocols-465723",
+      "secretVersion": "1",
+      "sdk": 37,
+      "appSecrets": {
+        "keystore": "PIXEL_APP_SIGNING_KEYSTORE",
+        "config": "PIXEL_APP_SIGNING_CONFIG",
+        "storePassword": "PIXEL_APP_SIGNING_STORE_PASSWORD",
+        "keyPassword": "PIXEL_APP_SIGNING_KEY_PASSWORD"
+      },
+      "appSdkRoot": "/home/pixelbuild/rose-actions/tools/android-sdk",
+      "appBuildCommand": [
+        "{python}",
+        "{checkout}/scripts/host-app-build.py",
+        "build",
+        "{candidate}",
+        "{release_dir}"
+      ],
+      "unsignedApks": {
+        "voice": "{release_dir}/unsigned/voice.apk",
+        "agent": "{release_dir}/unsigned/controller/Agent-unsigned.apk",
+        "target:dev.pixel.calculator.agent": "{release_dir}/unsigned/calculator.apk"
+      },
+      "reconcileCommand": [
+        "{python}",
+        "{checkout}/scripts/host-reconcile.py",
+        "apply",
+        "{candidate}",
+        "{release_dir}",
+        "{policy}",
+        "{signed_apps}"
+      ],
+      "repo": "repo",
+      "javaHome": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21/linux-x86",
+      "publicAssetsDir": "/home/pixelbuild/rose-actions/public-assets",
+      "publicAssetDigests": null,
+      "reconcile": {
+        "receiptDir": "/home/pixelbuild/rose-actions/reconcile",
+        "projects": [
+          "frameworks/base",
+          "build/make",
+          "build/release",
+          "packages/apps/Updater",
+          "packages/modules/Permission"
+        ],
+        "integrationOwnedRoots": [
+          "packages/apps/PixelBackgroundControl",
+          "packages/apps/RosePreinstall"
+        ],
+        "sparsePaths": {
+          "frameworks/base": [
+            "core/res/res/values/config.xml"
+          ],
+          "build/make": [
+            "target/product/handheld_product.mk"
+          ],
+          "packages/apps/Updater": [
+            "res/values/config.xml"
+          ],
+          "packages/modules/Permission": [
+            "service/java/com/android/role/RoleService.java"
+          ]
+        },
+        "installedIdentities": "os/release-evidence/frankel-2026102701/expected-identities.json",
+        "patcher": "trusted",
+        "applyArgs": [
+          "--background-policy",
+          "{policy}",
+          "--background-agent",
+          "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+          "--agent-tray",
+          "--updater-url",
+          "https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/",
+          "--preinstall-apk",
+          "{signed_apps}/dev.pixel.voice.apk",
+          "--preinstall-apk",
+          "{signed_apps}/dev.pixel.calculator.agent.apk",
+          "--installed-identities",
+          "{installed_identities}"
+        ]
+      }
+    },
+    "sign": {
+      "project": "protocols-465723",
+      "keysSecret": "PIXEL_OS_SIGNING_KEYS_FRANKEL_V5",
+      "passphraseSecret": "PIXEL_OS_SIGNING_PASSPHRASE_FRANKEL_V5",
+      "secretVersion": "1",
+      "otatools": "host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/otatools-packagelinux_glibc_x86_64",
+      "javaHome": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21/linux-x86",
+      "updateNotes": "os/release-notes/{device}-{build}.md"
+    }
+  },
+  "versionBaselines": {
+    "installedEvidence": {
+      "build": "2026102701",
+      "identities": "os/release-evidence/frankel-2026102701/expected-identities.json",
+      "basis": "Identities of the delivered, published 2026102701 release; publication alone does not prove which phones installed it"
+    },
+    "retained": [
+      {
+        "build": "2026102801",
+        "source": "7b5ba7a",
+        "buildTimestamp": 1793147782,
+        "mustExceed": {
+          "dev.pixel.voice": 299
+        },
+        "basis": "Immutable, unpublished P1; a newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME"
+      },
+      {
+        "build": "2026102802",
+        "source": "29a0f5df3fd5bc291253b368ba5cae709f7c996e",
+        "buildTimestamp": 1793163120,
+        "mustExceed": {
+          "dev.pixel.voice": 300,
+          "dev.pixel.backgroundcontrol": 27
+        },
+        "basis": "Immutable verified draft frankel-2026102802 (pixel-ota draft, not promoted; apps 300/4/27); a newer candidate with changed Rose Agent and controller sources needs higher versionCodes, build number and BUILD_DATETIME. Calculator 4 is unchanged and may stay equal"
+      },
+      {
+        "build": "2026102803",
+        "source": "f0fae0ff6096d7f12306b2c0e2d8020b1c2cb0a2",
+        "buildTimestamp": 1793176860,
+        "mustExceed": {
+          "dev.pixel.voice": 301
+        },
+        "basis": "Immutable draft frankel-2026102803 (pixel-ota draft 426456114, not promoted, not beta-eligible: it shipped without the system Updater; apps 301/4/28). A newer candidate needs a higher Rose Agent versionCode (its source changed with PR50), build number and BUILD_DATETIME; controller 28 and Calculator 4 are unchanged in source and may stay equal"
+      },
+      {
+        "build": "2026102804",
+        "source": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+        "buildTimestamp": 1793180700,
+        "mustExceed": {
+          "dev.pixel.voice": 302
+        },
+        "basis": "Published Beta frankel-2026102804 (pixel-ota Latest until 2026-10-28 18:34:04 UTC, superseded by the verified 2026102805; apps 302/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME; its Rose Agent must also exceed every app-only version (appRelease: 303 and 304 delivered, 306 reserved). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
+      }
+    ]
+  },
+  "appRelease": {
+    "packageName": "dev.pixel.voice",
+    "mustExceed": 304,
+    "published": {
+      "versionCode": 302,
+      "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
+      "size": 1381533,
+      "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+    },
+    "built": [
+      {
+        "versionCode": 303,
+        "versionName": "303-app-beta",
+        "sha256": "cb11480c88419851ecafee24565d4e86e0e14d5416800e9573f6bc23bfd96f41",
+        "size": 1381533,
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "run": 40676568143,
+        "basis": "INFRA-APP-080 app-only run on candidate 62286c08. Delivered through the authenticated private catalog at 14:39 UTC (lead record); it has no public GitHub release. Its version is consumed: a newer build needs 304 or above, and these bytes are never relabelled",
+        "delivered": {
+          "route": "authenticated catalog",
+          "at": "2026-10-28T14:39Z",
+          "publicRelease": false
+        }
+      },
+      {
+        "versionCode": 304,
+        "versionName": "304-app-beta",
+        "sha256": "d8f69efcdcbc209ec5fd16badcaaf4c98fa614d7eb5fc54c1431a6f098d26966",
+        "size": 1385629,
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "candidate": "a3d839e6805b514aa6cad6f86c15e5db622e10cc",
+        "publicReceiptSha256": "058c4834511524615335a3685efdba465ab74c46ef69174f69ad6ca184f4640c",
+        "delivered": {
+          "route": "public GitHub prerelease rose-agent-304 and authenticated catalog",
+          "at": "2026-10-28T17:27Z",
+          "publicRelease": true
+        },
+        "basis": "INFRA-APP-096 app-only candidate a3d839e6: public prerelease rose-agent-304 (receipt and APK read back anonymously 2026-10-28 by INFRA-APP-102: the APK matches the receipt's sha256 and size and holds no native libraries) and catalog-verified at 17:27 UTC (lead record). Its receipt predates schemaVersion 1, so direct-GitHub clients report it unavailable; it is immutable and never republished or relabelled"
+      }
+    ],
+    "minimumTestedOs": {
+      "build": "2026102804",
+      "controller": 28
+    },
+    "compatibility": {
+      "schemaVersion": 1,
+      "deviceCodenames": [
+        "frankel"
+      ],
+      "minOsBuild": "2026102804",
+      "minControllerVersion": 28,
+      "basis": "INFRA-APP-102 / APP-GITHUB-002-SCHEMA-001: declared support policy for the public receipt's compatibility, a conservative floor on the published Beta and its controller (frankel 2026102804, controller 28), not inferred from minimumTestedOs and not a claim of phone acceptance. Signed 2804 OTA metadata: pre-device=frankel, post-build-incremental=2026102804; the app compares Build.DEVICE and Build.VERSION.INCREMENTAL. minSdk and abis are measured from each signed APK by the publisher"
+    },
+    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 delivered through the authenticated catalog, 304 published on GitHub and catalog-delivered) and outside other routes' reservations (305 is the 2026102805 OS candidate's), and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is provenance only, never an eligibility rule",
+    "publication": {
+      "repository": "Immortal-Protocols/pixel-ota",
+      "tag": "rose-agent-{versionCode}",
+      "asset": "{package}-{versionCode}.apk",
+      "apkUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/{tag}/{asset}",
+      "prerelease": true,
+      "makeLatest": false,
+      "preserveLatest": "frankel-2026102805",
+      "basis": "INFRA-APP-096 / APR024: public signed Rose Agent APKs through the existing pixel-ota Releases with the existing publisher App (Contents:write), anonymous client download with the client's SHA-256 and size binding (APP-GITHUB-001-IFACE-001, PublicApkDownload.java: https://github.com/Immortal-Protocols/pixel-ota/releases/download/{versioned-tag}/{asset}.apk). Each app release is its own prerelease tag that never becomes Latest; OTA Latest is preserved, never moved. preserveLatest is the verified public Beta frankel-2026102805 (published 2026-10-28 18:34:04 UTC through the OS route; the public frankel-stable feed reads 2026102805 1793206861); it was frankel-2026102804 until then, and rose-agent-304 was published while 2804 was Latest"
+    },
+    "reserved": [
+      {
+        "versionCode": 305,
+        "versionName": "305-home-beta",
+        "candidate": "7fb94ae6ed535066d50879a99b7c8e427da8e853",
+        "route": "os-release",
+        "basis": "INFRA-HOME-098: bundled Rose Agent of the Frankel 2026102805 OS candidate 7fb94ae6 (admitted run 40741375683; excludes App #74). The app-only route may not reuse 305"
+      },
+      {
+        "versionCode": 306,
+        "versionName": "306-direct-github-beta",
+        "candidate": null,
+        "route": "app-only",
+        "basis": "INFRA-APP-102: the next app-only candidate, App #74's direct GitHub update client plus this schemaVersion 1 publisher (any merge at or after it; the lead records the exact SHA it dispatches). Only the app-only route may use 306"
+      }
+    ]
+  },
+  "updater": {
+    "packageName": "app.seamlessupdate.client",
+    "channelDefault": "prod",
+    "channelValues": [
+      "prod",
+      "stable",
+      "alpha"
+    ],
+    "apkPath": "SYSTEM/priv-app/Updater/Updater.apk",
+    "signer": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a",
+    "requiredFiles": [
+      "SYSTEM/etc/permissions/app.seamlessupdate.client.xml",
+      "SYSTEM/etc/default-permissions/app.seamlessupdate.client.xml",
+      "SYSTEM/etc/sysconfig/app.seamlessupdate.client.xml"
+    ],
+    "basis": "Compiled Updater gate (077 shipped none). Package from the Updater source tree, channel default and values from os/patches/updater-rose-channels.patch, url and published set from the reconcile applyArgs; apkPath and requiredFiles as stated by the OS inclusion fix (#52, docs/OS-INTEGRATION.md). signer: the release key the upstream map assigns (Updater sets no certificate, so testkey maps to releasekey under sign_target_files_apks -d); equal to the OTA certificate pin. The actual signed APK's certificate is checked, not apkcerts text"
+  },
+  "identities": {
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "otaCertificateSha256": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a",
+    "avbPublicKeySha256": "7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822"
+  },
+  "framework": {
+    "computerControlTargets": [
+      "dev.pixel.calculator.agent"
+    ],
+    "prototypeAgentsEmpty": true,
+    "lockedSessions": false
+  },
+  "publication": {
+    "repository": "Immortal-Protocols/pixel-ota",
+    "tag": "frankel-{build}",
+    "channels": {
+      "beta": {
+        "promoteLatest": true,
+        "feedChannel": "stable"
+      },
+      "prod": null
+    },
+    "api": "https://api.github.com",
+    "uploads": "https://uploads.github.com"
+  },
+  "bootstrap": {
+    "repositoryVariables": {
+      "ROSEOS_BUILDER_RUNNER_READY": "'true' only after the repository-scoped runner labelled roseos-frankel-builder is registered on immortal-os-builder",
+      "GCP_WORKLOAD_IDENTITY_PROVIDER": "Full resource name of the GitHub OIDC provider restricted to this repository, main and os-release.yml",
+      "GCP_CONTROLLER_SERVICE_ACCOUNT": "Identity limited to get/start/stop of immortal-os-builder",
+      "GCP_SIGNER_SERVICE_ACCOUNT": "Identity limited to reading the six existing signing secrets",
+      "PIXEL_OTA_PUBLISHER": "'github-app'",
+      "PIXEL_OTA_APP_ID": "App ID of the publisher App installed only on Immortal-Protocols/pixel-ota (Contents: write, Metadata: read)"
+    },
+    "repositorySecrets": {
+      "PIXEL_OTA_APP_PRIVATE_KEY": "Publisher App private key; read only by the hosted publisher token step"
+    },
+    "hostInputs": {
+      "stable SDK layout": "Install with scripts/host-sdk-layout.py --apksigner-jar <retained public apksigner.jar> during the coordinated builder window; preflight checks host.tools.apksigner exists",
+      "public connection assets": "Stage the five original inputs with scripts/host-app-build.py stage SOURCE /home/pixelbuild/rose-actions/public-assets CANDIDATE; optionally pin host.integrate.publicAssetDigests",
+      "host.tools.simg2img": "Retained otatools simg2img referenced by the P1 verifier (existing output provenance); check existence, executable bit and version in the coordinated host window. Each run records the path and sha256 of the tools it actually used in verification.json imageTools",
+      "host.tools.debugfs": "/usr/sbin/debugfs, used by the P1 independent image extraction; check existence and version in the coordinated host window",
+      "host.sign.otatools": "Path copied by the successful P1 signing run (lead-supplied); check it exists under OUT_DIR after the build in the coordinated host window",
+      "reconcile adoption": "One-time, after a fresh read-only preview: scripts/host-reconcile.py adopt ... --path P --reason R for each reviewed remaining conflict (e.g. order-only handheld_product.mk); never a blanket adoption"
+    }
+  },
+  "permissionApex": {
+    "module": "com.android.permission",
+    "paths": [
+      "SYSTEM/apex/com.android.permission.apex",
+      "SYSTEM/apex/com.android.permission.capex"
+    ],
+    "version": 370399999,
+    "payloadJar": "javalib/service-permission.jar",
+    "markers": [
+      "rose_home_role_selected",
+      "dev.pixel.voice"
+    ],
+    "sourcePayloadKeySha256": "1ab7920a9fcfc8611cbb8fdee454ff6d4b4d6d09d70ee0a90aaf05cd4b84e3ab",
+    "containerSigner": "otaCertificate",
+    "payloadKey": "avbPublicKey",
+    "basis": "INFRA-HOME-098: OS #70 patches packages/modules/Permission 4d6005db RoleService (os/patches/rose-home-role-permission.patch) and ships in the com.android.permission APEX. The gate reads the target-files: exactly this module (no Google prebuilt), apex_manifest version from the pinned RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION (cur -> cp2a), the patch's setting and package constants in service-permission.jar, the payload AVB signature, and the payload key: the module's own key unsigned, avb.pem (avbPublicKeySha256) signed, with the container signed by releasekey (otaCertificateSha256), as generate-release.sh maps it. Derivations: scripts/tests/fixtures/permission-apex/README.md. Artifact inclusion only; selected HOME, boot and migration are runtime evidence"
+  }
+}

@@ -1,0 +1,961 @@
+#!/usr/bin/env python3
+"""Job steps for .github/workflows/os-release.yml: preflight, builder control, build, verification,
+artifact staging and publication, behind fake and production adapters.
+
+The production adapter fails closed: a missing runner, identity, publisher credential, host entry
+point or tool stops the job and names the missing input. Verification reads the actual target-files,
+OTA and public files, runs the real OTA and AVB signature tools and the APK byte/signer gate; claimed
+metadata never counts as success. The fake adapter only swaps external edges (builder control, the
+make step and the release store) and marks every receipt simulated; production refuses those.
+Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
+"""
+import argparse
+import base64
+import fcntl
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+import zipfile
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_receipts  # noqa: E402
+import github_release_publisher  # noqa: E402
+import permission_apex  # noqa: E402
+from release_receipts import sha256_file  # noqa: E402
+
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = ROOT/'os/release-pipeline/frankel.json'
+TARGET_FILES_VERIFIER = ROOT/'qa/first-update/runtime/verify-target-files.py'
+SUPPORTED_PUBLISHERS = ('github-app',)  # pixel-ota-only App; token minted in the hosted publisher job.
+BUILDER = {'project': 'protocols-465723', 'zone': 'us-west2-a', 'instance': 'immortal-os-builder'}
+# action: (target state, state a request is submitted from, transitional states that need no new request)
+BUILDER_STATES = {'start': ('RUNNING', 'TERMINATED', {'PROVISIONING', 'STAGING'}),
+    'stop': ('TERMINATED', 'RUNNING', {'STOPPING'})}
+PROPS = ('SYSTEM/build.prop', 'VENDOR/build.prop', 'PRODUCT/etc/build.prop', 'SYSTEM_EXT/etc/build.prop')
+
+class CheckFailed(Exception):
+    pass
+
+class InvalidInput(Exception):
+    pass
+
+class SetupMissing(Exception):
+    def __init__(self, missing):
+        super().__init__('setup missing: ' + ', '.join(missing))
+        self.missing = missing
+
+def load_config(path):
+    try:
+        config = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as error:
+        raise InvalidInput(f'cannot read pipeline config: {error.__class__.__name__}')
+    if config.get('schemaVersion') != 1 or not isinstance(config.get('host'), dict):
+        raise InvalidInput('unsupported pipeline config')
+    return config
+
+def candidate(a):
+    if not re.fullmatch(r'[0-9a-f]{40}', a.candidate_sha or ''):
+        raise InvalidInput('--candidate-sha must be a full commit SHA')
+    if not re.fullmatch(r'\d{10}', a.build_number or ''):
+        raise InvalidInput('--build-number must be ten digits')
+    if not re.fullmatch(r'\d{10}', a.build_timestamp or ''):
+        raise InvalidInput('--build-timestamp must be a ten-digit UTC epoch')
+    if a.channel not in ('beta', 'prod'):
+        raise InvalidInput('--channel must be beta or prod')
+    return {'sha': a.candidate_sha, 'build': a.build_number, 'timestamp': a.build_timestamp, 'channel': a.channel}
+
+def public_assets(device, build):
+    return [f'{device}-ota_update-{build}.zip', f'{device}-stable', 'releasekey.x509.pem', 'avb_pkmd.bin',
+        'SHA256SUMS', 'UPDATE.md', 'verification.json']
+
+def host_path(config, value):
+    return Path(value) if Path(value).is_absolute() else Path(config['host']['sourceRoot'])/value
+
+# ---------------------------------------------------------------- preflight
+
+def preflight(job, config, env, adapter):
+    """Names of everything this job needs that is absent. Values are never printed."""
+    missing = []
+    if adapter == 'production' and config.get('fixture'):
+        raise InvalidInput('a fixture config cannot be used for production')
+    if adapter == 'fake':
+        return missing
+    if job in ('controller', 'cleanup'):
+        missing += [n for n in ('GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT') if not env.get(n)]
+    if job == 'guard':
+        if env.get('ROSEOS_BUILDER_RUNNER_READY') != 'true':
+            missing.append('ROSEOS_BUILDER_RUNNER_READY')
+        missing += [n for n in ('GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
+            'GCP_SIGNER_SERVICE_ACCOUNT') if not env.get(n)]
+        missing += publisher_inputs(env)
+        missing += adapter_inputs(config)
+        missing += [f'host.tools.{k}' for k, v in config['host']['tools'].items() if not v]
+        if not config.get('versionBaselines'):
+            missing.append('versionBaselines')
+        missing += [f'updater.{key}' for key in UPDATER_REQUIRED if not (config.get('updater') or {}).get(key)]
+        missing += permission_apex.missing(config.get('permissionApex'))
+    if job == 'builder':
+        if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
+            missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
+        host = config['host']
+        missing += adapter_inputs(config)
+        # Templated paths (the release's own otatools bin) exist only after signing; they are checked when used.
+        missing += [f'host.tools.{k}' for k, v in host['tools'].items() if not v or ('{' not in v and not host_path(config, v).exists())]
+        if not Path(host['sourceRoot']).is_dir():
+            missing.append('host.sourceRoot (not present on this runner)')
+        if not Path(host['lockPath']).parent.is_dir():
+            missing.append('host.lockPath directory')
+    if job == 'publisher':
+        missing += publisher_inputs(env)
+    return list(dict.fromkeys(missing))
+
+def publisher_inputs(env):
+    # Presence only: the workflow passes 'true'/'false' for the secret, never its value.
+    if env.get('PIXEL_OTA_PUBLISHER') not in SUPPORTED_PUBLISHERS:
+        return ['PIXEL_OTA_PUBLISHER (must be github-app)']
+    return [n for n, ok in (('PIXEL_OTA_APP_ID', bool(env.get('PIXEL_OTA_APP_ID'))),
+        ('PIXEL_OTA_APP_PRIVATE_KEY', env.get('PIXEL_OTA_APP_KEY_PRESENT') == 'true')) if not ok]
+
+# ---------------------------------------------------------------- adapters
+
+class Production:
+    simulated = False
+
+    def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic):
+        """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
+        this one instance, no operations read), within the 10-minute job limit. Never resubmits: a failed or uncertain request is reconciled against
+        the observed state. RUNNING is the VM state, not runner readiness."""
+        target, source, passing = BUILDER_STATES[action]
+        where = [f'--project={BUILDER["project"]}', f'--zone={BUILDER["zone"]}']
+
+        def describe():
+            result = subprocess.run([gcloud, 'compute', 'instances', 'describe', BUILDER['instance'], *where,
+                '--format=value(status)'], capture_output=True, text=True)
+            if result.returncode:
+                raise CheckFailed(f'builder describe failed (exit {result.returncode})')
+            return result.stdout.strip()
+        state = describe()
+        if state == source:
+            result = subprocess.run([gcloud, 'compute', 'instances', action, BUILDER['instance'], *where, '--async', '--quiet'],
+                capture_output=True, text=True)
+            if result.returncode:
+                state = describe()
+                if state not in passing | {target}:
+                    raise CheckFailed(f'builder {action} request failed (exit {result.returncode}); observed {state}')
+        elif state not in passing | {target}:
+            raise CheckFailed(f'builder is {state}; refusing to {action} it')
+        deadline = clock() + timeout
+        while state != target:
+            if state not in passing | {source}:
+                raise CheckFailed(f'builder moved to {state} while waiting for {target}')
+            if clock() >= deadline:
+                raise CheckFailed(f'builder did not reach {target} within {timeout}s; last observed {state}')
+            sleep(interval)
+            state = describe()
+        return state
+
+    def make(self, config, cand, env):
+        host = config['host']
+        steps = ['source build/envsetup.sh', f'lunch {host_token(config["target"]["lunch"])}']
+        if host.get('installclean'):
+            # Regenerates installed metadata (including AVB fingerprints) after a build-number change.
+            steps.append('m installclean')
+        steps.append(f'm -j{int(host["makeJobs"])} ' + ' '.join(host_token(g) for g in host['makeGoals']))
+        subprocess.run(['bash', '-euo', 'pipefail', '-c', ' && '.join(steps)], cwd=host['sourceRoot'], env=env, check=True)
+
+    def publish(self, config, cand, directory, receipt_dir):
+        if not os.environ.get('PIXEL_OTA_TOKEN'):
+            raise SetupMissing(['PIXEL_OTA_TOKEN (minted by the publisher job; never on the builder)'])
+        self.client = github_release_publisher.client_from_environment(config)
+        tag = config['publication']['tag'].format(build=cand['build'])
+        run = os.environ.get('GITHUB_SERVER_URL', '') + '/' + os.environ.get('GITHUB_REPOSITORY', '') + \
+            '/actions/runs/' + os.environ.get('GITHUB_RUN_ID', '')
+        body = (f'RoseOS {config["target"]["device"]} build {cand["build"]} from RoseOS-1 {cand["sha"]}, '
+            f'channel {cand["channel"]}. Verified and published by {run}.')
+        manifest = json.loads((Path(receipt_dir)/'manifest.json').read_text())
+        self.release, download, self.already_published = github_release_publisher.publish_release(
+            self.client, tag, tag, body, manifest, directory, Path(receipt_dir).parent/f'published-{cand["build"]}')
+        return download
+
+    def promote(self, config, cand, draft):
+        if self.already_published:
+            return
+        promoted = self.client.promote(self.release['id'])
+        if promoted.get('draft') is not False:
+            raise CheckFailed('release is still a draft after promotion')
+
+class Fake:
+    """Swaps only external edges; everything it produces is marked simulated."""
+    simulated = True
+
+    def __init__(self, state):
+        self.state = Path(state)
+        self.state.mkdir(parents=True, exist_ok=True)
+
+    def log(self, event):
+        with open(self.state/'events.log', 'a') as f:
+            f.write(event + '\n')
+
+    def control_builder(self, action):
+        self.log(f'builder {action}')
+
+    def make(self, config, cand, env):
+        self.log('make')
+        subprocess.run(config['host']['fakeMake'], env=env, check=True)
+
+    def publish(self, config, cand, directory, receipt_dir):
+        store = self.state/'releases'/config['publication']['tag'].format(build=cand['build'])
+        if store.exists():
+            raise CheckFailed('release tag already exists in the fake store')
+        draft = store/'draft'
+        shutil.copytree(directory, draft)
+        self.log('draft uploaded')
+        return draft
+
+    def promote(self, config, cand, draft):
+        draft.rename(draft.parent/'latest')
+        self.log('promoted latest')
+
+def host_token(value):
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', str(value)):
+        raise InvalidInput(f'unsafe build token in config: {value!r}')
+    return value
+
+def adapter_for(a):
+    return Fake(a.fake_state) if a.adapter == 'fake' else Production()
+
+# ---------------------------------------------------------------- build
+
+def stage_env(config, cand, release_dir):
+    env = dict(os.environ, ROSE_CANDIDATE_SHA=cand['sha'], ROSE_CHANNEL=cand['channel'],
+        BUILD_NUMBER=cand['build'], BUILD_DATETIME=cand['timestamp'], OUT_DIR=config['host']['outDir'],
+        ROSE_RELEASE_DIR=str(release_dir))
+    return env
+
+def entry_point(argv):
+    """argv lists only, never a shell string; {python} and {checkout} become this trusted checkout's absolute paths."""
+    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
+        raise InvalidInput('host entry points must be argv lists')
+    return [x.replace('{python}', sys.executable).replace('{checkout}', str(ROOT)) for x in argv]
+
+def run_entry_point(argv, env, cwd):
+    subprocess.run(entry_point(argv), env=env, cwd=cwd, check=True)
+
+def adapter_inputs(config):
+    """Recipe keys the checked-in host adapters still need (their --check mode)."""
+    missing = []
+    for key in ('integrateCommand', 'signCommand'):
+        argv = config['host'].get(key)
+        if not argv:
+            missing.append(f'host.{key}')
+            continue
+        argv = entry_point(argv)
+        if len(argv) == 2 and argv[1].startswith(str(ROOT/'scripts')+'/host-'):
+            result = subprocess.run([*argv, '--check'], capture_output=True, text=True)
+            if result.returncode == 4:
+                missing += json.loads(result.stderr)['missing']
+            elif result.returncode:
+                missing.append(f'host.{key} (adapter check failed)')
+    return missing
+
+def drop_signer_access():
+    """Remove the per-job gcloud config (actions-gcp-login.py) as soon as an entry point returns."""
+    directory = os.environ.get('CLOUDSDK_CONFIG')
+    runner_temp = os.environ.get('RUNNER_TEMP')
+    if directory and runner_temp and Path(directory) == Path(runner_temp)/'gcloud-job-config' and Path(directory).exists():
+        shutil.rmtree(directory)
+
+def check_version_baselines(config, cand, apps):
+    """Before anything is built: the dispatched apps must replace the delivered release's identities (Android keeps
+    an installed app unless the image's copy is at least as new) and must be strictly newer than retained candidates
+    whose content differs (e.g. the unpublished P1 299); the build number and BUILD_DATETIME must move past them."""
+    baselines = config.get('versionBaselines')
+    if baselines is None:
+        if config.get('fixture'):
+            return
+        raise SetupMissing(['versionBaselines'])
+    apps = {package: version for package, version in apps}
+    installed = json.loads((ROOT/baselines['installedEvidence']['identities']).read_text())
+    failures = [f'{app["packageName"]} versionCode {apps[app["packageName"]]} is below delivered '
+        f'{baselines["installedEvidence"]["build"]} versionCode {app["versionCode"]}'
+        for app in installed['apps'] if app['packageName'] in apps and apps[app['packageName']] < app['versionCode']]
+    consumed = app_versions_consumed(config, apps)
+    if consumed and apps.get(consumed[0], 0) <= consumed[1]:
+        failures.append(f'{consumed[0]} versionCode {apps.get(consumed[0])} must exceed {consumed[1]}, the newest app-only '
+            'version published, built or reserved')
+    for retained in baselines.get('retained', []):
+        for package, version in retained['mustExceed'].items():
+            if package not in apps or apps[package] <= version:
+                failures.append(f'{package} versionCode {apps.get(package)} must exceed retained {retained["build"]} versionCode {version}')
+        if int(cand['build']) <= int(retained['build']) or int(cand['timestamp']) <= int(retained['buildTimestamp']):
+            failures.append(f'build number and BUILD_DATETIME must exceed retained {retained["build"]} ({retained["buildTimestamp"]})')
+    if failures:
+        raise CheckFailed('; '.join(failures))
+
+def app_versions_consumed(config, apps=None):
+    """(package, newest versionCode) the app-only route has published, built or reserved: an OS candidate's bundled copy
+    must be newer, so a version never names two different APKs. A reservation for the OS route is the candidate's own:
+    an OS candidate bundling exactly that version passes the app-only reservations made after it (but never equals one,
+    and still exceeds everything published or built)."""
+    release = config.get('appRelease')
+    if not release:
+        return None
+    reserved = release.get('reserved', [])
+    bundled = (apps or {}).get(release['packageName'])
+    own = any(row.get('route') == 'os-release' and row['versionCode'] == bundled for row in reserved)
+    app_only = [row for row in reserved if row.get('route') != 'os-release'
+        and not (own and row['versionCode'] > bundled)]
+    rows = [release.get('published') or {}, *release.get('built', []), *app_only]
+    return release['packageName'], max(row.get('versionCode', 0) for row in rows)
+
+def build(a, config, cand, adapter):
+    host = config['host']
+    check_version_baselines(config, cand, json.loads(a.apps))
+    if not host.get('integrateCommand'):
+        raise SetupMissing(['host.integrateCommand'])
+    release_dir = Path(a.release_dir)
+    release_dir.mkdir(parents=True, exist_ok=True)
+    lock = open(host['lockPath'], 'a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise CheckFailed('the source/output lock is held by another job')
+    try:
+        env = stage_env(config, cand, release_dir)
+        # Lead-managed entry point: reconcile the exact candidate into the retained tree and write the
+        # resolved manifest and the background policy receipt into the release directory.
+        try:
+            run_entry_point(host['integrateCommand'], env, host['sourceRoot'])
+        finally:
+            drop_signer_access()
+        for name in ('resolved-manifest.xml', 'background-policy.json'):
+            if not (release_dir/name).is_file():
+                raise CheckFailed(f'integration did not produce $ROSE_RELEASE_DIR/{name}')
+        started = time.time()
+        adapter.make(config, cand, env)
+        # The retained OUT_DIR holds older target-files too; take only the one this build wrote.
+        packaging = Path(host['sourceRoot'])/host['outDir']/'target/product'/config['target']['device']/'obj/PACKAGING/target_files_intermediates'
+        fresh = [z for z in packaging.glob('*-target_files*.zip') if z.stat().st_mtime >= started - 1]
+        if len(fresh) != 1:
+            raise CheckFailed(f'expected exactly one target-files zip written by this build, found {len(fresh)}')
+        shutil.copyfile(fresh[0], release_dir/'unsigned-target_files.zip')
+    finally:
+        lock.close()
+    return {'stage': 'build', 'unsignedTargetFiles': sha256_file(release_dir/'unsigned-target_files.zip')}
+
+def sign(a, config, cand, adapter):
+    host = config['host']
+    if not host.get('signCommand'):
+        raise SetupMissing(['host.signCommand'])
+    release_dir = Path(a.release_dir)
+    lock = open(host['lockPath'], 'a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise CheckFailed('the source/output lock is held by another job')
+    try:
+        # Lead-managed entry point: signs with the existing identities; secrets stay on the builder.
+        try:
+            run_entry_point(host['signCommand'], stage_env(config, cand, release_dir), host['sourceRoot'])
+        finally:
+            drop_signer_access()
+    finally:
+        lock.close()
+    for name in ('signed-target_files.zip', 'public'):
+        if not (release_dir/name).exists():
+            raise CheckFailed(f'signing did not produce $ROSE_RELEASE_DIR/{name}')
+    return {'stage': 'sign', 'signedTargetFiles': sha256_file(release_dir/'signed-target_files.zip')}
+
+# ---------------------------------------------------------------- verification
+
+def read_props(archive):
+    props = {}
+    for name in PROPS:
+        if name in archive.namelist():
+            for line in archive.read(name).decode(errors='replace').splitlines():
+                if '=' in line and not line.startswith('#'):
+                    key, value = line.split('=', 1)
+                    props.setdefault(name, {})[key.strip()] = value.strip()
+    if 'SYSTEM/build.prop' not in props:
+        raise CheckFailed('target-files has no SYSTEM/build.prop')
+    return props
+
+def check_build_identity(path, config, cand, keys):
+    """Every partition's build number, timestamp, device and fingerprint, and every fingerprint in
+    META/misc_info.txt (stale AVB fingerprints there survived a build-number change once)."""
+    failures = []
+    device, build = config['target']['device'], cand['build']
+    marker = f'/{build}:{config["target"]["variant"]}/{keys}'
+    with zipfile.ZipFile(path) as archive:
+        props = read_props(archive)
+        for name, values in props.items():
+            for key, value in values.items():
+                if key.endswith('build.version.incremental') and value != build:
+                    failures.append(f'{name}: {key}={value}')
+                if key.endswith('build.date.utc') and value != cand['timestamp']:
+                    failures.append(f'{name}: {key}={value}')
+                if key.endswith('build.fingerprint') and marker not in value:
+                    failures.append(f'{name}: {key} does not name build {build} with {keys}')
+                if key.endswith('product.device') and value != device:
+                    failures.append(f'{name}: {key}={value}')
+        system = props['SYSTEM/build.prop']
+        if system.get('ro.build.type') != config['target']['variant']:
+            failures.append('ro.build.type is not ' + config['target']['variant'])
+        if 'META/misc_info.txt' not in archive.namelist():
+            failures.append('META/misc_info.txt missing')
+        else:
+            fingerprints = re.findall(r'\.fingerprint:(\S+)', archive.read('META/misc_info.txt').decode(errors='replace'))
+            if not fingerprints:
+                failures.append('META/misc_info.txt has no AVB fingerprint properties')
+            failures += [f'META/misc_info.txt fingerprint {f} does not name build {build}'
+                for f in fingerprints if marker not in f]
+    return failures
+
+def check_framework(path, config, aapt):
+    """Compiled framework allowlist and switches, read from framework-res.apk in the image."""
+    expected = config['framework']
+    with zipfile.ZipFile(path) as archive:
+        data = archive.read('SYSTEM/framework/framework-res.apk')
+    extracted = Path(os.environ.get('RUNNER_TEMP', '/tmp'))/f'framework-res-{os.getpid()}.apk'
+    extracted.write_bytes(data)
+    try:
+        dump = subprocess.run([aapt, 'dump', '--values', 'resources', str(extracted)], capture_output=True,
+            text=True, check=True).stdout
+    finally:
+        extracted.unlink()
+    return framework_failures(dump, expected, config['identities']['appSignerSha256'])
+
+def compiled_values(dump, kind, name):
+    """Value blocks of one resource in `aapt dump --values resources` output, as [(config, header, body lines)].
+    Only `resource 0x...` rows count: the `spec resource` declarations listed before the values carry no value. A
+    block's body is the following lines indented deeper than its row, so it ends at the next resource, spec or config."""
+    blocks, config, current = [], None, None
+    for line in dump.splitlines():
+        indent = len(line) - len(line.lstrip())
+        if current is not None and line.strip() and indent > current[0]:
+            current[3].append(line.strip())
+            continue
+        current = None
+        header = re.match(r'\s*config (.+?) flags=', line)
+        if header:
+            config = header.group(1)
+            continue
+        row = re.match(rf'\s*resource 0x[0-9a-f]{{8}} [\w.]+:{kind}/{re.escape(name)}: ?(.*)$', line)
+        if row:
+            current = (indent, config, row.group(1), [])
+            blocks.append(current)
+    return [(c, h, body) for _, c, h, body in blocks]
+
+def default_value(dump, kind, name, apk='framework-res'):
+    """(value, problem): the single default-config block; an override in another config or a malformed block is a
+    problem, never an empty or false value."""
+    blocks = compiled_values(dump, kind, name)
+    if [c for c, _, _ in blocks if c != '(default)']:
+        return None, f'{name} is overridden in config {sorted({c for c, _, _ in blocks if c != "(default)"})}'
+    if len(blocks) != 1:
+        return None, f'{name} has {len(blocks)} default values in {apk}'
+    _, header, body = blocks[0]
+    if kind == 'string':
+        values = [re.fullmatch(r'\(string(?:8|16)\) "([^"]*)"', line) for line in body]
+        if not header.startswith('t=0x03 ') or len(values) != 1 or not values[0]:
+            return None, f'{name} is not a well-formed string'
+        return values[0].group(1), None
+    if kind == 'array':
+        count = re.fullmatch(r'Parent=0x[0-9a-f]{8}\(Resolved=0x[0-9a-f]{8}\), Count=(\d+)', body[0]) if header == '<bag>' and body else None
+        items = [re.fullmatch(r'#(\d+) \(Key=0x[0-9a-f]{8}\): \(string(?:8|16)\) "([^"]*)"', line) for line in body[1:]]
+        if not count or not all(items) or [int(i.group(1)) for i in items] != list(range(int(count.group(1)))):
+            return None, f'{name} is not a well-formed string array'
+        return [i.group(2) for i in items], None
+    values = [re.fullmatch(r'\(boolean\) (true|false)', line) for line in body]
+    if not header.startswith('t=0x12 ') or len(values) != 1 or not values[0]:
+        return None, f'{name} is not a well-formed boolean'
+    return values[0].group(1) == 'true', None
+
+def framework_failures(dump, expected, signer):
+    failures = []
+    targets, problem = default_value(dump, 'array', 'config_pixelComputerControlTargets')
+    if problem:
+        failures.append(problem)
+    elif sorted(t.split(':')[0] for t in targets) != sorted(expected['computerControlTargets']) or \
+            any(t.split(':', 1)[-1].lower() != signer.lower() for t in targets):
+        failures.append(f'compiled computer-control targets are {targets}')
+    prototype, problem = default_value(dump, 'array', 'config_pixelComputerControlPrototypeAgents')
+    # A missing or unreadable array means the dump was not understood; fail closed rather than read it as empty.
+    if problem:
+        failures.append(problem)
+    elif expected['prototypeAgentsEmpty'] and prototype:
+        failures.append('compiled prototype agents are not empty')
+    locked, problem = default_value(dump, 'bool', 'config_pixelComputerControlLockedSessions')
+    if problem:
+        failures.append(problem)
+    elif locked != expected['lockedSessions']:
+        failures.append('compiled locked-session switch differs from config')
+    return failures
+
+UPDATER_REQUIRED = ('apkPath', 'signer', 'requiredFiles')
+# The RoseOS channel code the patcher copies into the Updater (os/overlays/.../RoseChannels.java), as a dex type.
+ROSE_CHANNELS_DEX = b'Lapp/seamlessupdate/client/RoseChannels;'
+
+def updater_expected(config):
+    """Compiled values the Updater must carry, derived from the checked-in recipe: the reconcile applyArgs pass
+    --updater-url (and any --updater-published-channel); os/patches/updater-rose-channels.patch fixes the rest."""
+    args = config['host']['integrate']['reconcile']['applyArgs']
+    published = [args[i + 1] for i, arg in enumerate(args) if arg == '--updater-published-channel'] or ['stable']
+    return {('string', 'url'): args[args.index('--updater-url') + 1], ('string', 'channel_default'): config['updater']['channelDefault'],
+        ('array', 'channel_published'): sorted(set(published)), ('array', 'channel_values'): config['updater']['channelValues']}
+
+def updater_failures(dump, expected):
+    failures = []
+    for (kind, name), want in expected.items():
+        value, problem = default_value(dump, kind, name, apk='the Updater')
+        if problem:
+            failures.append(f'Updater {problem}')
+        elif value != want:
+            failures.append(f'Updater compiled {name} is {value!r}, expected {want!r}')
+    return failures
+
+def check_updater(path, config, aapt, apksigner=None):
+    """The system Updater must be in the image itself, not only in patched source (077 shipped none): exactly the
+    configured privileged APK, its package identity, the supporting XML it requires, its compiled channel config and,
+    on signed target-files, its signer."""
+    spec = config.get('updater') or {}
+    missing = [f'updater.{key}' for key in UPDATER_REQUIRED if not spec.get(key)]
+    if missing:
+        raise SetupMissing(missing)
+    failures = []
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        found = sorted(n for n in names if re.search(r'(^|/)priv-app/Updater/[^/]+\.apk$', n))
+        if spec['apkPath'] not in names:
+            return [f'Updater APK {spec["apkPath"]} is absent from the target-files'
+                + (f' (found {found})' if found else ' (no Updater APK anywhere)')]
+        if found != [spec['apkPath']]:
+            failures.append(f'more than one Updater APK in the target-files: {found}')
+        for required in spec['requiredFiles']:
+            if required not in names:
+                failures.append(f'Updater supporting file {required} is absent')
+            elif spec['packageName'] not in archive.read(required).decode(errors='replace'):
+                failures.append(f'Updater supporting file {required} does not name {spec["packageName"]}')
+        data = archive.read(spec['apkPath'])
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as apk:
+            dexes = [n for n in apk.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+            if not any(ROSE_CHANNELS_DEX in apk.read(n) for n in dexes):
+                failures.append('Updater dex has no app.seamlessupdate.client.RoseChannels; the RoseOS channel code is not compiled in')
+    except zipfile.BadZipFile:
+        return failures + ['Updater APK is not a readable APK archive']
+    extracted = Path(os.environ.get('RUNNER_TEMP', '/tmp'))/f'updater-{os.getpid()}.apk'
+    extracted.write_bytes(data)
+    try:
+        badging = subprocess.run([aapt, 'dump', 'badging', str(extracted)], capture_output=True, text=True)
+        package = re.search(r"^package: name='([^']+)'", badging.stdout, re.M)
+        if badging.returncode or not package or package.group(1) != spec['packageName']:
+            failures.append(f'Updater package is {package.group(1) if package else None}, expected {spec["packageName"]}')
+        dump = subprocess.run([aapt, 'dump', '--values', 'resources', str(extracted)], capture_output=True, text=True, check=True).stdout
+        failures += updater_failures(dump, updater_expected(config))
+        if apksigner:
+            want = config['identities']['otaCertificateSha256'] if spec['signer'] == 'otaCertificate' else spec['signer']
+            certs = subprocess.run([apksigner, 'verify', '--print-certs', str(extracted)], capture_output=True, text=True)
+            digests = re.findall(r'certificate SHA-256 digest: ([0-9a-f]{64})', certs.stdout)
+            if certs.returncode or digests != [want.lower()]:
+                failures.append('Updater is not signed by the expected certificate')
+    finally:
+        extracted.unlink()
+    return failures
+
+def check_apps(path, policy, apksigner):
+    result = subprocess.run([sys.executable, str(TARGET_FILES_VERIFIER), str(path), str(policy), '--apksigner', apksigner],
+        capture_output=True, text=True)
+    report = json.loads(result.stdout or '{}')
+    if result.returncode or report.get('verdict') != 'PASS':
+        return [f'app gate: {r["packageName"]} failed' for r in report.get('results', []) if not r.get('pass')] or ['app gate failed']
+    return []
+
+def tool(config, name):
+    path = config['host']['tools'].get(name)
+    if not path or not host_path(config, path).exists():
+        raise SetupMissing([f'host.tools.{name}'])
+    return str(host_path(config, path))
+
+def check_permission_apex(path, config, used, apksigner=None):
+    """(failures, receipt) for the packaged Permission APEX (permission_apex.py). Unsigned target-files must carry the
+    source module's own payload key; signed ones the established route's keys (generate-release.sh: container
+    releasekey, payload avb.pem), i.e. the OTA certificate and AVB key pins, with the container signer checked."""
+    spec = config.get('permissionApex') or {}
+    absent = permission_apex.missing(spec)
+    if absent:
+        raise SetupMissing(absent)
+    with zipfile.ZipFile(path) as archive:
+        location, failures = permission_apex.locate(archive.namelist(), spec)
+        if failures:
+            return failures, None
+        data = archive.read(location)
+    identities = config['identities']
+    if apksigner:
+        key = identities['avbPublicKeySha256'] if spec['payloadKey'] == 'avbPublicKey' else spec['payloadKey']
+        signer = identities['otaCertificateSha256'] if spec['containerSigner'] == 'otaCertificate' else spec['containerSigner']
+    else:
+        key, signer = spec['sourcePayloadKeySha256'], None
+    with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        facts, failures = permission_apex.inspect(data, spec, lambda name: tool_receipt(config, name, used), workdir, key,
+            signer, apksigner)
+    return failures, {'path': location, 'sha256': hashlib.sha256(data).hexdigest(), **facts}
+
+def verify_build(a, config, cand, adapter):
+    release_dir = Path(a.release_dir)
+    target_files = release_dir/'unsigned-target_files.zip'
+    failures = check_build_identity(target_files, config, cand, 'test-keys')
+    failures += check_apps(target_files, release_dir/'background-policy.json', tool(config, 'apksigner'))
+    failures += check_framework(target_files, config, tool(config, 'aapt'))
+    failures += check_updater(target_files, config, tool(config, 'aapt'))
+    apex_tools = {}
+    apex_failures, apex = check_permission_apex(target_files, config, apex_tools)
+    failures += apex_failures
+    if failures:
+        raise CheckFailed('; '.join(failures))
+    return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
+        'Updater presence/identity/supporting XML/compiled channel config',
+        'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers'],
+        'permissionApex': apex, 'apexTools': apex_tools}
+
+def cert_sha256(pem):
+    body = pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0]
+    return hashlib.sha256(base64.b64decode(''.join(body.split()))).hexdigest()
+
+def otatools_bin(config, cand):
+    """The retained otatools bin of this release (unpacked by the signing script): delta_generator and friends."""
+    template = config['host']['tools'].get('otatoolsBin')
+    if not template:
+        raise SetupMissing(['host.tools.otatoolsBin'])
+    return host_path(config, template.format(device=config['target']['device'], build=cand['build']))
+
+def check_ota(config, cand, ota, public, used):
+    failures = []
+    device, build, identities = config['target']['device'], cand['build'], config['identities']
+    with zipfile.ZipFile(ota) as archive:
+        try:
+            metadata = dict(line.split('=', 1) for line in archive.read('META-INF/com/android/metadata').decode().splitlines() if '=' in line)
+        except KeyError:
+            return ['OTA has no META-INF/com/android/metadata']
+    if metadata.get('pre-device') != device:
+        failures.append(f'OTA pre-device is {metadata.get("pre-device")}')
+    if metadata.get('post-timestamp') != cand['timestamp']:
+        failures.append(f'OTA post-timestamp is {metadata.get("post-timestamp")}')
+    if f'/{build}:' not in metadata.get('post-build', ''):
+        failures.append('OTA post-build does not name the selected build')
+    if cert_sha256((public/'releasekey.x509.pem').read_text()) != identities['otaCertificateSha256']:
+        failures.append('published OTA certificate does not match the pin')
+    if sha256_file(public/'avb_pkmd.bin') != identities['avbPublicKeySha256']:
+        failures.append('published AVB key does not match the pin')
+    # Whole-package and payload signatures, checked by the source tree's own release tool. Its payload check runs
+    # delta_generator from PATH, so the retained otatools bin goes first; a missing tool is a verifier dependency
+    # failure, never a pass and never reported as a bad signature.
+    bin_dir = otatools_bin(config, cand)
+    delta = bin_dir/'delta_generator'
+    if not (delta.is_file() and os.access(delta, os.X_OK)):
+        return failures + ['verifier dependency missing: delta_generator in the retained otatools bin; payload signature not checked']
+    checker = tool_receipt(config, 'checkOtaSignature', used)
+    used.setdefault('delta_generator', {'path': str(delta), 'sha256': sha256_file(delta)})
+    result = subprocess.run([sys.executable, checker, str(public/'releasekey.x509.pem'), str(ota)], capture_output=True, text=True,
+        env=dict(os.environ, PATH=f'{bin_dir}:' + os.environ.get('PATH', '')))
+    if result.returncode and 'FileNotFoundError' in result.stderr:
+        failures.append('verifier dependency missing while checking the OTA (a tool was not found); signatures not established')
+    elif result.returncode:
+        failures.append('OTA package or payload signature verification failed')
+    return failures
+
+def check_vbmeta(config, signed, public, used):
+    """verify_image of vbmeta.img with every IMAGES/*.img beside it and --follow_chain_partitions: the vbmeta
+    signature, chained vbmeta signatures and all referenced partition hashes, plus the embedded key pin."""
+    failures = []
+    with zipfile.ZipFile(signed) as archive, tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        images = [n for n in archive.namelist() if re.fullmatch(r'IMAGES/[\w.-]+\.img', n)]
+        if 'IMAGES/vbmeta.img' not in images:
+            return ['signed target-files has no IMAGES/vbmeta.img']
+        for name in images:
+            with archive.open(name) as source, open(Path(workdir)/Path(name).name, 'wb') as out:
+                shutil.copyfileobj(source, out)
+        image = Path(workdir)/'vbmeta.img'
+        avbtool = tool_receipt(config, 'avbtool', used)
+        info = subprocess.run([sys.executable, avbtool, 'info_image', '--image', str(image)], capture_output=True, text=True)
+        missing = sorted(p for p in set(re.findall(r'Partition Name:\s*(\S+)', info.stdout)) if not (Path(workdir)/f'{p}.img').is_file())
+        if missing:
+            failures.append('verifier input missing: ' + ', '.join(f'IMAGES/{p}.img' for p in missing) + ' referenced by vbmeta')
+        else:
+            verified = subprocess.run([sys.executable, avbtool, 'verify_image', '--image', str(image), '--follow_chain_partitions'],
+                capture_output=True, text=True)
+            if verified.returncode:
+                failures.append('vbmeta chain verification failed (vbmeta, chained vbmeta or partition hash)')
+    embedded = re.search(r'Public key \(sha1\):\s*([0-9a-f]{40})', info.stdout)
+    if not embedded or embedded.group(1) != hashlib.sha1((public/'avb_pkmd.bin').read_bytes()).hexdigest():
+        failures.append('vbmeta is not signed by the published AVB key')
+    return failures
+
+SPARSE_MAGIC = b'\x3a\xff\x26\xed'
+# Loose target-files prefix -> (signed partition image, path inside that image).
+IMAGE_LOCATIONS = (('SYSTEM_EXT/', 'IMAGES/system_ext.img', '/'), ('PRODUCT/', 'IMAGES/product.img', '/'),
+    ('SYSTEM/', 'IMAGES/system.img', '/system/'))
+
+def tool_receipt(config, name, used):
+    # Which retained tool actually ran, with its bytes: the sparse branch is conditional, so only use is recorded.
+    path = tool(config, name)
+    used.setdefault(name, {'path': path, 'sha256': sha256_file(path)})
+    return path
+
+def image_file(config, archive, loose_name, workdir, cache, used):
+    """Bytes of a file as embedded in the signed partition image (simg2img when sparse, then debugfs)."""
+    for prefix, image, root in IMAGE_LOCATIONS:
+        if loose_name.startswith(prefix):
+            break
+    else:
+        raise CheckFailed(f'no image mapping for {loose_name}')
+    if image not in cache:
+        if image not in archive.namelist():
+            raise CheckFailed(f'signed target-files has no {image}')
+        raw = Path(workdir)/Path(image).name
+        with archive.open(image) as source, open(raw, 'wb') as out:
+            shutil.copyfileobj(source, out)
+        with open(raw, 'rb') as f:
+            sparse = f.read(4) == SPARSE_MAGIC
+        if sparse:
+            unsparse = raw.with_suffix('.raw')
+            subprocess.run([tool_receipt(config, 'simg2img', used), str(raw), str(unsparse)], check=True, capture_output=True)
+            raw.unlink()
+            raw = unsparse
+        cache[image] = raw
+    out = Path(workdir)/('extract-' + hashlib.sha256(loose_name.encode()).hexdigest()[:16])
+    inside = root + loose_name[len(prefix):]
+    subprocess.run([tool_receipt(config, 'debugfs', used), '-R', f'dump -p {inside} {out}', str(cache[image])], capture_output=True)
+    if not out.is_file():
+        raise CheckFailed(f'{inside} not found in {image}')
+    return out.read_bytes()
+
+def check_image_bytes(config, signed, policy_path, used):
+    """Loose target-files entries are not enough: compare the bytes actually embedded in the signed images."""
+    policy = json.loads(Path(policy_path).read_text())
+    expected = {'SYSTEM_EXT/priv-app/PixelBackgroundControl/': policy['agent']['apkSha256']}
+    for row in [policy['voice'], *policy['targets']]:
+        expected['PRODUCT/app/RosePreinstall_' + row['packageName'].replace('.', '_') + '/'] = row['apkSha256']
+    failures = []
+    with zipfile.ZipFile(signed) as archive, tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        cache = {}
+        for prefix, digest in expected.items():
+            names = [n for n in archive.namelist() if n.startswith(prefix) and n.endswith('.apk')]
+            if len(names) != 1:
+                failures.append(f'expected one APK under {prefix}, found {len(names)}')
+                continue
+            if hashlib.sha256(image_file(config, archive, names[0], workdir, cache, used)).hexdigest() != digest:
+                failures.append(f'image bytes of {names[0]} differ from the policy pin')
+        updater = (config.get('updater') or {}).get('apkPath')
+        if updater and updater in archive.namelist() and hashlib.sha256(image_file(config, archive, updater, workdir, cache, used)).digest() \
+                != hashlib.sha256(archive.read(updater)).digest():
+            failures.append(f'image bytes of {updater} differ from the checked target-files copy')
+        apex = next((p for p in (config.get('permissionApex') or {}).get('paths', []) if p in archive.namelist()), None)
+        if apex and hashlib.sha256(image_file(config, archive, apex, workdir, cache, used)).digest() != hashlib.sha256(archive.read(apex)).digest():
+            failures.append(f'image bytes of {apex} differ from the checked target-files copy')
+        framework = 'SYSTEM/framework/framework-res.apk'
+        if hashlib.sha256(image_file(config, archive, framework, workdir, cache, used)).digest() != hashlib.sha256(archive.read(framework)).digest():
+            failures.append('framework-res.apk in system.img differs from the checked target-files copy')
+    return failures
+
+def check_payload(ota):
+    """payload_properties.txt must describe payload.bin exactly: size, whole-file hash, metadata size and hash."""
+    with zipfile.ZipFile(ota) as archive:
+        if not {'payload.bin', 'payload_properties.txt'} <= set(archive.namelist()):
+            return ['OTA lacks payload.bin or payload_properties.txt']
+        properties = dict(line.split('=', 1) for line in archive.read('payload_properties.txt').decode().splitlines() if '=' in line)
+        digest, size = hashlib.sha256(), 0
+        with archive.open('payload.bin') as payload:
+            header = payload.read(24)
+            digest.update(header)
+            size += len(header)
+            if len(header) < 24 or header[:4] != b'CrAU':
+                return ['payload.bin has no valid header']
+            manifest_size = struct.unpack('>Q', header[12:20])[0]
+            metadata_size = 24 + manifest_size
+            metadata = hashlib.sha256(header)
+            remaining = manifest_size
+            while remaining:
+                block = payload.read(min(remaining, 1 << 20))
+                if not block:
+                    return ['payload.bin is shorter than its manifest']
+                metadata.update(block)
+                digest.update(block)
+                size += len(block)
+                remaining -= len(block)
+            for block in iter(lambda: payload.read(1 << 20), b''):
+                digest.update(block)
+                size += len(block)
+    failures = []
+    expected = {'FILE_SIZE': str(size), 'FILE_HASH': base64.b64encode(digest.digest()).decode(),
+        'METADATA_SIZE': str(metadata_size), 'METADATA_HASH': base64.b64encode(metadata.digest()).decode()}
+    for key, value in expected.items():
+        if properties.get(key) != value:
+            failures.append(f'payload_properties {key} does not match payload.bin')
+    return failures
+
+def write_checksums(public):
+    names = sorted(p.name for p in public.iterdir() if p.name != 'SHA256SUMS')
+    (public/'SHA256SUMS').write_text(''.join(f'{sha256_file(public/n)}  {n}\n' for n in names))
+
+def verify_signed(a, config, cand, adapter):
+    release_dir = Path(a.release_dir)
+    public, signed = release_dir/'public', release_dir/'signed-target_files.zip'
+    device, build = config['target']['device'], cand['build']
+    # The signer hands over five files; verification.json and then SHA256SUMS are written here, after the checks.
+    expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
+    present = {p.name for p in public.iterdir()}
+    failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
+    image_tools, verifier_tools = {}, {}
+    if not failures:
+        failures += check_build_identity(signed, config, cand, 'release-keys')
+        failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
+        failures += check_updater(signed, config, tool(config, 'aapt'), tool(config, 'apksigner'))
+        apex_failures, apex = check_permission_apex(signed, config, verifier_tools, tool(config, 'apksigner'))
+        failures += apex_failures
+        failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
+        failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
+        failures += check_payload(public/f'{device}-ota_update-{build}.zip')
+        failures += check_vbmeta(config, signed, public, verifier_tools)
+        feed = (public/f'{device}-stable').read_text().splitlines()[:1]
+        if feed != [f'{build} {cand["timestamp"]} {device} {config["publication"]["channels"]["beta"]["feedChannel"]}']:
+            failures.append('feed file does not describe the selected build')
+    if failures:
+        raise CheckFailed('; '.join(failures))
+    receipt = {'receiptType': 'candidate-verification', 'candidate': cand, 'simulated': adapter.simulated,
+        'signedTargetFilesSha256': sha256_file(signed), 'published': False,
+        'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
+            'Updater presence/identity/config/signer',
+            'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
+            'image-embedded app/framework/Permission APEX bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'vbmeta signature and AVB key', 'public pins', 'feed line'],
+        'permissionApex': apex, 'imageTools': image_tools, 'verifierTools': verifier_tools}
+    release_receipts.write_once(public/'verification.json', receipt)
+    write_checksums(public)
+    return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}
+
+# ---------------------------------------------------------------- transfer and publication
+
+def write_identities(config, path, apps):
+    signer = config['identities']['appSignerSha256']
+    release_receipts.write_once(path, {'apps': [{'packageName': p, 'versionCode': v, 'signerSha256': signer} for p, v in apps],
+        'otaCertificateSha256': config['identities']['otaCertificateSha256'],
+        'avbPublicKeySha256': config['identities']['avbPublicKeySha256']})
+
+def manifest_tool(*args):
+    result = subprocess.run([sys.executable, str(ROOT/'scripts/release-manifest.py'), *map(str, args)], capture_output=True, text=True)
+    if result.returncode:
+        raise CheckFailed(f'release-manifest {args[0]} failed: {(result.stdout or result.stderr).strip()[-400:]}')
+    return json.loads(result.stdout)
+
+def stage_artifact(a, config, cand, adapter):
+    """Copy only the allowlisted public files and nonsecret receipts into the artifact directory."""
+    release_dir, artifact = Path(a.release_dir), Path(a.artifact_dir)
+    device, build = config['target']['device'], cand['build']
+    verification = json.loads((release_dir/'public/verification.json').read_text())
+    if verification.get('candidate') != cand or verification.get('simulated') != adapter.simulated:
+        raise CheckFailed('verification receipt does not belong to this candidate and adapter')
+    assets = artifact/'assets'
+    assets.mkdir(parents=True)
+    for name in public_assets(device, build):
+        source = release_dir/'public'/name
+        if source.is_symlink() or not source.is_file():
+            raise CheckFailed(f'public file missing or not regular: {name}')
+        shutil.copyfile(source, assets/name)
+    apps = [tuple(x) for x in json.loads(a.apps)]
+    write_identities(config, artifact/'expected-identities.json', apps)
+    resolved = release_dir/'resolved-manifest.xml'
+    manifest_tool('create', '--source-revision', cand['sha'], '--resolved-manifest', resolved, '--device', device,
+        '--variant', config['target']['variant'], '--channel', cand['channel'], '--build-number', build,
+        '--build-timestamp', cand['timestamp'], '--identities', artifact/'expected-identities.json',
+        '--output', artifact/'manifest.json', *[x for n in sorted(os.listdir(assets)) for x in ('--asset', assets/n)])
+    release_receipts.write_once(artifact/'pipeline-receipt.json', {'receiptType': 'builder-transfer', 'candidate': cand,
+        'simulated': adapter.simulated, 'manifestSha256': sha256_file(artifact/'manifest.json')})
+    return {'stage': 'transfer', 'assets': len(os.listdir(assets)), 'simulated': adapter.simulated}
+
+def publish(a, config, cand, adapter):
+    artifact = Path(a.artifact_dir)
+    receipt = json.loads((artifact/'pipeline-receipt.json').read_text())
+    if receipt.get('simulated') and not adapter.simulated:
+        raise CheckFailed('refusing to publish a simulated artifact')
+    if receipt.get('candidate') != cand or receipt.get('manifestSha256') != sha256_file(artifact/'manifest.json'):
+        raise CheckFailed('artifact receipt does not match this candidate or manifest')
+    channel = config['publication']['channels'].get(cand['channel'])
+    if channel is None:
+        raise SetupMissing([f'publication.channels.{cand["channel"]} (no verified publication target)'])
+    # Revalidate the transferred bytes before anything leaves this job.
+    manifest_tool('verify-published', artifact/'manifest.json', '--dir', artifact/'assets')
+    manifest_tool('verify', artifact/'manifest.json', '--dir', artifact/'assets', '--expected-device', config['target']['device'],
+        '--expected-channel', cand['channel'], '--expected-identities', artifact/'expected-identities.json', '--no-baseline')
+    public = artifact/'assets'
+    if cert_sha256((public/'releasekey.x509.pem').read_text()) != config['identities']['otaCertificateSha256'] or \
+            sha256_file(public/'avb_pkmd.bin') != config['identities']['avbPublicKeySha256']:
+        raise CheckFailed('transferred public keys do not match the pins')
+    draft = adapter.publish(config, cand, public, artifact)
+    # Download check of the draft before any promotion; promotion only when explicitly requested.
+    manifest_tool('verify-published', artifact/'manifest.json', '--dir', draft)
+    promoted = bool(channel['promoteLatest'] and a.promote)
+    if promoted:
+        adapter.promote(config, cand, draft)
+    return {'stage': 'publish', 'draft': 'verified', 'promoted': promoted, 'simulated': adapter.simulated}
+
+# ---------------------------------------------------------------- command line
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('command', choices=['preflight', 'start-builder', 'stop-builder', 'build', 'verify-build', 'sign',
+        'verify-signed', 'stage-artifact', 'publish'])
+    p.add_argument('--job', choices=['guard', 'controller', 'builder', 'publisher', 'cleanup'])
+    p.add_argument('--adapter', choices=['production', 'fake'], default='production')
+    p.add_argument('--fake-state', help='Fake adapter state directory (tests only)')
+    p.add_argument('--config', default=str(CONFIG))
+    p.add_argument('--candidate-sha')
+    p.add_argument('--build-number')
+    p.add_argument('--build-timestamp')
+    p.add_argument('--channel', default='beta')
+    p.add_argument('--release-dir')
+    p.add_argument('--artifact-dir')
+    p.add_argument('--apps', default='[]', help='JSON list of [package, versionCode] expected in this candidate')
+    p.add_argument('--promote', action='store_true')
+    a = p.parse_args(argv)
+    try:
+        if a.adapter == 'fake' and not a.fake_state:
+            raise InvalidInput('--adapter fake needs --fake-state')
+        config = load_config(a.config)
+        if a.adapter == 'production' and config.get('fixture'):
+            raise InvalidInput('a fixture config cannot be used for production')
+        adapter = adapter_for(a)
+        if a.command == 'preflight':
+            missing = preflight(a.job, config, os.environ, a.adapter)
+            if missing:
+                raise SetupMissing(missing)
+            report = {'job': a.job, 'preflight': 'ready'}
+        elif a.command in ('start-builder', 'stop-builder'):
+            report = {'builder': a.command, 'observed': adapter.control_builder(a.command.split('-')[0])}
+        else:
+            cand = candidate(a)
+            report = {'build': build, 'verify-build': verify_build, 'sign': sign, 'verify-signed': verify_signed,
+                'stage-artifact': stage_artifact, 'publish': publish}[a.command](a, config, cand, adapter)
+    except SetupMissing as error:
+        print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
+        return 4
+    except InvalidInput as error:
+        print(json.dumps({'verdict': 'INVALID', 'error': str(error)}), file=sys.stderr)
+        return 2
+    except (CheckFailed, subprocess.CalledProcessError, release_receipts.ReceiptExists,
+            github_release_publisher.PublishError) as error:
+        print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())

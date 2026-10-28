@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "kind": "emulator-alpha",
+  "sharedHost": "os/release-pipeline/frankel.json",
+  "target": {
+    "lunch": "aosp_cf_x86_64_only_phone-cur-userdebug",
+    "product": "aosp_cf_x86_64_only_phone",
+    "release": "cur",
+    "variant": "userdebug",
+    "keys": "test-keys",
+    "basis": "Target of the historical Cuttlefish boot (docs/upstream/VALIDATION.md, 2026-10-24, framework 84183aff); that boot is not evidence for any current candidate. device/google/cuttlefish is pinned in os/pinned-manifest.xml (283645aa, android-17.0.0_r1). The emulator reference scripts' sdk_phone64 target, roots and in-place product edits are not used"
+  },
+  "build": {
+    "outDir": "out-rose-cf-alpha",
+    "buildIdPrefix": "rose-cf-alpha-",
+    "makeJobs": 48,
+    "makeGoals": [
+      "droid",
+      "hosttar"
+    ],
+    "requiredImages": [
+      "super.img",
+      "boot.img",
+      "vendor_boot.img",
+      "vbmeta.img"
+    ],
+    "minFreeGiB": 300,
+    "basis": "Own OUT_DIR beside the Pixel outDir, under the shared builder lock; nothing is cleaned. droid builds the guest images into PRODUCT_OUT; hosttar is the host package goal (hostPackage). requiredImages is a minimum, not the full launcher input list, which is unverified for this tree. minFreeGiB is a policy margin, not a measured output size"
+  },
+  "hostPackage": {
+    "moduleType": "cvd_host_package",
+    "module": "cvd-host_package",
+    "definedIn": "build/Android.bp",
+    "plugin": "build/cvd-host-package.go",
+    "pluginSha256": "c9f465dbd93b0074e61e34d428567284b262f72c99b0d08e286b61026541066b",
+    "goal": "hosttar",
+    "output": "cvd-host_package.tar.gz",
+    "boardPlatform": "vsoc_x86_64",
+    "basis": "Read from the pinned device/google/cuttlefish 283645aa (no compile): build/cvd-host-package.go registers the Soong cvd_host_package module type, installs <module>.tar.gz into the module's host install directory (HOST_OUT) and declares the hosttar phony only for the vsoc board platforms; build/Android.bp declares cvd_host_package cvd-host_package; vsoc_x86_64_only/BoardConfig.mk sets TARGET_BOARD_PLATFORM vsoc_x86_64. There is no Makefile hosttar. Preflight checks the plugin's sha256 and these declarations in the retained tree, and lunch must resolve this board platform"
+  },
+  "sourceBinding": {
+    "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+    "reconcileReceipt": "0004-2026102804.json",
+    "reconcileReceiptSha256": "db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0",
+    "apps": [
+      [
+        "dev.pixel.voice",
+        302
+      ],
+      [
+        "dev.pixel.calculator.agent",
+        4
+      ],
+      [
+        "dev.pixel.backgroundcontrol",
+        28
+      ]
+    ],
+    "basis": "The base of every preparation: the retained Pixel tree exactly as the last Pixel integration reconciled it, bound by the builder's latest host-reconcile receipt (file name and sha256), the candidate SHA and the dispatched apps of the run that wrote it. prepare refuses any other latest receipt and any drift from its entries; the build refuses any other candidate or app set. The retained tree itself is never built, edited or reconciled by the alpha",
+    "evidence": "Lead's read-only host inspection, 2026-10-28 (INFRA-ALPHA-082): reconcile receipt 0004-2026102804.json (written 2026-10-28T09:59:03Z) is the latest and none of its 15 entries has drifted; the immutable 2026102804 stage chain (000-init to 010-completed) names candidate ae9cfd4d; aapt and hashes of the integrated apps match 2804 (Rose Agent 302 01b184b4..., Calculator 4 9f46c1a2..., controller 28 f39936b1...). Rose Agent 303 never reconciled this tree. apps uses the order of the 2804 dispatch (scripts/tests/test_release_candidate_contract.py APPS), so the alpha dispatch passes exactly this list"
+  },
+  "hostEvidence": {
+    "probeReceiptSha256": "9c19b5cbcb731fb6dfc0eaf05845a6be1bc4a2a2990b4f650ff60a012c91750e",
+    "lunch": {
+      "BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE": "erofs",
+      "HOST_OUT": "out-rose-cf-alpha/host/linux-x86",
+      "PRODUCT_DEVICE": "vsoc_x86_64_only",
+      "PRODUCT_OUT": "out-rose-cf-alpha/target/product/vsoc_x86_64_only",
+      "TARGET_BOARD_PLATFORM": "vsoc_x86_64",
+      "TARGET_BUILD_VARIANT": "userdebug",
+      "TARGET_PRODUCT": "aosp_cf_x86_64_only_phone",
+      "TARGET_RELEASE": "cur"
+    },
+    "basis": "Values from a passing emulator-alpha.py probe on the builder under the lock: TARGET_PRODUCT, TARGET_BUILD_VARIANT, TARGET_BOARD_PLATFORM, PRODUCT_DEVICE, PRODUCT_OUT and HOST_OUT from get_build_var, and TARGET_RELEASE as exported by lunch into the shell (get_build_var returns it empty in this tree), with the alpha OUT_DIR. The failed first probe and the 081 diagnosis are not probe receipts. Until recorded, guard and builder fail closed",
+    "evidence": "Lead's probe (INFRA-ALPHA-094) on the prepared tree above, recipe 0f4a8db4, exit 0 with no treeFailures, 15:31:20 UTC; receipt /home/pixelbuild/rose-actions/alpha092-recipe-0f4a8db4/probe-receipt.json (readiness.json beside it). The probe's numeric run label 92 is not an Actions run or image identity. No compiler or build ran. 399568531456 bytes (372.1 GiB) free afterwards. Base ae9cfd4d, apps 302/4/28, OS delta f21bf683 and contract unchanged",
+    "probedSuccessorId": null
+  },
+  "preparation": {
+    "root": "/home/pixelbuild/rose-actions/alpha-source",
+    "copyBudgetGiB": 150,
+    "exclusions": {
+      "rootNames": [
+        ".repo",
+        "keys",
+        "releases",
+        "out"
+      ],
+      "rootPrefixes": [
+        "out-",
+        "out_"
+      ],
+      "anywhereNames": [
+        ".git",
+        ".repo"
+      ],
+      "externalLinks": [],
+      "cacheBoundaries": [
+        {
+          "path": "vendor/adevtool/dl/unpacked",
+          "pruneMarker": "vendor/adevtool/dl/.find-ignore",
+          "referenceMarkers": [
+            "adevtool/dl/unpacked",
+            "dl/unpacked/"
+          ],
+          "reason": "adevtool's extracted factory-image cache, not a build input",
+          "provenance": {
+            "adevtool": {
+              "project": "vendor/adevtool",
+              "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+              "facts": [
+                "src/config/paths.ts (sha256 418823cc...): IMAGE_DOWNLOAD_DIR = vendor/adevtool/dl and UNPACKED_IMAGES_DIR = dl/unpacked",
+                "src/frontend/source.ts: images are unpacked to dl/unpacked/<device>-<buildId> and made read-only (chmod -R a-w)",
+                "src/blobs/copy.ts (sha256 4d87c11b...) and src/build/make.ts (sha256 313f962c...): vendor blobs are byte-copied into vendor/<vendor>/<device>/proprietary and PRODUCT_COPY_FILES name that copy, not the cache",
+                ".gitignore (sha256 555789bf...): /dl/* ignored except /dl/.find-ignore, an empty tracked file"
+              ]
+            },
+            "soong": {
+              "project": "build/soong",
+              "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+              "facts": [
+                "ui/build/finder.go (sha256 2d77fa64...): PruneFiles .out-dir and .find-ignore make the module finder skip that directory and its subdirectories, so no build definition under vendor/adevtool/dl is discovered"
+              ]
+            },
+            "builder": "INFRA-ALPHA-090: the failed prepare named absolute links under dl/unpacked/frankel-CP3A.261005.005 to device paths; 95 absolute links there (receipt alpha089-recipe-3c048b45/absolute-links.json, sha256 f6b8af249ab1feafe020bba1ac12a656c2c3e4d862a905a67e0b6983df8c3a1a), including the two /sys/kernel/debug links formerly listed in externalLinks"
+          }
+        }
+      ]
+    },
+    "osDelta": {
+      "commit": "156ccb8ed0bbc871222bfa206009560b1c9907be",
+      "contract": "os/alpha/cuttlefish-product-contract.json",
+      "contractSha256": "a9c757c0bf50cbdaf78e3987b03cce507800f63448f2cfb306f9565b8c53ba8b"
+    },
+    "baseEvidence": {
+      "resolvedManifest": {
+        "path": "/home/pixelbuild/rose-actions/frankel-2026102804/release/resolved-manifest.xml",
+        "sha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888"
+      },
+      "policy": {
+        "path": "/home/pixelbuild/rose-actions/frankel-2026102804/release/background-policy.json",
+        "sha256": "044b99e57fa97d73b77fc46a349c47f7f6003fa9a202558ad577d9a83a471423"
+      }
+    },
+    "gitHeadProjects": [
+      "device/google/cuttlefish",
+      "build/make",
+      "build/release",
+      "frameworks/base",
+      "packages/apps/Updater"
+    ],
+    "basis": "INFRA-ALPHA-085 against the 084 interface (OS-ALPHA-001). Measured 2026-10-28 11:53Z on the builder's ext4: reflink unsupported; the selection without .repo, keys, releases, out, out-*, out_* and .git/.repo everywhere allocates 120.16 GiB (1,696,997 files), so copyBudgetGiB 150 includes metadata and slack, and build.minFreeGiB 300 must remain free after it. 6,680 symlinks: 6,543 resolve inside, 135 dangle (contained fixtures, kept), the extracted factory-image cache vendor/adevtool/dl/unpacked (where the absolute device-path links live, including both /sys/kernel/debug links) is excluded as an exact cache boundary (INFRA-ALPHA-090, provenance in cacheBoundaries); any other escape stops preparation. The resolved-manifest digest was read from the retained 2804 release directory by the lead (INFRA-ALPHA-090); the policy digest is the 2804 background-policy.json. The delta and its changed files come from OS's contract at osDelta.commit (OS-ALPHA-001 E010, PR72: build/make media_system.mk and target/product/generic/Android.bp, patch aa975499, adding the ALPHA-099 system-image closure to E006's patch e000da0d)",
+    "successorOf": {
+      "preparationId": "b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87",
+      "receiptSha256": "18582916250d5cc7236a4813fba0c758d9cee3c199681b0ac6ee11b953ca206e",
+      "incrementalDelta": "alpha099IncrementalDelta",
+      "basis": "INFRA-ALPHA-104: the historical preparation (delta f21bf683, patch e000da0d) whose tree and retained OUT_DIR the successor transition moves in place to osDelta (156ccb8e) by the contract's one-file alpha099IncrementalDelta (patch c9350590, build/make target/product/generic/Android.bp a8fd1327 -> cf5dff6d). Its preparation.json, manifest and probe stay immutable history; prepare-successor checks this receipt digest, the delta ancestry and a full re-hash before writing anything, and records alpha-source/<preparationId>/successors/<successorId>/successor.json write-once"
+    }
+  },
+  "prepared": {
+    "preparationId": "b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87",
+    "receiptSha256": "18582916250d5cc7236a4813fba0c758d9cee3c199681b0ac6ee11b953ca206e",
+    "basis": "The immutable preparation the build uses (alpha-source/<preparationId>/tree with preparation.json), recorded after the lead runs prepare and a probe passes against it. Until then guard and builder fail closed; the build never falls back to the retained Pixel tree",
+    "evidence": "Lead's actual run (INFRA-ALPHA-094) with recipe 0f4a8db4: prepare succeeded 15:16:05 UTC into /home/pixelbuild/rose-actions/alpha-source/b02dafbb.../tree. The first full verify-prepared failed only on build/make/target/product/media_system.mk and build/make/target/product/generic/Android.bp: bytes equal the contract after hashes, mode 0600 instead of the recorded 0644 (git apply under umask 0077). The lead restored only those two files to their recorded 0644 under the lock (mode-restoration.json; bytes, manifest and receipt unchanged; first attempt archived in alpha092-recipe-0f4a8db4/verify-attempt1). That host repair is historical and distinct from the source fix in this recipe, which restores recorded modes during preparation. The rerun full verify-prepared exited 0 with no differences This preparation and its probe bind the earlier delta f21bf683 (contract c825aa19, patch e000da0d) and stay as historical evidence of that source; after the ALPHA-099 delta (156ccb8e) its receipt osDeltaCommit no longer matches preparation.osDelta, so verify-prepared, guard and build refuse it until the lead records a successor preparation and probe.",
+    "successor": {
+      "successorId": null,
+      "receiptSha256": null,
+      "basis": "The successor the build uses (INFRA-ALPHA-104), recorded by the lead after emulator-alpha.py prepare-successor succeeds on the builder and a probe of that successor passes (hostEvidence.probedSuccessorId). Until then guard and builder fail closed; preparationId above stays the predecessor's tree location, never relabelled as the new delta"
+    }
+  },
+  "imageVerification": {
+    "partitions": [
+      "system",
+      "system_ext",
+      "product",
+      "vendor"
+    ],
+    "apps": {
+      "dev.pixel.voice": "product:app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk",
+      "dev.pixel.calculator.agent": "product:app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk",
+      "dev.pixel.backgroundcontrol": "system_ext:priv-app/PixelBackgroundControl/PixelBackgroundControl.apk"
+    },
+    "framework": "system:system/framework/framework-res.apk",
+    "buildProp": "system:system/build.prop",
+    "trayProperty": "persist.wm.debug.pixel_agent_tray",
+    "trayValue": "1",
+    "updater": {
+      "package": "app.seamlessupdate.client",
+      "dirNames": [
+        "Updater"
+      ],
+      "xml": "app.seamlessupdate.client.xml"
+    },
+    "closure": {
+      "source": {
+        "project": "packages/apps/Seedvault",
+        "revision": "7cfffed7ceeda60a10bf2a6d9818d6fda81828ba"
+      },
+      "apps": [
+        {
+          "module": "Seedvault",
+          "package": "com.stevesoltys.seedvault",
+          "path": "system:system/priv-app/Seedvault/Seedvault.apk"
+        },
+        {
+          "module": "LocalContactsBackup",
+          "package": "app.grapheneos.backup.contacts",
+          "path": "system:system/app/LocalContactsBackup/LocalContactsBackup.apk"
+        }
+      ],
+      "xml": [
+        {
+          "module": "com.stevesoltys.backup_allowlist",
+          "path": "system:system/etc/sysconfig/allowlist_com.stevesoltys.seedvault.xml",
+          "root": "config",
+          "package": "com.stevesoltys.seedvault"
+        },
+        {
+          "module": "com.stevesoltys.backup_default-permissions",
+          "path": "system:system/etc/default-permissions/default-permissions_com.stevesoltys.seedvault.xml",
+          "root": "exceptions",
+          "package": "com.stevesoltys.seedvault"
+        },
+        {
+          "module": "com.stevesoltys.backup_privapp_allowlist",
+          "path": "system:system/etc/permissions/com.stevesoltys.seedvault.xml",
+          "root": "permissions",
+          "package": "com.stevesoltys.seedvault"
+        },
+        {
+          "module": "default-permissions_app.grapheneos.backup.contacts",
+          "path": "system:system/etc/default-permissions/default-permissions_app.grapheneos.backup.contacts.xml",
+          "root": "exceptions",
+          "package": "app.grapheneos.backup.contacts"
+        }
+      ]
+    },
+    "tools": {
+      "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
+      "lpunpack": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/lpunpack",
+      "debugfs": "/usr/sbin/debugfs",
+      "fsckErofs": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs",
+      "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+      "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner"
+    },
+    "toolSha256": {
+      "lpunpack": "51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b",
+      "fsckErofs": "37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901"
+    },
+    "basis": "INFRA-ALPHA-087/088: the current OS alpha contract (os/alpha/cuttlefish-product-contract.json at preparation.osDelta, contract a9c757c0, delta 156ccb8e, OS PR72; the Seedvault closure checked here is unchanged from PR61's c825aa19) checked from the partitions in the built super.img, never from loose files. Rose app paths follow the contract: PRODUCT/app/RosePreinstall_*, SYSTEM_EXT/priv-app/PixelBackgroundControl, system framework-res and build.prop (system-as-root, as release-pipeline IMAGE_LOCATIONS). closure is the contract's Seedvault requirement (SYSTEM/priv-app/Seedvault and SYSTEM/app/LocalContactsBackup with their etc XML): module names, privileged flag, sub_dir and src file names from the pinned Android.bp files (OS fixtures os/tests/fixtures/cuttlefish-alpha/seedvault), packages from the pinned manifests and XML root elements and packages from the pinned XML files (scripts/tests/fixtures/seedvault-7cfffed7). These are compiled OS modules: their APKs must be readable with the pinned package; no version, digest or certificate is pinned for them and the Rose app signer does not apply. Pinned Cuttlefish shared/BoardConfig.mk packs product, system, system_ext, vendor and others into an A/B super image and leaves their file system to TARGET_RO_FILE_SYSTEM_TYPE, so the probe records BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE and the guard requires its extractor (ext4: debugfs, erofs: fsck.erofs). simg2img, debugfs, aapt and apksigner are the Pixel pipeline's retained paths; lpunpack and fsck.erofs are the retained P1 release bin/ executables the lead measured (INFRA-ALPHA-090) and are pinned by sha256 in toolSha256; a different file fails the gate. No probe or image has been verified"
+  },
+  "artifact": {
+    "name": "emulator-alpha-receipt-{run_id}",
+    "basis": "Only the nonsecret build receipt and SHA256SUMS; the images stay in the alpha OUT_DIR, hashed in the receipt for the separate guest operation"
+  }
+}

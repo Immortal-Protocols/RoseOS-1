@@ -1,0 +1,135 @@
+{
+ "schemaVersion": 1,
+ "kind": "rose-cuttlefish-product-contract",
+ "basis": "OS-ALPHA-001. Source-only: pinned device/google/cuttlefish 283645aa and build/make b0f697df were read and the product chain evaluated on fixtures (os/tests/test_cuttlefish_alpha_product.py); no Android build, image or boot is claimed.",
+ "target": {
+  "lunch": "aosp_cf_x86_64_only_phone-cur-userdebug",
+  "product": "aosp_cf_x86_64_only_phone",
+  "device": "vsoc_x86_64_only",
+  "productMakefile": "device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk"
+ },
+ "pinned": {
+  "device/google/cuttlefish": "283645aacf6cdb56cc31a9362f54d412dbc132a1",
+  "build/make": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+  "build/soong": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+  "packages/apps/Seedvault": "7cfffed7ceeda60a10bf2a6d9818d6fda81828ba",
+  "frameworks/base": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+  "packages/apps/GmsCompat": "f5b3c7ccc8fb327164d3f860298133c5a8f65b1d",
+  "external/GmsCompatConfig": "39df97dcdf0e8a52a26e109f5204fe0f50c12027",
+  "packages/apps/LogViewer": "75333e999c96d79c5b679660cd7547628d95af4d",
+  "packages/apps/NetworkLocation": "474472e844069392236782df2568db1f404945d0"
+ },
+ "base": {
+  "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+  "reconcileReceipt": "0004-2026102804.json",
+  "reconcileSha256": "db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0",
+  "requires": "An already independent source root holding the 2804 integration, including os/patches/updater-product-build-make.patch in build/make. Never the retained Pixel root."
+ },
+ "osDelta": {
+  "patches": [
+   {
+    "path": "os/patches/cuttlefish-alpha-no-updater.patch",
+    "project": "build/make",
+    "sha256": "aa975499e15021cdae01665961c2cbb3037ea34a0dc173b3d1a488b3a5d0ff84",
+    "apply": "git -C <preparedRoot>/build/make apply --check <patch> && git -C <preparedRoot>/build/make apply <patch>"
+   }
+  ],
+  "changedFiles": [
+   {
+    "project": "build/make",
+    "path": "target/product/generic/Android.bp",
+    "change": "Adds to aosp_shared_system_image deps only: Seedvault and its pinned required closure (LocalContactsBackup, com.stevesoltys.backup_allowlist, com.stevesoltys.backup_default-permissions, com.stevesoltys.backup_privapp_allowlist, default-permissions_app.grapheneos.backup.contacts); GmsCompat, LogViewer, NetworkLocation and VirtualDeviceManager; and HardeningTestApp and SecurePasteTestSystemApp under select(product_variable(\"debuggable\")). Soong adds each root's required and jni_libs closure. No removal, allowlist or diff change; system_image_defaults untouched.",
+    "fixtureBeforeSha256": "ecf117e54e688472c9bd0706897638f3c52af77388adbad3687f07a3e1a09cb5",
+    "fixtureAfterSha256": "cf5dff6dd793d5f7109f395ab885e3b8c454fa793e0a7ad5d79f3c32b2cdc564"
+   },
+   {
+    "project": "build/make",
+    "path": "target/product/media_system.mk",
+    "change": "Removes only the RoseOS 'PRODUCT_PACKAGES += Updater' block; the upstream OFFICIAL_BUILD block stays and OFFICIAL_BUILD stays unset. Seedvault stays.",
+    "fixtureBeforeSha256": "3740f433a937882918750d7b209df8a5e570cecc8388bb2c9870b4a310f4a596",
+    "fixtureAfterSha256": "63f7639d0ecb87e6f08b2c4a99aa0a045b7f97fcf67521c1ccf72540963d8475"
+   }
+  ]
+ },
+ "inheritance": {
+  "aosp_cf.mk": [
+   "generic_system.mk -> handheld_system.mk -> media_system.mk",
+   "handheld_system_ext.mk",
+   "aosp_product.mk -> handheld_product.mk"
+  ],
+  "systemImage": "aosp_cf.mk sets USE_SOONG_DEFINED_SYSTEM_IMAGE=true with aosp_shared_system_image (build/make target/product/generic/Android.bp), which lists no Updater; core/Makefile file_list_diff fails the build on system files installed by make but absent from that image (allowlist: init.environ.rc). Hence the Rose Updater line must not reach this target.",
+  "seedvault": "media_system.mk lists Seedvault (system priv-app, platform cert); its pinned required closure is 6 modules (Seedvault, LocalContactsBackup, three com.stevesoltys.backup_* prebuilt_etc, default-permissions_app.grapheneos.backup.contacts). None appears in any of the 69 build/make Android.bp files, so aosp_shared_system_image lacked it; the delta lists it there. A tree-wide search outside build/make was not possible (codeload archive 403, not retried); explicit deps are harmless if another path exists.",
+  "trayProperty": "aosp_shared_system_image -> system_image_defaults deps 'system-build.prop' -> build/soong build_prop product_config ':product_config' (merged soong.<DeviceProduct>.variables + extra.variables of the lunched product) -> core/soong_extra_config.mk PRODUCT_SYSTEM_PROPERTIES of that product -> gen_build_prop.py build_system_prop. The Rose line inherited from generic_system.mk is in that list; no override needed.",
+  "alpha099": "Run 40719075730 file_list_diff (aosp_shared_system_image): 29 make system paths missing from Soong. Roots, traced in pinned sources: handheld_system.mk PRODUCT_PACKAGES GmsCompat (required GmsCompatConfig, GmsCompatLib, two gmscompat XMLs), LogViewer (required logviewer XML), NetworkLocation (jni_libs libnetwork_location_position_estimation_rust, required two networklocation XMLs); base_system.mk PRODUCT_PACKAGES_DEBUG HardeningTestApp and SecurePasteTestSystemApp; RoseOS generic_system.mk VirtualDeviceManager, unconditional, while Soong lists it only under RELEASE_PACKAGE_COMPUTER_CONTROL, off in this release config. Pinned Soong packages a dep's required and jni_libs closure (android/packaging.go TransitivePackagingSpecs; PrintRecommendationService's required XML and PrintSpooler's JNI library are not listed in the pinned image), so only the six roots are added."
+ },
+ "updaterMode": "excluded-no-compatible-feed",
+ "updaterEndpoint": null,
+ "apps": [
+  {
+   "package": "dev.pixel.voice",
+   "version": 302,
+   "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6"
+  },
+  {
+   "package": "dev.pixel.calculator.agent",
+   "version": 4,
+   "sha256": "9f46c1a2068acdaacc7436fa3f3f29d08938f2896de18948bb10fae6343fd1a8"
+  },
+  {
+   "package": "dev.pixel.backgroundcontrol",
+   "version": 28,
+   "sha256": "f39936b1c217504151aa79fe756d2ce0eda58a6014a6950a8979aaaef91b827a"
+  }
+ ],
+ "policySha256": "044b99e57fa97d73b77fc46a349c47f7f6003fa9a202558ad577d9a83a471423",
+ "productExpectations": {
+  "PRODUCT_PACKAGES_present": [
+   "PixelBackgroundControl",
+   "com.android.extensions.computercontrol",
+   "RosePreinstall_dev_pixel_voice",
+   "RosePreinstall_dev_pixel_calculator_agent",
+   "VirtualDeviceManager (with RELEASE_PACKAGE_COMPUTER_CONTROL=true)",
+   "Seedvault"
+  ],
+  "PRODUCT_PACKAGES_absent": [
+   "Updater"
+  ],
+  "PRODUCT_SYSTEM_PROPERTIES_present": [
+   "persist.wm.debug.pixel_agent_tray=1"
+  ]
+ },
+ "imageExpectations": {
+  "present": [
+   "PRODUCT/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk byte-identical to the dev.pixel.voice sha256 above",
+   "PRODUCT/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk byte-identical to the dev.pixel.calculator.agent sha256 above",
+   "SYSTEM_EXT/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk byte-identical to the dev.pixel.backgroundcontrol sha256 above",
+   "framework-res config Agents/Targets matching the policy above",
+   "persist.wm.debug.pixel_agent_tray=1 in the system build.prop",
+   "SYSTEM/priv-app/Seedvault/Seedvault.apk and SYSTEM/app/LocalContactsBackup/LocalContactsBackup.apk with their etc XML, as in the Frankel baseline",
+   "SYSTEM/app/GmsCompat, app/GmsCompatConfig, app/GmsCompatLib, priv-app/LogViewer, priv-app/NetworkLocation (with lib64/libnetwork_location_position_estimation_rust.so), app/VirtualDeviceManager, app/HardeningTestApp and app/SecurePasteTestSystemApp (userdebug), with their etc XMLs, as make installs them"
+  ],
+  "absent": [
+   "any */priv-app/Updater/* or */app/Updater/* path",
+   "any app.seamlessupdate.client.xml (permissions, default-permissions, sysconfig)",
+   "any APK whose package is app.seamlessupdate.client"
+  ]
+ },
+ "knownRisks": [
+  "The tray property is shown reaching the generator input and output on fixtures; the built system build.prop still needs checking in the alpha image.",
+  "Seedvault closure: no reference outside build/make was searched (403 on the archive route); an unexpected extra Seedvault path would only duplicate an explicit dep.",
+  "ALPHA-099 closure is fixture-modelled: a successful file_list_diff, compile of the added modules for Cuttlefish and image contents need the build. If a later release config sets RELEASE_PACKAGE_COMPUTER_CONTROL=true, VirtualDeviceManager is listed twice (the same module)."
+ ],
+ "pixelUnchanged": "apply-os-changes.py keeps applying updater-product-build-make.patch for Frankel; this patch is never applied by it and never to the retained Pixel root.",
+ "alpha099IncrementalDelta": {
+  "path": "os/alpha/cuttlefish-alpha-099-from-f21bf683.patch",
+  "sha256": "c935059085f780afea423df1466d65526eb00fe15d5438bbabb928c755df7c67",
+  "project": "build/make",
+  "file": "target/product/generic/Android.bp",
+  "fromOsDeltaCommit": "f21bf68322b3fa0a8924840554ab3e9398f79125",
+  "fromPatchSha256": "e000da0d1247dfcb341bc97df3098a2ed57faed31af0e5a837733537ae567858",
+  "beforeSha256": "a8fd132718822798e00693d09492e4dce9e3b04922acf7434c24a1d2c3bb9bfa",
+  "afterSha256": "cf5dff6dd793d5f7109f395ab885e3b8c454fa793e0a7ad5d79f3c32b2cdc564",
+  "apply": "git -C <preparedRoot>/build/make apply --check <patch> && git -C <preparedRoot>/build/make apply <patch>",
+  "basis": "For a tree already prepared from fromOsDeltaCommit: the only byte difference between the old and new full patch results. media_system.mk is unchanged (63f7639d). A second application fails --check."
+ }
+}

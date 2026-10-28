@@ -35,6 +35,8 @@ public class VoiceService extends Service {
 
  volatile String status="Connecting…",task="",guardianName="",pendingCommand;
  volatile boolean connected=false,live=false,muted=false;
+ // Typed voice facts from the web client (Bridge.voiceLifecycle/backendReachable), read by the conversation surface.
+ volatile String lastEndReason="",lastStartError="";volatile Boolean backendReachable;
  volatile float level=0, trayInputLevel=0, trayOutputLevel=0;
  volatile long trayAudioObservedAt=0;
  GlassesReconnect glassesReconnect;
@@ -52,7 +54,7 @@ public class VoiceService extends Service {
  public int onStartCommand(Intent i,int flags,int id){if(i!=null&&"podcast_open".equals(i.getAction()))receivePodcast(i.getStringExtra("context"));if(i!=null&&Intent.ACTION_MEDIA_BUTTON.equals(i.getAction()))handleMediaButton(i);else if(i!=null&&i.getAction()!=null)command(i.getAction(),"intent");return START_STICKY;}
  void command(String c){command(c,"internal");}
  void command(String c,String origin){traceVoice("command",origin+":"+c);runOnUiThread(()->{
- if(glassesReconnect!=null){if("end".equals(c)&&!"capture_check".equals(origin))glassesReconnect.userEnded();else if("talk".equals(c)||"glasses".equals(c))glassesReconnect.userStarted();else if("auto_talk".equals(c)&&glassesReconnect.suppressed()){traceVoice("autostart_policy","late_start_suppressed");return;}}if("end".equals(c)){ignoreButtonsUntil=SystemClock.elapsedRealtime()+400;if(glassesReconnect!=null)glassesReconnect.cancelVoiceStart();}if(!loaded){pendingCommand=c;return;}String script="toggle_conversation_mode".equals(c)?"window.toggleConversationMode()":"toggle_deepseek_trial".equals(c)?"window.toggleDeepseekTrial()":"toggle_task_widgets".equals(c)?"window.toggleTaskWidgets()":"toggle_artemis_trial".equals(c)?"window.toggleArtemisTrial()":"toggle_luna_first".equals(c)?"window.toggleLunaFirst()":"toggle_decisions_routing".equals(c)?"window.toggleDecisionsRouting()":"guardian_back".equals(c)?"document.getElementById('guardianBack').click()":"podcast_open".equals(c)?"window.openPodcastCompanion()":"book_open".equals(c)?"window.openBookCompanion()":"sky_open".equals(c)?"window.openSkyGuide()":"auto_talk".equals(c)?"window.autoStartFromGlasses()":"glasses".equals(c)?"window.glassesTap()":"talk".equals(c)?"window.startFromGlasses()":"mute".equals(c)?"document.getElementById('mute').click()":"tray_mute".equals(c)?"window.setTrayMuted(true)":"tray_unmute".equals(c)?"window.setTrayMuted(false)":"end".equals(c)?"endConversation()":"disconnect".equals(c)?"cleanup()":"";if(!script.isEmpty())web.evaluateJavascript(script,null);});}
+ if(glassesReconnect!=null){if("end".equals(c)&&!"capture_check".equals(origin))glassesReconnect.userEnded();else if("talk".equals(c)||"glasses".equals(c))glassesReconnect.userStarted();else if("auto_talk".equals(c)&&glassesReconnect.suppressed()){traceVoice("autostart_policy","late_start_suppressed");return;}}if("end".equals(c)){ignoreButtonsUntil=SystemClock.elapsedRealtime()+400;if(glassesReconnect!=null)glassesReconnect.cancelVoiceStart();}if(!loaded){pendingCommand=c;if(voicePageHeld&&("talk".equals(c)||"glasses".equals(c))){voicePageHeld=false;voiceRenderer.reset();web.loadUrl(VOICE_PAGE);}return;}String script="toggle_conversation_mode".equals(c)?"window.toggleConversationMode()":"toggle_deepseek_trial".equals(c)?"window.toggleDeepseekTrial()":"toggle_task_widgets".equals(c)?"window.toggleTaskWidgets()":"toggle_artemis_trial".equals(c)?"window.toggleArtemisTrial()":"toggle_luna_first".equals(c)?"window.toggleLunaFirst()":"toggle_decisions_routing".equals(c)?"window.toggleDecisionsRouting()":"guardian_back".equals(c)?"document.getElementById('guardianBack').click()":"podcast_open".equals(c)?"window.openPodcastCompanion()":"book_open".equals(c)?"window.openBookCompanion()":"sky_open".equals(c)?"window.openSkyGuide()":"auto_talk".equals(c)?"window.autoStartFromGlasses()":"glasses".equals(c)?"window.glassesTap()":"talk".equals(c)?"window.startFromGlasses()":"mute".equals(c)?"document.getElementById('mute').click()":"tray_mute".equals(c)?"window.setTrayMuted(true)":"tray_unmute".equals(c)?"window.setTrayMuted(false)":"end".equals(c)?"endConversation()":"disconnect".equals(c)?"cleanup()":"";if(!script.isEmpty())web.evaluateJavascript(script,null);});}
  void setResultCardMode(String mode){if(!java.util.Arrays.asList("html","native","text").contains(mode))return;runOnUiThread(()->{if(loaded)web.evaluateJavascript("window.setResultCardMode("+JSONObject.quote(mode)+")",null);});}
  void connectGuardian(String name){runOnUiThread(()->{if(loaded)web.evaluateJavascript("window.connectGuardian("+JSONObject.quote(name)+")",null);});}
  PendingIntent action(String a){return PendingIntent.getService(this,a.hashCode(),new Intent(this,VoiceService.class).setAction(a),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
@@ -249,24 +251,72 @@ public class VoiceService extends Service {
  PhoneCommandStream phoneCommandStream;
  DebugBridge debugBridge;
  ClipboardSync clipboardSync;
- WebView web; ExecutorService requests=Executors.newCachedThreadPool(); String pin,endpoint; DeviceIdentity identity; SSLSocketFactory ssl; AudioManager audio;
+ WebView web; final CallbackOwner callbacks=new CallbackOwner(); ExecutorService requests=Executors.newCachedThreadPool(); String pin,endpoint; DeviceIdentity identity; SSLSocketFactory ssl; AudioManager audio;
  @Override public void onCreate(){super.onCreate();instance=this;if(StatusGlowOverlay.supported()){statusGlow=new StatusGlowOverlay(this);statusGlow.start();}voiceLifecycle=new VoiceLifecycleTrace(this);notification(false);
 
  try{JSONObject c=new JSONObject(read(getAssets().open("connection.json")));pin=c.getString("pin");endpoint=getSharedPreferences("MainActivity",0).getString("endpoint",c.getString("endpoint"));identity=new DeviceIdentity(this);ssl=identity.ssl(pin);}catch(Exception e){throw new RuntimeException(e);}
- registerReceiver(podcastReceiver,new IntentFilter("dev.pixel.voice.PODCAST_CONTEXT"),"dev.pixel.voice.permission.PODCAST_CONTEXT",null,Context.RECEIVER_EXPORTED);bookNarrator=new BookNarrator(this);registerReceiver(bookReceiver,new IntentFilter("dev.pixel.voice.BOOK_CONTEXT"),"dev.pixel.voice.permission.BOOK_CONTEXT",null,Context.RECEIVER_EXPORTED);audio=(AudioManager)getSystemService(AUDIO_SERVICE);voiceDucking=new VoiceDucking(this,main);conversationVolume=getSharedPreferences("voice-volume-v2",0).getFloat("level",-1f);registerReceiver(skyReceiver,new IntentFilter("dev.pixel.voice.SKY_CONTEXT"),"dev.pixel.voice.permission.SKY_CONTEXT",null,Context.RECEIVER_EXPORTED);registerReceiver(volumeReceiver,new IntentFilter("android.media.VOLUME_CHANGED_ACTION"),Context.RECEIVER_NOT_EXPORTED);main.post(volumeMonitor);audio.registerAudioDeviceCallback(routeCallback,new Handler());audio.addOnCommunicationDeviceChangedListener(getMainExecutor(),d->{if(communicating){freezeVolume();scheduleVolumeRestore();}if(!communicating)ignoreButtonsUntil=Math.max(ignoreButtonsUntil,SystemClock.elapsedRealtime()+750);android.util.Log.i("PixelTiming","route_ready type="+(d==null?0:d.getType())+" uptime="+SystemClock.elapsedRealtime());});routeAudio();setupMediaButtons();glassesTransportTrace=new GlassesTransportTrace(this);glassesReconnect=new GlassesReconnect(this);glassesReconnect.start();web=new WebView(this);web.setBackgroundColor(0xfff5f5f3);web.getSettings().setJavaScriptEnabled(true);web.getSettings().setDomStorageEnabled(true);web.getSettings().setMediaPlaybackRequiresUserGesture(false);web.getSettings().setAllowFileAccess(false);web.getSettings().setAllowContentAccess(false);WebView.setWebContentsDebuggingEnabled(false);
- web.setWebViewClient(new WebViewClient(){public void onPageFinished(WebView v,String u){loaded=true;if(pendingPodcastContext!=null)receivePodcast(pendingPodcastContext);if(pendingCommand!=null){String c=pendingCommand;pendingCommand=null;command(c);}}public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){if("https".equals(r.getUrl().getScheme())&&("api.elevenlabs.io".equals(r.getUrl().getHost())||"livekit.rtc.elevenlabs.io".equals(r.getUrl().getHost())))return null;if(!"appassets.androidplatform.net".equals(r.getUrl().getHost()))return new WebResourceResponse("text/plain","utf-8",403,"Blocked",null,new ByteArrayInputStream(new byte[0]));String p=r.getUrl().getPath();if(p.equals("/"))p="/index.html";if(!p.equals("/index.html")&&!p.equals("/eleven-client.js")&&!p.equals("/voice-timing.js")&&!p.equals("/voice-commands.js")&&!p.equals("/model-command-speech.js")&&!p.equals("/phone-app-context.js")&&!p.equals("/voice-providers.js")&&!p.equals("/luna-first.js")&&!p.equals("/guardian-voice.js")&&!p.equals("/output-boost.js")&&!p.equals("/messages-tool.js")&&!p.equals("/media-tool.js")&&!p.equals("/clock-tool.js")&&!p.equals("/apple-music-voice.js")&&!p.equals("/book-companion.js")&&!p.equals("/podcast-companion.js")&&!p.equals("/phone-command-delivery.js")&&!p.equals("/task-status-transport.js"))return new WebResourceResponse("text/plain","utf-8",404,"Not found",null,new ByteArrayInputStream(new byte[0]));try{return new WebResourceResponse(p.endsWith(".js")?"application/javascript":"text/html","utf-8",getAssets().open(p.substring(1)));}catch(Exception e){return null;}}public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return !"appassets.androidplatform.net".equals(r.getUrl().getHost());}});
+ registerReceiver(podcastReceiver,new IntentFilter("dev.pixel.voice.PODCAST_CONTEXT"),"dev.pixel.voice.permission.PODCAST_CONTEXT",null,Context.RECEIVER_EXPORTED);bookNarrator=new BookNarrator(this);registerReceiver(bookReceiver,new IntentFilter("dev.pixel.voice.BOOK_CONTEXT"),"dev.pixel.voice.permission.BOOK_CONTEXT",null,Context.RECEIVER_EXPORTED);audio=(AudioManager)getSystemService(AUDIO_SERVICE);voiceDucking=new VoiceDucking(this,main);conversationVolume=getSharedPreferences("voice-volume-v2",0).getFloat("level",-1f);registerReceiver(skyReceiver,new IntentFilter("dev.pixel.voice.SKY_CONTEXT"),"dev.pixel.voice.permission.SKY_CONTEXT",null,Context.RECEIVER_EXPORTED);registerReceiver(volumeReceiver,new IntentFilter("android.media.VOLUME_CHANGED_ACTION"),Context.RECEIVER_NOT_EXPORTED);main.post(volumeMonitor);audio.registerAudioDeviceCallback(routeCallback,new Handler());audio.addOnCommunicationDeviceChangedListener(getMainExecutor(),d->{if(communicating){freezeVolume();scheduleVolumeRestore();}if(!communicating)ignoreButtonsUntil=Math.max(ignoreButtonsUntil,SystemClock.elapsedRealtime()+750);android.util.Log.i("PixelTiming","route_ready type="+(d==null?0:d.getType())+" uptime="+SystemClock.elapsedRealtime());});routeAudio();setupMediaButtons();glassesTransportTrace=new GlassesTransportTrace(this);glassesReconnect=new GlassesReconnect(this);glassesReconnect.start();createVoiceWeb(true);clipboardSync=new ClipboardSync(this);clipboardSync.start();}
+
+ static final String VOICE_PAGE="https://appassets.androidplatform.net/index.html";
+ /** The voice page's WebView, its bridge and settings, exactly as at startup. loadPage=false leaves a fresh
+  * blank view (after repeated renderer loss) until an explicit Speak reloads it. */
+ void createVoiceWeb(boolean loadPage){web=new WebView(this);web.setBackgroundColor(0xfff5f5f3);web.getSettings().setJavaScriptEnabled(true);web.getSettings().setDomStorageEnabled(true);web.getSettings().setMediaPlaybackRequiresUserGesture(false);web.getSettings().setAllowFileAccess(false);web.getSettings().setAllowContentAccess(false);WebView.setWebContentsDebuggingEnabled(false);
+ web.setWebViewClient(new WebViewClient(){@Override public boolean onRenderProcessGone(WebView v,RenderProcessGoneDetail d){voiceRendererGone(v,d.didCrash());return true;}public void onPageFinished(WebView v,String u){if(v!=web)return;loaded=true;if(pendingPodcastContext!=null)receivePodcast(pendingPodcastContext);if(pendingCommand!=null){String c=pendingCommand;pendingCommand=null;command(c);}}public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r){if("https".equals(r.getUrl().getScheme())&&("api.elevenlabs.io".equals(r.getUrl().getHost())||"livekit.rtc.elevenlabs.io".equals(r.getUrl().getHost())))return null;if(!"appassets.androidplatform.net".equals(r.getUrl().getHost()))return new WebResourceResponse("text/plain","utf-8",403,"Blocked",null,new ByteArrayInputStream(new byte[0]));String p=r.getUrl().getPath();if(p.equals("/"))p="/index.html";if(!p.equals("/index.html")&&!p.equals("/eleven-client.js")&&!p.equals("/voice-timing.js")&&!p.equals("/voice-commands.js")&&!p.equals("/model-command-speech.js")&&!p.equals("/phone-app-context.js")&&!p.equals("/voice-providers.js")&&!p.equals("/luna-first.js")&&!p.equals("/guardian-voice.js")&&!p.equals("/output-boost.js")&&!p.equals("/messages-tool.js")&&!p.equals("/media-tool.js")&&!p.equals("/clock-tool.js")&&!p.equals("/apple-music-voice.js")&&!p.equals("/book-companion.js")&&!p.equals("/podcast-companion.js")&&!p.equals("/phone-command-delivery.js")&&!p.equals("/task-status-transport.js"))return new WebResourceResponse("text/plain","utf-8",404,"Not found",null,new ByteArrayInputStream(new byte[0]));try{return new WebResourceResponse(p.endsWith(".js")?"application/javascript":"text/html","utf-8",getAssets().open(p.substring(1)));}catch(Exception e){return null;}}public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return !"appassets.androidplatform.net".equals(r.getUrl().getHost());}});
  web.setWebChromeClient(new WebChromeClient(){public void onPermissionRequest(PermissionRequest r){runOnUiThread(()->{if(r.getOrigin().toString().equals("https://appassets.androidplatform.net/")&&checkSelfPermission("android.permission.RECORD_AUDIO")==PackageManager.PERMISSION_GRANTED)r.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});else r.deny();});}public boolean onConsoleMessage(ConsoleMessage c){android.util.Log.i("PixelVoice",c.message());return true;}});
- web.addJavascriptInterface(new Bridge(),"Native");web.loadUrl("https://appassets.androidplatform.net/index.html");clipboardSync=new ClipboardSync(this);clipboardSync.start();}
+ web.addJavascriptInterface(new Bridge(callbacks.open()),"Native");if(loadPage)web.loadUrl(VOICE_PAGE);}
+ final RendererRecovery voiceRenderer=new RendererRecovery(3,60000);boolean voicePageHeld;
+ /** The voice page's renderer is gone, so the call it carried is gone too. The dead view is destroyed and
+  * never reused; state shows the call ended with a typed reason; nothing pending is replayed; tasks are not
+  * touched. The backend session lease cannot be released from here (the page held its id) and expires on
+  * its own. A fresh page is loaded unless renderer loss repeats, then it waits for an explicit Speak. */
+ void voiceRendererGone(WebView dead,boolean crashed){
+  traceVoice("renderer_gone",crashed?"crash":"killed");
+  if(dead!=web){dead.destroy();return;}
+  loaded=false;pendingCommand=null;
+  live=false;connected=false;muted=false;lastEndReason="renderer_gone";
+  taskStateAvailable=false;taskStateStreamConnected=false;
+  new Bridge().audio(false);
+  dead.destroy();
+  voicePageHeld=!voiceRenderer.allow(SystemClock.elapsedRealtime());
+  createVoiceWeb(!voicePageHeld);
+  agentNotification();
+ }
  static String read(InputStream in)throws IOException{ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)b.write(buf,0,n);in.close();return b.toString("UTF-8");}static String hex(byte[] a){StringBuilder s=new StringBuilder();for(byte b:a)s.append(String.format("%02x",b));return s.toString();}
  public void deliveryStatus(String message){getSharedPreferences("delivery",0).edit().putString("status",message).apply();}
  final java.util.concurrent.atomic.AtomicBoolean installing=new java.util.concurrent.atomic.AtomicBoolean(false);
+ /** A voice session is active or connecting; installing Rose Agent would replace this app and end it. */
+ boolean voiceBusy(){return live||connected||communicating;}
+ /** This app's installed versionCode, or -1 when it can't be read. */
+ long selfVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){return -1;}}
+ /** Explicit "Update Rose Agent" install of the offered record. Admission is decided here against the service's
+  * own voice state and the shared installing flag, so only one download/install runs at a time. */
+ SelfUpdate.Admission installSelf(DirectUpdate.Offer offer){
+  long installed=selfVersion();
+  SelfUpdate.Admission a=SelfUpdate.admit(offer==null?-1:offer.versionCode,installed,voiceBusy(),installing.get(),getPackageManager().canRequestPackageInstalls());
+  if(a!=SelfUpdate.Admission.START)return a;
+  if(!installing.compareAndSet(false,true))return SelfUpdate.Admission.IN_PROGRESS;
+  recordSelfUpdate(offer.versionCode,"downloading");
+  requests.submit(()->{try{Delivery.installSelf(VoiceService.this,offer);}finally{installing.set(false);}});
+  return a;
+ }
+ /** The last explicit self-update attempt: its target version and state (see SelfUpdate.attemptText). */
+ void recordSelfUpdate(long target,String state){getSharedPreferences("self-update",0).edit().putLong("target",target).putString("state",state).apply();}
  ToneGenerator readyTone;
+ /** Each voice view gets its own Bridge, bound to that view's generation: its asynchronous callbacks reach
+  * the page only while that view is still the current one (CallbackOwner). */
  class Bridge {
+ final int generation;
+ Bridge(){this(callbacks.current());}
+ Bridge(int generation){this.generation=generation;}
  @JavascriptInterface public void voiceLifecycle(String kind,String detail){
   if(!kind.matches("cleanup|provider_disconnect|start_timeout|start_error|user_end|handoff"))return;
   if(detail==null||!detail.matches("[a-zA-Z0-9_:-]{0,100}"))detail="other";
   traceVoice(kind,detail);
+  // Typed end/failure facts for the conversation surface; display status text is never parsed.
+  if(kind.equals("cleanup"))lastEndReason=detail;else if(kind.equals("start_error"))lastStartError=detail;
  }
+ /** The voice client's own /health result; null until first checked. */
+ @JavascriptInterface public void backendReachable(boolean reachable){backendReachable=reachable;}
 
  @JavascriptInterface public void taskState(String raw){try{if(raw==null||raw.length()>80000)return;JSONObject data=new JSONObject(raw);if(data.optInt("version")!=1)return;taskStateJson=raw;taskStateReceivedAt=SystemClock.elapsedRealtime();taskStateAvailable=true;}catch(Exception ignored){taskStateAvailable=false;}}
  @JavascriptInterface public void taskStateUnavailable(){taskStateAvailable=false;}
@@ -289,7 +339,7 @@ public class VoiceService extends Service {
  @JavascriptInterface public void readerPlay(String audio){if(audio.length()>12000000)return;runOnUiThread(()->bookNarrator.play(audio));}
  @JavascriptInterface public void readerPause(){runOnUiThread(()->bookNarrator.pause());}
  @JavascriptInterface public void readerStop(){runOnUiThread(()->bookNarrator.stop());}
- @JavascriptInterface public void readerResume(){runOnUiThread(()->{if(!bookNarrator.resume())web.evaluateJavascript("window.readerAudioEvent('missing')",null);});}
+ @JavascriptInterface public void readerResume(){runOnUiThread(()->{if(!bookNarrator.resume())callbacks.run(generation,()->web.evaluateJavascript("window.readerAudioEvent('missing')",null));});}
 
  @JavascriptInterface public String phoneCommand(String raw){
   try{
@@ -351,6 +401,9 @@ public class VoiceService extends Service {
     }
    }
    if("diagnostics".equals(c.optString("action"))||"screenshot".equals(c.optString("action"))){JSONObject result=PhoneControl.execute(VoiceService.this,c);savePhoneResult(saved,id,result);return result.toString();}
+   // Claim the id with a durable running receipt before scheduling: a re-query never posts a second action.
+   PhoneCommandGate gate=new PhoneCommandGate(new PhoneCommandGate.Receipts(){public String get(String k){return saved.getString(k,null);}public void put(String k,String v){try{savePhoneResult(saved,k,new JSONObject(v));}catch(Exception e){throw new IllegalStateException(e);}}},VoiceService.this);
+   String owned=gate.claim(id);if(owned!=null)return owned;
    java.util.concurrent.CompletableFuture<String> task=new java.util.concurrent.CompletableFuture<>();
    main.post(()->{
     JSONObject result;
@@ -369,7 +422,8 @@ public class VoiceService extends Service {
      main.postDelayed(()->observeOpenedApp(task,saved,id,completed,completed.optString("packageName"),SystemClock.elapsedRealtime()+3000),150);
     }else task.complete(result.toString());
    });
-   return task.get(5,TimeUnit.SECONDS);
+   // A wait that runs out returns the current receipt (running until the action saves its result).
+   return gate.await(task,id,5000);
   }catch(Exception e){return "{\"status\":\"error\",\"message\":"+JSONObject.quote(e.toString())+"}";}
  }
 
@@ -404,6 +458,8 @@ public class VoiceService extends Service {
  @JavascriptInterface public boolean cameraMicrophoneSuspended(){return CameraMicrophoneProvider.suspended(VoiceService.this);}
  @JavascriptInterface public void cameraMicrophoneResult(String token,String result){CameraMicrophoneProvider.complete(token,result);}
  @JavascriptInterface public String appContext(){return PhoneAppContext.read(VoiceService.this).toString();}
+ /** Rose Agent updates itself only from the explicit menu check, never from the automatic /apps loop. */
+ @JavascriptInterface public boolean isSelf(String packageName){return getPackageName().equals(packageName);}
  @JavascriptInterface public boolean shouldOffer(String packageName,long version){if(!packageName.equals(getPackageName()))return true;try{return version>getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){return false;}}
  @JavascriptInterface public String installStatus(){return getSharedPreferences("delivery",0).getString("status","");}
  @JavascriptInterface public void installApp(String id,String label){if(!id.matches("[a-f0-9]{64}")||!installing.compareAndSet(false,true))return;requests.submit(()->{try{Delivery.install(VoiceService.this,id,label,endpoint,ssl);}finally{installing.set(false);}});}
@@ -419,7 +475,7 @@ public class VoiceService extends Service {
  @JavascriptInterface public boolean voiceBoostEnabled(){return VoiceService.this.voiceBoostEnabled();}
   @JavascriptInterface public void voiceBoostState(String state){outputBoostState=state;}
   @JavascriptInterface public String audioRoute(){if(Build.VERSION.SDK_INT>=31){AudioDeviceInfo d=audio.getCommunicationDevice();return (d==null?"No voice device":d.getProductName().toString()+" (type "+d.getType()+")")+" · version "+installedVersion()+" · saved "+Math.round(conversationVolume*100)+"% · call "+audio.getStreamVolume(0)+"/"+audio.getStreamMaxVolume(0)+" · settling "+!mayLearnVolume();}return "System audio";}
- @JavascriptInterface public void request(String id,String method,String route,String body){if(!route.startsWith("/")||route.contains(".."))return;requests.submit(()->{int status=0;String result;try{URL url=new URL(endpoint+route);HttpsURLConnection c=(HttpsURLConnection)url.openConnection();c.setSSLSocketFactory(ssl);c.setHostnameVerifier((h,s)->true);c.setConnectTimeout(6000);c.setReadTimeout(35000);c.setRequestMethod(method);if(method.equals("POST")){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");try(OutputStream o=c.getOutputStream()){o.write(body.getBytes("UTF-8"));}}status=c.getResponseCode();result=read(status<400?c.getInputStream():c.getErrorStream());c.disconnect();}catch(Exception e){result="{\"error\":"+JSONObject.quote(e.getClass().getSimpleName()+": "+e.getMessage())+"}";}final String js="window.nativeResponse("+JSONObject.quote(id)+","+status+","+JSONObject.quote(result)+")";runOnUiThread(()->web.evaluateJavascript(js,null));});}
+ @JavascriptInterface public void request(String id,String method,String route,String body){if(!route.startsWith("/")||route.contains(".."))return;requests.submit(()->{int status=0;String result;try{URL url=new URL(endpoint+route);HttpsURLConnection c=(HttpsURLConnection)url.openConnection();c.setSSLSocketFactory(ssl);c.setHostnameVerifier((h,s)->true);c.setConnectTimeout(6000);c.setReadTimeout(35000);c.setRequestMethod(method);if(method.equals("POST")){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");try(OutputStream o=c.getOutputStream()){o.write(body.getBytes("UTF-8"));}}status=c.getResponseCode();result=read(status<400?c.getInputStream():c.getErrorStream());c.disconnect();}catch(Exception e){result="{\"error\":"+JSONObject.quote(e.getClass().getSimpleName()+": "+e.getMessage())+"}";}final String js="window.nativeResponse("+JSONObject.quote(id)+","+status+","+JSONObject.quote(result)+")";runOnUiThread(()->callbacks.run(generation,()->web.evaluateJavascript(js,null)));});}
  }
- @Override public void onDestroy(){if(statusGlow!=null)statusGlow.stop();if(debugBridge!=null)debugBridge.close();PhoneEnvironment.get(this).setActive(false);if(glassesTransportTrace!=null)glassesTransportTrace.close();if(clipboardSync!=null)clipboardSync.stop();if(phoneCommandStream!=null)phoneCommandStream.stop();if(clockControlRoutine!=null)clockControlRoutine.cancel();if(mediaRoutine!=null)mediaRoutine.cancel();if(musicRoutine!=null)musicRoutine.cancel();if(voiceDucking!=null)voiceDucking.release();bookNarrator.stop();unregisterReceiver(podcastReceiver);unregisterReceiver(bookReceiver);sendReplyActivity(false);if(glassesReconnect!=null)glassesReconnect.stop();instance=null;main.removeCallbacks(appContextChanged);main.removeCallbacks(volumeMonitor);unregisterReceiver(volumeReceiver);unregisterReceiver(skyReceiver);if(readyTone!=null){readyTone.release();readyTone=null;}if(voiceLock!=null&&voiceLock.isHeld())voiceLock.release();communicating=false;if(mediaSession!=null)mediaSession.release();audio.unregisterAudioDeviceCallback(routeCallback);routeAudio();web.destroy();requests.shutdownNow();super.onDestroy();}
+ @Override public void onDestroy(){if(statusGlow!=null)statusGlow.stop();if(debugBridge!=null)debugBridge.close();PhoneEnvironment.get(this).setActive(false);if(glassesTransportTrace!=null)glassesTransportTrace.close();if(clipboardSync!=null)clipboardSync.stop();if(phoneCommandStream!=null)phoneCommandStream.stop();if(clockControlRoutine!=null)clockControlRoutine.cancel();if(mediaRoutine!=null)mediaRoutine.cancel();if(musicRoutine!=null)musicRoutine.cancel();if(voiceDucking!=null)voiceDucking.release();bookNarrator.stop();unregisterReceiver(podcastReceiver);unregisterReceiver(bookReceiver);sendReplyActivity(false);if(glassesReconnect!=null)glassesReconnect.stop();instance=null;main.removeCallbacks(appContextChanged);main.removeCallbacks(volumeMonitor);unregisterReceiver(volumeReceiver);unregisterReceiver(skyReceiver);if(readyTone!=null){readyTone.release();readyTone=null;}if(voiceLock!=null&&voiceLock.isHeld())voiceLock.release();communicating=false;if(mediaSession!=null)mediaSession.release();audio.unregisterAudioDeviceCallback(routeCallback);routeAudio();callbacks.close();web.destroy();requests.shutdownNow();super.onDestroy();}
 }

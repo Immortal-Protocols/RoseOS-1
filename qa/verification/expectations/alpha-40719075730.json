@@ -1,0 +1,36 @@
+{
+ "schemaVersion": 1,
+ "kind": "rose-verify-expectation",
+ "label": "alpha Actions 40719075730: recipe 2921d88d, product base ae9cfd4d + OS delta f21bf683, apps 302/4/28",
+ "channel": "alpha",
+ "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+ "target": {
+  "lunch": "aosp_cf_x86_64_only_phone-cur-userdebug",
+  "device": "vsoc_x86_64_only",
+  "actionsRun": "40719075730",
+  "recipe": "2921d88d1b770b962a8513c2bab81f5dfa2808c0",
+  "osDelta": "f21bf68322b3fa0a8924840554ab3e9398f79125"
+ },
+ "apps": [
+  {
+   "package": "dev.pixel.voice",
+   "version": 302,
+   "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
+   "imagePath": "product/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk"
+  },
+  {
+   "package": "dev.pixel.calculator.agent",
+   "version": 4,
+   "sha256": "9f46c1a2068acdaacc7436fa3f3f29d08938f2896de18948bb10fae6343fd1a8",
+   "imagePath": "product/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk"
+  },
+  {
+   "package": "dev.pixel.backgroundcontrol",
+   "version": 28,
+   "sha256": "f39936b1c217504151aa79fe756d2ce0eda58a6014a6950a8979aaaef91b827a",
+   "imagePath": "system_ext/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk"
+  }
+ ],
+ "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+ "basis": "Copied unchanged from os/alpha/cuttlefish-product-contract.json (base.candidate, target, apps) and os/release-pipeline/frankel.json identities.appSignerSha256; run, recipe and OS delta as bound in os/release-pipeline/cuttlefish-alpha.json (INFRA-ALPHA-094). scripts/tests/test_rose_verify.py fails if they diverge. Image hashes and the guest fingerprint are not known until Infra supplies the completed image receipt."
+}

@@ -1,0 +1,42 @@
+name: App offline tests
+
+# Runs the selected offline suite (scripts/test-local.sh) on changes to app, OS-policy
+# and test code. No secrets, signing inputs, phone, provider or cloud access.
+on:
+  pull_request:
+    paths:
+      - 'workspace/**'
+      - 'os/background-control/**'
+      - 'scripts/test-local.sh'
+      - '.github/workflows/app-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/**'
+      - 'os/background-control/**'
+      - 'scripts/test-local.sh'
+      - '.github/workflows/app-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Tool versions
+        run: |
+          node --version
+          python3 --version
+          java -version
+      - name: Offline suite
+        run: bash scripts/test-local.sh

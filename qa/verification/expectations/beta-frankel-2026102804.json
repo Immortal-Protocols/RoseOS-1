@@ -1,0 +1,35 @@
+{
+ "schemaVersion": 1,
+ "kind": "rose-verify-expectation",
+ "label": "beta frankel-2026102804 (pixel-ota), apps 302/4/28",
+ "channel": "beta",
+ "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+ "build": "2026102804",
+ "target": {
+  "device": "frankel",
+  "lunch": "frankel-cur-user"
+ },
+ "apps": [
+  {
+   "package": "dev.pixel.voice",
+   "version": 302,
+   "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
+   "imagePath": "product/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk"
+  },
+  {
+   "package": "dev.pixel.calculator.agent",
+   "version": 4,
+   "sha256": "9f46c1a2068acdaacc7436fa3f3f29d08938f2896de18948bb10fae6343fd1a8",
+   "imagePath": "product/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk"
+  },
+  {
+   "package": "dev.pixel.backgroundcontrol",
+   "version": 28,
+   "sha256": "f39936b1c217504151aa79fe756d2ce0eda58a6014a6950a8979aaaef91b827a",
+   "imagePath": "system_ext/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk"
+  }
+ ],
+ "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+ "avbPublicKeySha256": "7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822",
+ "basis": "Candidate ae9cfd4d/2026102804 and apps 302/4/28 as bound by the lead's INFRA-ALPHA-082 host evidence (os/release-pipeline/cuttlefish-alpha.json sourceBinding; os/alpha/cuttlefish-product-contract.json apps); signer and AVB key from os/release-pipeline/frankel.json identities. Verified against the published release in qa/verification/frankel-2026102804.md. scripts/tests/test_rose_verify.py fails if they diverge."
+}

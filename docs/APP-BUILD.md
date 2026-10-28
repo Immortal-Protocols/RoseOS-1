@@ -46,8 +46,16 @@ upstream generated `Manifest.java` is excluded from the staging directory;
 Outputs include `rose-agent-unsigned.apk`, `SHA256SUMS`, `apk-metadata.txt`,
 `java-version.txt`, `source-revision.txt` and `source-status.txt`. A nonempty
 source-status file means the build includes work outside the recorded commit.
-The app is `dev.pixel.voice`, version code 298, min API 29, target API 35. The
-imported source and the staged signed build were 297. Before distributing an
+The app is `dev.pixel.voice`, version code 306 (`306-direct-github-beta`, reserved for the
+next app-only candidate with direct GitHub updates), min API 29, target API 35. 305
+(`305-home-beta`) is the Rose Agent bundled in the Frankel 2026102805 OS candidate `7fb94ae6`.
+304 (`304-app-beta`, candidate `a3d839e6`) is public on GitHub as `rose-agent-304` and
+catalog-delivered. The app-only run 40676568143 built a signed 303, which was delivered
+through the authenticated catalog (14:39 UTC, 2026-10-28) but has no public GitHub
+release. Build 2026102804 carried the signed 302. The draft 2026102803 carried 301; the verified draft 2026102802 carried 300; the retained,
+unpublished P1 build 2026102801 was 299; the published 2026102701 release
+carried 298. The imported source and the staged
+signed build were 297. Before distributing an
 upgrade, compare the installed/released version and increase versionCode; do not
 assume the source number is newer than a live APK.
 

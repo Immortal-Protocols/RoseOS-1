@@ -27,7 +27,10 @@ def identity(apk, aapt, apksigner, sdk):
             certs.add(found[3].upper())
     if not certs:
         raise ValueError(f'No verified signer for target SDK {sdk}: {apk.name}')
-    return {'packageName': match[1], 'certificates': sorted(certs),
+    version = re.search(r"^package: .*\bversionCode='(\d+)'", badging, re.M)
+    if not version:
+        raise ValueError(f'No versionCode in {apk.name}')
+    return {'packageName': match[1], 'certificates': sorted(certs), 'versionCode': int(version[1]),
         'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest()}
 
 def validate_policy(policy, apk):
@@ -75,6 +78,14 @@ def preprocessed_issues(apk):
             if offset % (4096 if native else 4):issues.append(f'{name} is not aligned; run zipalign -f -p 4')
     return issues
 
+# frameworks/base patches for every build with a background policy, in order. The locked-session patch adds
+# config_pixelComputerControlLockedSessions=false, its auth max-age, their symbols and the owner-gated guards
+# (installer, permission, settings and system screens block a session while the device is locked). With the
+# resource false, locked creation stays off; the release verifier requires the resource present and false.
+# Only --locked-control turns it on.
+BACKGROUND_FRAMEWORK_PATCHES = ['background-control-frameworks-base.patch', 'background-control-modern-frameworks-base.patch',
+    'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch']
+
 def preinstall_plan(policy, apks):
     """Map APKs to product preinstalls; each must be byte-identical to Rose Agent or a policy target."""
     pinned = {row['apkSha256']: row for row in [policy['voice'], *policy['targets']] if row.get('apkSha256')}
@@ -96,6 +107,53 @@ def preinstall_plan(policy, apks):
             raise ValueError(f'{Path(apk).name} cannot be imported unchanged: ' + '; '.join(issues))
         plan.append({'module': module, 'packageName': row['packageName'], 'apk': Path(apk)})
     return sorted(plan, key=lambda p: p['module'])
+
+# Rose Agent's Home is selected once per user by the patched RoleService (OS-HOME-2804-FIX-001); the patch names
+# this package, so it applies only to a build that preinstalls exactly this app.
+ROSE_HOME_PACKAGE = 'dev.pixel.voice'
+ROSE_HOME_PATCHES = {'packages/modules/Permission': ['rose-home-role-permission.patch']}
+
+def rose_home_projects(preinstalls):
+    """Projects and patches that make the preinstalled Rose Agent the Home app; none without that preinstall."""
+    return dict(ROSE_HOME_PATCHES) if any(row['packageName'] == ROSE_HOME_PACKAGE for row in preinstalls) else {}
+
+def installed_precedence(rows, installed):
+    """(issues, notes) for bundled apps against the phone's installed copies. Android keeps an
+    installed app unless the image's copy has the same signer and a higher versionCode, so a lower
+    version or another signer is an issue. An equal version is normal for an unchanged app; it is an
+    issue only when the installed record pins different apkSha256 bytes, otherwise a note.
+    installed uses the expected-identities.json shape: {"apps": [{packageName, versionCode,
+    signerSha256, optional apkSha256}]}."""
+    if not isinstance(installed, dict) or not isinstance(installed.get('apps'), list):
+        raise ValueError('installed identities need an "apps" list')
+    phone = {}
+    for app in installed['apps']:
+        if (not isinstance(app, dict) or not PACKAGE.fullmatch(str(app.get('packageName', '')))
+                or type(app.get('versionCode')) is not int or app['versionCode'] < 1
+                or not DIGEST.fullmatch(str(app.get('signerSha256', '')).upper())
+                or ('apkSha256' in app and not DIGEST.fullmatch(str(app['apkSha256']).upper()))):
+            raise ValueError('each installed app needs packageName, positive versionCode and signerSha256')
+        phone[app['packageName']] = app
+    issues, notes = [], []
+    for row in rows:
+        app, name = phone.get(row['packageName']), row['packageName']
+        if app is None:continue
+        if type(row.get('versionCode')) is not int:
+            issues.append(f'{name}: policy receipt has no versionCode; regenerate it')
+            continue
+        if app['signerSha256'].upper() not in row['certificates']:
+            issues.append(f'{name}: bundled signer differs from the installed copy')
+        if row['versionCode'] < app['versionCode']:
+            issues.append(f'{name}: bundled versionCode {row["versionCode"]} is below installed '
+                f'{app["versionCode"]}; the phone would keep its installed copy')
+        elif row['versionCode'] == app['versionCode']:
+            if 'apkSha256' in app and app['apkSha256'].lower() != row.get('apkSha256', '').lower():
+                issues.append(f'{name}: bundled APK differs from the installed one at the same versionCode '
+                    f'{row["versionCode"]}; the phone would keep its installed copy')
+            elif 'apkSha256' not in app:
+                notes.append(f'{name}: versionCode {row["versionCode"]} equals the installed copy, which the '
+                    'phone keeps; fine only if this app is unchanged')
+    return issues, notes
 
 def preinstall_blueprint(module):
     # Presigned keeps the existing app signer; preprocessed makes Soong copy the APK unchanged

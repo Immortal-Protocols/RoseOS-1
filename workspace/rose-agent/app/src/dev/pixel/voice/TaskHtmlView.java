@@ -15,6 +15,8 @@ final class TaskHtmlView extends WebView {
  private final String resizeKey="pixel-height-"+UUID.randomUUID()+":";
  private String documentHtml;
  private boolean disposed;
+ /** Called after renderer loss has removed and destroyed this view. */
+ Runnable onRendererGone;
  @SuppressLint("SetJavaScriptEnabled")
  TaskHtmlView(MainActivity activity,String html){
   super(activity);this.activity=activity;setBackgroundColor(Color.TRANSPARENT);
@@ -41,6 +43,11 @@ final class TaskHtmlView extends WebView {
      try{activity.startActivity(new Intent(Intent.ACTION_VIEW,uri));}catch(Exception ignored){}
     }
     return true;
+   }
+   // The app's shared renderer is gone: this card's view is unusable. Remove and destroy it; the owner shows the text result.
+   @Override public boolean onRenderProcessGone(WebView view,RenderProcessGoneDetail detail){
+    android.view.ViewParent parent=getParent();if(parent instanceof android.view.ViewGroup)((android.view.ViewGroup)parent).removeView(TaskHtmlView.this);
+    dispose();if(onRendererGone!=null)onRendererGone.run();return true;
    }
    @Override public void onPageFinished(WebView view,String url){
     if(disposed)return;

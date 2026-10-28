@@ -1,0 +1,447 @@
+name: OS release
+
+# Build, sign, verify and publish one Frankel candidate on the existing builder. Proposed setup is
+# NOT applied: until the bootstrap inputs in os/release-pipeline/frankel.json exist, the guard job
+# fails closed and names what is missing; no job reports a simulated success.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication)
+        type: choice
+        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor]
+        default: os-release
+      candidate_sha:
+        description: RoseOS-1 commit to build (must be on main)
+        required: true
+      build_number:
+        description: New monotonic ten-digit build number
+        required: true
+      build_timestamp:
+        description: BUILD_DATETIME (UTC epoch) for the build
+        required: true
+      channel:
+        type: choice
+        options: [beta, prod]
+        default: beta
+      apps:
+        description: 'JSON [[package, versionCode], ...] expected in the image'
+        required: true
+      promote:
+        description: Promote the verified draft (beta means pixel-ota Latest)
+        type: boolean
+        default: false
+      resume_failed_stage:
+        description: Resume the preserved attempt of this build number at its failed stage, without rebuilding
+        type: choice
+        options: [none, bytes-verify, sign, ota-verify]
+        default: none
+      resume_unsigned_sha256:
+        description: With resume, the unsignedTargetFiles sha256 printed by the original build stage
+        required: false
+        default: ''
+      resume_signed_sha256:
+        description: With an ota-verify resume, the signedTargetFiles sha256 printed by the successful sign stage
+        required: false
+        default: ''
+      resume_source_run:
+        description: With resume, the run id of the resumed attempt that failed (empty = the original attempt)
+        required: false
+        default: ''
+      app_publish:
+        description: app-only only - publish the verified signed APK as its own pixel-ota prerelease (never Latest)
+        type: boolean
+        default: false
+      alpha_recover:
+        description: emulator-alpha-successor only - continue an interrupted successor transition from its journal (exact preimage or postimage only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # One candidate at a time across the builder's source/output tree and the publisher.
+  group: os-release-frankel
+  cancel-in-progress: false
+
+env:
+  MODE: ${{ inputs.mode }}
+  CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  BUILD_NUMBER: ${{ inputs.build_number }}
+  BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
+  CHANNEL: ${{ inputs.channel }}
+  APPS: ${{ inputs.apps }}
+  RESUME_STAGE: ${{ inputs.resume_failed_stage }}
+  RESUME_UNSIGNED_SHA256: ${{ inputs.resume_unsigned_sha256 }}
+  RESUME_SOURCE_RUN: ${{ inputs.resume_source_run }}
+  RESUME_SIGNED_SHA256: ${{ inputs.resume_signed_sha256 }}
+
+jobs:
+  guard:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Candidate is an exact commit on main
+        env:
+          PROMOTE: ${{ inputs.promote }}
+          APP_PUBLISH: ${{ inputs.app_publish }}
+          ALPHA_RECOVER: ${{ inputs.alpha_recover }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BUILD_NUMBER" =~ ^[0-9]{10}$ && "$BUILD_TIMESTAMP" =~ ^[0-9]{10}$ ]]
+          python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
+          git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+          [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
+          [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
+          # app-only and emulator-alpha: no resume and no promotion (neither reaches the publisher); app-only is exactly Rose Agent.
+          [[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]
+          # Public app publication exists only in app-only mode.
+          [[ "$APP_PUBLISH" == false || "$MODE" == app-only ]]
+          # Successor recovery exists only in emulator-alpha-successor mode.
+          [[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]
+          [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
+      - name: Bootstrap preflight
+        env:
+          ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+          GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+          PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+          PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
+          # Presence only; the key itself is read solely by the publisher job's token step.
+          PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
+        run: python3 scripts/release-pipeline.py preflight --job guard
+      # Fails closed (exit 4) until the checked-in sourceBinding and hostEvidence exist, before the builder starts.
+      - name: Emulator-alpha preflight
+        if: inputs.mode == 'emulator-alpha'
+        run: python3 scripts/emulator-alpha.py preflight --job guard
+      # Only the pinned predecessor, the contract's incremental delta and the bound base candidate and apps are admitted.
+      - name: Emulator-alpha successor preflight
+        if: inputs.mode == 'emulator-alpha-successor'
+        run: python3 scripts/emulator-alpha.py preflight --job successor-guard --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"
+
+  controller:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job controller
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      - run: python3 scripts/release-pipeline.py start-builder
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+
+  builder:
+    needs: controller
+    if: inputs.mode == 'os-release'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 600
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # the integration adapter checks out the exact candidate commit
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job builder
+      - name: Prepare stage receipts
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/frankel-$BUILD_NUMBER"
+          if [[ "$RESUME_STAGE" == none ]]; then
+            test ! -e "$base" || { echo "::error::$base already exists; use a new build number" >&2; exit 1; }
+            python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device frankel --build-number "$BUILD_NUMBER"
+          else
+            # The preserved attempt is only read: its build outputs are copied into a new attempt directory,
+            # hashed into a new receipt chain bound to the old one, and the failed stage runs again there.
+            source="$base${RESUME_SOURCE_RUN:+-resume-$RESUME_SOURCE_RUN}"
+            base="$base-resume-$GITHUB_RUN_ID"
+            test ! -e "$base"
+            mkdir -p "$base/release"
+            for name in unsigned-target_files.zip background-policy.json resolved-manifest.xml; do
+              cp "$source/release/$name" "$base/release/$name"
+            done
+            carried=(--artifact "$base/release/unsigned-target_files.zip" --artifact "$base/release/background-policy.json"
+              --artifact "$base/release/resolved-manifest.xml")
+            if [[ "$RESUME_STAGE" == ota-verify ]]; then
+              # The successful signed outputs are copied, never regenerated; the signing receipt binds them.
+              mkdir "$base/release/public"
+              cp "$source/release/signed-target_files.zip" "$source/release/sign-receipt.json" "$base/release/"
+              cp "$source/release/public/"* "$base/release/public/"
+              carried+=(--artifact "$base/release/signed-target_files.zip" --artifact "$base/release/sign-receipt.json"
+                --expect "signed-target_files.zip=$RESUME_SIGNED_SHA256" --bind-receipt "$base/release/sign-receipt.json")
+              for file in "$base/release/public/"*; do carried+=(--artifact "$file"); done
+            fi
+            python3 scripts/release-stage.py resume "$RESUME_STAGE" --from "$source/stages" --state "$base/stages" \
+              --source-revision "$CANDIDATE_SHA" --expect "unsigned-target_files.zip=$RESUME_UNSIGNED_SHA256" "${carried[@]}"
+          fi
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      # Signer access exists only around the two stages that need it; the pipeline drops it as soon
+      # as each lead-managed entry point returns, and the final logout always runs.
+      - name: Signer access for app signing
+        if: inputs.resume_failed_stage == 'none'
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Integrate (apps signed first) and build
+        if: inputs.resume_failed_stage == 'none'
+        run: bash scripts/os-release-stage.sh build build
+      - name: Verify the unsigned build
+        if: inputs.resume_failed_stage == 'none' || inputs.resume_failed_stage == 'bytes-verify'
+        run: bash scripts/os-release-stage.sh bytes-verify verify-build
+      - name: Signer access for OS signing
+        if: inputs.resume_failed_stage != 'ota-verify'
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Sign
+        if: inputs.resume_failed_stage != 'ota-verify'
+        env:
+          # Only a sign resume may move a failed attempt's task-owned partial release output aside (never deleted).
+          ROSE_SIGN_RESUME_ARCHIVE: ${{ inputs.resume_failed_stage == 'sign' && format('failed-sign-{0}', github.run_id) || '' }}
+        run: bash scripts/os-release-stage.sh sign sign
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Verify the signed candidate
+        run: bash scripts/os-release-stage.sh ota-verify verify-signed
+      - name: Stage only public files and receipts
+        run: bash scripts/os-release-stage.sh transfer stage-artifact --artifact-dir "$ROSE_BASE/artifact"
+      - name: Transfer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: os-release-frankel-${{ inputs.build_number }}
+          path: ${{ env.ROSE_BASE }}/artifact
+          retention-days: 3
+          if-no-files-found: error
+
+  # Rose Agent alone from the exact candidate: no reconcile, make or OS signing, no OS secrets, no controller or Calculator.
+  # Only the verified signed APK, its nonsecret receipt and SHA256SUMS leave the builder, as a private Actions artifact.
+  app-builder:
+    needs: controller
+    if: inputs.mode == 'app-only'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # the app release checks out the exact candidate commit as a worktree
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job builder
+      - run: python3 scripts/host-app-release.py --check
+      - name: Prepare the app attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/app-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Signer access for app signing
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Build, sign and verify Rose Agent
+        run: ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Private Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-release-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/artifact
+          retention-days: 3
+          if-no-files-found: error
+      - name: Remove the app attempt from the builder
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
+  # Unsigned, test-only Cuttlefish build of the retained tree bound to the candidate (os/release-pipeline/cuttlefish-alpha.json):
+  # own OUT_DIR under the shared lock; no reconcile, signing, secrets, publication or clean. Only the receipt leaves the builder.
+  alpha-builder:
+    needs: controller
+    if: inputs.mode == 'emulator-alpha'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 600
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/emulator-alpha.py preflight --job builder
+      - name: Prepare the alpha attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/cf-alpha-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Build the Cuttlefish alpha
+        run: python3 scripts/emulator-alpha.py build --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --receipt-dir "$ROSE_BASE/receipt"
+      - name: Receipt only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-alpha-receipt-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/receipt
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove the alpha attempt directory (the images stay in the alpha OUT_DIR)
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
+  # Host preparation only (INFRA-ALPHA-108): the pinned alpha preparation moves in place to the configured delta by the
+  # contract's one-file incremental patch, then a full re-hash and a probe (lunch only). No make, signing, secrets,
+  # cloud identity, publication or config write; only the sanitized evidence leaves the builder, as a private artifact.
+  alpha-successor:
+    needs: controller
+    if: inputs.mode == 'emulator-alpha-successor'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/emulator-alpha.py preflight --job successor-builder --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"
+      - name: Prepare the successor attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/cf-alpha-successor-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Transition, full re-hash and probe
+        env:
+          ALPHA_RECOVER: ${{ inputs.alpha_recover && '--recover' || '' }}
+        run: python3 scripts/emulator-alpha.py successor-run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --evidence-dir "$ROSE_BASE/evidence" $ALPHA_RECOVER
+      - name: Sanitized evidence only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-alpha-successor-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/evidence
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove the attempt directory (the successor and probe receipts stay beside the predecessor)
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
+  publisher:
+    needs: builder
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+      PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
+      PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job publisher
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: os-release-frankel-${{ inputs.build_number }}
+          path: ${{ runner.temp }}/artifact
+      # Short-lived token for the pixel-ota installation only; the action revokes it when the job ends.
+      - name: Mint pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Revalidate, draft, download-check and promote if requested
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-pipeline.py publish --candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" \
+            --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --artifact-dir "$RUNNER_TEMP/artifact" \
+            ${{ inputs.promote && '--promote' || '' }}
+
+  # Public Rose Agent APK (app-only with app_publish): hosted, after the builder's verified private artifact. Only this job
+  # mints the pixel-ota App token (revoked by the action at job end); the builder never receives it.
+  app-publisher:
+    needs: app-builder
+    if: inputs.mode == 'app-only' && inputs.app_publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+      PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
+      PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job publisher
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-release-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ runner.temp }}/app-artifact
+      - name: Mint pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Verify the signed APK and publish its own prerelease
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/app_release_publisher.py --artifact-dir "$RUNNER_TEMP/app-artifact" --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --public-dir "$RUNNER_TEMP/app-public"
+      - name: Public publication receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-publication-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ runner.temp }}/app-public
+          retention-days: 7
+          if-no-files-found: error
+
+  cleanup:
+    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, publisher]
+    if: always() && needs.controller.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job cleanup
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      # The existing 12h automatic STOP on the builder remains the independent fallback.
+      - run: python3 scripts/release-pipeline.py stop-builder
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout

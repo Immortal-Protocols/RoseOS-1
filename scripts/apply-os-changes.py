@@ -4,11 +4,13 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
+import re
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan, validate_policy
+from integration_copy import Conflict, install_bytes, install_copy
+from background_apks import (BACKGROUND_FRAMEWORK_PATCHES, installed_precedence, preinstall_blueprint,
+    preinstall_make_block, preinstall_plan, rose_home_projects, validate_policy)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('source', help='Existing GrapheneOS checkout matching os/pinned-manifest.xml')
@@ -17,19 +19,30 @@ p.add_argument('--background-policy', type=Path, help='Local receipt from prepar
 p.add_argument('--background-agent', type=Path, help='The exact signed Agent.apk verified in that receipt')
 p.add_argument('--reference-display-address', help='Optional physical cover display address for a Fold build')
 p.add_argument('--locked-control', action='store_true',
-    help='Owner opt-in: let the pinned prototype controller start background sessions while locked')
+    help='Owner opt-in: let the pinned prototype controller start background sessions while locked. Product builds '
+    'always carry the locked-session resources and owner-gated guards with this switched off')
 p.add_argument('--agent-tray', action='store_true',
     help='Enable the Rose Agent status tray in the system image (persist.wm.debug.pixel_agent_tray=1)')
 p.add_argument('--updater-url',
     help='Release channel base URL for the system Updater; must match the installed phone (https, ends with /)')
+p.add_argument('--updater-published-channel', action='append', default=[],
+    help='Wire channel with published DEVICE-channel metadata under --updater-url (repeatable; default: stable, '
+    'the existing Pixel Beta feed). Other choices show as not available and are never fetched')
+p.add_argument('--keep-upstream-updater', action='store_true',
+    help='Deliberately leave the Updater polling GrapheneOS (not for a build that updates an existing RoseOS phone)')
 p.add_argument('--preinstall-apk', type=Path, action='append', default=[],
     help='Preinstall this exact signed Rose Agent or target APK from the policy receipt on the product partition (repeatable)')
+p.add_argument('--installed-identities', type=Path,
+    help='The phone\'s installed app identities (expected-identities.json shape); refuse bundled apps '
+    'that would not replace them (versionCode not higher, or a different signer)')
 p.add_argument('--check', action='store_true', help='Run all preflight checks without changing source')
 a = p.parse_args()
 if bool(a.background_policy) != bool(a.background_agent):
     p.error('--background-policy and --background-agent must be supplied together')
 if a.preinstall_apk and not a.background_policy:
     p.error('--preinstall-apk needs --background-policy and --background-agent')
+if a.installed_identities and not a.background_policy:
+    p.error('--installed-identities needs --background-policy and --background-agent')
 if a.locked_control and not a.background_policy:
     p.error('--locked-control needs --background-policy and --background-agent')
 if a.reference_display_address and (not a.background_policy or not a.reference_display_address.isdecimal()
@@ -38,6 +51,19 @@ if a.reference_display_address and (not a.background_policy or not a.reference_d
 if a.updater_url and (not a.updater_url.startswith('https://') or not a.updater_url.endswith('/')
         or any(c in a.updater_url for c in '<>&"\' \n')):
     p.error('--updater-url must be an https URL ending with / and without XML special characters')
+if a.updater_published_channel and not a.updater_url:
+    p.error('--updater-published-channel needs --updater-url')
+if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,31}', c) for c in a.updater_published_channel):
+    p.error('--updater-published-channel must be a lowercase channel token such as stable')
+published_channels = sorted(set(a.updater_published_channel or ['stable']))
+if a.updater_url and a.keep_upstream_updater:
+    p.error('--updater-url and --keep-upstream-updater are mutually exclusive')
+# A product build that keeps the upstream URL moves the installed phone to GrapheneOS's channel,
+# whose releases it cannot verify, and strands it until reflashed.
+if (a.background_policy or a.preinstall_apk or a.agent_tray or a.locked_control) \
+        and not a.updater_url and not a.keep_upstream_updater:
+    p.error('A RoseOS product build needs --updater-url (the installed phone\'s channel); '
+        'pass --keep-upstream-updater only for a build that will not update an existing phone')
 source = Path(a.source).resolve()
 bundle = Path(__file__).resolve().parents[1]/'os'
 manifest = ET.parse(bundle/'pinned-manifest.xml')
@@ -48,20 +74,32 @@ if a.emulator:projects['device/generic/goldfish'] = ['goldfish.patch']
 # Upstream Updater polls GrapheneOS; a differently signed build must name its own channel.
 UPDATER_CONFIG = 'packages/apps/Updater/res/values/config.xml'
 UPDATER_MARKER = '    <string name="url" translatable="false">https://releases.grapheneos.org/</string>'
-if a.updater_url:projects['packages/apps/Updater'] = []
+# RoseOS channel choices (Prod/Beta/Alpha, Beta = existing "stable" feed) ride on the same Updater change.
+UPDATER_PUBLISHED = '    <string-array name="channel_published" translatable="false">\n        <item>stable</item>\n    </string-array>\n'
+if a.updater_url:projects['packages/apps/Updater'] = ['updater-rose-channels.patch']
+# Upstream lists the Updater module only for OFFICIAL_BUILD (media_system.mk), so a RoseOS build omitted it.
+# Include it exactly when its channel is set; a --keep-upstream-updater build ships none.
+if a.updater_url:projects.setdefault('build/make', []).append('updater-product-build-make.patch')
 policy = None
 if a.background_policy:
     policy = validate_policy(json.loads(a.background_policy.read_text()), a.background_agent)
     if a.locked_control and not policy.get('prototypeControl', False):
         p.error('--locked-control needs a policy prepared with --prototype-control')
-    projects['frameworks/base'].append('background-control-frameworks-base.patch')
-    projects['frameworks/base'].append('background-control-modern-frameworks-base.patch')
-    projects['frameworks/base'].append('background-control-resource-import-fix.patch')
-    if a.locked_control:projects['frameworks/base'].append('locked-control-frameworks-base.patch')
+    projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
+projects.update(rose_home_projects(preinstalls))
+if a.installed_identities:
+    bundled = [policy['agent']] + [row for row in [policy['voice'], *policy['targets']]
+        if row['packageName'] in {p['packageName'] for p in preinstalls}]
+    issues, notes = installed_precedence(bundled, json.loads(a.installed_identities.read_text()))
+    for note in notes:print('Note: ' + note)
+    if issues:raise SystemExit('Bundled apps would not replace the installed copies:\n  ' + '\n  '.join(issues))
 PRODUCT_MAKEFILE = 'target/product/handheld_product.mk'
+
+def is_updater_overlay(path):
+    return str(path).startswith('packages/apps/Updater/')
 
 def is_background_overlay(path):
     return str(path).startswith(('packages/apps/PixelBackgroundControl/',
@@ -108,6 +146,7 @@ for file in (bundle/'overlays').rglob('*'):
     if not file.is_file():continue
     relative = file.relative_to(bundle/'overlays')
     if is_background_overlay(relative) and policy is None:continue
+    if is_updater_overlay(relative) and not a.updater_url:continue
     copies.append((file, source/relative))
 if policy:copies.append((a.background_agent, source/'packages/apps/PixelBackgroundControl/Agent.apk'))
 generated = []
@@ -128,18 +167,25 @@ for project, patches in projects.items():
     for patch in patches:
         subprocess.run(['git', '-C', str(source/project), 'apply',
             str(bundle/'patches'/patch)], check=True)
-for file, target in copies:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(file, target)
-for target, data in generated:
-    target.write_bytes(data)
+# Fresh mtimes so incremental builds rebuild from replaced inputs; identical bytes stay untouched.
+try:
+    for file, target in copies:
+        install_copy(file, target)
+    for target, data in generated:
+        install_bytes(target, data)
+except Conflict as error:
+    raise SystemExit(str(error))
 if preinstalls:
     product = source/'build/make'/PRODUCT_MAKEFILE
     product.write_text(product.read_text() + preinstall_make_block([row['module'] for row in preinstalls]))
 if a.updater_url:
     config = source/UPDATER_CONFIG
-    config.write_text(config.read_text().replace(UPDATER_MARKER,
-        f'    <string name="url" translatable="false">{a.updater_url}</string>'))
+    text = config.read_text()
+    if text.count(UPDATER_PUBLISHED) != 1:raise SystemExit('Updater published-channel list not found as expected')
+    items = ''.join(f'        <item>{c}</item>\n' for c in published_channels)
+    config.write_text(text.replace(UPDATER_MARKER,
+        f'    <string name="url" translatable="false">{a.updater_url}</string>').replace(UPDATER_PUBLISHED,
+        '    <string-array name="channel_published" translatable="false">\n' + items + '    </string-array>\n'))
 if policy:
     config = source/'frameworks/base/core/res/res/values/config.xml'
     text = config.read_text()

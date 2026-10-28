@@ -1,0 +1,27 @@
+android_app {
+    name: "LogViewer",
+
+    srcs: [
+        "src/**/*.java",
+    ],
+
+    resource_dirs: ["res"],
+
+    privileged: true,
+    platform_apis: true,
+
+    static_libs: [
+        "androidx.recyclerview_recyclerview",
+    ],
+
+    required: [
+        "etc_permissions_app.grapheneos.logviewer.xml",
+    ],
+}
+
+prebuilt_etc {
+    name: "etc_permissions_app.grapheneos.logviewer.xml",
+    src:  "etc/permissions/app.grapheneos.logviewer.xml",
+    sub_dir: "permissions",
+    filename_from_src: true,
+}
