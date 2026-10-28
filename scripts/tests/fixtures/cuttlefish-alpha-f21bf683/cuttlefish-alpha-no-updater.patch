@@ -1,0 +1,33 @@
+diff --git a/target/product/generic/Android.bp b/target/product/generic/Android.bp
+index b2ee0fe..d5447a5 100644
+--- a/target/product/generic/Android.bp
++++ b/target/product/generic/Android.bp
+@@ -1186,5 +1186,13 @@ android_system_image {
+         // DO NOT update this list. Instead, update the system_image_defaults to
+         // sync with the base_system.mk
+         "logpersist.start", // cf only
++        // RoseOS Cuttlefish alpha only (OS-ALPHA-001): GrapheneOS media_system.mk installs Seedvault on
++        // system, so this image lists it and its required closure for file_list_diff to match.
++        "Seedvault",
++        "LocalContactsBackup",
++        "com.stevesoltys.backup_allowlist",
++        "com.stevesoltys.backup_default-permissions",
++        "com.stevesoltys.backup_privapp_allowlist",
++        "default-permissions_app.grapheneos.backup.contacts",
+     ],
+ }
+diff --git a/target/product/media_system.mk b/target/product/media_system.mk
+index 8043916..424844a 100644
+--- a/target/product/media_system.mk
++++ b/target/product/media_system.mk
+@@ -40,10 +40,6 @@ ifeq ($(OFFICIAL_BUILD),true)
+     PRODUCT_PACKAGES += Updater
+ endif
+ 
+-# RoseOS ships the existing Updater in every build whose channel apply-os-changes.py sets
+-# (--updater-url); OFFICIAL_BUILD stays unset. Its Android.bp pulls the required permission XML.
+-PRODUCT_PACKAGES += Updater
+-
+ PRODUCT_PACKAGES += Seedvault
+ 
+ # Allowlist for system packages included in media_system.mk

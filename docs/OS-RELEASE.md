@@ -526,6 +526,71 @@ the lock:
    `BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE`) in `hostEvidence`, in one config
    commit.
 
+**Successor preparation** (INFRA-ALPHA-104). OS's ALPHA-099 delta (`156ccb8e`,
+patch `aa975499`, contract `a9c757c0`) differs from the delta of the prepared
+tree `b02dafbb…` (`f21bf683`, patch `e000da0d`) by one file:
+`build/make/target/product/generic/Android.bp`, `a8fd1327…` to `cf5dff6d…`. The
+contract records that difference as `alpha099IncrementalDelta`: patch
+`c9350590…`, which applies once and refuses a second `--check`. The retained
+Pixel tree has moved on (reconcile `0005`), so a fresh copy would not reproduce
+the 2804 base. Instead the existing tree moves in place, with its alpha
+`OUT_DIR`:
+
+- **Pin:** `preparation.successorOf` pins the predecessor (`b02dafbb…`, receipt
+  `18582916…`) and names the contract's incremental delta.
+- **Command:** `emulator-alpha.py prepare-successor`, under the shared lock:
+  1. **Ancestry checks:**
+     - the predecessor receipt digest;
+     - the predecessor's base binding, target, apps 302/4/28, policy, routing
+       and `OUT_DIR`;
+     - its delta equals the incremental base commit and patch;
+     - every changed file's base equals the contract, and only the incremental
+       file changes;
+     - the incremental patch digest touches exactly that one file, and its
+       postimage is the contract's full-delta result.
+  2. **Full re-hash:** the whole tree is re-hashed against the predecessor's
+     manifest. Any difference, mode drift, a symlink on the path, or a file
+     that is not at the preimage stops the run before anything is written.
+  3. **Journal:** a write-once `transition-started.json`.
+  4. **Transition:** `git apply --check` and `git apply` of the incremental
+     patch, then the recorded mode is restored. The postimage is checked, a
+     second `--check` must be refused, and the `OUT_DIR` must be unchanged
+     (inode and mtime).
+  5. **Receipt:** a write-once receipt,
+     `alpha-source/<predecessorId>/successors/<successorId>/successor.json`. It
+     records the predecessor chain, the new delta, the incremental patch,
+     modes, changed files, and the same selection manifest. The
+     `effectiveSourceIdentity` is the one a fresh preparation of the new delta
+     would have; the tests prove this.
+- **Preserved:** the predecessor's `preparation.json`, manifest and probe are
+  never changed, relabelled or reused as evidence for the new delta.
+- **Rerun:** returns the existing receipt after re-checking the postimage. It
+  never applies the patch twice.
+- **Interruption:** a journal without a receipt is an interrupted transition.
+  The command refuses it until `prepare-successor --recover` is run, which
+  continues only from exactly the preimage or the postimage of that file.
+- **Use:**
+  - `verify-prepared --preparation-id <predecessor> --successor-id <id>`
+    re-hashes the successor fully.
+  - `probe ... --successor-id <id>` probes it, and its receipt names the
+    successor.
+  - With `successorOf` set, the guard, builder and build use only
+    `prepared.successor` (`successorId`, `receiptSha256`). They also need
+    `hostEvidence.probedSuccessorId` to name it, so the successor must be
+    re-probed before `hostEvidence` is recorded.
+  - Until the lead records those values, the guard exits 4 and names them. The
+    predecessor alone is refused for the new delta.
+- **Capacity:** the transition writes no new space and skips the capacity
+  check. The build keeps `build.minFreeGiB` 300 unchanged.
+
+The lead's successor sequence, after capacity admission and with the lock free:
+
+1. `prepare-successor` prints the successor receipt.
+2. Optionally, `verify-prepared --preparation-id b02dafbb… --successor-id <id>`.
+3. `probe --preparation-id b02dafbb… --successor-id <id> --run-id <n> --receipt <new path>`.
+4. In one config commit, record `prepared.successor` (id and receipt sha256),
+   plus the probe's sha256, `lunch` and `probedSuccessorId` in `hostEvidence`.
+
 Source-only contract for the OS owner:
 
 - the Rose changes are applied for the Pixel product. Their effect on the

@@ -393,3 +393,148 @@ def verify_tree(tree, manifest_text, changes, skip=()):
                 problems.append(f'{rel}: file differs')
     problems += [f'{p}: missing' for p in sorted(set(expected) - seen)]
     return problems
+
+# ---------------------------------------------------------------- successor transition (INFRA-ALPHA-104)
+
+SUCCESSORS = 'successors'
+STARTED, RECORD = 'transition-started.json', 'successor.json'
+
+def successor_id(predecessor, delta, incremental, changes):
+    return sha256_bytes(canonical({'predecessor': {'preparationId': predecessor['preparationId'], 'receiptSha256': predecessor['receiptSha256']},
+        'osDelta': {'commit': delta['commit'], 'contractSha256': delta['contractSha256'],
+            'patchDigests': [{'path': p['path'], 'project': p['project'], 'sha256': p['sha256']} for p in delta['patches']]},
+        'incremental': {k: incremental[k] for k in ('path', 'sha256', 'project', 'file', 'beforeSha256', 'afterSha256')},
+        'changedFiles': changes}))
+
+def contained_regular(tree, rel):
+    """tree/rel as a regular file reached without any symlink component, or a PreparationFailed naming why not."""
+    current = Path(tree)
+    for part in rel.split('/'):
+        current = current/part
+        info = os.lstat(current) if os.path.lexists(current) else None
+        if info is None:
+            raise PreparationFailed(f'{rel} is absent from the prepared tree')
+        if stat.S_ISLNK(info.st_mode):
+            raise PreparationFailed(f'{rel} reaches a symlink at {current.relative_to(tree)}; the transition never follows links')
+    if not stat.S_ISREG(info.st_mode):
+        raise PreparationFailed(f'{rel} is not a regular file')
+    return current
+
+def out_dir_state(tree, out_dir):
+    path = Path(tree)/out_dir
+    if not os.path.lexists(path):
+        return {'path': out_dir, 'present': False}
+    info = os.lstat(path)
+    return {'path': out_dir, 'present': True, 'directory': stat.S_ISDIR(info.st_mode), 'inode': info.st_ino, 'mtimeNs': info.st_mtime_ns}
+
+def transition(directory, predecessor, delta, incremental, extra, recover=False, now=time.time):
+    """Move an immutable preparation's tree in place to a successor delta by exactly one declared file change, recorded by
+    a write-once successor receipt beside the predecessor (directory/successors/<id>/). The predecessor's
+    preparation.json, manifest and every other byte of the tree, and its retained OUT_DIR, stay as they are.
+
+    predecessor: the predecessor receipt plus its receiptSha256 (already checked by the caller). delta: the successor's
+    commit, contractSha256 and patches (digests only). incremental: the contract's one-file delta with its patch file
+    (path, sha256, file on disk, project, file, beforeSha256, afterSha256). extra: receipt fields the caller verified.
+    Order: full re-hash of the predecessor tree against its manifest (anything but the declared file at its preimage is
+    drift and stops before any write), a write-once journal, git apply --check and apply of only the incremental patch,
+    the recorded mode restored, the postimage and a refused second --check, then the write-once receipt. An existing
+    receipt makes the call a verified no-op; a journal without a receipt is an interrupted transition that only
+    recover=True continues, from exactly the preimage or the postimage of that file."""
+    directory = Path(directory)
+    tree = directory/'tree'
+    rel = f'{incremental["project"]}/{incremental["file"]}'
+    changes, found = [], False
+    for change in predecessor['changedFiles']:
+        if (change['project'], change['path']) == (incremental['project'], incremental['file']):
+            if change['afterSha256'] != incremental['beforeSha256']:
+                raise PreparationFailed(f'the predecessor recorded {rel} as {change["afterSha256"]}, not the incremental preimage {incremental["beforeSha256"]}')
+            change, found = {**change, 'afterSha256': incremental['afterSha256']}, True
+        changes.append(change)
+    if not found:
+        raise PreparationFailed(f'{rel} is not one of the predecessor\'s changed files; the incremental delta has no ancestry there')
+    identity = successor_id(predecessor, delta, incremental, changes)
+    record_dir = directory/SUCCESSORS/identity
+    record, started = record_dir/RECORD, record_dir/STARTED
+    if record.exists():
+        receipt = json.loads(record.read_text())
+        current = sha256_path(contained_regular(tree, rel))
+        if receipt.get('successorId') != identity or current != incremental['afterSha256']:
+            raise PreparationFailed(f'{record} exists but the tree or receipt no longer matches successor {identity}')
+        return {**receipt, 'alreadyTransitioned': True}
+    if started.exists() and not recover:
+        raise PreparationFailed(f'an interrupted transition left {started}; inspect the tree, then rerun with --recover')
+    if recover and not started.exists():
+        raise PreparationFailed(f'nothing to recover: {started} is absent')
+    target = contained_regular(tree, rel)
+    recorded = {e['path']: e for e in predecessor.get('changedFileModes', [])}
+    manifest_text = (directory/predecessor['manifest']).read_text()
+    if sha256_bytes(manifest_text.encode()) != predecessor['selectionSha256']:
+        raise PreparationFailed('the predecessor manifest differs from its selectionSha256')
+    mode = next((int(line.split('\t')[2], 8) for line in manifest_text.splitlines() if line.split('\t')[0] == rel), None)
+    if mode is None:
+        raise PreparationFailed(f'{rel} has no recorded mode in the predecessor manifest')
+    current = sha256_path(target)
+    allowed = {incremental['beforeSha256']} | ({incremental['afterSha256']} if recover else set())
+    if current not in allowed:
+        raise PreparationFailed(f'{rel} is {current}, not the incremental preimage {incremental["beforeSha256"]}'
+            + (' or postimage' if recover else ''))
+    # Full re-hash: every entry but rel must be exactly the predecessor's; rel was checked above.
+    problems = [p for p in verify_tree(tree, manifest_text, predecessor['changedFiles'], skip={extra['outDir']}) if p != f'{rel}: file differs']
+    if stat.S_IMODE(os.lstat(target).st_mode) != mode and current == incremental['beforeSha256']:
+        problems.append(f'{rel}: mode {stat.S_IMODE(os.lstat(target).st_mode):o}, not the recorded {mode:o}')
+    if problems:
+        raise PreparationFailed('the prepared tree drifted from its predecessor receipt: ' + '; '.join(problems[:50]))
+    out_before = out_dir_state(tree, extra['outDir'])
+    entries = len(manifest_text.splitlines())
+    if recover:
+        journal = json.loads(started.read_text())
+        if journal.get('successorId') != identity:
+            raise PreparationFailed(f'{started} names another successor')
+        nonce = journal['nonce']
+    else:
+        record_dir.mkdir(parents=True, exist_ok=True)
+        nonce = sha256_bytes(os.urandom(16))[:12]
+        with open(started, 'x') as f:
+            f.write(json.dumps({'successorId': identity, 'nonce': nonce, 'pid': os.getpid(), 'started': now(),
+                'preimageSha256': incremental['beforeSha256']}, sort_keys=True) + '\n')
+    recovered = None
+    if current == incremental['beforeSha256']:
+        apply_patch(tree/incremental['project'], incremental['patchFile'], directory)
+        recovered = 'preimage' if recover else None
+    else:
+        recovered = 'postimage'
+    after_mode = stat.S_IMODE(os.lstat(target).st_mode)
+    if after_mode != mode:
+        os.chmod(target, mode)
+    target = contained_regular(tree, rel)
+    if sha256_path(target) != incremental['afterSha256'] or stat.S_IMODE(os.lstat(target).st_mode) != mode:
+        raise PreparationFailed(f'{rel} is not the incremental postimage {incremental["afterSha256"]} with mode {mode:o} after the transition')
+    env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(directory))
+    second = subprocess.run(['git', '-C', str(tree/incremental['project']), 'apply', '--check', str(incremental['patchFile'])],
+        env=env, capture_output=True, text=True)
+    if second.returncode == 0:
+        raise PreparationFailed(f'the incremental patch would apply again to {rel}; the postimage is not a one-time transition')
+    out_after = out_dir_state(tree, extra['outDir'])
+    if out_after != out_before:
+        raise PreparationFailed(f'{extra["outDir"]} changed during the transition')
+    selection = predecessor['selectionSha256']
+    binding = {k: predecessor[k] for k in ('baseCandidate', 'baseResolvedManifestSha256', 'baseReconcileReceipt', 'baseReconcileSha256')}
+    receipt = {'schemaVersion': 1, 'kind': 'rose-cuttlefish-source-successor', 'successorId': identity,
+        'predecessor': {'preparationId': predecessor['preparationId'], 'receiptSha256': predecessor['receiptSha256'],
+            'selectionSha256': selection, 'effectiveSourceIdentity': predecessor['effectiveSourceIdentity'],
+            'osDeltaCommit': predecessor['osDeltaCommit'], 'patchDigests': predecessor['patchDigests'],
+            'contractSha256': predecessor.get('contractSha256')},
+        'preparedRoot': str(tree), **binding, 'osDeltaCommit': delta['commit'], 'contractSha256': delta['contractSha256'],
+        'patchDigests': [{'path': p['path'], 'project': p['project'], 'sha256': p['sha256']} for p in delta['patches']],
+        'incremental': {**{k: incremental[k] for k in ('path', 'sha256', 'project', 'file', 'beforeSha256', 'afterSha256')},
+            'recordedMode': f'{mode:o}', 'modeAfterApply': f'{after_mode:o}', 'modeRestored': after_mode != mode, 'secondCheckRefused': True},
+        'changedFiles': changes, 'selectionSha256': selection, 'manifest': f'../../{predecessor["manifest"]}',
+        'effectiveSourceIdentity': sha256_bytes(canonical({'base': binding, 'selectionSha256': selection,
+            'osDeltaCommit': delta['commit'], 'changedFiles': changes})),
+        'transitionMethod': 'in place: one git apply of the incremental patch to one regular file of the predecessor tree; no copy, reset or clean',
+        'verification': {'predecessorFullRehash': True, 'manifestEntries': entries, 'differencesOutsideTheDelta': 0},
+        'outDirPreserved': {'before': out_before, 'after': out_after}, 'recoveredFrom': recovered, 'journalNonce': nonce,
+        'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now())), **extra}
+    with open(record, 'x') as f:
+        f.write(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+    return receipt
