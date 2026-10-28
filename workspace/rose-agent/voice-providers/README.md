@@ -80,7 +80,7 @@ node --test rose-agent/voice-providers/*.test.* rose-agent/personal-memory/voice
 node rose-agent/tests/eleven-ui.cjs
 node rose-agent/tests/book-companion.cjs
 node rose-agent/tests/podcast-companion.cjs
-node rose-agent/tests/status-audio-levels.cjs
+node --test rose-agent/tests/page-regressions.test.mjs
 node rose-agent/tests/reconnect.mjs
 ```
 
