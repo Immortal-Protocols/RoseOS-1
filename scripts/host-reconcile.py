@@ -11,8 +11,13 @@ changes is then classified against the retained tree:
   anything else                          -> owner change: CONFLICT, nothing is written
 Files a previous receipt installed that the candidate no longer changes are restored to HEAD on the same terms.
 Owner changes are never reset or wiped and candidate changes are never skipped. `adopt` records the current bytes of
-conflicting files as a task-owned baseline once, explicitly and with a reason (e.g. the hand-made P1 integration).
+conflicting files as a task-owned baseline once, explicitly and with a reason (e.g. the hand-made P1 integration);
+`--path` limits that to the named conflicting files (e.g. a makefile that differs only in package order).
 Receipts are immutable and sequenced in the receipt directory. Exit status: 0 ok, 1 conflict or failure, 2 usage.
+
+The patcher is the candidate's own by default. `patcher: trusted` is a recipe fix for an already-pinned candidate: this
+checkout's apply-os-changes.py (and its two helpers) runs against the candidate's own os/ bundle (pinned manifest,
+patches, overlays), so the product content stays the candidate's; the patcher hashes are recorded in the receipt.
 """
 import argparse
 import hashlib
@@ -28,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+PATCHER = ('apply-os-changes.py', 'background_apks.py', 'integration_copy.py')
 
 class Conflict(Exception):
     pass
@@ -122,16 +128,33 @@ def write_atomic(target, data, mode):
     os.replace(temporary, target)
     os.utime(target)
 
+def prepare_patcher(candidate, choice, workdir):
+    """(apply-os-changes.py to run, receipt entry). 'trusted' copies this checkout's patcher into workdir beside a link
+    to the candidate's os/ bundle, which the patcher reads relative to its own path."""
+    if choice == 'candidate':
+        script = Path(candidate)/'scripts/apply-os-changes.py'
+        return script, {'patcher': 'candidate', 'sha256': {script.name: sha(script.read_bytes())}}
+    if choice != 'trusted':
+        raise Conflict(f'unknown patcher {choice!r}; expected candidate or trusted')
+    (Path(workdir)/'scripts').mkdir(parents=True)
+    for name in PATCHER:
+        shutil.copyfile(ROOT/'scripts'/name, Path(workdir)/'scripts'/name)
+    os.symlink(Path(candidate).resolve()/'os', Path(workdir)/'os')
+    return Path(workdir)/'scripts/apply-os-changes.py', {'patcher': 'trusted',
+        'sha256': {name: sha((ROOT/'scripts'/name).read_bytes()) for name in PATCHER}}
+
 def reconcile(source, candidate, release_dir, apply_args, receipt_dir, projects, owned_roots, extra, label, mode='apply',
-              reason=None, run=subprocess.run):
+              reason=None, run=subprocess.run, patcher='candidate', only=None):
     source, receipt_dir = Path(source), Path(receipt_dir)
     receipt_dir.mkdir(parents=True, exist_ok=True)
-    shadow = Path(release_dir)/'reconcile-shadow'
-    if shadow.exists():
-        raise Conflict(f'{shadow} exists from an earlier run; inspect and remove it deliberately')
+    shadow, workdir = Path(release_dir)/'reconcile-shadow', Path(release_dir)/'reconcile-patcher'
+    for leftover in (shadow, workdir):
+        if leftover.exists():
+            raise Conflict(f'{leftover} exists from an earlier run; inspect and remove it deliberately')
     try:
+        script, patcher_receipt = prepare_patcher(candidate, patcher, workdir)
         build_shadow(source, candidate, shadow, projects, extra)
-        result = run([sys.executable, str(Path(candidate)/'scripts/apply-os-changes.py'), str(shadow), *apply_args],
+        result = run([sys.executable, str(script), str(shadow), *apply_args],
             cwd=str(candidate), capture_output=True, text=True)
         if result.returncode:
             raise Conflict('candidate apply-os-changes failed on the shadow tree: ' + (result.stdout + result.stderr).strip()[-600:])
@@ -139,10 +162,16 @@ def reconcile(source, candidate, release_dir, apply_args, receipt_dir, projects,
         actions, conflicts = plan(source, projects, owned_roots, desired_changes(shadow, projects), previous)
     finally:
         shutil.rmtree(shadow, ignore_errors=True)
+        shutil.rmtree(workdir, ignore_errors=True)
     entries = dict(previous.get('entries', {}))
     if mode == 'adopt':
         if not reason:
             raise Conflict('adopt needs an explicit reason')
+        if only:
+            unknown = sorted(set(only) - set(conflicts))
+            if unknown:
+                raise Conflict('not current conflicts, nothing adopted: ' + ', '.join(unknown))
+            conflicts = sorted(only)
         for path in conflicts:
             entries[path] = {'after': sha(read(source/path)), 'action': 'adopted'}
         record = {'receiptType': 'reconcile-adopt', 'label': label, 'reason': reason, 'adopted': sorted(conflicts), 'entries': entries}
@@ -161,6 +190,7 @@ def reconcile(source, candidate, release_dir, apply_args, receipt_dir, projects,
                 write_atomic(target, desired, file_mode)
             entries[path] = {'before': sha(current), 'after': sha(desired), 'action': 'removed' if desired is None else 'installed'}
         record = {'receiptType': 'reconcile', 'label': label, 'changed': sorted(actions), 'entries': entries}
+    record['patcher'] = patcher_receipt
     record['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     release_receipts.write_once(receipt_dir/f'{count + 1:04d}-{label}.json', record)
     return record
@@ -175,6 +205,7 @@ def main(argv=None):
     p.add_argument('--config', type=Path, default=ROOT/'os/release-pipeline/frankel.json')
     p.add_argument('--label', default=os.environ.get('BUILD_NUMBER', 'manual'))
     p.add_argument('--reason')
+    p.add_argument('--path', action='append', dest='only', help='adopt only this conflicting path (repeatable)')
     a = p.parse_args(argv)
     config = json.loads(a.config.read_text())
     settings = config['host']['integrate']['reconcile']
@@ -189,7 +220,8 @@ def main(argv=None):
     apply_args = [part.format(**values) for part in settings['applyArgs']]
     try:
         record = reconcile(config['host']['sourceRoot'], a.candidate, a.release_dir, apply_args, settings['receiptDir'],
-            settings['projects'], settings['integrationOwnedRoots'], settings.get('sparsePaths', {}), a.label, a.mode, a.reason)
+            settings['projects'], settings['integrationOwnedRoots'], settings.get('sparsePaths', {}), a.label, a.mode, a.reason,
+            patcher=settings.get('patcher', 'candidate'), only=a.only)
     except (Conflict, subprocess.CalledProcessError, release_receipts.ReceiptExists) as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error) if not isinstance(error, subprocess.CalledProcessError)
             else f'git {error.cmd[1]} failed'}), file=sys.stderr)

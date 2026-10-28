@@ -9,8 +9,8 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from integration_copy import Conflict, install_bytes, install_copy
-from background_apks import (installed_precedence, preinstall_blueprint, preinstall_make_block,
-    preinstall_plan, validate_policy)
+from background_apks import (BACKGROUND_FRAMEWORK_PATCHES, installed_precedence, preinstall_blueprint,
+    preinstall_make_block, preinstall_plan, validate_policy)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('source', help='Existing GrapheneOS checkout matching os/pinned-manifest.xml')
@@ -19,7 +19,8 @@ p.add_argument('--background-policy', type=Path, help='Local receipt from prepar
 p.add_argument('--background-agent', type=Path, help='The exact signed Agent.apk verified in that receipt')
 p.add_argument('--reference-display-address', help='Optional physical cover display address for a Fold build')
 p.add_argument('--locked-control', action='store_true',
-    help='Owner opt-in: let the pinned prototype controller start background sessions while locked')
+    help='Owner opt-in: let the pinned prototype controller start background sessions while locked. Product builds '
+    'always carry the locked-session resources and owner-gated guards with this switched off')
 p.add_argument('--agent-tray', action='store_true',
     help='Enable the Rose Agent status tray in the system image (persist.wm.debug.pixel_agent_tray=1)')
 p.add_argument('--updater-url',
@@ -81,10 +82,7 @@ if a.background_policy:
     policy = validate_policy(json.loads(a.background_policy.read_text()), a.background_agent)
     if a.locked_control and not policy.get('prototypeControl', False):
         p.error('--locked-control needs a policy prepared with --prototype-control')
-    projects['frameworks/base'].append('background-control-frameworks-base.patch')
-    projects['frameworks/base'].append('background-control-modern-frameworks-base.patch')
-    projects['frameworks/base'].append('background-control-resource-import-fix.patch')
-    if a.locked_control:projects['frameworks/base'].append('locked-control-frameworks-base.patch')
+    projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
