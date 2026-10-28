@@ -11,7 +11,9 @@ plan fails closed (exit 4) naming it.
 
   plan             print the commands a build would run, marked executed: false; runs nothing
   preflight        --job guard: the checked-in config alone (before the builder starts);
-                   --job builder: also the pinned preparation, read-only (no lunch, no make)
+                   --job builder: also the pinned preparation, read-only (no lunch, no make);
+                   --job successor-guard / successor-builder: what successor-run needs, before the builder starts and
+                   on it (the predecessor, its ancestry and the capacity guard), read-only
   prepare          on the builder, under the shared lock: base and capacity checks, then the independent copy plus
                    delta; prints the preparation receipt
   prepare-successor
@@ -19,6 +21,10 @@ plan fails closed (exit 4) naming it.
                    in place to the configured delta by the contract's one-file incremental patch, after a full re-hash;
                    writes the write-once successor receipt (alpha-source/<predecessorId>/successors/<successorId>/) and
                    prints it. --recover continues an interrupted transition from exactly the preimage or postimage
+  successor-run    the os-release.yml emulator-alpha-successor job (INFRA-ALPHA-108): --candidate-sha and --apps must be
+                   the bound base, then prepare-successor, a full re-hash of the successor and a probe of it, in that
+                   order; --evidence-dir receives only the sanitized successor, verification and probe receipts, a
+                   summary of the values the lead records, and SHA256SUMS. Never compiles, signs or writes the config
   verify-prepared  --preparation-id ID [--successor-id ID]: full re-hash of a prepared tree against its manifest
   probe            --preparation-id ID [--successor-id ID], under the shared lock: the prepared (or successor) tree's
                    checks plus lunch resolution (which writes build-system state only inside the alpha OUT_DIR of that
@@ -478,9 +484,8 @@ def prepare_successor(config, recover=False, now=time.time):
     lock = locked(config)
     try:
         directory, predecessor = predecessor_receipt(config, document, item)
-        tree_failures = [f for f in source_failures(config, directory/'tree', (predecessor.get('baseGitHeads') or {}).get(CUTTLEFISH))
-            if 'below build.minFreeGiB' not in f]  # the transition writes no new space; the build keeps its guard
-        if tree_failures:
+        tree_failures = source_failures(config, directory/'tree', (predecessor.get('baseGitHeads') or {}).get(CUTTLEFISH))
+        if tree_failures:  # including the unchanged build.minFreeGiB guard, before anything is written
             raise CheckFailed('; '.join(tree_failures))
         extra = {k: predecessor[k] for k in ('target', 'apps', 'policySha256', 'updaterMode', 'updaterEndpoint', 'baseGitHeads',
             'outDir', 'baseReconcileEntries')}
@@ -566,6 +571,78 @@ def verify_successor(config, preparation_id, successor_id):
     failures += differences
     return {'verdict': 'FAIL' if failures else 'OK', 'successorId': successor_id, 'failures': failures[:200],
         'failureCount': len(failures), 'fullRehash': True}
+
+def successor_preflight(config, sha=None, apps=None, host=False):
+    """What the emulator-alpha-successor job needs: the configured predecessor and the contract's incremental delta,
+    the bound base dispatch, and on the builder the unchanged predecessor, its ancestry and the tree checks (including
+    the build.minFreeGiB guard). Read-only."""
+    failures = config_failures(config)
+    if failures:
+        raise CheckFailed('; '.join(failures))
+    successor = config['preparation'].get('successorOf') or {}
+    missing = [f'preparation.successorOf.{k}' for k in ('preparationId', 'receiptSha256', 'incrementalDelta') if not successor.get(k)]
+    missing += [f'sourceBinding.{k}' for k in ('candidate', 'reconcileReceipt', 'reconcileReceiptSha256', 'apps') if not config['sourceBinding'].get(k)]
+    if missing:
+        raise SetupMissing(missing)
+    if sha is not None or apps is not None:
+        check_dispatch(config, sha, apps)
+    document, _ = contract(config)
+    item = incremental_delta(config, document)
+    if not host:
+        return {'verdict': 'OK', 'job': 'successor-guard', 'predecessor': successor['preparationId'], 'incremental': item['sha256']}
+    directory, predecessor = predecessor_receipt(config, document, item)
+    failures = source_failures(config, directory/'tree', (predecessor.get('baseGitHeads') or {}).get(CUTTLEFISH))
+    if failures:
+        raise CheckFailed('; '.join(failures))
+    return {'verdict': 'OK', 'job': 'successor-builder', 'predecessor': successor['preparationId'], 'incremental': item['sha256']}
+
+def successor_run(config, sha, apps, run_id, timestamp, evidence_dir, recover=False, now=time.time):
+    """prepare-successor, a full re-hash of the successor and a probe of it, then sanitized evidence for the lead."""
+    if not re.fullmatch(r'[0-9a-f]{40}', sha or '') or not re.fullmatch(r'\d{10}', timestamp or ''):
+        raise InvalidInput('a full candidate SHA and a ten-digit BUILD_DATETIME are required')
+    identity = build_id(config, run_id)
+    evidence_dir = Path(evidence_dir)
+    if evidence_dir.exists():
+        raise CheckFailed(f'{evidence_dir} already exists; use a new evidence directory')
+    successor_preflight(config, sha, apps, host=True)
+    predecessor_id = config['preparation']['successorOf']['preparationId']
+    receipt = prepare_successor(config, recover=recover, now=now)
+    successor_id = receipt['successorId']
+    record_dir = preparation_dir(config, predecessor_id)/alpha_source.SUCCESSORS/successor_id
+    lock = locked(config)
+    try:
+        verification = verify_successor(config, predecessor_id, successor_id)
+    finally:
+        lock.close()
+    if verification['verdict'] != 'OK':
+        raise CheckFailed(f'the successor failed its full re-hash ({verification["failureCount"]} differences): '
+            + '; '.join(verification['failures'][:20]))
+    probe_path = record_dir/f'probe-{identity}.json'
+    probed = probe(config, predecessor_id, run_id, timestamp, probe_path, successor_id)
+    if probed['treeFailures']:
+        raise CheckFailed('the successor probe found tree failures: ' + '; '.join(probed['treeFailures'][:20]))
+    evidence_dir.mkdir(parents=True)
+    copies = {'successor.json': record_dir/alpha_source.RECORD, 'probe.json': probe_path}
+    for name, source in copies.items():
+        shutil.copyfile(source, evidence_dir/name)
+    (evidence_dir/'verification.json').write_text(json.dumps(verification, indent=2, sort_keys=True) + '\n')
+    digests = {name: sha256_file(evidence_dir/name) for name in ('successor.json', 'probe.json', 'verification.json')}
+    summary = {'receiptType': 'emulator-alpha-successor-run', 'executedMake': False, 'compiled': False, 'signed': False,
+        'published': False, 'configWritten': False, 'candidate': sha, 'apps': apps, 'predecessor': predecessor_id,
+        'predecessorReceiptSha256': config['preparation']['successorOf']['receiptSha256'],
+        'osDeltaCommit': receipt['osDeltaCommit'], 'contractSha256': receipt['contractSha256'], 'incremental': receipt['incremental']['sha256'],
+        'successorId': successor_id, 'successorReceiptSha256': digests['successor.json'],
+        'alreadyTransitioned': bool(receipt.get('alreadyTransitioned')), 'recoveredFrom': receipt.get('recoveredFrom'),
+        'fullRehash': {'verdict': verification['verdict'], 'failureCount': verification['failureCount']},
+        'probeReceiptSha256': digests['probe.json'], 'probePath': str(probe_path), 'lunch': probed['lunch'],
+        'toRecord': {'prepared.successor': {'successorId': successor_id, 'receiptSha256': digests['successor.json']},
+            'hostEvidence': {'probeReceiptSha256': digests['probe.json'], 'lunch': probed['lunch'], 'probedSuccessorId': successor_id}},
+        'notProven': ['alpha compile, file_list_diff and image', *NOT_PROVEN],
+        'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now()))}
+    (evidence_dir/'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+    names = sorted(p.name for p in evidence_dir.iterdir())
+    (evidence_dir/'SHA256SUMS').write_text(''.join(f'{sha256_file(evidence_dir/n)}  {n}\n' for n in names))
+    return summary
 
 # ---------------------------------------------------------------- probe and build
 
@@ -774,8 +851,10 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['plan', 'preflight', 'prepare', 'prepare-successor', 'verify-prepared', 'probe', 'verify-image', 'build'])
-    p.add_argument('--job', choices=['guard', 'builder'], default='guard')
+    p.add_argument('command', choices=['plan', 'preflight', 'prepare', 'prepare-successor', 'successor-run', 'verify-prepared', 'probe',
+        'verify-image', 'build'])
+    p.add_argument('--job', choices=['guard', 'builder', 'successor-guard', 'successor-builder'], default='guard')
+    p.add_argument('--evidence-dir')
     p.add_argument('--config', default=str(CONFIG))
     p.add_argument('--candidate-sha')
     p.add_argument('--apps', default='[]')
@@ -791,6 +870,13 @@ def main(argv=None):
         config = load(a.config)
         if a.command == 'plan':
             result = plan(config, a.candidate_sha, a.run_id, a.build_timestamp)
+        elif a.command == 'preflight' and a.job.startswith('successor-'):
+            result = successor_preflight(config, a.candidate_sha, json.loads(a.apps) if a.candidate_sha else None,
+                host=a.job == 'successor-builder')
+        elif a.command == 'successor-run':
+            if not a.evidence_dir:
+                raise InvalidInput('--evidence-dir is required')
+            result = successor_run(config, a.candidate_sha, json.loads(a.apps), a.run_id, a.build_timestamp, a.evidence_dir, recover=a.recover)
         elif a.command == 'preflight':
             guard(config)
             if a.job == 'builder':

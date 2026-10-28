@@ -583,13 +583,63 @@ the 2804 base. Instead the existing tree moves in place, with its alpha
 - **Capacity:** the transition writes no new space and skips the capacity
   check. The build keeps `build.minFreeGiB` 300 unchanged.
 
-The lead's successor sequence, after capacity admission and with the lock free:
+**The Actions route** (INFRA-ALPHA-108) runs this preparation through the same
+private `os-release.yml` `workflow_dispatch` on main. It uses the same runner
+group, controller OIDC start and always-cleanup stop, shared lock and
+`os-release-frankel` concurrency. Mode `emulator-alpha-successor`:
 
-1. `prepare-successor` prints the successor receipt.
-2. Optionally, `verify-prepared --preparation-id b02dafbb… --successor-id <id>`.
-3. `probe --preparation-id b02dafbb… --successor-id <id> --run-id <n> --receipt <new path>`.
-4. In one config commit, record `prepared.successor` (id and receipt sha256),
-   plus the probe's sha256, `lunch` and `probedSuccessorId` in `hostEvidence`.
+- **Guard:** the usual input and ancestry checks, then
+  `emulator-alpha.py preflight --job successor-guard`.
+  - This needs `preparation.successorOf`, the contract's incremental delta at
+    its digest, and exactly the bound base candidate `ae9cfd4d` with apps
+    302/4/28.
+  - No resume, promotion or `app_publish` is allowed in this mode.
+  - The `alpha_recover` input is allowed in this mode only.
+- **Job `alpha-successor`:** runs on the builder with `contents: read` only (no
+  `id-token`, no secrets, no signer login).
+  1. `preflight --job successor-builder` checks the predecessor, its ancestry,
+     the tree and the unchanged `build.minFreeGiB` 300.
+  2. `successor-run` runs `prepare-successor` (with `--recover` only when
+     `alpha_recover` is true), then a full re-hash of the successor under the
+     lock, then a probe (`lunch` only).
+  - **Never:** make, compile, sign, publish, or write the config.
+  - **Success:** only the evidence directory is uploaded, as the private
+    artifact `emulator-alpha-successor-<run id>` (7 days).
+  - **Failure:** nothing is uploaded. A completed transition stays recorded,
+    so a rerun is a verified no-op.
+  - **Always:** the attempt directory is removed. The successor and probe
+    receipts stay beside the predecessor:
+    `successors/<successorId>/successor.json` and `probe-rose-cf-alpha-<run id>.json`.
+- **Evidence files:** `successor.json`, `probe.json`, `verification.json`,
+  `summary.json` and `SHA256SUMS`.
+  - `summary.json` records `executedMake`, `compiled`, `signed`, `published`
+    and `configWritten`, all false.
+  - It also records the predecessor, delta, contract, incremental patch,
+    successor id and receipt sha256, full re-hash verdict, probe receipt sha256
+    and path, and `lunch`.
+  - `toRecord` holds the exact values for the lead to record: `prepared.successor`
+    and the `hostEvidence` probe sha256, `lunch` and `probedSuccessorId`.
+- **Normal alpha mode:** it stays fail-closed (exit 4) until those values are
+  recorded in a config commit.
+
+Dispatch fields for the lead:
+
+| Field | Value |
+| --- | --- |
+| `mode` | `emulator-alpha-successor` |
+| `candidate_sha` | `ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9` |
+| `apps` | `[["dev.pixel.voice",302],["dev.pixel.calculator.agent",4],["dev.pixel.backgroundcontrol",28]]` |
+| `build_number` | any ten digits (unused) |
+| `build_timestamp` | ten digits (the probe's `BUILD_DATETIME`) |
+| `channel` | `beta` |
+| `promote`, `app_publish`, `alpha_recover` | `false` |
+| `resume_failed_stage` | `none` |
+
+The same sequence without Actions, on the builder with the lock free:
+`prepare-successor`, then `verify-prepared --preparation-id b02dafbb… --successor-id <id>`,
+then `probe --preparation-id b02dafbb… --successor-id <id> --run-id <n> --receipt <new path>`.
+Then record `prepared.successor`, plus the probe's sha256, `lunch` and
+`probedSuccessorId` in `hostEvidence`, in one config commit.
 
 Source-only contract for the OS owner:
 
