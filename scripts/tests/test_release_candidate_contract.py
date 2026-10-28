@@ -1,5 +1,5 @@
-"""Checked-in candidate contract for build 2026102803 (Rose Agent 301, controller 28, Calculator 4), the immutable
-2026102802 draft it supersedes, and the controller's async builder start/stop, using the retained nonsecret evidence in
+"""Checked-in candidate contract for build 2026102804 (Rose Agent 302, controller 28, Calculator 4), the immutable
+2026102802 and 2026102803 drafts it supersedes, and the controller's async builder start/stop, using the retained nonsecret evidence in
 this repository and a fake gcloud."""
 import hashlib
 import importlib.util
@@ -21,10 +21,11 @@ spec.loader.exec_module(pipeline)
 from background_apks import installed_precedence  # noqa: E402
 
 CONFIG = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
-APPS = [['dev.pixel.voice', 301], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
-DRAFT = {'build': '2026102803', 'timestamp': '1793176860'}
+APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+DRAFT = {'build': '2026102804', 'timestamp': '1793180700'}
 # The verified 2026102802 draft's notes are immutable evidence (pixel-ota draft frankel-2026102802).
 NOTES_2802_SHA256 = 'a84fac7a77cd521d53226bcf1d8b89528f6f23b0f8a0eb42b73570055a4f865f'
+NOTES_2803_SHA256 = '04f91df28af8e021177a10740731849da9e605d52af2faee78f33d6fc96579cb'  # draft 426456114, immutable
 
 def manifest_version(path):
     text = (ROOT/path).read_text()
@@ -42,7 +43,7 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertEqual(pipeline.preflight('guard', CONFIG, {'ROSEOS_BUILDER_RUNNER_READY': 'true',
             'GCP_WORKLOAD_IDENTITY_PROVIDER': 'x', 'GCP_CONTROLLER_SERVICE_ACCOUNT': 'x', 'GCP_SIGNER_SERVICE_ACCOUNT': 'x',
             'PIXEL_OTA_PUBLISHER': 'github-app', 'PIXEL_OTA_APP_ID': '1', 'PIXEL_OTA_APP_KEY_PRESENT': 'true'}, 'production'),
-            ['updater.signer'])  # the next candidate waits for the OS layout
+            [])
 
     def test_updater_expectations_follow_the_patch_and_the_recipe(self):
         patch = (ROOT/'os/patches/updater-rose-channels.patch').read_text()
@@ -56,6 +57,13 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertEqual(expected[('string', 'url')], 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/')
         self.assertEqual(expected[('array', 'channel_published')], ['stable'])  # Beta keeps the existing stable wire channel
 
+    def test_updater_signer_is_the_release_key_pin_and_the_channel_code_is_ours(self):
+        self.assertEqual(CONFIG['updater']['signer'], '2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a')
+        self.assertEqual(CONFIG['updater']['signer'], CONFIG['identities']['otaCertificateSha256'])
+        source = (ROOT/'os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java').read_text()
+        self.assertTrue(source.startswith('package app.seamlessupdate.client;'))
+        self.assertEqual(pipeline.ROSE_CHANNELS_DEX, b'Lapp/seamlessupdate/client/RoseChannels;')
+
     def test_updater_layout_is_the_one_the_os_inclusion_documents(self):
         docs = ' '.join((ROOT/'docs/OS-INTEGRATION.md').read_text().split())
         updater = CONFIG['updater']
@@ -66,7 +74,7 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertIn('updater-product-build-make.patch', (ROOT/'scripts/apply-os-changes.py').read_text())
 
     def test_source_manifests_match_the_allocated_versions(self):
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 301, '301-wave-beta'))
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 302, '302-wave-beta'))
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
@@ -79,13 +87,15 @@ class CheckedInCandidateTest(unittest.TestCase):
             self.assertIn(f'"{extra}"', consumer)
 
     def test_release_notes_bind_to_the_candidate_and_describe_the_draft(self):
-        self.assertEqual(hashlib.sha256((ROOT/'os/release-notes/frankel-2026102802.md').read_bytes()).hexdigest(), NOTES_2802_SHA256)
-        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build='2026102803')
+        for build, digest in (('2026102802', NOTES_2802_SHA256), ('2026102803', NOTES_2803_SHA256)):
+            self.assertEqual(hashlib.sha256((ROOT/f'os/release-notes/frankel-{build}.md').read_bytes()).hexdigest(), digest)
+        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build='2026102804')
         notes = (ROOT/path).read_text()
         flat = ' '.join(notes.split())
-        for expected in ('2026102803', 'frankel', 'user build', 'versionCode 301 (301-wave-beta)', '28 (2.1.5-pip)', '4 (unchanged)',
-                'not promoted', 'Beta channel (pixel-ota Latest) is unchanged', 'not been accepted on a phone',
-                'locked sessions off', 'prototype agent list empty', 'not yet verified at runtime'):
+        for expected in ('2026102804', 'frankel', 'user build', 'versionCode 302 (302-wave-beta)', '28 (2.1.5-pip, unchanged)',
+                '4 (unchanged)', 'not promoted', 'Beta channel (pixel-ota Latest) is unchanged', 'not been accepted on a phone',
+                'locked sessions off', 'prototype agent list empty', 'not yet verified at runtime',
+                'system Updater is built into the image again', 'install a verified newer Rose Agent', 'release-key signature'):
             self.assertIn(expected, flat)
         for claim in ('downgrade', 'available on Alpha', 'available on Prod'):
             self.assertNotIn(claim, flat)
@@ -109,14 +119,15 @@ class CheckedInCandidateTest(unittest.TestCase):
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
         pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
         for apps, cand, message in (
+                ([['dev.pixel.voice', 301], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 301 must exceed retained 2026102803 versionCode 301'),
                 ([['dev.pixel.voice', 300], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 300 must exceed retained 2026102802 versionCode 300'),
                 ([*APPS[:2], ['dev.pixel.backgroundcontrol', 27]], DRAFT,
                     'dev.pixel.backgroundcontrol versionCode 27 must exceed retained 2026102802 versionCode 27'),
                 ([['dev.pixel.voice', 299], *APPS[1:]], DRAFT, 'must exceed retained 2026102801 versionCode 299'),
                 ([['dev.pixel.voice', 297], *APPS[1:]], DRAFT, 'below delivered 2026102701 versionCode 298'),
                 (APPS[1:], DRAFT, 'dev.pixel.voice versionCode None must exceed'),
-                (APPS, {'build': '2026102803', 'timestamp': '1793163120'}, 'must exceed retained 2026102802 \\(1793163120\\)'),
-                (APPS, {'build': '2026102802', 'timestamp': '1793176860'}, 'must exceed retained 2026102802')):
+                (APPS, {'build': '2026102804', 'timestamp': '1793176860'}, 'must exceed retained 2026102803 \\(1793176860\\)'),
+                (APPS, {'build': '2026102803', 'timestamp': '1793180700'}, 'must exceed retained 2026102803')):
             with self.assertRaisesRegex(pipeline.CheckFailed, message):
                 pipeline.check_version_baselines(CONFIG, cand, apps)
         without = {k: v for k, v in CONFIG.items() if k != 'versionBaselines'}
