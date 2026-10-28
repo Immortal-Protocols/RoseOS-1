@@ -81,6 +81,24 @@ test('no conversation-page check uses a literal page index',()=>{
  assert.match(main,/launcherPager\.currentPage\(\)==voicePage\)&&visualDetail==null&&screenDetail==null/);
 });
 
+test('the Home session mark renders the same authoritative state as the tray and conversation',()=>{
+ const snapshot=src=>src.match(/ConversationState\.of\(false[^;]*;/)[0].replace(/\s+/g,'');
+ const tray=read('../app/src/dev/pixel/voice/AgentTrayService.java');
+ const conversation=read('../app/src/dev/pixel/voice/RoseConversationActivity.java');
+ // Same fields, same order, same "no service is inactive" rule as App's two surfaces.
+ assert.equal(snapshot(main).replace(/s\./g,'v.'),snapshot(tray));
+ assert.equal(snapshot(main),snapshot(conversation));
+ assert.match(main,/static ConversationState conversationState\(\)\{VoiceService s=VoiceService\.instance;return s==null\?/);
+ // Updated on every refresh tick, before the conversation-page early return, so Home is live too.
+ assert.match(main,/void refresh\(\)\{\n  if\(roseHome!=null\)roseHome\.showSession\(conversationState\(\)\);\n  if\(drawer\|\|micButton==null\)return;/);
+ // The tick starts on resume and stops on pause, so returning to Home reads fresh state.
+ assert.match(main,/onResume\(\)\{[^\n]*handler\.removeCallbacks\(tick\);handler\.post\(tick\);\}/);
+ assert.match(main,/onPause\(\)\{[^\n]*handler\.removeCallbacks\(tick\);/);
+ // Home chooses its mark only through HomeSessionMark, never from audio levels or status text.
+ assert.match(home,/HomeSessionMark\.Mark mark = HomeSessionMark\.of\(state\);/);
+ for(const guess of ['inputLevel','outputLevel','status','.live','.connected'])assert.ok(!home.includes(guess),guess);
+});
+
 test('Back from the conversation or app pages returns Home',()=>{
  assert.match(main,/else if\(drawer&&launcherPager!=null\)launcherPager\.showPage\(homePage,true\);else if\(experimentalHome&&chatMode\)\{chatMode=false;home\(\);\}else if\(launcherPager!=null\)launcherPager\.showPage\(homePage,true\);\}/);
 });

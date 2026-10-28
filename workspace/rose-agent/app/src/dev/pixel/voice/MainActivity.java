@@ -12,7 +12,7 @@ public class MainActivity extends Activity {
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
  LauncherPager launcherPager;LinearLayout homePageDots;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
- boolean launcherReceiverRegistered;
+ boolean launcherReceiverRegistered;RoseHomeView roseHome;
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
  /** Home visual card trial. false removes the card, its detail view and its Home options entry. */
@@ -384,7 +384,7 @@ public class MainActivity extends Activity {
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   page.setBackgroundColor(Color.TRANSPARENT);homePageDots=makePageDots(titles);page.addView(homePageDots,new LinearLayout.LayoutParams(-1,dp(30)));
-  launcherPager.addView(new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::openRoseConversation,this::apps,makePageDots(titles)));
+  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::openRoseConversation,this::apps,makePageDots(titles)));
   launcherPager.addView(page);
   for(int number=voicePage+1;number<count;number++){
    LinearLayout appPage=new LinearLayout(this);appPage.setOrientation(1);
@@ -515,6 +515,7 @@ public class MainActivity extends Activity {
  String audioLabel(VoiceService s){if(!s.communicating)return "Microphone off";AudioDeviceInfo d=s.audio==null?null:s.audio.getCommunicationDevice();if(d==null)return "Connecting audio…";if(VoiceService.isBluetooth(d))return "Glasses";if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)return "Phone speaker";if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)return "Phone earpiece";return d.getProductName().toString();}
  final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,250);}};
  void refresh(){
+  if(roseHome!=null)roseHome.showSession(conversationState());
   if(drawer||micButton==null)return;syncVisual();VoiceService s=VoiceService.instance;boolean active=s!=null&&s.live&&s.connected,starting=s!=null&&s.communicating&&!active,isMuted=active&&s.muted;
   String error=s!=null&&!active&&!starting&&s.status.toLowerCase(java.util.Locale.ROOT).matches(".*(failed|unavailable|not ready|denied|error|timed out).*")?"Couldn’t connect. Tap to retry.":"";
   if(active||starting||!error.isEmpty())startFeedbackUntil=0;
@@ -550,6 +551,9 @@ public class MainActivity extends Activity {
  @Override protected void onResume(){super.onResume();screenHostActive=true;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();if(clockWidget!=null&&launcherPager!=null)clockWidget.setActive(launcherPager.currentPage()==widgetsPage);if(weatherWidget!=null&&launcherPager!=null)weatherWidget.setActive(launcherPager.currentPage()==widgetsPage);if(galleryWidget!=null&&launcherPager!=null)galleryWidget.setActive(launcherPager.currentPage()==widgetsPage);handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onPause(){ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
  @Override public void onNewIntent(Intent i){super.onNewIntent(i);home();showHomeFor(i);}
+ /** The same snapshot RoseConversationActivity and AgentTrayService build: no service is inactive, never guessed. */
+ static ConversationState conversationState(){VoiceService s=VoiceService.instance;return s==null?ConversationState.of(false,false,false,false,false,null,null,null)
+   :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);}
  /** Home's Rose entry: App's conversation surface (APP-P2-002-HOOK-001). Plain explicit Intent in this task, so Back
   * returns Home and HOME clears it; navigation only, never a voice or task command. */
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
