@@ -26,6 +26,7 @@ public final class RoseConversationActivity extends Activity {
  final ConversationState.Notices notices=new ConversationState.Notices();
  ConversationState state;
  Presence presence;LinearLayout notice;TextView noticeIcon,noticeText,failure;
+ LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";
  Control primary,end;
  int noticeSerial;
  final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,150);}};
@@ -51,7 +52,19 @@ public final class RoseConversationActivity extends Activity {
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
   getWindow().setStatusBarColor(paper());getWindow().setNavigationBarColor(paper());
   FrameLayout root=new FrameLayout(this);root.setBackgroundColor(paper());
-  presence=new Presence(this);root.addView(presence,new FrameLayout.LayoutParams(dp(240),dp(240),Gravity.CENTER));
+  // Presence plus the presented output of the current task (Rose-Fold-v3 .presented): eyebrow, title, body.
+  content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER);
+  presence=new Presence(this);content.addView(presence,new LinearLayout.LayoutParams(dp(240),dp(240)));
+  presentedScroll=new ScrollView(this);presentedScroll.setVisibility(View.GONE);
+  LinearLayout presented=new LinearLayout(this);presented.setOrientation(LinearLayout.VERTICAL);presented.setPadding(dp(24),dp(8),dp(24),dp(16));
+  taskEyebrow=presentedText(13,eyebrow(),"sans-serif-medium");presented.addView(taskEyebrow);
+  taskTitle=presentedText(26,ink(),"sans-serif-medium");taskTitle.setAccessibilityHeading(true);taskTitle.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+  LinearLayout.LayoutParams ttp=new LinearLayout.LayoutParams(-1,-2);ttp.topMargin=dp(10);presented.addView(taskTitle,ttp);
+  taskBody=presentedText(16,ink(),"sans-serif");taskBody.setLineSpacing(dp(6),1);
+  LinearLayout.LayoutParams tbp=new LinearLayout.LayoutParams(-1,-2);tbp.topMargin=dp(14);presented.addView(taskBody,tbp);
+  taskNote=presentedText(13,eyebrow(),"sans-serif");LinearLayout.LayoutParams tnp=new LinearLayout.LayoutParams(-1,-2);tnp.topMargin=dp(12);presented.addView(taskNote,tnp);
+  presentedScroll.addView(presented);content.addView(presentedScroll,new LinearLayout.LayoutParams(-1,0,1f));
+  FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=statusInset()+dp(56);cp.bottomMargin=dp(190);root.addView(content,cp);
 
   notice=new LinearLayout(this);notice.setGravity(Gravity.CENTER_VERTICAL);notice.setPadding(dp(18),dp(12),dp(18),dp(12));notice.setMinimumHeight(dp(56));
   GradientDrawable nb=new GradientDrawable();nb.setColor(noticeBg());nb.setCornerRadius(dp(24));nb.setStroke(dp(1),line());notice.setBackground(nb);notice.setElevation(dp(6));
@@ -74,6 +87,8 @@ public final class RoseConversationActivity extends Activity {
   FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
   setContentView(root);
  }
+ static int eyebrow(){return c(0xff677c6f,0xffb6ccbc);}
+ TextView presentedText(int size,int color,String family){TextView t=new TextView(this);t.setTextSize(size);t.setTextColor(color);t.setTypeface(Typeface.create(family,Typeface.NORMAL));return t;}
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
 
  @Override protected void onResume(){super.onResume();notices.reset();handler.removeCallbacks(tick);handler.post(tick);}
@@ -92,6 +107,26 @@ public final class RoseConversationActivity extends Activity {
   end.setVisibility(state.canEnd()?View.VISIBLE:View.GONE);
   failure.setText(state.failureText());
   presence.update(state,s==null||!active?0f:s.trayOutputLevel,reducedMotion());
+  renderTask(s);
+ }
+ /** The current task from VoiceService's copy of the server's task projection, which outlives this
+  * screen, voice sessions and navigation; returning here shows the same task. Read-only: no Stop. */
+ void renderTask(VoiceService s){
+  String raw=s==null?null:s.taskStateJson;
+  boolean available=s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000);
+  String key=raw+"|"+available;if(key.equals(lastTaskKey))return;lastTaskKey=key;
+  TaskPresentation t=TaskPresentation.NONE;
+  if(raw!=null)try{org.json.JSONObject cur=new org.json.JSONObject(raw).optJSONObject("current");
+   if(cur!=null)t=TaskPresentation.of(true,cur.optString("id"),cur.optString("state"),cur.optString("title"),cur.optString("activity"),cur.optString("progress"),cur.optString("result"),available);
+  }catch(org.json.JSONException e){t=TaskPresentation.NONE;}
+  LinearLayout.LayoutParams pp=(LinearLayout.LayoutParams)presence.getLayoutParams();int size=dp(t.visible?132:240);
+  if(pp.width!=size){pp.width=pp.height=size;presence.setLayoutParams(pp);}
+  presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
+  if(!t.visible){shownTaskId="";return;}
+  if(!t.id.equals(shownTaskId)){shownTaskId=t.id;presentedScroll.scrollTo(0,0);}
+  taskEyebrow.setText(t.eyebrow);taskTitle.setText(t.title);
+  taskBody.setVisibility(t.body.isEmpty()?View.GONE:View.VISIBLE);if(!t.body.isEmpty())TaskText.set(taskBody,t.body);
+  taskNote.setVisibility(t.note.isEmpty()?View.GONE:View.VISIBLE);taskNote.setText(t.note);
  }
  void showNotice(String text){
   int serial=++noticeSerial;handler.removeCallbacksAndMessages(notice);notice.animate().cancel();
