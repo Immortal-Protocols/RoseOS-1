@@ -102,6 +102,12 @@ python3 scripts/apply-os-changes.py /path/to/os-source \
   --updater-url INSTALLED_CHANNEL_BASE_URL/ --check
 ```
 
+Any product option (`--background-policy`, `--preinstall-apk`, `--agent-tray` or
+`--locked-control`) now requires `--updater-url`; without it the pinned Updater
+would poll GrapheneOS and strand the installed phone. Pass
+`--keep-upstream-updater` only for a build that will never update an existing
+RoseOS phone.
+
 Substitute actual artifact paths and the target OS's SDK number. Confirm the
 policy's final allowlist before applying. RoseOS's product baseline calls for a
 pinned app allowlist and explicit owner approval for installs, messages,
