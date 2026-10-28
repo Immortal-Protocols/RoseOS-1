@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone (no OS stage, no publication)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication)
         type: choice
-        options: [os-release, app-only]
+        options: [os-release, app-only, emulator-alpha]
         default: os-release
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
@@ -90,9 +90,9 @@ jobs:
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
           [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
-          # app-only: exactly Rose Agent, no resume and no promotion (it never reaches the publisher).
-          [[ "$MODE" == os-release || ( "$MODE" == app-only && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]
-          [[ "$MODE" == os-release ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
+          # app-only and emulator-alpha: no resume and no promotion (neither reaches the publisher); app-only is exactly Rose Agent.
+          [[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]
+          [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
       - name: Bootstrap preflight
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
@@ -104,6 +104,10 @@ jobs:
           # Presence only; the key itself is read solely by the publisher job's token step.
           PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
         run: python3 scripts/release-pipeline.py preflight --job guard
+      # Fails closed (exit 4) until the checked-in sourceBinding and hostEvidence exist, before the builder starts.
+      - name: Emulator-alpha preflight
+        if: inputs.mode == 'emulator-alpha'
+        run: python3 scripts/emulator-alpha.py preflight --job guard
 
   controller:
     needs: guard
@@ -254,6 +258,40 @@ jobs:
         if: always()
         run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
 
+  # Unsigned, test-only Cuttlefish build of the retained tree bound to the candidate (os/release-pipeline/cuttlefish-alpha.json):
+  # own OUT_DIR under the shared lock; no reconcile, signing, secrets, publication or clean. Only the receipt leaves the builder.
+  alpha-builder:
+    needs: controller
+    if: inputs.mode == 'emulator-alpha'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 600
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/emulator-alpha.py preflight --job builder
+      - name: Prepare the alpha attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/cf-alpha-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Build the Cuttlefish alpha
+        run: python3 scripts/emulator-alpha.py build --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --receipt-dir "$ROSE_BASE/receipt"
+      - name: Receipt only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-alpha-receipt-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/receipt
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove the alpha attempt directory (the images stay in the alpha OUT_DIR)
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
   publisher:
     needs: builder
     runs-on: ubuntu-24.04
@@ -291,7 +329,7 @@ jobs:
             ${{ inputs.promote && '--promote' || '' }}
 
   cleanup:
-    needs: [controller, builder, app-builder, publisher]
+    needs: [controller, builder, app-builder, alpha-builder, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

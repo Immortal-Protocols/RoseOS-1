@@ -329,6 +329,65 @@ package, version, size, sha256, public signer, `appRelease.minimumTestedOs` and
 the checks run. The worktree and every temporary input are removed on success or
 failure, and cleanup stops the builder.
 
+**Emulator-alpha mode** (`mode: emulator-alpha`) builds an unsigned, test-only
+Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
+(`os/release-pipeline/cuttlefish-alpha.json`, `scripts/emulator-alpha.py`).
+
+- **Where it builds:** the same source tree and lock as the Pixel config, but into
+  its own `OUT_DIR` (`out-rose-cf-alpha`). Nothing is cleaned and the Pixel
+  output is never touched.
+- **What it never does:** reconcile, adopt, sign apps, read any secret, publish
+  or edit the tree.
+- **Source:** it builds the retained tree exactly as the last Pixel integration
+  left it. `sourceBinding` names that run's candidate, its dispatched apps and
+  the latest host-reconcile receipt (name and sha256). The build refuses any
+  other candidate or app set, a newer receipt, and any file that has drifted
+  from that receipt's entries.
+- **Order of a build:**
+  1. read-only checks of the tree: `device/google/cuttlefish` at the pinned
+     revision, the product mapping in `AndroidProducts.mk`, the `hosttar` goal,
+     and free disk space;
+  2. `lunch` resolution, which must equal the recorded `hostEvidence.lunch`;
+  3. `m droid hosttar`;
+  4. required images and the host package must be written by this build;
+  5. the partition `build.prop` identity must match: emulator build id
+     `rose-cf-alpha-<run id>` as `BUILD_NUMBER`, the dispatched timestamp,
+     `userdebug` and `test-keys`.
+- **Receipt:** it hashes every top-level image and `cvd-host_package.tar.gz`.
+  It records `testOnly`, `signed: false`, `published: false` and
+  `bootAttempted: false`, and lists what it does not prove. Only the receipt
+  and `SHA256SUMS` become the Actions artifact `emulator-alpha-receipt-<run id>`;
+  the images stay in the alpha `OUT_DIR`.
+- **Guard and options:** the guard needs no resume and no promotion. The alpha
+  job has no cloud identity.
+- **`plan`:** prints the exact commands, marked `executed: false`, and runs
+  nothing.
+
+The checked-in `sourceBinding` and `hostEvidence` are null, because nothing on
+the builder has been observed for this target. Until they are recorded, the guard
+fails with exit 4 before the builder starts, and no dispatch can compile. To
+record them, the lead runs this on the builder through existing access, while
+no other job holds the lock:
+
+`python3 scripts/emulator-alpha.py probe --run-id <id> --receipt <path>`
+
+It runs the read-only checks and `lunch` only, never make; `lunch` writes build-system state only inside the alpha `OUT_DIR`. Its receipt gives the
+`lunch` values, and the latest reconcile receipt gives the binding.
+
+Source-only contract for the OS owner:
+
+- the Rose changes are applied for the Pixel product. Their effect on the
+  Cuttlefish product (shared `handheld_product.mk` packages versus
+  Pixel-specific overlays) and the Updater's frankel feed URL inside an emulator
+  are not established;
+- the historical 2026-10-24 Cuttlefish boot (`docs/upstream/VALIDATION.md`) is
+  not evidence for this build;
+- the emulator reference scripts (`sdk_phone64`, stale roots, in-place product
+  edits) are not used;
+- guest operation stays a separate, lead-owned step on the existing runner. That
+  step needs provenance checks against the receipt hashes,
+  `sys.boot_completed`, UI, viewer, input and Stop evidence, and cleanup.
+
 `workspace/rose-agent/delivery/catalog.mjs` adds such an artifact to an existing
 `/apps` catalog directory (the layout `server/delivery.mjs` reads). Before it
 writes anything, it checks that:

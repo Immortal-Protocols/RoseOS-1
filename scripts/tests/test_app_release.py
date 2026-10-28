@@ -229,9 +229,9 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             block = self.jobs[name].replace("    if: inputs.mode == 'os-release'\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: builder\n', self.jobs['publisher'])  # skipped whenever builder is skipped
-        self.assertIn('    needs: [controller, builder, app-builder, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, app-only\]\n        default: os-release\n")
+        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, app-only, emulator-alpha\]\n        default: os-release\n")
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']
@@ -251,8 +251,8 @@ class WorkflowAppOnlyTest(unittest.TestCase):
     def test_guard_limits_app_only_to_rose_agent_without_resume_or_promotion(self):
         guard = self.jobs['guard']
         self.assertIn('PROMOTE: ${{ inputs.promote }}', guard)
-        self.assertIn('[[ "$MODE" == os-release || ( "$MODE" == app-only && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
-        check = re.search(r"\[\[ \"\$MODE\" == os-release \]\] \|\| python3 -c '(.+)'", guard)[1]
+        self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
+        check = re.search(r"\[\[ \"\$MODE\" != app-only \]\] \|\| python3 -c '(.+)'", guard)[1]
         for apps, ok in (([['dev.pixel.voice', 303]], True), ([['dev.pixel.voice', 303], ['dev.pixel.backgroundcontrol', 28]], False),
                          ([['dev.pixel.calculator.agent', 5]], False)):
             result = subprocess.run([PY, '-c', check], env=dict(os.environ, APPS=json.dumps(apps)), capture_output=True)

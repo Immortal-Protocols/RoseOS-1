@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "emulator-alpha",
+  "sharedHost": "os/release-pipeline/frankel.json",
+  "target": {
+    "lunch": "aosp_cf_x86_64_only_phone-cur-userdebug",
+    "product": "aosp_cf_x86_64_only_phone",
+    "release": "cur",
+    "variant": "userdebug",
+    "keys": "test-keys",
+    "basis": "Target of the historical Cuttlefish boot (docs/upstream/VALIDATION.md, 2026-10-24, framework 84183aff); that boot is not evidence for any current candidate. device/google/cuttlefish is pinned in os/pinned-manifest.xml (283645aa, android-17.0.0_r1). The emulator reference scripts' sdk_phone64 target, roots and in-place product edits are not used"
+  },
+  "build": {
+    "outDir": "out-rose-cf-alpha",
+    "buildIdPrefix": "rose-cf-alpha-",
+    "makeJobs": 48,
+    "makeGoals": ["droid", "hosttar"],
+    "requiredImages": ["super.img", "boot.img", "vendor_boot.img", "vbmeta.img"],
+    "requiredHostOutputs": ["cvd-host_package.tar.gz"],
+    "minFreeGiB": 300,
+    "basis": "Own OUT_DIR beside the Pixel outDir, under the shared builder lock; nothing is cleaned. droid builds the guest images into PRODUCT_OUT and hosttar the launcher host package into HOST_OUT; preflight checks that the retained tree's device/google/cuttlefish defines both. requiredImages is a minimum, not the full launcher input list, which is unverified for this tree. minFreeGiB is a policy margin, not a measured output size"
+  },
+  "sourceBinding": {
+    "candidate": null,
+    "reconcileReceipt": null,
+    "reconcileReceiptSha256": null,
+    "apps": null,
+    "basis": "The alpha builds the retained tree exactly as the last Pixel integration reconciled it: it never reconciles, adopts, signs apps or edits the tree. Bind it only from the builder's latest host-reconcile receipt (file name and sha256), the candidate SHA and dispatched apps of the run that wrote it; the build refuses any other candidate and any drift from that receipt's entries"
+  },
+  "hostEvidence": {
+    "probeReceiptSha256": null,
+    "lunch": null,
+    "basis": "Values from an emulator-alpha.py probe run on the builder under the lock: TARGET_PRODUCT, TARGET_RELEASE, TARGET_BUILD_VARIANT, PRODUCT_DEVICE, PRODUCT_OUT and HOST_OUT from lunch in the retained tree with the alpha OUT_DIR. Until recorded, guard and builder fail closed"
+  },
+  "artifact": {
+    "name": "emulator-alpha-receipt-{run_id}",
+    "basis": "Only the nonsecret build receipt and SHA256SUMS; the images stay in the alpha OUT_DIR, hashed in the receipt for the separate guest operation"
+  }
+}
