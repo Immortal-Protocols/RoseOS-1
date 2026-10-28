@@ -69,6 +69,9 @@ public final class RoseConversationActivity extends Activity {
   end=new Control(endInk());end.show("📞","End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end);
   LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-2,-2);rp.topMargin=dp(8);bottom.addView(row,rp);
   FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);bp.bottomMargin=dp(32);root.addView(bottom,bp);
+  TextView more=new TextView(this);more.setText("⋯");more.setTextSize(24);more.setTextColor(ink());more.setGravity(Gravity.CENTER);more.setContentDescription("More options");
+  more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});m.show();});
+  FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
   setContentView(root);
  }
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
@@ -114,6 +117,42 @@ public final class RoseConversationActivity extends Activity {
  /** Same delivery as MainActivity.command and the tray: VoiceService performs it or reports failure through its state.
   * A new attempt withdraws the previous session's notice at once rather than waiting for the next poll. */
  void send(String action){if("talk".equals(action))clearNotice();startForegroundService(new Intent(this,VoiceService.class).setAction(action));}
+
+ /** "Update Rose Agent": one authenticated GET /apps over the voice service's existing pinned connection.
+  * Reports only; it never downloads or installs, so it cannot interrupt a call. */
+ void checkForUpdate(){
+  android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Update Rose Agent").setMessage("Checking for updates…")
+   .setNegativeButton("Close",null).setNeutralButton("Check again",null).create();
+  dialog.setOnShowListener(d->{Button again=dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL);again.setOnClickListener(v->runUpdateCheck(dialog,again));runUpdateCheck(dialog,again);});
+  dialog.show();
+ }
+ void runUpdateCheck(android.app.AlertDialog dialog,Button again){
+  dialog.setMessage("Checking for updates…");again.setEnabled(false);
+  boolean busy=state!=null&&(state.active()||state.phase==ConversationState.Phase.CONNECTING);
+  String self=getPackageName();long installed;
+  try{installed=getPackageManager().getPackageInfo(self,0).getLongVersionCode();}catch(Exception e){installed=-1;}
+  final long version=installed;VoiceService s=VoiceService.instance;
+  new Thread(()->{
+   int status=0;java.util.List<UpdateCheck.Record> apps=null;
+   if(s!=null&&s.ssl!=null&&s.endpoint!=null)try{
+    javax.net.ssl.HttpsURLConnection c=(javax.net.ssl.HttpsURLConnection)new java.net.URL(s.endpoint+"/apps").openConnection();
+    try{c.setSSLSocketFactory(s.ssl);c.setHostnameVerifier((h,x)->true);c.setConnectTimeout(6000);c.setReadTimeout(15000);
+     status=c.getResponseCode();if(status==200)apps=parseApps(VoiceService.read(c.getInputStream()));}
+    finally{c.disconnect();}
+   }catch(Exception e){status=0;android.util.Log.w("RoseUpdate","check failed: "+e.getClass().getSimpleName());}
+   UpdateCheck result=UpdateCheck.evaluate(status,apps,version,self,busy);
+   runOnUiThread(()->{if(dialog.isShowing()){dialog.setMessage(result.message);again.setEnabled(true);}});
+  },"rose-update-check").start();
+ }
+ /** {apps:[...]} → records, or null when the body is not that shape. Unknown fields (e.g. deviceId) are ignored. */
+ static java.util.List<UpdateCheck.Record> parseApps(String body){
+  try{org.json.JSONArray a=new org.json.JSONObject(body).optJSONArray("apps");if(a==null)return null;
+   java.util.List<UpdateCheck.Record> out=new java.util.ArrayList<>();
+   for(int i=0;i<a.length();i++){org.json.JSONObject o=a.optJSONObject(i);if(o==null)continue;
+    out.add(new UpdateCheck.Record(str(o,"id"),str(o,"label"),str(o,"packageName"),o.opt("versionCode"),str(o,"sha256")));}
+   return out;}catch(Exception e){return null;}
+ }
+ static String str(org.json.JSONObject o,String k){Object v=o.opt(k);return v instanceof String?(String)v:null;}
 
  /** Simple folded presence: overlapping translucent petals around an aperture. Opening follows the
   * session (closed when idle or muted, open when listening); Rose's output level articulates the edges.

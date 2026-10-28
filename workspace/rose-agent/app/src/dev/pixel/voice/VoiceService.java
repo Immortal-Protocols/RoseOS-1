@@ -410,6 +410,8 @@ public class VoiceService extends Service {
  @JavascriptInterface public boolean cameraMicrophoneSuspended(){return CameraMicrophoneProvider.suspended(VoiceService.this);}
  @JavascriptInterface public void cameraMicrophoneResult(String token,String result){CameraMicrophoneProvider.complete(token,result);}
  @JavascriptInterface public String appContext(){return PhoneAppContext.read(VoiceService.this).toString();}
+ /** Rose Agent updates itself only from the explicit menu check, never from the automatic /apps loop. */
+ @JavascriptInterface public boolean isSelf(String packageName){return getPackageName().equals(packageName);}
  @JavascriptInterface public boolean shouldOffer(String packageName,long version){if(!packageName.equals(getPackageName()))return true;try{return version>getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){return false;}}
  @JavascriptInterface public String installStatus(){return getSharedPreferences("delivery",0).getString("status","");}
  @JavascriptInterface public void installApp(String id,String label){if(!id.matches("[a-f0-9]{64}")||!installing.compareAndSet(false,true))return;requests.submit(()->{try{Delivery.install(VoiceService.this,id,label,endpoint,ssl);}finally{installing.set(false);}});}

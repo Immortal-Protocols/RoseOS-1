@@ -1,0 +1,48 @@
+// Automatic /apps catalog loop and backend reachability in app/assets/index.html, with fake
+// backend replies. No device, provider or backend is used.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {loadPage} from './web-ui-harness.mjs';
+
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+const calls=(page,name)=>page.calls.filter(c=>c[0]===name).map(c=>c.slice(1));
+const SELF='dev.pixel.voice';
+const entry=(packageName,label,id)=>({id,label,packageName,versionCode:999,sha256:id,created:1});
+
+test('the automatic catalog loop never offers or installs Rose Agent itself',async()=>{
+ const page=loadPage({native:{isSelf:name=>name===SELF,shouldOffer:()=>true}});
+ page.window.__apps={apps:[entry(SELF,'Rose Agent','a'.repeat(64)),entry('dev.pixel.calculator.agent','Calculator','b'.repeat(64))]};
+ page.run(`api=(method,route)=>route==='/apps'?Promise.resolve(window.__apps):Promise.reject(new Error('unexpected '+route));`);
+ page.run('refreshApps()');await settle();
+ assert.deepEqual(calls(page,'installApp'),[['b'.repeat(64),'Calculator']],'only the other app is auto-installed');
+ assert.deepEqual(page.node('appList').children.map(c=>c.children[0].textContent),['Calculator'],'no Install button for Rose Agent');
+});
+
+test('other apps keep their existing automatic offer',async()=>{
+ const page=loadPage({native:{isSelf:()=>false,shouldOffer:()=>true}});
+ page.window.__apps={apps:[entry('dev.pixel.calculator.agent','Calculator','b'.repeat(64))]};
+ page.run(`api=(method,route)=>Promise.resolve(window.__apps);`);
+ page.run('refreshApps()');await settle();
+ assert.deepEqual(calls(page,'installApp'),[['b'.repeat(64),'Calculator']]);
+});
+
+test('check() reports whether the backend answered, for the conversation surface',async()=>{
+ const down=loadPage();
+ down.run(`api=()=>Promise.reject(new Error('Mac request timed out'));`);
+ down.run('check()');await settle();
+ assert.deepEqual(calls(down,'backendReachable'),[[false]]);
+ assert.equal(down.node('status').textContent,'Cannot reach Mac. Check connection settings.','existing idle text unchanged');
+
+ const up=loadPage();
+ up.run(`api=(method,route)=>route==='/health'?Promise.resolve({ready:true}):new Promise(()=>{});`);
+ up.run('check()');await settle();
+ assert.deepEqual(calls(up,'backendReachable'),[[true]]);
+});
+
+test('every voice end reports its typed reason to native code',()=>{
+ const page=loadPage();
+ page.run(`ready=true;voiceLost('Voice did not connect. Tap Talk to retry.','start_timeout');`);
+ page.run(`ready=true;voiceLost('Mac restarted. Tap Talk to reconnect.');`);
+ page.run(`ready=true;endConversation();`);
+ assert.deepEqual(calls(page,'voiceLifecycle').filter(c=>c[0]==='cleanup').map(c=>c[1]),['start_timeout','other','cleanup']);
+});
