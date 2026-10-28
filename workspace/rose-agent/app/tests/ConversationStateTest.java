@@ -91,6 +91,25 @@ public final class ConversationStateTest {
         n.reset(); n.observe(IDLE);
         expect(n.observe(MUTED).equals("Connected"), "Connecting while muted announces Connected only");
 
+        // Tray protocol v1 fields come from the same state (OS-CORE-STATE-R001).
+        expect(OPENING.trayStatus(true).equals("Connecting") && !OPENING.trayConnected() && !OPENING.trayListening(),
+                "Any open attempt is Connecting on the tray, whatever the display text says");
+        ConversationState liveNotConnected = s(true, false, false, true, "");
+        expect(!liveNotConnected.trayListening() && !liveNotConnected.trayConnected()
+                && liveNotConnected.trayStatus(true).equals("Connecting"), "live without connected never lights listening");
+        expect(ACTIVE.trayConnected() && ACTIVE.trayListening() && !ACTIVE.trayMuted()
+                && ACTIVE.trayStatus(true).equals("Listening"), "Active session: connected and listening");
+        expect(MUTED.trayConnected() && !MUTED.trayListening() && MUTED.trayMuted()
+                && MUTED.trayStatus(true).equals("Muted"), "Muted session: connected, not listening");
+        expect(!IDLE.trayConnected() && !IDLE.trayListening() && !IDLE.trayMuted()
+                && IDLE.trayStatus(true).equals("Disconnected"), "Idle service is disconnected");
+        expect(!TIMED_OUT.trayConnected() && TIMED_OUT.trayStatus(true).equals("Disconnected"), "Failure is disconnected, not connecting");
+        expect(s(false, false, true, false, "").trayMuted() == false, "Muted flag without a session is not reported");
+        expect(none.trayStatus(false).equals("Ready") && !none.trayConnected(), "No service keeps the existing Ready word");
+        for (ConversationState x : new ConversationState[] {IDLE, OPENING, ACTIVE, MUTED, TIMED_OUT, DROPPED})
+            expect(x.trayConnected() == x.active() && (x.trayListening() == (x.active() && !x.muted)),
+                    "Tray and conversation agree on active and listening");
+
         System.out.println("ConversationStateTest: " + checks + " checks passed");
     }
 }

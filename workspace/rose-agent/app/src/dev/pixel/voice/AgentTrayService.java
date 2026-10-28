@@ -60,18 +60,19 @@ public final class AgentTrayService extends Service {
  }
  /** True while the platform SystemUI tray client is bound; the app-side glow then stays hidden. */
  static boolean systemTrayRegistered(){AgentTrayService service=instance;return service!=null&&!service.clients.isEmpty();}
+ /** v1 state from the same ConversationState the conversation surface renders; no status-text inference. */
  static Bundle state(){
   VoiceService v=VoiceService.instance;
-  boolean connected=v!=null&&v.connected,live=v!=null&&v.live,muted=v!=null&&v.muted;
-  boolean connecting=v!=null&&(v.status.startsWith("Opening microphone")||v.status.startsWith("Connecting voice")||v.status.startsWith("Voice reconnecting")||v.status.equals("Connecting…"));
+  ConversationState c=v==null?ConversationState.of(false,false,false,false,false,null,null,null)
+   :ConversationState.of(true,v.live,v.connected,v.muted,v.communicating,v.lastEndReason,v.lastStartError,v.backendReachable);
   Bundle b=new Bundle();b.putInt("protocolVersion",1);b.putBoolean("available",true);
-  b.putBoolean("connected",connected);b.putBoolean("listening",live&&!muted);
-  b.putBoolean("muted",muted);
+  b.putBoolean("connected",c.trayConnected());b.putBoolean("listening",c.trayListening());
+  b.putBoolean("muted",c.trayMuted());
   boolean fresh=v!=null&&SystemClock.elapsedRealtime()-v.trayAudioObservedAt<1200;
-  b.putFloat("inputLevel",fresh&&live&&!muted?v.trayInputLevel:0f);
-  b.putFloat("outputLevel",fresh&&live?v.trayOutputLevel:0f);
+  b.putFloat("inputLevel",fresh&&c.trayListening()?v.trayInputLevel:0f);
+  b.putFloat("outputLevel",fresh&&c.active()?v.trayOutputLevel:0f);
   b.putLong("audioObservedAt",v==null?0L:v.trayAudioObservedAt);
-  b.putString("status",live?(muted?"Muted":"Listening"):connected?"Ready":connecting?"Connecting":v==null?"Ready":"Disconnected");
+  b.putString("status",c.trayStatus(v!=null));
   return b;
  }
  private String signature(Bundle b){return b.getBoolean("connected")+":"+b.getBoolean("listening")+":"+b.getBoolean("muted")+":"+b.getString("status")+":"+Math.round(b.getFloat("inputLevel")*50)+":"+Math.round(b.getFloat("outputLevel")*50)+":"+(b.getLong("audioObservedAt")/400);}
