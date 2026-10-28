@@ -31,6 +31,9 @@ python3 os/tests/test_updater_channels.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
+python3 scripts/tests/test_github_publisher.py
+python3 scripts/tests/test_host_adapters.py
+python3 scripts/tests/test_actions_gcp_login.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT

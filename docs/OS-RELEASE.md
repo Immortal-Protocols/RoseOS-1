@@ -269,24 +269,43 @@ timestamp, channel and expected app versions. The jobs are:
    bootstrap input.
 2. **controller:** starts `immortal-os-builder` using GitHub OIDC (no key files).
 3. **builder:** runs on a repository-scoped self-hosted runner, under the
-   existing lock and `release-stage.py` receipts. It runs the lead-managed
-   integration entry point, then `installclean` plus the make goals. It verifies
-   the build identity and every `META/misc_info.txt` AVB fingerprint, app bytes,
-   PRESIGNED state and signers, and the compiled framework policy. It runs the
-   lead-managed signing entry point, then verifies again: OTA metadata, OTA
-   package and payload signatures, the vbmeta signature and AVB key, and the
-   public pins. Finally it transfers only the allowlisted public files and
-   receipts as a 3-day Actions artifact.
-4. **publisher:** a hosted job that revalidates the artifact, creates a draft,
-   checks the draft by download, and promotes only when asked.
+   existing lock and `release-stage.py` receipts.
+   - `scripts/host-integrate.py` checks out the exact candidate, builds the
+     apps, checks their versionCodes, and signs them *before* integration with
+     the pinned `PIXEL_APP_SIGNING_*` versions. It then writes the SDK 37 policy,
+     reconciles the candidate into the retained tree and records the resolved
+     manifest.
+   - The job runs `installclean` plus the make goals. It verifies the build
+     identity and every `META/misc_info.txt` AVB fingerprint, app bytes,
+     PRESIGNED state and signers, and the compiled framework policy.
+   - `scripts/host-sign.py` validates the pinned OS key archive, checks the
+     public certificate and AVB key against the pins, and runs the source
+     tree's release command.
+   - The job verifies again: OTA metadata, OTA package and payload signatures,
+     the vbmeta signature and AVB key, and the public pins.
+   - Finally it transfers only the allowlisted public files and receipts as a
+     3-day Actions artifact.
+
+   Signer access is a per-job gcloud config (`scripts/actions-gcp-login.py`). It
+   exists only around the two signing stages and is removed as soon as each
+   adapter returns. Secret copies live in owner-only RAM and are removed on
+   success and failure.
+4. **publisher:** a hosted job that revalidates the artifact, then mints a
+   short-lived token for the pixel-ota App installation only
+   (`actions/create-github-app-token`, revoked when the job ends). With it,
+   `scripts/github_release_publisher.py` creates or reconciles the draft
+   with exactly the seven assets, downloads them with authentication for full
+   verification, and promotes only when asked. It never modifies a published
+   release that differs from the candidate.
 5. **cleanup:** stops the builder, whatever happened. The 12-hour automatic stop
    stays as the fallback.
 
 Configuration, the host recipe used as adapter input, the public pins and the
 exact bootstrap input names are in `os/release-pipeline/frankel.json`. Until they
 exist, `scripts/release-pipeline.py preflight` fails with exit 4 and lists them.
-No publisher mechanism is supported until the publisher credential decision is
-made. The fake adapter, used only in `scripts/tests/test_release_pipeline.py`,
+That includes the source-tree recipe steps the host adapters still need:
+`host.integrate.*`, `host.sign.*` and a stable `apksigner`. The fake adapter,
+used only in `scripts/tests/test_release_pipeline.py`,
 runs the real verification code against synthetic artifacts. Everything it
 produces is marked simulated, and production refuses it.
 
