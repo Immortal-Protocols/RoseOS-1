@@ -30,8 +30,8 @@
       "avbtool": "external/avb/avbtool.py",
       "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
       "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
-      "simg2img": null,
-      "debugfs": null
+      "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
+      "debugfs": "/usr/sbin/debugfs"
     },
     "integrate": {
       "project": "protocols-465723",
@@ -92,6 +92,7 @@
             "res/values/config.xml"
           ]
         },
+        "installedIdentities": "os/release-evidence/frankel-2026102701/expected-identities.json",
         "applyArgs": [
           "--background-policy",
           "{policy}",
@@ -103,7 +104,9 @@
           "--preinstall-apk",
           "{signed_apps}/dev.pixel.voice.apk",
           "--preinstall-apk",
-          "{signed_apps}/dev.pixel.calculator.agent.apk"
+          "{signed_apps}/dev.pixel.calculator.agent.apk",
+          "--installed-identities",
+          "{installed_identities}"
         ]
       }
     },
@@ -112,10 +115,28 @@
       "keysSecret": "PIXEL_OS_SIGNING_KEYS_FRANKEL_V5",
       "passphraseSecret": "PIXEL_OS_SIGNING_PASSPHRASE_FRANKEL_V5",
       "secretVersion": "1",
-      "otatools": "host/linux-x86/obj/ETC/otatools-package_linux_glibc_x86_64_intermediates/otatools-package_linux_glibc_x86_64",
+      "otatools": "host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/otatools-packagelinux_glibc_x86_64",
       "javaHome": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21/linux-x86",
-      "updateNotes": null
+      "updateNotes": "os/release-notes/{device}-{build}.md"
     }
+  },
+  "versionBaselines": {
+    "installedEvidence": {
+      "build": "2026102701",
+      "identities": "os/release-evidence/frankel-2026102701/expected-identities.json",
+      "basis": "Identities of the delivered, published 2026102701 release; publication alone does not prove which phones installed it"
+    },
+    "retained": [
+      {
+        "build": "2026102801",
+        "source": "7b5ba7a",
+        "buildTimestamp": 1793147782,
+        "mustExceed": {
+          "dev.pixel.voice": 299
+        },
+        "basis": "Immutable, unpublished P1; a newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME"
+      }
+    ]
   },
   "identities": {
     "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
@@ -157,10 +178,9 @@
     "hostInputs": {
       "stable SDK layout": "Install with scripts/host-sdk-layout.py --apksigner-jar <retained public apksigner.jar> during the coordinated builder window; preflight checks host.tools.apksigner exists",
       "public connection assets": "Stage the five original inputs with scripts/host-app-build.py stage SOURCE /home/pixelbuild/rose-actions/public-assets CANDIDATE; optionally pin host.integrate.publicAssetDigests",
-      "host.tools.simg2img": "simg2img path on the builder (image gate)",
-      "host.tools.debugfs": "debugfs path on the builder (image gate)",
-      "host.sign.updateNotes": "Candidate-relative path of the release notes published as UPDATE.md, e.g. os/release-notes/{device}-{build}.md",
-      "host.sign.otatools": "Confirm the otatools package path relative to OUT_DIR",
+      "host.tools.simg2img": "Retained otatools simg2img referenced by the P1 verifier (existing output provenance); check existence, executable bit and version in the coordinated host window. Each run records the path and sha256 of the tools it actually used in verification.json imageTools",
+      "host.tools.debugfs": "/usr/sbin/debugfs, used by the P1 independent image extraction; check existence and version in the coordinated host window",
+      "host.sign.otatools": "Path copied by the successful P1 signing run (lead-supplied); check it exists under OUT_DIR after the build in the coordinated host window",
       "reconcile adoption": "One-time: scripts/host-reconcile.py adopt ... --reason to record the hand-made P1 integration as task-owned"
     }
   }

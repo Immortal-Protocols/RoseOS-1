@@ -115,14 +115,14 @@ class SignAdapterTest(Base):
         self.config = self.root/'config.json'
         self.write_config(hashlib.sha256(der).hexdigest(), hashlib.sha256(self.avb).hexdigest())
         self.head = subprocess.run(['git', '-C', str(SCRIPTS.parent), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-        self.env = dict(os.environ, BUILD_NUMBER='2026102901', BUILD_DATETIME='1793200000', OUT_DIR='out',
+        self.env = dict(os.environ, BUILD_NUMBER='2026102802', BUILD_DATETIME='1793200000', OUT_DIR='out',
             ROSE_CANDIDATE_SHA=self.head, ROSE_RELEASE_DIR=str(self.release))
 
-    def write_config(self, cert_pin, avb_pin):
+    def write_config(self, cert_pin, avb_pin, notes='os/release-notes/{device}-{build}.md'):
         self.config.write_text(json.dumps({'target': {'device': 'frankel'}, 'identities': {'otaCertificateSha256': cert_pin,
             'avbPublicKeySha256': avb_pin}, 'publication': {'channels': {'beta': {'feedChannel': 'stable'}}},
             'host': {'sign': {'project': 'p', 'keysSecret': 'KEYS', 'passphraseSecret': 'PASS', 'secretVersion': '1',
-                'otatools': 'host/otatools.zip', 'javaHome': '/usr', 'updateNotes': 'README.md'}}}))
+                'otatools': 'host/otatools.zip', 'javaHome': '/usr', 'updateNotes': notes}}}))
 
     def assert_secrets_gone(self):
         for path in self.fetched_paths():
@@ -131,11 +131,11 @@ class SignAdapterTest(Base):
     def test_signs_with_derived_recipe_and_maps_exact_outputs(self):
         self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
         public = self.release/'public'
-        self.assertEqual(sorted(p.name for p in public.iterdir()), sorted(['frankel-ota_update-2026102901.zip', 'frankel-stable',
+        self.assertEqual(sorted(p.name for p in public.iterdir()), sorted(['frankel-ota_update-2026102802.zip', 'frankel-stable',
             'releasekey.x509.pem', 'avb_pkmd.bin', 'UPDATE.md']))
-        self.assertEqual((public/'frankel-stable').read_text(), '2026102901 1793200000 frankel stable\n')
+        self.assertEqual((public/'frankel-stable').read_text(), '2026102802 1793200000 frankel stable\n')
         self.assertEqual((public/'UPDATE.md').read_bytes(), subprocess.run(['git', '-C', str(SCRIPTS.parent), 'show',
-            f'{self.head}:README.md'], capture_output=True).stdout)
+            f'{self.head}:os/release-notes/frankel-2026102802.md'], capture_output=True).stdout)
         self.assertEqual((self.release/'signed-target_files.zip').read_bytes(), b'unsigned target files')
         receipt = json.loads((self.release/'sign-receipt.json').read_text())
         self.assertEqual(receipt['keyDirectoryInArchive'], 'release/keys/frankel')
@@ -145,11 +145,20 @@ class SignAdapterTest(Base):
         self.assertEqual([json.loads(l)[3] for l in self.log.read_text().splitlines()], ['1', '1'])
         everything = b''.join(p.read_bytes() for p in self.release.rglob('*') if p.is_file())
         self.assertNotIn(b'synthetic-passphrase', everything)
-        self.assertTrue((self.src/'releases/2026102901/.rose-actions-owner.json').is_file())
+        self.assertTrue((self.src/'releases/2026102802/.rose-actions-owner.json').is_file())
         self.assert_secrets_gone()
 
+    def test_release_notes_must_come_from_the_candidate_and_name_the_build(self):
+        self.write_config(*json.loads(self.config.read_text())['identities'].values(), notes='README.md')
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'do not name build 2026102802'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.write_config(*json.loads(self.config.read_text())['identities'].values(), notes='os/release-notes/absent-{build}.md')
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'has no os/release-notes/absent-2026102802.md'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertEqual(self.fetched_paths() if self.log.exists() else [], [])
+
     def test_foreign_or_completed_release_directory_is_not_touched(self):
-        (self.src/'releases/2026102901').mkdir(parents=True)
+        (self.src/'releases/2026102802').mkdir(parents=True)
         with self.assertRaisesRegex(host_sign.AdapterFailed, 'not this task'):
             host_sign.main(self.config, self.env, self.gcloud)
         self.assertEqual(self.fetched_paths() if self.log.exists() else [], [])
@@ -227,7 +236,7 @@ class IntegrateAdapterTest(Base):
                 'target:dev.pixel.calculator.agent': '{release_dir}/unsigned/calc.apk'},
             'reconcileCommand': [PY, reconcile, '{policy}', '{signed_apps}'], 'repo': repo}}}))
         head = subprocess.run(['git', '-C', str(SCRIPTS.parent), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
-        self.env = dict(os.environ, ROSE_CANDIDATE_SHA=head, ROSE_RELEASE_DIR=str(self.release), BUILD_NUMBER='2026102901',
+        self.env = dict(os.environ, ROSE_CANDIDATE_SHA=head, ROSE_RELEASE_DIR=str(self.release), BUILD_NUMBER='2026102802',
             APPS=json.dumps([['dev.pixel.voice', 300], ['dev.pixel.backgroundcontrol', 27], ['dev.pixel.calculator.agent', 4]]))
 
     def test_apps_signed_before_integration_with_policy_and_resolved_manifest(self):
@@ -253,9 +262,7 @@ class IntegrateAdapterTest(Base):
 class CheckedInConfigTest(unittest.TestCase):
     def test_checked_in_config_names_every_missing_recipe_input(self):
         self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-integrate.py'), '--check']).returncode, 0)
-        result = subprocess.run([PY, str(SCRIPTS/'host-sign.py'), '--check'], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 4)
-        self.assertEqual(json.loads(result.stderr)['missing'], ['host.sign.updateNotes'])
+        self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-sign.py'), '--check']).returncode, 0)
 
 if __name__ == '__main__':
     unittest.main()

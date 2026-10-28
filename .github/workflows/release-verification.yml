@@ -28,6 +28,10 @@ on:
       - 'scripts/tests/test_host_build_reconcile.py'
       - 'scripts/tests/test_actions_gcp_login.py'
       - 'os/release-evidence/**'
+      - 'os/release-notes/**'
+      - 'workspace/rose-agent/app/AndroidManifest.xml'
+      - 'workspace/pixel-calculator-agent/AndroidManifest.xml'
+      - 'os/background-control/agent-pip/AndroidManifest.xml'
       - '.github/workflows/release-verification.yml'
   push:
     branches: [main]
@@ -57,6 +61,10 @@ on:
       - 'scripts/tests/test_host_build_reconcile.py'
       - 'scripts/tests/test_actions_gcp_login.py'
       - 'os/release-evidence/**'
+      - 'os/release-notes/**'
+      - 'workspace/rose-agent/app/AndroidManifest.xml'
+      - 'workspace/pixel-calculator-agent/AndroidManifest.xml'
+      - 'os/background-control/agent-pip/AndroidManifest.xml'
       - '.github/workflows/release-verification.yml'
   workflow_dispatch:
     inputs:
@@ -87,6 +95,7 @@ jobs:
           python3 scripts/tests/test_release_manifest.py
           python3 scripts/tests/test_release_stage.py
           python3 scripts/tests/test_release_pipeline.py
+          python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py
           python3 scripts/tests/test_host_build_reconcile.py

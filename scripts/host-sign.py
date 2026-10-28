@@ -98,6 +98,8 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     device, build, stamp, sha = config['target']['device'], env['BUILD_NUMBER'], env['BUILD_DATETIME'], env['ROSE_CANDIDATE_SHA']
     release_dir = Path(env['ROSE_RELEASE_DIR'])
     notes = candidate_file(sha, sign['updateNotes'].format(device=device, build=build))
+    if build.encode() not in notes:
+        raise AdapterFailed(f'release notes in candidate {sha[:12]} do not name build {build}')
     releases = prepare_release_dir(source_root, device, build, sha)
     copy_fresh(release_dir/'unsigned-target_files.zip', releases/f'{device}-target_files.zip')
     copy_fresh(source_root/env['OUT_DIR']/sign['otatools'], releases/f'{device}-otatools.zip')
