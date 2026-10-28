@@ -448,6 +448,29 @@ that went from present to missing, whether the script was alive or already
 exiting at that moment, and the first tool start that found a key unreadable.
 The trace never contains key bytes, argv, environment or raw key paths.
 
+A chain that signed successfully but failed at `ota-verify` resumes with:
+
+- `resume_failed_stage: ota-verify`;
+- `resume_source_run`: that attempt's run id;
+- `resume_signed_sha256`: the `signedTargetFiles` value its sign stage
+  printed.
+
+The builder copies the signed target-files, `sign-receipt.json` and the public
+files beside the build outputs. Every one of them must match the hashes
+recorded in that sign receipt and the expected values. Build, bytes-verify,
+signer login and signing are skipped, and the successful release and its
+`.rose-actions-signed.json` are never touched.
+
+Signed verification runs the source tree's `check_ota_package_signature.py`
+with the release's own otatools `bin` first on `PATH` (`host.tools.otatoolsBin`),
+because its payload check runs `delta_generator`. It extracts every
+`IMAGES/*.img` beside `vbmeta.img` for
+`avbtool verify_image --follow_chain_partitions`. A missing `delta_generator`
+or a missing referenced partition image is reported as a verifier dependency
+or input failure, never as a pass. The tools that ran are recorded in
+`verification.json` (`verifierTools`), and the embedded AVB key and OTA
+certificate pins are unchanged.
+
 Receipts hold hashes, times and exit codes, not command output, arguments or
 environment.
 

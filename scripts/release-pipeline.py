@@ -103,7 +103,8 @@ def preflight(job, config, env, adapter):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
         host = config['host']
         missing += adapter_inputs(config)
-        missing += [f'host.tools.{k}' for k, v in host['tools'].items() if not v or not host_path(config, v).exists()]
+        # Templated paths (the release's own otatools bin) exist only after signing; they are checked when used.
+        missing += [f'host.tools.{k}' for k, v in host['tools'].items() if not v or ('{' not in v and not host_path(config, v).exists())]
         if not Path(host['sourceRoot']).is_dir():
             missing.append('host.sourceRoot (not present on this runner)')
         if not Path(host['lockPath']).parent.is_dir():
@@ -498,7 +499,14 @@ def cert_sha256(pem):
     body = pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0]
     return hashlib.sha256(base64.b64decode(''.join(body.split()))).hexdigest()
 
-def check_ota(config, cand, ota, public):
+def otatools_bin(config, cand):
+    """The retained otatools bin of this release (unpacked by the signing script): delta_generator and friends."""
+    template = config['host']['tools'].get('otatoolsBin')
+    if not template:
+        raise SetupMissing(['host.tools.otatoolsBin'])
+    return host_path(config, template.format(device=config['target']['device'], build=cand['build']))
+
+def check_ota(config, cand, ota, public, used):
     failures = []
     device, build, identities = config['target']['device'], cand['build'], config['identities']
     with zipfile.ZipFile(ota) as archive:
@@ -516,26 +524,45 @@ def check_ota(config, cand, ota, public):
         failures.append('published OTA certificate does not match the pin')
     if sha256_file(public/'avb_pkmd.bin') != identities['avbPublicKeySha256']:
         failures.append('published AVB key does not match the pin')
-    # Whole-package and payload signatures, checked by the source tree's own release tool.
-    result = subprocess.run([sys.executable, tool(config, 'checkOtaSignature'), str(public/'releasekey.x509.pem'), str(ota)],
-        capture_output=True, text=True)
-    if result.returncode:
+    # Whole-package and payload signatures, checked by the source tree's own release tool. Its payload check runs
+    # delta_generator from PATH, so the retained otatools bin goes first; a missing tool is a verifier dependency
+    # failure, never a pass and never reported as a bad signature.
+    bin_dir = otatools_bin(config, cand)
+    delta = bin_dir/'delta_generator'
+    if not (delta.is_file() and os.access(delta, os.X_OK)):
+        return failures + ['verifier dependency missing: delta_generator in the retained otatools bin; payload signature not checked']
+    checker = tool_receipt(config, 'checkOtaSignature', used)
+    used.setdefault('delta_generator', {'path': str(delta), 'sha256': sha256_file(delta)})
+    result = subprocess.run([sys.executable, checker, str(public/'releasekey.x509.pem'), str(ota)], capture_output=True, text=True,
+        env=dict(os.environ, PATH=f'{bin_dir}:' + os.environ.get('PATH', '')))
+    if result.returncode and 'FileNotFoundError' in result.stderr:
+        failures.append('verifier dependency missing while checking the OTA (a tool was not found); signatures not established')
+    elif result.returncode:
         failures.append('OTA package or payload signature verification failed')
     return failures
 
-def check_vbmeta(config, signed, public):
-    with zipfile.ZipFile(signed) as archive:
-        if 'IMAGES/vbmeta.img' not in archive.namelist():
+def check_vbmeta(config, signed, public, used):
+    """verify_image of vbmeta.img with every IMAGES/*.img beside it and --follow_chain_partitions: the vbmeta
+    signature, chained vbmeta signatures and all referenced partition hashes, plus the embedded key pin."""
+    failures = []
+    with zipfile.ZipFile(signed) as archive, tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        images = [n for n in archive.namelist() if re.fullmatch(r'IMAGES/[\w.-]+\.img', n)]
+        if 'IMAGES/vbmeta.img' not in images:
             return ['signed target-files has no IMAGES/vbmeta.img']
-        image = Path(os.environ.get('RUNNER_TEMP', '/tmp'))/f'vbmeta-{os.getpid()}.img'
-        image.write_bytes(archive.read('IMAGES/vbmeta.img'))
-    try:
-        avbtool = tool(config, 'avbtool')
-        verified = subprocess.run([sys.executable, avbtool, 'verify_image', '--image', str(image)], capture_output=True, text=True)
+        for name in images:
+            with archive.open(name) as source, open(Path(workdir)/Path(name).name, 'wb') as out:
+                shutil.copyfileobj(source, out)
+        image = Path(workdir)/'vbmeta.img'
+        avbtool = tool_receipt(config, 'avbtool', used)
         info = subprocess.run([sys.executable, avbtool, 'info_image', '--image', str(image)], capture_output=True, text=True)
-    finally:
-        image.unlink()
-    failures = [] if verified.returncode == 0 else ['vbmeta signature verification failed']
+        missing = sorted(p for p in set(re.findall(r'Partition Name:\s*(\S+)', info.stdout)) if not (Path(workdir)/f'{p}.img').is_file())
+        if missing:
+            failures.append('verifier input missing: ' + ', '.join(f'IMAGES/{p}.img' for p in missing) + ' referenced by vbmeta')
+        else:
+            verified = subprocess.run([sys.executable, avbtool, 'verify_image', '--image', str(image), '--follow_chain_partitions'],
+                capture_output=True, text=True)
+            if verified.returncode:
+                failures.append('vbmeta chain verification failed (vbmeta, chained vbmeta or partition hash)')
     embedded = re.search(r'Public key \(sha1\):\s*([0-9a-f]{40})', info.stdout)
     if not embedded or embedded.group(1) != hashlib.sha1((public/'avb_pkmd.bin').read_bytes()).hexdigest():
         failures.append('vbmeta is not signed by the published AVB key')
@@ -649,14 +676,14 @@ def verify_signed(a, config, cand, adapter):
     expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
     present = {p.name for p in public.iterdir()}
     failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
-    image_tools = {}
+    image_tools, verifier_tools = {}, {}
     if not failures:
         failures += check_build_identity(signed, config, cand, 'release-keys')
         failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
-        failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public)
+        failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
-        failures += check_vbmeta(config, signed, public)
+        failures += check_vbmeta(config, signed, public, verifier_tools)
         feed = (public/f'{device}-stable').read_text().splitlines()[:1]
         if feed != [f'{build} {cand["timestamp"]} {device} {config["publication"]["channels"]["beta"]["feedChannel"]}']:
             failures.append('feed file does not describe the selected build')
@@ -667,7 +694,7 @@ def verify_signed(a, config, cand, adapter):
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
             'image-embedded app/framework bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
-        'imageTools': image_tools}
+        'imageTools': image_tools, 'verifierTools': verifier_tools}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)
     return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}

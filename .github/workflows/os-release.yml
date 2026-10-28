@@ -29,10 +29,14 @@ on:
       resume_failed_stage:
         description: Resume the preserved attempt of this build number at its failed stage, without rebuilding
         type: choice
-        options: [none, bytes-verify, sign]
+        options: [none, bytes-verify, sign, ota-verify]
         default: none
       resume_unsigned_sha256:
         description: With resume, the unsignedTargetFiles sha256 printed by the original build stage
+        required: false
+        default: ''
+      resume_signed_sha256:
+        description: With an ota-verify resume, the signedTargetFiles sha256 printed by the successful sign stage
         required: false
         default: ''
       resume_source_run:
@@ -57,6 +61,7 @@ env:
   RESUME_STAGE: ${{ inputs.resume_failed_stage }}
   RESUME_UNSIGNED_SHA256: ${{ inputs.resume_unsigned_sha256 }}
   RESUME_SOURCE_RUN: ${{ inputs.resume_source_run }}
+  RESUME_SIGNED_SHA256: ${{ inputs.resume_signed_sha256 }}
 
 jobs:
   guard:
@@ -76,6 +81,7 @@ jobs:
           git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
+          [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
       - name: Bootstrap preflight
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
@@ -141,10 +147,19 @@ jobs:
             for name in unsigned-target_files.zip background-policy.json resolved-manifest.xml; do
               cp "$source/release/$name" "$base/release/$name"
             done
+            carried=(--artifact "$base/release/unsigned-target_files.zip" --artifact "$base/release/background-policy.json"
+              --artifact "$base/release/resolved-manifest.xml")
+            if [[ "$RESUME_STAGE" == ota-verify ]]; then
+              # The successful signed outputs are copied, never regenerated; the signing receipt binds them.
+              mkdir "$base/release/public"
+              cp "$source/release/signed-target_files.zip" "$source/release/sign-receipt.json" "$base/release/"
+              cp "$source/release/public/"* "$base/release/public/"
+              carried+=(--artifact "$base/release/signed-target_files.zip" --artifact "$base/release/sign-receipt.json"
+                --expect "signed-target_files.zip=$RESUME_SIGNED_SHA256" --bind-receipt "$base/release/sign-receipt.json")
+              for file in "$base/release/public/"*; do carried+=(--artifact "$file"); done
+            fi
             python3 scripts/release-stage.py resume "$RESUME_STAGE" --from "$source/stages" --state "$base/stages" \
-              --source-revision "$CANDIDATE_SHA" --expect "unsigned-target_files.zip=$RESUME_UNSIGNED_SHA256" \
-              --artifact "$base/release/unsigned-target_files.zip" --artifact "$base/release/background-policy.json" \
-              --artifact "$base/release/resolved-manifest.xml"
+              --source-revision "$CANDIDATE_SHA" --expect "unsigned-target_files.zip=$RESUME_UNSIGNED_SHA256" "${carried[@]}"
           fi
           echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
       # Signer access exists only around the two stages that need it; the pipeline drops it as soon
@@ -156,11 +171,13 @@ jobs:
         if: inputs.resume_failed_stage == 'none'
         run: bash scripts/os-release-stage.sh build build
       - name: Verify the unsigned build
-        if: inputs.resume_failed_stage != 'sign'
+        if: inputs.resume_failed_stage == 'none' || inputs.resume_failed_stage == 'bytes-verify'
         run: bash scripts/os-release-stage.sh bytes-verify verify-build
       - name: Signer access for OS signing
+        if: inputs.resume_failed_stage != 'ota-verify'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Sign
+        if: inputs.resume_failed_stage != 'ota-verify'
         env:
           # Only a sign resume may move a failed attempt's task-owned partial release output aside (never deleted).
           ROSE_SIGN_RESUME_ARCHIVE: ${{ inputs.resume_failed_stage == 'sign' && format('failed-sign-{0}', github.run_id) || '' }}
