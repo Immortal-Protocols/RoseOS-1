@@ -10,7 +10,8 @@ against it, and only against it. The schema is in the script's docstring and in
 | File | Candidate | Basis |
 | --- | --- | --- |
 | `beta-frankel-2026102804.json` | Published beta frankel-2026102804, source `ae9cfd4d`, apps 302/4/28 | Lead's INFRA-ALPHA-082 binding, plus the signer and AVB key from `os/release-pipeline/frankel.json`. Verified against the published release (`../frankel-2026102804.md`) |
-| `alpha-40719075730.json` | Active alpha, Actions 40719075730: recipe `2921d88d`, product base `ae9cfd4d` + OS delta `f21bf683`, `aosp_cf_x86_64_only_phone-cur-userdebug`, apps 302/4/28 | `os/alpha/cuttlefish-product-contract.json` and `os/release-pipeline/cuttlefish-alpha.json`, unchanged |
+| `alpha-40719075730.json` | Alpha Actions 40719075730 (failed at `file_list_diff`; no image): recipe `2921d88d`, product base `ae9cfd4d` + OS delta `f21bf683`, `aosp_cf_x86_64_only_phone-cur-userdebug`, apps 302/4/28 | `os/alpha/cuttlefish-product-contract.json` and `os/release-pipeline/cuttlefish-alpha.json`, unchanged |
+| `app-rose-agent-304.json` | App-only Rose Agent 304: `pixel-ota` prerelease `rose-agent-304`, Actions 40733909409, product `a3d839e6`, recipe `31e58006`; no device target | Infra's receipt (1,385,629 bytes, `d8f69efc…26966`, signer `650d47f9…0bfb`). The verifier has not downloaded the bytes. Used for INFRA-RUNTIME-100 (`../rose-agent-304-infra-runtime-100.md`) |
 
 `scripts/tests/test_rose_verify.py` fails if either file diverges from those
 checked-in pins.

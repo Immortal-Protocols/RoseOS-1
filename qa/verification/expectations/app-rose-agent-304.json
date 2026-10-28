@@ -1,0 +1,22 @@
+{
+ "schemaVersion": 1,
+ "kind": "rose-verify-expectation",
+ "label": "app-only Rose Agent 304 (pixel-ota prerelease rose-agent-304, Actions 40733909409)",
+ "channel": "app",
+ "candidate": "a3d839e6805b514aa6cad6f86c15e5db622e10cc",
+ "target": {
+  "release": "pixel-ota rose-agent-304",
+  "asset": "dev.pixel.voice-304.apk",
+  "actionsRun": "40733909409",
+  "recipe": "31e580069763f0495aef5dcb89d520a1faacdbf0"
+ },
+ "apps": [
+  {
+   "package": "dev.pixel.voice",
+   "version": 304,
+   "sha256": "d8f69efcdcbc209ec5fd16badcaaf4c98fa614d7eb5fc54c1431a6f098d26966"
+  }
+ ],
+ "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+ "basis": "Copied from Infra's receipt on the verifier inbox ('Infra runtime/artifact checkpoint — alpha failure, corrected304 public artifact available', and INFRA-RUNTIME-100): product a3d839e6, recipe 31e58006, versionCode 304 (304-app-beta), 1,385,629 bytes, SHA-256 d8f69efc...26966, signer 650d47f9...0bfb; the lead's own anonymous download, checksum and apksigner v3 verification passed. The verifier has not downloaded these bytes (its one attempt was denied by this session's permission classifier). No device target: the APK is app-only and ABI-neutral. Contains OS PR67 entry routing, not the PR70 HOME-role migration."
+}

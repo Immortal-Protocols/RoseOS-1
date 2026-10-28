@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 SCRIPT = Path(__file__).resolve().parents[1]/'rose-verify.py'
@@ -117,6 +118,14 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((b['minSdk'], b['targetSdk']), (29, 35))
         self.assertEqual(b['nativeCode'], ['arm64-v8a', 'x86_64'])
         self.assertEqual(b['launchableActivity'], 'dev.example.voice.MainActivity')
+
+    def test_short_component(self):
+        self.assertEqual(rv.short_component('dev.pixel.voice/dev.pixel.voice.MainActivity'), 'dev.pixel.voice/.MainActivity')
+        self.assertEqual(rv.short_component('dev.pixel.voice/.MainActivity'), 'dev.pixel.voice/.MainActivity')
+        self.assertEqual(rv.short_component('app.grapheneos.setupwizard/app.grapheneos.setupwizard.view.activity.WelcomeActivity'),
+                         'app.grapheneos.setupwizard/.view.activity.WelcomeActivity')
+        self.assertEqual(rv.short_component('android/com.android.internal.app.ResolverActivity'),
+                         'android/com.android.internal.app.ResolverActivity')
 
     def test_manifest_home_and_launcher(self):
         components = rv.manifest_components(rv.parse_xmltree(XMLTREE), 'dev.example.voice')
@@ -245,6 +254,14 @@ class CompareTests(unittest.TestCase):
         other = rv.compare(self.save(self.ImageOps.invert(self.ref), 'inv.png'), self.tmp/'out', label='i')
         self.assertEqual(other['verdict'], 'differs-from-reference')
 
+    def test_cli_side_by_side_is_named_after_each_screenshot(self):
+        a = self.save(self.ref, 'home.png')
+        b = self.save(self.ImageOps.invert(self.ref), 'conversation.png')
+        for shot in (a, b):
+            self.assertIn(run_cli('compare', str(shot), '--out', str(self.tmp/'o'))[0], (0, 1))
+        self.assertEqual(sorted(p.name for p in (self.tmp/'o').iterdir()),
+                         ['conversation-vs-reference.png', 'home-vs-reference.png'])
+
     def test_black_screen_fails_cli(self):
         shot = self.save(self.Image.new('RGB', (540, 1200), (0, 0, 0)), 'black.png')
         self.assertEqual(run_cli('compare', str(shot), '--out', str(self.tmp/'o'))[0], 1)
@@ -288,7 +305,12 @@ elif cmd.startswith('settings ') and words[3:5] == ['get', 'secure']:
 elif cmd.startswith('screencap'):
     sys.stdout.buffer.write(open(state['screenshot'], 'rb').read())
 elif cmd.startswith('cat /data/local/tmp/rose-verify-ui.xml'):
-    print(state['ui'])
+    ui = state['ui']
+    if isinstance(ui, list):
+        print(ui.pop(0))
+        json.dump(state, open(sys.argv[0] + '.json', 'w'))
+    else:
+        print(ui)
 elif cmd.startswith('dumpsys activity activities'):
     print('  topResumedActivity=ActivityRecord{1a2b u0 %s t7}' % state['focus'].pop(0))
     json.dump(state, open(sys.argv[0] + '.json', 'w'))
@@ -337,30 +359,76 @@ class RuntimeTests(unittest.TestCase):
     def failed(self, r):
         return {c['check'] for c in r['checks'] if c['result'] == 'fail'}
 
-    @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
-    def test_interactive_home_conversation_and_launcher_entry(self):
+    ROSE_UI = ('<hierarchy><node text="" content-desc="Home" bounds="[0,0][540,1200]" package="dev.pixel.voice"/>'
+               '<node text="" content-desc="Open Rose" bounds="[170,450][370,650]" package="dev.pixel.voice"/></hierarchy>')
+    OTHER_UI = '<hierarchy><node text="Welcome" content-desc="" bounds="[0,0][540,1200]" package="app.grapheneos.setupwizard"/></hierarchy>'
+    STEPS = ['home-key', 'explicit-rose-home', 'home-to-conversation', 'conversation-back', 'launcher-icon-entry',
+             'home-key-again']
+
+    def interactive_state(self):
         from PIL import Image
         shot = self.tmp/'screen.png'
         rv.cover_crop(Image.open(rv.ROOT/rv.WALLPAPER).convert('RGB'), 540, 1200).save(shot)
-        self.state.update(screenshot=str(shot), ui='<hierarchy><node text="" content-desc="Home" bounds="[0,0][540,1200]" '
-                          'package="dev.pixel.voice"/><node text="" content-desc="Open Rose" bounds="[170,450][370,650]" '
-                          'package="dev.pixel.voice"/></hierarchy>',
-                          focus=['dev.pixel.voice/.MainActivity', 'dev.pixel.voice/.RoseConversationActivity',
-                                 'dev.pixel.voice/.MainActivity', 'dev.pixel.voice/.PairingActivity',
-                                 'dev.pixel.voice/.MainActivity'])
+        self.state.update(screenshot=str(shot), ui=self.ROSE_UI,
+                          focus=['dev.pixel.voice/.MainActivity', 'dev.pixel.voice/.MainActivity',
+                                 'dev.pixel.voice/.RoseConversationActivity', 'dev.pixel.voice/.MainActivity',
+                                 'dev.pixel.voice/.PairingActivity', 'dev.pixel.voice/.MainActivity'])
+
+    @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
+    def test_interactive_home_conversation_and_launcher_entry(self):
+        self.interactive_state()
         r = self.runtime(interactive=True)
         self.assertEqual(r['kind'], 'runtime-interactive')
         self.assertEqual(self.failed(r), set())
-        self.assertEqual([s['step'] for s in r['steps']], ['home-key', 'home-to-conversation', 'conversation-back',
-                                                            'launcher-icon-entry', 'home-key-again'])
+        self.assertEqual([s['step'] for s in r['steps']], self.STEPS)
         self.assertEqual({s['user'] for s in r['steps']}, {0})
         self.assertEqual(r['steps'][0]['comparison']['verdict'], 'wallpaper-consistent')
-        self.assertEqual(r['steps'][3]['focus'], 'dev.pixel.voice/.PairingActivity')
+        self.assertIn('does not prove the HOME default', r['steps'][1]['entry'])
+        self.assertEqual(r['steps'][4]['focus'], 'dev.pixel.voice/.PairingActivity')
         commands = self.commands()
         self.assertIn('input tap 270 550', commands)
         self.assertIn('rm -f /data/local/tmp/rose-verify-ui.xml', commands)
-        self.assertTrue(any(c.startswith('am start --user 0 ') for c in commands))
+        self.assertIn('am start --user 0 -W -a android.intent.action.MAIN -c android.intent.category.HOME '
+                      '-n dev.pixel.voice/.MainActivity', commands)
         self.assertEqual(commands.count('am get-current-user'), 2, 'foreground user read before and after')
+
+    @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
+    def test_other_home_holder_fails_system_home_but_explicit_rose_home_is_labeled(self):
+        self.interactive_state()
+        setup = 'app.grapheneos.setupwizard/.view.activity.WelcomeActivity'
+        self.state['home']['0'] = setup
+        self.state['roles']['0'] = 'app.grapheneos.setupwizard'
+        self.state['ui'] = [self.OTHER_UI] + [self.ROSE_UI] * 4 + [self.OTHER_UI]
+        self.state['focus'][0] = self.state['focus'][5] = setup
+        r = self.runtime(interactive=True)
+        self.assertEqual(self.failed(r), {'HOME role held by Rose Agent for user 0',
+                                          'unqualified MAIN/HOME resolves to Rose Agent for user 0',
+                                          'system HOME key shows Rose Home page'})
+        passed = {c['check'] for c in r['checks'] if c['result'] == 'pass'}
+        self.assertTrue({'explicit Rose HOME shows Rose Home page (explicit component)',
+                         'Rose entry opens RoseConversationActivity',
+                         'Back from the conversation returns to Rose Home'} <= passed)
+        self.assertFalse(r['ok'], 'an explicit launch never makes up for the system HOME result')
+        self.assertEqual(r['steps'][0]['focus'], setup)
+
+    def test_host_without_pillow_keeps_screenshots_and_reports_comparison_unavailable(self):
+        if HAVE_PIL:
+            self.interactive_state()
+        else:
+            shot = self.tmp/'screen.png'
+            shot.write_bytes(b'\x89PNG fake')
+            self.state.update(screenshot=str(shot), ui=self.ROSE_UI,
+                              focus=['dev.pixel.voice/.MainActivity', 'dev.pixel.voice/.MainActivity',
+                                     'dev.pixel.voice/.RoseConversationActivity', 'dev.pixel.voice/.MainActivity',
+                                     'dev.pixel.voice/.PairingActivity', 'dev.pixel.voice/.MainActivity'])
+        with mock.patch.object(rv, 'compare', side_effect=rv.Fail('screenshot comparison needs Pillow', 4)):
+            r = self.runtime(interactive=True)
+        self.assertEqual(self.failed(r), set())
+        self.assertEqual({s['comparison']['verdict'] for s in r['steps'] if 'comparison' in s}, {'unavailable'})
+        self.assertEqual([c for c in r['unmeasured'] if c.endswith('screenshot not black')],
+                         ['home-key screenshot not black', 'explicit-rose-home screenshot not black',
+                          'launcher-icon-entry screenshot not black'])
+        self.assertTrue((self.tmp/'out/home-key.png').is_file())
 
     def test_requires_handback_expectation_and_external_output(self):
         with self.assertRaisesRegex(rv.Fail, 'handback'):
@@ -387,7 +455,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual([c['result'] for c in r['checks'] if c['check'] == 'user 10 observations'], ['unavailable'])
         self.assertEqual((r['ok'], r['unmeasured']), (True, ['user 10 observations']))
         self.assertEqual(r['expectation']['label'], ALPHA['label'])
-        self.assertTrue(r['method'].startswith('rose-verify r2'))
+        self.assertTrue(r['method'].startswith('rose-verify r3'))
         self.assertTrue((self.tmp/'out/runtime-receipt.json').is_file())
         commands = self.commands()
         self.assertEqual([c for c in commands if not c.startswith(READONLY_PREFIXES)], [],
@@ -470,6 +538,14 @@ class ExpectationTests(unittest.TestCase):
         self.assertEqual(ALPHA['target']['lunch'], CONTRACT['target']['lunch'])
         self.assertEqual((BETA['build'], BETA['target']['device']), ('2026102804', pipeline['target']['device']))
         self.assertEqual(BETA['avbPublicKeySha256'], pipeline['identities']['avbPublicKeySha256'])
+
+    def test_app_304_expectation_is_its_own_candidate(self):
+        app = rv.load_expectation(EXPECTATIONS/'app-rose-agent-304.json')
+        self.assertEqual((app['channel'], app['candidate'], [a['version'] for a in app['apps']]),
+                         ('app', 'a3d839e6805b514aa6cad6f86c15e5db622e10cc', [304]))
+        self.assertNotIn('device', app['target'], 'app-only: no device target')
+        self.assertNotEqual(app['apps'][0]['sha256'], ALPHA['apps'][0]['sha256'])
+        self.assertEqual(app['appSignerSha256'], ALPHA['appSignerSha256'])
 
     def test_malformed_expectations_are_rejected(self):
         base = {k: v for k, v in json.loads(Path(ALPHA['path']).read_text()).items()}

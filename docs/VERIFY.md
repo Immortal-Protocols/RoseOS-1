@@ -67,7 +67,8 @@ Checked-in expectations live in `qa/verification/expectations/`:
 | File | Build | Apps |
 | --- | --- | --- |
 | `beta-frankel-2026102804.json` | Published beta 2804, candidate `ae9cfd4d` | 302/4/28 |
-| `alpha-40719075730.json` | Active alpha, Actions 40719075730 (recipe `2921d88d`, base `ae9cfd4d` + OS delta `f21bf683`) | 302/4/28 |
+| `alpha-40719075730.json` | Alpha Actions 40719075730 (recipe `2921d88d`, base `ae9cfd4d` + OS delta `f21bf683`). The build failed, so no image exists | 302/4/28 |
+| `app-rose-agent-304.json` | App-only `pixel-ota` prerelease `rose-agent-304` (product `a3d839e6`); no device target | Rose Agent 304 only |
 
 Both copy the existing pins unchanged. The test suite fails if either diverges
 from `os/alpha/cuttlefish-product-contract.json` or
@@ -106,9 +107,20 @@ The product Home implements the delivered Fold prototype:
   `differs-from-reference`. Overlays (status bar, Rose presence, dock) lower
   coverage. Always look at the side-by-side PNG it writes.
 
-If someone retrieves the prototype HTML through the supported Library flow,
-record its full SHA-256 before rendering it. Then render the narrow Home in an
-approved browser at the device's logical size and compare it with `--reference`.
+To compare a screen with the prototype itself, not just its wallpaper:
+
+1. Retrieve `Rose-Fold-v3.html` through the supported Library flow or its
+   native Notion attachment (OS-P1-001), and check its SHA-256 first.
+2. Render it in the pre-installed headless Chromium (Playwright) with every
+   non-`file:`/`data:` request blocked and reduced motion. Use the Folded
+   layout and screenshot the `#device` phone frame. Then click
+   `#presence-hit` and screenshot the Conversation view.
+3. Record the page's renderer label (WebGL or static fallback).
+4. Put the prototype frames side by side with the device screenshots and
+   write down what matches and what differs. That written interpretation is
+   the visual evidence; `compare` covers only the wallpaper.
+
+`qa/verification/rose-agent-304-infra-runtime-100.md` is the first example.
 
 Never publish screenshots, wallpapers or dumps from a personal phone, or any
 device identifier. `runtime` refuses to write inside the repository. It never
@@ -262,15 +274,26 @@ serializes runtime work.
     `unavailable` check, such as other users.
    - The icon launch uses `am start --user U`.
 
-   Each step saves a screenshot, a UI dump and the focused window, then:
-   1. presses the HOME key: the Rose Home page should have an `Open Rose`
-      element, and the screenshot is compared with the reference;
-   2. taps `Open Rose`: focus should be `RoseConversationActivity`;
-   3. presses BACK;
-   4. starts the launcher-icon entry
-      (`am start -a MAIN -c LAUNCHER -n dev.pixel.voice/.MainActivity`) and
-      compares it too;
-   5. presses HOME again.
+   Each step saves a screenshot, a UI dump and the focused window:
+   1. **System HOME key** (unqualified). Whatever holds HOME for the user is
+      shown. The check passes only if the Rose Home page (`Open Rose`) is
+      there.
+   2. **Explicit Rose HOME** (`am start --user U -a MAIN -c HOME -n
+      dev.pixel.voice/.MainActivity`). It is labeled "explicit component (does
+      not prove the HOME default)". It renders Rose Home whoever holds HOME, and
+      never offsets a failed step 1.
+   3. **Open Rose** is tapped from step 2. Focus should be
+      `RoseConversationActivity`.
+   4. **BACK.** It should return to Rose Home (`MainActivity` with `Open Rose`).
+   5. **Launcher-icon entry** (`am start --user U -a MAIN -c LAUNCHER -n
+      dev.pixel.voice/.MainActivity`). It is recorded, not judged. The expected
+      page depends on the version (`source REV`): before pairing, a permission
+      prompt or `PairingActivity` comes first.
+   6. **HOME key again.**
+
+   Screenshots from steps 1, 2 and 5 are compared with the reference when
+   Pillow is available on the capturing host. Otherwise the comparison is
+   `unavailable`, the PNG is kept, and `compare` runs on it later elsewhere.
 
    The only file it writes on the guest is a temporary UI dump in
    `/data/local/tmp`, which it removes.
@@ -326,9 +349,11 @@ is never a physical frankel OTA result.
 | Revision | Where | Change |
 | --- | --- | --- |
 | r1 (INFRA-VERIFY-001) | PR69, `f35b860c` | First method. App checks used the fixed alpha contract (302/4/28); HOME resolution and role holders were read without a user argument. The 2804 record (`qa/verification/frankel-2026102804.md`) was made with r1 and stays as recorded |
-| r2 (INFRA-VERIFY-002) | This revision | An explicit, fail-closed `--expect` replaces the fixed contract. Every runtime observation is bound to one recorded tested user: package path, user state, HOME role holders, unqualified HOME resolution, the PR70 default-HOME marker and interactive steps. Interactive capture runs only for the foreground user. Every receipt carries `method`. Re-running r2 on the same 2804 bytes passed 26 of 26 checks (`qa/verification/expectations/README.md`) |
+| r2 (INFRA-VERIFY-002) | PR71, `b63377be` | An explicit, fail-closed `--expect` replaces the fixed contract. Every runtime observation is bound to one recorded tested user: package path, user state, HOME role holders, unqualified HOME resolution, the PR70 default-HOME marker and interactive steps. Interactive capture runs only for the foreground user. Every receipt carries `method`. Re-running r2 on the same 2804 bytes passed 26 of 26 checks (`qa/verification/expectations/README.md`) |
 
-**Limitations (r2):**
+| r3 (INFRA-VERIFY-003) | This revision | Changes come from the INFRA-RUNTIME-100 run (`qa/verification/rose-agent-304-infra-runtime-100.md`). Interactive capture no longer needs Pillow on the capturing host: without it, the comparison is `unavailable` and the screenshot is kept. A labeled explicit Rose HOME step and a Back-returns-to-Rose-Home check follow the system HOME key. The app-only 304 expectation is added from Infra's receipt |
+
+**Limitations (r2, r3):**
 - Only one user is measured per run. Other users and profiles stay
   `unavailable`.
 - versionCode and APK bytes are device-wide, not per user.
