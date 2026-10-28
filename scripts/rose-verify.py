@@ -20,8 +20,9 @@ one recorded tested user (--user, default the current foreground user, resolved 
   source    [REV]: the manifest and Home routing of a source revision (git show; no build)
   runtime   --serial S --handback REF --expect FILE --out DIR [--user ID]: read-only properties, the tested user's
             installed app paths/state/bytes/versions, HOME role holders and unqualified MAIN/HOME resolution.
-            --interactive (tested user must be the foreground user) also drives HOME, the launcher-icon entry and
-            Home -> conversation -> back, with screenshots, UI dumps and a comparison of each Home screenshot
+            --interactive (tested user must be the foreground user) also drives the system HOME key, a labeled
+            explicit Rose HOME launch, Rose -> conversation -> Back, the launcher-icon entry and HOME again, with
+            screenshots, UI dumps and (where Pillow is installed) a comparison of each Home screenshot
   compare   SCREENSHOT --out DIR: a screenshot against the reference wallpaper (cover crop), black-screen detection
             and a side-by-side image for human review
 Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
@@ -49,7 +50,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-METHOD = 'rose-verify r2 (INFRA-VERIFY-002): explicit candidate expectation; tested-user binding'
+METHOD = ('rose-verify r3 (INFRA-VERIFY-003): explicit candidate expectation; tested-user binding; '
+          'labeled explicit Rose HOME step; comparison optional on the capturing host')
 CONTRACT = ROOT/'os/alpha/cuttlefish-product-contract.json'
 PIPELINE = ROOT/'os/release-pipeline/frankel.json'
 WALLPAPER = 'workspace/rose-agent/app/res/drawable-nodpi/rose_home_wallpaper.jpg'
@@ -825,7 +827,13 @@ def focus(adb):
                   adb.shell('dumpsys activity activities'))
     if not m:
         m = re.search(r'mCurrentFocus=Window\{\S+ \S+ ([^}\s]+)\}', adb.shell('dumpsys window'))
-    return m.group(1) if m else None
+    return short_component(m.group(1)) if m else None
+
+
+def short_component(component):
+    """pkg/pkg.Cls -> pkg/.Cls, the form am and resolve-activity print, so focus compares exactly."""
+    pkg, _, cls = component.partition('/')
+    return f'{pkg}/{cls[len(pkg):]}' if cls.startswith(pkg + '.') else component
 
 
 def ui_dump(adb, out, label):
@@ -972,25 +980,56 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
             steps.append(step)
             return step, nodes, shot
 
+        def compared(step, shot):
+            """The heuristic comparison, or unavailable when this host cannot run it (the PNG is kept for a local
+            `compare`). Never a visual verdict on its own."""
+            try:
+                step['comparison'] = compare(shot, out, label=step['step'])
+            except Fail as err:
+                if err.code != 4:
+                    raise
+                step['comparison'] = {'kind': 'screenshot-comparison', 'verdict': 'unavailable', 'reason': str(err),
+                                      'screenshot': shot.name, 'note': 'run `compare` on the saved PNG elsewhere'}
+            verdict = step['comparison']['verdict']
+            checks.append(check(f'{step["step"]} screenshot not black', None if verdict == 'unavailable' else
+                                verdict != 'black-screen', verdict))
+
+        rose_main = 'dev.pixel.voice/.MainActivity'
+        # 1. The system HOME key: whatever holds HOME for this user (unqualified).
         adb.shell('input keyevent KEYCODE_HOME')
-        home_step, nodes, shot = capture('home-key')
-        home_step['comparison'] = compare(shot, out, label='home-key')
-        checks.append(check('HOME key shows Rose Home page', home_step['roseEntry'] is not None, home_step['pageDescriptions']))
-        checks.append(check('Home screenshot not black', home_step['comparison']['verdict'] != 'black-screen',
-                            home_step['comparison']['verdict']))
+        home_step, _, shot = capture('home-key')
+        home_step['entry'] = 'system HOME key (unqualified)'
+        compared(home_step, shot)
+        checks.append(check('system HOME key shows Rose Home page', home_step['roseEntry'] is not None,
+                            {'focus': home_step['focus'], 'pages': home_step['pageDescriptions']}))
+        # 2. Rose Home through an explicit component: renders Rose Home whoever holds HOME; never proof of the default.
+        adb.shell(f'am start --user {tested} -W -a android.intent.action.MAIN -c android.intent.category.HOME '
+                  f'-n {rose_main}')
+        explicit, nodes, shot = capture('explicit-rose-home')
+        explicit['entry'] = 'explicit component MAIN/HOME (does not prove the HOME default)'
+        compared(explicit, shot)
+        checks.append(check('explicit Rose HOME shows Rose Home page (explicit component)',
+                            explicit['roseEntry'] is not None and rose_main in (explicit['focus'] or ''),
+                            {'focus': explicit['focus'], 'pages': explicit['pageDescriptions']}))
+        # 3. Rose presence -> conversation, then Back -> Rose Home.
         opened = tap_desc(adb, nodes, 'Open Rose')
         conv, _, _ = capture('home-to-conversation')
         conv['tapped'] = opened
         checks.append(check('Rose entry opens RoseConversationActivity', opened is not None and
                             'RoseConversationActivity' in (conv['focus'] or ''), conv['focus']))
         adb.shell('input keyevent KEYCODE_BACK')
-        capture('conversation-back')
+        back, _, _ = capture('conversation-back')
+        checks.append(check('Back from the conversation returns to Rose Home', opened is not None and
+                            back['roseEntry'] is not None and rose_main in (back['focus'] or ''), back['focus']))
+        # 4. The app icon entry (behavior differs by version: run `source` for the rule); recorded, not judged.
         adb.shell(f'am start --user {tested} -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER '
-                  '-n dev.pixel.voice/.MainActivity')
+                  f'-n {rose_main}')
         icon, _, shot = capture('launcher-icon-entry')
-        icon['comparison'] = compare(shot, out, label='launcher-icon-entry')
+        icon['entry'] = 'explicit component MAIN/LAUNCHER (app icon)'
+        compared(icon, shot)
         adb.shell('input keyevent KEYCODE_HOME')
-        capture('home-key-again')
+        again, _, _ = capture('home-key-again')
+        again['entry'] = 'system HOME key (unqualified)'
         after = adb.shell('am get-current-user').strip()
         checks.append(check('foreground user unchanged during interactive capture', after == str(tested),
                             {'before': tested, 'after': after}))
