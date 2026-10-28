@@ -13,6 +13,7 @@ node --test workspace/rose-agent/tests/staged-copies.test.mjs
 node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-agent/server/event-delivery.test.mjs
 # APP-REMOVE-001: retired DeepSeek, Luna-first and ARTEMIS trial controls stay removed; shared paths stay.
 node --test workspace/rose-agent/tests/trial-removal.test.mjs
+node --test workspace/rose-agent/tests/trial-menu-removal.test.mjs
 node --test \
  workspace/rose-agent/security/device-auth.test.mjs \
  workspace/rose-agent/security/recovery-download.test.mjs \
