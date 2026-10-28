@@ -59,7 +59,8 @@ class ServingConfigTest(unittest.TestCase):
 
     def test_image_pinned_by_digest_but_not_mirrored(self):
         for option in CONFIG['options']:
-            self.assertIsNone(option['container_spec']['imageUri'])  # no Artifact Registry mirror exists
+            self.assertNotIn('imageUri', option['container_spec'])  # supplied at render time from the regional mirror
+            self.assertIsNone(option['runtime']['artifact_registry_image_uri'])
         runtime = CONFIG['options'][0]['runtime']
         digest = re.compile(r'^sha256:[0-9a-f]{64}$')
         self.assertRegex(runtime['image_digest'], digest)
@@ -73,7 +74,9 @@ class ServingConfigTest(unittest.TestCase):
         env = CONFIG['prompt_envelope']
         self.assertEqual(env['max_model_len'], CONFIG['demo_assumptions']['max_model_len'])
         self.assertEqual(env['acceptance_prompt_tokens_max']+env['acceptance_max_tokens']+env['slack_tokens'], env['max_model_len'])
-        self.assertTrue(any('12,288' in item and '2,048' in item for item in CONFIG['load_test']['accept_if']))
+        self.assertEqual(env['max_model_len'], 8192)
+        self.assertEqual(env['acceptance_max_tokens'], CONFIG['wire_contract']['max_tokens'])
+        self.assertTrue(any('7,168' in item and '512' in item for item in CONFIG['load_test']['accept_if']))
 
     def test_single_attempt_and_verified_cleanup(self):
         envelope = CONFIG['test_envelope']

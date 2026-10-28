@@ -2,7 +2,7 @@
 
 This is a source and configuration draft for serving the candidate model behind the spoken name
 "Muse Glimmer" on Agent Platform. Nothing here is deployed or measured, and no image or weights were pulled.
-Nathan still has to select the model.
+Nathan selected Muse Glimmer for the Rust chat prototype (authenticated PM transcript relayed by Chief at 21:50 UTC; Core did not see the transcript itself). The first run is 8,192 tokens of context, one sequence, BF16, TP=2. The 16K figures below are comparison only.
 Each fact below is labeled **verified** (read from a pinned file, registry manifest or primary documentation),
 **derived** (arithmetic from verified inputs) or **open** (unresolved, with the decision or evidence it needs).
 
@@ -10,7 +10,8 @@ Each fact below is labeled **verified** (read from a pinned file, registry manif
   image digests, Agent Platform `containerSpec`/`machineSpec` drafts, the prompt envelope, the one-attempt test envelope,
   load-test thresholds, cleanup, and the wire contract.
 - `capacity.py`: per-GPU fit and an 8K/16K × 1/4-sequence sensitivity matrix (`python3 capacity.py --check`).
-- `startup_guard.py`: the pre-download node check run inside the container before `vllm serve`.
+- `startup_guard.py`: the pre-download node check run inside the container before `vllm serve`. Runtime-only; it imports nothing from this repository.
+- `render_upload.py`: renders the Model upload request body offline (see Upload renderer).
 - `tests/`: offline checks for the config and guard, part of `scripts/test-local.sh`.
 
 ## Model (verified)
@@ -60,57 +61,85 @@ Option A: `a2-highgpu-2g`, 2× A100, BF16 vLLM, TP=2, `--gpu-memory-utilization 
 
 | Context × sequences | Headroom at 3 GiB runtime reserve | Headroom at 5 GiB reserve |
 | --- | --- | --- |
-| 8K × 1 | 3.44 GB | 1.29 GB |
+| **8K × 1 (first run)** | **3.44 GB** | **1.29 GB** |
 | 8K × 4 | 2.78 GB | 0.64 GB |
-| **16K × 1 (proposed)** | **3.22 GB** | **1.07 GB** |
+| 16K × 1 (comparison) | 3.22 GB | 1.07 GB |
 | 16K × 4 | 1.91 GB | −0.24 GB (does not fit) |
 
 The margin at the pessimistic reserve is only about 1 GB. It is not a validated fit, and only the live startup report settles it.
 Option B (labeled alternative: official Q4_K_M; the card states about 1.0% average degradation): `g2-standard-12`, 1× L4, ~4.4 GB headroom at 16K × 1.
 
-## Prompt envelope
+## Prompt envelope (first run)
 
-`--max-model-len 16384` covers **prompt plus output**. The prompt count includes the chat template, system lines and
-the reasoning-strength line; the output count includes reasoning tokens. The server counts both with the pinned tokenizer
-revision and reports them as `usage.prompt_tokens` and `usage.completion_tokens`.
+`--max-model-len 8192` covers **prompt plus output**. The prompt count includes the chat template, system lines and
+the reasoning-strength line; the output count includes reasoning tokens. Clients send `max_tokens` ≤ 512.
+The server counts both with the pinned tokenizer revision and reports `usage.prompt_tokens` and `usage.completion_tokens`.
 
-The acceptance request is `usage.prompt_tokens` between 11,000 and 12,288, with `max_tokens` 2,048. That leaves 2,048 tokens of slack inside 16,384.
-The tokenizer file was not downloaded in this cycle.
+The acceptance request is `usage.prompt_tokens` between 6,500 and 7,168, with `max_tokens` 512. That leaves 512 tokens of slack inside 8,192.
 
 ## Startup guard (`startup_guard.py`)
 
-`containerSpec.command` comes from `startup_guard.container_command()`: `python3 -c <guard> '<limits>' -- vllm serve`, followed by `containerSpec.args`.
+`render_upload.py` puts the guard source inline in `containerSpec.command`:
+`python3 -c <guard> '<limits json>' -- vllm serve`, followed by `containerSpec.args`.
+This is a documented command override on the pinned upstream image. **No derived image and no image build are needed.**
+
 Before any weights download, the guard reads:
 - `/proc/driver/nvidia/version`;
 - the GPUs torch sees, with `mem_get_info` total and free per device;
 - free disk at `~/.cache/huggingface`;
 - `/dev/shm` size.
 
-It prints one JSON evidence line, then either `exec`s `vllm serve` or exits 3. The option A limits come from the pinned config:
+It prints one JSON evidence line to the container log, then either `exec`s `vllm serve` or exits 3. On exit 3 the container stops,
+the replica never turns healthy, and the deploy fails: the operator sees the abort in the deploy status, and the reason in the evidence line.
+
+The first-run (8K) limits, rendered from the pinned config:
 
 | Check | Limit |
 | --- | --- |
 | Driver major version | ≥ 580 |
 | GPUs visible | exactly 2 |
-| Device-reported total per GPU | ≥ 39,371,177,528 B (worst-case weights + 16K KV + 3 GiB reserve, ÷ 0.90) |
+| Device-reported total per GPU | ≥ 39,128,839,964 B (worst-case weights + 8K all-layer KV + 3 GiB reserve, ÷ 0.90). The 16K figure was 39,371,177,528 |
 | Free per GPU | ≥ 0.90 × total |
 | Free cache disk | ≥ 63,634,841,824 B (weights ×1.05 + 1 GiB) |
-| `/dev/shm` | ≥ 0.9 × 16,384 MiB |
+| `/dev/shm` | ≥ 15,461,882,265 B (0.9 × 16,384 MiB) |
 
-The guard does not prove that managed disk is large enough. It refuses when it isn't.
-The image's own unpack space sits outside the guard: it is the platform's pull, 8.62 GB compressed.
-A CUDA initialisation error, such as from a driver that is too old, is reported and refused.
-The tests cover each shortfall, a healthy node, driver-string parsing, and the rendered command failing closed on a machine without GPUs.
+The guard does not prove that managed disk is large enough; it refuses when it isn't.
+The image's own unpack space (8.62 GB compressed) is the platform's pull, outside the guard.
+
+## Upload renderer (`render_upload.py`)
+
+Offline. It makes no network call and handles no credentials or tokens. The Mac executor runs it after staging the image:
+
+```bash
+python3 workspace/models/serving/render_upload.py \
+  --image-uri us-central1-docker.pkg.dev/PROJECT/REPO/vllm-openai@sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c \
+  --out upload-request.json
+```
+
+**Output contract.**
+- On success: exit 0. `--out` holds the complete JSON body for
+  `POST https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/models:upload`: `model.displayName`, `model.description` and `model.containerSpec`.
+- stdout carries one JSON line with `out`, `sha256`, `bytes`, `imageUri` and `guard_limits`.
+- On rejection: exit 2, the reason on stderr, and no file written.
+
+**What it rejects:**
+- an image that is not a `us-central1-docker.pkg.dev` reference pinned to exactly the linux/amd64 digest (this excludes tags, the index digest, other regions, Docker Hub and `us-docker`);
+- a context that disagrees between the args, the demo settings and the envelope, or that exceeds the model maximum;
+- prompt + output + slack above the context;
+- `--max-num-seqs` or the TP size disagreeing with the machine.
+
+`containerSpec` carries only supported ModelContainerSpec fields. Nothing here creates the endpoint or deploys.
 
 ## One attempt, timeline and cleanup
 
-- **Attempts:** one deploy attempt. 8K context, `--enforce-eager`, and any restart, retry or second deploy are alternatives that each need a separately approved scope.
-- **Timeline:** T0 is the first cost-bearing operation (the deploy request).
-  - The replica must be healthy by T0+1h (`deploymentTimeout 3600s` = startupProbe 30 s × 120).
+- **Attempts:** one deploy attempt. 16K context, `--enforce-eager`, and any restart, retry or second deploy each need a separately approved scope.
+  The platform may restart a replica on its own, and a restart may fetch the weights again, so one attempt does not guarantee a single weight download.
+- **Timeline:** T0 is the **first cost-bearing operation**: image staging into Artifact Registry if it comes first, otherwise the deploy request.
+  - The replica must be healthy within 3600 s of the deploy request, and in any case before T0+4h.
   - Testing stops by T0+4h.
-  - Teardown must be **verified** by T0+6h, after success, failure or timeout alike.
-- **Cleanup:** `aiplatform.endpoints.undeploy`, then `aiplatform.endpoints.delete` and `aiplatform.models.delete`. Verify with endpoint get/list showing no deployed model, and model get returning not found. A deploy timeout alone is not cleanup.
-- **Cost:** the published on-demand `a2-highgpu-2g` rate of $8.4489898/h covers the machine, with no separate on-demand fee. Derived: $33.80 for 4 h, $50.69 for 6 h, before storage.
+  - Teardown must be **verified** by T0+6h, after success, failure or timeout alike. It covers the endpoint, the model and the staged image.
+- **Cleanup:** `aiplatform.endpoints.undeploy`, then `aiplatform.endpoints.delete` and `aiplatform.models.delete`. Verify with get/list. A deploy timeout alone is not cleanup.
+- **Cost:** the published on-demand `a2-highgpu-2g` rate of $8.4489898/h covers the machine. The working reserve is USD 150 within the aggregate budget (Chief's 21:51 packet).
 
 ### Load test
 
@@ -118,7 +147,7 @@ The tests cover each shortfall, a healthy node, driver-string parsing, and the r
 - the guard exits 3;
 - an OOM or engine exit at startup;
 - the replica is not healthy within 3600 s;
-- the engine reports less than 1.0 GiB of KV per GPU, or concurrency below 1.0 at 16,384 tokens;
+- the engine reports less than 1.0 GiB of KV per GPU, or concurrency below 1.0 at 8,192 tokens;
 - peak GPU memory goes above 95%;
 - spend reaches the cap.
 
@@ -126,7 +155,7 @@ The tests cover each shortfall, a healthy node, driver-string parsing, and the r
 - `/health` returns 200;
 - `/v1/models` lists `muse-glimmer` with root `meta-models/Muse-Glimmer-30B`;
 - a two-turn non-streaming chat returns non-empty content;
-- the 12,288-token prompt with `max_tokens` 2,048 completes.
+- the 6,500–7,168-token prompt with `max_tokens` 512 completes.
 
 The exact wording of vLLM's startup log messages is unverified.
 
@@ -146,7 +175,7 @@ The Probe reference contradicts itself on `periodSeconds` versus `timeoutSeconds
 - **Request:** `POST {base}/v1/chat/completions` with `"model": "muse-glimmer"`.
 - **Agent Platform:** `:rawPredict`, with the body unchanged and a Google OAuth bearer token; the caller needs `aiplatform.endpoints.predict`. Streaming uses `:streamRawPredict`.
 - **Response:** the answer is `choices[0].message.content`. Thinking comes separately in `message.reasoning`.
-- **Limits:** one in-flight request (`--max-num-seqs 1`); 16,384 tokens of prompt plus output; never `temperature: 0`.
+- **Limits:** one in-flight request (`--max-num-seqs 1`); 8,192 tokens of prompt plus output; `max_tokens` ≤ 512; never `temperature: 0`.
 
 ## Access
 
@@ -157,7 +186,7 @@ The Probe reference contradicts itself on `periodSeconds` versus `timeoutSeconds
 
 | Category | Items |
 | --- | --- |
-| Closed facts | Model pin and files; architecture and fit arithmetic; license and policy text; vLLM support tags; image index and amd64 digests; transformers 5.21; NVIDIA driver rule; Agent Platform route and probe fields; prompt envelope; one-attempt timeline; cleanup operations |
-| Owner choices | Select the model and pin; accept the terms, including the under-18 statement; option A or B, us-central1, window, spend cap; approve the image mirror and the Hugging Face startup download |
-| New grants | None identified as required. Whether existing principals hold the listed operations is unverified and is checked by the owner/Chief route, not assumed |
-| Measured only in an approved experiment | Node driver; device-reported memory; managed disk; image pull and startup time; KV and peak memory; latency; error bodies; `--limit-mm-per-prompt` effect |
+| Closed facts | Model pin and files; arithmetic; terms text; vLLM tags; image index and amd64 digests; transformers 5.21; NVIDIA 580 rule; route and probe fields; 8K envelope; inline-guard upload body; timeline; cleanup operations |
+| Settled per Chief's 21:50/21:51 relay | Muse Glimmer selection; a2-highgpu-2g, us-central1, one attempt, 4 h / 6 h, USD 150 reserve. Core records these as relayed; it did not independently see them |
+| Escalate only if hit | A new grant or persistent credential actually required; a concrete conflict with the license or Usage Policy (including the under-18 statement). Whether existing principals hold the listed operations is unverified |
+| Measured only in the approved run | Node driver; device-reported memory; managed disk; pull and start time; KV and peak memory; latency; error bodies; `--limit-mm-per-prompt` effect |

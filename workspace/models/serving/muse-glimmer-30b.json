@@ -1,5 +1,5 @@
 {
-  "status": "draft: candidate model pending owner selection; nothing deployed; image digest read from the registry, not pulled",
+  "status": "first-run configuration: 8K, one sequence, BF16 TP2; nothing deployed; image pinned by registry digest, not pulled",
   "model": {
     "candidate_for": "spoken name \"Muse Glimmer\" (owner confirmation pending)",
     "repo": "meta-models/Muse-Glimmer-30B",
@@ -61,14 +61,17 @@
       },
       "total_bytes_including_small_files": 59582000000,
       "notice_file_present": false
-    }
+    },
+    "selection": "Muse Glimmer selected by Nathan for the Rust chat prototype (authenticated PM transcript relayed by Chief 21:50 UTC; Core did not see the transcript itself)"
   },
   "demo_assumptions": {
-    "source": "manager draft comparison assumptions, not an approved workload",
+    "source": "Chief 21:51 packet and manager 22:03 handoff",
     "modalities": "text only",
     "concurrent_conversations": 1,
-    "max_model_len": 16384,
-    "drafter": false
+    "max_model_len": 8192,
+    "drafter": false,
+    "max_output_tokens": 512,
+    "comparison_16k": "retained in capacity.py sensitivity matrix; not the first run"
   },
   "options": [
     {
@@ -111,10 +114,10 @@
         "image_digest_evidence": "Registry V2 manifest read 2026-10-28T21:43Z, 4 requests, anonymous pull token; body hashes match headers; no layers pulled",
         "driver_major_min": 580,
         "driver_basis": "CUDA 13.x needs driver 580 or newer (NVIDIA minor-version compatibility); Agent Platform node driver unknown",
-        "weights_cache_dir": "~/.cache/huggingface"
+        "weights_cache_dir": "~/.cache/huggingface",
+        "artifact_registry_region": "us-central1"
       },
       "container_spec": {
-        "imageUri": null,
         "args": [
           "meta-models/Muse-Glimmer-30B",
           "--revision",
@@ -132,7 +135,7 @@
           "--dtype",
           "bfloat16",
           "--max-model-len",
-          "16384",
+          "8192",
           "--max-num-seqs",
           "1",
           "--gpu-memory-utilization",
@@ -164,8 +167,7 @@
           "timeoutSeconds": 30,
           "failureThreshold": 120
         },
-        "deploymentTimeout": "3600s",
-        "command_rendered_by": "startup_guard.container_command (inline guard, then vllm serve)"
+        "deploymentTimeout": "3600s"
       },
       "max_num_seqs": 1,
       "gpu_memory_utilization": 0.9,
@@ -213,7 +215,6 @@
         "driver_major_min": null
       },
       "container_spec": {
-        "imageUri": null,
         "args": [
           "--model",
           "/models/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
@@ -224,7 +225,7 @@
           "--port",
           "8080",
           "--ctx-size",
-          "16384",
+          "8192",
           "--n-gpu-layers",
           "999",
           "--parallel",
@@ -267,10 +268,11 @@
     "do_not_send": [
       "temperature: 0",
       "--chat-template override"
-    ]
+    ],
+    "max_tokens": 512
   },
   "test_envelope": {
-    "source": "Models Manager proposal (MODELS-GCP-001), not approved",
+    "source": "Chief 21:51 packet (MODELS-GCP-001): one a2-highgpu-2g, 4 h work, 6 h teardown, USD 150 working reserve within the aggregate budget",
     "region": "us-central1",
     "replicas": 1,
     "test_hours": 4,
@@ -279,16 +281,18 @@
     "rate_note": "published on-demand inference rate already includes the machine; no separate management fee is added for on-demand. Reservations bill separate infrastructure and management SKUs.",
     "attempts": 1,
     "timeline": {
-      "T0": "first cost-bearing operation (deploy request)",
-      "startup_deadline": "T0+1h (deploymentTimeout 3600s)",
+      "T0": "first cost-bearing operation: image staging into Artifact Registry if it precedes deploy, otherwise the deploy request",
+      "startup_deadline": "deploy request + 3600s (deploymentTimeout), and never later than T0+4h",
       "test_stop": "T0+4h",
-      "teardown_verified_by": "T0+6h, including after a failed startup"
+      "teardown_verified_by": "T0+6h, including after a failed startup; covers the endpoint, model and staged image"
     },
     "alternatives_requiring_separate_scope": [
-      "8K context",
+      "16K context",
       "--enforce-eager",
       "any restart, retry or second deploy"
-    ]
+    ],
+    "provider_restarts": "the platform may restart a replica on its own; a restart may fetch the weights again, so one attempt is not a guaranteed single weight download",
+    "working_reserve_usd": 150
   },
   "load_test": {
     "abort_if": [
@@ -304,16 +308,16 @@
       "GET /health returns 200",
       "GET /v1/models lists id muse-glimmer with root meta-models/Muse-Glimmer-30B",
       "two-turn non-streaming chat returns non-empty choices[0].message.content",
-      "one request with usage.prompt_tokens between 11,000 and 12,288 and max_tokens 2,048 completes without OOM"
+      "one request with usage.prompt_tokens between 6,500 and 7,168 and max_tokens 512 completes without OOM"
     ]
   },
   "prompt_envelope": {
-    "max_model_len": 16384,
+    "max_model_len": 8192,
     "counted_by": "server usage.prompt_tokens + usage.completion_tokens with the pinned tokenizer revision (chat template included)",
-    "acceptance_prompt_tokens_max": 12288,
-    "acceptance_max_tokens": 2048,
-    "slack_tokens": 2048,
-    "note": "reasoning tokens count toward completion tokens; the 16,384 cap is prompt plus output"
+    "acceptance_prompt_tokens_max": 7168,
+    "acceptance_max_tokens": 512,
+    "slack_tokens": 512,
+    "note": "8,192 covers prompt (template, system and reasoning-strength lines) plus output (reasoning tokens included); clients send max_tokens <= 512"
   },
   "cleanup": {
     "operations": [
