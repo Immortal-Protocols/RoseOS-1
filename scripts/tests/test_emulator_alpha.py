@@ -1447,7 +1447,7 @@ class WorkflowAlphaTest(unittest.TestCase):
             "        run: python3 scripts/emulator-alpha.py preflight --job guard\n", guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
-        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, app-reuse, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: inputs.mode == 'os-release'\n", self.jobs['builder'])
         self.assertIn('    needs: builder\n', self.jobs['publisher'])
 
@@ -1456,7 +1456,7 @@ class WorkflowAlphaTest(unittest.TestCase):
         self.assertIn("      - name: Emulator-alpha successor preflight\n        if: inputs.mode == 'emulator-alpha-successor'\n"
             '        run: python3 scripts/emulator-alpha.py preflight --job successor-guard --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"\n', guard)
         self.assertIn('[[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]', guard)
-        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only ]]', guard)  # no publication in this mode
+        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]', guard)  # no publication in this mode
         job = self.jobs['alpha-successor']
         self.assertIn("    needs: controller\n    if: inputs.mode == 'emulator-alpha-successor'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", job)
         self.assertIn('    permissions:\n      contents: read\n    steps:\n', job)
@@ -1475,7 +1475,9 @@ class WorkflowAlphaTest(unittest.TestCase):
         # No other job runs in this mode: each builder job is bound to its own mode, the publishers to theirs.
         for name, mode in (('builder', 'os-release'), ('app-builder', 'app-only'), ('alpha-builder', 'emulator-alpha')):
             self.assertIn(f"    if: inputs.mode == '{mode}'\n", self.jobs[name])
-        self.assertIn("    if: inputs.mode == 'app-only' && inputs.app_publish\n", self.jobs['app-publisher'])
+        self.assertIn("      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||\n"
+            "      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))\n", self.jobs['app-publisher'])
+        self.assertIn("    if: inputs.mode == 'app-reuse'\n", self.jobs['app-reuse'])
         self.assertIn('alpha_recover:\n        description: emulator-alpha-successor only', WORKFLOW)
         self.assertIn('        type: boolean\n        default: false\n', WORKFLOW.split('alpha_recover:', 1)[1])
 

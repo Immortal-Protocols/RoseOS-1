@@ -88,7 +88,8 @@ class CheckedInCandidateTest(unittest.TestCase):
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
         self.assertEqual((reserved[305]['route'], reserved[305]['versionName'], reserved[305]['candidate']),
             ('os-release', '305-home-beta', '7fb94ae6ed535066d50879a99b7c8e427da8e853'))
-        self.assertEqual((reserved[308]['route'], reserved[308]['versionName'], reserved[308]['candidate']), ('os-release', '308-home-tray-beta', None))
+        self.assertEqual((reserved[308]['route'], reserved[308]['versionName'], reserved[308]['candidate'], reserved[308]['osBuild'],
+            reserved[308]['buildTimestamp']), ('os-release', '308-home-tray-beta', '93ad1c2bd7094d6b65c695ba239d05d272b87c57', DRAFT['build'], int(DRAFT['timestamp'])))
         self.assertNotIn(307, reserved, 'the consumed 307 reservation is gone')
         built = {row['versionCode']: row for row in CONFIG['appRelease']['built']}
         self.assertEqual((built[307]['candidate'], built[307]['sha256'], built[307]['size'], built[307]['release'], built[307]['run']),

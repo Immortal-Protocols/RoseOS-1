@@ -114,7 +114,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.command == 'POST' and url.path == REPO + '/releases':
             data = json.loads(body)
             release = {'id': s.next_id, 'tag_name': data['tag_name'], 'draft': data['draft'], 'prerelease': data['prerelease'],
-                'make_latest': data['make_latest'], 'assets': []}
+                'make_latest': data['make_latest'], 'body': data.get('body', ''), 'assets': []}
             s.next_id += 1
             s.releases.append(release)
             return self.reply(201, release)
@@ -334,6 +334,143 @@ class PublisherTest(unittest.TestCase):
         with self.assertRaisesRegex(gp.PublishError, 'not on github.com'):
             client.public_download('https://example.com/x.apk', self.root/'x', 1)
 
+OS_CANDIDATE = '93ad1c2bd7094d6b65c695ba239d05d272b87c57'
+REUSE = {'sourceRun': 40778491188, 'apkSha256': None, 'unsignedTargetFilesSha256': 'a' * 64, 'signedTargetFilesSha256': 'b' * 64}
+
+class PublisherReuseTest(PublisherTest):
+    """app-reuse (INFRA-APP-118): the OS candidate's signed Rose Agent 308 with its source block, published unchanged."""
+    def setUp(self):
+        super().setUp()
+        self.apk = apk_bytes(self.certificate, b'rose agent 308 bundled in 2806')
+        self.binding = dict(REUSE, apkSha256=hashlib.sha256(self.apk).hexdigest())
+        self.make_reuse()
+
+    def source(self, **change):
+        return {'route': 'os-release-reuse', 'osBuild': '2026102806', 'buildTimestamp': 1793220605, 'sourceRun': 40778491188,
+            'unsignedTargetFilesSha256': 'a' * 64, 'signedTargetFilesSha256': 'b' * 64,
+            'targetFilesPath': 'PRODUCT/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk', **change}
+
+    def make_reuse(self, edit=lambda r: r, name='reuse', apk=None):
+        directory = self.root/name
+        directory.mkdir()
+        data = self.apk if apk is None else apk
+        (directory/'dev.pixel.voice-308.apk').write_bytes(data)
+        receipt = edit({'receiptType': 'app-release', 'simulated': False, 'candidate': OS_CANDIDATE, 'packageName': 'dev.pixel.voice',
+            'versionCode': 308, 'versionName': '308-home-tray-beta', 'apk': 'dev.pixel.voice-308.apk', 'size': len(data),
+            'sha256': hashlib.sha256(data).hexdigest(), 'signerSha256': self.signer, 'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'],
+            'apkFacts': {'minSdk': 29, 'nativeAbis': []}, 'source': self.source(), 'checks': ['reuse checks']})
+        (directory/'app-release-receipt.json').write_text(json.dumps(receipt))
+        names = ['app-release-receipt.json', 'dev.pixel.voice-308.apk']
+        (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n' for n in names))
+        self.artifact = directory
+        return directory
+
+    def reuse_publisher(self, public='public', apps='[["dev.pixel.voice", 308]]', candidate=OS_CANDIDATE, binding=None,
+                        build='2026102806', stamp='1793220605', reuse=True):
+        args = ['--reuse-binding', json.dumps(binding or self.binding), '--build-number', build, '--build-timestamp', stamp] if reuse else []
+        return subprocess.run([sys.executable, str(SCRIPTS/'app_release_publisher.py'), '--artifact-dir', str(self.artifact),
+            '--candidate-sha', candidate, '--apps', apps, '--public-dir', str(self.root/public), '--config', str(self.config_path), *args],
+            capture_output=True, text=True, env=dict(os.environ, PIXEL_OTA_TOKEN=TOKEN))
+
+    def test_publishes_the_os_bundled_308_with_a_truthful_body_and_an_unchanged_schema(self):
+        result = self.reuse_publisher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release, = self.server.releases
+        self.assertEqual((release['tag_name'], release['draft'], release['prerelease'], release['make_latest']), ('rose-agent-308', False, True, 'false'))
+        self.assertEqual(self.server.latest, 'frankel-2026102805', 'OS Latest is untouched')
+        published = {a['name']: self.server.blobs[a['id']] for a in release['assets']}
+        self.assertEqual(sorted(published), ['SHA256SUMS', 'dev.pixel.voice-308.apk', 'dev.pixel.voice-308.receipt.json'])
+        self.assertEqual(published['dev.pixel.voice-308.apk'], self.apk)
+        public = json.loads(published['dev.pixel.voice-308.receipt.json'])
+        self.assertEqual(sorted(public), sorted(['receiptType', 'schemaVersion', 'packageName', 'versionCode', 'versionName', 'size', 'sha256',
+            'signerSha256', 'candidate', 'minimumTestedOs', 'repository', 'tag', 'asset', 'apkUrl', 'prerelease', 'compatibility']),
+            'exactly the keys DirectUpdate accepts; the source stays private')
+        self.assertEqual((public['versionCode'], public['versionName'], public['candidate'], public['sha256']),
+            (308, '308-home-tray-beta', OS_CANDIDATE, self.binding['apkSha256']))
+        self.assertIn('the same signed bytes RoseOS frankel 2026102806 bundles (RoseOS-1 ' + OS_CANDIDATE + '), not rebuilt or re-signed',
+            release['body'])
+        record = json.loads((self.root/'public/publication.json').read_text())
+        self.assertEqual(record['source'], self.source())
+        self.assertIn(('GET', '/Immortal-Protocols/pixel-ota/releases/download/rose-agent-308/dev.pixel.voice-308.apk', False), self.server.log)
+        # The same artifact never passes as an app-only release, and a rerun is an idempotent no-op.
+        writes = len(self.api_writes())
+        self.assertEqual(self.reuse_publisher(public='again').returncode, 0)
+        self.assertEqual(len(self.api_writes()), writes)
+
+    def test_reuse_provenance_failures_stop_before_any_api_call(self):
+        cases = (
+            (dict(reuse=False), 'reserved for the os-release route'),
+            (dict(apps='[["dev.pixel.voice", 309]]'), 'is not the reservation of OS candidate'),
+            (dict(apps='[["dev.pixel.voice", 307]]'), 'with N above 307'),
+            (dict(candidate='f' * 40), 'is not the reservation of OS candidate ' + 'f' * 40),
+            (dict(build='2026102807'), 'build 2026102807 (1793220605)'),
+            (dict(stamp='1793220606'), 'build 2026102806 (1793220606)'),
+            (dict(binding=dict(REUSE, apkSha256='0' * 64)), 'not the dispatched OS-bundled bytes'),
+            (dict(binding=dict(REUSE, apkSha256='A' * 64)), 'lowercase sha256'),
+            (dict(binding={'sourceRun': 1}), 'must hold exactly'),
+            (dict(binding=dict(REUSE, apkSha256='0' * 64, sourceRun=0)), 'must hold exactly'),
+            (dict(build='26'), 'ten-digit OS build number'),
+        )
+        for index, (kwargs, message) in enumerate(cases):
+            result = self.reuse_publisher(public=f'r{index}', **kwargs)
+            self.assertEqual(result.returncode, 1, kwargs)
+            self.assertIn(message, result.stderr, kwargs)
+            self.assertFalse((self.root/f'r{index}').exists())
+        for index, (edit, message) in enumerate((
+                (lambda r: {**r, 'source': self.source(sourceRun=1)}, "source does not name the dispatched OS build"),
+                (lambda r: {**r, 'source': self.source(signedTargetFilesSha256='c' * 64)}, 'source does not name'),
+                (lambda r: {**r, 'source': self.source(route='app-only')}, 'source does not name'),
+                (lambda r: {**r, 'source': self.source(targetFilesPath='SYSTEM/app/Other/Other.apk')}, 'source does not name'),
+                (lambda r: {**r, 'source': self.source(extra=True)}, 'source does not name'),
+                (lambda r: {k: v for k, v in r.items() if k != 'source'}, 'source does not name'),
+                (lambda r: {**r, 'versionName': '308-other'}, 'not the dispatched OS-bundled bytes and versionName'),
+                (lambda r: {**r, 'candidate': 'e' * 40}, 'candidate='))):
+            self.make_reuse(edit=edit, name=f'edited{index}')
+            result = self.reuse_publisher(public=f'e{index}')
+            self.assertEqual(result.returncode, 1, index)
+            self.assertIn(message, result.stderr, index)
+        # Alternate 308 bytes (another build of 308, or another signer) are refused even with a matching receipt.
+        other = apk_bytes(self.certificate, b'another 308 build')
+        self.make_reuse(name='alternate', apk=other)
+        self.assertIn('not the dispatched OS-bundled bytes', self.reuse_publisher(public='alt').stderr)
+        self.make_reuse(name='signer', apk=apk_bytes(b'another certificate', b'rose agent 308 bundled in 2806'))
+        self.assertIn('not signed by exactly the pinned app signer',
+            self.reuse_publisher(public='sig', binding=dict(self.binding, apkSha256=hashlib.sha256(
+                (self.root/'signer/dev.pixel.voice-308.apk').read_bytes()).hexdigest())).stderr)
+        self.assertEqual(self.server.log, [], 'nothing reached the API')
+
+    def test_an_app_only_artifact_is_never_published_as_reuse_and_vice_versa(self):
+        self.make_artifact(name='app-only-309')
+        result = self.reuse_publisher(public='a', apps='[["dev.pixel.voice", 309]]')
+        self.assertIn('is not the reservation of OS candidate', result.stderr)
+        self.make_reuse(name='as-app-only', edit=lambda r: {**r, 'versionCode': 309, 'versionName': '309-app-beta',
+            'apk': 'dev.pixel.voice-309.apk'})
+        (self.artifact/'dev.pixel.voice-308.apk').rename(self.artifact/'dev.pixel.voice-309.apk')
+        names = ['app-release-receipt.json', 'dev.pixel.voice-309.apk']
+        (self.artifact/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((self.artifact/n).read_bytes()).hexdigest()}  {n}\n' for n in names))
+        result = self.run_publisher(apps='[["dev.pixel.voice", 309]]', candidate=OS_CANDIDATE, public='b')
+        self.assertIn('describes reused OS bytes; publish it only in app-reuse mode', result.stderr)
+        self.assertEqual(self.server.log, [])
+
+    def test_a_conflicting_published_308_or_moved_latest_is_never_changed(self):
+        self.server.releases.append({'id': 77, 'tag_name': 'rose-agent-308', 'draft': False, 'prerelease': True, 'make_latest': 'false',
+            'assets': [{'id': 76, 'name': 'dev.pixel.voice-308.apk', 'size': 5, 'state': 'uploaded', 'digest': 'sha256:' + '0' * 64}]})
+        before = json.dumps(self.server.releases)
+        result = self.reuse_publisher()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('published release rose-agent-308 differs from this app release; it is not modified', result.stderr)
+        self.assertEqual(json.dumps(self.server.releases), before)
+        self.server.releases.clear()
+        self.server.latest = 'frankel-2026102806'
+        result = self.reuse_publisher(public='latest')
+        self.assertIn('Latest is not frankel-2026102805; nothing is published', result.stderr)
+        self.assertEqual(self.api_writes(), [])
+
+# Only the reuse tests run in PublisherReuseTest; the inherited app-only tests already run in PublisherTest.
+for _name in [n for n in vars(PublisherTest) if n.startswith('test_')]:
+    if _name not in vars(PublisherReuseTest):
+        setattr(PublisherReuseTest, _name, None)
+
 APP_SOURCES = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice'
 PROBE = SCRIPTS/'tests/java/dev/pixel/voice/DirectUpdateReceiptProbe.java'
 RECEIPT_304 = SCRIPTS/'tests/fixtures/app-publication/dev.pixel.voice-304.receipt.json'
@@ -447,7 +584,9 @@ class WorkflowAppPublisherTest(unittest.TestCase):
 
     def test_only_app_only_with_app_publish_runs_the_hosted_app_publisher(self):
         job = self.jobs['app-publisher']
-        self.assertIn("    needs: app-builder\n    if: inputs.mode == 'app-only' && inputs.app_publish\n    runs-on: ubuntu-24.04\n", job)
+        self.assertIn("    needs: [app-builder, app-reuse]\n    if: >-\n      !cancelled() && inputs.app_publish &&\n"
+            "      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||\n"
+            "      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))\n    runs-on: ubuntu-24.04\n", job)
         self.assertNotIn('self-hosted', job)
         self.assertIn('          name: app-release-dev.pixel.voice-${{ github.run_id }}\n', job)
         self.assertIn('uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0', job)
@@ -458,10 +597,13 @@ class WorkflowAppPublisherTest(unittest.TestCase):
         for other in ('builder', 'app-builder', 'alpha-builder', 'controller', 'cleanup'):
             self.assertNotIn('PIXEL_OTA_APP_PRIVATE_KEY }}\n', self.jobs[other].replace('!= \'\'', ''), other)
             self.assertNotIn('create-github-app-token', self.jobs[other], other)
-        self.assertIn('      app_publish:\n        description: app-only only', WORKFLOW)
+        self.assertIn('      app_publish:\n        description: app-only and app-reuse only', WORKFLOW)
+        self.assertIn('[[ "$MODE" != app-reuse ]] || reuse=(--reuse-binding "$REUSE_BINDING" --build-number "$BUILD_NUMBER" '
+            '--build-timestamp "$BUILD_TIMESTAMP")\n', job)
+        self.assertIn('--public-dir "$RUNNER_TEMP/app-public" "${reuse[@]}"\n', job)
         guard = self.jobs['guard']
         self.assertIn('APP_PUBLISH: ${{ inputs.app_publish }}', guard)
-        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only ]]', guard)
+        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]', guard)
         self.assertIn("    if: inputs.mode == 'emulator-alpha'\n", self.jobs['alpha-builder'])
         self.assertIn('    needs: builder\n', self.jobs['publisher'])
 

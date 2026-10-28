@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion)
         type: choice
-        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained]
+        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse]
         default: os-release
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
@@ -49,9 +49,13 @@ on:
         required: false
         default: ''
       app_publish:
-        description: app-only only - publish the verified signed APK as its own pixel-ota prerelease (never Latest)
+        description: app-only and app-reuse only - publish the verified signed APK as its own pixel-ota prerelease (never Latest)
         type: boolean
         default: false
+      reuse_binding:
+        description: 'app-reuse only - JSON {"sourceRun": original os-release run id, "apkSha256", "unsignedTargetFilesSha256", "signedTargetFilesSha256"} from that run'
+        required: false
+        default: ''
       alpha_recover:
         description: emulator-alpha-successor only - continue an interrupted successor transition from its journal (exact preimage or postimage only)
         type: boolean
@@ -76,6 +80,7 @@ env:
   RESUME_UNSIGNED_SHA256: ${{ inputs.resume_unsigned_sha256 }}
   RESUME_SOURCE_RUN: ${{ inputs.resume_source_run }}
   RESUME_SIGNED_SHA256: ${{ inputs.resume_signed_sha256 }}
+  REUSE_BINDING: ${{ inputs.reuse_binding }}
 
 jobs:
   guard:
@@ -102,11 +107,14 @@ jobs:
           [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
           # app-only and emulator-alpha: no resume and no promotion (neither reaches the publisher); app-only is exactly Rose Agent.
           [[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]
-          # Public app publication exists only in app-only mode.
-          [[ "$APP_PUBLISH" == false || "$MODE" == app-only ]]
+          # Public app publication exists only in app-only and app-reuse modes.
+          [[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]
           # Successor recovery exists only in emulator-alpha-successor mode.
           [[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]
           [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
+          # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
+          [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
+          [[ "$MODE" != app-reuse ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); b = json.loads(os.environ["REUSE_BINDING"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice" and sorted(b) == ["apkSha256", "signedTargetFilesSha256", "sourceRun", "unsignedTargetFilesSha256"] and type(b["sourceRun"]) is int and b["sourceRun"] > 0 and all(isinstance(b[k], str) and re.fullmatch("[0-9a-f]{64}", b[k]) for k in b if k != "sourceRun")'
       - name: Bootstrap preflight
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
@@ -427,6 +435,42 @@ jobs:
         if: always()
         run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
 
+  # INFRA-APP-118: the signed Rose Agent a verified OS candidate bundled, read unchanged from that build's original attempt
+  # under the shared lock (host-app-reuse.py). No app build, OS compile, signing, secrets, signer login or cloud identity;
+  # only the APK, its nonsecret receipt and SHA256SUMS leave the builder, as the same private artifact app-only uploads.
+  app-reuse:
+    needs: controller
+    if: inputs.mode == 'app-reuse'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # the candidate's own AndroidManifest.xml is read at the candidate commit
+          persist-credentials: false
+      - run: python3 scripts/host-app-reuse.py --check
+      - name: Prepare the reuse attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/app-reuse-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Check the original build's receipts and copy only its signed Rose Agent
+        run: python3 scripts/host-app-reuse.py --artifact-dir "$ROSE_BASE/artifact"
+      - name: Private Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-release-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/artifact
+          retention-days: 3
+          if-no-files-found: error
+      - name: Remove the reuse attempt from the builder (the original attempt is untouched)
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
   publisher:
     needs: builder
     runs-on: ubuntu-24.04
@@ -463,11 +507,14 @@ jobs:
             --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --artifact-dir "$RUNNER_TEMP/artifact" \
             ${{ inputs.promote && '--promote' || '' }}
 
-  # Public Rose Agent APK (app-only with app_publish): hosted, after the builder's verified private artifact. Only this job
-  # mints the pixel-ota App token (revoked by the action at job end); the builder never receives it.
+  # Public Rose Agent APK (app-only or app-reuse with app_publish): hosted, after the builder's verified private artifact.
+  # Only this job mints the pixel-ota App token (revoked by the action at job end); the builder never receives it.
   app-publisher:
-    needs: app-builder
-    if: inputs.mode == 'app-only' && inputs.app_publish
+    needs: [app-builder, app-reuse]
+    if: >-
+      !cancelled() && inputs.app_publish &&
+      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||
+      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -495,7 +542,11 @@ jobs:
       - name: Verify the signed APK and publish its own prerelease
         env:
           PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
-        run: python3 scripts/app_release_publisher.py --artifact-dir "$RUNNER_TEMP/app-artifact" --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --public-dir "$RUNNER_TEMP/app-public"
+        run: |
+          set -euo pipefail
+          reuse=()
+          [[ "$MODE" != app-reuse ]] || reuse=(--reuse-binding "$REUSE_BINDING" --build-number "$BUILD_NUMBER" --build-timestamp "$BUILD_TIMESTAMP")
+          python3 scripts/app_release_publisher.py --artifact-dir "$RUNNER_TEMP/app-artifact" --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --public-dir "$RUNNER_TEMP/app-public" "${reuse[@]}"
       - name: Public publication receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -505,7 +556,7 @@ jobs:
           if-no-files-found: error
 
   cleanup:
-    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, publisher]
+    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, app-reuse, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

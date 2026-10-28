@@ -20,6 +20,13 @@ release before and after. A published release is never modified: identical asset
 else fails. A draft left by an earlier attempt is reconciled. Every asset is downloaded back with authentication and
 the APK once more anonymously from the exact public URL the client uses; each must match. Errors name only the
 method, endpoint template and status; response bodies and the token are never printed.
+
+App-reuse mode (INFRA-APP-118, --reuse-binding with --build-number and --build-timestamp) publishes the signed Rose Agent an
+OS candidate bundled, handed over by host-app-reuse.py, instead of an app-only build. Only a version reserved for the
+os-release route with exactly this candidate, osBuild and buildTimestamp is accepted, and the receipt's source block
+must name that build, timestamp and the dispatched run and digests (the APK's sha256 among them). The public receipt keeps
+schemaVersion 1 unchanged (the app refuses unknown keys); the release body and publication.json say the bytes are the
+OS candidate's. An app-only artifact never carries a source block, and a reuse artifact is never accepted without one.
 Exit status: 0 ok, 1 check or publication failed, 4 setup missing.
 """
 import argparse
@@ -43,6 +50,9 @@ PUBLIC_FIELDS = ('packageName', 'versionCode', 'versionName', 'size', 'sha256', 
 SCHEMA_VERSION = 1  # APP-GITHUB-002-SCHEMA-001, read by the app's DirectUpdate
 KNOWN_ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86')
 UNIVERSAL = 'universal'
+REUSE_ROUTE = 'os-release-reuse'
+REUSE_BINDING = ('sourceRun', 'apkSha256', 'unsignedTargetFilesSha256', 'signedTargetFilesSha256')
+REUSE_TARGET_PREFIX = 'PRODUCT/app/RosePreinstall_dev_pixel_voice/'
 
 class CheckFailed(Exception):
     pass
@@ -115,8 +125,22 @@ def names(config, version):
     asset = publication['asset'].format(package=package, versionCode=version)
     return tag, asset, publication['apkUrl'].format(tag=tag, asset=asset)
 
-def verify_artifact(directory, config, candidate, apps):
-    """The builder's private artifact, checked completely before any API call; returns (receipt, apk path)."""
+def reuse_source(reuse):
+    """The source block a reuse receipt must carry for the dispatched build, timestamp and binding."""
+    binding = reuse['binding']
+    if not isinstance(binding, dict) or sorted(binding) != sorted(REUSE_BINDING) or type(binding['sourceRun']) is not int \
+            or binding['sourceRun'] < 1 or not all(isinstance(binding[k], str) and re.fullmatch(r'[0-9a-f]{64}', binding[k])
+            for k in REUSE_BINDING[1:]):
+        raise CheckFailed(f'the reuse binding must hold exactly {list(REUSE_BINDING)}: a run id and lowercase sha256 digests')
+    if not re.fullmatch(r'\d{10}', reuse['build'] or '') or not re.fullmatch(r'\d{10}', reuse['timestamp'] or ''):
+        raise CheckFailed('app reuse needs the ten-digit OS build number and BUILD_DATETIME')
+    return {'route': REUSE_ROUTE, 'osBuild': reuse['build'], 'buildTimestamp': int(reuse['timestamp']),
+        'sourceRun': binding['sourceRun'], 'unsignedTargetFilesSha256': binding['unsignedTargetFilesSha256'],
+        'signedTargetFilesSha256': binding['signedTargetFilesSha256']}
+
+def verify_artifact(directory, config, candidate, apps, reuse=None):
+    """The builder's private artifact, checked completely before any API call; returns (receipt, apk path).
+    reuse ({build, timestamp, binding}) selects the OS-bundled route: the version must be that OS candidate's reservation."""
     directory, app = Path(directory), config['appRelease']
     package, signer = app['packageName'], config['identities']['appSignerSha256'].lower()
     if not re.fullmatch(r'[0-9a-f]{40}', candidate or ''):
@@ -126,11 +150,17 @@ def verify_artifact(directory, config, candidate, apps):
     version = apps[0][1]
     reserved = app.get('reserved', [])
     row = next((r for r in reserved if r['versionCode'] == version), None)
-    if row and (row['route'] != 'app-only' or row['candidate'] not in (None, candidate)):
-        raise CheckFailed(f'{package} versionCode {version} is reserved for the {row["route"]} route'
-            + (f' and candidate {row["candidate"]}' if row['candidate'] else ''))
-    if not row and reserved and version <= max(r['versionCode'] for r in reserved):
-        raise CheckFailed(f'{package} versionCode {version} must exceed the reserved {max(r["versionCode"] for r in reserved)}')
+    source = reuse_source(reuse) if reuse is not None else None
+    if source is None:
+        if row and (row['route'] != 'app-only' or row['candidate'] not in (None, candidate)):
+            raise CheckFailed(f'{package} versionCode {version} is reserved for the {row["route"]} route'
+                + (f' and candidate {row["candidate"]}' if row['candidate'] else ''))
+        if not row and reserved and version <= max(r['versionCode'] for r in reserved):
+            raise CheckFailed(f'{package} versionCode {version} must exceed the reserved {max(r["versionCode"] for r in reserved)}')
+    elif not row or row['route'] != 'os-release' or (row.get('candidate'), row.get('osBuild'), row.get('buildTimestamp')) \
+            != (candidate, source['osBuild'], source['buildTimestamp']):
+        raise CheckFailed(f'{package} versionCode {version} is not the reservation of OS candidate {candidate} build '
+            f'{source["osBuild"]} ({source["buildTimestamp"]}); only that OS-bundled version is reused')
     _, asset, _ = names(config, version)
     present = sorted(p.name for p in directory.iterdir())
     if present != sorted([asset, RECEIPT, SUMS]):
@@ -151,6 +181,16 @@ def verify_artifact(directory, config, candidate, apps):
         raise CheckFailed('the app receipt does not match: ' + ', '.join(wrong))
     if not isinstance(receipt.get('versionName'), str) or not receipt['versionName']:
         raise CheckFailed('the app receipt has no versionName')
+    if source is None and 'source' in receipt:
+        raise CheckFailed('the app receipt describes reused OS bytes; publish it only in app-reuse mode')
+    if source is not None:
+        given = receipt.get('source') if isinstance(receipt.get('source'), dict) else {}
+        path = given.get('targetFilesPath')
+        if {k: v for k, v in given.items() if k != 'targetFilesPath'} != source or not isinstance(path, str) \
+                or not path.startswith(REUSE_TARGET_PREFIX) or not path.endswith('.apk'):
+            raise CheckFailed('the app receipt\'s source does not name the dispatched OS build, run and target-files digests')
+        if receipt['sha256'] != reuse['binding']['apkSha256'] or receipt['versionName'] != row['versionName']:
+            raise CheckFailed('the reused APK is not the dispatched OS-bundled bytes and versionName')
     if apk_signer_digests(apk) != [signer]:
         raise CheckFailed('the APK is not signed by exactly the pinned app signer')
     compatibility(receipt, apk, config)
@@ -205,14 +245,16 @@ def matches(asset, expected):
     digest, size = expected
     return asset.get('state', 'uploaded') == 'uploaded' and asset.get('size') == size and asset.get('digest') in (None, 'sha256:' + digest)
 
-def publish(client, config, document, files, directory, download_dir):
+def publish(client, config, document, files, directory, download_dir, source=None):
     """Own versioned prerelease holding exactly `files`; Latest is checked before and after. Returns the release."""
     publication = config['appRelease']['publication']
     tag, name = document['tag'], f'Rose Agent {document["versionCode"]} ({document["versionName"]})'
     if client.latest_tag() != publication['preserveLatest']:
         raise CheckFailed(f'Latest is not {publication["preserveLatest"]}; nothing is published')
+    origin = (f'the same signed bytes RoseOS frankel {source["osBuild"]} bundles (RoseOS-1 {document["candidate"]}), '
+        'not rebuilt or re-signed' if source else f'from RoseOS-1 {document["candidate"]}')
     body = (f'Rose Agent {document["versionName"]} for {document["packageName"]}, versionCode {document["versionCode"]}, '
-        f'sha256 {document["sha256"]}, signer {document["signerSha256"]}, from RoseOS-1 {document["candidate"]}. '
+        f'sha256 {document["sha256"]}, signer {document["signerSha256"]}, {origin}. '
         'Prerelease: an app update channel, not an OS release. Rose Agent reads the receipt asset to decide eligibility and '
         'verifies the APK against it before installing.')
     release = client.find_release(tag)
@@ -259,10 +301,16 @@ def main(argv=None):
     p.add_argument('--apps', required=True)
     p.add_argument('--public-dir', type=Path, required=True, help='new directory for the public files and receipt')
     p.add_argument('--config', type=Path, default=CONFIG)
+    p.add_argument('--reuse-binding', help='app-reuse mode: the original OS run\'s binding (host-app-reuse.py REUSE_BINDING)')
+    p.add_argument('--build-number', help='app-reuse mode: the OS build that bundled the APK')
+    p.add_argument('--build-timestamp', help='app-reuse mode: that build\'s BUILD_DATETIME')
     a = p.parse_args(argv)
+    if bool(a.reuse_binding) != bool(a.build_number) or bool(a.reuse_binding) != bool(a.build_timestamp):
+        p.error('--reuse-binding, --build-number and --build-timestamp go together')
     try:
         config = json.loads(a.config.read_text())
-        receipt, apk = verify_artifact(a.artifact_dir, config, a.candidate_sha, json.loads(a.apps))
+        reuse = {'build': a.build_number, 'timestamp': a.build_timestamp, 'binding': json.loads(a.reuse_binding)} if a.reuse_binding else None
+        receipt, apk = verify_artifact(a.artifact_dir, config, a.candidate_sha, json.loads(a.apps), reuse)
         document, files = public_files(receipt, apk, config, a.public_dir/'assets')
         token = os.environ.get('PIXEL_OTA_TOKEN', '')
         if not token:
@@ -272,8 +320,9 @@ def main(argv=None):
         client = gp.GitHubReleases(config['appRelease']['publication']['repository'], token, publication.get('api', 'https://api.github.com'),
             publication.get('uploads', 'https://uploads.github.com'), web=publication.get('web', 'https://github.com'), allow_http=bool(config.get('fixture')))
         with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as work:
-            release = publish(client, config, document, files, a.public_dir/'assets', Path(work)/'downloaded')
-        (a.public_dir/'publication.json').write_text(json.dumps({**document, 'releaseId': release['id']}, indent=2, sort_keys=True) + '\n')
+            release = publish(client, config, document, files, a.public_dir/'assets', Path(work)/'downloaded', receipt.get('source'))
+        record = {**document, 'releaseId': release['id'], **({'source': receipt['source']} if reuse else {})}
+        (a.public_dir/'publication.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
     except (CheckFailed, gp.PublishError) as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
         return 1

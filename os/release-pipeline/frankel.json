@@ -287,9 +287,11 @@
       {
         "versionCode": 308,
         "versionName": "308-home-tray-beta",
-        "candidate": null,
+        "candidate": "93ad1c2bd7094d6b65c695ba239d05d272b87c57",
+        "osBuild": "2026102806",
+        "buildTimestamp": 1793220605,
         "route": "os-release",
-        "basis": "INFRA-CANDIDATE-115: bundled Rose Agent of the Frankel 2026102806 OS candidate (the INFRA-CANDIDATE-115 merge on main, which cannot name its own commit; base e5c3eaa3 with OS #81/App #89 trial removal, #83 Home reuse and #85 tray lifecycle). The app-only route may not use 308"
+        "basis": "INFRA-CANDIDATE-115: bundled Rose Agent of the Frankel 2026102806 OS candidate 93ad1c2b (the INFRA-CANDIDATE-115 merge; base e5c3eaa3 with OS #81/App #89 trial removal, #83 Home reuse and #85 tray lifecycle), dispatched with BUILD_DATETIME 1793220605. The app-only route may not use 308; INFRA-APP-118 app-reuse may publish only these OS-bundled signed bytes, bound to that candidate, build and timestamp"
       }
     ]
   },

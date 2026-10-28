@@ -267,7 +267,7 @@ class CheckedInAppReleaseTest(unittest.TestCase):
              config['identities']['appSignerSha256'], 'd27dded6acac8567ebe0084d928145521da4d3bf', 40765131690, 427169403,
              {'route': 'public GitHub prerelease rose-agent-307', 'at': '2026-10-28T20:40Z', 'publicRelease': True}))
         self.assertEqual([(r['versionCode'], r['versionName'], r['route'], r['candidate']) for r in app['reserved']],
-            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (308, '308-home-tray-beta', 'os-release', None)])
+            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (308, '308-home-tray-beta', 'os-release', '93ad1c2bd7094d6b65c695ba239d05d272b87c57')])
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
             {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
@@ -302,9 +302,9 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             block = self.jobs[name].replace("    if: inputs.mode == 'os-release'\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: builder\n', self.jobs['publisher'])  # skipped whenever builder is skipped
-        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, app-reuse, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained\]\n        default: os-release\n")
+        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse\]\n        default: os-release\n")
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']
