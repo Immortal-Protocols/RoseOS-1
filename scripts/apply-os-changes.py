@@ -77,6 +77,9 @@ UPDATER_MARKER = '    <string name="url" translatable="false">https://releases.g
 # RoseOS channel choices (Prod/Beta/Alpha, Beta = existing "stable" feed) ride on the same Updater change.
 UPDATER_PUBLISHED = '    <string-array name="channel_published" translatable="false">\n        <item>stable</item>\n    </string-array>\n'
 if a.updater_url:projects['packages/apps/Updater'] = ['updater-rose-channels.patch']
+# Upstream lists the Updater module only for OFFICIAL_BUILD (media_system.mk), so a RoseOS build omitted it.
+# Include it exactly when its channel is set; a --keep-upstream-updater build ships none.
+if a.updater_url:projects.setdefault('build/make', []).append('updater-product-build-make.patch')
 policy = None
 if a.background_policy:
     policy = validate_policy(json.loads(a.background_policy.read_text()), a.background_agent)

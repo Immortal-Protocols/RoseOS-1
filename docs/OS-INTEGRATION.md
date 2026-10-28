@@ -36,7 +36,14 @@ device and release-channel fact to obtain first, not something to infer from
 ### Release channels (alpha, beta, prod)
 
 With `--updater-url`, the patcher also applies `os/patches/updater-rose-channels.patch`
-and copies `RoseChannels.java` into the Updater. The selector offers:
+and copies `RoseChannels.java` into the Updater. It also applies
+`os/patches/updater-product-build-make.patch`, because upstream lists the `Updater`
+module only for `OFFICIAL_BUILD` (`media_system.mk`), so RoseOS builds shipped
+without it (candidate 2026102803). The patch adds `PRODUCT_PACKAGES += Updater` next
+to that block; `OFFICIAL_BUILD` stays unset. A signed build must then contain
+`SYSTEM/priv-app/Updater/Updater.apk` (`app.seamlessupdate.client`) and its
+`SYSTEM/etc/{permissions,default-permissions,sysconfig}/app.seamlessupdate.client.xml`.
+A `--keep-upstream-updater` build includes no Updater. The selector offers:
 
 | Label | Stored `channel` | Wire channel (`DEVICE-channel`, metadata token) |
 | --- | --- | --- |
