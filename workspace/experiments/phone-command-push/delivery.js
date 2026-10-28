@@ -61,7 +61,8 @@
      // operation again, not start a second action or advance to another one.
      do{result=await this.execute(c);if(result.status==='running')await this.sleep(200);}
      while(result.status==='running'&&item.epoch===this.epoch&&this.now()<c.expires+5000);
-     if(result.status==='running')result={status:'error',reason:'Command completion timed out; not repeated'};
+     // Still running at the deadline: the action may have happened. Unknown is reported as such, never retried.
+     if(result.status==='running')result={status:'uncertain',reason:'The phone action was started but its result was not confirmed before the command expired. It was not repeated; inspect before retrying.'};
     }catch(e){result={status:'error',reason:String(e.message||e)};}
     const finishedAt=this.now();let delay=200;
     // Retry delivery of the same result; never rerun a tap after a lost reply.

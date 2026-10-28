@@ -112,3 +112,35 @@ test('W2: the status check is retried, never guessed, and a lost result reply ne
  assert.equal(phone.get(c.id).status,'completed');
  assert.equal(requests.filter(r=>r==='GET /phone/commands/'+c.id).length,1,'one successful status check, not one per result retry');
 });
+
+// W1 (APP-FIX-006): the bridge answers 'running' when its wait for the main thread runs out (PhoneCommandGate),
+// and keeps answering from the id's receipt. A fake bridge with that contract, the real client and server store.
+function slowBridge(){
+ const receipts=new Map();let actions=0,release;const done=new Promise(r=>release=r);
+ const execute=async c=>{
+  if(receipts.has(c.id))return receipts.get(c.id);
+  receipts.set(c.id,{status:'running'});actions++;
+  done.then(result=>receipts.set(c.id,result)); // the one posted action finishes later
+  return {status:'running'}; // the five-second wait ran out
+ };
+ return {execute,release,actions:()=>actions};
+}
+test('W1: a native wait that runs out is not reported as a failure; the real result is posted once it exists',async()=>{
+ const {phone,api,settle}=await stopRig();const bridge=slowBridge();
+ const d=new Delivery({api,sleep:async()=>{await tick();},execute:bridge.execute});
+ const c=phone.create({action:'open_app',packageName:'com.example.app'});
+ d.accept(await api('GET','/phone/commands'),'poll');await settle();
+ assert.equal(phone.get(c.id).status,'pending','the server is not told the action failed while it may still run');
+ bridge.release({status:'launch_requested',packageName:'com.example.app'});await settle();
+ assert.equal(phone.get(c.id).status,'completed');assert.equal(phone.get(c.id).result.status,'launch_requested');
+ assert.equal(bridge.actions(),1,'re-queries of the same id never start a second action');
+});
+test('W1: still running at the command deadline is reported as uncertain, not error, and not repeated',async()=>{
+ const {phone,api,settle}=await stopRig();const bridge=slowBridge();let now=Date.now();
+ const d=new Delivery({api,now:()=>now,sleep:async()=>{now+=1000;await tick();},execute:bridge.execute});
+ const c=phone.create({action:'open_app',packageName:'com.example.app'});
+ d.accept(await api('GET','/phone/commands'),'poll');await settle();await settle();
+ const record=phone.get(c.id);
+ assert.equal(record.status,'completed');assert.equal(record.result.status,'uncertain');assert.match(record.result.reason,/not repeated/);
+ assert.equal(bridge.actions(),1);
+});
