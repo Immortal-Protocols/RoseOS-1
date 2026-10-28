@@ -333,36 +333,90 @@ failure, and cleanup stops the builder.
 Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
 (`os/release-pipeline/cuttlefish-alpha.json`, `scripts/emulator-alpha.py`).
 
-- **Where it builds:** the same source tree and lock as the Pixel config, but into
-  its own `OUT_DIR` (`out-rose-cf-alpha`). Nothing is cleaned and the Pixel
-  output is never touched.
+- **Source preparation:** the build never uses the retained Pixel tree, because
+  that tree holds the Pixel Updater integration, which the Cuttlefish product
+  must not include (OS-ALPHA-001). `emulator-alpha.py prepare`
+  (`scripts/alpha_source.py`), run under the shared lock, makes an ordinary,
+  independent copy of the source inputs into
+  `rose-actions/alpha-source/<preparationId>/tree`:
+  - **Copy:** every file is copied byte by byte into a new inode, keeping its
+    mode and mtime. There is no reflink (unsupported on the builder's ext4), no
+    hardlink, no symlink forest, no mount and no patch-and-restore.
+  - **Exclusions:** the exact policy `preparation.exclusions`:
+    - root `.repo`, `keys`, `releases`, `out`, `out-*` and `out_*`;
+    - `.git` and `.repo` anywhere;
+    - the two listed extracted-image links to `/sys/kernel/debug`, matched by
+      path and exact target.
+
+    Pixel release keys are never copied.
+  - **Links:** relative links that stay inside are kept, and absolute links into
+    the tree are rebased. Dangling links are kept only if their target is
+    contained in the tree. Any other escape, a link into an excluded path that
+    exists, a loop, or an unsupported file type stops the preparation and is
+    named.
+  - **Checks before copying:**
+    - the base binding: the reconcile receipt is the latest, unchanged, and no
+      file has drifted;
+    - `build/make` and Cuttlefish at the OS contract's pins;
+    - the resolved-manifest and policy digests;
+    - the three app APKs by digest;
+    - OS's contract at its pinned digest, consistent with this config;
+    - the copy budget (150 GiB) plus 300 GiB free after the copy.
+  - **Delta:** OS's patch (`os/patches/cuttlefish-alpha-no-updater.patch`, which
+    changes only `build/make/target/product/media_system.mk`) is applied with
+    `git apply` inside the copy, never to the retained tree.
+  - **Staging:** the copy is staged in `.staging-<id>-<nonce>`. It becomes
+    `<id>/` (`tree/`, `manifest.tsv`, `preparation.json`) only after the delta
+    hashes match and the base is seen unchanged. A failed run removes only its
+    own staging directory. A leftover from an interrupted run is never removed
+    automatically and blocks a new preparation of that id.
+  - **preparationId:** the sha256 of the base binding, the delta digests and
+    the changed files' before and after hashes.
+  - **preparation.json:** the 084 interface: base candidate, resolved-manifest
+    and reconcile digests, `osDeltaCommit`, `patchDigests`, `changedFiles`,
+    apps with paths, `policySha256`, `updaterMode`
+    `excluded-no-compatible-feed` with no endpoint, `selectionSha256`,
+    `effectiveSourceIdentity`, the exclusions and dangling links, the base git
+    revisions snapshotted before `.git` is left out, and the preservation
+    checks.
+- **Verifying a prepared tree:** probe and build check the prepared tree
+  against its receipt and the pinned digests. The Cuttlefish revision comes from
+  the receipt, because the copy has no `.git`. `verify-prepared` re-hashes the
+  whole tree against `manifest.tsv`.
+- **Where it builds:** the prepared tree, under the same lock as the Pixel
+  config, into its own `OUT_DIR` (`tree/out-rose-cf-alpha`). Nothing is cleaned,
+  and the retained tree and Pixel output are never touched.
 - **What it never does:** reconcile, adopt, sign apps, read any secret, publish
-  or edit the tree.
-- **Source:** it builds the retained tree exactly as the last Pixel integration
-  left it. `sourceBinding` names that run's candidate, its dispatched apps and
-  the latest host-reconcile receipt (name and sha256). The build refuses any
-  other candidate or app set, a newer receipt, and any file that has drifted
-  from that receipt's entries.
+  or edit the retained tree.
 - **Order of a build:**
-  1. read-only checks of the tree: `device/google/cuttlefish` at the pinned
-     revision, the product mapping in `AndroidProducts.mk`, the host package
-     mechanism (`hostPackage`) and free disk space. `hosttar` is not a Makefile
-     goal. At the pinned revision, the Soong plugin `build/cvd-host-package.go`
-     registers `cvd_host_package` and installs `<module>.tar.gz` into
-     `HOST_OUT`. It declares the `hosttar` phony only for the `vsoc_*` board
-     platforms. `build/Android.bp` declares `cvd-host_package`. Preflight checks
-     the plugin's pinned sha256 and these declarations;
+  1. the prepared tree is checked against `prepared.preparationId` and
+     `prepared.receiptSha256`. This covers:
+     - the base binding, the delta, the apps, the policy and the routing;
+     - the changed files and the reconcile-entry files;
+     - the manifest digest;
+     - `device/google/cuttlefish` at the pinned revision (from the receipt);
+     - the product mapping in `AndroidProducts.mk`;
+     - the host package mechanism (`hostPackage`);
+     - free disk space.
+
+     `hosttar` is not a Makefile goal. At the pinned revision, the Soong plugin
+     `build/cvd-host-package.go` registers `cvd_host_package` and installs
+     `<module>.tar.gz` into `HOST_OUT`, and it declares the `hosttar` phony only
+     for the `vsoc_*` board platforms. `build/Android.bp` declares
+     `cvd-host_package`. Preflight checks the plugin's pinned sha256 and these
+     declarations;
   2. `lunch` resolution, which must equal the recorded `hostEvidence.lunch`,
      including `TARGET_BOARD_PLATFORM=vsoc_x86_64`. `TARGET_RELEASE` is read
      from the shell after a successful `lunch`, because `get_build_var` returns
-     it empty in the retained tree; it must be `cur`, with no fallback;
+     it empty in the retained tree. It must be `cur`, with no fallback;
   3. `m droid hosttar`;
-  4. required images and the host package must be written by this build;
+  4. the required images and the host package must be written by this build;
   5. the partition `build.prop` identity must match: emulator build id
      `rose-cf-alpha-<run id>` as `BUILD_NUMBER`, the dispatched timestamp,
      `userdebug` and `test-keys`.
-- **Receipt:** it hashes every top-level image and `cvd-host_package.tar.gz`.
-  It records `testOnly`, `signed: false`, `published: false` and
+- **Receipt:** it hashes every top-level image and `cvd-host_package.tar.gz`,
+  and binds the preparation id, its receipt digest and the effective source
+  identity. It records `testOnly`, `signed: false`, `published: false` and
   `bootAttempted: false`, and lists what it does not prove. Only the receipt
   and `SHA256SUMS` become the Actions artifact `emulator-alpha-receipt-<run id>`;
   the images stay in the alpha `OUT_DIR`.
@@ -377,17 +431,23 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
 - reconcile receipt `0004-2026102804.json` and its sha256;
 - apps 302/4/28, in the 2804 dispatch order.
 
-`hostEvidence` stays null until a probe passes. The first probe failed, and its
-diagnosis is not a probe receipt. Until `hostEvidence` is recorded, the guard
-fails with exit 4 before the builder starts, and no dispatch can compile. The
-lead runs the probe on the builder through existing access, while no other job
-holds the lock:
+`preparation.baseEvidence.resolvedManifest.sha256`, `prepared` and
+`hostEvidence` stay null until the lead records them from real runs. Until then
+`prepare` fails with exit 4 naming the manifest digest. The guard also fails with
+exit 4 before the builder starts, so no dispatch can compile.
 
-`python3 scripts/emulator-alpha.py probe --run-id <id> --receipt <path>`
+The lead's sequence on the builder, through existing access, needs approved
+capacity (the copy budget plus 300 GiB free after it) and no other job holding
+the lock:
 
-It runs the read-only checks and `lunch` only, never make; `lunch` writes build-system state only inside the alpha `OUT_DIR`. Its receipt gives the
-`lunch` values and any tree failures. Disk headroom (300 GiB minimum) is a
-separate host blocker owned by the lead.
+1. `python3 scripts/emulator-alpha.py prepare` prints the preparation receipt.
+2. `python3 scripts/emulator-alpha.py verify-prepared --preparation-id <id>` is
+   optional and re-hashes the whole tree.
+3. `python3 scripts/emulator-alpha.py probe --preparation-id <id> --run-id <n> --receipt <new path>`
+   runs the prepared tree's checks and `lunch` only, never make. `lunch` writes
+   build-system state only inside that tree's alpha `OUT_DIR`.
+4. Record the preparation id and receipt sha256 in `prepared`, and the passing
+   probe's sha256 and `lunch` values in `hostEvidence`, in one config commit.
 
 Source-only contract for the OS owner:
 
