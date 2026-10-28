@@ -11,6 +11,7 @@ node --test \
  workspace/rose-agent/server/background-app-policy.test.mjs \
  workspace/rose-agent/server/owner-stop.test.mjs \
  workspace/rose-agent/server/server-stop-gate.test.mjs \
+ workspace/rose-agent/tests/home-launcher.test.mjs \
  workspace/experiments/phone-command-push/push.test.mjs \
  workspace/experiments/phone-command-push/delivery.test.cjs \
  workspace/experiments/phone-control-metrics/metrics.test.mjs \
