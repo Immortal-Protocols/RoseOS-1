@@ -280,6 +280,27 @@ class StageTest(unittest.TestCase):
         shutil.copy(output, directory)  # the directory holds the other test artifacts already
         self.assertEqual(self.resume(artifacts=[directory/'unsigned-target_files.zip'])[0], 0)
 
+    def test_a_resumed_chain_that_fails_signing_resumes_again_with_the_same_artifacts(self):
+        self.failed_at_bytes_verify()
+        self.assertEqual(self.resume()[0], 0)
+        first = self.state
+        self.state = self.root/'resumed'
+        self.assertEqual(self.run_stage('bytes-verify')[0], 0)
+        self.assertEqual(self.run_stage('sign', 'false')[0], 1)
+        before = {p.name: p.read_bytes() for p in self.state.iterdir()}
+        artifacts = self.artifacts()
+        (artifacts[1]).write_text('{"changed": true}')
+        code, report = self.resume(state=self.root/'resumed-2', stage='sign', artifacts=artifacts)
+        self.assertEqual(code, 2)
+        self.assertIn('background-policy.json differs from the source receipt', report['error'])
+        code, report = self.resume(state=self.root/'resumed-2', stage='sign')
+        self.assertEqual(code, 0, report)
+        self.assertEqual((report['stage'], report['completedStages']), ('sign', ['build', 'bytes-verify']))
+        self.assertEqual({p.name: p.read_bytes() for p in self.state.iterdir()}, before)
+        self.assertEqual(len(list(first.glob('*.json'))), 6)
+        self.state = self.root/'resumed-2'
+        self.assertEqual(self.run_stage('sign')[0], 0)
+
     def test_carried_receipts_only_open_a_resumed_chain(self):
         self.assertEqual(self.run_stage('build')[0], 0)
         receipt = json.loads((self.state/'002-completed.json').read_text())
