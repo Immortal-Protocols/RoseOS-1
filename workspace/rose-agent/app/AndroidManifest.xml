@@ -35,6 +35,7 @@
 <provider android:name=".CameraMicrophoneProvider" android:authorities="dev.pixel.voice.camera-microphone" android:exported="true" android:permission="dev.pixel.voice.permission.CAMERA_CONTEXT"/>
 <provider android:name=".SettingsAgentProvider" android:authorities="dev.pixel.voice.agent" android:exported="true"/>
 <activity android:name=".ServerConnectionActivity" android:exported="false"/>
+<activity android:name=".RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
 <activity android:name=".PairingActivity" android:exported="false"/>
 <activity android:name=".SettingsAccessActivity" android:exported="false"/>
 <provider android:name=".GlassesPhotoProvider" android:authorities="dev.pixel.voice.glasses" android:exported="true"/>
