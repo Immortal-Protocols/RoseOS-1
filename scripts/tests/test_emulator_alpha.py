@@ -26,17 +26,23 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 SHA = '62286c084e52bc57e41a35333653960844c16ad2'
 APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 TS = '1793180700'
+BOUND = 'ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9'  # 2804, the run that wrote the retained tree's latest reconcile receipt
+FIXTURES = SCRIPTS/'tests/fixtures/cuttlefish-283645aa'  # unmodified pinned upstream files (see its README)
 LUNCH = {'TARGET_PRODUCT': 'aosp_cf_x86_64_only_phone', 'TARGET_RELEASE': 'cur', 'TARGET_BUILD_VARIANT': 'userdebug',
-    'PRODUCT_DEVICE': 'vsoc_x86_64_only', 'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only',
+    'TARGET_BOARD_PLATFORM': 'vsoc_x86_64', 'PRODUCT_DEVICE': 'vsoc_x86_64_only', 'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only',
     'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86'}
 
 ENVSETUP = r'''
 lunch() {
   [ "$1" = "${FAKE_LUNCH_ACCEPT:-aosp_cf_x86_64_only_phone-cur-userdebug}" ] || return 1
-  TARGET_PRODUCT=aosp_cf_x86_64_only_phone TARGET_RELEASE=cur TARGET_BUILD_VARIANT=userdebug PRODUCT_DEVICE=vsoc_x86_64_only
+  TARGET_PRODUCT=aosp_cf_x86_64_only_phone TARGET_BUILD_VARIANT=userdebug PRODUCT_DEVICE=vsoc_x86_64_only
+  TARGET_BOARD_PLATFORM="${FAKE_BOARD:-vsoc_x86_64}"
+  # As in the retained tree: lunch exports the release into the shell (build/envsetup.sh)...
+  [ -n "${FAKE_RELEASE_UNSET:-}" ] || export TARGET_RELEASE="${FAKE_RELEASE:-cur}"
   PRODUCT_OUT="${FAKE_PRODUCT_OUT:-$OUT_DIR/target/product/vsoc_x86_64_only}" HOST_OUT="$OUT_DIR/host/linux-x86"
 }
-get_build_var() { eval "echo \$$1"; }
+# ...while get_build_var returns the release variables empty there.
+get_build_var() { case "$1" in TARGET_RELEASE|TARGET_RELEASE_CONFIG) echo;; *) eval "echo \$$1";; esac; }
 m() {
   echo "m $* OUT_DIR=$OUT_DIR BUILD_NUMBER=$BUILD_NUMBER BUILD_DATETIME=$BUILD_DATETIME" >> "$FAKE_LOG"
   [ -n "${FAKE_MAKE_FAIL:-}" ] && return 2
@@ -73,7 +79,9 @@ class AlphaTreeTest(unittest.TestCase):
         (cf/'vsoc_x86_64_only/phone/aosp_cf.mk').write_text('PRODUCT_NAME := aosp_cf_x86_64_only_phone\n')
         (cf/'AndroidProducts.mk').write_text('PRODUCT_MAKEFILES := \\\n\taosp_cf_x86_64_phone:$(LOCAL_DIR)/vsoc_x86_64/phone/aosp_cf.mk \\\n'
             '\taosp_cf_x86_64_only_phone:$(LOCAL_DIR)/vsoc_x86_64_only/phone/aosp_cf.mk \\\n')
-        (cf/'host_package.mk').write_text('cvd_host_tarball := $(HOST_OUT)/cvd-host_package.tar.gz\n.PHONY: hosttar\nhosttar: $(cvd_host_tarball)\n')
+        (cf/'build').mkdir()
+        for name in ('Android.bp', 'cvd-host-package.go'):
+            (cf/'build'/name).write_bytes((FIXTURES/'build'/name).read_bytes())
         for args in (['init', '-q'], ['add', '.'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'cf']):
             subprocess.run(['git', '-C', str(cf), *args], check=True)
         self.cf_head = subprocess.run(['git', '-C', str(cf), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
@@ -180,14 +188,14 @@ class AlphaTreeTest(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.src/alpha.CUTTLEFISH), '-c', 'user.name=t', '-c', 'user.email=t@t',
             'commit', '-q', '--allow-empty', '-m', 'moved'], check=True)
         (self.src/'device/google/cuttlefish/AndroidProducts.mk').write_text('PRODUCT_MAKEFILES := \\\n\taosp_cf_x86_64_phone:$(LOCAL_DIR)/x.mk\n')
-        (self.src/'device/google/cuttlefish/host_package.mk').write_text('# no host package\n')
+        (self.src/'device/google/cuttlefish/build/cvd-host-package.go').unlink()
         self.data['build']['minFreeGiB'] = 10 ** 9
         self.write()
         with self.assertRaises(alpha.CheckFailed) as error:
             self.run_build()
         message = str(error.exception)
         for expected in ('is not checked out at the pinned', 'does not map aosp_cf_x86_64_only_phone',
-                         'does not define the hosttar goal', 'below build.minFreeGiB'):
+                         'build/cvd-host-package.go is absent; the hosttar goal is unverified', 'below build.minFreeGiB'):
             self.assertIn(expected, message)
         self.assertEqual(self.made(), [])
 
@@ -239,6 +247,45 @@ class AlphaTreeTest(unittest.TestCase):
             self.run_build()
         self.assertEqual(self.made(), [])
 
+    def test_release_is_the_one_lunch_exports_not_get_build_var(self):
+        # Actual tree output: get_build_var TARGET_RELEASE is empty while lunch exported cur; that resolves.
+        env = alpha.build_env(alpha.load(self.config_path), 'rose-cf-alpha-1', TS)
+        self.assertEqual(alpha.resolve(alpha.load(self.config_path), env)['TARGET_RELEASE'], 'cur')
+        for change, message in ((('FAKE_RELEASE_UNSET', '1'), 'TARGET_RELEASE=\\(empty\\)'), (('FAKE_RELEASE', 'trunk_staging'), 'TARGET_RELEASE=trunk_staging')):
+            self.env = {'FAKE_LOG': str(self.log), change[0]: change[1]}
+            with self.assertRaisesRegex(alpha.CheckFailed, 'lunch resolved ' + message):
+                self.run_build()
+        self.assertEqual(self.made(), [])
+
+    def test_host_package_goal_is_checked_against_the_pinned_soong_plugin(self):
+        cf = self.src/alpha.CUTTLEFISH
+        plugin, blueprint = cf/'build/cvd-host-package.go', cf/'build/Android.bp'
+        pinned_plugin, pinned_blueprint = plugin.read_bytes(), blueprint.read_bytes()
+        cases = (
+            (lambda: plugin.write_bytes(pinned_plugin + b'// local edit\n'), ['differs from the pinned plugin']),
+            (lambda: plugin.write_bytes(pinned_plugin.replace(b'(board_platform == "vsoc_x86_64")', b'(board_platform == "vsoc_x86_65")')),
+                ['differs from the pinned plugin', 'only for other board platforms than vsoc_x86_64']),
+            (lambda: plugin.write_bytes(pinned_plugin.replace(b'ctx.Phony("hosttar", info.TarballMetadata)', b'ctx.Phony("hostpkg", info.TarballMetadata)')),
+                ['differs from the pinned plugin', 'does not declare the goal']),
+            (lambda: plugin.write_bytes(pinned_plugin.replace(b'c.BaseModuleName()+".tar.gz", tarball)', b'"host.zip", tarball)')),
+                ['does not declare the installed output']),
+            (lambda: blueprint.write_bytes(pinned_blueprint.replace(b'name: "cvd-host_package"', b'name: "cvd-host_package_v2"')),
+                ['does not declare cvd_host_package cvd-host_package']),
+            (lambda: blueprint.unlink(), ['does not declare cvd_host_package cvd-host_package']),
+        )
+        for damage, messages in cases:
+            damage()
+            failures = alpha.tree_failures(alpha.load(self.config_path))
+            for message in messages:
+                self.assertTrue(any(message in f for f in failures), (message, failures))
+            plugin.write_bytes(pinned_plugin)
+            blueprint.write_bytes(pinned_blueprint)
+        self.assertEqual(alpha.tree_failures(alpha.load(self.config_path)), [])
+        self.env['FAKE_BOARD'] = 'vsoc_arm64'
+        with self.assertRaisesRegex(alpha.CheckFailed, 'TARGET_BOARD_PLATFORM=vsoc_arm64'):
+            self.run_build()
+        self.assertEqual(self.made(), [])
+
     def test_probe_resolves_and_records_without_making(self):
         os.environ['FAKE_LOG'] = str(self.log)
         self.addCleanup(os.environ.pop, 'FAKE_LOG')
@@ -253,11 +300,38 @@ class CheckedInAlphaTest(unittest.TestCase):
     def test_checked_in_config_fails_closed_naming_the_missing_evidence(self):
         result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
-        self.assertEqual(json.loads(result.stderr)['missing'], ['sourceBinding.candidate', 'sourceBinding.reconcileReceipt',
-            'sourceBinding.reconcileReceiptSha256', 'sourceBinding.apps', 'hostEvidence.probeReceiptSha256', 'hostEvidence.lunch'])
-        build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', SHA, '--apps', json.dumps(APPS),
+        self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch'])
+        build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
             '--run-id', '1', '--build-timestamp', TS, '--receipt-dir', '/nonexistent/alpha-receipt'], capture_output=True, text=True)
         self.assertEqual(build.returncode, 4, 'a dispatch cannot compile speculatively')
+
+    def test_source_binding_is_the_lead_evidenced_2804_integration(self):
+        binding = CHECKED_IN['sourceBinding']
+        self.assertEqual({k: binding[k] for k in ('candidate', 'reconcileReceipt', 'reconcileReceiptSha256', 'apps')},
+            {'candidate': BOUND, 'reconcileReceipt': '0004-2026102804.json',
+             'reconcileReceiptSha256': 'db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0', 'apps': APPS})
+        # The documented order is the 2804 dispatch contract's.
+        self.assertIn("APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]",
+            (SCRIPTS/'tests/test_release_candidate_contract.py').read_text())
+        self.assertEqual((CHECKED_IN['hostEvidence']['probeReceiptSha256'], CHECKED_IN['hostEvidence']['lunch']), (None, None))
+        config = alpha.load()
+        with self.assertRaisesRegex(alpha.CheckFailed, 'bound to ae9cfd4d'):
+            alpha.check_dispatch(config, SHA, APPS)
+        with self.assertRaisesRegex(alpha.CheckFailed, 'differ from the bound'):
+            alpha.check_dispatch(config, BOUND, list(reversed(APPS)))
+        alpha.check_dispatch(config, BOUND, APPS)
+
+    def test_host_package_pin_matches_the_pinned_upstream_fixture(self):
+        package = CHECKED_IN['hostPackage']
+        self.assertEqual(hashlib.sha256((FIXTURES/package['plugin']).read_bytes()).hexdigest(), package['pluginSha256'])
+        self.assertEqual((package['moduleType'], package['module'], package['goal'], package['output'], package['boardPlatform']),
+            ('cvd_host_package', 'cvd-host_package', 'hosttar', 'cvd-host_package.tar.gz', 'vsoc_x86_64'))
+        self.assertIn(package['goal'], CHECKED_IN['build']['makeGoals'])
+        readme = (FIXTURES/'README.md').read_text()
+        self.assertIn(alpha.pinned_revision('device/google/cuttlefish'), readme)
+        for name in ('Android.bp', 'cvd-host-package.go'):
+            self.assertIn(hashlib.sha256((FIXTURES/'build'/name).read_bytes()).hexdigest(), readme)
+            self.assertIn('Licensed under the Apache License', (FIXTURES/'build'/name).read_text())
 
     def test_target_out_dir_and_lock_are_the_cuttlefish_alpha_ones(self):
         config = alpha.load()
@@ -272,7 +346,9 @@ class CheckedInAlphaTest(unittest.TestCase):
     def test_unsafe_targets_are_config_failures(self):
         for change, message in ((('build', 'outDir', FRANKEL['host']['outDir']), 'disjoint'), (('build', 'outDir', 'out'), 'plain directory'),
                                 (('build', 'outDir', 'a/b'), 'plain directory'), (('target', 'variant', 'user'), 'userdebug test-keys'),
-                                (('target', 'lunch', 'frankel-cur-user'), 'does not match')):
+                                (('target', 'lunch', 'frankel-cur-user'), 'does not match'),
+                                (('hostPackage', 'output', 'cvd-host_package.zip'), 'module name plus .tar.gz'),
+                                (('build', 'makeGoals', ['droid']), 'must include the hostPackage goal')):
             config = alpha.load()
             config[change[0]][change[1]] = change[2]
             self.assertTrue(any(message in f for f in alpha.config_failures(config)), change)

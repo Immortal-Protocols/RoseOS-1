@@ -14,23 +14,55 @@
     "outDir": "out-rose-cf-alpha",
     "buildIdPrefix": "rose-cf-alpha-",
     "makeJobs": 48,
-    "makeGoals": ["droid", "hosttar"],
-    "requiredImages": ["super.img", "boot.img", "vendor_boot.img", "vbmeta.img"],
-    "requiredHostOutputs": ["cvd-host_package.tar.gz"],
+    "makeGoals": [
+      "droid",
+      "hosttar"
+    ],
+    "requiredImages": [
+      "super.img",
+      "boot.img",
+      "vendor_boot.img",
+      "vbmeta.img"
+    ],
     "minFreeGiB": 300,
-    "basis": "Own OUT_DIR beside the Pixel outDir, under the shared builder lock; nothing is cleaned. droid builds the guest images into PRODUCT_OUT and hosttar the launcher host package into HOST_OUT; preflight checks that the retained tree's device/google/cuttlefish defines both. requiredImages is a minimum, not the full launcher input list, which is unverified for this tree. minFreeGiB is a policy margin, not a measured output size"
+    "basis": "Own OUT_DIR beside the Pixel outDir, under the shared builder lock; nothing is cleaned. droid builds the guest images into PRODUCT_OUT; hosttar is the host package goal (hostPackage). requiredImages is a minimum, not the full launcher input list, which is unverified for this tree. minFreeGiB is a policy margin, not a measured output size"
+  },
+  "hostPackage": {
+    "moduleType": "cvd_host_package",
+    "module": "cvd-host_package",
+    "definedIn": "build/Android.bp",
+    "plugin": "build/cvd-host-package.go",
+    "pluginSha256": "c9f465dbd93b0074e61e34d428567284b262f72c99b0d08e286b61026541066b",
+    "goal": "hosttar",
+    "output": "cvd-host_package.tar.gz",
+    "boardPlatform": "vsoc_x86_64",
+    "basis": "Read from the pinned device/google/cuttlefish 283645aa (no compile): build/cvd-host-package.go registers the Soong cvd_host_package module type, installs <module>.tar.gz into the module's host install directory (HOST_OUT) and declares the hosttar phony only for the vsoc board platforms; build/Android.bp declares cvd_host_package cvd-host_package; vsoc_x86_64_only/BoardConfig.mk sets TARGET_BOARD_PLATFORM vsoc_x86_64. There is no Makefile hosttar. Preflight checks the plugin's sha256 and these declarations in the retained tree, and lunch must resolve this board platform"
   },
   "sourceBinding": {
-    "candidate": null,
-    "reconcileReceipt": null,
-    "reconcileReceiptSha256": null,
-    "apps": null,
-    "basis": "The alpha builds the retained tree exactly as the last Pixel integration reconciled it: it never reconciles, adopts, signs apps or edits the tree. Bind it only from the builder's latest host-reconcile receipt (file name and sha256), the candidate SHA and dispatched apps of the run that wrote it; the build refuses any other candidate and any drift from that receipt's entries"
+    "candidate": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+    "reconcileReceipt": "0004-2026102804.json",
+    "reconcileReceiptSha256": "db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0",
+    "apps": [
+      [
+        "dev.pixel.voice",
+        302
+      ],
+      [
+        "dev.pixel.calculator.agent",
+        4
+      ],
+      [
+        "dev.pixel.backgroundcontrol",
+        28
+      ]
+    ],
+    "basis": "The alpha builds the retained tree exactly as the last Pixel integration reconciled it: it never reconciles, adopts, signs apps or edits the tree. Bind it only from the builder's latest host-reconcile receipt (file name and sha256), the candidate SHA and dispatched apps of the run that wrote it; the build refuses any other candidate and any drift from that receipt's entries",
+    "evidence": "Lead's read-only host inspection, 2026-10-28 (INFRA-ALPHA-082): reconcile receipt 0004-2026102804.json (written 2026-10-28T09:59:03Z) is the latest and none of its 15 entries has drifted; the immutable 2026102804 stage chain (000-init to 010-completed) names candidate ae9cfd4d; aapt and hashes of the integrated apps match 2804 (Rose Agent 302 01b184b4..., Calculator 4 9f46c1a2..., controller 28 f39936b1...). Rose Agent 303 never reconciled this tree. apps uses the order of the 2804 dispatch (scripts/tests/test_release_candidate_contract.py APPS), so the alpha dispatch passes exactly this list"
   },
   "hostEvidence": {
     "probeReceiptSha256": null,
     "lunch": null,
-    "basis": "Values from an emulator-alpha.py probe run on the builder under the lock: TARGET_PRODUCT, TARGET_RELEASE, TARGET_BUILD_VARIANT, PRODUCT_DEVICE, PRODUCT_OUT and HOST_OUT from lunch in the retained tree with the alpha OUT_DIR. Until recorded, guard and builder fail closed"
+    "basis": "Values from a passing emulator-alpha.py probe on the builder under the lock: TARGET_PRODUCT, TARGET_BUILD_VARIANT, TARGET_BOARD_PLATFORM, PRODUCT_DEVICE, PRODUCT_OUT and HOST_OUT from get_build_var, and TARGET_RELEASE as exported by lunch into the shell (get_build_var returns it empty in this tree), with the alpha OUT_DIR. The failed first probe and the 081 diagnosis are not probe receipts. Until recorded, guard and builder fail closed"
   },
   "artifact": {
     "name": "emulator-alpha-receipt-{run_id}",
