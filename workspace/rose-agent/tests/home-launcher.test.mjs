@@ -72,6 +72,24 @@ test('the dock shows real installed apps through the existing launch path',()=>{
  assert.ok(!/"(com|dev|org)\.[a-z0-9_.]+"/.test(home),'no hard-coded package names');
 });
 
+test('dock labels are fitted whole, never cut on one line (M008)',()=>{
+ const tile=home.slice(home.indexOf('static View dockTile('),home.indexOf('/** Opens the conversation surface'));
+ // The 302/304 tile forced one line with an end ellipsis: Messaging and Camera (system) showed cut at 720 px.
+ assert.doesNotMatch(tile,/setSingleLine\(true\)/);
+ assert.match(tile,/DockLabelView name = new DockLabelView\(activity, label\);/);
+ assert.match(tile,/DockLabel fit = DockLabel\.fit\(label, basePx, basePx \* 10 \/ 12, available,/);
+ // The full label stays the tile's accessible name and the launch label; the text view is not spoken twice.
+ assert.match(tile,/tile\.setContentDescription\(label\);/);
+ assert.match(tile,/name\.setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
+ // Same 46dp icon and padding; tiles fill the tray height, top-aligned, so icons stay level when a label wraps.
+ assert.match(tile,/tile\.addView\(icon, new LinearLayout\.LayoutParams\(activity\.dp\(46\), activity\.dp\(46\)\)\);/);
+ assert.match(tile,/tile\.setGravity\(Gravity\.CENTER_HORIZONTAL \| Gravity\.TOP\);/);
+ assert.equal((home.match(/new LinearLayout\.LayoutParams\(0, -1, 1\)/g)||[]).length,2);
+ // Setters run only on a change, so measuring never loops through requestLayout.
+ assert.match(tile,/if \(getMaxLines\(\) != fit\.lines\) setMaxLines\(fit\.lines\);/);
+ assert.match(tile,/if \(!fit\.text\.contentEquals\(getText\(\)\)\) setText\(fit\.text\);/);
+});
+
 test('the wallpaper is the exact Rose-Fold-v3 narrow Home image, drawn like background-size: cover',()=>{
  const jpeg=fs.readFileSync(new URL('../app/res/drawable-nodpi/rose_home_wallpaper.jpg',import.meta.url));
  // First embedded JPEG of Rose-Fold-v3.html (Library v2, SHA-256 67bf7a50…05ee), 461 x 1024.

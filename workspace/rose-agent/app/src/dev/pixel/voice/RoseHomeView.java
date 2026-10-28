@@ -93,11 +93,11 @@ final class RoseHomeView extends FrameLayout {
    int iconResource = AppLabels.icon(activity.getPackageManager(), app.activityInfo.packageName);
    ImageView icon = new ImageView(activity);
    icon.setImageDrawable(iconResource == 0 ? app.loadIcon(activity.getPackageManager()) : activity.getDrawable(iconResource));
-   tray.addView(dockTile(activity, icon, label, () -> WorkspaceLauncher.open(activity, app, label)), new LinearLayout.LayoutParams(0, -2, 1));
+   tray.addView(dockTile(activity, icon, label, () -> WorkspaceLauncher.open(activity, app, label)), new LinearLayout.LayoutParams(0, -1, 1));
   }
   TextView glyph = activity.text("▦", 30, 0xff3b5547);
   glyph.setGravity(Gravity.CENTER);
-  tray.addView(dockTile(activity, glyph, "All apps", openApps), new LinearLayout.LayoutParams(0, -2, 1));
+  tray.addView(dockTile(activity, glyph, "All apps", openApps), new LinearLayout.LayoutParams(0, -1, 1));
   LinearLayout.LayoutParams trayParams = new LinearLayout.LayoutParams(-1, -2);
   trayParams.bottomMargin = activity.dp(8);
   column.addView(tray, trayParams);
@@ -125,7 +125,8 @@ final class RoseHomeView extends FrameLayout {
  static View dockTile(MainActivity activity, View icon, String label, Runnable open) {
   LinearLayout tile = new LinearLayout(activity);
   tile.setOrientation(LinearLayout.VERTICAL);
-  tile.setGravity(Gravity.CENTER_HORIZONTAL);
+  // Top-aligned at the tray's tallest tile, so icons stay level when one label takes two lines.
+  tile.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.TOP);
   tile.setPadding(activity.dp(4), activity.dp(8), activity.dp(4), activity.dp(6));
   tile.setClickable(true);
   tile.setFocusable(true);
@@ -134,10 +135,10 @@ final class RoseHomeView extends FrameLayout {
   icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
   if (icon instanceof ImageView) ((ImageView) icon).setScaleType(ImageView.ScaleType.FIT_CENTER);
   tile.addView(icon, new LinearLayout.LayoutParams(activity.dp(46), activity.dp(46)));
-  TextView name = activity.text(label, 12, 0xff22382e);
+  DockLabelView name = new DockLabelView(activity, label);
+  name.setTextSize(12);
+  name.setTextColor(0xff22382e);
   name.setGravity(Gravity.CENTER_HORIZONTAL);
-  name.setSingleLine(true);
-  name.setEllipsize(android.text.TextUtils.TruncateAt.END);
   name.setTypeface(activity.chatFont(800));
   name.setIncludeFontPadding(false);
   name.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -145,6 +146,44 @@ final class RoseHomeView extends FrameLayout {
   nameParams.topMargin = activity.dp(10);
   tile.addView(name, nameParams);
   return tile;
+ }
+
+ /** A dock label fitted to its tile width by DockLabel: the whole name, never a one-line cut. */
+ static final class DockLabelView extends TextView {
+  final String label;
+  float basePx;
+
+  DockLabelView(MainActivity activity, String label) {
+   super(activity);
+   this.label = label;
+   setText(label);
+  }
+
+  /** The dock size the owner's font scale gives; fitting may go down to 10/12 of it. */
+  @Override public void setTextSize(float sp) {
+   super.setTextSize(sp);
+   basePx = getTextSize();
+  }
+
+  @Override protected void onMeasure(int widthSpec, int heightSpec) {
+   float available = MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight();
+   if (available > 0 && basePx > 0) {
+    android.text.TextPaint paint = new android.text.TextPaint(getPaint());
+    DockLabel fit = DockLabel.fit(label, basePx, basePx * 10 / 12, available, (text, size) -> {
+     paint.setTextSize(size);
+     float widest = 0;
+     for (String line : text.split("\n")) widest = Math.max(widest, paint.measureText(line));
+     return widest;
+    });
+    if (!fit.text.contentEquals(getText())) setText(fit.text);
+    if (getTextSize() != fit.sizePx) super.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fit.sizePx);
+    // Each setter runs only on a change, so a measure pass never requests another layout once settled.
+    if (getMaxLines() != fit.lines) setMaxLines(fit.lines);
+    android.text.TextUtils.TruncateAt end = fit.ellipsize ? android.text.TextUtils.TruncateAt.END : null;
+    if (getEllipsize() != end) setEllipsize(end);
+   }
+   super.onMeasure(widthSpec, heightSpec);
+  }
  }
 
  /** Opens the conversation surface; never starts, mutes or ends the voice session. */
