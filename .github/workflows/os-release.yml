@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication)
         type: choice
-        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic]
+        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained]
         default: os-release
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
@@ -129,6 +129,9 @@ jobs:
       # The diagnostic reads the same pinned alpha output as the alpha build; its config gate is the alpha guard.
       - name: Emulator-alpha APK diagnostic preflight
         if: inputs.mode == 'emulator-alpha-apk-diagnostic'
+        run: python3 scripts/emulator-alpha.py preflight --job guard
+      - name: Emulator-alpha retained verification preflight
+        if: inputs.mode == 'emulator-alpha-verify-retained'
         run: python3 scripts/emulator-alpha.py preflight --job guard
 
   controller:
@@ -388,6 +391,42 @@ jobs:
         if: always()
         run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
 
+  # INFRA-ALPHA-117: the full alpha image gate (corrected Updater package scan) on run 40765631053's retained output,
+  # bound to the super.img the ALPHA-116 diagnostic measured. No lunch, make, signing, secrets, cloud identity or
+  # publication; only the verification receipt leaves the builder, as a private artifact.
+  alpha-verify-retained:
+    needs: controller
+    if: inputs.mode == 'emulator-alpha-verify-retained'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/emulator-alpha.py preflight --job builder
+      - name: Prepare the verification attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/cf-alpha-verify-retained-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: Verify the retained alpha output (full image gate)
+        run: python3 scripts/alpha-verify-retained.py run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --receipt-dir "$ROSE_BASE/receipt"
+      - name: Verification receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-alpha-verification-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/receipt
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove the verification attempt directory (the images stay in the alpha OUT_DIR)
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
   publisher:
     needs: builder
     runs-on: ubuntu-24.04
@@ -466,7 +505,7 @@ jobs:
           if-no-files-found: error
 
   cleanup:
-    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, publisher]
+    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

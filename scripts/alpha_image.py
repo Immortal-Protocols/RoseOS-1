@@ -18,7 +18,11 @@ Checks, all from extracted partition content:
     compiled modules), and each required XML at its path, a non-empty regular file that parses with the pinned root
     element and names the pinned package;
   * no Updater: no app/ or priv-app/ Updater directory, no app.seamlessupdate.client.xml, and no APK of that package
-    among every APK in the inspected partitions (an APK aapt cannot read fails the gate: absence must be proven).
+    among every APK in the inspected partitions. The scan needs package identity only, so it reads the package from
+    the compiled AndroidManifest.xml (aapt dump xmltree), strictly: platform APKs such as Shell and Settings make
+    badging exit 1 on framework resource references and IntentResolver has no versionCode (INFRA-ALPHA-116/117), yet
+    their compiled manifests are well formed. An APK whose manifest cannot be read unambiguously fails the gate:
+    absence must be proven.
 The result says unsigned/test-only for the OS images; it is not a boot, UI or phone result.
 """
 import hashlib
@@ -125,6 +129,47 @@ def badging(aapt, apk):
     out = subprocess.run([aapt, 'dump', 'badging', str(apk)], capture_output=True, text=True)
     match = re.search(r"^package: name='([^']+)' versionCode='(\d+)'", out.stdout, re.M)
     return (match[1], int(match[2])) if out.returncode == 0 and match else None
+
+# One segment is valid: framework-res.apk's package is android.
+PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*')
+
+def manifest_package(aapt, apk):
+    """The package of apk's compiled AndroidManifest.xml from aapt dump xmltree, or None unless it is unambiguous:
+    aapt exits 0, the first element is the only top-level one and is <manifest>, and exactly one package attribute
+    sits directly on it (one level deeper than the element), with a valid package name and an equal Raw value.
+    Attributes of nested elements never count, so a nested package attribute cannot stand in for the root's."""
+    out = subprocess.run([aapt, 'dump', 'xmltree', str(apk), 'AndroidManifest.xml'], capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    root, packages, roots, children = None, [], 0, False
+    for line in out.stdout.splitlines():
+        stripped = line.lstrip(' ')
+        if not stripped or stripped.startswith('N: '):
+            continue  # namespace declarations precede and enclose the root element
+        indent = len(line) - len(stripped)
+        if stripped.startswith('E: '):
+            if root is None or indent <= root:
+                roots += 1
+                if root is None:
+                    if stripped.split()[1:2] != ['manifest']:
+                        return None
+                    root = indent
+            else:
+                children = True
+            continue
+        if root is None:
+            return None  # only namespace lines may precede the root element
+        if stripped.startswith('A: ') and indent == root + 2:
+            if children:
+                return None  # a root-level attribute after a child element is not well-formed xmltree output
+            if re.match(r'A: package(?:\(0x[0-9a-f]+\))?=', stripped):
+                packages.append(stripped)
+    if root is None or roots != 1 or len(packages) != 1:
+        return None
+    value = re.fullmatch(r'A: package(?:\(0x[0-9a-f]+\))?="([^"]*)"(?: \(Raw: "([^"]*)"\))?', packages[0])
+    if not value or not PACKAGE.fullmatch(value[1]) or (value[2] is not None and value[2] != value[1]):
+        return None
+    return value[1]
 
 def signers(apksigner, apk):
     out = subprocess.run([apksigner, 'verify', '--print-certs', str(apk)], capture_output=True, text=True)
@@ -263,10 +308,10 @@ def verify(product_out, spec, contract, policy, signer, filesystem, locked, defa
                     failures.append(f'{updater["xml"]} is in the image at {name}:{os.path.normpath(os.path.join(rel, f))}')
                 if f.endswith('.apk') and not path.is_symlink():
                     inspected += 1
-                    identity = badging(aapt, path)
-                    if identity is None:
+                    package = manifest_package(aapt, path)
+                    if package is None:
                         failures.append(f'{name}:{os.path.normpath(os.path.join(rel, f))} could not be read; Updater absence is unproven')
-                    elif identity[0] == updater['package']:
+                    elif package == updater['package']:
                         failures.append(f'an APK of {updater["package"]} is in the image at {name}:{os.path.normpath(os.path.join(rel, f))}')
     if failures:
         raise ImageCheckFailed('; '.join(failures))
