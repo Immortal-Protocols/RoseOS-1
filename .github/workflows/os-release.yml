@@ -26,6 +26,15 @@ on:
         description: Promote the verified draft (beta means pixel-ota Latest)
         type: boolean
         default: false
+      resume_failed_stage:
+        description: Resume the preserved attempt of this build number at its failed stage, without rebuilding
+        type: choice
+        options: [none, bytes-verify]
+        default: none
+      resume_unsigned_sha256:
+        description: With resume, the unsignedTargetFiles sha256 printed by that attempt's build stage
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -41,6 +50,8 @@ env:
   BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
   CHANNEL: ${{ inputs.channel }}
   APPS: ${{ inputs.apps }}
+  RESUME_STAGE: ${{ inputs.resume_failed_stage }}
+  RESUME_UNSIGNED_SHA256: ${{ inputs.resume_unsigned_sha256 }}
 
 jobs:
   guard:
@@ -58,6 +69,7 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BUILD_NUMBER" =~ ^[0-9]{10}$ && "$BUILD_TIMESTAMP" =~ ^[0-9]{10}$ ]]
           python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
           git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+          [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
       - name: Bootstrap preflight
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
@@ -110,14 +122,32 @@ jobs:
         run: |
           set -euo pipefail
           base="$HOME/rose-actions/frankel-$BUILD_NUMBER"
-          test ! -e "$base" || { echo "::error::$base already exists; use a new build number" >&2; exit 1; }
-          python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device frankel --build-number "$BUILD_NUMBER"
+          if [[ "$RESUME_STAGE" == none ]]; then
+            test ! -e "$base" || { echo "::error::$base already exists; use a new build number" >&2; exit 1; }
+            python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device frankel --build-number "$BUILD_NUMBER"
+          else
+            # The preserved attempt is only read: its build outputs are copied into a new attempt directory,
+            # hashed into a new receipt chain bound to the old one, and the failed stage runs again there.
+            source="$base"
+            base="$source-resume-$GITHUB_RUN_ID"
+            test ! -e "$base"
+            mkdir -p "$base/release"
+            for name in unsigned-target_files.zip background-policy.json resolved-manifest.xml; do
+              cp "$source/release/$name" "$base/release/$name"
+            done
+            python3 scripts/release-stage.py resume "$RESUME_STAGE" --from "$source/stages" --state "$base/stages" \
+              --source-revision "$CANDIDATE_SHA" --expect "unsigned-target_files.zip=$RESUME_UNSIGNED_SHA256" \
+              --artifact "$base/release/unsigned-target_files.zip" --artifact "$base/release/background-policy.json" \
+              --artifact "$base/release/resolved-manifest.xml"
+          fi
           echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
       # Signer access exists only around the two stages that need it; the pipeline drops it as soon
       # as each lead-managed entry point returns, and the final logout always runs.
       - name: Signer access for app signing
+        if: inputs.resume_failed_stage == 'none'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Integrate (apps signed first) and build
+        if: inputs.resume_failed_stage == 'none'
         run: bash scripts/os-release-stage.sh build build
       - name: Verify the unsigned build
         run: bash scripts/os-release-stage.sh bytes-verify verify-build

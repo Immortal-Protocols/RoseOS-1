@@ -380,7 +380,21 @@ runs the real verification code against synthetic artifacts. Everything it
 produces is marked simulated, and production refuses it.
 
 A successful build is never release completion. Recovery is explicit:
-`mark-interrupted`, then run the stage again. Receipts hold hashes, times and exit
+`mark-interrupted`, then run the stage again. A chain that failed at `bytes-verify`
+after a completed build stays terminal and is never edited. To verify the
+preserved build again without rebuilding, dispatch the same candidate, build
+number and timestamp with:
+
+- `resume_failed_stage: bytes-verify`;
+- `resume_unsigned_sha256`: the `unsignedTargetFiles` value that attempt's build
+  stage printed.
+
+The builder copies the three build outputs into
+`frankel-<build>-resume-<run id>/release`.
+`release-stage.py resume` then opens a new chain. That chain is bound to the
+failed chain's last receipt hash and records the carried files' hashes, which
+must match the expected value and any outputs the failed chain recorded. The
+failed stage, signing and everything after it then run in the new chain. Receipts hold hashes, times and exit
 codes, not command output, arguments or environment.
 
 Promote the candidate and channel metadata only after its acceptance gates pass.

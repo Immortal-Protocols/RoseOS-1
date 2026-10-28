@@ -211,6 +211,85 @@ class StageTest(unittest.TestCase):
             result = subprocess.run([PY, '-I', str(script), '--help'], capture_output=True, text=True, cwd=self.root)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def failed_at_bytes_verify(self, build_outputs=()):
+        self.assertEqual(self.run_stage('build', outputs=build_outputs)[0], 0)
+        self.assertEqual(self.run_stage('bytes-verify', 'false')[0], 1)
+        self.assertEqual(self.status()[1]['state'], 'TERMINAL')
+
+    def artifacts(self, data=b'unsigned target files'):
+        directory = self.root/'resumed-release'
+        directory.mkdir(exist_ok=True)
+        (directory/'unsigned-target_files.zip').write_bytes(data)
+        (directory/'background-policy.json').write_text('{}')
+        return [directory/'unsigned-target_files.zip', directory/'background-policy.json']
+
+    def resume(self, *extra, artifacts=None, state=None, stage='bytes-verify', source=SOURCE):
+        args = ['resume', stage, '--from', self.state, '--state', state or self.root/'resumed']
+        for path in self.artifacts() if artifacts is None else artifacts:
+            args += ['--artifact', path]
+        return cli(*args, *extra, source=source)
+
+    def test_resume_carries_completed_stages_into_a_new_bound_chain(self):
+        self.failed_at_bytes_verify()
+        before = {p.name: p.read_bytes() for p in self.state.iterdir()}
+        digest = __import__('hashlib').sha256(b'unsigned target files').hexdigest()
+        code, report = self.resume('--expect', f'unsigned-target_files.zip={digest}')
+        self.assertEqual(code, 0, report)
+        self.assertEqual((report['state'], report['stage'], report['completedStages']), ('AWAITING', 'bytes-verify', ['build']))
+        self.assertEqual({p.name: p.read_bytes() for p in self.state.iterdir()}, before)  # the failed chain is only read
+        init = json.loads((self.root/'resumed/000-init.json').read_text())
+        origin = init['resumedFrom']
+        self.assertEqual((origin['failedStage'], origin['carriedStages'], origin['receipts']), ('bytes-verify', ['build'], 6))
+        self.assertEqual(origin['lastReceiptSha256'], __import__('hashlib').sha256((self.state/'005-failed.json').read_bytes()).hexdigest())
+        self.assertEqual(origin['expected'], {'unsigned-target_files.zip': digest})
+        self.assertEqual(sorted(a['name'] for a in origin['artifacts']), ['background-policy.json', 'unsigned-target_files.zip'])
+        self.state = self.root/'resumed'
+        self.assertEqual(self.run_stage('bytes-verify')[0], 0)
+        self.assertEqual(self.status()[1]['completedStages'], ['build', 'bytes-verify'])
+
+    def test_resume_refuses_anything_but_an_exact_failed_stage(self):
+        code, report = self.resume()
+        self.assertEqual(code, 2)
+        self.assertIn('did not fail at bytes-verify', report['error'])  # nothing has failed yet
+        self.failed_at_bytes_verify()
+        for extra, stage, source, message in (
+                ([], 'sign', SOURCE, 'did not fail at sign'),
+                ([], 'build', SOURCE, 'only a builder stage after build'),
+                ([], 'publish', SOURCE, 'only a builder stage after build'),
+                ([], 'bytes-verify', OTHER, 'does not match'),
+                (['--expect', 'unsigned-target_files.zip=' + 'a' * 64], 'bytes-verify', SOURCE, 'differs from its expected sha256'),
+                (['--expect', 'missing.zip=' + 'a' * 64], 'bytes-verify', SOURCE, 'for a carried artifact')):
+            code, report = self.resume(*extra, stage=stage, source=source)
+            self.assertEqual(code, 2, (stage, extra))
+            self.assertIn(message, report['error'])
+        self.assertFalse((self.root/'resumed').exists() and any((self.root/'resumed').iterdir()))
+        code, report = self.resume(artifacts=[])
+        self.assertIn('each carried artifact once', report['error'])
+        self.assertEqual(self.resume()[0], 0)
+        code, report = self.resume()
+        self.assertIn('must be new and empty', report['error'])
+
+    def test_recorded_build_outputs_must_be_carried_unchanged(self):
+        output = self.root/'unsigned-target_files.zip'
+        output.write_bytes(b'the bytes the build recorded')
+        self.failed_at_bytes_verify(build_outputs=[output])
+        code, report = self.resume()
+        self.assertEqual(code, 2)
+        self.assertIn('differs from the source receipt', report['error'])
+        directory = self.root/'resumed-release'
+        shutil.copy(output, directory)  # the directory holds the other test artifacts already
+        self.assertEqual(self.resume(artifacts=[directory/'unsigned-target_files.zip'])[0], 0)
+
+    def test_carried_receipts_only_open_a_resumed_chain(self):
+        self.assertEqual(self.run_stage('build')[0], 0)
+        receipt = json.loads((self.state/'002-completed.json').read_text())
+        receipt.update(event='carried', sequence=3, previousSha256=__import__('hashlib').sha256(
+            (self.state/'002-completed.json').read_bytes()).hexdigest(), stage='bytes-verify')
+        (self.state/'003-carried.json').write_text(json.dumps(receipt))
+        code, report = self.status()
+        self.assertEqual(code, 2)
+        self.assertIn('illegal transition: carried', report['error'])
+
     def test_uninitialized_is_not_failed_and_abandon_is_explicit(self):
         empty = self.root/'empty'
         empty.mkdir()

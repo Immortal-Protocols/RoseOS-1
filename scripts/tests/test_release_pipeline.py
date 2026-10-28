@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,28 @@ PIPELINE, STAGE = SCRIPTS/'release-pipeline.py', SCRIPTS/'release-stage.py'
 PY = sys.executable
 SHA, BUILD, STAMP = '34fa48ff16d046e16c7d680731bf01058d794279', '2026102901', '1793200000'
 SIGNER = 'A'*64
+# Exact nonsecret excerpt of the real dump of build 2026102802's framework-res.apk (sha256 88dc574b...89ef9aa),
+# including the spec rows before the values and the unrelated resources after them (ACTIONS068 evidence).
+FRAMEWORK_DUMP = '''\
+      spec resource 0x01070156 android:array/config_pixelComputerControlPrototypeAgents: flags=0x00000000
+      spec resource 0x01070157 android:array/config_pixelComputerControlTargets: flags=0x00000000
+      config (default) flags=0x02 [offset16]:
+        resource 0x01070156 android:array/config_pixelComputerControlPrototypeAgents: <bag>
+          Parent=0x00000000(Resolved=0x00000000), Count=0
+        resource 0x01070157 android:array/config_pixelComputerControlTargets: <bag>
+          Parent=0x00000000(Resolved=0x00000000), Count=1
+          #0 (Key=0x01000001): (string8) "dev.pixel.calculator.agent:650D47F91B7F5AF3C530FEF53FE92018AA4521EFBA065BCB1D6FC9B699060BFB"
+      config watch flags=0x01 [sparse]:
+      spec resource 0x01110330 android:bool/config_pixelComputerControlLockedSessions: flags=0x00000000
+      config (default) flags=0x02 [offset16]:
+        resource 0x01110330 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
+          (boolean) false
+        resource 0x01110331 android:bool/config_useSystemWallpaperDuringUserSwitch: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
+          (boolean) false
+'''
 APPS = [['dev.pixel.voice', 300], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 27]]
+WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
+PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
 WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
     (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text(), re.M)
 
@@ -75,6 +97,55 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None)
         z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
         z.writestr('IMAGES/system.img', image({'/system/framework/framework-res.apk': b'framework'}))
 
+spec = __import__('importlib.util').util.spec_from_file_location('release_pipeline', PIPELINE)
+release_pipeline = __import__('importlib.util').util.module_from_spec(spec)
+spec.loader.exec_module(release_pipeline)
+EXPECTED = {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False}
+REAL_SIGNER = '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb'
+
+class FrameworkDumpTest(unittest.TestCase):
+    """check_framework's parser against the real aapt output of the 2026102802 candidate and edits of it."""
+    def failures(self, dump, expected=EXPECTED, signer=REAL_SIGNER):
+        return release_pipeline.framework_failures(dump, expected, signer)
+
+    def test_real_dump_passes_and_reads_values_not_spec_rows(self):
+        self.assertEqual(self.failures(FRAMEWORK_DUMP), [])
+        self.assertEqual(release_pipeline.default_value(FRAMEWORK_DUMP, 'array', 'config_pixelComputerControlTargets'),
+            (['dev.pixel.calculator.agent:650D47F91B7F5AF3C530FEF53FE92018AA4521EFBA065BCB1D6FC9B699060BFB'], None))
+        self.assertEqual(release_pipeline.default_value(FRAMEWORK_DUMP, 'array', 'config_pixelComputerControlPrototypeAgents'), ([], None))
+        self.assertEqual(release_pipeline.default_value(FRAMEWORK_DUMP, 'bool', 'config_pixelComputerControlLockedSessions'), (False, None))
+        # Only the locked-session block is read: flipping the following unrelated boolean changes nothing.
+        neighbour = FRAMEWORK_DUMP.rsplit('(boolean) false', 1)
+        self.assertEqual(self.failures('(boolean) true'.join(neighbour)), [])
+
+    def test_wrong_values_fail(self):
+        locked_on = FRAMEWORK_DUMP.replace('(boolean) false', '(boolean) true', 1)
+        self.assertEqual(self.failures(locked_on), ['compiled locked-session switch differs from config'])
+        prototype = FRAMEWORK_DUMP.replace('Count=0\n', 'Count=1\n          #0 (Key=0x01000001): (string8) "dev.pixel.backgroundcontrol:AA"\n')
+        self.assertEqual(self.failures(prototype), ['compiled prototype agents are not empty'])
+        self.assertIn('compiled computer-control targets are', self.failures(FRAMEWORK_DUMP, signer='b' * 64)[0])
+        other = FRAMEWORK_DUMP.replace('dev.pixel.calculator.agent:', 'com.example.other:')
+        self.assertIn('compiled computer-control targets are', self.failures(other)[0])
+        empty = FRAMEWORK_DUMP.replace('Count=1\n          #0 (Key=0x01000001): (string8) "dev.pixel.calculator.agent:650D47F91B7F5AF3C530FEF53FE92018AA4521EFBA065BCB1D6FC9B699060BFB"\n', 'Count=0\n')
+        self.assertEqual(self.failures(empty), ['compiled computer-control targets are []'])
+
+    def test_missing_malformed_or_overridden_values_fail_closed(self):
+        lines = FRAMEWORK_DUMP.splitlines(keepends=True)
+        without_value = ''.join(l for l in lines if 'resource 0x01110330' not in l or 'spec resource' in l).replace(
+            '          (boolean) false\n        resource 0x01110331', '        resource 0x01110331')
+        self.assertEqual(self.failures(without_value), ['config_pixelComputerControlLockedSessions has 0 default values in framework-res'])
+        only_spec = ''.join(l for l in lines if 'config_pixelComputerControlTargets' not in l or 'spec resource' in l)
+        self.assertIn('config_pixelComputerControlTargets has 0 default values in framework-res', self.failures(only_spec))
+        self.assertIn('config_pixelComputerControlLockedSessions is not a well-formed boolean',
+            self.failures(FRAMEWORK_DUMP.replace('(boolean) false', '(bool) false', 1)))
+        self.assertIn('config_pixelComputerControlTargets is not a well-formed string array',
+            self.failures(FRAMEWORK_DUMP.replace('Count=1', 'Count=2')))
+        override = FRAMEWORK_DUMP.replace('      config watch flags=0x01 [sparse]:\n', '      config watch flags=0x01 [sparse]:\n'
+            '        resource 0x01070156 android:array/config_pixelComputerControlPrototypeAgents: <bag>\n'
+            '          Parent=0x00000000(Resolved=0x00000000), Count=0\n')
+        self.assertIn("config_pixelComputerControlPrototypeAgents is overridden in config ['watch']", self.failures(override))
+        self.assertEqual(len(self.failures('')), 3)
+
 class PipelineTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -121,16 +192,24 @@ class PipelineTest(unittest.TestCase):
         avb_sha1 = hashlib.sha1(b'synthetic avb key blob').hexdigest()
         script(tools/'avbtool.py', f'import sys; print("Public key (sha1): {avb_sha1}") if sys.argv[1] == "info_image" else None')
         script(tools/'apksigner', f'print("Signer #1 certificate SHA-256 digest: {SIGNER.lower()}")')
+        # The real `aapt dump --values resources` layout (see FRAMEWORK_DUMP): spec rows before value blocks.
         script(tools/'aapt', '''
             import os
-            targets = os.environ.get("FAKE_TARGETS", "dev.pixel.calculator.agent:AAAA")
-            print("      resource 0x01070001 android:array/config_pixelComputerControlTargets: t=0x10")
-            for t in targets.split(","): print('        (string8) "%s"' % t)
-            if not os.environ.get("FAKE_NO_PROTOTYPE"):
-                print("      resource 0x01070002 android:array/config_pixelComputerControlPrototypeAgents: t=0x10")
-                for t in filter(None, os.environ.get("FAKE_PROTOTYPE", "").split(",")): print('        (string8) "%s"' % t)
-            print("      resource 0x01050001 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x0 (s=0x0008 r=0x00)")
-            print("        (bool) false")''')
+            def bag(number, name, items):
+                print("        resource 0x0107015%d android:array/%s: <bag>" % (number, name))
+                print("          Parent=0x00000000(Resolved=0x00000000), Count=%d" % len(items))
+                for i, t in enumerate(items): print('          #%d (Key=0x01000001): (string8) "%s"' % (i, t))
+            targets = os.environ.get("FAKE_TARGETS", "dev.pixel.calculator.agent:" + "A" * 64).split(",")
+            prototype = list(filter(None, os.environ.get("FAKE_PROTOTYPE", "").split(",")))
+            print("      spec resource 0x01070156 android:array/config_pixelComputerControlPrototypeAgents: flags=0x00000000")
+            print("      spec resource 0x01070157 android:array/config_pixelComputerControlTargets: flags=0x00000000")
+            print("      config (default) flags=0x02 [offset16]:")
+            if not os.environ.get("FAKE_NO_PROTOTYPE"): bag(6, "config_pixelComputerControlPrototypeAgents", prototype)
+            bag(7, "config_pixelComputerControlTargets", targets)
+            print("      spec resource 0x01110330 android:bool/config_pixelComputerControlLockedSessions: flags=0x00000000")
+            print("      config (default) flags=0x02 [offset16]:")
+            print("        resource 0x01110330 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x00000000 (s=0x0008 r=0x00)")
+            print("          (boolean) false")''')
         script(tools/'simg2img', '''
             import sys; data = open(sys.argv[1], 'rb').read(); assert data[:4] == b'\\x3a\\xff\\x26\\xed'
             open(sys.argv[2], 'wb').write(data[4:])''')
@@ -207,7 +286,7 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(self.status()['state'], 'TERMINAL')
 
     def test_compiled_framework_policy_mismatch_fails(self):
-        os.environ['FAKE_TARGETS'] = 'dev.pixel.calculator.agent:AAAA,com.example.other:BBBB'
+        os.environ['FAKE_TARGETS'] = 'dev.pixel.calculator.agent:' + SIGNER + ',com.example.other:' + SIGNER
         self.addCleanup(os.environ.pop, 'FAKE_TARGETS', None)
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'bytes-verify')
@@ -225,7 +304,7 @@ class PipelineTest(unittest.TestCase):
         self.addCleanup(os.environ.pop, 'FAKE_NO_PROTOTYPE', None)
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'bytes-verify')
-        self.assertIn('compiled prototype agents not found', result.stderr)
+        self.assertIn('config_pixelComputerControlPrototypeAgents has 0 default values', result.stderr)
 
     def test_bad_ota_signature_fails_after_signing(self):
         os.environ['FAKE_OTA_BAD'] = '1'
@@ -246,6 +325,47 @@ class PipelineTest(unittest.TestCase):
         failed, result = self.run_builder_job(apps=None)
         self.assertEqual(failed, 'build')
         self.assertIn('APPS is required', result.stderr)
+
+    def test_workflow_resume_reverifies_the_preserved_build_without_rebuilding(self):
+        home = self.root/'home'
+        env = dict(os.environ, HOME=str(home), CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP, CHANNEL='beta',
+            APPS=json.dumps(APPS), PATH=f'{Path(PY).parent}:{os.environ["PATH"]}', GITHUB_RUN_ID='4242',
+            RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', GITHUB_ENV=str(self.root/'github-env'))
+        fake = ' '.join(shlex.quote(str(x)) for x in self.common[10:])
+        def prepare():
+            (self.root/'github-env').write_text('')
+            result = subprocess.run(['bash', '-c', PREPARE], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            env['ROSE_BASE'] = (self.root/'github-env').read_text().strip().split('=', 1)[1]
+        def stage(line):
+            return subprocess.run(['bash', '-c', f'{line} {fake}'], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
+        prepare()
+        first = Path(env['ROSE_BASE'])
+        built = stage(WORKFLOW_STAGES[0])
+        self.assertEqual(built.returncode, 0, built.stderr)
+        unsigned = json.loads(built.stderr[built.stderr.index('{'):built.stderr.rindex('}') + 1])['unsignedTargetFiles']
+        env['FAKE_TARGETS'] = 'com.example.other:' + SIGNER  # stands in for the parser defect: verification fails
+        self.assertNotEqual(stage(WORKFLOW_STAGES[1]).returncode, 0)
+        env.pop('FAKE_TARGETS')
+        before = {p.name: p.read_bytes() for p in (first/'stages').iterdir()}
+        makes = (self.root/'fake/events.log').read_text().count('make')
+        env.update(RESUME_STAGE='bytes-verify', RESUME_UNSIGNED_SHA256='0' * 64)
+        result = subprocess.run(['bash', '-c', PREPARE], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)  # a wrong expected hash resumes nothing
+        shutil.rmtree(Path(f'{first}-resume-4242'))
+        env['RESUME_UNSIGNED_SHA256'] = unsigned
+        prepare()
+        self.assertEqual(env['ROSE_BASE'], f'{first}-resume-4242')
+        for line in WORKFLOW_STAGES[1:]:
+            result = stage(line)
+            self.assertEqual(result.returncode, 0, line + result.stderr)
+        self.assertEqual({p.name: p.read_bytes() for p in (first/'stages').iterdir()}, before)
+        self.assertEqual((self.root/'fake/events.log').read_text().count('make'), makes)  # nothing was rebuilt
+        status = json.loads(subprocess.run([PY, str(STAGE), 'status', '--state', env['ROSE_BASE'] + '/stages'],
+            capture_output=True, text=True).stdout)
+        self.assertEqual((status['state'], status['completedStages']), ('AWAITING_EXTERNAL',
+            ['build', 'bytes-verify', 'sign', 'ota-verify', 'transfer']))
+        self.assertTrue((Path(env['ROSE_BASE'])/'artifact/assets/verification.json').is_file())
 
     def test_held_lock_refuses_the_build(self):
         import fcntl
