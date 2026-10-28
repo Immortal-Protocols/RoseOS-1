@@ -153,6 +153,21 @@ for _name, _status_code, _kind, _msg, _headers in [
     SCENARIOS[_name] = (f'HTTP {_status_code} {_kind} JSON error', _status(_status_code, _kind, _msg, _headers))
 
 
+@scenario('echo-history', 'Turn 1 replies OK; later turns quote every CODE-1234 style word seen in earlier user turns; usage counts ~chars/4')
+def _echo_history(h, body, model):
+    import re
+    messages = body.get('messages', []) if isinstance(body, dict) else []
+    users = [m.get('content', '') for m in messages if isinstance(m, dict) and m.get('role') == 'user']
+    earlier = ' '.join(users[:-1])
+    codes = re.findall(r'[A-Z]+-[0-9]+', earlier)
+    reply = 'OK' if len(users) <= 1 else ('fixture recall ' + ' '.join(codes) if codes else 'fixture recall none')
+    payload = completion(model, reply)
+    prompt_chars = sum(len(str(m.get('content', ''))) for m in messages if isinstance(m, dict))
+    payload['usage'] = {'prompt_tokens': prompt_chars // 4 + 8, 'completion_tokens': len(reply) // 4 + 1,
+                        'total_tokens': prompt_chars // 4 + 9 + len(reply) // 4}
+    h.send_json(200, payload)
+
+
 @scenario('reasoning', 'Answer in content plus a separate vLLM-style message.reasoning field')
 def _reasoning(h, body, model):
     h.send_json(200, completion(model, reply_text(body), reasoning=f'{REASONING_SENTINEL} hidden thinking'))
@@ -312,6 +327,18 @@ class Handler(BaseHTTPRequestHandler):
                            'tls_handshake_failures': self.server.tls_handshake_failures,
                            'requests': list(self.server.requests)}
             self.send_json(200, payload)
+        elif self.path.startswith('/s/') and self.path.rstrip('/').endswith(('/health', '/models')):
+            # Serving-runtime probes. Selector 'loading' answers 503; 'alias-missing' lists another id.
+            selector = self.path.split('/')[2]
+            if self.path.rstrip('/').endswith('/health'):
+                if selector == 'loading':
+                    self.send_raw(503, b'', 'text/plain')
+                else:
+                    self.send_raw(200, b'', 'text/plain')
+            else:
+                alias = 'qa-fixture-other' if selector == 'alias-missing' else self.server.served_alias
+                self.send_json(200, {'object': 'list', 'data': [
+                    {'id': alias, 'object': 'model', 'root': 'qa-fixture-root', 'max_model_len': 8192}]})
         elif self.path == '/__qa/scenarios':
             self.send_json(200, {name: desc for name, (desc, _) in SCENARIOS.items()})
         else:
@@ -385,6 +412,7 @@ class FixtureServer(ThreadingHTTPServer):
             self.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             self.tls.load_cert_chain(tls_cert, tls_key)
         self.big_bytes = int(big_mib * (1 << 20))
+        self.served_alias = 'muse-glimmer'
         self.seq_counters = {}
         self.tcp_accepts = 0
         self.tls_handshake_failures = 0
