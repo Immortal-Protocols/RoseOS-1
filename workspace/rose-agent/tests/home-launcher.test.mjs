@@ -22,7 +22,7 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.match(main,/int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;/);
  // Cold start routes only a fresh intent; recreation (saved state) keeps Home without reopening the conversation.
  assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);home\(\);showHomeFor\(i,true\);\}/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh)'));
  assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(homePage,false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  // The same explicit Intent the Rose presence uses; routing never touches voice, the HOME role or the wallpaper.
@@ -70,6 +70,22 @@ test('the dock shows real installed apps through the existing launch path',()=>{
  assert.match(home,/"android"\.equals\(pkg\) \|\| pkg\.equals\(self\)/);
  assert.match(home,/for \(ResolveInfo app : launchable\) if \(pkg\.equals\(app\.activityInfo\.packageName\)\)/);
  assert.ok(!/"(com|dev|org)\.[a-z0-9_.]+"/.test(home),'no hard-coded package names');
+});
+
+test('an unchanged HOME or app-icon return reuses the built Home; changes rebuild it (OS-HOME-REUSE-001)',()=>{
+ // The route is decided after reuse, so HOME still lands on Home and the app icon still opens the conversation.
+ assert.match(main,/if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true\);/);
+ // Only Home entries (HOME, MAIN\/LAUNCHER) qualify, judged by the same HomeEntry rule as routing.
+ assert.match(main,/boolean reuseHome\(Intent i\)\{return i!=null&&HomeReuse\.reuse\(HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(i\.getAction\(\)\),i\.hasCategory\(Intent\.CATEGORY_HOME\),i\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),true,false,true\)\.showHome,/);
+ // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, a changed Home setting, another view in place.
+ assert.match(main,/launcherPager!=null&&launcherPager\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,experimentalHome!=getPreferences\(0\)\.getBoolean\("conversation-home",true\)\);\}/);
+ // The stamp is recorded by every catalog build and covers packages, configuration and the dock's default apps.
+ assert.match(main,/launcherPager\.requestApplyInsets\(\);\n  builtHomeStamp=homeStamp\(\);\n \}/);
+ assert.match(main,/public void onReceive\(Context context,Intent intent\)\{packageGeneration\+\+;if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}/);
+ for(const field of ['screenWidthDp','screenHeightDp','densityDpi','orientation','fontScale','uiMode','getLocales().toLanguageTags()'])assert.ok(main.includes('c.'+field),field);
+ assert.match(main,/RoseHomeView\.dockRolePackages\(getPackageManager\(\),getPackageName\(\)\)\);\}/);
+ // The dock is built from the same role list the stamp compares.
+ assert.match(home,/for \(String pkg : dockRolePackages\(pm, self\)\)/);
 });
 
 test('dock labels are fitted whole, never cut on one line (M008)',()=>{

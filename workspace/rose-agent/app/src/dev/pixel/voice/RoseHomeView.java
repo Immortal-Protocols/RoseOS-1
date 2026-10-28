@@ -256,22 +256,32 @@ final class RoseHomeView extends FrameLayout {
   * launchable apps. A role with no single default (a chooser) or no launchable activity is left out.
   */
  static List<ResolveInfo> dockApps(PackageManager pm, String self, List<ResolveInfo> launchable) {
+  ArrayList<ResolveInfo> dock = new ArrayList<>();
+  for (String pkg : dockRolePackages(pm, self)) {
+   if (dock.size() == DOCK_SIZE) break;
+   for (ResolveInfo app : launchable) if (pkg.equals(app.activityInfo.packageName)) { dock.add(app); break; }
+  }
+  return dock;
+ }
+
+ /** The packages holding those defaults, in order, without enumerating apps: four resolutions, cheap
+  * enough to compare on every HOME so a changed default app rebuilds the dock. */
+ static List<String> dockRolePackages(PackageManager pm, String self) {
   Intent[] roles = {
    new Intent(Intent.ACTION_DIAL, Uri.parse("tel:")),
    new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")),
    new Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA),
    new Intent(Intent.ACTION_VIEW, Uri.parse("https://"))
   };
-  ArrayList<ResolveInfo> dock = new ArrayList<>();
+  ArrayList<String> packages = new ArrayList<>();
   HashSet<String> used = new HashSet<>();
   for (Intent role : roles) {
-   if (dock.size() == DOCK_SIZE) break;
    ResolveInfo handler = pm.resolveActivity(role, PackageManager.MATCH_DEFAULT_ONLY);
    String pkg = handler == null || handler.activityInfo == null ? null : handler.activityInfo.packageName;
    if (pkg == null || "android".equals(pkg) || pkg.equals(self) || !used.add(pkg)) continue;
-   for (ResolveInfo app : launchable) if (pkg.equals(app.activityInfo.packageName)) { dock.add(app); break; }
+   packages.add(pkg);
   }
-  return dock;
+  return packages;
  }
 
  @Override public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
