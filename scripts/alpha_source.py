@@ -7,7 +7,13 @@ copied is decided by an exact policy and listed in the receipt:
   * root names (.repo, keys, releases, out) and root prefixes (out-, out_): repo metadata, Pixel release keys,
     release outputs and build outputs;
   * names anywhere (.git, .repo): version-control metadata; the base revisions are snapshotted before;
-  * listed external links, each matched by path and exact target (the two extracted-image /sys/kernel/debug links).
+  * listed external links, each matched by path and exact target;
+  * cache boundaries: an exact directory proven not to be a build input, here adevtool's extracted factory-image
+    cache vendor/adevtool/dl/unpacked (INFRA-ALPHA-090). Its links point at device paths (/system/bin, /vendor/...,
+    /sys/kernel/debug) that are image-internal, not host inputs. The boundary holds only while its prune marker
+    (vendor/adevtool/dl/.find-ignore, which the build's file finder honours) is an empty regular file in the base
+    and no build-definition file (.mk, .bp, .go) in the copied selection names the cache; otherwise preparation
+    stops and names the cause. The cache itself stays untouched in the base.
 Symlinks are resolved hop by hop inside the tree before anything is written: relative links that stay inside are
 kept as they are, absolute links into the tree are rebased onto the prepared tree, links whose target is absent in
 the base (dangling) are kept only if their target is contained in the tree, and any other escape, a link into an
@@ -46,7 +52,12 @@ def sha256_path(path):
             digest.update(block)
     return digest.hexdigest()
 
+BUILD_FILE_SUFFIXES = ('.mk', '.bp', '.go')
+
 def excluded_reason(rel, policy):
+    for boundary in policy.get('cacheBoundaries', []):
+        if rel == boundary['path']:
+            return 'cache boundary: ' + boundary['reason']
     parts = rel.split('/')
     if len(parts) == 1 and (parts[0] in policy['rootNames'] or any(parts[0].startswith(p) for p in policy['rootPrefixes'])):
         return 'excluded root'
@@ -57,6 +68,17 @@ def excluded_reason(rel, policy):
 def inside_excluded(rel, policy):
     parts = rel.split('/')
     return any(excluded_reason('/'.join(parts[:i + 1]), policy) for i in range(len(parts)))
+
+def boundary_problems(base, boundary, policy):
+    """A cache boundary is admitted only as the exact real directory with its build-finder prune marker present."""
+    problems, path, marker = [], base/boundary['path'], base/boundary['pruneMarker']
+    if os.path.islink(path) or not path.is_dir():
+        problems.append(f'cache boundary {boundary["path"]} is not a real directory in the base')
+    if os.path.islink(marker) or not marker.is_file() or marker.stat().st_size:
+        problems.append(f'prune marker {boundary["pruneMarker"]} is not an empty regular file; the cache may be visible to the build')
+    elif inside_excluded(boundary['pruneMarker'], policy):
+        problems.append(f'prune marker {boundary["pruneMarker"]} would not be copied')
+    return problems
 
 def resolve_link(base, rel, hops=0):
     """Follow the link at base/rel hop by hop without leaving base. Returns (kind, target_rel, exists) with kind
@@ -102,6 +124,9 @@ def plan_copy(base, policy):
     external = {e['path']: e['target'] for e in policy['externalLinks']}
     counts = {'files': 0, 'dirs': 0, 'linksInternal': 0, 'linksRebased': 0, 'linksDangling': 0, 'allocatedBytes': 0, 'apparentBytes': 0}
     dangling = []
+    boundaries = policy.get('cacheBoundaries', [])
+    for boundary in boundaries:
+        problems += boundary_problems(base, boundary, policy)
     stack = ['']
     while stack:
         directory = stack.pop()
@@ -125,6 +150,10 @@ def plan_copy(base, policy):
                 counts['files'] += 1
                 counts['allocatedBytes'] += info.st_blocks * 512
                 counts['apparentBytes'] += info.st_size
+                if boundaries and name.endswith(BUILD_FILE_SUFFIXES):
+                    data = (base/rel).read_bytes()
+                    problems += [f'{rel} references the excluded cache ({m}); the boundary is not proven for this tree'
+                        for b in boundaries for m in b['referenceMarkers'] if m.encode() in data]
             elif stat.S_ISLNK(info.st_mode):
                 text = os.readlink(base/rel)
                 if rel in external:
