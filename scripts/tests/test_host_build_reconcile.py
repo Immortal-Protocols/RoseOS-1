@@ -83,6 +83,15 @@ class AppBuildTest(unittest.TestCase):
         self.assertEqual(self.npm_calls[0][0][:3], ['npm', 'ci', '--ignore-scripts'])
         self.assertTrue(self.npm_calls[0][1].endswith('workspace/rose-agent/server'))
 
+    def test_voice_only_build_never_runs_the_calculator_or_controller(self):
+        app_build.stage(self.source, self.assets, self.candidate)
+        for path in ('workspace/pixel-calculator-agent/build.sh', 'scripts/build-background-agent.py'):
+            write(self.candidate/path, 'exit 9\nraise SystemExit(9)\n' if path.endswith('.py') else 'exit 9\n')
+        hashes = app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_fake, voice_only=True)
+        self.assertEqual(set(hashes), {'voice'})
+        self.assertEqual(sorted(p.relative_to(self.release).as_posix() for p in self.release.rglob('*')), ['unsigned', 'unsigned/voice.apk'])
+        self.assertEqual((self.release/'unsigned/voice.apk').read_text().strip(), 'voice')
+
     def test_tampered_staged_input_or_unsafe_asset_is_refused(self):
         app_build.stage(self.source, self.assets, self.candidate)
         (self.assets/app_build.PUBLIC_ASSETS[3]).write_text('changed')

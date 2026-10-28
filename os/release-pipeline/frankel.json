@@ -159,6 +159,21 @@
       }
     ]
   },
+  "appRelease": {
+    "packageName": "dev.pixel.voice",
+    "mustExceed": 302,
+    "published": {
+      "versionCode": 302,
+      "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
+      "size": 1381533,
+      "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+    },
+    "minimumTestedOs": {
+      "build": "2026102804",
+      "controller": 28
+    },
+    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a higher versionCode and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is not a claim that the app was accepted on a phone"
+  },
   "updater": {
     "packageName": "app.seamlessupdate.client",
     "channelDefault": "prod",
