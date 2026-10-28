@@ -27,6 +27,7 @@ fn response(content: Option<&str>, finish: FinishReason, served: Option<&str>) -
         served_model: served.map(str::to_string),
         request_id: None,
         usage: None,
+        reasoning: None,
     })
 }
 
@@ -266,6 +267,7 @@ fn reply_reports_latency_and_metadata() {
         served_model: Some(MODEL.into()),
         request_id: Some("req-1".into()),
         usage: None,
+        reasoning: None,
     });
     let mut s = session([step]);
     let reply = s.send("u").unwrap();

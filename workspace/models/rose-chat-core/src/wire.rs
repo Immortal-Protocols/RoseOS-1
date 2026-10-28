@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::error::{ChatError, TimeoutPhase};
 use crate::model::{ChatRequest, ChatResponse, FinishReason, Usage};
 
-/// Request body for `POST {base_url}/chat/completions`.
+/// Request body for `POST` to the configured request URL.
 pub fn encode_request(request: &ChatRequest) -> String {
     let mut body = json!({
         "model": request.model,
@@ -36,6 +36,7 @@ pub fn decode_response(
     match status {
         200..=299 => decode_success(body),
         401 => Err(ChatError::Unauthorized { status }),
+        404 => Err(ChatError::NotFound { status }),
         403 => Err(ChatError::Forbidden { status }),
         408 => Err(ChatError::Timeout {
             phase: TimeoutPhase::Response,
@@ -79,6 +80,11 @@ fn decode_success(body: &[u8]) -> Result<ChatResponse, ChatError> {
             ));
         }
     };
+    // vLLM reasoning parsers return thinking separately; keep it apart from the answer.
+    let reasoning = match optional_str(message, "reasoning")? {
+        Some(r) => Some(r.to_string()),
+        None => optional_str(message, "reasoning_content")?.map(str::to_string),
+    };
     let finish_reason = match optional_str(choice, "finish_reason")? {
         None => FinishReason::Unreported,
         Some("stop") => FinishReason::Stop,
@@ -103,6 +109,7 @@ fn decode_success(body: &[u8]) -> Result<ChatResponse, ChatError> {
         served_model: optional_str(root, "model")?.map(str::to_string),
         request_id: optional_str(root, "id")?.map(str::to_string),
         usage,
+        reasoning,
     })
 }
 

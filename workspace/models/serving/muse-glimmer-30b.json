@@ -36,11 +36,31 @@
     },
     "vision_parameters_upper_bound": 2000000000,
     "generation": {
-      "eos_token_id": [200001, 200008],
+      "eos_token_id": [
+        200001,
+        200008
+      ],
       "temperature": 1.0,
       "top_p": 0.95,
       "top_k": 64,
-      "reasoning_strength_levels": ["low", "medium", "high", "xhigh"]
+      "reasoning_strength_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "served_alias": {
+      "muse-glimmer": "meta-models/Muse-Glimmer-30B@cec94fcfd6512f2cfe708138c32533b346ea4f69"
+    },
+    "weights_fetch": {
+      "files": {
+        "model-00001-of-00002.safetensors": 49950112952,
+        "model-00002-of-00002.safetensors": 9603322320,
+        "tokenizer.json": 28129897
+      },
+      "total_bytes_including_small_files": 59582000000,
+      "notice_file_present": false
     }
   },
   "demo_assumptions": {
@@ -56,14 +76,27 @@
       "role": "primary candidate",
       "precision": "bf16 (official checkpoint, no quantization)",
       "region": "us-central1",
-      "zones_with_machine": ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"],
+      "zones_with_machine": [
+        "us-central1-a",
+        "us-central1-b",
+        "us-central1-c",
+        "us-central1-f"
+      ],
       "machine_spec": {
         "machineType": "a2-highgpu-2g",
         "acceleratorType": "NVIDIA_TESLA_A100",
         "acceleratorCount": 2
       },
-      "machine_resources": {"vcpu": 24, "ram_gb": 170, "gpu": "A100 40GB", "gpu_count": 2},
-      "replicas": {"min": 1, "max": 1},
+      "machine_resources": {
+        "vcpu": 24,
+        "ram_gb": 170,
+        "gpu": "A100 40GB",
+        "gpu_count": 2
+      },
+      "replicas": {
+        "min": 1,
+        "max": 1
+      },
       "gpu_memory_bytes": 42949672960,
       "runtime": {
         "engine": "vllm",
@@ -76,35 +109,56 @@
         "imageUri": null,
         "args": [
           "meta-models/Muse-Glimmer-30B",
-          "--revision", "cec94fcfd6512f2cfe708138c32533b346ea4f69",
-          "--tokenizer-revision", "cec94fcfd6512f2cfe708138c32533b346ea4f69",
-          "--served-model-name", "muse-glimmer",
-          "--host", "0.0.0.0",
-          "--port", "8080",
-          "--tensor-parallel-size", "2",
-          "--dtype", "bfloat16",
-          "--max-model-len", "16384",
-          "--max-num-seqs", "4",
-          "--gpu-memory-utilization", "0.90",
-          "--limit-mm-per-prompt", "{\"image\":0,\"video\":0}",
+          "--revision",
+          "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+          "--tokenizer-revision",
+          "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+          "--served-model-name",
+          "muse-glimmer",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8080",
+          "--tensor-parallel-size",
+          "2",
+          "--dtype",
+          "bfloat16",
+          "--max-model-len",
+          "16384",
+          "--max-num-seqs",
+          "1",
+          "--gpu-memory-utilization",
+          "0.90",
+          "--limit-mm-per-prompt",
+          "{\"image\":0,\"video\":0}",
           "--enable-auto-tool-choice",
-          "--tool-call-parser", "muse_glimmer",
-          "--reasoning-parser", "muse_glimmer",
-          "--generation-config", "auto"
+          "--tool-call-parser",
+          "muse_glimmer",
+          "--reasoning-parser",
+          "muse_glimmer",
+          "--generation-config",
+          "auto"
         ],
-        "ports": [{"containerPort": 8080}],
+        "ports": [
+          {
+            "containerPort": 8080
+          }
+        ],
         "predictRoute": "/v1/chat/completions",
         "healthRoute": "/health",
         "sharedMemorySizeMb": "16384",
         "startupProbe": {
-          "httpGet": {"path": "/health", "port": 8080},
+          "httpGet": {
+            "path": "/health",
+            "port": 8080
+          },
           "periodSeconds": 30,
           "timeoutSeconds": 30,
           "failureThreshold": 120
         },
-        "deploymentTimeout": "7200s"
+        "deploymentTimeout": "3600s"
       },
-      "max_num_seqs": 4,
+      "max_num_seqs": 1,
       "gpu_memory_utilization": 0.9,
       "runtime_reserve_bytes_per_gpu": 3221225472
     },
@@ -113,14 +167,26 @@
       "role": "labeled alternative: official 4-bit quantization, lower quality and throughput",
       "precision": "Q4_K_M GGUF (official; card states 1.0% average benchmark degradation)",
       "region": "us-central1",
-      "zones_with_machine": ["us-central1-a", "us-central1-b", "us-central1-c"],
+      "zones_with_machine": [
+        "us-central1-a",
+        "us-central1-b",
+        "us-central1-c"
+      ],
       "machine_spec": {
         "machineType": "g2-standard-12",
         "acceleratorType": "NVIDIA_L4",
         "acceleratorCount": 1
       },
-      "machine_resources": {"vcpu": 12, "ram_gb": 48, "gpu": "L4 24GB", "gpu_count": 1},
-      "replicas": {"min": 1, "max": 1},
+      "machine_resources": {
+        "vcpu": 12,
+        "ram_gb": 48,
+        "gpu": "L4 24GB",
+        "gpu_count": 1
+      },
+      "replicas": {
+        "min": 1,
+        "max": 1
+      },
       "gpu_memory_bytes": 24152899584,
       "weights": {
         "repo": "meta-models/Muse-Glimmer-30B-GGUF",
@@ -138,25 +204,39 @@
       "container_spec": {
         "imageUri": null,
         "args": [
-          "--model", "/models/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
-          "--alias", "muse-glimmer",
-          "--host", "0.0.0.0",
-          "--port", "8080",
-          "--ctx-size", "16384",
-          "--n-gpu-layers", "999",
-          "--parallel", "1",
+          "--model",
+          "/models/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+          "--alias",
+          "muse-glimmer",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8080",
+          "--ctx-size",
+          "16384",
+          "--n-gpu-layers",
+          "999",
+          "--parallel",
+          "1",
           "--jinja"
         ],
-        "ports": [{"containerPort": 8080}],
+        "ports": [
+          {
+            "containerPort": 8080
+          }
+        ],
         "predictRoute": "/v1/chat/completions",
         "healthRoute": "/health",
         "startupProbe": {
-          "httpGet": {"path": "/health", "port": 8080},
+          "httpGet": {
+            "path": "/health",
+            "port": 8080
+          },
           "periodSeconds": 30,
           "timeoutSeconds": 30,
-          "failureThreshold": 60
+          "failureThreshold": 120
         },
-        "deploymentTimeout": "7200s"
+        "deploymentTimeout": "3600s"
       },
       "max_num_seqs": 1,
       "gpu_memory_utilization": 1.0,
@@ -172,6 +252,34 @@
     "answer_field": "choices[0].message.content",
     "reasoning_field_vllm": "choices[0].message.reasoning",
     "reasoning_control": "system prompt line 'Reasoning strength: <level>' or chat_template_kwargs.reasoning_strength",
-    "do_not_send": ["temperature: 0", "--chat-template override"]
+    "do_not_send": [
+      "temperature: 0",
+      "--chat-template override"
+    ]
+  },
+  "test_envelope": {
+    "source": "Models Manager proposal (MODELS-GCP-001), not approved",
+    "region": "us-central1",
+    "replicas": 1,
+    "test_hours": 4,
+    "teardown_allowance_hours": 6,
+    "on_demand_rate_usd_per_hour_a2_highgpu_2g": 8.4489898,
+    "rate_note": "published on-demand inference rate already includes the machine; no separate management fee is added for on-demand. Reservations bill separate infrastructure and management SKUs."
+  },
+  "load_test": {
+    "abort_if": [
+      "startup OOM or engine exit",
+      "replica not healthy within deploymentTimeout (3600s)",
+      "engine-reported KV cache below 1.0 GiB per GPU",
+      "engine-reported concurrency at max_model_len below 1.0",
+      "peak GPU memory above 95% of total on either GPU",
+      "spend reaches the approved cap"
+    ],
+    "accept_if": [
+      "GET /health returns 200",
+      "GET /v1/models lists id muse-glimmer with root meta-models/Muse-Glimmer-30B",
+      "two-turn non-streaming chat returns non-empty choices[0].message.content",
+      "one 16K-token prompt completes without OOM"
+    ]
   }
 }
