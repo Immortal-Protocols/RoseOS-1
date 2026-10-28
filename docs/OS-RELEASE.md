@@ -551,21 +551,24 @@ the action revokes at job end; the builder never receives it. The job then runs
   - the artifact is exactly the APK, the receipt and `SHA256SUMS`, with every
     digest matching;
   - the receipt is non-simulated and names this candidate and the dispatched
-    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (303,
-    built and delivered through the authenticated catalog, never published
-    on GitHub). `host-app-release.py` also accepts a version in
-    `appRelease.reserved` only for its app-only candidate (304, `a3d839e6`),
-    and any other N must exceed every reservation (305 is the bundled Rose
-    Agent of the 2026102805 OS candidate);
+    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (304: 303
+    was delivered through the authenticated catalog; 304 is public on GitHub
+    and catalog-delivered);
+  - a version in `appRelease.reserved` is accepted only for the app-only route
+    and its candidate (any candidate when none is recorded). Any other N must
+    exceed every reservation. `host-app-release.py` applies the same rule:
+    - 305 belongs to the 2026102805 OS candidate `7fb94ae6`;
+    - 306 (`306-direct-github-beta`) is the next app-only candidate;
   - the APK's size, sha256 and signer match the receipt, and the APK's own
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;
 - **requires** OTA Latest to be `frankel-2026102804` before and after;
 - **publishes** its own prerelease, `rose-agent-N`, with `make_latest` false.
   The prerelease holds only `dev.pixel.voice-N.apk`, a sanitized
-  `dev.pixel.voice-N.receipt.json` (package, version, size, sha256, signer,
-  candidate, minimum tested OS, repository, tag, asset and `apkUrl`) and
-  `SHA256SUMS`;
+  `dev.pixel.voice-N.receipt.json` and `SHA256SUMS`. The receipt carries
+  package, version, size, sha256, signer, candidate, minimum tested OS,
+  repository, tag, asset and `apkUrl`, plus `schemaVersion` 1 and
+  `compatibility` (see the receipt section below);
 - **never changes a published release:** a published release with identical
   assets is a no-op, any other published release is refused, and its own
   leftover draft is reconciled;
@@ -573,6 +576,34 @@ the action revokes at job end; the builder never receives it. The job then runs
   the APK once more anonymously from the exact public URL the client uses;
 - **keeps the receipt:** the public receipt becomes the Actions artifact
   `app-publication-dev.pixel.voice-<run id>`.
+
+**The public receipt is the phone's update manifest** (INFRA-APP-102,
+APP-GITHUB-002-SCHEMA-001). Rose Agent from App #74 (`DirectUpdate`) reads it
+directly from GitHub, with no PixelVoice catalog. `compatibility` holds exactly:
+
+- `deviceCodenames`, `minOsBuild` and `minControllerVersion`: the declared support
+  policy in `appRelease.compatibility`, currently `["frankel"]`, `"2026102804"`
+  and `28`. This is a conservative floor on the published Beta and its controller.
+  It is neither inferred from `minimumTestedOs` nor a claim of phone acceptance.
+  - The phone compares `Build.DEVICE` and `Build.VERSION.INCREMENTAL`.
+  - The signed 2804 OTA metadata has `pre-device=frankel` and
+    `post-build-incremental=2026102804`.
+- `minSdk`: measured by `host-app-release.py` from the signed APK
+  (`aapt` `sdkVersion`), which must equal the candidate source's
+  `minSdkVersion`.
+- `abis`: the APK's own `lib/<abi>/*.so` entries.
+  - The builder records them and checks them against `aapt`'s `native-code`;
+    the publisher re-reads the APK and requires the same list.
+  - `["universal"]` only when there are none. An ABI the app does not know
+    fails.
+
+A missing or malformed policy, measurement or ABI list fails before any API
+call. `scripts/tests/test_app_release_publisher.py` runs the produced receipt
+through the app's own parser (`DirectUpdateReceiptProbe` over the unchanged
+`DirectUpdate`/`MiniJson` sources): it is eligible only where the policy says,
+and any drift from the schema makes it unavailable. The published 304 receipt
+(`058c4834…`) predates the schema. The client reports it unavailable, and it is
+never republished.
 
 Emulator-alpha and OS modes are unchanged.
 

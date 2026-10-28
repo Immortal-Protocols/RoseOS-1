@@ -1,0 +1,19 @@
+{
+  "apkUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/dev.pixel.voice-304.apk",
+  "asset": "dev.pixel.voice-304.apk",
+  "candidate": "a3d839e6805b514aa6cad6f86c15e5db622e10cc",
+  "minimumTestedOs": {
+    "build": "2026102804",
+    "controller": 28
+  },
+  "packageName": "dev.pixel.voice",
+  "prerelease": true,
+  "receiptType": "app-publication",
+  "repository": "Immortal-Protocols/pixel-ota",
+  "sha256": "d8f69efcdcbc209ec5fd16badcaaf4c98fa614d7eb5fc54c1431a6f098d26966",
+  "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+  "size": 1385629,
+  "tag": "rose-agent-304",
+  "versionCode": 304,
+  "versionName": "304-app-beta"
+}

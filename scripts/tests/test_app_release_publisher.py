@@ -1,7 +1,9 @@
 """app_release_publisher.py and the app-publisher job against a local fake GitHub (releases API, uploads, storage
 redirects and the public github.com download route): artifact and signer verification before any API call, a
 separate prerelease that never becomes Latest, idempotent reruns, refusal to modify a different release, sanitized
-public files and no token or response body in any output. Synthetic APKs carry a real-format v2 signing block."""
+public files and no token or response body in any output. Synthetic APKs carry a real-format v2 signing block.
+The public receipt is also read by the app's own DirectUpdate parser (DirectUpdateReceiptProbe, compiled with javac from
+the app sources) so the producer and the direct-GitHub client agree on schemaVersion 1 and its compatibility."""
 import hashlib
 import http.server
 import io
@@ -9,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -40,11 +43,13 @@ def signing_block(certificate, scheme=0x7109871A):
     size = len(pairs) + 8 + 16
     return struct.pack('<Q', size) + pairs + struct.pack('<Q', size) + b'APK Sig Block 42'
 
-def apk_bytes(certificate, content=b'rose agent 304', scheme=0x7109871A, block=True):
+def apk_bytes(certificate, content=b'rose agent 306', scheme=0x7109871A, block=True, libs=()):
     """A ZIP with an APK signing block between the entries and the central directory, as apksigner writes it."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
         archive.writestr('AndroidManifest.xml', content)
+        for lib in libs:
+            archive.writestr(lib, b'\x7fELF synthetic')
     data = buffer.getvalue()
     eocd = data.rfind(b'PK\x05\x06')
     directory = struct.unpack_from('<I', data, eocd + 16)[0]
@@ -166,20 +171,20 @@ class PublisherTest(unittest.TestCase):
         directory = self.root/name
         directory.mkdir()
         data = apk if apk is not None else apk_bytes(self.certificate)
-        (directory/'dev.pixel.voice-304.apk').write_bytes(data)
+        (directory/'dev.pixel.voice-306.apk').write_bytes(data)
         receipt = edit({'receiptType': 'app-release', 'simulated': False, 'candidate': CANDIDATE, 'packageName': 'dev.pixel.voice',
-            'versionCode': 304, 'versionName': '304-app-beta', 'apk': 'dev.pixel.voice-304.apk', 'size': len(data),
+            'versionCode': 306, 'versionName': '306-direct-github-beta', 'apk': 'dev.pixel.voice-306.apk', 'size': len(data),
             'sha256': hashlib.sha256(data).hexdigest(), 'signerSha256': self.signer, 'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'],
-            'checks': ['builder checks']})
+            'apkFacts': {'minSdk': 29, 'nativeAbis': []}, 'checks': ['builder checks']})
         (directory/'app-release-receipt.json').write_text(json.dumps(receipt))
         if extra:
             (directory/extra).write_text('extra')
-        names = sums or ['app-release-receipt.json', 'dev.pixel.voice-304.apk']
+        names = sums or ['app-release-receipt.json', 'dev.pixel.voice-306.apk']
         (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n' for n in names))
         self.artifact = directory
         return directory
 
-    def run_publisher(self, apps='[["dev.pixel.voice", 304]]', public='public', token=TOKEN, candidate=CANDIDATE):
+    def run_publisher(self, apps='[["dev.pixel.voice", 306]]', public='public', token=TOKEN, candidate=CANDIDATE):
         env = dict(os.environ, PIXEL_OTA_TOKEN=token)
         return subprocess.run([sys.executable, str(SCRIPTS/'app_release_publisher.py'), '--artifact-dir', str(self.artifact),
             '--candidate-sha', candidate, '--apps', apps, '--public-dir', str(self.root/public), '--config', str(self.config_path)],
@@ -193,23 +198,26 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         release, = self.server.releases
         self.assertEqual((release['tag_name'], release['draft'], release['prerelease'], release['make_latest']),
-            ('rose-agent-304', False, True, 'false'))
-        self.assertEqual(sorted(a['name'] for a in release['assets']), ['SHA256SUMS', 'dev.pixel.voice-304.apk', 'dev.pixel.voice-304.receipt.json'])
+            ('rose-agent-306', False, True, 'false'))
+        self.assertEqual(sorted(a['name'] for a in release['assets']), ['SHA256SUMS', 'dev.pixel.voice-306.apk', 'dev.pixel.voice-306.receipt.json'])
         self.assertEqual(self.server.latest, 'frankel-2026102804', 'OTA Latest is untouched')
-        apk = (self.artifact/'dev.pixel.voice-304.apk').read_bytes()
+        apk = (self.artifact/'dev.pixel.voice-306.apk').read_bytes()
         published = {a['name']: self.server.blobs[a['id']] for a in release['assets']}
-        self.assertEqual(published['dev.pixel.voice-304.apk'], apk)
-        public = json.loads(published['dev.pixel.voice-304.receipt.json'])
-        self.assertEqual(public, {'receiptType': 'app-publication', 'packageName': 'dev.pixel.voice', 'versionCode': 304,
-            'versionName': '304-app-beta', 'size': len(apk), 'sha256': hashlib.sha256(apk).hexdigest(), 'signerSha256': self.signer,
+        self.assertEqual(published['dev.pixel.voice-306.apk'], apk)
+        public = json.loads(published['dev.pixel.voice-306.receipt.json'])
+        self.assertEqual(public, {'receiptType': 'app-publication', 'schemaVersion': 1, 'packageName': 'dev.pixel.voice', 'versionCode': 306,
+            'versionName': '306-direct-github-beta', 'size': len(apk), 'sha256': hashlib.sha256(apk).hexdigest(), 'signerSha256': self.signer,
             'candidate': CANDIDATE, 'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'], 'repository': 'Immortal-Protocols/pixel-ota',
-            'tag': 'rose-agent-304', 'asset': 'dev.pixel.voice-304.apk', 'prerelease': True,
-            'apkUrl': 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/dev.pixel.voice-304.apk'})
+            'tag': 'rose-agent-306', 'asset': 'dev.pixel.voice-306.apk', 'prerelease': True,
+            'compatibility': {'deviceCodenames': ['frankel'], 'abis': ['universal'], 'minSdk': 29, 'minOsBuild': '2026102804',
+                'minControllerVersion': 28},
+            'apkUrl': 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-306/dev.pixel.voice-306.apk'})
         self.assertNotIn('checks', public, 'only the allowlisted public fields')
+        self.assertNotIn('apkFacts', public)
         self.assertEqual(published['SHA256SUMS'].decode(), ''.join(f'{hashlib.sha256(published[n]).hexdigest()}  {n}\n'
-            for n in ('dev.pixel.voice-304.apk', 'dev.pixel.voice-304.receipt.json')))
+            for n in ('dev.pixel.voice-306.apk', 'dev.pixel.voice-306.receipt.json')))
         # The public route was fetched anonymously; the token never reached storage or the public route.
-        self.assertIn(('GET', '/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/dev.pixel.voice-304.apk', False), self.server.log)
+        self.assertIn(('GET', '/Immortal-Protocols/pixel-ota/releases/download/rose-agent-306/dev.pixel.voice-306.apk', False), self.server.log)
         self.assertFalse([e for e in self.server.log if (e[1].startswith('/storage/') or e[1].startswith('/Immortal-Protocols/')) and e[2]])
         self.assertEqual(json.loads(result.stdout), public)
         self.assertEqual(json.loads((self.root/'public/publication.json').read_text()), {**public, 'releaseId': release['id']})
@@ -228,19 +236,19 @@ class PublisherTest(unittest.TestCase):
         before = json.dumps(self.server.releases)
         refused = self.run_publisher(public='public3')
         self.assertEqual(refused.returncode, 1)
-        self.assertIn('published release rose-agent-304 differs from this app release; it is not modified', refused.stderr)
+        self.assertIn('published release rose-agent-306 differs from this app release; it is not modified', refused.stderr)
         self.assertEqual(json.dumps(self.server.releases), before)
 
     def test_a_leftover_draft_is_reconciled(self):
-        self.server.releases.append({'id': 99, 'tag_name': 'rose-agent-304', 'draft': True, 'prerelease': True, 'make_latest': 'false',
-            'assets': [{'id': 98, 'name': 'dev.pixel.voice-304.apk', 'size': 3, 'state': 'uploaded', 'digest': 'sha256:' + '0' * 64},
+        self.server.releases.append({'id': 99, 'tag_name': 'rose-agent-306', 'draft': True, 'prerelease': True, 'make_latest': 'false',
+            'assets': [{'id': 98, 'name': 'dev.pixel.voice-306.apk', 'size': 3, 'state': 'uploaded', 'digest': 'sha256:' + '0' * 64},
                        {'id': 97, 'name': 'unrelated.txt', 'size': 1, 'state': 'uploaded', 'digest': 'sha256:' + '1' * 64}]})
         self.server.blobs.update({98: b'old', 97: b'x'})
         result = self.run_publisher()
         self.assertEqual(result.returncode, 0, result.stderr)
         release, = self.server.releases
         self.assertEqual((release['draft'], sorted(a['name'] for a in release['assets'])),
-            (False, ['SHA256SUMS', 'dev.pixel.voice-304.apk', 'dev.pixel.voice-304.receipt.json']))
+            (False, ['SHA256SUMS', 'dev.pixel.voice-306.apk', 'dev.pixel.voice-306.receipt.json']))
         self.assertIn(('DELETE', REPO + '/releases/assets/98', True), self.server.log)
         self.assertIn(('DELETE', REPO + '/releases/assets/97', True), self.server.log)
 
@@ -250,7 +258,7 @@ class PublisherTest(unittest.TestCase):
             (dict(edit=lambda r: {**r, 'sha256': '0' * 64}), "sha256="),
             (dict(edit=lambda r: {**r, 'size': r['size'] + 1}), 'size='),
             (dict(edit=lambda r: {**r, 'packageName': 'dev.pixel.other'}), 'packageName='),
-            (dict(edit=lambda r: {**r, 'versionCode': 303}), 'versionCode='),
+            (dict(edit=lambda r: {**r, 'versionCode': 305}), 'versionCode='),
             (dict(edit=lambda r: {**r, 'signerSha256': 'cd' * 32}), 'signerSha256='),
             (dict(edit=lambda r: {**r, 'simulated': True}), 'simulated='),
             (dict(edit=lambda r: {**r, 'candidate': 'e' * 40}), 'candidate='),
@@ -258,7 +266,7 @@ class PublisherTest(unittest.TestCase):
             (dict(apk=apk_bytes(b'', block=False)), 'no APK signing block'),
             (dict(apk=apk_bytes(self.certificate, scheme=0x42726577)), 'no v2 or v3 signature'),
             (dict(extra='config.json'), 'not exactly'),
-            (dict(sums=['dev.pixel.voice-304.apk']), 'SHA256SUMS does not cover exactly'),
+            (dict(sums=['dev.pixel.voice-306.apk']), 'SHA256SUMS does not cover exactly'),
         )
         for index, (kwargs, message) in enumerate(cases):
             self.make_artifact(name=f'bad{index}', **kwargs)
@@ -271,7 +279,8 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(self.run_publisher(public='v3').returncode, 0, 'a v3-only signing block is read too')
 
     def test_wrong_dispatch_wrong_candidate_or_missing_token_fail_closed(self):
-        for apps, message in (('[["dev.pixel.voice", 303]]', 'with N above 303'), ('[["dev.pixel.voice", 304], ["dev.pixel.backgroundcontrol", 28]]', 'exactly'),
+        for apps, message in (('[["dev.pixel.voice", 304]]', 'with N above 304'), ('[["dev.pixel.voice", 305]]', 'reserved for the os-release route'),
+                              ('[["dev.pixel.voice", 306], ["dev.pixel.backgroundcontrol", 28]]', 'exactly'),
                               ('[["dev.pixel.calculator.agent", 5]]', 'exactly')):
             result = self.run_publisher(apps=apps, public='x')
             self.assertEqual(result.returncode, 1)
@@ -306,6 +315,112 @@ class PublisherTest(unittest.TestCase):
         client = gp.GitHubReleases('Immortal-Protocols/pixel-ota', TOKEN)
         with self.assertRaisesRegex(gp.PublishError, 'not on github.com'):
             client.public_download('https://example.com/x.apk', self.root/'x', 1)
+
+APP_SOURCES = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice'
+PROBE = SCRIPTS/'tests/java/dev/pixel/voice/DirectUpdateReceiptProbe.java'
+RECEIPT_304 = SCRIPTS/'tests/fixtures/app-publication/dev.pixel.voice-304.receipt.json'
+
+class DirectUpdateContractTest(unittest.TestCase):
+    """The producer's public receipt read by the app's own DirectUpdate.offer/incompatibility (unchanged App #74 sources)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.classes = Path(cls.temp.name)/'classes'
+        sources = [APP_SOURCES/n for n in ('PublicApkDownload.java', 'MiniJson.java', 'DirectUpdate.java')] + [PROBE]
+        subprocess.run([shutil.which('javac') or 'javac', '-source', '8', '-target', '8', '-Xlint:-options', '-d', str(cls.classes),
+            *map(str, sources)], check=True, capture_output=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp.cleanup()
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.config = json.loads(json.dumps(FRANKEL))
+        self.count = 0
+
+    def produce(self, libs=(), facts=None, policy=None):
+        """public_files() for a 306 artifact verified exactly as main() verifies it; returns (document, receipt path)."""
+        self.count += 1
+        directory = self.root/f'artifact{self.count}'
+        directory.mkdir()
+        data = apk_bytes(b'cert', libs=libs)
+        self.config['identities']['appSignerSha256'] = hashlib.sha256(b'cert').hexdigest()
+        if policy is not None:
+            self.config['appRelease']['compatibility'] = policy
+        (directory/'dev.pixel.voice-306.apk').write_bytes(data)
+        receipt = {'receiptType': 'app-release', 'simulated': False, 'candidate': CANDIDATE, 'packageName': 'dev.pixel.voice',
+            'versionCode': 306, 'versionName': '306-direct-github-beta', 'apk': 'dev.pixel.voice-306.apk', 'size': len(data),
+            'sha256': hashlib.sha256(data).hexdigest(), 'signerSha256': self.config['identities']['appSignerSha256'],
+            'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'], 'apkFacts': facts or {'minSdk': 29, 'nativeAbis': []}}
+        (directory/'app-release-receipt.json').write_text(json.dumps(receipt))
+        (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n'
+            for n in ('app-release-receipt.json', 'dev.pixel.voice-306.apk')))
+        verified, apk = arp.verify_artifact(directory, self.config, CANDIDATE, [['dev.pixel.voice', 306]])
+        document, _ = arp.public_files(verified, apk, self.config, self.root/f'public{self.count}')
+        return document, self.root/f'public{self.count}/dev.pixel.voice-306.receipt.json'
+
+    def probe(self, receipt, version=306, device='frankel', abis='arm64-v8a', sdk=37, os_build='2026102805', controller=28,
+              installed=305, signer=None):
+        signer = signer or self.config['identities']['appSignerSha256']
+        result = subprocess.run(['java', '-cp', str(self.classes), 'dev.pixel.voice.DirectUpdateReceiptProbe', str(receipt), str(version),
+            device, abis, str(sdk), os_build, str(controller), str(installed), signer], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    def test_the_produced_receipt_is_eligible_exactly_where_the_policy_says(self):
+        document, receipt = self.produce()
+        self.assertEqual(self.probe(receipt), f'ELIGIBLE 306 {document["sha256"]} {document["size"]} universal 29 2026102804 28')
+        self.assertEqual(self.probe(receipt, os_build='2026102804', abis='x86_64'), self.probe(receipt))  # floor and universal
+        for kwargs, reason in ((dict(device='husky'), 'isn’t for this phone model'), (dict(os_build='2026102803'), 'needs Rose OS 2026102804'),
+                (dict(os_build='-'), 'build couldn’t be read'), (dict(controller=27), 'newer background controller'),
+                (dict(controller=-1), 'newer background controller'), (dict(sdk=28), 'newer Android version'),
+                (dict(signer='0' * 64), 'isn’t signed like the installed')):
+            self.assertIn(reason, self.probe(receipt, **kwargs), kwargs)
+
+    def test_native_libraries_are_listed_exactly_and_never_universal(self):
+        document, receipt = self.produce(libs=['lib/arm64-v8a/libx.so'], facts={'minSdk': 29, 'nativeAbis': ['arm64-v8a']})
+        self.assertEqual(document['compatibility']['abis'], ['arm64-v8a'])
+        self.assertTrue(self.probe(receipt).startswith('ELIGIBLE 306 '))
+        self.assertIn('processor', self.probe(receipt, abis='x86_64'))
+        for libs, facts, message in ((['lib/arm64-v8a/libx.so'], {'minSdk': 29, 'nativeAbis': []}, "not the receipt's []"),
+                ([], {'minSdk': 29, 'nativeAbis': ['arm64-v8a']}, "native libraries for [], not the receipt's ['arm64-v8a']"),
+                (['lib/riscv64/libx.so'], {'minSdk': 29, 'nativeAbis': ['riscv64']}, "ABIs the app cannot match: ['riscv64']"),
+                ([], {'nativeAbis': []}, 'no measured minSdk'), ([], {'minSdk': '29', 'nativeAbis': []}, 'no measured minSdk')):
+            with self.assertRaisesRegex(arp.CheckFailed, re.escape(message)):
+                self.produce(libs=libs, facts=facts)
+
+    def test_malformed_policy_is_refused_before_anything_is_written(self):
+        good = FRANKEL['appRelease']['compatibility']
+        for change, message in (({'schemaVersion': 2}, 'not schemaVersion 1'), ({'deviceCodenames': []}, 'deviceCodenames'),
+                ({'deviceCodenames': ['Frankel']}, 'deviceCodenames'), ({'deviceCodenames': ['frankel', 'frankel']}, 'deviceCodenames'),
+                ({'minOsBuild': '2804'}, 'ten-digit'), ({'minOsBuild': 2026102804}, 'ten-digit'),
+                ({'minControllerVersion': 0}, 'positive integer or null'), ({'minControllerVersion': '28'}, 'positive integer or null')):
+            with self.assertRaisesRegex(arp.CheckFailed, message):
+                self.produce(policy={**good, **change})
+        without = {k: v for k, v in good.items() if k != 'minControllerVersion'}
+        with self.assertRaisesRegex(arp.CheckFailed, 'positive integer or null'):
+            self.produce(policy=without)
+        self.assertFalse(list(self.root.glob('public*')))
+        document, receipt = self.produce(policy={**good, 'minControllerVersion': None})
+        self.assertIsNone(document['compatibility']['minControllerVersion'])
+        self.assertTrue(self.probe(receipt, controller=-1).startswith('ELIGIBLE 306 '))  # explicit null: no controller needed
+
+    def test_the_consumer_rejects_any_drift_from_the_produced_schema(self):
+        document, receipt = self.produce()
+        for edit in (lambda d: d.pop('compatibility'), lambda d: d.pop('schemaVersion'), lambda d: d.update(schemaVersion=2),
+                lambda d: d.update(v4Signature={}), lambda d: d['compatibility'].pop('minControllerVersion'),
+                lambda d: d['compatibility'].update(abis=['universal', 'x86']), lambda d: d.update(apkUrl=d['apkUrl'] + '?x')):
+            changed = json.loads(json.dumps(document))
+            edit(changed)
+            receipt.write_text(json.dumps(changed))
+            self.assertTrue(self.probe(receipt).startswith('UNAVAILABLE '), changed)
+
+    def test_the_published_304_receipt_stays_unavailable_and_unchanged(self):
+        self.assertEqual(hashlib.sha256(RECEIPT_304.read_bytes()).hexdigest(), FRANKEL['appRelease']['built'][1]['publicReceiptSha256'])
+        self.assertEqual(json.loads(RECEIPT_304.read_text())['sha256'], FRANKEL['appRelease']['built'][1]['sha256'])
+        self.assertTrue(self.probe(RECEIPT_304, version=304, installed=303).startswith('UNAVAILABLE '))
 
 class WorkflowAppPublisherTest(unittest.TestCase):
     def setUp(self):

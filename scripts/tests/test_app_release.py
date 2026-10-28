@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
@@ -72,9 +74,17 @@ class AppReleaseTest(unittest.TestCase):
         self.verify_cert.write_text(PIN)
         apksigner = script(tools/'apksigner', f'''
             print('Signer #1 certificate SHA-256 digest: ' + open({str(self.verify_cert)!r}).read())''')
-        aapt = script(tools/'aapt', '''
-            import sys; pkg, ver = open(sys.argv[-1]).read().split(':')
-            print("package: name='%s' versionCode='%s' versionName='%s-app-beta'" % (pkg, ver.strip(), ver.strip()))''')
+        # aapt dump badging over a stand-in APK (a ZIP whose 'identity' entry names package:version): the identity line,
+        # sdkVersion (from self.sdk_file) and native-code for its lib/<abi>/ entries (or self.native_file when written).
+        self.sdk_file, self.native_file = self.root/'aapt-sdk', self.root/'aapt-native'
+        self.sdk_file.write_text('29')
+        aapt = script(tools/'aapt', f'''
+            import os, re, sys, zipfile; z = zipfile.ZipFile(sys.argv[-1]); pkg, ver = z.read('identity').decode().split(':')
+            print("package: name='%s' versionCode='%s' versionName='%s-app-beta'" % (pkg, ver.strip(), ver.strip()))
+            print("sdkVersion:'%s'" % open({str(self.sdk_file)!r}).read())
+            abis = sorted({{n.split('/')[1] for n in z.namelist() if re.fullmatch(r'lib/[^/]+/.+\\.so', n)}})
+            if os.path.exists({str(self.native_file)!r}): abis = open({str(self.native_file)!r}).read().split()
+            if abis: print('native-code: ' + ' '.join("'%s'" % a for a in abis))''')
         # OS entry points that app-only must never reach: each would leave a marker.
         self.markers = self.root/'markers'
         self.markers.mkdir()
@@ -94,17 +104,20 @@ class AppReleaseTest(unittest.TestCase):
                 'minimumTestedOs': {'build': '2026102804', 'controller': 28}}}
         self.config = self.root/'config.json'
         self.config.write_text(json.dumps(self.config_data))
-        self.built = 'dev.pixel.voice:304'
+        self.built, self.libs = 'dev.pixel.voice:306', ()
         self.calls = []
         self.head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
         self.work, self.artifact = self.root/'attempt/work', self.root/'attempt/artifact'
         self.env = dict(os.environ, ROSE_CANDIDATE_SHA=self.head, ROSE_RELEASE_DIR=str(self.work),
-            APPS=json.dumps([['dev.pixel.voice', 304]]))
+            APPS=json.dumps([['dev.pixel.voice', 306]]))
 
     def build(self, candidate, release_dir, sdk, java_home, assets, pinned, voice_only=False):
         self.calls.append({'candidate': Path(candidate), 'voice_only': voice_only, 'sdk': sdk})
         (Path(release_dir)/'unsigned').mkdir(parents=True)
-        (Path(release_dir)/'unsigned/voice.apk').write_text(self.built)
+        with zipfile.ZipFile(Path(release_dir)/'unsigned/voice.apk', 'w') as apk:
+            apk.writestr('identity', self.built)
+            for lib in self.libs:
+                apk.writestr(lib, b'synthetic native library')
         return {}
 
     def run_release(self):
@@ -125,15 +138,15 @@ class AppReleaseTest(unittest.TestCase):
 
     def test_only_the_signed_apk_receipt_and_checksums_leave_the_builder(self):
         receipt = self.run_release()
-        self.assertEqual(sorted(p.name for p in self.artifact.iterdir()), ['SHA256SUMS', 'app-release-receipt.json', 'dev.pixel.voice-304.apk'])
-        apk = self.artifact/'dev.pixel.voice-304.apk'
+        self.assertEqual(sorted(p.name for p in self.artifact.iterdir()), ['SHA256SUMS', 'app-release-receipt.json', 'dev.pixel.voice-306.apk'])
+        apk = self.artifact/'dev.pixel.voice-306.apk'
         self.assertEqual(receipt, json.loads((self.artifact/'app-release-receipt.json').read_text()))
         self.assertEqual({k: receipt[k] for k in ('receiptType', 'simulated', 'candidate', 'packageName', 'versionCode', 'versionName',
-            'apk', 'size', 'sha256', 'signerSha256', 'minimumTestedOs')},
+            'apk', 'size', 'sha256', 'signerSha256', 'minimumTestedOs', 'apkFacts')},
             {'receiptType': 'app-release', 'simulated': False, 'candidate': self.head, 'packageName': 'dev.pixel.voice',
-             'versionCode': 304, 'versionName': '304-app-beta', 'apk': apk.name, 'size': apk.stat().st_size,
+             'versionCode': 306, 'versionName': '306-app-beta', 'apk': apk.name, 'size': apk.stat().st_size,
              'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'signerSha256': PIN,
-             'minimumTestedOs': {'build': '2026102804', 'controller': 28}})
+             'minimumTestedOs': {'build': '2026102804', 'controller': 28}, 'apkFacts': {'minSdk': 29, 'nativeAbis': []}})
         self.assertIn('independent apksigner verification: exactly the pinned signer', receipt['checks'])
         sums = dict(reversed(l.split('  ')) for l in (self.artifact/'SHA256SUMS').read_text().splitlines())
         self.assertEqual(sorted(sums), ['app-release-receipt.json', apk.name])
@@ -159,8 +172,23 @@ class AppReleaseTest(unittest.TestCase):
         self.assertFalse(self.artifact.exists(), 'no partial artifact to upload')
         self.assert_clean()
 
+    def test_apk_facts_come_from_the_signed_apk_and_the_source(self):
+        self.libs = ('lib/arm64-v8a/libx.so', 'lib/x86_64/libx.so')
+        self.assertEqual(self.run_release()['apkFacts'], {'minSdk': 29, 'nativeAbis': ['arm64-v8a', 'x86_64']})
+        self.assert_clean()
+        for setup, message in ((lambda: self.sdk_file.write_text('30'), 'minSdk 30 does not match the source minSdkVersion 29'),
+                (lambda: self.native_file.write_text('arm64-v8a'), "native libraries \\['arm64-v8a', 'x86_64'\\] do not match aapt native-code")):
+            setup()
+            shutil.rmtree(self.root/'attempt', ignore_errors=True)
+            with self.assertRaisesRegex(release.AdapterFailed, message):
+                self.run_release()
+            self.assertFalse(self.artifact.exists(), 'no artifact without exact APK facts')
+            self.assert_clean()
+            self.sdk_file.write_text('29')
+            self.native_file.unlink(missing_ok=True)
+
     def test_wrong_package_or_built_version_stops_before_any_secret_is_read(self):
-        for built, message in (('dev.pixel.other:304', "dev.pixel.other"), ('dev.pixel.voice:303', "303\\), expected dev.pixel.voice 304")):
+        for built, message in (('dev.pixel.other:306', "dev.pixel.other"), ('dev.pixel.voice:303', "303\\), expected dev.pixel.voice 306")):
             self.built = built
             with self.assertRaisesRegex(release.AdapterFailed, message):
                 self.run_release()
@@ -171,8 +199,8 @@ class AppReleaseTest(unittest.TestCase):
     def test_dispatch_must_name_exactly_rose_agent_above_the_published_302(self):
         for apps, message in (([['dev.pixel.voice', 302]], 'must exceed 302, the newest built or published'),
                 ([['dev.pixel.voice', 301]], 'must exceed 302, the newest built or published'),
-                ([['dev.pixel.voice', 304], ['dev.pixel.backgroundcontrol', 28]], 'exactly'),
-                ([['dev.pixel.calculator.agent', 5]], 'exactly'), ([['dev.pixel.voice', '304']], 'exactly'), ([], 'exactly')):
+                ([['dev.pixel.voice', 306], ['dev.pixel.backgroundcontrol', 28]], 'exactly'),
+                ([['dev.pixel.calculator.agent', 5]], 'exactly'), ([['dev.pixel.voice', '306']], 'exactly'), ([], 'exactly')):
             self.env['APPS'] = json.dumps(apps)
             with self.assertRaisesRegex(release.AdapterFailed, message):
                 self.run_release()
@@ -208,39 +236,49 @@ class CheckedInAppReleaseTest(unittest.TestCase):
     def test_checked_in_config_has_every_app_only_input(self):
         self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-app-release.py'), '--check']).returncode, 0)
 
-    def test_app_release_pins_the_published_302_the_delivered_303_and_the_reserved_304_and_305(self):
+    def test_app_release_pins_302_the_delivered_303_and_304_and_the_reserved_305_and_306(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         app = config['appRelease']
         self.assertEqual(app['published'], {'versionCode': 302, 'size': 1381533,
             'sha256': '01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6',
             'signerSha256': config['identities']['appSignerSha256']})
         self.assertEqual((app['packageName'], app['mustExceed'], app['minimumTestedOs']),
-            ('dev.pixel.voice', 303, {'build': '2026102804', 'controller': 28}))
-        built, = app['built']
+            ('dev.pixel.voice', 304, {'build': '2026102804', 'controller': 28}))
+        built, public = app['built']
         self.assertEqual((built['versionCode'], built['sha256'], built['size'], built['run']),
             (303, 'cb11480c88419851ecafee24565d4e86e0e14d5416800e9573f6bc23bfd96f41', 1381533, 40676568143))
-        self.assertEqual(app['mustExceed'], max(app['published']['versionCode'], built['versionCode']))
+        self.assertEqual(app['mustExceed'], max(app['published']['versionCode'], built['versionCode'], public['versionCode']))
         # 303 reached phones through the authenticated catalog; only a public GitHub release is absent.
         self.assertEqual(built['delivered'], {'route': 'authenticated catalog', 'at': '2026-10-28T14:39Z', 'publicRelease': False})
         self.assertNotIn('never published', built['basis'])
+        # 304 is public on GitHub and catalog-delivered, read back anonymously: APK d8f69efc... with no native libraries.
+        self.assertEqual((public['versionCode'], public['sha256'], public['size'], public['candidate'], public['delivered']),
+            (304, 'd8f69efcdcbc209ec5fd16badcaaf4c98fa614d7eb5fc54c1431a6f098d26966', 1385629, 'a3d839e6805b514aa6cad6f86c15e5db622e10cc',
+             {'route': 'public GitHub prerelease rose-agent-304 and authenticated catalog', 'at': '2026-10-28T17:27Z', 'publicRelease': True}))
         self.assertEqual([(r['versionCode'], r['versionName'], r['route'], r['candidate']) for r in app['reserved']],
-            [(304, '304-app-beta', 'app-only', 'a3d839e6805b514aa6cad6f86c15e5db622e10cc'), (305, '305-home-beta', 'os-release', None)])
+            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (306, '306-direct-github-beta', 'app-only', None)])
+        self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
+            {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
-        self.assertIn('package="dev.pixel.voice" android:versionCode="305" android:versionName="305-home-beta"', manifest)
+        self.assertIn('package="dev.pixel.voice" android:versionCode="306" android:versionName="306-direct-github-beta"', manifest)
 
     def test_reserved_versions_belong_to_their_route_and_candidate(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         queued = 'a3d839e6805b514aa6cad6f86c15e5db622e10cc'
-        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 304]], queued), 304)
-        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 306]], 'f' * 40), 306)
-        for version, sha, message in ((304, 'f' * 40, 'reserved for the app-only route and candidate ' + queued),
-                (305, queued, 'reserved for the os-release route'), (303, queued, 'must exceed 303, the newest built or published')):
+        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 306]], 'f' * 40), 306)  # no candidate recorded
+        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 307]], 'f' * 40), 307)
+        pinned = json.loads(json.dumps(config))
+        pinned['appRelease']['reserved'][1]['candidate'] = queued
+        self.assertEqual(release.requested_version(pinned, [['dev.pixel.voice', 306]], queued), 306)
+        for cfg, version, sha, message in ((pinned, 306, 'f' * 40, 'reserved for the app-only route and candidate ' + queued),
+                (config, 305, queued, 'reserved for the os-release route and candidate 7fb94ae6'),
+                (config, 304, queued, 'must exceed 304, the newest built or published')):
             with self.assertRaisesRegex(release.AdapterFailed, message):
-                release.requested_version(config, [['dev.pixel.voice', version]], sha)
+                release.requested_version(cfg, [['dev.pixel.voice', version]], sha)
         gap = json.loads(json.dumps(config))  # an unreserved version below a reservation is refused too
-        gap['appRelease']['reserved'] = [dict(gap['appRelease']['reserved'][0], versionCode=306)]
-        with self.assertRaisesRegex(release.AdapterFailed, 'must exceed the reserved 306'):
-            release.requested_version(gap, [['dev.pixel.voice', 305]], queued)
+        gap['appRelease']['reserved'] = [dict(gap['appRelease']['reserved'][1], versionCode=308)]
+        with self.assertRaisesRegex(release.AdapterFailed, 'must exceed the reserved 308'):
+            release.requested_version(gap, [['dev.pixel.voice', 307]], queued)
 
 class WorkflowAppOnlyTest(unittest.TestCase):
     def setUp(self):

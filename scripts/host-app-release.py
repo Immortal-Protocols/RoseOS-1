@@ -9,7 +9,9 @@ APPS (exactly [["dev.pixel.voice", N]]) set, and the job's short-lived signer id
    removed on success or failure (the same helpers as the OS integrate adapter);
 3. verify the signed APK independently: package dev.pixel.voice, the dispatched versionCode, a versionCode above
    appRelease.mustExceed (the newest built or published Rose Agent) and exactly the pinned app signer. A version in
-   appRelease.reserved is accepted only for its app-only candidate; any other must exceed every reservation;
+   appRelease.reserved is accepted only for the app-only route and its candidate (any candidate when none is recorded);
+   any other must exceed every reservation. The receipt also records the signed APK's minSdk (equal to the source's)
+   and native-library ABIs, from which the public receipt's compatibility is derived;
 4. write to the artifact directory only the signed APK, a nonsecret receipt and SHA256SUMS;
 5. remove the candidate worktree and every temporary input under ROSE_RELEASE_DIR, on success or failure.
 It holds the builder's shared source/output lock (host.lockPath) for the whole run, so it never overlaps an OS stage.
@@ -27,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import importlib.util
+import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_secrets  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
@@ -34,6 +37,7 @@ from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 PACKAGE = 'dev.pixel.voice'
+SOURCE_MANIFEST = 'workspace/rose-agent/app/AndroidManifest.xml'
 
 def load(name):
     spec = importlib.util.spec_from_file_location(name.replace('-', '_'), ROOT/'scripts'/f'{name}.py')
@@ -77,12 +81,28 @@ def requested_version(config, apps, sha=None):
     # A reserved version belongs to one route and candidate; anything newer must pass every reservation.
     reserved = config['appRelease'].get('reserved', [])
     row = next((r for r in reserved if r['versionCode'] == version), None)
-    if row and (row['route'] != 'app-only' or row['candidate'] != sha):
+    if row and (row['route'] != 'app-only' or row['candidate'] not in (None, sha)):
         raise AdapterFailed(f'{PACKAGE} versionCode {version} is reserved for the {row["route"]} route'
             + (f' and candidate {row["candidate"]}' if row['candidate'] else ''))
     if not row and reserved and version <= max(r['versionCode'] for r in reserved):
         raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed the reserved {max(r["versionCode"] for r in reserved)}')
     return version
+
+def apk_facts(aapt, apk, candidate):
+    """What the public receipt's compatibility derives from the signed APK itself: its minSdk (aapt sdkVersion, which
+    must equal the candidate source's uses-sdk minSdkVersion) and the ABIs of its native libraries (lib/<abi>/*.so,
+    which must agree with aapt's native-code line; none means the APK runs on any ABI)."""
+    out = subprocess.run([aapt, 'dump', 'badging', str(apk)], capture_output=True, text=True).stdout
+    built = re.search(r"^sdkVersion:'(\d+)'$", out, re.M)
+    source = re.search(r'<uses-sdk\b[^>]*android:minSdkVersion="(\d+)"', (Path(candidate)/SOURCE_MANIFEST).read_text())
+    if not built or not source or built[1] != source[1]:
+        raise AdapterFailed(f'signed APK minSdk {built and built[1]} does not match the source minSdkVersion {source and source[1]}')
+    with zipfile.ZipFile(apk) as archive:
+        abis = sorted({n.split('/')[1] for n in archive.namelist() if re.fullmatch(r'lib/[^/]+/.+\.so', n)})
+    declared = re.search(r"^native-code: (.*)$", out, re.M)
+    if sorted(re.findall(r"'([^']+)'", declared[1]) if declared else []) != abis:
+        raise AdapterFailed(f'native libraries {abis} do not match aapt native-code {declared and declared[1]}')
+    return {'minSdk': int(built[1]), 'nativeAbis': abis}
 
 def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', build=None):
     config = json.loads(Path(config_path).read_text())
@@ -143,15 +163,17 @@ def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, 
         raise AdapterFailed(f'signed APK is {package} {signed_version}, expected {PACKAGE} {version}')
     if signers(apksigner, signed) != [config['identities']['appSignerSha256'].lower()]:
         raise AdapterFailed('signed APK is not signed by exactly the pinned app signer')
+    facts = apk_facts(aapt, signed, candidate)
     artifact.mkdir(parents=True)
     shutil.copyfile(signed, artifact/signed.name)
     receipt = {'receiptType': 'app-release', 'simulated': False, 'candidate': sha, 'packageName': PACKAGE, 'versionCode': version,
         'versionName': version_name, 'apk': signed.name, 'size': (artifact/signed.name).stat().st_size,
         'sha256': sha256(artifact/signed.name), 'signerSha256': config['identities']['appSignerSha256'].lower(),
-        'minimumTestedOs': config['appRelease']['minimumTestedOs'],
+        'minimumTestedOs': config['appRelease']['minimumTestedOs'], 'apkFacts': facts,
         'checks': ['candidate worktree at the selected commit', 'Rose Agent built alone', 'unsigned package and versionCode',
             f'versionCode above {config["appRelease"]["mustExceed"]} (newest built or published)', 'signed with the pinned app signer (sign-apk.py)',
-            'independent apksigner verification: exactly the pinned signer', 'signed package and versionCode']}
+            'independent apksigner verification: exactly the pinned signer', 'signed package and versionCode',
+            'minSdk from the signed APK equal to the source', 'native-library ABIs from the signed APK']}
     (artifact/'app-release-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     (artifact/'SHA256SUMS').write_text(''.join(f'{sha256(artifact/n)}  {n}\n' for n in sorted(p.name for p in artifact.iterdir())))
     return receipt

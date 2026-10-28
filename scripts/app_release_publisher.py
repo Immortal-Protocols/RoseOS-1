@@ -4,9 +4,15 @@
 Runs only in the hosted app-publisher job, after the builder's private app-release artifact was transferred with the
 workflow's own artifact steps; the pixel-ota installation token is minted in that job and never reaches the builder.
 Before any API call it verifies the artifact: exactly the APK, app-release-receipt.json and SHA256SUMS, every digest,
-a non-simulated receipt for this candidate and the dispatched [["dev.pixel.voice", N]] (N above appRelease.mustExceed),
-the APK's size and sha256, the receipt's signer, and the APK's own v2/v3 signing certificate read from its signing
-block, all equal to the pinned app signer.
+a non-simulated receipt for this candidate and the dispatched [["dev.pixel.voice", N]] (N above appRelease.mustExceed,
+and a reserved N only for the app-only route and its candidate), the APK's size and sha256, the receipt's signer, and
+the APK's own v2/v3 signing certificate read from its signing block, all equal to the pinned app signer.
+
+The public receipt is the app's direct-GitHub update manifest (APP-GITHUB-002-SCHEMA-001): schemaVersion 1 and a
+compatibility object. deviceCodenames, minOsBuild and minControllerVersion are the declared support policy in
+appRelease.compatibility. minSdk is the builder's measurement of the signed APK (equal to the source), and abis come from
+the APK's own lib/<abi>/*.so entries, re-read here and equal to the builder's: ["universal"] only when there are none,
+otherwise exactly those ABIs, and an ABI the app does not know fails.
 
 It then publishes only an allowlist to its own versioned prerelease (appRelease.publication: tag rose-agent-N, asset
 dev.pixel.voice-N.apk, a sanitized public receipt and SHA256SUMS), never Latest: OTA Latest must be the configured
@@ -25,6 +31,7 @@ import re
 import struct
 import sys
 import tempfile
+import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github_release_publisher as gp  # noqa: E402
 
@@ -33,6 +40,9 @@ CONFIG = ROOT/'os/release-pipeline/frankel.json'
 RECEIPT, SUMS = 'app-release-receipt.json', 'SHA256SUMS'
 SIGNATURE_SCHEMES = (0x7109871A, 0xF05368C0)  # APK Signature Scheme v2, v3
 PUBLIC_FIELDS = ('packageName', 'versionCode', 'versionName', 'size', 'sha256', 'signerSha256', 'candidate', 'minimumTestedOs')
+SCHEMA_VERSION = 1  # APP-GITHUB-002-SCHEMA-001, read by the app's DirectUpdate
+KNOWN_ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86')
+UNIVERSAL = 'universal'
 
 class CheckFailed(Exception):
     pass
@@ -114,6 +124,13 @@ def verify_artifact(directory, config, candidate, apps):
     if len(apps) != 1 or apps[0][0] != package or type(apps[0][1]) is not int or apps[0][1] <= app['mustExceed']:
         raise CheckFailed(f'app publication takes exactly [["{package}", N]] with N above {app["mustExceed"]}')
     version = apps[0][1]
+    reserved = app.get('reserved', [])
+    row = next((r for r in reserved if r['versionCode'] == version), None)
+    if row and (row['route'] != 'app-only' or row['candidate'] not in (None, candidate)):
+        raise CheckFailed(f'{package} versionCode {version} is reserved for the {row["route"]} route'
+            + (f' and candidate {row["candidate"]}' if row['candidate'] else ''))
+    if not row and reserved and version <= max(r['versionCode'] for r in reserved):
+        raise CheckFailed(f'{package} versionCode {version} must exceed the reserved {max(r["versionCode"] for r in reserved)}')
     _, asset, _ = names(config, version)
     present = sorted(p.name for p in directory.iterdir())
     if present != sorted([asset, RECEIPT, SUMS]):
@@ -136,18 +153,49 @@ def verify_artifact(directory, config, candidate, apps):
         raise CheckFailed('the app receipt has no versionName')
     if apk_signer_digests(apk) != [signer]:
         raise CheckFailed('the APK is not signed by exactly the pinned app signer')
+    compatibility(receipt, apk, config)
     return receipt, apk
 
+def native_abis(apk):
+    with zipfile.ZipFile(apk) as archive:
+        return sorted({n.split('/')[1] for n in archive.namelist() if re.fullmatch(r'lib/[^/]+/.+\.so', n)})
+
+def compatibility(receipt, apk, config):
+    """The public compatibility object: declared policy plus the APK's measured minSdk and native-library ABIs."""
+    policy = config['appRelease'].get('compatibility') or {}
+    if policy.get('schemaVersion') != SCHEMA_VERSION:
+        raise CheckFailed(f'appRelease.compatibility is not schemaVersion {SCHEMA_VERSION}')
+    codenames, os_build, controller = policy.get('deviceCodenames'), policy.get('minOsBuild'), policy.get('minControllerVersion', 'absent')
+    if not isinstance(codenames, list) or not codenames or len(set(codenames)) != len(codenames) \
+            or not all(isinstance(c, str) and re.fullmatch(r'[a-z0-9_]{1,32}', c) for c in codenames):
+        raise CheckFailed('appRelease.compatibility.deviceCodenames must be a non-empty list of distinct device codenames')
+    if not isinstance(os_build, str) or not re.fullmatch(r'[0-9]{10}', os_build):
+        raise CheckFailed('appRelease.compatibility.minOsBuild must be a ten-digit build number')
+    if not (controller is None or (type(controller) is int and controller >= 1)):
+        raise CheckFailed('appRelease.compatibility.minControllerVersion must be a positive integer or null')
+    facts = receipt.get('apkFacts') or {}
+    if type(facts.get('minSdk')) is not int or not 1 <= facts['minSdk'] <= 1000:
+        raise CheckFailed('the app receipt has no measured minSdk')
+    abis = native_abis(apk)
+    if facts.get('nativeAbis') != abis:
+        raise CheckFailed(f'the APK holds native libraries for {abis}, not the receipt\'s {facts.get("nativeAbis")}')
+    unknown = [a for a in abis if a not in KNOWN_ABIS]
+    if unknown:
+        raise CheckFailed(f'the APK has native libraries for ABIs the app cannot match: {unknown}')
+    return {'deviceCodenames': codenames, 'abis': abis or [UNIVERSAL], 'minSdk': facts['minSdk'], 'minOsBuild': os_build,
+        'minControllerVersion': controller}
+
 def public_files(receipt, apk, config, out):
-    """The allowlisted public assets: the APK, a receipt holding only PUBLIC_FIELDS plus where it is published, and
-    SHA256SUMS over both. Nothing else (no paths, checks text, configuration or identifiers) leaves the run."""
+    """The allowlisted public assets: the APK, a receipt holding only PUBLIC_FIELDS, where it is published, the schema
+    version and compatibility, and SHA256SUMS over both. Nothing else (no paths, checks text, configuration or identifiers) leaves the run."""
     tag, asset, url = names(config, receipt['versionCode'])
     publication = config['appRelease']['publication']
     out = Path(out)
     out.mkdir(parents=True)
     (out/asset).write_bytes(apk.read_bytes())
-    document = {'receiptType': 'app-publication', **{k: receipt[k] for k in PUBLIC_FIELDS},
-        'repository': publication['repository'], 'tag': tag, 'asset': asset, 'apkUrl': url, 'prerelease': True}
+    document = {'receiptType': 'app-publication', 'schemaVersion': SCHEMA_VERSION, **{k: receipt[k] for k in PUBLIC_FIELDS},
+        'repository': publication['repository'], 'tag': tag, 'asset': asset, 'apkUrl': url, 'prerelease': True,
+        'compatibility': compatibility(receipt, apk, config)}
     public_receipt = asset[:-len('.apk')] + '.receipt.json'
     (out/public_receipt).write_text(json.dumps(document, indent=2, sort_keys=True) + '\n')
     (out/SUMS).write_text(''.join(f'{sha256(out/n)}  {n}\n' for n in sorted([asset, public_receipt])))
@@ -165,7 +213,8 @@ def publish(client, config, document, files, directory, download_dir):
         raise CheckFailed(f'Latest is not {publication["preserveLatest"]}; nothing is published')
     body = (f'Rose Agent {document["versionName"]} for {document["packageName"]}, versionCode {document["versionCode"]}, '
         f'sha256 {document["sha256"]}, signer {document["signerSha256"]}, from RoseOS-1 {document["candidate"]}. '
-        'Prerelease: an app update channel, not an OS release; installs are verified by the app against its catalog record.')
+        'Prerelease: an app update channel, not an OS release. Rose Agent reads the receipt asset to decide eligibility and '
+        'verifies the APK against it before installing.')
     release = client.find_release(tag)
     if release and not release.get('draft'):
         assets = {a['name']: a for a in release.get('assets', [])}
