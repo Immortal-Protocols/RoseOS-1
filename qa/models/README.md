@@ -61,6 +61,21 @@ never stores the Authorization value, only its class, so records can be shared.
 | `stall-after-headers` | Headers and half the body, then holds | T03 |
 | `slow-body` | Headers, then one body byte every `--drip` s | T04 |
 
+## Client checks
+
+```bash
+python3 qa/models/client_checks.py --crate workspace/models/rose-chat-core --out results.json
+```
+
+Builds the crate's `rose-chat` binary and a small out-of-tree probe (in a temp
+directory) against the given checkout, then reports PASS, FAIL, INCONCLUSIVE or
+UNAVAILABLE per matrix case. `cli` checks run the binary with `base_url` at the
+fixture and confirm zero connections. `bridged` checks drive the crate's own
+session, encoder and decoder, with this script carrying each request to the
+fixture over loopback. Neither kind exercises a Rust socket transport, timeouts,
+cancellation, a model or an endpoint. Those cases print as UNAVAILABLE. It needs
+cargo and the crate's dependencies, so it is not part of `scripts/test-local.sh`.
+
 Not covered yet: streaming (only if Product chooses it), user cancellation
 (needs Product's cancel surface), invalid UTF-8 and oversized bodies,
 cross-origin redirects, and anything requiring a real endpoint or model.
