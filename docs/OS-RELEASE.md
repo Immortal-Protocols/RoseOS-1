@@ -345,9 +345,17 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
   from that receipt's entries.
 - **Order of a build:**
   1. read-only checks of the tree: `device/google/cuttlefish` at the pinned
-     revision, the product mapping in `AndroidProducts.mk`, the `hosttar` goal,
-     and free disk space;
-  2. `lunch` resolution, which must equal the recorded `hostEvidence.lunch`;
+     revision, the product mapping in `AndroidProducts.mk`, the host package
+     mechanism (`hostPackage`) and free disk space. `hosttar` is not a Makefile
+     goal. At the pinned revision, the Soong plugin `build/cvd-host-package.go`
+     registers `cvd_host_package` and installs `<module>.tar.gz` into
+     `HOST_OUT`. It declares the `hosttar` phony only for the `vsoc_*` board
+     platforms. `build/Android.bp` declares `cvd-host_package`. Preflight checks
+     the plugin's pinned sha256 and these declarations;
+  2. `lunch` resolution, which must equal the recorded `hostEvidence.lunch`,
+     including `TARGET_BOARD_PLATFORM=vsoc_x86_64`. `TARGET_RELEASE` is read
+     from the shell after a successful `lunch`, because `get_build_var` returns
+     it empty in the retained tree; it must be `cur`, with no fallback;
   3. `m droid hosttar`;
   4. required images and the host package must be written by this build;
   5. the partition `build.prop` identity must match: emulator build id
@@ -363,16 +371,23 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
 - **`plan`:** prints the exact commands, marked `executed: false`, and runs
   nothing.
 
-The checked-in `sourceBinding` and `hostEvidence` are null, because nothing on
-the builder has been observed for this target. Until they are recorded, the guard
-fails with exit 4 before the builder starts, and no dispatch can compile. To
-record them, the lead runs this on the builder through existing access, while
-no other job holds the lock:
+`sourceBinding` holds the lead's host evidence (INFRA-ALPHA-082):
+
+- candidate `ae9cfd4d` (2804);
+- reconcile receipt `0004-2026102804.json` and its sha256;
+- apps 302/4/28, in the 2804 dispatch order.
+
+`hostEvidence` stays null until a probe passes. The first probe failed, and its
+diagnosis is not a probe receipt. Until `hostEvidence` is recorded, the guard
+fails with exit 4 before the builder starts, and no dispatch can compile. The
+lead runs the probe on the builder through existing access, while no other job
+holds the lock:
 
 `python3 scripts/emulator-alpha.py probe --run-id <id> --receipt <path>`
 
 It runs the read-only checks and `lunch` only, never make; `lunch` writes build-system state only inside the alpha `OUT_DIR`. Its receipt gives the
-`lunch` values, and the latest reconcile receipt gives the binding.
+`lunch` values and any tree failures. Disk headroom (300 GiB minimum) is a
+separate host blocker owned by the lead.
 
 Source-only contract for the OS owner:
 

@@ -36,7 +36,11 @@ from release_receipts import sha256_file  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/cuttlefish-alpha.json'
 CUTTLEFISH = 'device/google/cuttlefish'
-LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'PRODUCT_DEVICE', 'PRODUCT_OUT', 'HOST_OUT')
+LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_BOARD_PLATFORM', 'PRODUCT_DEVICE',
+    'PRODUCT_OUT', 'HOST_OUT')
+# Read from the shell after lunch, not get_build_var: the retained tree's lunch exports TARGET_RELEASE
+# (build/envsetup.sh) while get_build_var TARGET_RELEASE returns empty there.
+SHELL_VARS = ('TARGET_RELEASE',)
 PROPS = ('system/build.prop', 'vendor/build.prop', 'product/etc/build.prop', 'system_ext/etc/build.prop')
 NOT_PROVEN = ['signature or verified boot (AOSP test keys, userdebug)', 'guest boot (sys.boot_completed)',
     'Rose UI, viewer, input or Stop behaviour', 'Pixel hardware, firmware, radio or flashing',
@@ -81,6 +85,11 @@ def config_failures(config):
         failures.append('build.outDir must be disjoint from the Pixel outDir')
     for goal in build['makeGoals']:
         token(goal)
+    package = config['hostPackage']
+    if package['output'] != package['module'] + '.tar.gz':
+        failures.append('hostPackage.output must be the module name plus .tar.gz (what the plugin installs)')
+    if package['goal'] not in build['makeGoals']:
+        failures.append('build.makeGoals must include the hostPackage goal')
     return failures
 
 def missing_evidence(config):
@@ -123,13 +132,35 @@ def tree_failures(config):
         failures.append(f'{CUTTLEFISH}/AndroidProducts.mk does not map {product}')
     elif not (cf/mapping[1]).is_file():
         failures.append(f'{product} makefile {CUTTLEFISH}/{mapping[1]} is absent')
-    makefiles = ''.join(p.read_text(errors='replace') for p in sorted(cf.glob('*.mk')) + sorted(cf.glob('*/*.mk'))) if cf.is_dir() else ''
-    if not re.search(r'^\.PHONY:.*\bhosttar\b', makefiles, re.M) or 'cvd-host_package.tar.gz' not in makefiles:
-        failures.append(f'{CUTTLEFISH} does not define the hosttar goal and cvd-host_package.tar.gz')
+    failures += host_package_failures(config, cf)
     failures += binding_failures(config, source)
     free = shutil.disk_usage(source).free // 2**30
     if free < config['build']['minFreeGiB']:
         failures.append(f'{free} GiB free under the source root, below build.minFreeGiB {config["build"]["minFreeGiB"]}')
+    return failures
+
+def host_package_failures(config, cf):
+    """The Soong mechanism behind the host package goal, as pinned: the cvd_host_package plugin (by sha256 and by the
+    declarations that make the goal and the output), the module declaration and the board platform the goal needs."""
+    package = config['hostPackage']
+    plugin, blueprint = cf/package['plugin'], cf/package['definedIn']
+    if not plugin.is_file():
+        return [f'{CUTTLEFISH}/{package["plugin"]} is absent; the {package["goal"]} goal is unverified']
+    failures = []
+    if sha256_file(plugin) != package['pluginSha256']:
+        failures.append(f'{CUTTLEFISH}/{package["plugin"]} differs from the pinned plugin; its goal and output are unverified')
+    text = plugin.read_text(errors='replace')
+    for what, needle in (('module type', f'android.RegisterModuleType("{package["moduleType"]}"'),
+                         ('goal', f'ctx.Phony("{package["goal"]}", info.TarballMetadata)'),
+                         ('installed output', 'ctx.InstallFile(android.PathForModuleInstall(ctx), c.BaseModuleName()+".tar.gz", tarball)')):
+        if needle not in text:
+            failures.append(f'{CUTTLEFISH}/{package["plugin"]} does not declare the {what}')
+    if package['boardPlatform'] not in re.findall(r'board_platform == "([\w-]+)"', text):
+        failures.append(f'{CUTTLEFISH}/{package["plugin"]} declares {package["goal"]} only for other board platforms than {package["boardPlatform"]}')
+    modules = re.findall(rf'^{re.escape(package["moduleType"])}\s*\{{\s*name:\s*"([^"]+)"', blueprint.read_text(errors='replace'), re.M) \
+        if blueprint.is_file() else []
+    if package['module'] not in modules:
+        failures.append(f'{CUTTLEFISH}/{package["definedIn"]} does not declare {package["moduleType"]} {package["module"]}')
     return failures
 
 def binding_failures(config, source):
@@ -166,7 +197,8 @@ def build_env(config, build_id, timestamp):
 
 def steps(config):
     lunch = token(config['target']['lunch'])
-    resolve = ['source build/envsetup.sh', f'lunch {lunch}'] + [f'echo {v}=$(get_build_var {v})' for v in LUNCH_VARS]
+    resolve = ['source build/envsetup.sh', f'lunch {lunch}'] + [
+        f'echo {v}=${{{v}:-}}' if v in SHELL_VARS else f'echo {v}=$(get_build_var {v})' for v in LUNCH_VARS]
     make = ['source build/envsetup.sh', f'lunch {lunch}',
         f'm -j{int(config["build"]["makeJobs"])} ' + ' '.join(token(g) for g in config['build']['makeGoals'])]
     return ' && '.join(resolve), ' && '.join(make)
@@ -182,8 +214,9 @@ def resolve(config, env):
         if (values.get(key) or '').startswith(source):  # recorded relative to the source root either way
             values[key] = values[key][len(source):]
     target = config['target']
-    expected = {'TARGET_PRODUCT': target['product'], 'TARGET_RELEASE': target['release'], 'TARGET_BUILD_VARIANT': target['variant']}
-    wrong = [f'{k}={values.get(k)}' for k, v in expected.items() if values.get(k) != v]
+    expected = {'TARGET_PRODUCT': target['product'], 'TARGET_RELEASE': target['release'], 'TARGET_BUILD_VARIANT': target['variant'],
+        'TARGET_BOARD_PLATFORM': config['hostPackage']['boardPlatform']}
+    wrong = [f'{k}={values.get(k) or "(empty)"}' for k, v in expected.items() if values.get(k) != v]
     out = config['build']['outDir']
     wrong += [f'{k}={values.get(k)} (outside {out})' for k in ('PRODUCT_OUT', 'HOST_OUT')
         if not (values.get(k) or '').startswith(out + '/')]
@@ -280,20 +313,20 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
         (make or (lambda: subprocess.run(['bash', '-euo', 'pipefail', '-c', steps(config)[1]], cwd=source, env=env, check=True)))()
         product_out, host_out = source/values['PRODUCT_OUT'], source/values['HOST_OUT']
         stale = [n for n in config['build']['requiredImages'] if not (product_out/n).is_file() or (product_out/n).stat().st_mtime < started - 1]
-        stale += [n for n in config['build']['requiredHostOutputs'] if not (host_out/n).is_file() or (host_out/n).stat().st_mtime < started - 1]
+        stale += [n for n in [config['hostPackage']['output']] if not (host_out/n).is_file() or (host_out/n).stat().st_mtime < started - 1]
         if stale:
             raise CheckFailed('not written by this build: ' + ', '.join(stale))
         failures = identity_failures(read_props(product_out), config, identity, timestamp, values['PRODUCT_DEVICE'])
         if failures:
             raise CheckFailed('; '.join(failures))
         images = {p.name: {'size': p.stat().st_size, 'sha256': sha256_file(p)} for p in sorted(product_out.glob('*.img'))}
-        hosts = {n: {'size': (host_out/n).stat().st_size, 'sha256': sha256_file(host_out/n)} for n in config['build']['requiredHostOutputs']}
+        hosts = {n: {'size': (host_out/n).stat().st_size, 'sha256': sha256_file(host_out/n)} for n in [config['hostPackage']['output']]}
     finally:
         lock.close()
     props = read_props(product_out)['system/build.prop']
     receipt = {'receiptType': 'emulator-alpha-build', 'simulated': make is not None, 'testOnly': True, 'signed': False,
         'keys': config['target']['keys'], 'published': False, 'bootAttempted': False, 'bootVerified': False,
-        'candidate': sha, 'sourceBinding': {k: v for k, v in config['sourceBinding'].items() if k != 'basis'},
+        'candidate': sha, 'sourceBinding': {k: config['sourceBinding'][k] for k in ('candidate', 'reconcileReceipt', 'reconcileReceiptSha256', 'apps')},
         'emulatorBuildId': identity, 'buildDatetime': timestamp, 'lunch': values, 'outDir': config['build']['outDir'],
         'makeGoals': config['build']['makeGoals'], 'images': images, 'hostOutputs': hosts,
         'buildProps': {k: props.get(k) for k in ('ro.build.fingerprint', 'ro.build.type', 'ro.build.version.incremental', 'ro.build.date.utc')},
