@@ -1,5 +1,5 @@
 {
-  "status": "draft: candidate model pending owner selection; nothing deployed; no image digest resolved",
+  "status": "draft: candidate model pending owner selection; nothing deployed; image digest read from the registry, not pulled",
   "model": {
     "candidate_for": "spoken name \"Muse Glimmer\" (owner confirmation pending)",
     "repo": "meta-models/Muse-Glimmer-30B",
@@ -101,9 +101,17 @@
       "runtime": {
         "engine": "vllm",
         "image_source_tag": "vllm/vllm-openai:muse-glimmer",
-        "image_digest": null,
+        "image_digest": "sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c",
         "image_requires_cuda": "13.0",
-        "artifact_registry_image_uri": null
+        "artifact_registry_image_uri": null,
+        "image_index_digest": "sha256:413c8fbecb1204a218117c77a4ea4b3a211d5686ff99c31d82ba6dd0cec8c5a6",
+        "image_platform": "linux/amd64",
+        "image_compressed_layer_bytes": 8619692312,
+        "image_layer_count": 32,
+        "image_digest_evidence": "Registry V2 manifest read 2026-10-28T21:43Z, 4 requests, anonymous pull token; body hashes match headers; no layers pulled",
+        "driver_major_min": 580,
+        "driver_basis": "CUDA 13.x needs driver 580 or newer (NVIDIA minor-version compatibility); Agent Platform node driver unknown",
+        "weights_cache_dir": "~/.cache/huggingface"
       },
       "container_spec": {
         "imageUri": null,
@@ -156,11 +164,13 @@
           "timeoutSeconds": 30,
           "failureThreshold": 120
         },
-        "deploymentTimeout": "3600s"
+        "deploymentTimeout": "3600s",
+        "command_rendered_by": "startup_guard.container_command (inline guard, then vllm serve)"
       },
       "max_num_seqs": 1,
       "gpu_memory_utilization": 0.9,
-      "runtime_reserve_bytes_per_gpu": 3221225472
+      "runtime_reserve_bytes_per_gpu": 3221225472,
+      "gpu_memory_bytes_basis": "assumption from the nominal GPU size; the startup guard uses the device-reported total and free memory"
     },
     {
       "id": "l4x1-q4km-llamacpp",
@@ -199,7 +209,8 @@
         "minimum_build": "b10353",
         "image_source_tag": null,
         "image_digest": null,
-        "artifact_registry_image_uri": null
+        "artifact_registry_image_uri": null,
+        "driver_major_min": null
       },
       "container_spec": {
         "imageUri": null,
@@ -240,7 +251,8 @@
       },
       "max_num_seqs": 1,
       "gpu_memory_utilization": 1.0,
-      "runtime_reserve_bytes_per_gpu": 2147483648
+      "runtime_reserve_bytes_per_gpu": 2147483648,
+      "gpu_memory_bytes_basis": "assumption from the nominal GPU size; the startup guard uses the device-reported total and free memory"
     }
   ],
   "wire_contract": {
@@ -264,10 +276,23 @@
     "test_hours": 4,
     "teardown_allowance_hours": 6,
     "on_demand_rate_usd_per_hour_a2_highgpu_2g": 8.4489898,
-    "rate_note": "published on-demand inference rate already includes the machine; no separate management fee is added for on-demand. Reservations bill separate infrastructure and management SKUs."
+    "rate_note": "published on-demand inference rate already includes the machine; no separate management fee is added for on-demand. Reservations bill separate infrastructure and management SKUs.",
+    "attempts": 1,
+    "timeline": {
+      "T0": "first cost-bearing operation (deploy request)",
+      "startup_deadline": "T0+1h (deploymentTimeout 3600s)",
+      "test_stop": "T0+4h",
+      "teardown_verified_by": "T0+6h, including after a failed startup"
+    },
+    "alternatives_requiring_separate_scope": [
+      "8K context",
+      "--enforce-eager",
+      "any restart, retry or second deploy"
+    ]
   },
   "load_test": {
     "abort_if": [
+      "startup guard exits 3 (driver, GPU count, device-reported memory, cache disk or shm below limits)",
       "startup OOM or engine exit",
       "replica not healthy within deploymentTimeout (3600s)",
       "engine-reported KV cache below 1.0 GiB per GPU",
@@ -279,7 +304,27 @@
       "GET /health returns 200",
       "GET /v1/models lists id muse-glimmer with root meta-models/Muse-Glimmer-30B",
       "two-turn non-streaming chat returns non-empty choices[0].message.content",
-      "one 16K-token prompt completes without OOM"
+      "one request with usage.prompt_tokens between 11,000 and 12,288 and max_tokens 2,048 completes without OOM"
     ]
+  },
+  "prompt_envelope": {
+    "max_model_len": 16384,
+    "counted_by": "server usage.prompt_tokens + usage.completion_tokens with the pinned tokenizer revision (chat template included)",
+    "acceptance_prompt_tokens_max": 12288,
+    "acceptance_max_tokens": 2048,
+    "slack_tokens": 2048,
+    "note": "reasoning tokens count toward completion tokens; the 16,384 cap is prompt plus output"
+  },
+  "cleanup": {
+    "operations": [
+      "aiplatform.endpoints.undeploy",
+      "aiplatform.endpoints.delete",
+      "aiplatform.models.delete"
+    ],
+    "verify_with": [
+      "aiplatform.endpoints.get/list shows no deployed model",
+      "aiplatform.models.get returns not found"
+    ],
+    "note": "required after success, failure or timeout; a deploy timeout alone is not cleanup"
   }
 }
