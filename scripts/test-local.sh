@@ -72,6 +72,9 @@ java -cp "$JAVA_TESTS/HomeSessionMark" dev.pixel.voice.HomeSessionMarkTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/UpdateCheck" \
  workspace/rose-agent/app/src/dev/pixel/voice/UpdateCheck.java workspace/rose-agent/app/tests/UpdateCheckTest.java
 java -cp "$JAVA_TESTS/UpdateCheck" dev.pixel.voice.UpdateCheckTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/SelfUpdate" \
+ workspace/rose-agent/app/src/dev/pixel/voice/UpdateCheck.java workspace/rose-agent/app/src/dev/pixel/voice/SelfUpdate.java workspace/rose-agent/app/tests/SelfUpdateTest.java
+java -cp "$JAVA_TESTS/SelfUpdate" dev.pixel.voice.SelfUpdateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TaskPresentation" \
  workspace/rose-agent/app/src/dev/pixel/voice/TaskPresentation.java workspace/rose-agent/app/tests/TaskPresentationTest.java
 java -cp "$JAVA_TESTS/TaskPresentation" dev.pixel.voice.TaskPresentationTest

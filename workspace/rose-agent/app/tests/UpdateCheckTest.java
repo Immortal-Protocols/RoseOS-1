@@ -24,8 +24,8 @@ public final class UpdateCheckTest {
         expect(UpdateCheck.evaluate(200, Arrays.asList(self(297)), 298, SELF, false).state == UpdateCheck.State.NO_UPDATE,
                 "Older offered version is no update");
         r = UpdateCheck.evaluate(200, Arrays.asList(self(299)), 298, SELF, false);
-        expect(r.state == UpdateCheck.State.AVAILABLE && r.offered == 299 && r.message.contains("isn’t enabled"),
-                "Higher version is reported, without claiming it installs");
+        expect(r.state == UpdateCheck.State.AVAILABLE && r.offered == 299 && r.message.equals("Version 299 is available (installed 298).") && r.offeredId != null && r.offeredId.equals(self(299).id),
+                "Higher version is reported for an explicit Install of exactly that record, without claiming it is installed");
         r = UpdateCheck.evaluate(200, Arrays.asList(self(299.0)), 298, SELF, true);
         expect(r.state == UpdateCheck.State.AVAILABLE && r.message.contains("interrupt"),
                 "JSON whole number accepted; during a call nothing interrupts it");
