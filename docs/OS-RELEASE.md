@@ -666,14 +666,16 @@ the action revokes at job end; the builder never receives it. The job then runs
   - the artifact is exactly the APK, the receipt and `SHA256SUMS`, with every
     digest matching;
   - the receipt is non-simulated and names this candidate and the dispatched
-    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (304: 303
+    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (306: 303
     was delivered through the authenticated catalog; 304 is public on GitHub
-    and catalog-delivered);
+    and catalog-delivered; 306 is public on GitHub as the first direct-GitHub
+    client);
   - a version in `appRelease.reserved` is accepted only for the app-only route
     and its candidate (any candidate when none is recorded). Any other N must
     exceed every reservation. `host-app-release.py` applies the same rule:
     - 305 belongs to the 2026102805 OS candidate `7fb94ae6`;
-    - 306 (`306-direct-github-beta`) is the next app-only candidate;
+    - 307 (`307-dock-label-beta`) is the next app-only candidate. Because 306 is
+      built and delivered, a new OS candidate must bundle Rose Agent 308 or above;
   - the APK's size, sha256 and signer match the receipt, and the APK's own
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;

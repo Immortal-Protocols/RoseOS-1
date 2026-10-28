@@ -236,18 +236,18 @@ class CheckedInAppReleaseTest(unittest.TestCase):
     def test_checked_in_config_has_every_app_only_input(self):
         self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-app-release.py'), '--check']).returncode, 0)
 
-    def test_app_release_pins_302_the_delivered_303_and_304_and_the_reserved_305_and_306(self):
+    def test_app_release_pins_302_the_delivered_303_304_and_306_and_the_reserved_305_and_307(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         app = config['appRelease']
         self.assertEqual(app['published'], {'versionCode': 302, 'size': 1381533,
             'sha256': '01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6',
             'signerSha256': config['identities']['appSignerSha256']})
         self.assertEqual((app['packageName'], app['mustExceed'], app['minimumTestedOs']),
-            ('dev.pixel.voice', 304, {'build': '2026102804', 'controller': 28}))
-        built, public = app['built']
+            ('dev.pixel.voice', 306, {'build': '2026102804', 'controller': 28}))
+        built, public, direct = app['built']
         self.assertEqual((built['versionCode'], built['sha256'], built['size'], built['run']),
             (303, 'cb11480c88419851ecafee24565d4e86e0e14d5416800e9573f6bc23bfd96f41', 1381533, 40676568143))
-        self.assertEqual(app['mustExceed'], max(app['published']['versionCode'], built['versionCode'], public['versionCode']))
+        self.assertEqual(app['mustExceed'], max(app['published']['versionCode'], built['versionCode'], public['versionCode'], direct['versionCode']))
         # 303 reached phones through the authenticated catalog; only a public GitHub release is absent.
         self.assertEqual(built['delivered'], {'route': 'authenticated catalog', 'at': '2026-10-28T14:39Z', 'publicRelease': False})
         self.assertNotIn('never published', built['basis'])
@@ -255,30 +255,38 @@ class CheckedInAppReleaseTest(unittest.TestCase):
         self.assertEqual((public['versionCode'], public['sha256'], public['size'], public['candidate'], public['delivered']),
             (304, 'd8f69efcdcbc209ec5fd16badcaaf4c98fa614d7eb5fc54c1431a6f098d26966', 1385629, 'a3d839e6805b514aa6cad6f86c15e5db622e10cc',
              {'route': 'public GitHub prerelease rose-agent-304 and authenticated catalog', 'at': '2026-10-28T17:27Z', 'publicRelease': True}))
+        # 306 is the first direct-GitHub client, public as rose-agent-306 (release 427075167, run 40750475915): delivered and immutable.
+        self.assertEqual((direct['versionCode'], direct['versionName'], direct['sha256'], direct['size'], direct['signerSha256'], direct['candidate'], direct['delivered']),
+            (306, '306-direct-github-beta', '23874658c1590472a1b687b198cb5d81f76134ee11b1a46bd5ba5611cfb3a2eb', 1393821,
+             config['identities']['appSignerSha256'], 'c095566b159b61417a7e9906408a50a518e69924',
+             {'route': 'public GitHub prerelease rose-agent-306', 'at': '2026-10-28T19:04Z', 'publicRelease': True}))
         self.assertEqual([(r['versionCode'], r['versionName'], r['route'], r['candidate']) for r in app['reserved']],
-            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (306, '306-direct-github-beta', 'app-only', None)])
+            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (307, '307-dock-label-beta', 'app-only', None)])
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
             {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
-        self.assertIn('package="dev.pixel.voice" android:versionCode="306" android:versionName="306-direct-github-beta"', manifest)
+        self.assertIn('package="dev.pixel.voice" android:versionCode="307" android:versionName="307-dock-label-beta"', manifest)
 
     def test_reserved_versions_belong_to_their_route_and_candidate(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         queued = 'a3d839e6805b514aa6cad6f86c15e5db622e10cc'
-        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 306]], 'f' * 40), 306)  # no candidate recorded
-        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 307]], 'f' * 40), 307)
+        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 307]], 'f' * 40), 307)  # no candidate recorded
+        self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 308]], 'f' * 40), 308)
         pinned = json.loads(json.dumps(config))
         pinned['appRelease']['reserved'][1]['candidate'] = queued
-        self.assertEqual(release.requested_version(pinned, [['dev.pixel.voice', 306]], queued), 306)
-        for cfg, version, sha, message in ((pinned, 306, 'f' * 40, 'reserved for the app-only route and candidate ' + queued),
-                (config, 305, queued, 'reserved for the os-release route and candidate 7fb94ae6'),
-                (config, 304, queued, 'must exceed 304, the newest built or published')):
+        self.assertEqual(release.requested_version(pinned, [['dev.pixel.voice', 307]], queued), 307)
+        osres = json.loads(json.dumps(config))  # an os-release reservation above mustExceed is never the app-only route's
+        osres['appRelease']['reserved'].append({'versionCode': 308, 'versionName': '308-os-beta', 'candidate': 'e' * 40, 'route': 'os-release', 'basis': 'test'})
+        for cfg, version, sha, message in ((pinned, 307, 'f' * 40, 'reserved for the app-only route and candidate ' + queued),
+                (osres, 308, queued, 'reserved for the os-release route and candidate eeeeeeee'),
+                (config, 305, queued, 'must exceed 306, the newest built or published'),
+                (config, 306, queued, 'must exceed 306, the newest built or published')):
             with self.assertRaisesRegex(release.AdapterFailed, message):
                 release.requested_version(cfg, [['dev.pixel.voice', version]], sha)
         gap = json.loads(json.dumps(config))  # an unreserved version below a reservation is refused too
-        gap['appRelease']['reserved'] = [dict(gap['appRelease']['reserved'][1], versionCode=308)]
-        with self.assertRaisesRegex(release.AdapterFailed, 'must exceed the reserved 308'):
-            release.requested_version(gap, [['dev.pixel.voice', 307]], queued)
+        gap['appRelease']['reserved'] = [dict(gap['appRelease']['reserved'][1], versionCode=309)]
+        with self.assertRaisesRegex(release.AdapterFailed, 'must exceed the reserved 309'):
+            release.requested_version(gap, [['dev.pixel.voice', 308]], queued)
 
 class WorkflowAppOnlyTest(unittest.TestCase):
     def setUp(self):

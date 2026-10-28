@@ -24,6 +24,9 @@ from background_apks import installed_precedence  # noqa: E402
 CONFIG = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
 APPS = [['dev.pixel.voice', 305], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 DRAFT = {'build': '2026102805', 'timestamp': '1793206861'}
+# After the app-only 306 was delivered (INFRA-APP-110), a new OS candidate must bundle Rose Agent above it and the
+# app-only 307 reservation; 308 is the smallest it may bundle. The published 2805 (Agent 305) itself is unchanged.
+NEXT = [['dev.pixel.voice', 308], *APPS[1:]]
 # The verified 2026102802 draft's notes are immutable evidence (pixel-ota draft frankel-2026102802).
 NOTES_2802_SHA256 = 'a84fac7a77cd521d53226bcf1d8b89528f6f23b0f8a0eb42b73570055a4f865f'
 NOTES_2803_SHA256 = '04f91df28af8e021177a10740731849da9e605d52af2faee78f33d6fc96579cb'  # draft 426456114, immutable
@@ -76,20 +79,23 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertIn('updater-product-build-make.patch', (ROOT/'scripts/apply-os-changes.py').read_text())
 
     def test_source_manifests_match_the_allocated_versions(self):
-        # 2804 carried Rose Agent 302; 303 was delivered through the catalog and 304 published on GitHub (app-only a3d839e6);
-        # the 2805 candidate bundles 305, reserved for the OS route; 306 is the next app-only reservation.
-        # The source has moved on to the app-only 306; 2805 builds its 305 from the pinned product 7fb94ae6 (the reservation below).
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 306, '306-direct-github-beta'))
+        # 2804 carried Rose Agent 302; 303 was delivered through the catalog and 304 and 306 published on GitHub (app-only
+        # a3d839e6 and c095566b); the 2805 candidate bundled 305, reserved for the OS route; 307 is the next app-only reservation.
+        # The source has moved on to the app-only 307 (INFRA-APP-110: direct GitHub client plus the M008 dock-label fix).
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 307, '307-dock-label-beta'))
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
         self.assertEqual((reserved[305]['route'], reserved[305]['versionName'], reserved[305]['candidate']),
             ('os-release', '305-home-beta', '7fb94ae6ed535066d50879a99b7c8e427da8e853'))
-        self.assertEqual((reserved[306]['route'], reserved[306]['versionName']), ('app-only', '306-direct-github-beta'))
+        self.assertEqual((reserved[307]['route'], reserved[307]['versionName'], reserved[307]['candidate']), ('app-only', '307-dock-label-beta', None))
         built = {row['versionCode']: row for row in CONFIG['appRelease']['built']}
         self.assertEqual(built[304]['candidate'], 'a3d839e6805b514aa6cad6f86c15e5db622e10cc')
-        # The 2805 candidate's own reservation admits 305 past the later app-only 306; any other OS candidate must exceed 306.
-        self.assertEqual(pipeline.app_versions_consumed(CONFIG, dict(APPS)), ('dev.pixel.voice', 304))
-        self.assertEqual(pipeline.app_versions_consumed(CONFIG), ('dev.pixel.voice', 306))
-        self.assertEqual(pipeline.app_versions_consumed(CONFIG, {'dev.pixel.voice': 307}), ('dev.pixel.voice', 306))
+        self.assertEqual((built[306]['candidate'], built[306]['sha256'], built[306]['size']),
+            ('c095566b159b61417a7e9906408a50a518e69924', '23874658c1590472a1b687b198cb5d81f76134ee11b1a46bd5ba5611cfb3a2eb', 1393821))
+        # 306 is now built and delivered, so even 2805's own 305 reservation no longer passes it; any new OS candidate
+        # must exceed the built 306 and the app-only 307 reservation.
+        self.assertEqual(pipeline.app_versions_consumed(CONFIG, dict(APPS)), ('dev.pixel.voice', 306))
+        self.assertEqual(pipeline.app_versions_consumed(CONFIG), ('dev.pixel.voice', 307))
+        self.assertEqual(pipeline.app_versions_consumed(CONFIG, {'dev.pixel.voice': 308}), ('dev.pixel.voice', 307))
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
@@ -143,27 +149,29 @@ class CheckedInCandidateTest(unittest.TestCase):
             '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs')
 
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
-        pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
+        pipeline.check_version_baselines(CONFIG, DRAFT, NEXT)
         for apps, cand, message in (
                 ([['dev.pixel.voice', 304], *APPS[1:]], DRAFT,
-                    'dev.pixel.voice versionCode 304 must exceed 306, the newest app-only version published, built or reserved'),
-                ([['dev.pixel.voice', 306], *APPS[1:]], DRAFT, 'versionCode 306 must exceed 306, the newest app-only version'),
-                ([['dev.pixel.voice', 303], *APPS[1:]], DRAFT, 'must exceed 306, the newest app-only version'),
+                    'dev.pixel.voice versionCode 304 must exceed 307, the newest app-only version published, built or reserved'),
+                (APPS, DRAFT, 'dev.pixel.voice versionCode 305 must exceed 306, the newest app-only version'),  # 2805's own 305 no longer passes the built 306
+                ([['dev.pixel.voice', 306], *APPS[1:]], DRAFT, 'versionCode 306 must exceed 307, the newest app-only version'),
+                ([['dev.pixel.voice', 307], *APPS[1:]], DRAFT, 'versionCode 307 must exceed 307, the newest app-only version'),
+                ([['dev.pixel.voice', 303], *APPS[1:]], DRAFT, 'must exceed 307, the newest app-only version'),
                 ([['dev.pixel.voice', 302], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 302 must exceed retained 2026102804 versionCode 302'),
                 ([['dev.pixel.voice', 301], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 301 must exceed retained 2026102803 versionCode 301'),
                 ([['dev.pixel.voice', 300], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 300 must exceed retained 2026102802 versionCode 300'),
-                ([*APPS[:2], ['dev.pixel.backgroundcontrol', 27]], DRAFT,
+                ([*NEXT[:2], ['dev.pixel.backgroundcontrol', 27]], DRAFT,
                     'dev.pixel.backgroundcontrol versionCode 27 must exceed retained 2026102802 versionCode 27'),
                 ([['dev.pixel.voice', 299], *APPS[1:]], DRAFT, 'must exceed retained 2026102801 versionCode 299'),
                 ([['dev.pixel.voice', 297], *APPS[1:]], DRAFT, 'below delivered 2026102701 versionCode 298'),
-                (APPS[1:], DRAFT, 'dev.pixel.voice versionCode None must exceed'),
-                (APPS, {'build': '2026102805', 'timestamp': '1793180700'}, 'must exceed retained 2026102804 \\(1793180700\\)'),
-                (APPS, {'build': '2026102804', 'timestamp': '1793206861'}, 'must exceed retained 2026102804')):
+                (NEXT[1:], DRAFT, 'dev.pixel.voice versionCode None must exceed'),
+                (NEXT, {'build': '2026102805', 'timestamp': '1793180700'}, 'must exceed retained 2026102804 \\(1793180700\\)'),
+                (NEXT, {'build': '2026102804', 'timestamp': '1793206861'}, 'must exceed retained 2026102804')):
             with self.assertRaisesRegex(pipeline.CheckFailed, message):
                 pipeline.check_version_baselines(CONFIG, cand, apps)
         without = {k: v for k, v in CONFIG.items() if k != 'versionBaselines'}
         with self.assertRaises(pipeline.SetupMissing):
-            pipeline.check_version_baselines(without, DRAFT, APPS)
+            pipeline.check_version_baselines(without, DRAFT, NEXT)
 
 class BuilderControlTest(unittest.TestCase):
     """Fake gcloud: describe pops the next status from a queue (repeating the last); start/stop exit as configured."""
