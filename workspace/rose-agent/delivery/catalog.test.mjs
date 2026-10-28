@@ -161,3 +161,72 @@ test('the CLI defaults the signer pin to the checked-in app signer identity',t=>
  assert.equal(usage.status,1);
  assert.match(JSON.parse(usage.stderr).error,/^usage:/);
 });
+
+const PUBLICATION={repository:'Immortal-Protocols/pixel-ota',tag:'rose-agent-{versionCode}',asset:'{package}-{versionCode}.apk'};
+function publicReceipt(root,dir,edit=r=>r,name='public.json'){
+ const receipt=JSON.parse(fs.readFileSync(path.join(dir,'app-release-receipt.json'),'utf8'));
+ const tag=`rose-agent-${receipt.versionCode}`,asset=`dev.pixel.voice-${receipt.versionCode}.apk`;
+ const document=edit({receiptType:'app-publication',prerelease:true,repository:'Immortal-Protocols/pixel-ota',tag,asset,
+  apkUrl:`https://github.com/Immortal-Protocols/pixel-ota/releases/download/${tag}/${asset}`,
+  ...Object.fromEntries(['packageName','versionCode','versionName','size','sha256','signerSha256','candidate','minimumTestedOs'].map(k=>[k,receipt[k]]))});
+ const file=path.join(root,name);fs.writeFileSync(file,JSON.stringify(document));return file;
+}
+
+test('INFRA-APP-096: a verified public receipt adds the canonical apkUrl that the authenticated manifest serves',async t=>{
+ const {root,catalog,prior}=setup(t);
+ const dir=artifact(root,{version:304});
+ const receipt=publish({artifactDir:dir,catalogDir:catalog,receiptPath:path.join(root,'publish.json'),expectedSigner:PIN,now:()=>1000,
+  publicReceipt:publicReceipt(root,dir),publicationConfig:PUBLICATION});
+ const url='https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/dev.pixel.voice-304.apk';
+ assert.equal(receipt.apkUrl,url);
+ assert.match(receipt.publicReceiptSha256,/^[0-9a-f]{64}$/);
+ const manifest=JSON.parse((await request(catalog,`/apps/${receipt.id}/manifest`)).body);
+ assert.equal(manifest.apkUrl,url);
+ assert.equal(manifest.sha256,receipt.id,'the client binds the public bytes to this sha256 and size');
+ assert.ok((await request(catalog,`/apps/${receipt.id}/apk`)).body.length>0,'same-origin APK bytes are still stored');
+ assert.equal(JSON.parse((await request(catalog,`/apps/${prior.id}/manifest`)).body).apkUrl,undefined,'previous records are unchanged');
+ // Rerunning with the same receipt is a no-op; the same APK without the public receipt is a different record.
+ publish({artifactDir:dir,catalogDir:catalog,receiptPath:path.join(root,'publish.json'),expectedSigner:PIN,
+  publicReceipt:path.join(root,'public.json'),publicationConfig:PUBLICATION});
+ assert.throws(()=>publish({artifactDir:dir,catalogDir:catalog,receiptPath:path.join(root,'other.json'),expectedSigner:PIN}),/a different catalog record/);
+});
+
+test('INFRA-APP-096: a public receipt that does not match the artifact or the URL contract fails before any write',t=>{
+ const {root,catalog}=setup(t);
+ const before=snapshot(catalog);
+ const dir=artifact(root,{version:304});
+ const cases=[
+  [r=>({...r,sha256:'0'.repeat(64)}),/public receipt sha256 differs/],
+  [r=>({...r,size:r.size+1}),/public receipt size differs/],
+  [r=>({...r,versionCode:303}),/public receipt versionCode differs/],
+  [r=>({...r,packageName:'dev.pixel.other'}),/public receipt packageName differs/],
+  [r=>({...r,signerSha256:'cd'.repeat(32)}),/public receipt signerSha256 differs/],
+  [r=>({...r,candidate:'e'.repeat(40)}),/public receipt candidate differs/],
+  [r=>({...r,prerelease:false}),/not an app-publication receipt of a prerelease/],
+  [r=>({...r,receiptType:'app-release'}),/not an app-publication receipt/],
+  [r=>({...r,tag:'latest',apkUrl:r.apkUrl.replace('rose-agent-304','latest')}),/not Immortal-Protocols\/pixel-ota\/rose-agent-304/],
+  [r=>({...r,repository:'someone/else'}),/not Immortal-Protocols\/pixel-ota/],
+  [r=>({...r,apkUrl:r.apkUrl+'?x=1'}),/apkUrl is not the canonical/],
+  [r=>({...r,apkUrl:r.apkUrl.replace('https:','http:')}),/apkUrl is not the canonical/],
+  [r=>({...r,apkUrl:r.apkUrl.replace('github.com','example.com')}),/apkUrl is not the canonical/],
+  [r=>({...r,apkUrl:r.apkUrl.replace('pixel-ota','pixel-ota2')}),/apkUrl is not the canonical/],
+ ];
+ cases.forEach(([edit,message],i)=>{
+  assert.throws(()=>publish({artifactDir:dir,catalogDir:catalog,receiptPath:path.join(root,`r${i}.json`),expectedSigner:PIN,
+   publicReceipt:publicReceipt(root,dir,edit,`p${i}.json`),publicationConfig:PUBLICATION}),message);
+ });
+ assert.throws(()=>publish({artifactDir:dir,catalogDir:catalog,receiptPath:path.join(root,'n.json'),expectedSigner:PIN,
+  publicReceipt:publicReceipt(root,dir)}),/no appRelease.publication configuration/);
+ assert.deepEqual(snapshot(catalog),before);
+ assert.ok(!fs.readdirSync(root).some(f=>/^r\d+\.json$/.test(f)),'no publish receipt for a refused record');
+});
+
+test('INFRA-APP-096: the CLI reads the pinned publication names from the checked-in config',t=>{
+ const config=JSON.parse(fs.readFileSync(path.join(import.meta.dirname,'../../../os/release-pipeline/frankel.json'),'utf8'));
+ assert.deepEqual({repository:config.appRelease.publication.repository,tag:config.appRelease.publication.tag,asset:config.appRelease.publication.asset},PUBLICATION);
+ const {root,catalog}=setup(t);
+ const dir=artifact(root,{version:304,signer:config.identities.appSignerSha256});
+ const out=execFileSync(process.execPath,[CATALOG,'--artifact-dir',dir,'--catalog-dir',catalog,'--receipt',path.join(root,'p.json'),
+  '--public-receipt',publicReceipt(root,dir)],{encoding:'utf8'});
+ assert.equal(JSON.parse(out).apkUrl,'https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/dev.pixel.voice-304.apk');
+});

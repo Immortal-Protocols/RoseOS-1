@@ -5,6 +5,14 @@
 //
 //   node workspace/rose-agent/delivery/catalog.mjs --artifact-dir DIR --catalog-dir DIR --receipt FILE
 //     [--label TEXT] [--device-id-file FILE] [--idsig FILE] [--expected-signer SHA256] [--apksigner PATH]
+//     [--public-receipt FILE]
+//
+// --public-receipt (INFRA-APP-096): the app-publication receipt of the public pixel-ota prerelease, after the lead
+// verified the public bytes. Its package, version, size, sha256, signer and candidate must equal the verified
+// artifact, its tag and asset must be the configured names for that version, and its apkUrl must be exactly
+// https://github.com/Immortal-Protocols/pixel-ota/releases/download/{tag}/{asset} (the client's initial-URL contract,
+// PublicApkDownload.java). The record then carries apkUrl, which the authenticated manifest serves; without the option
+// records stay exactly as before. Writing a record is not transport and grants no access.
 //
 // Preconditions, all before the first write: SHA256SUMS covers exactly the APK and the receipt and every digest
 // matches; the receipt is a nonsimulated app-release whose size, sha256 and signer equal the APK bytes and the pin;
@@ -53,12 +61,37 @@ export function verifyArtifact(artifactDir,expectedSigner,apksigner){
  return {receipt,apk,receiptBytes:fs.readFileSync(path.join(artifactDir,'app-release-receipt.json'))};
 }
 
-export function publish({artifactDir,catalogDir,receiptPath,label,deviceId=null,idsig=null,expectedSigner,apksigner=null,now=Date.now}){
+const RELEASES='https://github.com/Immortal-Protocols/pixel-ota/releases/download/';
+
+// The public prerelease's receipt against the verified artifact receipt; returns the canonical apkUrl.
+export function verifyPublication(publication,receipt,publicationConfig){
+ if(!publicationConfig)fail('no appRelease.publication configuration to check the public receipt against');
+ if(publication.receiptType!=='app-publication'||publication.prerelease!==true)fail('not an app-publication receipt of a prerelease');
+ for(const key of ['packageName','versionCode','size','sha256','signerSha256','candidate'])
+  if(publication[key]!==receipt[key])fail(`public receipt ${key} differs from the verified artifact`);
+ const tag=publicationConfig.tag.replace('{versionCode}',receipt.versionCode);
+ const asset=publicationConfig.asset.replace('{package}',receipt.packageName).replace('{versionCode}',receipt.versionCode);
+ if(publication.tag!==tag||publication.asset!==asset||publication.repository!==publicationConfig.repository)
+  fail(`public receipt names ${publication.repository}/${publication.tag}/${publication.asset}, not ${publicationConfig.repository}/${tag}/${asset}`);
+ const url=RELEASES+tag+'/'+asset;
+ // The same shape the client accepts: a versioned tag (not latest), an .apk asset, no query, fragment or encoding.
+ if(publication.apkUrl!==url||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(tag)||!/[0-9]/.test(tag)||/^latest$/i.test(tag)
+  ||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.apk$/.test(asset))fail('public receipt apkUrl is not the canonical release-asset URL');
+ return url;
+}
+
+export function publish({artifactDir,catalogDir,receiptPath,label,deviceId=null,idsig=null,expectedSigner,apksigner=null,now=Date.now,
+ publicReceipt=null,publicationConfig=null}){
  if(deviceId!==null&&!HEX.test(deviceId))fail('device id must be 64 lowercase hex characters');
  const {receipt,apk,receiptBytes}=verifyArtifact(artifactDir,expectedSigner,apksigner);
  const id=receipt.sha256;
  const entry={id,label:label||`Rose Agent ${receipt.versionName||receipt.versionCode}`,packageName:receipt.packageName,
   versionCode:receipt.versionCode,size:apk.length,sha256:id};
+ let publicBytes=null;
+ if(publicReceipt){
+  publicBytes=fs.readFileSync(publicReceipt);
+  entry.apkUrl=verifyPublication(JSON.parse(publicBytes),receipt,publicationConfig);
+ }
  if(deviceId)entry.deviceId=deviceId;
  let sidecar=null;
  if(idsig){
@@ -87,7 +120,8 @@ export function publish({artifactDir,catalogDir,receiptPath,label,deviceId=null,
   size:stored.size,sha256:id,signerSha256:receipt.signerSha256,label:stored.label,created:stored.created,
   v4Signature:stored.v4Signature||null,deviceScoped:Boolean(stored.deviceId),candidate:receipt.candidate||null,
   minimumTestedOs:receipt.minimumTestedOs||null,appReleaseReceiptSha256:digest(receiptBytes),
-  retainedRecords:others.map(e=>e.id).sort(),transport:'none (catalog file write only)'};
+  retainedRecords:others.map(e=>e.id).sort(),transport:'none (catalog file write only)',
+  apkUrl:stored.apkUrl||null,publicReceiptSha256:publicBytes?digest(publicBytes):null};
  const receiptOut=Buffer.from(JSON.stringify(publishReceipt,null,2)+'\n');
  if(fs.existsSync(receiptPath)&&!fs.readFileSync(receiptPath).equals(receiptOut))fail('the publish receipt exists with different content');
  // Bytes first, metadata last: the server lists a record only once its JSON exists.
@@ -100,13 +134,16 @@ export function publish({artifactDir,catalogDir,receiptPath,label,deviceId=null,
  return publishReceipt;
 }
 
+const CONFIG=path.resolve(import.meta.dirname,'../../../os/release-pipeline/frankel.json');
 function pinnedSigner(){
- const config=path.resolve(import.meta.dirname,'../../../os/release-pipeline/frankel.json');
- return fs.existsSync(config)?JSON.parse(fs.readFileSync(config,'utf8')).identities.appSignerSha256.toLowerCase():null;
+ return fs.existsSync(CONFIG)?JSON.parse(fs.readFileSync(CONFIG,'utf8')).identities.appSignerSha256.toLowerCase():null;
+}
+function pinnedPublication(){
+ return fs.existsSync(CONFIG)?JSON.parse(fs.readFileSync(CONFIG,'utf8')).appRelease?.publication||null:null;
 }
 
 if(import.meta.url===`file://${process.argv[1]}`){
- const known=['artifact-dir','catalog-dir','receipt','label','device-id-file','idsig','expected-signer','apksigner'];
+ const known=['artifact-dir','catalog-dir','receipt','label','device-id-file','idsig','expected-signer','apksigner','public-receipt'];
  try{
   const args={};
   for(let i=2;i<process.argv.length;i+=2){
@@ -116,10 +153,11 @@ if(import.meta.url===`file://${process.argv[1]}`){
   }
   const unknown=Object.keys(args).filter(k=>!known.includes(k));
   if(unknown.length||!args['artifact-dir']||!args['catalog-dir']||!args.receipt)
-   fail('usage: catalog.mjs --artifact-dir DIR --catalog-dir DIR --receipt FILE [--label TEXT] [--device-id-file FILE] [--idsig FILE] [--expected-signer SHA256] [--apksigner PATH]');
+   fail('usage: catalog.mjs --artifact-dir DIR --catalog-dir DIR --receipt FILE [--label TEXT] [--device-id-file FILE] [--idsig FILE] [--expected-signer SHA256] [--apksigner PATH] [--public-receipt FILE]');
   const deviceId=args['device-id-file']?fs.readFileSync(args['device-id-file'],'utf8').trim():null;
   console.log(JSON.stringify(publish({artifactDir:args['artifact-dir'],catalogDir:args['catalog-dir'],receiptPath:args.receipt,
-   label:args.label,deviceId,idsig:args.idsig||null,expectedSigner:args['expected-signer']||pinnedSigner(),apksigner:args.apksigner||null}),null,2));
+   label:args.label,deviceId,idsig:args.idsig||null,expectedSigner:args['expected-signer']||pinnedSigner(),apksigner:args.apksigner||null,
+   publicReceipt:args['public-receipt']||null,publicationConfig:pinnedPublication()}),null,2));
  }catch(error){
   // Only the catalog's own messages are printed; nothing else is echoed.
   console.error(JSON.stringify({verdict:'FAIL',error:error.catalog?error.message:error.code||error.name}));

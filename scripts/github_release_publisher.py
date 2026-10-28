@@ -17,13 +17,15 @@ class PublishError(Exception):
     pass
 
 class GitHubReleases:
-    def __init__(self, repository, token, api='https://api.github.com', uploads='https://uploads.github.com', allow_http=False):
-        for base in (api, uploads):
+    def __init__(self, repository, token, api='https://api.github.com', uploads='https://uploads.github.com', allow_http=False,
+                 web='https://github.com'):
+        for base in (api, uploads, web):
             if urllib.parse.urlsplit(base).scheme != 'https' and not allow_http:
                 raise PublishError('GitHub API endpoints must use https')
         if not token:
             raise PublishError('no publisher token')
-        self.repository, self.api, self.uploads = repository, api.rstrip('/'), uploads.rstrip('/')
+        self.repository, self.api, self.uploads, self.web = repository, api.rstrip('/'), uploads.rstrip('/'), web.rstrip('/')
+        self.allow_http = allow_http
         self._token = token
 
     def _connect(self, url):
@@ -106,6 +108,33 @@ class GitHubReleases:
         if status == 302:
             # Signed storage URL: the token must not travel there.
             self._request('GET', location, 'download release asset storage', headers={'Accept': 'application/octet-stream'},
+                authenticated=False, stream_to=destination, limit=size)
+
+    def latest_tag(self):
+        status, _, release = self._request('GET', f'{self.api}/repos/{self.repository}/releases/latest', 'get latest release', expect=(200, 404))
+        return release.get('tag_name') if status == 200 and release else None
+
+    def create_prerelease_draft(self, tag, name, body):
+        return self._request('POST', f'{self.api}/repos/{self.repository}/releases', 'create draft prerelease',
+            body={'tag_name': tag, 'name': name, 'body': body, 'draft': True, 'prerelease': True, 'make_latest': 'false'},
+            expect=(201,))[2]
+
+    def publish_prerelease(self, release_id):
+        return self._request('PATCH', f'{self.api}/repos/{self.repository}/releases/{int(release_id)}', 'publish prerelease',
+            body={'draft': False, 'prerelease': True, 'make_latest': 'false'})[2]
+
+    def public_download(self, url, destination, size):
+        """The asset as an anonymous client gets it: the public github.com URL, then at most one redirect to the release
+        asset storage host, without any token."""
+        if not url.startswith('https://github.com/'):
+            raise PublishError('public download URL is not on github.com')
+        status, location, _ = self._request('GET', self.web + url[len('https://github.com'):], 'public release asset',
+            headers={'Accept': 'application/octet-stream'}, authenticated=False, expect=(200, 302), stream_to=destination, limit=size)
+        if status == 302:
+            target = urllib.parse.urlsplit(location or '')
+            if not self.allow_http and (target.scheme != 'https' or target.netloc != 'release-assets.githubusercontent.com'):
+                raise PublishError('public release asset redirected to an unexpected host')
+            self._request('GET', location, 'public release asset storage', headers={'Accept': 'application/octet-stream'},
                 authenticated=False, stream_to=destination, limit=size)
 
     def promote(self, release_id):

@@ -94,12 +94,12 @@ class AppReleaseTest(unittest.TestCase):
                 'minimumTestedOs': {'build': '2026102804', 'controller': 28}}}
         self.config = self.root/'config.json'
         self.config.write_text(json.dumps(self.config_data))
-        self.built = 'dev.pixel.voice:303'
+        self.built = 'dev.pixel.voice:304'
         self.calls = []
         self.head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
         self.work, self.artifact = self.root/'attempt/work', self.root/'attempt/artifact'
         self.env = dict(os.environ, ROSE_CANDIDATE_SHA=self.head, ROSE_RELEASE_DIR=str(self.work),
-            APPS=json.dumps([['dev.pixel.voice', 303]]))
+            APPS=json.dumps([['dev.pixel.voice', 304]]))
 
     def build(self, candidate, release_dir, sdk, java_home, assets, pinned, voice_only=False):
         self.calls.append({'candidate': Path(candidate), 'voice_only': voice_only, 'sdk': sdk})
@@ -125,13 +125,13 @@ class AppReleaseTest(unittest.TestCase):
 
     def test_only_the_signed_apk_receipt_and_checksums_leave_the_builder(self):
         receipt = self.run_release()
-        self.assertEqual(sorted(p.name for p in self.artifact.iterdir()), ['SHA256SUMS', 'app-release-receipt.json', 'dev.pixel.voice-303.apk'])
-        apk = self.artifact/'dev.pixel.voice-303.apk'
+        self.assertEqual(sorted(p.name for p in self.artifact.iterdir()), ['SHA256SUMS', 'app-release-receipt.json', 'dev.pixel.voice-304.apk'])
+        apk = self.artifact/'dev.pixel.voice-304.apk'
         self.assertEqual(receipt, json.loads((self.artifact/'app-release-receipt.json').read_text()))
         self.assertEqual({k: receipt[k] for k in ('receiptType', 'simulated', 'candidate', 'packageName', 'versionCode', 'versionName',
             'apk', 'size', 'sha256', 'signerSha256', 'minimumTestedOs')},
             {'receiptType': 'app-release', 'simulated': False, 'candidate': self.head, 'packageName': 'dev.pixel.voice',
-             'versionCode': 303, 'versionName': '303-app-beta', 'apk': apk.name, 'size': apk.stat().st_size,
+             'versionCode': 304, 'versionName': '304-app-beta', 'apk': apk.name, 'size': apk.stat().st_size,
              'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'signerSha256': PIN,
              'minimumTestedOs': {'build': '2026102804', 'controller': 28}})
         self.assertIn('independent apksigner verification: exactly the pinned signer', receipt['checks'])
@@ -160,7 +160,7 @@ class AppReleaseTest(unittest.TestCase):
         self.assert_clean()
 
     def test_wrong_package_or_built_version_stops_before_any_secret_is_read(self):
-        for built, message in (('dev.pixel.other:303', "dev.pixel.other"), ('dev.pixel.voice:302', "302\\), expected dev.pixel.voice 303")):
+        for built, message in (('dev.pixel.other:304', "dev.pixel.other"), ('dev.pixel.voice:303', "303\\), expected dev.pixel.voice 304")):
             self.built = built
             with self.assertRaisesRegex(release.AdapterFailed, message):
                 self.run_release()
@@ -169,10 +169,10 @@ class AppReleaseTest(unittest.TestCase):
             self.assert_clean()
 
     def test_dispatch_must_name_exactly_rose_agent_above_the_published_302(self):
-        for apps, message in (([['dev.pixel.voice', 302]], 'must exceed the published 302'),
-                ([['dev.pixel.voice', 301]], 'must exceed the published 302'),
-                ([['dev.pixel.voice', 303], ['dev.pixel.backgroundcontrol', 28]], 'exactly'),
-                ([['dev.pixel.calculator.agent', 5]], 'exactly'), ([['dev.pixel.voice', '303']], 'exactly'), ([], 'exactly')):
+        for apps, message in (([['dev.pixel.voice', 302]], 'must exceed 302, the newest built or published'),
+                ([['dev.pixel.voice', 301]], 'must exceed 302, the newest built or published'),
+                ([['dev.pixel.voice', 304], ['dev.pixel.backgroundcontrol', 28]], 'exactly'),
+                ([['dev.pixel.calculator.agent', 5]], 'exactly'), ([['dev.pixel.voice', '304']], 'exactly'), ([], 'exactly')):
             self.env['APPS'] = json.dumps(apps)
             with self.assertRaisesRegex(release.AdapterFailed, message):
                 self.run_release()
@@ -208,16 +208,20 @@ class CheckedInAppReleaseTest(unittest.TestCase):
     def test_checked_in_config_has_every_app_only_input(self):
         self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-app-release.py'), '--check']).returncode, 0)
 
-    def test_app_release_pins_the_published_302_and_the_reserved_303(self):
+    def test_app_release_pins_the_published_302_the_built_303_and_the_reserved_304(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         app = config['appRelease']
         self.assertEqual(app['published'], {'versionCode': 302, 'size': 1381533,
             'sha256': '01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6',
             'signerSha256': config['identities']['appSignerSha256']})
         self.assertEqual((app['packageName'], app['mustExceed'], app['minimumTestedOs']),
-            ('dev.pixel.voice', 302, {'build': '2026102804', 'controller': 28}))
+            ('dev.pixel.voice', 303, {'build': '2026102804', 'controller': 28}))
+        built, = app['built']
+        self.assertEqual((built['versionCode'], built['sha256'], built['size'], built['run']),
+            (303, 'cb11480c88419851ecafee24565d4e86e0e14d5416800e9573f6bc23bfd96f41', 1381533, 40676568143))
+        self.assertEqual(app['mustExceed'], max(app['published']['versionCode'], built['versionCode']))
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
-        self.assertIn('package="dev.pixel.voice" android:versionCode="303" android:versionName="303-app-beta"', manifest)
+        self.assertIn('package="dev.pixel.voice" android:versionCode="304" android:versionName="304-app-beta"', manifest)
 
 class WorkflowAppOnlyTest(unittest.TestCase):
     def setUp(self):
@@ -253,7 +257,7 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         self.assertIn('PROMOTE: ${{ inputs.promote }}', guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         check = re.search(r"\[\[ \"\$MODE\" != app-only \]\] \|\| python3 -c '(.+)'", guard)[1]
-        for apps, ok in (([['dev.pixel.voice', 303]], True), ([['dev.pixel.voice', 303], ['dev.pixel.backgroundcontrol', 28]], False),
+        for apps, ok in (([['dev.pixel.voice', 304]], True), ([['dev.pixel.voice', 304], ['dev.pixel.backgroundcontrol', 28]], False),
                          ([['dev.pixel.calculator.agent', 5]], False)):
             result = subprocess.run([PY, '-c', check], env=dict(os.environ, APPS=json.dumps(apps)), capture_output=True)
             self.assertEqual(result.returncode == 0, ok, apps)
