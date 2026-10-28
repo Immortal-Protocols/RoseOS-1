@@ -91,6 +91,10 @@ java -cp "$JAVA_TESTS/SelfUpdate" dev.pixel.voice.SelfUpdateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/PublicApkDownload" \
  workspace/rose-agent/app/src/dev/pixel/voice/PublicApkDownload.java workspace/rose-agent/app/tests/PublicApkDownloadTest.java
 java -cp "$JAVA_TESTS/PublicApkDownload" dev.pixel.voice.PublicApkDownloadTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DirectUpdate" \
+ workspace/rose-agent/app/src/dev/pixel/voice/PublicApkDownload.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java workspace/rose-agent/app/tests/DirectUpdateTest.java
+java -cp "$JAVA_TESTS/DirectUpdate" dev.pixel.voice.DirectUpdateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TaskPresentation" \
  workspace/rose-agent/app/src/dev/pixel/voice/TaskPresentation.java workspace/rose-agent/app/tests/TaskPresentationTest.java
 java -cp "$JAVA_TESTS/TaskPresentation" dev.pixel.voice.TaskPresentationTest
