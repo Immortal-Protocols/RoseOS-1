@@ -1,5 +1,9 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {create}=require('./luna-first.js');
+const vm=require('node:vm'),fs=require('node:fs');
+// The page loads this file as a classic script (workspace/package.json is type:module, so require() would
+// treat it as an ES module where `module` is undefined). Load it the same way the page does.
+function pageScript(name){const window={};vm.runInThisContext('(function(window){'+require('node:fs').readFileSync(__dirname+'/'+name,'utf8')+'\n})',{filename:name})(window);return window;}
+const {create}=pageScript('luna-first.js').LunaFirst;
 test('audio remains closed until an authorized result drains prior speech',()=>{
  let now=100,muted=true;const sent=[];const c=create({dispatch(){},send:e=>sent.push(e),setMuted:v=>muted=v,now:()=>now});
  assert.equal(muted,true);c.tick(0,.1);assert.equal(c.audible(),false);

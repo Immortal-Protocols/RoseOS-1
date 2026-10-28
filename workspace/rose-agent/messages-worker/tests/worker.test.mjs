@@ -1,6 +1,11 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {createRequire} from 'node:module';
 import {MessagesWorker,resolveChat} from '../worker.mjs';
-const require=createRequire(import.meta.url),route=require('../../voice-providers/voice-commands.js');
+import fs from 'node:fs';
+import vm from 'node:vm';
+// The page loads this as a classic script; workspace/package.json is type:module, so require() would load it as an ES
+// module where `module` is undefined and nothing is exported. Load it the way the page does.
+const pageScript=rel=>{const window={};vm.runInThisContext('(function(window){'+fs.readFileSync(new URL(rel,import.meta.url),'utf8')+'\n})',{filename:rel})(window);return window;};
+const route=pageScript('../../voice-providers/voice-commands.js').resolveVoiceCommand;
 const chats=[{id:1,displayName:'Jack Smith',participants:'a',dateMs:300},{id:2,displayName:'Jack Smith, Terri Jones',participants:'a, b',dateMs:200},{id:3,displayName:'Molly Green',participants:'c',dateMs:100}];
 const inbox={1:[{id:11,dateMs:100,fromMe:0,text:'Earlier message'},{id:12,dateMs:200,fromMe:1,text:'A question'},{id:13,dateMs:300,fromMe:0,text:'A reply'}],2:[{id:20,dateMs:200,fromMe:0,text:'Group message'}],3:[{id:30,dateMs:100,fromMe:0,text:'Other message'}]};
 function fixture(){const calls=[];return {calls,worker:new MessagesWorker({enabled:()=>true,read:async input=>{calls.push(input);if(input.action==='chats')return {status:'ok',chats};assert.equal(input.action,'messages');return {status:'ok',chat:chats.find(c=>c.id===input.chatId),messages:inbox[input.chatId]};}})};}
