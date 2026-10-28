@@ -704,9 +704,13 @@ the action revokes at job end; the builder never receives it. The job then runs
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;
 - **requires** OTA Latest to be `appRelease.publication.preserveLatest` before and
-  after: `frankel-2026102805` since that Beta was published at 18:34:04 UTC on
-  2026-10-28 (it was `frankel-2026102804` before then; `rose-agent-304` was
-  published under it). The check never moves or skips Latest;
+  after: `frankel-2026102806` since that Beta was promoted at 22:53:12 UTC on
+  2026-10-28 as release 427275514 (INFRA-APP-119). It was `frankel-2026102805`
+  from 18:34:04 UTC that day (`rose-agent-306` and `rose-agent-307` were published
+  under it) and `frankel-2026102804` before then (`rose-agent-304`). The value is
+  one exact tag, compared before and after; any other Latest, older or newer, is
+  refused, and moving it is a reviewed config change. The check never moves or
+  skips Latest;
 - **publishes** its own prerelease, `rose-agent-N`, with `make_latest` false.
   The prerelease holds only `dev.pixel.voice-N.apk`, a sanitized
   `dev.pixel.voice-N.receipt.json` and `SHA256SUMS`. The receipt carries

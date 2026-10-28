@@ -178,7 +178,7 @@
         "mustExceed": {
           "dev.pixel.voice": 305
         },
-        "basis": "Published Beta frankel-2026102805 (pixel-ota Latest since 2026-10-28 18:34:04 UTC; apps 305/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 307 published). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
+        "basis": "Published Beta frankel-2026102805 (pixel-ota Latest from 2026-10-28 18:34:04 UTC until the verified 2026102806 was promoted at 22:53:12 UTC; apps 305/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 307 published). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
       }
     ]
   },
@@ -273,8 +273,8 @@
       "apkUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/{tag}/{asset}",
       "prerelease": true,
       "makeLatest": false,
-      "preserveLatest": "frankel-2026102805",
-      "basis": "INFRA-APP-096 / APR024: public signed Rose Agent APKs through the existing pixel-ota Releases with the existing publisher App (Contents:write), anonymous client download with the client's SHA-256 and size binding (APP-GITHUB-001-IFACE-001, PublicApkDownload.java: https://github.com/Immortal-Protocols/pixel-ota/releases/download/{versioned-tag}/{asset}.apk). Each app release is its own prerelease tag that never becomes Latest; OTA Latest is preserved, never moved. preserveLatest is the verified public Beta frankel-2026102805 (published 2026-10-28 18:34:04 UTC through the OS route; the public frankel-stable feed reads 2026102805 1793206861); it was frankel-2026102804 until then, and rose-agent-304 was published while 2804 was Latest"
+      "preserveLatest": "frankel-2026102806",
+      "basis": "INFRA-APP-096 / APR024: public signed Rose Agent APKs through the existing pixel-ota Releases with the existing publisher App (Contents:write), anonymous client download with the client's SHA-256 and size binding (APP-GITHUB-001-IFACE-001, PublicApkDownload.java: https://github.com/Immortal-Protocols/pixel-ota/releases/download/{versioned-tag}/{asset}.apk). Each app release is its own prerelease tag that never becomes Latest; OTA Latest is preserved, never moved. preserveLatest is the verified public Beta frankel-2026102806 (INFRA-APP-119: promoted 2026-10-28 22:53:12 UTC through the OS route as release 427275514, Latest, the frankel-stable feed and all seven public assets independently verified by the lead; candidate 93ad1c2b, BUILD_DATETIME 1793220605). It is one exact tag compared before and after publication, never a floating or newest-wins rule. It was frankel-2026102805 from 18:34:04 UTC (rose-agent-306 and rose-agent-307 were published under it) and frankel-2026102804 before that (rose-agent-304)"
     },
     "reserved": [
       {
