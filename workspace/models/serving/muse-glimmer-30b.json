@@ -1,0 +1,177 @@
+{
+  "status": "draft: candidate model pending owner selection; nothing deployed; no image digest resolved",
+  "model": {
+    "candidate_for": "spoken name \"Muse Glimmer\" (owner confirmation pending)",
+    "repo": "meta-models/Muse-Glimmer-30B",
+    "revision": "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+    "gated": false,
+    "architecture": "MuseGlimmerForConditionalGeneration",
+    "model_type": "muse_glimmer",
+    "dtype": "bfloat16",
+    "bf16_parameters": 29776626688,
+    "repo_bytes": 59580000000,
+    "license": {
+      "spdx": "Apache-2.0",
+      "license_file_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "license_file_bytes": 11358,
+      "usage_policy_file": "USAGE_POLICY.md",
+      "obligations": [
+        "Apache-2.0: keep the LICENSE and NOTICE text with any redistributed weights or derivative",
+        "Meta Usage Policy: prohibited-use list applies to Rose deployments",
+        "Usage Policy and model card: not intended for individuals under 18; deployer must assess and mitigate"
+      ]
+    },
+    "text_config": {
+      "num_hidden_layers": 52,
+      "global_attention_layers": 13,
+      "sliding_attention_layers": 39,
+      "sliding_window": 2048,
+      "hidden_size": 6656,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 2,
+      "head_dim": 128,
+      "vocab_size": 202048,
+      "tie_word_embeddings": false,
+      "max_position_embeddings": 131072
+    },
+    "vision_parameters_upper_bound": 2000000000,
+    "generation": {
+      "eos_token_id": [200001, 200008],
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "reasoning_strength_levels": ["low", "medium", "high", "xhigh"]
+    }
+  },
+  "demo_assumptions": {
+    "source": "manager draft comparison assumptions, not an approved workload",
+    "modalities": "text only",
+    "concurrent_conversations": 1,
+    "max_model_len": 16384,
+    "drafter": false
+  },
+  "options": [
+    {
+      "id": "a100x2-bf16-vllm",
+      "role": "primary candidate",
+      "precision": "bf16 (official checkpoint, no quantization)",
+      "region": "us-central1",
+      "zones_with_machine": ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"],
+      "machine_spec": {
+        "machineType": "a2-highgpu-2g",
+        "acceleratorType": "NVIDIA_TESLA_A100",
+        "acceleratorCount": 2
+      },
+      "machine_resources": {"vcpu": 24, "ram_gb": 170, "gpu": "A100 40GB", "gpu_count": 2},
+      "replicas": {"min": 1, "max": 1},
+      "gpu_memory_bytes": 42949672960,
+      "runtime": {
+        "engine": "vllm",
+        "image_source_tag": "vllm/vllm-openai:muse-glimmer",
+        "image_digest": null,
+        "image_requires_cuda": "13.0",
+        "artifact_registry_image_uri": null
+      },
+      "container_spec": {
+        "imageUri": null,
+        "args": [
+          "meta-models/Muse-Glimmer-30B",
+          "--revision", "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+          "--tokenizer-revision", "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+          "--served-model-name", "muse-glimmer",
+          "--host", "0.0.0.0",
+          "--port", "8080",
+          "--tensor-parallel-size", "2",
+          "--dtype", "bfloat16",
+          "--max-model-len", "16384",
+          "--max-num-seqs", "4",
+          "--gpu-memory-utilization", "0.90",
+          "--limit-mm-per-prompt", "{\"image\":0,\"video\":0}",
+          "--enable-auto-tool-choice",
+          "--tool-call-parser", "muse_glimmer",
+          "--reasoning-parser", "muse_glimmer",
+          "--generation-config", "auto"
+        ],
+        "ports": [{"containerPort": 8080}],
+        "predictRoute": "/v1/chat/completions",
+        "healthRoute": "/health",
+        "sharedMemorySizeMb": "16384",
+        "startupProbe": {
+          "httpGet": {"path": "/health", "port": 8080},
+          "periodSeconds": 30,
+          "timeoutSeconds": 30,
+          "failureThreshold": 120
+        },
+        "deploymentTimeout": "7200s"
+      },
+      "max_num_seqs": 4,
+      "gpu_memory_utilization": 0.9,
+      "runtime_reserve_bytes_per_gpu": 3221225472
+    },
+    {
+      "id": "l4x1-q4km-llamacpp",
+      "role": "labeled alternative: official 4-bit quantization, lower quality and throughput",
+      "precision": "Q4_K_M GGUF (official; card states 1.0% average benchmark degradation)",
+      "region": "us-central1",
+      "zones_with_machine": ["us-central1-a", "us-central1-b", "us-central1-c"],
+      "machine_spec": {
+        "machineType": "g2-standard-12",
+        "acceleratorType": "NVIDIA_L4",
+        "acceleratorCount": 1
+      },
+      "machine_resources": {"vcpu": 12, "ram_gb": 48, "gpu": "L4 24GB", "gpu_count": 1},
+      "replicas": {"min": 1, "max": 1},
+      "gpu_memory_bytes": 24152899584,
+      "weights": {
+        "repo": "meta-models/Muse-Glimmer-30B-GGUF",
+        "revision": "b44f1072cf75e918a1b82a3a17b45c4389b076e7",
+        "file": "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+        "bytes": 16756683904
+      },
+      "runtime": {
+        "engine": "llama.cpp server",
+        "minimum_build": "b10353",
+        "image_source_tag": null,
+        "image_digest": null,
+        "artifact_registry_image_uri": null
+      },
+      "container_spec": {
+        "imageUri": null,
+        "args": [
+          "--model", "/models/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+          "--alias", "muse-glimmer",
+          "--host", "0.0.0.0",
+          "--port", "8080",
+          "--ctx-size", "16384",
+          "--n-gpu-layers", "999",
+          "--parallel", "1",
+          "--jinja"
+        ],
+        "ports": [{"containerPort": 8080}],
+        "predictRoute": "/v1/chat/completions",
+        "healthRoute": "/health",
+        "startupProbe": {
+          "httpGet": {"path": "/health", "port": 8080},
+          "periodSeconds": 30,
+          "timeoutSeconds": 30,
+          "failureThreshold": 60
+        },
+        "deploymentTimeout": "7200s"
+      },
+      "max_num_seqs": 1,
+      "gpu_memory_utilization": 1.0,
+      "runtime_reserve_bytes_per_gpu": 2147483648
+    }
+  ],
+  "wire_contract": {
+    "local_request": "POST /v1/chat/completions (OpenAI chat-completions JSON)",
+    "agent_platform_request": "POST https://us-central1-aiplatform.googleapis.com/v1/projects/{project}/locations/us-central1/endpoints/{endpoint}:rawPredict",
+    "agent_platform_streaming": "POST .../endpoints/{endpoint}:streamRawPredict",
+    "auth": "Google OAuth bearer token; caller needs aiplatform.endpoints.predict on the endpoint",
+    "model_field": "muse-glimmer",
+    "answer_field": "choices[0].message.content",
+    "reasoning_field_vllm": "choices[0].message.reasoning",
+    "reasoning_control": "system prompt line 'Reasoning strength: <level>' or chat_template_kwargs.reasoning_strength",
+    "do_not_send": ["temperature: 0", "--chat-template override"]
+  }
+}

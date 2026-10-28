@@ -51,6 +51,8 @@ python3 scripts/tests/test_app_release_publisher.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py
 python3 scripts/tests/test_rose_verify.py
+# Models serving draft: pins, Agent Platform container shape and derived capacity stay consistent.
+python3 workspace/models/serving/tests/test_serving_config.py
 python3 os/tests/test_cuttlefish_alpha_product.py
 node --test workspace/rose-agent/delivery/catalog.test.mjs
 # Pure controller logic; each test compiles with only the class it covers.
