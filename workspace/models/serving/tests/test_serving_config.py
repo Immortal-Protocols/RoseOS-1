@@ -81,6 +81,32 @@ class ServingConfigTest(unittest.TestCase):
         for option in CONFIG['options']:
             self.assertTrue(capacity.fit(CONFIG, option)['fits'], option['id'])
 
+    def test_one_sequence_matches_one_conversation(self):
+        a100 = CONFIG['options'][0]
+        self.assertEqual(int(arg(a100['container_spec']['args'], '--max-num-seqs')), a100['max_num_seqs'])
+        self.assertEqual(a100['max_num_seqs'], CONFIG['demo_assumptions']['concurrent_conversations'])
+
+    def test_conservative_reserve_explains_single_sequence(self):
+        a100 = CONFIG['options'][0]
+        self.assertTrue(capacity.fit(CONFIG, a100, 16384, 1, 5*2**30)['fits'])
+        self.assertFalse(capacity.fit(CONFIG, a100, 16384, 4, 5*2**30)['fits'])
+
+    def test_served_alias_names_the_pin(self):
+        model = CONFIG['model']
+        self.assertEqual(model['served_alias'], {CONFIG['wire_contract']['model_field']: f"{model['repo']}@{model['revision']}"})
+        self.assertEqual(sum(model['weights_fetch']['files'].values()), 49950112952+9603322320+28129897)
+
+    def test_deployment_fits_test_window_and_probe(self):
+        hours = CONFIG['test_envelope']['test_hours']
+        for option in CONFIG['options']:
+            spec = option['container_spec']
+            timeout = int(spec['deploymentTimeout'].rstrip('s'))
+            self.assertLessEqual(timeout, hours*3600/4)
+            probe = spec['startupProbe']
+            self.assertLessEqual(probe['periodSeconds']*probe['failureThreshold'], timeout)
+        self.assertIn('no separate management fee', CONFIG['test_envelope']['rate_note'])
+        self.assertTrue(CONFIG['load_test']['abort_if'] and CONFIG['load_test']['accept_if'])
+
     def test_bf16_does_not_fit_one_l4(self):
         l4 = dict(CONFIG['options'][0], gpu_memory_bytes=CONFIG['options'][1]['gpu_memory_bytes'],
             machine_spec=dict(CONFIG['options'][0]['machine_spec'], acceleratorCount=1))

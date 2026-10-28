@@ -34,17 +34,25 @@ def weight_bytes_per_gpu(model, option):
     return total/tp, (total-vision)/tp + vision
 
 
-def fit(config, option):
+def fit(config, option, context=None, seqs=None, reserve=None):
+    """Worst-case per-GPU headroom: replicated vision tower, KV without sliding-window savings."""
     model, text = config['model'], config['model']['text_config']
     tp = option['machine_spec']['acceleratorCount'] if 'weights' not in option else 1
-    context = config['demo_assumptions']['max_model_len']
+    context = context or config['demo_assumptions']['max_model_len']
+    seqs = seqs or option['max_num_seqs']
     usable = option['gpu_memory_bytes']*option['gpu_memory_utilization']
     best, worst = weight_bytes_per_gpu(model, option)
-    kv_naive = kv_bytes_per_sequence(text, context, tp, sliding_aware=False)*option['max_num_seqs']
-    reserve = option['runtime_reserve_bytes_per_gpu']
+    kv_naive = kv_bytes_per_sequence(text, context, tp, sliding_aware=False)*seqs
+    reserve = option['runtime_reserve_bytes_per_gpu'] if reserve is None else reserve
     headroom = usable - worst - kv_naive - reserve
-    return {'option': option['id'], 'usable': usable, 'weights_best': best, 'weights_worst': worst,
-            'kv_worst': kv_naive, 'reserve': reserve, 'headroom': headroom, 'fits': headroom > 0}
+    return {'option': option['id'], 'context': context, 'seqs': seqs, 'usable': usable, 'weights_best': best,
+            'weights_worst': worst, 'kv_worst': kv_naive, 'reserve': reserve, 'headroom': headroom, 'fits': headroom > 0}
+
+
+def scenarios(config, option, reserves=(None, 5*2**30)):
+    """8K/16K context x 1/4 sequences, at the configured runtime reserve and a pessimistic 5 GiB one."""
+    return [fit(config, option, context, seqs, reserve)
+            for reserve in reserves for context in (8192, 16384) for seqs in (1, 4)]
 
 
 def load(path=CONFIG):
@@ -69,6 +77,10 @@ def main():
         print(f"{r['option']}: usable {gb(r['usable'])}/GPU; weights {gb(r['weights_best'])}..{gb(r['weights_worst'])}; "
               f"KV(worst) {gb(r['kv_worst'])}; reserve {gb(r['reserve'])}; headroom {gb(r['headroom'])}; "
               f"{'fits' if r['fits'] else 'DOES NOT FIT'} (derived, not measured)")
+    for option in config['options']:
+        print(f"{option['id']} sensitivity (context x sequences x runtime reserve):")
+        for r in scenarios(config, option):
+            print(f"  {r['context']:>6} tok x {r['seqs']} seq, reserve {gb(r['reserve'])}: headroom {gb(r['headroom'])}")
     if a.check and not all(r['fits'] for r in results):
         raise SystemExit(1)
 
