@@ -285,5 +285,91 @@ class ReconcileTest(unittest.TestCase):
                 text=True).stdout, listing)
         self.assertFalse((self.release/'reconcile-shadow').exists())
 
+class PermissionReconcileTest(unittest.TestCase):
+    """The checked-in reconcile inputs carry OS #70's Permission RoleService patch: a sparse shared clone of
+    packages/modules/Permission holding the pinned RoleService.java (os/tests/fixtures/rose-home-role, 8bc87856...) and the
+    real os/patches/rose-home-role-permission.patch, applied by a stand-in patcher that does what apply-os-changes.py does
+    for this project (refuse a missing or dirty project, git apply the patch). The real patcher also pins the upstream
+    revision, which a synthetic repository cannot have."""
+    PROJECT = 'packages/modules/Permission'
+    FILE = 'service/java/com/android/role/RoleService.java'
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = self.root = Path(temp.name)
+        self.config = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['host']['integrate']['reconcile']
+        self.source, self.candidate = root/'R', root/'candidate'
+        project = self.source/self.PROJECT
+        (project/self.FILE).parent.mkdir(parents=True)
+        shutil.copyfile(SCRIPTS.parent/'os/tests/fixtures/rose-home-role/RoleService.java', project/self.FILE)
+        write(project/'Android.bp', 'apex { name: "com.android.permission" }\n')
+        write(project/'PermissionController/src/Unrelated.java', 'class Unrelated {}\n')
+        git('init', '-q', cwd=project)
+        git('add', '-A', cwd=project)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'pinned', cwd=project)
+        (self.candidate/'os/patches').mkdir(parents=True)
+        shutil.copyfile(SCRIPTS.parent/'os/patches/rose-home-role-permission.patch', self.candidate/'os/patches/rose-home-role-permission.patch')
+        write(self.candidate/'scripts/apply-os-changes.py', f'''
+            import json, os, subprocess, sys
+            dest = os.path.join(sys.argv[1], {self.PROJECT!r})
+            if not os.path.isdir(dest) or subprocess.run(['git', '-C', dest, 'status', '--porcelain'], capture_output=True, text=True).stdout:
+                sys.exit('missing or dirty ' + dest)
+            listing = sorted(os.path.relpath(os.path.join(d, f), dest) for d, _, fs in os.walk(dest) if '.git' not in d for f in fs)
+            json.dump(listing, open({str(root/'shadow-files.json')!r}, 'w'))
+            subprocess.run(['git', '-C', dest, 'apply', os.path.abspath('os/patches/rose-home-role-permission.patch')], check=True)''')
+        self.receipts, self.release = root/'receipts', root/'release'
+        self.release.mkdir()
+        patched = root/'patched'
+        (patched/self.FILE).parent.mkdir(parents=True)
+        shutil.copyfile(project/self.FILE, patched/self.FILE)
+        git('init', '-q', cwd=patched)
+        git('apply', str(self.candidate/'os/patches/rose-home-role-permission.patch'), cwd=patched)
+        self.patched = (patched/self.FILE).read_bytes()
+
+    def run_reconcile(self, label, projects=None):
+        return reconcile.reconcile(self.source, self.candidate, self.release, [], self.receipts,
+            projects or [self.PROJECT], self.config['integrationOwnedRoots'], self.config['sparsePaths'], label)
+
+    def test_checked_in_reconcile_inputs_include_the_permission_project(self):
+        self.assertEqual(self.config['projects'], ['frameworks/base', 'build/make', 'build/release', 'packages/apps/Updater',
+            self.PROJECT])
+        self.assertEqual(self.config['sparsePaths'][self.PROJECT], [self.FILE])
+        self.assertEqual(self.config['integrationOwnedRoots'], ['packages/apps/PixelBackgroundControl', 'packages/apps/RosePreinstall'])
+        self.assertIn(self.FILE, reconcile.sparse_paths(SCRIPTS.parent, self.PROJECT, self.config['sparsePaths']))
+
+    def test_sparse_clone_installs_only_the_patched_role_service_and_rerun_is_idempotent(self):
+        before = (self.source/self.PROJECT/self.FILE).read_bytes()
+        self.assertEqual(hashlib.sha256(before).hexdigest(), '8bc87856050126743959e24467f7b27a7258d95e9f216d0a26b06d0e8f1b3415')
+        record = self.run_reconcile('2026102805')
+        self.assertEqual(record['changed'], [f'{self.PROJECT}/{self.FILE}'])
+        self.assertEqual(json.loads((self.root/'shadow-files.json').read_text()), [self.FILE])  # sparse: nothing else checked out
+        self.assertEqual((self.source/self.PROJECT/self.FILE).read_bytes(), self.patched)
+        entry = record['entries'][f'{self.PROJECT}/{self.FILE}']
+        self.assertEqual((entry['before'], entry['after'], entry['action']),
+            (hashlib.sha256(before).hexdigest(), hashlib.sha256(self.patched).hexdigest(), 'installed'))
+        self.assertEqual((self.receipts/f'0001-2026102805-backup/{self.PROJECT}/{self.FILE}').read_bytes(), before)
+        self.assertEqual((self.source/self.PROJECT/'PermissionController/src/Unrelated.java').read_text(), 'class Unrelated {}\n')
+        self.assertEqual(self.run_reconcile('2026102805-rerun')['changed'], [])
+        self.assertEqual((self.source/self.PROJECT/self.FILE).read_bytes(), self.patched)
+
+    def test_without_the_project_the_patcher_fails_closed(self):
+        (self.source/'build/make').mkdir(parents=True)
+        git('init', '-q', cwd=self.source/'build/make')
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'b', cwd=self.source/'build/make')
+        with self.assertRaisesRegex(reconcile.Conflict, 'candidate apply-os-changes failed on the shadow tree: missing or dirty'):
+            self.run_reconcile('2026102805', projects=['build/make'])
+        self.assertFalse(list(self.receipts.glob('*.json')))
+        self.assertEqual(hashlib.sha256((self.source/self.PROJECT/self.FILE).read_bytes()).hexdigest(),
+            '8bc87856050126743959e24467f7b27a7258d95e9f216d0a26b06d0e8f1b3415')
+
+    def test_owner_change_to_role_service_conflicts_and_nothing_is_written(self):
+        target = self.source/self.PROJECT/self.FILE
+        target.write_bytes(target.read_bytes() + b'// owner edit\n')
+        with self.assertRaisesRegex(reconcile.Conflict, f'{self.PROJECT}/{self.FILE}'):
+            self.run_reconcile('2026102805')
+        self.assertTrue(target.read_bytes().endswith(b'// owner edit\n'))
+        self.assertFalse(list(self.receipts.glob('*.json')))
+
 if __name__ == '__main__':
     unittest.main()
