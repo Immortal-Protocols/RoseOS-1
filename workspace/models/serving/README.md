@@ -12,6 +12,7 @@ Each fact below is labeled **verified** (read from a pinned file, registry manif
 - `capacity.py`: per-GPU fit and an 8K/16K × 1/4-sequence sensitivity matrix (`python3 capacity.py --check`).
 - `startup_guard.py`: the pre-download node check run inside the container before `vllm serve`. Runtime-only; it imports nothing from this repository.
 - `render_upload.py`: renders the Model upload request body offline (see Upload renderer).
+- `render_local.py`, `scratch_inventory.py`: the H100 local-guest launch script and the scratch-disk inventory (see H100 local-guest profile).
 - `tests/`: offline checks for the config and guard, part of `scripts/test-local.sh`.
 
 ## Model (verified)
@@ -129,6 +130,117 @@ python3 workspace/models/serving/render_upload.py \
 - `--max-num-seqs` or the TP size disagreeing with the machine.
 
 `containerSpec` carries only supported ModelContainerSpec fields. Nothing here creates the endpoint or deploys.
+
+## H100 local-guest profile (`h100x1-bf16-vllm-local`)
+
+This profile is for the retained H100 VM (Chief, 23:01 UTC). It is separate from the two-A100 Agent Platform profile, which is unchanged.
+It uses the same pins: the image's linux/amd64 digest, `meta-models/Muse-Glimmer-30B@cec94fcf…` for model and tokenizer, BF16,
+**TP=1**, 8,192 tokens of context, one sequence, output ≤ 512 tokens, and 0.90 utilization.
+vLLM binds **127.0.0.1:8000** on the host network, so nothing listens beyond guest loopback.
+
+| | Derived (not measured) |
+| --- | --- |
+| Weights on the GPU | 59.55 GB (all of it at TP=1) |
+| KV, 8K × 1, all layers | 0.44 GB |
+| Headroom at 0.90 utilization, assuming 80 GiB nominal | ~14.1 GB with a 3 GiB reserve |
+
+**One-GPU guard limits**, rendered from the profile:
+- driver ≥ 580;
+- exactly 1 GPU;
+- device-reported total ≥ **70,234,096,071 B**, which an 80 GB device passes and a 40 GB device fails;
+- free memory ≥ 0.90 × total;
+- free cache disk ≥ 63,634,841,824 B;
+- `/dev/shm` ≥ 7,730,941,132 B (0.9 × `--shm-size 8192m`).
+
+### Steps on the guest (Mac/Chief execute; Core runs nothing)
+
+1. **Read-only receipt.** Run each of these and record the output:
+
+   ```bash
+   uname -r
+   cat /etc/os-release
+   mokutil --sb-state
+   lsmod | grep -E '^(nvidia|nouveau)'
+   cat /proc/driver/nvidia/version
+   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
+   docker version
+   nvidia-ctk --version
+   df -B1 /
+   free -b
+   python3 scratch_inventory.py
+   ```
+
+2. **Scratch disk.** Use the inventory to pick one eligible device. Eligible means all of these hold:
+   - a by-id link names it a provider local SSD (`google-local-nvme-ssd-N` or `google-local-ssd-N`);
+   - it backs no mounted path, as a device or as an ancestor, so the boot disk is excluded;
+   - it has no partitions, filesystem, partition table or wipefs signature, and is not mounted.
+
+   Then prepare exactly that device:
+
+   ```bash
+   python3 scratch_inventory.py --prepare /dev/DEVICE --confirm /dev/DEVICE
+   ```
+
+   This formats it ext4 with label `models-scratch` and mounts it on `/mnt/models-scratch`. It refuses (exit 3) without touching anything if the device is not eligible at that moment or `--confirm` differs. It never uses a wildcard and never edits fstab.
+   Local SSD contents are lost when the VM stops or is preempted.
+
+3. **Image graph root (optional, before the first pull).** If Docker has no data to keep, it can be pointed at `/mnt/models-scratch/docker` (`data-root`). Otherwise the image lives on the boot disk.
+   The image is 8.62 GB compressed; its expanded size is unmeasured, so budget about 3× (25.9 GB).
+
+4. **Stage the image.** Either pull `vllm/vllm-openai@sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c` over verified egress, or `docker load` it from the Mac transfer.
+   Then `docker image inspect --format '{{.Id}}'` must print `sha256:e90b8320f680a6a7b8daff87ad08cdf063a68d869880e662fd6d2cebfef689dc`.
+
+5. **Weights.**
+   - **Online (default):** vLLM fetches the pinned revision (59.58 GB) through existing egress into `/mnt/models-scratch/hf`.
+   - **`--offline`:** sets `HF_HUB_OFFLINE=1`, for a Hugging Face cache snapshot of that revision already staged into that directory.
+
+6. **Render and run:**
+
+   ```bash
+   python3 workspace/models/serving/render_local.py --out launch-muse-glimmer.sh
+   ```
+
+   Add `--offline` for staged weights. The renderer prints the script's sha256 and the guard limits. Copy the script to the guest and run `bash launch-muse-glimmer.sh` there.
+   - Exit 4: the scratch mount or the exact image is missing. Nothing has started.
+   - Exit 3: the guard refused. Its one JSON evidence line gives the reasons.
+
+   The script `exec`s `docker run --rm --gpus all --network host --shm-size 8192m -v /mnt/models-scratch/hf:/root/.cache/huggingface --entrypoint python3 <image ID> -c <guard> <limits> -- vllm serve …`.
+   It never pulls, installs, opens a port beyond loopback, or creates credentials.
+
+7. **Verify:**
+   - `ss -ltnp 'sport = :8000'` shows only `127.0.0.1:8000`;
+   - `curl -s 127.0.0.1:8000/health` returns 200;
+   - `curl -s 127.0.0.1:8000/v1/models` lists `muse-glimmer`.
+
+**Prerequisites and fail-closed rules.**
+- Required: NVIDIA driver ≥ 580 (CUDA 13.0 image), Docker, and the NVIDIA container toolkit configured for `--gpus`. Exact install commands depend on the receipt's OS and kernel, so they are not invented here.
+- **Stop and report, with no install, if any of these hold:**
+  - `nouveau` is loaded (removing it needs a blacklist and a reboot);
+  - Secure Boot is enabled and the driver modules are not already signed for it (MOK enrollment needs a reboot/console);
+  - headers or modules for the running `uname -r` are unavailable without a kernel change;
+  - any step would upgrade the kernel or reboot.
+- A no-reboot driver install is only plausible when none of those hold.
+
+### A100 CPU-offload finding (secondary)
+
+This is a short finding, not a profile. **Do not pursue it for the demo.**
+- **Status:** vLLM documents a CPU weight-offload engine option (`--cpu-offload-gb`). Whether it works for `muse_glimmer` in the pinned image is **unknown**: the source hold stands, and no run has been made.
+- **Derived numbers** for 1× A100 40GB with an 85 GiB host:
+  - on-GPU room at 0.90 is about 38.65 GB, minus 0.44 GB KV and a 3 GiB reserve;
+  - that requires offloading ≥ 24.6 GB of weights, so 30 GB would be the conservative setting;
+  - the host would then hold about 30 GB of pinned weights, plus loader page cache for the 59.6 GB of safetensors, plus the process. That is tight, with OOM-kill risk during load.
+- **Latency:** each decode step must stream about 30 GB over PCIe. At about 25 GB/s that is ≥ 1.2 s per token, so ≤ ~0.8 tok/s and ≥ 10 min for a 512-token reply.
+- **Verdict:** impractical for interactive chat. The H100 remains the primary route.
+- **Abort limits if it is ever tried under separate scope:** host available memory < 8 GiB, any OOM-kill, or first token > 120 s.
+
+### Local contract for Product and QA
+
+- **Base URL on the guest:** `http://127.0.0.1:8000/v1`. From the Mac, use the same URL through Chief's port-forward of local 8000 to guest `127.0.0.1:8000`.
+- **Auth:** no `Authorization` header (loopback; no API key is configured).
+- **Model:** `muse-glimmer`.
+- **Chat:** `POST /chat/completions`, non-streaming, `max_tokens` ≤ 512, prompt plus output ≤ 8,192 tokens, one in-flight request.
+- **Probes:** `GET /health` and `GET /v1/models`.
+- **Not measured:** latency and error bodies are unmeasured until the guest run.
 
 ## One attempt, timeline and cleanup
 

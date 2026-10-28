@@ -64,6 +64,7 @@ python3 qa/models/test_fixture_server.py
 python3 workspace/models/serving/tests/test_serving_config.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
+python3 workspace/models/serving/tests/test_local_profile.py
 python3 os/tests/test_cuttlefish_alpha_product.py
 node --test workspace/rose-agent/delivery/catalog.test.mjs
 # Pure controller logic; each test compiles with only the class it covers.

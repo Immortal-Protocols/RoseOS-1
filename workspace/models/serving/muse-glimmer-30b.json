@@ -254,6 +254,92 @@
       "gpu_memory_utilization": 1.0,
       "runtime_reserve_bytes_per_gpu": 2147483648,
       "gpu_memory_bytes_basis": "assumption from the nominal GPU size; the startup guard uses the device-reported total and free memory"
+    },
+    {
+      "id": "h100x1-bf16-vllm-local",
+      "role": "retained H100 local-guest profile (Chief 23:01): one GPU, loopback only; not an Agent Platform deployment",
+      "precision": "bf16 (official checkpoint, no quantization)",
+      "region": "us-central1",
+      "zones_with_machine": [
+        "us-central1-a"
+      ],
+      "machine_spec": {
+        "machineType": "a3-highgpu-1g",
+        "acceleratorType": "NVIDIA_H100_80GB",
+        "acceleratorCount": 1
+      },
+      "machine_resources": {
+        "gpu": "H100 80GB",
+        "gpu_count": 1,
+        "bundled_local_ssd_gib": 750,
+        "source": "Chief 23:01 handoff; vCPU/RAM not restated here"
+      },
+      "gpu_memory_bytes": 85899345920,
+      "runtime": {
+        "engine": "vllm",
+        "image_source_tag": "vllm/vllm-openai:muse-glimmer",
+        "image_digest": "sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c",
+        "image_requires_cuda": "13.0",
+        "image_index_digest": "sha256:413c8fbecb1204a218117c77a4ea4b3a211d5686ff99c31d82ba6dd0cec8c5a6",
+        "image_platform": "linux/amd64",
+        "image_compressed_layer_bytes": 8619692312,
+        "image_layer_count": 32,
+        "image_digest_evidence": "Registry V2 manifest read 2026-10-28T21:43Z, 4 requests, anonymous pull token; body hashes match headers; no layers pulled",
+        "driver_major_min": 580,
+        "driver_basis": "CUDA 13.x needs driver 580 or newer (NVIDIA minor-version compatibility); Agent Platform node driver unknown",
+        "weights_cache_dir": "~/.cache/huggingface",
+        "image_id": "sha256:e90b8320f680a6a7b8daff87ad08cdf063a68d869880e662fd6d2cebfef689dc",
+        "image_id_basis": "config digest from the 21:43 amd64 manifest; docker reports it as the image ID after a pull or a load"
+      },
+      "container_spec": {
+        "args": [
+          "meta-models/Muse-Glimmer-30B",
+          "--revision",
+          "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+          "--tokenizer-revision",
+          "cec94fcfd6512f2cfe708138c32533b346ea4f69",
+          "--served-model-name",
+          "muse-glimmer",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8000",
+          "--tensor-parallel-size",
+          "1",
+          "--dtype",
+          "bfloat16",
+          "--max-model-len",
+          "8192",
+          "--max-num-seqs",
+          "1",
+          "--gpu-memory-utilization",
+          "0.90",
+          "--limit-mm-per-prompt",
+          "{\"image\":0,\"video\":0}",
+          "--enable-auto-tool-choice",
+          "--tool-call-parser",
+          "muse_glimmer",
+          "--reasoning-parser",
+          "muse_glimmer",
+          "--generation-config",
+          "auto"
+        ]
+      },
+      "max_num_seqs": 1,
+      "gpu_memory_utilization": 0.9,
+      "runtime_reserve_bytes_per_gpu": 3221225472,
+      "gpu_memory_bytes_basis": "assumption from the nominal 80 GiB; the startup guard uses the device-reported total and free memory",
+      "local_launch": {
+        "container_runtime": "docker with the NVIDIA container toolkit (prerequisite, not installed by this code)",
+        "network": "host",
+        "bind": "127.0.0.1:8000",
+        "scratch_mount": "/mnt/models-scratch",
+        "host_cache_dir": "/mnt/models-scratch/hf",
+        "container_cache_dir": "/root/.cache/huggingface",
+        "shm_size_mb": 8192,
+        "image_headroom_bytes": 25859076936,
+        "container_name": "muse-glimmer"
+      }
     }
   ],
   "wire_contract": {
