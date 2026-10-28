@@ -11,6 +11,8 @@ node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
 node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-agent/server/event-delivery.test.mjs
+# APP-REMOVE-001: retired DeepSeek, Luna-first and ARTEMIS trial controls stay removed; shared paths stay.
+node --test workspace/rose-agent/tests/trial-removal.test.mjs
 node --test \
  workspace/rose-agent/security/device-auth.test.mjs \
  workspace/rose-agent/security/recovery-download.test.mjs \
