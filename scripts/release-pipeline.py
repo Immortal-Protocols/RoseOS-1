@@ -98,6 +98,7 @@ def preflight(job, config, env, adapter):
         missing += [f'host.tools.{k}' for k, v in config['host']['tools'].items() if not v]
         if not config.get('versionBaselines'):
             missing.append('versionBaselines')
+        missing += [f'updater.{key}' for key in UPDATER_REQUIRED if not (config.get('updater') or {}).get(key)]
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
@@ -430,15 +431,20 @@ def compiled_values(dump, kind, name):
             blocks.append(current)
     return [(c, h, body) for _, c, h, body in blocks]
 
-def default_value(dump, kind, name):
+def default_value(dump, kind, name, apk='framework-res'):
     """(value, problem): the single default-config block; an override in another config or a malformed block is a
     problem, never an empty or false value."""
     blocks = compiled_values(dump, kind, name)
     if [c for c, _, _ in blocks if c != '(default)']:
         return None, f'{name} is overridden in config {sorted({c for c, _, _ in blocks if c != "(default)"})}'
     if len(blocks) != 1:
-        return None, f'{name} has {len(blocks)} default values in framework-res'
+        return None, f'{name} has {len(blocks)} default values in {apk}'
     _, header, body = blocks[0]
+    if kind == 'string':
+        values = [re.fullmatch(r'\(string(?:8|16)\) "([^"]*)"', line) for line in body]
+        if not header.startswith('t=0x03 ') or len(values) != 1 or not values[0]:
+            return None, f'{name} is not a well-formed string'
+        return values[0].group(1), None
     if kind == 'array':
         count = re.fullmatch(r'Parent=0x[0-9a-f]{8}\(Resolved=0x[0-9a-f]{8}\), Count=(\d+)', body[0]) if header == '<bag>' and body else None
         items = [re.fullmatch(r'#(\d+) \(Key=0x[0-9a-f]{8}\): \(string(?:8|16)\) "([^"]*)"', line) for line in body[1:]]
@@ -471,6 +477,68 @@ def framework_failures(dump, expected, signer):
         failures.append('compiled locked-session switch differs from config')
     return failures
 
+UPDATER_REQUIRED = ('apkPath', 'signer', 'requiredFiles')
+
+def updater_expected(config):
+    """Compiled values the Updater must carry, derived from the checked-in recipe: the reconcile applyArgs pass
+    --updater-url (and any --updater-published-channel); os/patches/updater-rose-channels.patch fixes the rest."""
+    args = config['host']['integrate']['reconcile']['applyArgs']
+    published = [args[i + 1] for i, arg in enumerate(args) if arg == '--updater-published-channel'] or ['stable']
+    return {('string', 'url'): args[args.index('--updater-url') + 1], ('string', 'channel_default'): config['updater']['channelDefault'],
+        ('array', 'channel_published'): sorted(set(published)), ('array', 'channel_values'): config['updater']['channelValues']}
+
+def updater_failures(dump, expected):
+    failures = []
+    for (kind, name), want in expected.items():
+        value, problem = default_value(dump, kind, name, apk='the Updater')
+        if problem:
+            failures.append(f'Updater {problem}')
+        elif value != want:
+            failures.append(f'Updater compiled {name} is {value!r}, expected {want!r}')
+    return failures
+
+def check_updater(path, config, aapt, apksigner=None):
+    """The system Updater must be in the image itself, not only in patched source (077 shipped none): exactly the
+    configured privileged APK, its package identity, the supporting XML it requires, its compiled channel config and,
+    on signed target-files, its signer."""
+    spec = config.get('updater') or {}
+    missing = [f'updater.{key}' for key in UPDATER_REQUIRED if not spec.get(key)]
+    if missing:
+        raise SetupMissing(missing)
+    failures = []
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        found = sorted(n for n in names if re.search(r'(^|/)priv-app/Updater/[^/]+\.apk$', n))
+        if spec['apkPath'] not in names:
+            return [f'Updater APK {spec["apkPath"]} is absent from the target-files'
+                + (f' (found {found})' if found else ' (no Updater APK anywhere)')]
+        if found != [spec['apkPath']]:
+            failures.append(f'more than one Updater APK in the target-files: {found}')
+        for required in spec['requiredFiles']:
+            if required not in names:
+                failures.append(f'Updater supporting file {required} is absent')
+            elif spec['packageName'] not in archive.read(required).decode(errors='replace'):
+                failures.append(f'Updater supporting file {required} does not name {spec["packageName"]}')
+        data = archive.read(spec['apkPath'])
+    extracted = Path(os.environ.get('RUNNER_TEMP', '/tmp'))/f'updater-{os.getpid()}.apk'
+    extracted.write_bytes(data)
+    try:
+        badging = subprocess.run([aapt, 'dump', 'badging', str(extracted)], capture_output=True, text=True)
+        package = re.search(r"^package: name='([^']+)'", badging.stdout, re.M)
+        if badging.returncode or not package or package.group(1) != spec['packageName']:
+            failures.append(f'Updater package is {package.group(1) if package else None}, expected {spec["packageName"]}')
+        dump = subprocess.run([aapt, 'dump', '--values', 'resources', str(extracted)], capture_output=True, text=True, check=True).stdout
+        failures += updater_failures(dump, updater_expected(config))
+        if apksigner:
+            want = config['identities']['otaCertificateSha256'] if spec['signer'] == 'otaCertificate' else spec['signer']
+            certs = subprocess.run([apksigner, 'verify', '--print-certs', str(extracted)], capture_output=True, text=True)
+            digests = re.findall(r'certificate SHA-256 digest: ([0-9a-f]{64})', certs.stdout)
+            if certs.returncode or digests != [want.lower()]:
+                failures.append('Updater is not signed by the expected certificate')
+    finally:
+        extracted.unlink()
+    return failures
+
 def check_apps(path, policy, apksigner):
     result = subprocess.run([sys.executable, str(TARGET_FILES_VERIFIER), str(path), str(policy), '--apksigner', apksigner],
         capture_output=True, text=True)
@@ -491,9 +559,11 @@ def verify_build(a, config, cand, adapter):
     failures = check_build_identity(target_files, config, cand, 'test-keys')
     failures += check_apps(target_files, release_dir/'background-policy.json', tool(config, 'apksigner'))
     failures += check_framework(target_files, config, tool(config, 'aapt'))
+    failures += check_updater(target_files, config, tool(config, 'aapt'))
     if failures:
         raise CheckFailed('; '.join(failures))
-    return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy']}
+    return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
+        'Updater presence/identity/supporting XML/compiled channel config']}
 
 def cert_sha256(pem):
     body = pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0]
@@ -623,6 +693,10 @@ def check_image_bytes(config, signed, policy_path, used):
                 continue
             if hashlib.sha256(image_file(config, archive, names[0], workdir, cache, used)).hexdigest() != digest:
                 failures.append(f'image bytes of {names[0]} differ from the policy pin')
+        updater = (config.get('updater') or {}).get('apkPath')
+        if updater and updater in archive.namelist() and hashlib.sha256(image_file(config, archive, updater, workdir, cache, used)).digest() \
+                != hashlib.sha256(archive.read(updater)).digest():
+            failures.append(f'image bytes of {updater} differ from the checked target-files copy')
         framework = 'SYSTEM/framework/framework-res.apk'
         if hashlib.sha256(image_file(config, archive, framework, workdir, cache, used)).digest() != hashlib.sha256(archive.read(framework)).digest():
             failures.append('framework-res.apk in system.img differs from the checked target-files copy')
@@ -680,6 +754,7 @@ def verify_signed(a, config, cand, adapter):
     if not failures:
         failures += check_build_identity(signed, config, cand, 'release-keys')
         failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
+        failures += check_updater(signed, config, tool(config, 'aapt'), tool(config, 'apksigner'))
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
@@ -692,7 +767,7 @@ def verify_signed(a, config, cand, adapter):
     receipt = {'receiptType': 'candidate-verification', 'candidate': cand, 'simulated': adapter.simulated,
         'signedTargetFilesSha256': sha256_file(signed), 'published': False,
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
-            'image-embedded app/framework bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'Updater presence/identity/config/signer', 'image-embedded app/framework bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
         'imageTools': image_tools, 'verifierTools': verifier_tools}
     release_receipts.write_once(public/'verification.json', receipt)

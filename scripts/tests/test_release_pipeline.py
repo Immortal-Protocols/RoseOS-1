@@ -74,6 +74,18 @@ def ota(path, build, stamp, post_build=None, bad_properties=False):
         z.writestr('payload.bin', payload)
         z.writestr('payload_properties.txt', ''.join(f'{k}={v}\n' for k, v in properties.items()))
 
+# Fixture layout for the Updater gate; the real paths come from the OS product inclusion (config updater block).
+UPDATER_APK = 'SYSTEM_EXT/priv-app/Updater/Updater.apk'
+UPDATER_XML = ('SYSTEM_EXT/etc/permissions/privapp-permissions-updater.xml',
+    'SYSTEM_EXT/etc/default-permissions/default-permissions-updater.xml', 'SYSTEM_EXT/etc/sysconfig/updater.xml')
+UPDATER_URL = 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/'
+
+def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.seamlessupdate.client'):
+    for apk in apk_paths:
+        z.writestr(apk, b'updater apk')
+    for name in xml:
+        z.writestr(name, f'<permissions><privapp-permissions package="{package}"/></permissions>\n')
+
 def target_files(path, keys, policy_apks, stale_misc=False, image_override=None):
     """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, images."""
     fp = f'google/frankel/frankel:17/CP3A.261005.005/{BUILD}:user/{keys}'
@@ -94,6 +106,9 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None)
         if not os.environ.get('FAKE_NO_BOOT_IMG'):
             z.writestr('IMAGES/boot.img', b'boot')
         embedded = {prefix + name: data for prefix, name, data in policy_apks}
+        if not os.environ.get('FAKE_NO_UPDATER'):  # 077 shipped no Updater at all
+            write_updater(z)
+            embedded[UPDATER_APK] = b'updater apk'
         embedded.update(image_override or {})
         z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
         z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
@@ -224,7 +239,26 @@ class PipelineTest(unittest.TestCase):
         script(tools/'apksigner', f'print("Signer #1 certificate SHA-256 digest: {SIGNER.lower()}")')
         # The real `aapt dump --values resources` layout (see FRAMEWORK_DUMP): spec rows before value blocks.
         script(tools/'aapt', '''
-            import os
+            import os, sys
+            if 'updater-' in os.path.basename(sys.argv[-1]):
+                # Updater APK: badging and the real `aapt dump --values resources` string/array layout.
+                if sys.argv[2] == 'badging':
+                    print("package: name='%s' versionCode='1' versionName='1'" % os.environ.get('FAKE_UPDATER_PACKAGE', 'app.seamlessupdate.client'))
+                    sys.exit(0)
+                def string(number, name, value):
+                    print("        resource 0x7f0e000%d app.seamlessupdate.client:string/%s: t=0x03 d=0x0000000%d (s=0x0008 r=0x00)" % (number, name, number))
+                    print('          (string8) "%s"' % value)
+                def array(number, name, items):
+                    print("        resource 0x7f03000%d app.seamlessupdate.client:array/%s: <bag>" % (number, name))
+                    print("          Parent=0x00000000(Resolved=0x00000000), Count=%d" % len(items))
+                    for i, t in enumerate(items): print('          #%d (Key=0x01000001): (string8) "%s"' % (i, t))
+                print("      spec resource 0x7f0e0001 app.seamlessupdate.client:string/url: flags=0x00000000")
+                print("      config (default) flags=0x02 [offset16]:")
+                string(1, 'url', os.environ.get('FAKE_UPDATER_URL', 'UPDATER_URL_PLACEHOLDER'))
+                string(2, 'channel_default', os.environ.get('FAKE_UPDATER_DEFAULT', 'prod'))
+                array(1, 'channel_published', os.environ.get('FAKE_UPDATER_PUBLISHED', 'stable').split(','))
+                array(2, 'channel_values', ['prod', 'stable', 'alpha'])
+                sys.exit(0)
             def bag(number, name, items):
                 print("        resource 0x0107015%d android:array/%s: <bag>" % (number, name))
                 print("          Parent=0x00000000(Resolved=0x00000000), Count=%d" % len(items))
@@ -239,7 +273,7 @@ class PipelineTest(unittest.TestCase):
             print("      spec resource 0x01110330 android:bool/config_pixelComputerControlLockedSessions: flags=0x00000000")
             print("      config (default) flags=0x02 [offset16]:")
             print("        resource 0x01110330 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x00000000 (s=0x0008 r=0x00)")
-            print("          (boolean) false")''')
+            print("          (boolean) false")'''.replace('UPDATER_URL_PLACEHOLDER', UPDATER_URL))
         script(tools/'simg2img', '''
             import sys; data = open(sys.argv[1], 'rb').read(); assert data[:4] == b'\\x3a\\xff\\x26\\xed'
             open(sys.argv[2], 'wb').write(data[4:])''')
@@ -252,6 +286,7 @@ class PipelineTest(unittest.TestCase):
             'target': {'device': 'frankel', 'variant': 'user', 'lunch': 'frankel-cur-user'},
             'host': {'sourceRoot': str(src), 'outDir': 'out', 'lockPath': str(root/'build.lock'), 'installclean': True,
                 'makeJobs': 2, 'makeGoals': ['target-files-package'], 'integrateCommand': [PY, integrate], 'signCommand': [PY, sign],
+                'integrate': {'reconcile': {'applyArgs': ['--agent-tray', '--updater-url', UPDATER_URL]}},
                 'fakeMake': [PY, fake_make],
                 'tools': {'checkOtaSignature': str(tools/'check_ota.py'), 'avbtool': str(tools/'avbtool.py'),
                     'apksigner': str(tools/'apksigner'), 'aapt': str(tools/'aapt'),
@@ -261,6 +296,8 @@ class PipelineTest(unittest.TestCase):
             'identities': {'appSignerSha256': SIGNER.lower(), 'otaCertificateSha256': cert_pin,
                 'avbPublicKeySha256': hashlib.sha256(b'synthetic avb key blob').hexdigest()},
             'framework': {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False},
+            'updater': {'packageName': 'app.seamlessupdate.client', 'channelDefault': 'prod', 'channelValues': ['prod', 'stable', 'alpha'],
+                'apkPath': UPDATER_APK, 'signer': SIGNER.lower(), 'requiredFiles': list(UPDATER_XML)},
             'publication': {'repository': 'example/none', 'tag': 'frankel-{build}',
                 'channels': {'beta': {'promoteLatest': True, 'feedChannel': 'stable'}, 'prod': None}}}))
         self.base = root/'actions'
@@ -571,6 +608,66 @@ class PipelineTest(unittest.TestCase):
     def test_vbmeta_signed_by_another_key_fails(self):
         self.verify_fails('FAKE_AVB_KEY_SHA1', 'vbmeta is not signed by the published AVB key', value='0' * 40)
 
+    def updater_zip(self, **kwargs):
+        path = self.root/'updater-target_files.zip'
+        with zipfile.ZipFile(path, 'w') as z:
+            write_updater(z, **kwargs)
+        return path
+
+    def check_updater(self, path, apksigner=True, config=None):
+        return release_pipeline.check_updater(path, config or json.loads(self.config.read_text()), str(self.root/'tools/aapt'),
+            str(self.root/'tools/apksigner') if apksigner else None)
+
+    def test_077_omission_stops_the_build_before_signing(self):
+        os.environ['FAKE_NO_UPDATER'] = '1'
+        self.addCleanup(os.environ.pop, 'FAKE_NO_UPDATER', None)
+        for name, keys in (('unsigned.zip', 'test-keys'), ('signed.zip', 'release-keys')):
+            target_files(self.root/'fixtures'/name, keys, self.placed)
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'bytes-verify')
+        self.assertIn(f'Updater APK {UPDATER_APK} is absent from the target-files (no Updater APK anywhere)', result.stderr)
+
+    def test_updater_gate_accepts_the_configured_layout(self):
+        self.assertEqual(self.check_updater(self.updater_zip()), [])
+
+    def test_updater_gate_refuses_wrong_place_duplicates_and_missing_or_foreign_xml(self):
+        moved = 'PRODUCT/priv-app/Updater/Updater.apk'
+        self.assertEqual(self.check_updater(self.updater_zip(apk_paths=(moved,))),
+            [f"Updater APK {UPDATER_APK} is absent from the target-files (found ['{moved}'])"])
+        self.assertIn('more than one Updater APK', self.check_updater(self.updater_zip(apk_paths=(UPDATER_APK, moved)))[0])
+        self.assertEqual(self.check_updater(self.updater_zip(xml=UPDATER_XML[:2])), [f'Updater supporting file {UPDATER_XML[2]} is absent'])
+        failures = self.check_updater(self.updater_zip(package='com.example.other'))
+        self.assertEqual(len(failures), 3)
+        self.assertTrue(all('does not name app.seamlessupdate.client' in f for f in failures))
+
+    def test_updater_gate_refuses_wrong_identity_config_or_signer(self):
+        path = self.updater_zip()
+        for variable, value, message in (
+                ('FAKE_UPDATER_PACKAGE', 'com.example.updater', 'Updater package is com.example.updater, expected app.seamlessupdate.client'),
+                ('FAKE_UPDATER_URL', 'https://releases.grapheneos.org/', "Updater compiled url is 'https://releases.grapheneos.org/'"),
+                ('FAKE_UPDATER_DEFAULT', 'stable', "Updater compiled channel_default is 'stable', expected 'prod'"),
+                ('FAKE_UPDATER_PUBLISHED', 'stable,alpha', "Updater compiled channel_published is ['stable', 'alpha'], expected ['stable']")):
+            os.environ[variable] = value
+            try:
+                failures = self.check_updater(path)
+                self.assertEqual(len(failures), 1, failures)
+                self.assertTrue(failures[0].startswith(message), failures)
+            finally:
+                os.environ.pop(variable)
+        config = json.loads(self.config.read_text())
+        config['updater']['signer'] = 'otaCertificate'  # the fixture APK is signed by the app signer instead
+        self.assertEqual(self.check_updater(path, config=config), ['Updater is not signed by the expected certificate'])
+        self.assertEqual(self.check_updater(path, apksigner=False, config=config), [])  # unsigned stage: no signer check
+
+    def test_updater_gate_fails_closed_without_the_os_layout(self):
+        config = json.loads(self.config.read_text())
+        for key in ('apkPath', 'signer', 'requiredFiles'):
+            broken = json.loads(json.dumps(config))
+            broken['updater'][key] = None
+            with self.assertRaises(release_pipeline.SetupMissing) as caught:
+                self.check_updater(self.updater_zip(), config=broken)
+            self.assertEqual(caught.exception.missing, [f'updater.{key}'])
+
     def test_checksums_are_written_after_verification_and_cover_it(self):
         failed, _ = self.run_builder_job()
         self.assertIsNone(failed)
@@ -599,7 +696,8 @@ class PipelineTest(unittest.TestCase):
         missing = json.loads(out)['missing']
         # Only the proposed admin setup remains; the host recipe in the checked-in config is complete.
         self.assertEqual(missing, ['ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
-            'GCP_SIGNER_SERVICE_ACCOUNT', 'PIXEL_OTA_PUBLISHER (must be github-app)'])
+            'GCP_SIGNER_SERVICE_ACCOUNT', 'PIXEL_OTA_PUBLISHER (must be github-app)',
+            'updater.apkPath', 'updater.signer', 'updater.requiredFiles'])  # awaiting the OS Updater inclusion layout
         code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app'))
         self.assertEqual(code, 4)
         self.assertEqual(json.loads(out)['missing'], ['PIXEL_OTA_APP_ID', 'PIXEL_OTA_APP_PRIVATE_KEY'])

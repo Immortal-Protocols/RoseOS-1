@@ -41,7 +41,20 @@ class CheckedInCandidateTest(unittest.TestCase):
             '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img')
         self.assertEqual(pipeline.preflight('guard', CONFIG, {'ROSEOS_BUILDER_RUNNER_READY': 'true',
             'GCP_WORKLOAD_IDENTITY_PROVIDER': 'x', 'GCP_CONTROLLER_SERVICE_ACCOUNT': 'x', 'GCP_SIGNER_SERVICE_ACCOUNT': 'x',
-            'PIXEL_OTA_PUBLISHER': 'github-app', 'PIXEL_OTA_APP_ID': '1', 'PIXEL_OTA_APP_KEY_PRESENT': 'true'}, 'production'), [])
+            'PIXEL_OTA_PUBLISHER': 'github-app', 'PIXEL_OTA_APP_ID': '1', 'PIXEL_OTA_APP_KEY_PRESENT': 'true'}, 'production'),
+            ['updater.apkPath', 'updater.signer', 'updater.requiredFiles'])  # the next candidate waits for the OS layout
+
+    def test_updater_expectations_follow_the_patch_and_the_recipe(self):
+        patch = (ROOT/'os/patches/updater-rose-channels.patch').read_text()
+        updater = CONFIG['updater']
+        self.assertIn(f'+    <string name="channel_default" translatable="false">{updater["channelDefault"]}</string>', patch)
+        values = patch.split('<string-array name="channel_values" translatable="false">')[1].split('</string-array>')[0]
+        self.assertEqual(re.findall(r'^[ +]\s*<item>(\w+)</item>', values, re.M), updater['channelValues'])
+        self.assertIn('diff --git a/src/app/seamlessupdate/client/', patch)  # the Updater's own package source tree
+        self.assertEqual(updater['packageName'], 'app.seamlessupdate.client')
+        expected = pipeline.updater_expected(CONFIG)
+        self.assertEqual(expected[('string', 'url')], 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/')
+        self.assertEqual(expected[('array', 'channel_published')], ['stable'])  # Beta keeps the existing stable wire channel
 
     def test_source_manifests_match_the_allocated_versions(self):
         self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 301, '301-wave-beta'))

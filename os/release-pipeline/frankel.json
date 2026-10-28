@@ -150,6 +150,19 @@
       }
     ]
   },
+  "updater": {
+    "packageName": "app.seamlessupdate.client",
+    "channelDefault": "prod",
+    "channelValues": [
+      "prod",
+      "stable",
+      "alpha"
+    ],
+    "apkPath": null,
+    "signer": null,
+    "requiredFiles": null,
+    "basis": "Compiled Updater gate (077 shipped none). Package from the Updater source tree, channel default and values from os/patches/updater-rose-channels.patch, url and published set from the reconcile applyArgs. apkPath, signer (otaCertificate or a sha256) and requiredFiles (target-files paths of its default-permissions, permissions and sysconfig XML) await the OS product inclusion layout"
+  },
   "identities": {
     "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
     "otaCertificateSha256": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a",
