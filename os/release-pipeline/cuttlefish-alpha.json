@@ -56,13 +56,71 @@
         28
       ]
     ],
-    "basis": "The alpha builds the retained tree exactly as the last Pixel integration reconciled it: it never reconciles, adopts, signs apps or edits the tree. Bind it only from the builder's latest host-reconcile receipt (file name and sha256), the candidate SHA and dispatched apps of the run that wrote it; the build refuses any other candidate and any drift from that receipt's entries",
+    "basis": "The base of every preparation: the retained Pixel tree exactly as the last Pixel integration reconciled it, bound by the builder's latest host-reconcile receipt (file name and sha256), the candidate SHA and the dispatched apps of the run that wrote it. prepare refuses any other latest receipt and any drift from its entries; the build refuses any other candidate or app set. The retained tree itself is never built, edited or reconciled by the alpha",
     "evidence": "Lead's read-only host inspection, 2026-10-28 (INFRA-ALPHA-082): reconcile receipt 0004-2026102804.json (written 2026-10-28T09:59:03Z) is the latest and none of its 15 entries has drifted; the immutable 2026102804 stage chain (000-init to 010-completed) names candidate ae9cfd4d; aapt and hashes of the integrated apps match 2804 (Rose Agent 302 01b184b4..., Calculator 4 9f46c1a2..., controller 28 f39936b1...). Rose Agent 303 never reconciled this tree. apps uses the order of the 2804 dispatch (scripts/tests/test_release_candidate_contract.py APPS), so the alpha dispatch passes exactly this list"
   },
   "hostEvidence": {
     "probeReceiptSha256": null,
     "lunch": null,
     "basis": "Values from a passing emulator-alpha.py probe on the builder under the lock: TARGET_PRODUCT, TARGET_BUILD_VARIANT, TARGET_BOARD_PLATFORM, PRODUCT_DEVICE, PRODUCT_OUT and HOST_OUT from get_build_var, and TARGET_RELEASE as exported by lunch into the shell (get_build_var returns it empty in this tree), with the alpha OUT_DIR. The failed first probe and the 081 diagnosis are not probe receipts. Until recorded, guard and builder fail closed"
+  },
+  "preparation": {
+    "root": "/home/pixelbuild/rose-actions/alpha-source",
+    "copyBudgetGiB": 150,
+    "exclusions": {
+      "rootNames": [
+        ".repo",
+        "keys",
+        "releases",
+        "out"
+      ],
+      "rootPrefixes": [
+        "out-",
+        "out_"
+      ],
+      "anywhereNames": [
+        ".git",
+        ".repo"
+      ],
+      "externalLinks": [
+        {
+          "path": "vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor_boot/vendor_ramdisk00__unpacked/d",
+          "target": "/sys/kernel/debug"
+        },
+        {
+          "path": "vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/system/d",
+          "target": "/sys/kernel/debug"
+        }
+      ]
+    },
+    "osDelta": {
+      "commit": "620d51601d9b3569ec0378787da677a06a8c2b65",
+      "contract": "os/alpha/cuttlefish-product-contract.json",
+      "contractSha256": "fcb5f5e4dc29d36c6514fe09e947f78f25eabdcd2855391fa3310f1e335e1f91"
+    },
+    "baseEvidence": {
+      "resolvedManifest": {
+        "path": "/home/pixelbuild/rose-actions/frankel-2026102804/release/resolved-manifest.xml",
+        "sha256": null
+      },
+      "policy": {
+        "path": "/home/pixelbuild/rose-actions/frankel-2026102804/release/background-policy.json",
+        "sha256": "044b99e57fa97d73b77fc46a349c47f7f6003fa9a202558ad577d9a83a471423"
+      }
+    },
+    "gitHeadProjects": [
+      "device/google/cuttlefish",
+      "build/make",
+      "build/release",
+      "frameworks/base",
+      "packages/apps/Updater"
+    ],
+    "basis": "INFRA-ALPHA-085 against the 084 interface (OS-ALPHA-001). Measured 2026-10-28 11:53Z on the builder's ext4: reflink unsupported; the selection without .repo, keys, releases, out, out-*, out_* and .git/.repo everywhere allocates 120.16 GiB (1,696,997 files), so copyBudgetGiB 150 includes metadata and slack, and build.minFreeGiB 300 must remain free after it. 6,680 symlinks: 6,543 resolve inside, 135 dangle (contained fixtures, kept), the two listed extracted-image links to /sys/kernel/debug are non-inputs and excluded by exact path and target; any other escape stops preparation. The resolved-manifest digest is to be read from the retained 2804 release directory before preparation; the policy digest is the 2804 background-policy.json. The delta and its changed files come from OS's contract at osDelta.commit"
+  },
+  "prepared": {
+    "preparationId": null,
+    "receiptSha256": null,
+    "basis": "The immutable preparation the build uses (alpha-source/<preparationId>/tree with preparation.json), recorded after the lead runs prepare and a probe passes against it. Until then guard and builder fail closed; the build never falls back to the retained Pixel tree"
   },
   "artifact": {
     "name": "emulator-alpha-receipt-{run_id}",
