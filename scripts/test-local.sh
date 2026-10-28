@@ -9,6 +9,8 @@ node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent
 node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
+# Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
+node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-agent/server/event-delivery.test.mjs
 node --test \
  workspace/rose-agent/security/device-auth.test.mjs \
  workspace/rose-agent/security/recovery-download.test.mjs \
@@ -78,3 +80,7 @@ java -cp "$JAVA_TESTS/TaskControl" dev.pixel.voice.TaskControlTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RendererRecovery" \
  workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java workspace/rose-agent/app/tests/RendererRecoveryTest.java
 java -cp "$JAVA_TESTS/RendererRecovery" dev.pixel.voice.RendererRecoveryTest
+# Native glasses-button duplicate suppression (media-button handling on the native side).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Button" \
+ workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java
+java -cp "$JAVA_TESTS/Button" dev.pixel.voice.ButtonTest

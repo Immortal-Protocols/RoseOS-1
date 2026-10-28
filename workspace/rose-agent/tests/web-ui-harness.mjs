@@ -26,7 +26,7 @@ function element(id){
 }
 
 // Timers are recorded, never run, so no poll loop starts; tests drive state directly.
-export function loadPage({native={}}={}){
+export function loadPage({native={},navigator={}}={}){
  const nodes=new Map(),timers=[],calls=[];
  const record=name=>(...args)=>{calls.push([name,...args]);};
  const Native=new Proxy({audioPrepared:()=>true,endpoint:()=>'https://example.invalid',audioRoute:()=>'',
@@ -36,7 +36,7 @@ export function loadPage({native={}}={}){
  const document={getElementById(id){if(!nodes.has(id))nodes.set(id,element(id));return nodes.get(id);},
   createElement:tag=>element(tag),querySelector:()=>null,querySelectorAll:()=>[],body:element('body')};
  const context=vm.createContext({document,Native,console:{log(){},warn(){},error:console.error},
-  localStorage:{getItem:()=>null,setItem(){}},navigator:{},performance:{now:()=>0},crypto:globalThis.crypto,
+  localStorage:{getItem:()=>null,setItem(){}},navigator,performance:{now:()=>0},crypto:globalThis.crypto,
   setTimeout:(f,ms)=>{timers.push({f,ms});return timers.length;},setInterval:(f,ms)=>{timers.push({f,ms,repeat:true});return timers.length;},
   clearTimeout(){},clearInterval(){},Audio:class{},TextEncoder,TextDecoder,URL,AbortController,
   Map,Set,Promise,JSON,Error,Math,Date,Number,String,Array,Object,Symbol,structuredClone});
