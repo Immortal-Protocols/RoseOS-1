@@ -1,0 +1,48 @@
+android_app {
+    name: "NetworkLocation",
+    srcs: ["src/**/*.kt", "src/**/*.java"],
+    resource_dirs: ["res"],
+    manifest: "AndroidManifest.xml",
+
+    certificate: "platform",
+    privileged: true,
+    platform_apis: true,
+
+    kotlincflags: ["-Xplugin=external/kotlinc/lib/kotlinx-serialization-compiler-plugin.jar"],
+
+    static_libs: [
+        "androidx.core_core",
+        "androidx.core_core-ktx",
+        "kotlinx_serialization_core",
+        "kotlinx_serialization_json",
+        "network-location-position-estimation",
+        "network-location-proto",
+    ],
+
+    libs: [
+        "com.android.location.provider.impl",
+    ],
+
+    jni_libs: [
+        "libnetwork_location_position_estimation_rust",
+    ],
+
+    required: [
+        "etc_permissions_app.grapheneos.networklocation.xml",
+        "etc_sysconfig_app.grapheneos.networklocation.xml",
+    ],
+}
+
+prebuilt_etc {
+    name: "etc_permissions_app.grapheneos.networklocation.xml",
+    src: "etc/permissions/app.grapheneos.networklocation.xml",
+    sub_dir: "permissions",
+    filename_from_src: true,
+}
+
+prebuilt_etc {
+    name: "etc_sysconfig_app.grapheneos.networklocation.xml",
+    src: "etc/sysconfig/app.grapheneos.networklocation.xml",
+    sub_dir: "sysconfig",
+    filename_from_src: true,
+}

@@ -1,0 +1,23 @@
+diff --git a/target/product/generic/Android.bp b/target/product/generic/Android.bp
+--- a/target/product/generic/Android.bp
++++ b/target/product/generic/Android.bp
+@@ -1194,5 +1194,18 @@ android_system_image {
+         "com.stevesoltys.backup_default-permissions",
+         "com.stevesoltys.backup_privapp_allowlist",
+         "default-permissions_app.grapheneos.backup.contacts",
+-    ],
++        // RoseOS Cuttlefish alpha only (OS-ALPHA-099): system packages make installs for this product
++        // that system_image_defaults omits. Soong adds each one's required and jni_libs closure.
++        "GmsCompat", // handheld_system: GmsCompatConfig, GmsCompatLib and its two XMLs
++        "LogViewer", // handheld_system
++        "NetworkLocation", // handheld_system: libnetwork_location_position_estimation_rust and two XMLs
++        "VirtualDeviceManager", // RoseOS generic_system.mk, unconditional (not RELEASE_PACKAGE_COMPUTER_CONTROL)
++    ] + select(product_variable("debuggable"), {
++        // base_system PRODUCT_PACKAGES_DEBUG: eng and userdebug only, as in make.
++        true: [
++            "HardeningTestApp",
++            "SecurePasteTestSystemApp",
++        ],
++        default: [],
++    }),
+ }
