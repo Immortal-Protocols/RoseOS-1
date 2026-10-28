@@ -603,7 +603,12 @@ def source(rev):
     main = git_show(commit, 'workspace/rose-agent/app/src/dev/pixel/voice/MainActivity.java').decode()
     pages = re.findall(r'titles\.add\("([^"]+)"\)', main)
     indexes = dict(re.findall(r'\b(homePage|voicePage|widgetsPage|ourAppsPage)=(\d+)', main))
-    home_rule = re.search(r'void showHomeFor\(Intent intent\)\{([^}]*)\}', main)
+    home_rule = next((line.strip() for line in main.splitlines() if 'void showHomeFor(' in line), None)
+    try:
+        entry = git_show(commit, 'workspace/rose-agent/app/src/dev/pixel/voice/HomeEntry.java').decode()
+        entry_rules = re.findall(r'^\s*(if \(.*?;|return new HomeEntry\(.*?;)\s*$', entry, re.M)
+    except Fail:
+        entry_rules = None
     wallpaper = hashlib.sha256(git_show(commit, WALLPAPER)).hexdigest()
     result = {
         'kind': 'source-inspection', 'commit': commit,
@@ -614,7 +619,8 @@ def source(rev):
         'homeActivities': with_category(activities, HOME), 'launcherActivities': with_category(activities, LAUNCHER),
         'routing': {
             'launcherPages': pages, 'pageIndexes': {k: int(v) for k, v in indexes.items()},
-            'homeIntentRule': home_rule.group(1).strip() if home_rule else None,
+            'entryMethod': home_rule,
+            'homeEntryRules': entry_rules,
             'homePresenceOpens': 'RoseConversationActivity' if 'void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}' in main else None,
             'pairingOnCreate': 'PairingActivity started from MainActivity.onCreate when the device is unpaired'
             if 'if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class))' in main else None,

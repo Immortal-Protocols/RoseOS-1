@@ -214,7 +214,7 @@ where it came from.
 | 5 | Fold wallpaper bytes in Rose Agent; Home/conversation classes compiled in | artifact | `409c0dbf…d8c5`; both classes present |
 | 6 | HOME candidates in the image vs HOME role holder on the device | artifact vs runtime-readonly | Image lists them; the device decides. Report both, never infer one from the other |
 | 7 | HOME key → Rose Home page with `Open Rose`, not black | runtime-interactive + comparison | Only when Rose holds HOME |
-| 8 | Launcher-icon entry → which page | runtime-interactive | Source 302 opens `voicePage` ("Voice home"), not Rose Home |
+| 8 | Launcher-icon entry → which page | runtime-interactive | 302 (beta 2804, alpha): `voicePage` ("Voice home"), not Rose Home. 304+ (`HomeEntry`, OS-HOME-2804-FIX-001): Rose Home, with the conversation opened over it when paired and launched fresh; Back returns to Home. Run `source REV` for the build's rule |
 | 9 | Home → conversation → back transition | runtime-interactive | `RoseConversationActivity`, then back to the launcher |
 | 10 | Truthful unavailable states | runtime-interactive | An unpaired guest opens `PairingActivity`; no backend means no fake connected/task state; alpha has no Updater |
 | 11 | Visual review of side-by-sides against the prototype | screenshot-comparison + human | Consistent with the delivered prototype, not "accepted" |

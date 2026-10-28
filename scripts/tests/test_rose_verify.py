@@ -351,7 +351,16 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(r['package'], 'dev.pixel.voice')
         self.assertIn('dev.pixel.voice.MainActivity', r['homeActivities'])
         self.assertTrue(r['routing']['launcherPages'])
+        self.assertIn('CATEGORY_HOME', r['routing']['entryMethod'])
         self.assertFalse(r['runtime']['performed'])
+
+    def test_beta_302_routing_when_history_is_available(self):
+        beta = 'ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9'
+        if subprocess.run(['git', '-C', str(rv.ROOT), 'cat-file', '-e', beta + '^{commit}']).returncode:
+            self.skipTest('shallow checkout without the beta commit')
+        r = rv.source(beta)
+        self.assertEqual((r['versionCode'], r['routing']['homeEntryRules']), (302, None))
+        self.assertIn('showPage(homePage,false)', r['routing']['entryMethod'])
 
 
 if __name__ == '__main__':
