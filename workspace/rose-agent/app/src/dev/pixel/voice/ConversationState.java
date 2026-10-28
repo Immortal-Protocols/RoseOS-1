@@ -51,6 +51,13 @@ final class ConversationState {
  /** End call applies to voice only and is offered for an active session. */
  boolean canEnd(){return phase==Phase.ACTIVE;}
 
+ /** SystemUI tray protocol v1 fields, from this same state so the tray and conversation agree.
+  * connected/listening/muted are true only for an active session; status keeps its existing words. */
+ boolean trayConnected(){return active();}
+ boolean trayListening(){return active()&&!muted;}
+ boolean trayMuted(){return active()&&muted;}
+ String trayStatus(boolean service){return phase==Phase.ACTIVE?(muted?"Muted":"Listening"):phase==Phase.CONNECTING?"Connecting":service?"Disconnected":"Ready";}
+
  /** Emits only the four conversation notices, on observed transitions, plus CLEAR when a new attempt
   * starts so a previous session's notice never lingers. The first observation after (re)opening the
   * surface only seeds state, so returning never replays a stale notice. A drop into reconnecting is not
