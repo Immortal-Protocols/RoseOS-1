@@ -53,8 +53,9 @@ test('search verifies text before submitting and does not repeat a rejected subm
  await assert.rejects(r.step('test.app',{kind:'search',selector:{viewId:'search'}},{query:'example'}),/submission rejected/);assert.equal(submitted,1);
 });
 test('leaving the target app stops generation before an action',async()=>{
+ // Generation runs in the active control workspace (foreground or background), so the wrong package there is refused before any action.
  let mutations=0;const r=new GeneratedAppRuntime({client:{},route:()=>({}),phone:async c=>{if(c.action!=='inspect_ui')mutations++;return {status:'ok',packageName:'another.app',nodes:[]};}});
- await assert.rejects(r.step('test.app',{kind:'tap',selector:{text:'Browse'}},{}),/foreground/);assert.equal(mutations,0);
+ await assert.rejects(r.step('test.app',{kind:'tap',selector:{text:'Browse'}},{}),/Expected app is not available in the active control workspace/);assert.equal(mutations,0);
 });
 test('a password prompt prevents exploration or collection of its contents',async()=>{
  let mutations=0;const r=new GeneratedAppRuntime({client:{},route:()=>({}),phone:async c=>{if(c.action!=='inspect_ui')mutations++;return {status:'ok',packageName:'test.app',nodes:[{password:true,text:'[password]'}]};}});

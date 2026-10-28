@@ -36,7 +36,15 @@ test('OpenAI keeps app tool selection with the model and deduplicates only ident
 });
 test('cancel during microphone acquisition releases a late microphone without opening a session',async()=>{
  const f=setup();let resolve,handle,requests=0;f.context.navigator.mediaDevices.getUserMedia=()=>new Promise(r=>resolve=r);
- const opening=f.context.VoiceProviders.start({provider:'openai',api:async()=>requests++,tools:{},onConversationCreated:c=>handle=c});await handle.close();resolve(f.stream);await assert.rejects(opening,/canceled/);assert.equal(requests,0);assert.equal(f.tracks[0].stopped,true);
+ const opening=f.context.VoiceProviders.start({provider:'openai',api:async()=>requests++,tools:{},onConversationCreated:c=>handle=c});
+ // Acquisition starts after the session's audio setup awaits; cancel once it is actually pending.
+ for(let i=0;i<50&&!resolve;i++)await flush();assert.equal(typeof resolve,'function','microphone acquisition started');
+ await handle.close();resolve(f.stream);await assert.rejects(opening,/canceled/);assert.equal(requests,0);assert.equal(f.tracks[0].stopped,true);
+});
+test('cancel before microphone acquisition never requests the microphone',async()=>{
+ const f=setup();let calls=0,handle;f.context.navigator.mediaDevices.getUserMedia=()=>{calls++;return Promise.resolve(f.stream);};
+ const opening=f.context.VoiceProviders.start({provider:'openai',api:async()=>{throw Error('no session request expected');},tools:{},onConversationCreated:c=>handle=c});
+ await handle.close();await assert.rejects(opening,/canceled/);assert.equal(calls,0);assert.equal(f.tracks[0].stopped,false);
 });
 test('fast command matching is narrow and does not treat albums or quoted chatter as song actions',()=>{
  const f=setup(),match=f.context.resolveVoiceCommand;

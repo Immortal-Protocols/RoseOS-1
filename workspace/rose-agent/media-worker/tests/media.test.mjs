@@ -1,7 +1,11 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {createRequire} from 'node:module';
 import {MediaWorkerConfig} from '../config.mjs';import {PhoneCommands} from '../../server/phone.mjs';
-const require=createRequire(import.meta.url),create=require('../media-tool.js'),match=require('../../voice-providers/voice-commands.js');
+import vm from 'node:vm';
+// The page loads this as a classic script; workspace/package.json is type:module, so require() would load it as an ES
+// module where `module` is undefined and nothing is exported. Load it the way the page does.
+const pageScript=rel=>{const window={};vm.runInThisContext('(function(window){'+fs.readFileSync(new URL(rel,import.meta.url),'utf8')+'\n})',{filename:rel})(window);return window;};
+const create=pageScript('../media-tool.js').createMediaTool,match=pageScript('../../voice-providers/voice-commands.js').resolveVoiceCommand;
 test('off by default; disable immediately rejects new media work',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pixel-media-'));
  try{const config=new MediaWorkerConfig(path.join(dir,'config.json'));const commands=new PhoneCommands(()=>1000,()=>config.read().enabled);

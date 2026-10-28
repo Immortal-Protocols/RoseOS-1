@@ -1,5 +1,9 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {create,limiterCurve}=require('./output-boost.js');
+const vm=require('node:vm'),fs=require('node:fs');
+// The page loads this file as a classic script (workspace/package.json is type:module, so require() would
+// treat it as an ES module where `module` is undefined). Load it the same way the page does.
+function pageScript(name){const window={};vm.runInThisContext('(function(window){'+require('node:fs').readFileSync(__dirname+'/'+name,'utf8')+'\n})',{filename:name})(window);return window;}
+const {create,limiterCurve}=pageScript('output-boost.js').VoiceOutputBoost;
 function setup(broken=false){const nodes=[],audio={muted:false},states=[];function node(){const n={connections:0,disconnected:false,connect(){this.connections++},disconnect(){this.disconnected=true;this.connections=0}};nodes.push(n);return n;}const ctx={state:'running',destination:{},createMediaStreamSource(){if(broken)throw Error('Unavailable');return node();},createGain(){return Object.assign(node(),{gain:{value:0}})},createDynamicsCompressor(){return Object.assign(node(),Object.fromEntries(['threshold','knee','ratio','attack','release'].map(x=>[x,{value:0}])))},createWaveShaper:node};return {nodes,audio,states,boost:create(ctx,{},audio,s=>states.push(s))};}
 test('boost switches off without layered playback or multiplying the graph on repeat',()=>{const f=setup();f.boost.setDb(6);assert.equal(f.audio.muted,true);assert.equal(f.nodes.length,4);f.boost.setDb(6);assert.equal(f.nodes.length,4);assert.equal(f.nodes[3].connections,1);f.boost.setDb(0);assert.equal(f.audio.muted,false);assert.ok(f.nodes.every(n=>n.disconnected));f.boost.setDb(6);f.boost.close();assert.equal(f.audio.muted,false);assert.ok(f.nodes.every(n=>n.disconnected));});
 test('unavailable processing falls back to original playback',()=>{const f=setup(true);f.boost.setDb(6);assert.equal(f.audio.muted,false);assert.equal(f.states.at(-1).status,'unavailable');assert.equal(f.boost.state().active,false);});
