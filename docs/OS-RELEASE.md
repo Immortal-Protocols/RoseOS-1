@@ -394,8 +394,27 @@ The builder copies the three build outputs into
 `release-stage.py resume` then opens a new chain. That chain is bound to the
 failed chain's last receipt hash and records the carried files' hashes, which
 must match the expected value and any outputs the failed chain recorded. The
-failed stage, signing and everything after it then run in the new chain. Receipts hold hashes, times and exit
-codes, not command output, arguments or environment.
+failed stage, signing and everything after it then run in the new chain.
+
+A chain that failed at `sign`, including a resumed one, resumes the same way
+with `resume_failed_stage: sign`. Set `resume_source_run` to the failed resumed
+attempt's run id, so the source directory is `frankel-<build>-resume-<id>`.
+The carried files must still match the hashes that chain recorded.
+`bytes-verify` is skipped. `host-sign.py` then moves the failed attempt's
+task-owned `releases/<build>` aside, whole, to
+`releases/<build>.failed-sign-<run id>` (never deleted). It does this only
+when the owner marker matches this candidate exactly and no
+`.rose-actions-signed.json` marker exists; a successful signing writes that
+marker, and a signed release is never moved or overwritten.
+
+The derived release script keeps `KEY_DIR=keys`, so certificate and
+otacerts paths stay relative and reproducible. Only the
+`--extra_apex_payload_key` arguments become the absolute path of the
+release-local `keys` link: the APEX re-pack opens them from another working
+directory, where `keys/avb.pem` failed to resolve in run 40641163775.
+
+Receipts hold hashes, times and exit codes, not command output, arguments or
+environment.
 
 Promote the candidate and channel metadata only after its acceptance gates pass.
 Publishing `frankel-stable` may make an update available to existing users; it is

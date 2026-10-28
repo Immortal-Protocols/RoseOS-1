@@ -187,7 +187,8 @@ class PipelineTest(unittest.TestCase):
             shutil.copy({str(fixtures/'ota.zip')!r}, os.path.join(p, 'frankel-ota_update-' + b + '.zip'))
             for n in ('releasekey.x509.pem', 'avb_pkmd.bin'): shutil.copy(os.path.join({str(fixtures)!r}, n), p)
             open(os.path.join(p, 'frankel-stable'), 'w').write(b + ' ' + os.environ['BUILD_DATETIME'] + ' frankel stable\\n')
-            open(os.path.join(p, 'UPDATE.md'), 'w').write('# synthetic\\n')''')
+            open(os.path.join(p, 'UPDATE.md'), 'w').write('# synthetic\\n')
+            if os.environ.get('FAKE_SIGN_FAIL'): raise SystemExit('synthetic signing failure')''')
         script(tools/'check_ota.py', 'import os, sys; sys.exit(1 if os.environ.get("FAKE_OTA_BAD") else 0)')
         avb_sha1 = hashlib.sha1(b'synthetic avb key blob').hexdigest()
         script(tools/'avbtool.py', f'import sys; print("Public key (sha1): {avb_sha1}") if sys.argv[1] == "info_image" else None')
@@ -326,46 +327,93 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(failed, 'build')
         self.assertIn('APPS is required', result.stderr)
 
-    def test_workflow_resume_reverifies_the_preserved_build_without_rebuilding(self):
-        home = self.root/'home'
-        env = dict(os.environ, HOME=str(home), CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP, CHANNEL='beta',
-            APPS=json.dumps(APPS), PATH=f'{Path(PY).parent}:{os.environ["PATH"]}', GITHUB_RUN_ID='4242',
-            RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', GITHUB_ENV=str(self.root/'github-env'))
-        fake = ' '.join(shlex.quote(str(x)) for x in self.common[10:])
-        def prepare():
-            (self.root/'github-env').write_text('')
-            result = subprocess.run(['bash', '-c', PREPARE], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+    def workflow_env(self):
+        """The builder job's environment for running os-release.yml's prepare block and stage lines directly."""
+        return dict(os.environ, HOME=str(self.root/'home'), CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP,
+            CHANNEL='beta', APPS=json.dumps(APPS), PATH=f'{Path(PY).parent}:{os.environ["PATH"]}', GITHUB_RUN_ID='4242',
+            RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='', GITHUB_ENV=str(self.root/'github-env'))
+
+    def prepare(self, env, ok=True):
+        (self.root/'github-env').write_text('')
+        result = subprocess.run(['bash', '-c', PREPARE], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode == 0, ok, result.stderr)
+        if ok:
             env['ROSE_BASE'] = (self.root/'github-env').read_text().strip().split('=', 1)[1]
-        def stage(line):
-            return subprocess.run(['bash', '-c', f'{line} {fake}'], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
-        prepare()
-        first = Path(env['ROSE_BASE'])
-        built = stage(WORKFLOW_STAGES[0])
+
+    def workflow_stage(self, env, line):
+        fake = ' '.join(shlex.quote(str(x)) for x in self.common[10:])
+        return subprocess.run(['bash', '-c', f'{line} {fake}'], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
+
+    def built_attempt(self, env):
+        self.prepare(env)
+        built = self.workflow_stage(env, WORKFLOW_STAGES[0])
         self.assertEqual(built.returncode, 0, built.stderr)
-        unsigned = json.loads(built.stderr[built.stderr.index('{'):built.stderr.rindex('}') + 1])['unsignedTargetFiles']
+        return json.loads(built.stderr[built.stderr.index('{'):built.stderr.rindex('}') + 1])['unsignedTargetFiles']
+
+    def chain_status(self, base):
+        return json.loads(subprocess.run([PY, str(STAGE), 'status', '--state', f'{base}/stages'], capture_output=True, text=True).stdout)
+
+    def test_workflow_resume_reverifies_the_preserved_build_without_rebuilding(self):
+        env = self.workflow_env()
+        unsigned = self.built_attempt(env)
+        first = Path(env['ROSE_BASE'])
         env['FAKE_TARGETS'] = 'com.example.other:' + SIGNER  # stands in for the parser defect: verification fails
-        self.assertNotEqual(stage(WORKFLOW_STAGES[1]).returncode, 0)
+        self.assertNotEqual(self.workflow_stage(env, WORKFLOW_STAGES[1]).returncode, 0)
         env.pop('FAKE_TARGETS')
         before = {p.name: p.read_bytes() for p in (first/'stages').iterdir()}
         makes = (self.root/'fake/events.log').read_text().count('make')
         env.update(RESUME_STAGE='bytes-verify', RESUME_UNSIGNED_SHA256='0' * 64)
-        result = subprocess.run(['bash', '-c', PREPARE], cwd=SCRIPTS.parent, env=env, capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)  # a wrong expected hash resumes nothing
+        self.prepare(env, ok=False)  # a wrong expected hash resumes nothing
         shutil.rmtree(Path(f'{first}-resume-4242'))
         env['RESUME_UNSIGNED_SHA256'] = unsigned
-        prepare()
+        self.prepare(env)
         self.assertEqual(env['ROSE_BASE'], f'{first}-resume-4242')
         for line in WORKFLOW_STAGES[1:]:
-            result = stage(line)
+            result = self.workflow_stage(env, line)
             self.assertEqual(result.returncode, 0, line + result.stderr)
         self.assertEqual({p.name: p.read_bytes() for p in (first/'stages').iterdir()}, before)
         self.assertEqual((self.root/'fake/events.log').read_text().count('make'), makes)  # nothing was rebuilt
-        status = json.loads(subprocess.run([PY, str(STAGE), 'status', '--state', env['ROSE_BASE'] + '/stages'],
-            capture_output=True, text=True).stdout)
+        status = self.chain_status(env['ROSE_BASE'])
         self.assertEqual((status['state'], status['completedStages']), ('AWAITING_EXTERNAL',
             ['build', 'bytes-verify', 'sign', 'ota-verify', 'transfer']))
         self.assertTrue((Path(env['ROSE_BASE'])/'artifact/assets/verification.json').is_file())
+
+    def test_workflow_sign_resume_continues_a_resumed_attempt_without_reverifying_or_rebuilding(self):
+        # Mirrors 2802: the original attempt failed bytes-verify, its resume (run 4242) passed bytes-verify and failed
+        # signing, and a sign resume (run 5151) names run 4242 as its source.
+        env = self.workflow_env()
+        unsigned = self.built_attempt(env)
+        first = Path(env['ROSE_BASE'])
+        env['FAKE_TARGETS'] = 'com.example.other:' + SIGNER
+        self.assertNotEqual(self.workflow_stage(env, WORKFLOW_STAGES[1]).returncode, 0)
+        env.pop('FAKE_TARGETS')
+        env.update(RESUME_STAGE='bytes-verify', RESUME_UNSIGNED_SHA256=unsigned)
+        self.prepare(env)
+        resumed = Path(env['ROSE_BASE'])
+        self.assertEqual(self.workflow_stage(env, WORKFLOW_STAGES[1]).returncode, 0)
+        env['FAKE_SIGN_FAIL'] = '1'
+        self.assertNotEqual(self.workflow_stage(env, WORKFLOW_STAGES[2]).returncode, 0)
+        env.pop('FAKE_SIGN_FAIL')
+        before = {base: {p.name: p.read_bytes() for p in (base/'stages').iterdir()} for base in (first, resumed)}
+        makes = (self.root/'fake/events.log').read_text().count('make')
+        env.update(RESUME_STAGE='sign', GITHUB_RUN_ID='5151')
+        self.prepare(env, ok=False)  # without naming run 4242 the source is the original chain, which failed bytes-verify
+        shutil.rmtree(Path(f'{first}-resume-5151'))
+        env['RESUME_SOURCE_RUN'] = '4242'
+        self.prepare(env)
+        self.assertEqual(env['ROSE_BASE'], f'{first}-resume-5151')
+        status = self.chain_status(env['ROSE_BASE'])
+        self.assertEqual((status['stage'], status['completedStages']), ('sign', ['build', 'bytes-verify']))
+        # The workflow skips bytes-verify on a sign resume and runs sign onward.
+        for line in WORKFLOW_STAGES[2:]:
+            result = self.workflow_stage(env, line)
+            self.assertEqual(result.returncode, 0, line + result.stderr)
+        self.assertEqual({base: {p.name: p.read_bytes() for p in (base/'stages').iterdir()} for base in (first, resumed)}, before)
+        self.assertEqual((self.root/'fake/events.log').read_text().count('make'), makes)
+        self.assertEqual(self.chain_status(env['ROSE_BASE'])['state'], 'AWAITING_EXTERNAL')
+        self.assertIn("if: inputs.resume_failed_stage != 'sign'\n        run: bash scripts/os-release-stage.sh bytes-verify", WORKFLOW_TEXT)
+        self.assertIn("ROSE_SIGN_RESUME_ARCHIVE: ${{ inputs.resume_failed_stage == 'sign' && format('failed-sign-{0}', github.run_id) || '' }}",
+            WORKFLOW_TEXT)
 
     def test_held_lock_refuses_the_build(self):
         import fcntl

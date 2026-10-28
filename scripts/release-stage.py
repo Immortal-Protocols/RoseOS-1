@@ -335,11 +335,14 @@ def resume(a):
         if by_name[name]['sha256'] != digest:
             raise StateError(f'{name} differs from its expected sha256; nothing resumed')
         expected[name] = digest
-    # Outputs that the completed stages recorded must be carried unchanged.
+    # Outputs that the completed stages recorded, and the artifacts a resumed source chain carried, must be carried
+    # unchanged (a resume of a resume keeps the original binding).
+    recorded = list(source_chain[0].get('resumedFrom', {}).get('artifacts', []))
     for receipt in source_chain:
-        for output in receipt.get('outputs', []) if receipt.get('event') == 'completed' else []:
-            if by_name.get(output['name'], {}).get('sha256') != output['sha256']:
-                raise StateError(f'{output["name"]} differs from the source receipt; nothing resumed')
+        recorded += receipt.get('outputs', []) if receipt.get('event') == 'completed' else []
+    for output in recorded:
+        if by_name.get(output['name'], {}).get('sha256') != output['sha256']:
+            raise StateError(f'{output["name"]} differs from the source receipt; nothing resumed')
     state = Path(a.state)
     if state.exists() and any(state.iterdir()):
         raise StateError('the new state directory must be new and empty')

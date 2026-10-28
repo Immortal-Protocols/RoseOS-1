@@ -41,9 +41,14 @@ def missing_inputs(config):
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
-def derive_release_script(original, common_sh, key_dir, passfile, python=sys.executable,
+def derive_release_script(original, common_sh, key_dir, passfile, release_keys, python=sys.executable,
                           helper=str(ROOT/'scripts/host-decrypt-keys.py')):
-    """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing."""
+    """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing.
+
+    release_keys is the absolute path of the `keys` link the script creates in its release directory (to the RAM key
+    directory). The script then sets KEY_DIR=keys so that otacerts.zip and the recorded certificate and AVB key paths
+    stay relative and reproducible; those are left alone. Only the APEX payload keys become that absolute path: the
+    APEX re-pack opens them from another working directory, where keys/avb.pem does not resolve (run 40641163775)."""
     def once(pattern, text, flags=0):
         found = list(re.finditer(pattern, text, flags))
         if len(found) != 1:
@@ -58,7 +63,18 @@ def derive_release_script(original, common_sh, key_dir, passfile, python=sys.exe
     decrypt = once(r'script/decrypt-keys\s+(\S+)', text)
     text = text[:decrypt.start()] + ' '.join(map(shlex.quote, (python, helper))) + ' ' + decrypt.group(1) + ' ' + \
         shlex.quote(str(passfile)) + text[decrypt.end():]
-    return text
+    once(r'^KEY_DIR=keys$', text, re.M)
+    if not re.fullmatch(r'/[\w./-]+', str(release_keys)):
+        raise AdapterFailed('release keys path must be a plain absolute path')
+    lines = text.splitlines(keepends=True)
+    apex = [i for i, line in enumerate(lines) if '--extra_apex_payload_key' in line]
+    if not apex:
+        raise AdapterFailed('release script anchor --extra_apex_payload_key found 0 times, expected at least once')
+    for i in apex:
+        if lines[i].count('--extra_apex_payload_key') != lines[i].count('$KEY_DIR/avb.pem'):
+            raise AdapterFailed('an --extra_apex_payload_key argument does not use $KEY_DIR/avb.pem; not rewriting it')
+        lines[i] = lines[i].replace('$KEY_DIR/avb.pem', f'{release_keys}/avb.pem')
+    return ''.join(lines)
 
 def candidate_file(sha, path):
     result = subprocess.run(['git', '-C', str(ROOT), 'show', f'{sha}:{path}'], capture_output=True)
@@ -75,16 +91,30 @@ def copy_fresh(source, target):
     os.replace(temporary, target)
     os.utime(target)
 
-def prepare_release_dir(source_root, device, build, sha):
+SIGNED = '.rose-actions-signed.json'
+
+def prepare_release_dir(source_root, device, build, sha, archive=None):
+    """releases/{build} for this run. A partial release output from a failed signing attempt is moved aside whole, to
+    releases/{build}.{archive}, only when a sign resume names that archive, the owner marker is exactly this
+    candidate's and no successful-signing marker exists; the generate-release script would otherwise rm -rf it."""
     releases = Path(source_root)/'releases'/build
     marker = releases/'.rose-actions-owner.json'
     owner = {'candidate': sha, 'build': build, 'device': device}
+    if archive is not None and not re.fullmatch(r'failed-sign-\d+', archive):
+        raise AdapterFailed('sign resume archive name must be failed-sign-<run id>')
     if releases.exists():
         if not marker.is_file() or json.loads(marker.read_text()) != owner:
             raise AdapterFailed(f'{releases} exists and is not this task\'s resumable state; it is not touched')
+        if (releases/SIGNED).exists():
+            raise AdapterFailed(f'{releases} holds a successfully signed release; it is not touched')
         if (releases/f'release-{device}-{build}').exists():
-            raise AdapterFailed(f'{releases}/release-{device}-{build} already exists; refusing to overwrite a signed release')
-    else:
+            if archive is None:
+                raise AdapterFailed(f'{releases}/release-{device}-{build} already exists; refusing to overwrite a signed release')
+            target = releases.parent/f'{build}.{archive}'
+            if target.exists():
+                raise AdapterFailed(f'{target} already exists; nothing moved')
+            os.rename(releases, target)
+    if not releases.exists():
         releases.mkdir(parents=True)
         marker.write_text(json.dumps(owner, sort_keys=True) + '\n')
     return releases
@@ -100,7 +130,7 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     notes = candidate_file(sha, sign['updateNotes'].format(device=device, build=build))
     if build.encode() not in notes:
         raise AdapterFailed(f'release notes in candidate {sha[:12]} do not name build {build}')
-    releases = prepare_release_dir(source_root, device, build, sha)
+    releases = prepare_release_dir(source_root, device, build, sha, env.get('ROSE_SIGN_RESUME_ARCHIVE') or None)
     copy_fresh(release_dir/'unsigned-target_files.zip', releases/f'{device}-target_files.zip')
     copy_fresh(source_root/env['OUT_DIR']/sign['otatools'], releases/f'{device}-otatools.zip')
     original = (source_root/'script/generate-release.sh').read_bytes()
@@ -113,7 +143,8 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         extracted = host_secrets.extract_key_archive(archive, private/'keys')
         archive.unlink()
         key_dir = host_secrets.discover_key_directory(extracted, config['identities'])
-        derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase)
+        derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase,
+            releases/f'release-{device}-{build}'/'keys')
         script = private/'generate-release-derived.sh'
         script.write_text(derived)
         java = Path(sign['javaHome'])
@@ -138,6 +169,8 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         'outputs': {p.name: sha256(p.read_bytes()) for p in sorted(public.iterdir())},
         'signedTargetFilesSha256': sha256((release_dir/'signed-target_files.zip').read_bytes())}
     (release_dir/'sign-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+    (releases/SIGNED).write_text(json.dumps({'candidate': sha, 'build': build, 'outputs': receipt['outputs'],
+        'signedTargetFilesSha256': receipt['signedTargetFilesSha256']}, sort_keys=True) + '\n')
     return 0
 
 if __name__ == '__main__':

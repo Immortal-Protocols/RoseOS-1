@@ -67,6 +67,8 @@ class Base(unittest.TestCase):
     def fetched_paths(self):
         return [Path(json.loads(l)[json.loads(l).index('--out-file') + 1]) for l in self.log.read_text().splitlines()]
 
+# Shape of the real script/generate-release.sh: RAM key directory, a release-local `keys` link with KEY_DIR=keys for
+# reproducible certificate paths, then signing whose APEX re-pack opens the payload key from another directory.
 RELEASE_SCRIPT = r"""#!/bin/bash
 set -o errexit -o nounset -o pipefail
 source "$(dirname ${BASH_SOURCE[0]})/common.sh"
@@ -75,18 +77,29 @@ DEVICE=$1
 BUILD=$2
 PERSISTENT_KEY_DIR=keys/$DEVICE
 RELEASE_OUT=releases/$BUILD/release-$DEVICE-$BUILD
-KEY_DIR=$(mktemp -d /dev/shm/release_keys.XXXXXXXXXX)
-trap "rm -rf \"$KEY_DIR\"" EXIT
+KEY_DIR=$(mktemp -d /dev/shm/generate-release.XXXXXXXXXX)
+trap "rm -rf \"$KEY_DIR\" && rm -f \"$PWD/$RELEASE_OUT/keys\"" EXIT
 cp "$PERSISTENT_KEY_DIR"/* "$KEY_DIR"
 script/decrypt-keys "$KEY_DIR"
 openssl pkcs8 -inform DER -nocrypt -in "$KEY_DIR/releasekey.pk8" -out /dev/null
-openssl pkey -in "$KEY_DIR/avb.pem" -noout
 [[ $COMMON_LOADED == yes ]]
-mkdir -p "$RELEASE_OUT"
-cp releases/$BUILD/$DEVICE-target_files.zip "$RELEASE_OUT/$DEVICE-target_files.zip"
+rm -rf $RELEASE_OUT
+mkdir -p $RELEASE_OUT
 cmp releases/$BUILD/$DEVICE-otatools.zip "$OUT_DIR/host/otatools.zip"
-echo "ota $BUILD" > "$RELEASE_OUT/$DEVICE-ota_update-$BUILD.zip"
-img_from_target_files "$RELEASE_OUT/$DEVICE-target_files.zip" factory.zip
+cp releases/$BUILD/$DEVICE-target_files.zip "$RELEASE_OUT/$DEVICE-target_files.zip"
+cd $RELEASE_OUT
+# reproducible key path for otacerts.zip
+ln -s "$KEY_DIR" keys
+KEY_DIR=keys
+[[ -f $KEY_DIR/releasekey.x509.pem ]]
+echo "otacerts $KEY_DIR/releasekey.x509.pem" > otacerts.txt
+for arg in --extra_apex_payload_key com.android.mediaprovider.apex="$KEY_DIR/avb.pem"; do
+  [[ $arg == --* ]] && continue
+  # Like apexer under sign_target_files_apks: the key is opened from a temporary working directory.
+  (cd "$(mktemp -d)" && openssl pkey -in "${arg#*=}" -noout)
+done
+echo "ota $BUILD" > "$DEVICE-ota_update-$BUILD.zip"
+img_from_target_files "$DEVICE-target_files.zip" factory.zip
 """
 
 class SignAdapterTest(Base):
@@ -163,6 +176,37 @@ class SignAdapterTest(Base):
             host_sign.main(self.config, self.env, self.gcloud)
         self.assertEqual(self.fetched_paths() if self.log.exists() else [], [])
 
+    def test_failed_partial_release_moves_aside_only_on_an_explicit_sign_resume(self):
+        releases = self.src/'releases/2026102802'
+        (releases/'release-frankel-2026102802').mkdir(parents=True)
+        (releases/'release-frankel-2026102802/partial').write_text('failed attempt output')
+        (releases/'frankel-target_files.zip').write_bytes(b'copied input')
+        owner = {'candidate': self.head, 'build': '2026102802', 'device': 'frankel'}
+        (releases/'.rose-actions-owner.json').write_text(json.dumps(owner))
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'refusing to overwrite'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'failed-sign-<run id>'):
+            host_sign.main(self.config, dict(self.env, ROSE_SIGN_RESUME_ARCHIVE='../elsewhere'), self.gcloud)
+        self.assertTrue((releases/'release-frankel-2026102802/partial').is_file())
+        self.assertEqual(host_sign.main(self.config, dict(self.env, ROSE_SIGN_RESUME_ARCHIVE='failed-sign-77'), self.gcloud), 0)
+        archived = self.src/'releases/2026102802.failed-sign-77'
+        self.assertEqual((archived/'release-frankel-2026102802/partial').read_text(), 'failed attempt output')
+        self.assertEqual((archived/'frankel-target_files.zip').read_bytes(), b'copied input')
+        self.assertEqual(json.loads((archived/'.rose-actions-owner.json').read_text()), owner)
+        signed = json.loads((releases/'.rose-actions-signed.json').read_text())
+        self.assertEqual(signed['candidate'], self.head)
+        self.assert_secrets_gone()
+        shutil.rmtree(self.release/'public')
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'successfully signed release'):
+            host_sign.main(self.config, dict(self.env, ROSE_SIGN_RESUME_ARCHIVE='failed-sign-78'), self.gcloud)
+        self.assertFalse((self.src/'releases/2026102802.failed-sign-78').exists())
+
+    def test_sign_resume_never_moves_a_foreign_directory(self):
+        (self.src/'releases/2026102802/release-frankel-2026102802').mkdir(parents=True)
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'not this task'):
+            host_sign.main(self.config, dict(self.env, ROSE_SIGN_RESUME_ARCHIVE='failed-sign-77'), self.gcloud)
+        self.assertFalse((self.src/'releases/2026102802.failed-sign-77').exists())
+
     def test_key_discovery_requires_one_pinned_directory(self):
         key_archive(self.secrets/'KEYS', self.members + [('other/releasekey.x509.pem', self.cert)])
         with self.assertRaisesRegex(host_sign.AdapterFailed, 'exactly one'):
@@ -183,13 +227,23 @@ class SignAdapterTest(Base):
         self.assert_secrets_gone()
 
     def test_release_script_anchors_must_each_occur_once(self):
-        derive = lambda text: host_sign.derive_release_script(text, '/R/script/common.sh', '/dev/shm/k', '/dev/shm/p')
+        derive = lambda text: host_sign.derive_release_script(text, '/R/script/common.sh', '/dev/shm/k', '/dev/shm/p',
+            '/R/releases/2026102802/release-frankel-2026102802/keys')
         derived = derive(RELEASE_SCRIPT)
         self.assertNotIn('img_from_target_files', derived)
         self.assertIn("source /R/script/common.sh", derived)
         self.assertIn('PERSISTENT_KEY_DIR=/dev/shm/k', derived)
         self.assertIn('host-decrypt-keys.py', derived)
         self.assertNotIn('script/decrypt-keys', derived)
+        # Only the APEX payload key becomes absolute; KEY_DIR=keys and the certificate paths stay relative.
+        self.assertIn('com.android.mediaprovider.apex="/R/releases/2026102802/release-frankel-2026102802/keys/avb.pem"', derived)
+        self.assertIn('\nKEY_DIR=keys\n', derived)
+        self.assertIn('echo "otacerts $KEY_DIR/releasekey.x509.pem"', derived)
+        for text, message in ((RELEASE_SCRIPT.replace('="$KEY_DIR/avb.pem"', '="$OTHER/avb.pem"'), 'does not use'),
+                              (RELEASE_SCRIPT.replace('--extra_apex_payload_key ', '--other '), 'found 0 times'),
+                              (RELEASE_SCRIPT.replace('\nKEY_DIR=keys\n', '\n'), 'anchor')):
+            with self.assertRaisesRegex(host_sign.AdapterFailed, message):
+                derive(text)
         for broken in (RELEASE_SCRIPT.replace('PERSISTENT_KEY_DIR=keys/$DEVICE', 'PERSISTENT_KEY_DIR=keys/$DEVICE\nPERSISTENT_KEY_DIR=keys/$DEVICE'),
                        RELEASE_SCRIPT.replace('img_from_target_files', 'image_from_target'),
                        RELEASE_SCRIPT.replace('script/decrypt-keys', 'script/unlock-keys')):
