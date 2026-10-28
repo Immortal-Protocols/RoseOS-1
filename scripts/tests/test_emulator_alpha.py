@@ -105,7 +105,7 @@ def tree_listing(root):
 AAPT = r"""
 import pathlib, sys
 a = sys.argv[1:]
-data = pathlib.Path(a[-1]).read_bytes()
+data = pathlib.Path(a[2] if a[:2] == ['dump', 'xmltree'] else a[-1]).read_bytes()
 if a[:2] == ['dump', 'badging']:
     head = data.split(b' ')[0].decode(errors='replace')
     if ':' not in head or b'UNREADABLE' in data:
@@ -114,6 +114,16 @@ if a[:2] == ['dump', 'badging']:
     print(f"package: name='{package}' versionCode='{version}' versionName='x'")
 elif a[:3] == ['dump', '--values', 'resources']:
     sys.stdout.write(data.decode())
+elif a[:2] == ['dump', 'xmltree'] and a[3:] == ['AndroidManifest.xml']:
+    # The compiled manifest of the same synthetic APK; UNREADABLE stands for an APK whose manifest aapt cannot read.
+    head = data.split(b' ')[0].decode(errors='replace')
+    if ':' not in head or b'UNREADABLE' in data:
+        sys.exit(1)
+    package = head.split(':', 1)[0]
+    print('N: android=http://schemas.android.com/apk/res/android')
+    print('  E: manifest (line=2)')
+    print(f'    A: package="{package}" (Raw: "{package}")')
+    print('    E: application (line=5)')
 """
 APKSIGNER = r"""
 import pathlib, sys
@@ -1437,7 +1447,7 @@ class WorkflowAlphaTest(unittest.TestCase):
             "        run: python3 scripts/emulator-alpha.py preflight --job guard\n", guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
-        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: inputs.mode == 'os-release'\n", self.jobs['builder'])
         self.assertIn('    needs: builder\n', self.jobs['publisher'])
 
