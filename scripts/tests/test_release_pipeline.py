@@ -22,7 +22,7 @@ import apex_fixture
 SCRIPTS = Path(__file__).resolve().parents[1]
 PIPELINE, STAGE = SCRIPTS/'release-pipeline.py', SCRIPTS/'release-stage.py'
 PY = sys.executable
-SHA, BUILD, STAMP = '34fa48ff16d046e16c7d680731bf01058d794279', '2026102901', '1793200000'
+SHA, BUILD, STAMP = '34fa48ff16d046e16c7d680731bf01058d794279', '2026102901', '1793300000'
 SIGNER = 'A'*64
 # Exact nonsecret excerpt of the real dump of build 2026102802's framework-res.apk (sha256 88dc574b...89ef9aa),
 # including the spec rows before the values and the unrelated resources after them (ACTIONS068 evidence).
@@ -43,7 +43,7 @@ FRAMEWORK_DUMP = '''\
         resource 0x01110331 android:bool/config_useSystemWallpaperDuringUserSwitch: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
           (boolean) false
 '''
-APPS = [['dev.pixel.voice', 305], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+APPS = [['dev.pixel.voice', 308], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
 PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
 WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
@@ -84,6 +84,8 @@ UPDATER_XML = ('SYSTEM_EXT/etc/permissions/privapp-permissions-updater.xml',
 UPDATER_URL = 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/'
 PERMISSION_APEX = 'SYSTEM/apex/com.android.permission.apex'
 PERMISSION_SPEC = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['permissionApex']
+SYSTEMUI_SPEC = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['systemUiTray']
+SYSTEMUI_APK = SYSTEMUI_SPEC['apkPath']
 
 def updater_apk(rose_channels=True):
     """A stand-in Updater APK: an archive whose classes.dex names the RoseChannels type when it is compiled in."""
@@ -96,13 +98,28 @@ def updater_apk(rose_channels=True):
 
 UPDATER_APK_BYTES = updater_apk()
 
+def systemui_apk(markers=tuple(SYSTEMUI_SPEC['markers']), dex=True):
+    """A stand-in SystemUI APK: classes.dex holds only the dex strings the tray gate reads, plus an unrelated second dex.
+    dex=False is a dexpreopted APK whose code is not in the archive."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as apk:
+        if dex:
+            apk.writestr(zipfile.ZipInfo('classes.dex', (2009, 1, 1, 0, 0, 0)), b'dex\n039\0Lcom/android/systemui/SystemUIApplication;')
+            apk.writestr(zipfile.ZipInfo('classes2.dex', (2009, 1, 1, 0, 0, 0)), b'dex\n039\0' + b''.join(m.encode() + b'\0' for m in markers))
+        apk.writestr(zipfile.ZipInfo('AndroidManifest.xml', (2009, 1, 1, 0, 0, 0)), b'binary manifest')
+    return buffer.getvalue()
+
+SYSTEMUI_APK_BYTES = systemui_apk()
+# The 2026102805 SystemUI: the tray prototype and its service name, without the screen-off lifecycle (AgentTrayLink, OS #85).
+SYSTEMUI_2805_BYTES = systemui_apk(markers=tuple(SYSTEMUI_SPEC['markers'][:2]))
+
 def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.seamlessupdate.client', rose_channels=True):
     for apk in apk_paths:
         z.writestr(apk, updater_apk(rose_channels))
     for name in xml:
         z.writestr(name, f'<permissions><privapp-permissions package="{package}"/></permissions>\n')
 
-def target_files(path, keys, policy_apks, stale_misc=False, image_override=None, apex=None):
+def target_files(path, keys, policy_apks, stale_misc=False, image_override=None, apex=None, systemui=SYSTEMUI_APK_BYTES):
     """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, images."""
     fp = f'google/frankel/frankel:17/CP3A.261005.005/{BUILD}:user/{keys}'
     with zipfile.ZipFile(path, 'w') as z:
@@ -125,6 +142,9 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None,
         if not os.environ.get('FAKE_NO_UPDATER'):  # 077 shipped no Updater at all
             write_updater(z)
             embedded[UPDATER_APK] = UPDATER_APK_BYTES
+        if systemui is not None:
+            z.writestr(SYSTEMUI_APK, systemui)
+            embedded[SYSTEMUI_APK] = systemui
         embedded.update(image_override or {})
         z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
         z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
@@ -325,7 +345,7 @@ class PipelineTest(unittest.TestCase):
             'framework': {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False},
             'updater': {'packageName': 'app.seamlessupdate.client', 'channelDefault': 'prod', 'channelValues': ['prod', 'stable', 'alpha'],
                 'apkPath': UPDATER_APK, 'signer': SIGNER.lower(), 'requiredFiles': list(UPDATER_XML)},
-            'permissionApex': PERMISSION_SPEC,
+            'permissionApex': PERMISSION_SPEC, 'systemUiTray': SYSTEMUI_SPEC,
             'publication': {'repository': 'example/none', 'tag': 'frankel-{build}',
                 'channels': {'beta': {'promoteLatest': True, 'feedChannel': 'stable'}, 'prod': None}}}))
         self.base = root/'actions'
@@ -372,6 +392,9 @@ class PipelineTest(unittest.TestCase):
         apex = json.loads((artifact/'assets/verification.json').read_text())['permissionApex']
         self.assertEqual((apex['path'], apex['version'], apex['markers'], apex['payloadFs'], apex['sha256']),
             (PERMISSION_APEX, 370399999, PERMISSION_SPEC['markers'], 'ext4', hashlib.sha256(self.signed_apex).hexdigest()))
+        tray = json.loads((artifact/'assets/verification.json').read_text())['systemUiTray']
+        self.assertEqual((tray['apkPath'], tray['sha256'], tray['dexFiles'], tray['markers']),
+            (SYSTEMUI_APK, hashlib.sha256(SYSTEMUI_APK_BYTES).hexdigest(), 2, SYSTEMUI_SPEC['markers']))
         self.assertEqual(tools['debugfs']['sha256'], hashlib.sha256((self.root/'tools/debugfs').read_bytes()).hexdigest())
         code, out = self.pipeline('publish', *self.common[:8], '--config', self.config, '--artifact-dir', artifact,
             '--adapter', 'fake', '--fake-state', self.root/'fake', '--promote')
@@ -616,6 +639,31 @@ class PipelineTest(unittest.TestCase):
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'ota-verify')
         self.assertIn(f'image bytes of {PERMISSION_APEX} differ from the checked target-files copy', result.stderr)
+
+    def test_systemui_must_carry_the_agent_tray_lifecycle(self):
+        # bytes-verify: the 2026102805 SystemUI (tray without AgentTrayLink), no SystemUI, or no readable dex stop before signing.
+        for systemui, message in ((SYSTEMUI_2805_BYTES, "SystemUI dex lacks ['Lcom/android/wm/shell/AgentTrayLink;', 'Voice binding already released']"),
+                (None, f'SystemUI APK {SYSTEMUI_APK} is absent from the target-files'),
+                (systemui_apk(dex=False), 'SystemUI APK carries no classes*.dex'),
+                (b'not an apk', 'SystemUI APK is not a readable APK archive')):
+            with self.subTest(message=message):
+                target_files(self.root/'fixtures/unsigned.zip', 'test-keys', self.placed, apex=apex_fixture.apex(), systemui=systemui)
+                failed, result = self.run_builder_job()
+                self.assertEqual(failed, 'bytes-verify')
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.base/'release/signed-target_files.zip').exists())
+                shutil.rmtree(self.base)
+
+    def test_signed_systemui_must_carry_the_tray_and_match_the_image(self):
+        # ota-verify: an old SystemUI in the signed target-files, or image bytes that are not the checked APK.
+        for kwargs, message in (({'systemui': SYSTEMUI_2805_BYTES}, 'SystemUI dex lacks'),
+                ({'image_override': {SYSTEMUI_APK: SYSTEMUI_2805_BYTES}}, f'image bytes of {SYSTEMUI_APK} differ from the checked target-files copy')):
+            with self.subTest(message=message):
+                target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, apex=self.signed_apex, **kwargs)
+                failed, result = self.run_builder_job()
+                self.assertEqual(failed, 'ota-verify')
+                self.assertIn(message, result.stderr)
+                shutil.rmtree(self.base)
 
     def test_payload_properties_must_describe_payload(self):
         ota(self.root/'fixtures/ota.zip', BUILD, STAMP, bad_properties=True)

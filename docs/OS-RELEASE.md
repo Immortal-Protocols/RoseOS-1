@@ -284,13 +284,14 @@ timestamp, channel and expected app versions. The jobs are:
    - The job runs `installclean` plus the make goals. It verifies the build
      identity and every `META/misc_info.txt` AVB fingerprint, app bytes,
      PRESIGNED state and signers, the compiled framework policy, and the
-     Permission APEX gate (see below).
+     Permission APEX gate and the SystemUI tray gate (see below).
    - `scripts/host-sign.py` validates the pinned OS key archive, checks the
      public certificate and AVB key against the pins, and runs the source
      tree's release command.
    - The job verifies again: OTA metadata, OTA package and payload signatures,
      the vbmeta signature and AVB key, the Permission APEX with its release
-     signers and image bytes, and the public pins.
+     signers and image bytes, the SystemUI tray code with its image bytes, and
+     the public pins.
    - Finally it transfers only the allowlisted public files and receipts as a
      3-day Actions artifact.
 
@@ -686,16 +687,17 @@ the action revokes at job end; the builder never receives it. The job then runs
   - the artifact is exactly the APK, the receipt and `SHA256SUMS`, with every
     digest matching;
   - the receipt is non-simulated and names this candidate and the dispatched
-    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (306: 303
+    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (307: 303
     was delivered through the authenticated catalog; 304 is public on GitHub
     and catalog-delivered; 306 is public on GitHub as the first direct-GitHub
-    client);
+    client; 307 (`307-dock-label-beta`, candidate `d27dded6`, run 40765131690)
+    is the public prerelease `rose-agent-307`);
   - a version in `appRelease.reserved` is accepted only for the app-only route
     and its candidate (any candidate when none is recorded). Any other N must
     exceed every reservation. `host-app-release.py` applies the same rule:
     - 305 belongs to the 2026102805 OS candidate `7fb94ae6`;
-    - 307 (`307-dock-label-beta`) is the next app-only candidate. Because 306 is
-      built and delivered, a new OS candidate must bundle Rose Agent 308 or above;
+    - 308 (`308-home-tray-beta`) belongs to the 2026102806 OS candidate
+      (INFRA-CANDIDATE-115), so the next app-only version is 309 or above.
   - the APK's size, sha256 and signer match the receipt, and the APK's own
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;
@@ -842,6 +844,55 @@ The gate proves inclusion in the artifact, not behavior. The Home holder after
 an update, at first boot and after a reboot, a later owner choice and the
 rendered Rose Home are runtime evidence that needs a compatible booted
 candidate.
+
+**SystemUI tray gate** (INFRA-CANDIDATE-115, `check_systemui_tray` in
+`scripts/release-pipeline.py`, `systemUiTray` in `frankel.json`). The tray's
+screen-off lifecycle (OS #85: the new `AgentTrayLink.java` and the updated
+`AgentTrayPrototype.java`) is an overlay into frameworks/base's WindowManager
+Shell. At the pinned `84183aff`, Shell's `wm_shell-sources` is `src/**/*.java`
+and reaches SystemUI through `WindowManager-Shell`, so a new file needs no
+source-list edit; SystemUI is a privileged, multi-dex `system_ext` app, so it
+lands at `SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk`; and its R8 rules keep the
+Shell classes and strip only `Log.v`. Those blueprints are pinned in
+`scripts/tests/fixtures/systemui-84183aff/` with their derivation. Reconcile
+installs `AgentTrayLink.java` as a new task-owned file and replaces the
+previous candidate's `AgentTrayPrototype.java` with a backup; both appear in
+the receipt (`TrayOverlayReconcileTest`). At both verify stages the gate:
+
+- requires the SystemUI APK at `apkPath` in the target-files;
+- reads every `classes*.dex` in it and requires all four markers:
+  `Lcom/android/wm/shell/AgentTrayPrototype;`,
+  `dev.pixel.voice.AgentTrayService`, `Lcom/android/wm/shell/AgentTrayLink;`
+  and `Voice binding already released`. The 2026102805 SystemUI has only the
+  first two, so an old or wrong artifact fails;
+- fails closed when the APK has no dex (for example a dexpreopted APK whose code
+  is only in odex/vdex), is not an archive, or the config is missing;
+- in signed images, requires the `system_ext.img` bytes to equal the checked
+  APK.
+
+The receipt (path, sha256, dex count, markers) is in the bytes-verify output and
+`verification.json` (`systemUiTray`). Like the APEX gate, it shows the code is
+compiled in, not that the tray stops at screen off.
+
+**What the gates do not count as image inclusion.** Candidate source
+directories are not image contents: `workspace/models/` (`rose-chat-core`,
+`serving`), `qa/` (`models/`, `first-update/`, `verification/`), `os/tests/`,
+and `workspace/` sources other than the three dispatched, presigned APKs. A
+change there reaches a phone only through a rebuilt APK or a separate service
+deployment, never through this image. The image carries the presigned APKs,
+the reconciled overlays and patches, and the framework, Permission APEX,
+SystemUI and Updater outputs the gates read.
+
+**Runtime evidence for 2026102806** that only the lead can collect on a real
+build (the source cannot derive it):
+
+1. The SystemUI compile itself, and whether the built `SystemUI.apk` keeps its
+   `classes*.dex`. If dexpreopt strips them, the gate stops at bytes-verify
+   instead of passing; report the APK listing.
+2. The bytes-verify and ota-verify `systemUiTray` receipts.
+3. On a booted candidate: the tray stops polling at screen off and resumes with
+   fresh state at screen on, Home reuse on a HOME press, the removed trial
+   switches, and the direct GitHub update check.
 - **`host-sign.py`:** derives the release script from the source tree's
   `generate-release.sh`, each edit asserted to occur exactly once with hashes
   recorded:

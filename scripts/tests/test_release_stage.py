@@ -1,4 +1,5 @@
 """Stage receipts, locking and interruption, exercised with real local dummy processes only."""
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,7 @@ class StageTest(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.state = self.root/'state'
+        self.runners = []
         code, report = cli('init', '--state', self.state, '--device', 'testdev', '--build-number', 2026102801)
         self.assertEqual(code, 0, report)
 
@@ -47,9 +49,16 @@ class StageTest(unittest.TestCase):
     def status(self):
         return cli('status', '--state', self.state)
 
-    def spawn(self, stage, *command):
+    def spawn(self, stage, *command, timeout=15):
+        """Start a background runner and return once it holds the lock, i.e. once its started receipt exists.
+        Status probes take the stage lock briefly (lock_view); polling before the runner has acquired it can make the
+        runner refuse with LOCKED, which is the refusal under test elsewhere, so nothing polls status until then.
+        The runner's output goes to files so an early exit is reported with its exit code and output."""
         argv = [PY, str(SCRIPT), 'run', '--state', str(self.state), '--source-revision', SOURCE, stage, '--', *command]
-        process = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        log = self.root/f'runner-{len(self.runners)}'
+        with open(f'{log}.out', 'wb') as out, open(f'{log}.err', 'wb') as err:
+            process = subprocess.Popen(argv, stdout=out, stderr=err, start_new_session=True)
+        self.runners.append((process, log))
         def cleanup():
             try:
                 os.killpg(process.pid, signal.SIGKILL)
@@ -57,7 +66,19 @@ class StageTest(unittest.TestCase):
                 pass
             process.wait()
         self.addCleanup(cleanup)
+        before = set(self.state.glob('*-started.json'))
+        deadline = time.monotonic() + timeout
+        while not set(self.state.glob('*-started.json')) - before:
+            if process.poll() is not None or time.monotonic() > deadline:
+                self.fail(f'runner never started its stage: {self.runner_evidence()}')
+            time.sleep(0.01)
         return process
+
+    def runner_evidence(self, limit=2000):
+        """Exit code (None while running) and the bounded stdout/stderr of each background runner."""
+        return [{'pid': process.pid, 'returncode': process.poll(),
+            'stdout': Path(f'{log}.out').read_bytes()[-limit:].decode(errors='replace'),
+            'stderr': Path(f'{log}.err').read_bytes()[-limit:].decode(errors='replace')} for process, log in self.runners]
 
     def wait_state(self, expected, timeout=15):
         deadline = time.monotonic() + timeout
@@ -66,7 +87,7 @@ class StageTest(unittest.TestCase):
             if code == 0 and report['state'] == expected:
                 return report
             time.sleep(0.05)
-        self.fail(f'state never became {expected}: {self.status()}')
+        self.fail(f'state never became {expected}: {self.status()}; runners: {self.runner_evidence()}')
 
     def receipts(self):
         return [json.loads(p.read_text()) for p in sorted(self.state.glob('*.json'))]
@@ -166,6 +187,20 @@ class StageTest(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(report['verdict'], 'LOCKED')
         self.assertEqual(cli('abandon', '--state', self.state, '--reason', 'x')[0], 3)
+        self.assertEqual([r['event'] for r in self.receipts()], ['init', 'started'])
+        self.assertIsNone(self.runners[0][0].poll())
+
+    def test_runner_starting_inside_a_status_probe_refuses_and_writes_nothing(self):
+        # The PR94 CI signature: a runner that meets the lock while a status probe holds it (lock_view takes it with
+        # LOCK_EX|LOCK_NB) refuses with LOCKED and writes no receipt, leaving AWAITING with only the init receipt.
+        with open(self.state/'stage.lock', 'a+') as probe:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code, report = self.run_stage('build', *SLEEP)
+            self.assertEqual((code, report['verdict']), (3, 'LOCKED'))
+        code, report = self.status()
+        self.assertEqual((code, report['state'], report['receipts'], report['lock']['held']), (0, 'AWAITING', 1, False))
+        self.assertEqual([r['event'] for r in self.receipts()], ['init'])
+        self.assertEqual(self.run_stage('build')[0], 0)  # once the probe lets go, the stage runs normally
 
     def test_foreign_boot_id_is_never_running(self):
         process = self.spawn('build', *SLEEP)
