@@ -22,6 +22,8 @@ p.add_argument('--agent-tray', action='store_true',
     help='Enable the Rose Agent status tray in the system image (persist.wm.debug.pixel_agent_tray=1)')
 p.add_argument('--updater-url',
     help='Release channel base URL for the system Updater; must match the installed phone (https, ends with /)')
+p.add_argument('--keep-upstream-updater', action='store_true',
+    help='Deliberately leave the Updater polling GrapheneOS (not for a build that updates an existing RoseOS phone)')
 p.add_argument('--preinstall-apk', type=Path, action='append', default=[],
     help='Preinstall this exact signed Rose Agent or target APK from the policy receipt on the product partition (repeatable)')
 p.add_argument('--check', action='store_true', help='Run all preflight checks without changing source')
@@ -38,6 +40,14 @@ if a.reference_display_address and (not a.background_policy or not a.reference_d
 if a.updater_url and (not a.updater_url.startswith('https://') or not a.updater_url.endswith('/')
         or any(c in a.updater_url for c in '<>&"\' \n')):
     p.error('--updater-url must be an https URL ending with / and without XML special characters')
+if a.updater_url and a.keep_upstream_updater:
+    p.error('--updater-url and --keep-upstream-updater are mutually exclusive')
+# A product build that keeps the upstream URL moves the installed phone to GrapheneOS's channel,
+# whose releases it cannot verify, and strands it until reflashed.
+if (a.background_policy or a.preinstall_apk or a.agent_tray or a.locked_control) \
+        and not a.updater_url and not a.keep_upstream_updater:
+    p.error('A RoseOS product build needs --updater-url (the installed phone\'s channel); '
+        'pass --keep-upstream-updater only for a build that will not update an existing phone')
 source = Path(a.source).resolve()
 bundle = Path(__file__).resolve().parents[1]/'os'
 manifest = ET.parse(bundle/'pinned-manifest.xml')

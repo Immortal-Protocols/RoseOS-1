@@ -21,6 +21,8 @@ node --test \
 python3 os/background-control/tests/test_policy.py
 python3 os/background-control/tests/test_stop_wiring.py
 python3 os/background-control/tests/test_preinstall.py
+python3 os/tests/test_apply_os_changes.py
+python3 os/tests/test_tray_contract.py
 python3 scripts/tests/test_release_manifest.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
@@ -33,6 +35,11 @@ for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-
   "os/background-control/tests/${name}Test.java"
  java -cp "$JAVA_TESTS/$name" "dev.pixel.backgroundcontrol.${name}Test"
 done
+# SystemUI tray tap mapping; compiled alone like the controller tests above.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
+ os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \
+ os/tests/AgentStatusControlsTest.java
+java -cp "$JAVA_TESTS/AgentStatusControls" com.android.wm.shell.AgentStatusControlsTest
 # Pure Rose Agent app logic, compiled the same way.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
