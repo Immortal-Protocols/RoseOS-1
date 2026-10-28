@@ -195,8 +195,26 @@ class SignAdapterTest(Base):
     def trace(self):
         return [json.loads(line) for line in (self.release/'sign-trace.jsonl').read_text().splitlines()]
 
+    def hold_until_traced(self, pause, then=lambda: None):
+        """Release the synthetic script's pause point once the watcher has sampled the key family present, so a fast
+        machine cannot finish the script inside one sampling interval."""
+        def release():
+            trace = self.release/'sign-trace.jsonl'
+            for _ in range(400):
+                if Path(f'{pause}.ready').exists() and trace.exists() and '"ramTarget": true' in trace.read_text():
+                    break
+                time.sleep(0.05)
+            then()
+            Path(f'{pause}.go').write_text('')
+        thread = threading.Thread(target=release)
+        thread.start()
+        return thread
+
     def test_trace_shows_the_key_family_readable_at_every_tool_start_and_removed_only_by_the_exit_trap(self):
-        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        pause = self.root/'pause'
+        holder = self.hold_until_traced(pause)
+        self.assertEqual(host_sign.main(self.config, dict(self.env, ROSE_TEST_PAUSE=str(pause)), self.gcloud), 0)
+        holder.join()
         records = self.trace()
         events = [r['event'] for r in records]
         tools = [r for r in records if r['event'] == 'tool']
@@ -218,16 +236,9 @@ class SignAdapterTest(Base):
         pause = self.root/'pause'
         link = self.src/'releases/2026102802/release-frankel-2026102802/keys'
         def remove_like_an_external_cleaner():
-            trace = self.release/'sign-trace.jsonl'
-            for _ in range(400):  # paused, and the watcher has recorded the family present
-                if Path(f'{pause}.ready').exists() and '"ramTarget": true' in trace.read_text():
-                    break
-                time.sleep(0.05)
             shutil.rmtree(os.path.realpath(link))  # e.g. a logind RemoveIPC sweep of /dev/shm
             time.sleep(0.5)
-            Path(f'{pause}.go').write_text('')
-        remover = threading.Thread(target=remove_like_an_external_cleaner)
-        remover.start()
+        remover = self.hold_until_traced(pause, remove_like_an_external_cleaner)
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaisesRegex(host_sign.AdapterFailed, 'derived release script exited'):
             host_sign.main(self.config, dict(self.env, ROSE_TEST_PAUSE=str(pause)), self.gcloud)
