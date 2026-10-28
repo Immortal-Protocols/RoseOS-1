@@ -343,6 +343,21 @@ def resume(a):
     for output in recorded:
         if by_name.get(output['name'], {}).get('sha256') != output['sha256']:
             raise StateError(f'{output["name"]} differs from the source receipt; nothing resumed')
+    # A carried signing receipt binds the signed outputs: each file it lists must be carried with that hash.
+    bound = None
+    if a.bind_receipt:
+        receipt = json.loads(Path(a.bind_receipt).read_text())
+        listed = dict(receipt.get('outputs', {}))
+        if 'signedTargetFilesSha256' in receipt:
+            listed['signed-target_files.zip'] = receipt['signedTargetFilesSha256']
+        if not listed:
+            raise StateError('the bound receipt lists no outputs')
+        for name, digest in listed.items():
+            if by_name.get(name, {}).get('sha256') != digest:
+                raise StateError(f'{name} differs from the bound receipt; nothing resumed')
+        bound = file_record(a.bind_receipt)
+        if by_name.get(bound['name'], {}).get('sha256') != bound['sha256']:
+            raise StateError('the bound receipt itself must be one of the carried artifacts')
     state = Path(a.state)
     if state.exists() and any(state.iterdir()):
         raise StateError('the new state directory must be new and empty')
@@ -353,7 +368,7 @@ def resume(a):
             'candidate': source_chain[0]['candidate'], 'event': 'init', 'at': now(), 'stages': ORDER,
             'resumedFrom': {'state': str(Path(a.source).resolve()), 'lastReceiptSha256': source_last,
                 'receipts': len(source_chain), 'failedStage': a.stage, 'carriedStages': done,
-                'artifacts': artifacts, 'expected': expected}}
+                'artifacts': artifacts, 'expected': expected, 'boundReceipt': bound}}
         release_receipts.write_once(state/'000-init.json', receipt)
         chain, previous = [receipt], sha256_file(state/'000-init.json')
         for name in done:
@@ -400,6 +415,7 @@ def main(argv=None):
     c.add_argument('--from', dest='source', type=Path, required=True, help='State directory of the failed chain')
     c.add_argument('--artifact', type=Path, action='append', default=[], help='Carried file (hashed into the receipt)')
     c.add_argument('--expect', action='append', default=[], help='NAME=SHA256 an artifact must match (e.g. from the run log)')
+    c.add_argument('--bind-receipt', type=Path, help='Carried receipt whose outputs (and signedTargetFilesSha256) must match')
     c = command('mark-interrupted', 'Close a stage whose runner died')
     c.add_argument('stage', choices=ORDER)
     for name in ('fail', 'abandon'):

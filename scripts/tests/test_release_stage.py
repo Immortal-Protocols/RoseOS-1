@@ -301,6 +301,34 @@ class StageTest(unittest.TestCase):
         self.state = self.root/'resumed-2'
         self.assertEqual(self.run_stage('sign')[0], 0)
 
+    def test_bound_signing_receipt_must_match_every_carried_output(self):
+        self.assertEqual(self.run_stage('build')[0], 0)
+        self.assertEqual(self.run_stage('bytes-verify')[0], 0)
+        self.assertEqual(self.run_stage('sign')[0], 0)
+        self.assertEqual(self.run_stage('ota-verify', 'false')[0], 1)
+        directory = self.root/'carried'
+        directory.mkdir()
+        (directory/'signed-target_files.zip').write_bytes(b'signed')
+        (directory/'UPDATE.md').write_text('notes')
+        digest = lambda data: __import__('hashlib').sha256(data).hexdigest()
+        receipt = directory/'sign-receipt.json'
+        def write(outputs, signed=digest(b'signed')):
+            receipt.write_text(json.dumps({'outputs': outputs, 'signedTargetFilesSha256': signed}))
+        files = [directory/'signed-target_files.zip', directory/'UPDATE.md', receipt]
+        resume = lambda state: self.resume('--bind-receipt', receipt, artifacts=files, stage='ota-verify', state=self.root/state)
+        write({'UPDATE.md': digest(b'other notes')})
+        self.assertIn('UPDATE.md differs from the bound receipt', resume('r1')[1]['error'])
+        write({'UPDATE.md': digest(b'notes')}, signed=digest(b'other'))
+        self.assertIn('signed-target_files.zip differs from the bound receipt', resume('r2')[1]['error'])
+        write({'UPDATE.md': digest(b'notes')})
+        code, report = resume('r3')
+        self.assertEqual(code, 0, report)
+        self.assertEqual((report['stage'], report['completedStages']), ('ota-verify', ['build', 'bytes-verify', 'sign']))
+        init = json.loads((self.root/'r3/000-init.json').read_text())
+        self.assertEqual(init['resumedFrom']['boundReceipt']['name'], 'sign-receipt.json')
+        code, report = self.resume('--bind-receipt', receipt, artifacts=files[:2], stage='ota-verify', state=self.root/'r4')
+        self.assertIn('the bound receipt itself must be one of the carried artifacts', report['error'])
+
     def test_carried_receipts_only_open_a_resumed_chain(self):
         self.assertEqual(self.run_stage('build')[0], 0)
         receipt = json.loads((self.state/'002-completed.json').read_text())

@@ -31,7 +31,8 @@
       "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
       "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
       "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
-      "debugfs": "/usr/sbin/debugfs"
+      "debugfs": "/usr/sbin/debugfs",
+      "otatoolsBin": "releases/{build}/release-{device}-{build}/bin"
     },
     "integrate": {
       "project": "protocols-465723",

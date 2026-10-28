@@ -91,6 +91,8 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None)
         z.writestr('META/apkcerts.txt', '\n'.join(certs) + '\n')
         z.writestr('SYSTEM/framework/framework-res.apk', b'framework')
         z.writestr('IMAGES/vbmeta.img', b'vbmeta')
+        if not os.environ.get('FAKE_NO_BOOT_IMG'):
+            z.writestr('IMAGES/boot.img', b'boot')
         embedded = {prefix + name: data for prefix, name, data in policy_apks}
         embedded.update(image_override or {})
         z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
@@ -188,10 +190,37 @@ class PipelineTest(unittest.TestCase):
             for n in ('releasekey.x509.pem', 'avb_pkmd.bin'): shutil.copy(os.path.join({str(fixtures)!r}, n), p)
             open(os.path.join(p, 'frankel-stable'), 'w').write(b + ' ' + os.environ['BUILD_DATETIME'] + ' frankel stable\\n')
             open(os.path.join(p, 'UPDATE.md'), 'w').write('# synthetic\\n')
-            if os.environ.get('FAKE_SIGN_FAIL'): raise SystemExit('synthetic signing failure')''')
-        script(tools/'check_ota.py', 'import os, sys; sys.exit(1 if os.environ.get("FAKE_OTA_BAD") else 0)')
+            if os.environ.get('FAKE_SIGN_FAIL'): raise SystemExit('synthetic signing failure')
+            import hashlib, json; digest = lambda f: hashlib.sha256(open(f, 'rb').read()).hexdigest()
+            open(os.path.join(os.environ['ROSE_RELEASE_DIR'], 'sign-count'), 'a').write('signed\\n')
+            json.dump({{'receiptType': 'os-signing', 'outputs': {{n: digest(os.path.join(p, n)) for n in sorted(os.listdir(p))}},
+                'signedTargetFilesSha256': digest(os.path.join(d, 'signed-target_files.zip'))}}, open(os.path.join(d, 'sign-receipt.json'), 'w'))''')
+        # CLI contract of build/make/tools/releasetools/check_ota_package_signature.py: CERT PACKAGE; the whole-package
+        # check, then the payload check through delta_generator found on PATH (FileNotFoundError when it is absent).
+        script(tools/'check_ota.py', '''
+            import os, subprocess, sys
+            assert len(sys.argv) == 3 and sys.argv[1].endswith('.x509.pem') and os.path.isfile(sys.argv[2])
+            if os.environ.get("FAKE_OTA_BAD"): raise AssertionError("whole package signature mismatch")
+            print("Whole package signature VERIFIED")
+            subprocess.run(["delta_generator", "--in_file=" + sys.argv[2]], check=True)''')
+        for build in (BUILD, '2026102801'):
+            (src/f'releases/{build}/release-frankel-{build}/bin').mkdir(parents=True)
+            script(src/f'releases/{build}/release-frankel-{build}/bin/delta_generator',
+                'import os, sys; sys.exit(1 if os.environ.get("FAKE_PAYLOAD_BAD") else 0)')
         avb_sha1 = hashlib.sha1(b'synthetic avb key blob').hexdigest()
-        script(tools/'avbtool.py', f'import sys; print("Public key (sha1): {avb_sha1}") if sys.argv[1] == "info_image" else None')
+        # avbtool contract: info_image lists the referenced partitions; verify_image --follow_chain_partitions needs
+        # each <partition>.img beside vbmeta.img.
+        script(tools/'avbtool.py', f'''
+            import os, sys
+            image = sys.argv[sys.argv.index('--image') + 1]
+            if sys.argv[1] == 'info_image':
+                print("Public key (sha1): " + os.environ.get("FAKE_AVB_KEY_SHA1", "{avb_sha1}"))
+                print("    Hash descriptor:\\n      Partition Name:        boot")
+            elif sys.argv[1] == 'verify_image':
+                assert '--follow_chain_partitions' in sys.argv
+                if not os.path.exists(os.path.join(os.path.dirname(image), 'boot.img')):
+                    sys.exit("boot.img: No such file or directory")
+                sys.exit(1 if os.environ.get("FAKE_AVB_BAD") else 0)''')
         script(tools/'apksigner', f'print("Signer #1 certificate SHA-256 digest: {SIGNER.lower()}")')
         # The real `aapt dump --values resources` layout (see FRAMEWORK_DUMP): spec rows before value blocks.
         script(tools/'aapt', '''
@@ -226,7 +255,8 @@ class PipelineTest(unittest.TestCase):
                 'fakeMake': [PY, fake_make],
                 'tools': {'checkOtaSignature': str(tools/'check_ota.py'), 'avbtool': str(tools/'avbtool.py'),
                     'apksigner': str(tools/'apksigner'), 'aapt': str(tools/'aapt'),
-                    'simg2img': str(tools/'simg2img'), 'debugfs': str(tools/'debugfs')}},
+                    'simg2img': str(tools/'simg2img'), 'debugfs': str(tools/'debugfs'),
+                    'otatoolsBin': 'releases/{build}/release-{device}-{build}/bin'}},
             'versionBaselines': json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['versionBaselines'],
             'identities': {'appSignerSha256': SIGNER.lower(), 'otaCertificateSha256': cert_pin,
                 'avbPublicKeySha256': hashlib.sha256(b'synthetic avb key blob').hexdigest()},
@@ -272,6 +302,8 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(json.loads((artifact/'pipeline-receipt.json').read_text())['simulated'])
         tools = json.loads((artifact/'assets/verification.json').read_text())['imageTools']
         self.assertEqual(sorted(tools), ['debugfs', 'simg2img'])  # the fixture product image is sparse
+        verifier = json.loads((artifact/'assets/verification.json').read_text())['verifierTools']
+        self.assertEqual(sorted(verifier), ['avbtool', 'checkOtaSignature', 'delta_generator'])
         self.assertEqual(tools['debugfs']['sha256'], hashlib.sha256((self.root/'tools/debugfs').read_bytes()).hexdigest())
         code, out = self.pipeline('publish', *self.common[:8], '--config', self.config, '--artifact-dir', artifact,
             '--adapter', 'fake', '--fake-state', self.root/'fake', '--promote')
@@ -411,9 +443,54 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual({base: {p.name: p.read_bytes() for p in (base/'stages').iterdir()} for base in (first, resumed)}, before)
         self.assertEqual((self.root/'fake/events.log').read_text().count('make'), makes)
         self.assertEqual(self.chain_status(env['ROSE_BASE'])['state'], 'AWAITING_EXTERNAL')
-        self.assertIn("if: inputs.resume_failed_stage != 'sign'\n        run: bash scripts/os-release-stage.sh bytes-verify", WORKFLOW_TEXT)
+        self.assertIn("if: inputs.resume_failed_stage == 'none' || inputs.resume_failed_stage == 'bytes-verify'\n"
+            "        run: bash scripts/os-release-stage.sh bytes-verify", WORKFLOW_TEXT)
         self.assertIn("ROSE_SIGN_RESUME_ARCHIVE: ${{ inputs.resume_failed_stage == 'sign' && format('failed-sign-{0}', github.run_id) || '' }}",
             WORKFLOW_TEXT)
+
+    def test_workflow_ota_verify_resume_reuses_the_successful_signed_outputs_without_signing(self):
+        # Mirrors 2802: the original attempt failed bytes-verify, its resume (run 4242) signed successfully and failed
+        # ota-verify because of a verifier defect; the ota-verify resume (run 5151) names run 4242 and the signed hash.
+        env = self.workflow_env()
+        unsigned = self.built_attempt(env)
+        first = Path(env['ROSE_BASE'])
+        env['FAKE_TARGETS'] = 'com.example.other:' + SIGNER
+        self.assertNotEqual(self.workflow_stage(env, WORKFLOW_STAGES[1]).returncode, 0)
+        env.pop('FAKE_TARGETS')
+        env.update(RESUME_STAGE='bytes-verify', RESUME_UNSIGNED_SHA256=unsigned)
+        self.prepare(env)
+        signed_attempt = Path(env['ROSE_BASE'])
+        self.assertEqual(self.workflow_stage(env, WORKFLOW_STAGES[1]).returncode, 0)
+        signed = self.workflow_stage(env, WORKFLOW_STAGES[2])
+        self.assertEqual(signed.returncode, 0, signed.stderr)
+        signed_sha = json.loads(signed.stderr[signed.stderr.index('{'):signed.stderr.rindex('}') + 1])['signedTargetFiles']
+        env['FAKE_PAYLOAD_BAD'] = '1'  # stands in for the verifier defect
+        self.assertNotEqual(self.workflow_stage(env, WORKFLOW_STAGES[3]).returncode, 0)
+        env.pop('FAKE_PAYLOAD_BAD')
+        preserved = {p: p.read_bytes() for base in (first, signed_attempt) for p in base.rglob('*') if p.is_file()}
+        env.update(RESUME_STAGE='ota-verify', RESUME_SOURCE_RUN='4242', RESUME_SIGNED_SHA256='0' * 64, GITHUB_RUN_ID='5151')
+        self.prepare(env, ok=False)  # the signed hash from the original log must match
+        shutil.rmtree(Path(f'{first}-resume-5151'))
+        tampered = signed_attempt/'release/public/UPDATE.md'
+        original_notes = tampered.read_bytes()
+        tampered.write_bytes(b'tampered\n')
+        env['RESUME_SIGNED_SHA256'] = signed_sha
+        self.prepare(env, ok=False)  # every public output must match the signing receipt
+        tampered.write_bytes(original_notes)
+        shutil.rmtree(Path(f'{first}-resume-5151'))
+        self.prepare(env)
+        status = self.chain_status(env['ROSE_BASE'])
+        self.assertEqual((status['stage'], status['completedStages']), ('ota-verify', ['build', 'bytes-verify', 'sign']))
+        for line in WORKFLOW_STAGES[3:]:  # the workflow skips build, bytes-verify, signer login and sign
+            result = self.workflow_stage(env, line)
+            self.assertEqual(result.returncode, 0, line + result.stderr)
+        self.assertEqual({p: p.read_bytes() for p in preserved}, preserved)  # every earlier file is byte-identical
+        self.assertFalse((Path(env['ROSE_BASE'])/'release/sign-count').exists())
+        self.assertEqual((signed_attempt/'release/sign-count').read_text(), 'signed\n')  # signed exactly once, ever
+        self.assertEqual(self.chain_status(env['ROSE_BASE'])['state'], 'AWAITING_EXTERNAL')
+        for step in ("      - name: Signer access for OS signing\n        if: inputs.resume_failed_stage != 'ota-verify'",
+                     "      - name: Sign\n        if: inputs.resume_failed_stage != 'ota-verify'"):
+            self.assertIn(step, WORKFLOW_TEXT)
 
     def test_held_lock_refuses_the_build(self):
         import fcntl
@@ -455,6 +532,45 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(failed, 'ota-verify')
         self.assertIn('payload_properties FILE_SIZE does not match payload.bin', result.stderr)
 
+    def verify_fails(self, variable, message, value='1'):
+        os.environ[variable] = value
+        self.addCleanup(os.environ.pop, variable, None)
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify', result.stderr)
+        self.assertIn(message, result.stderr)
+        return result
+
+    def test_missing_delta_generator_is_a_dependency_failure_not_a_pass(self):
+        (self.root/f'src/releases/{BUILD}/release-frankel-{BUILD}/bin/delta_generator').unlink()
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify')
+        self.assertIn('verifier dependency missing: delta_generator in the retained otatools bin', result.stderr)
+
+    def test_delta_generator_absent_from_path_is_named_as_a_dependency_failure(self):
+        bin_dir = self.root/f'src/releases/{BUILD}/release-frankel-{BUILD}/bin'
+        (bin_dir/'delta_generator').rename(bin_dir/'delta_generator.off')
+        (bin_dir/'delta_generator').mkdir()  # present by name but not runnable: the checker's lookup fails
+        failed, result = self.run_builder_job()
+        self.assertIn('verifier dependency missing', result.stderr)
+
+    def test_missing_sibling_image_is_named_and_nothing_is_called_verified(self):
+        os.environ['FAKE_NO_BOOT_IMG'] = '1'
+        self.addCleanup(os.environ.pop, 'FAKE_NO_BOOT_IMG', None)
+        target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed)  # signed images without boot.img
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify', result.stderr)
+        self.assertIn('verifier input missing: IMAGES/boot.img referenced by vbmeta', result.stderr)
+        self.assertNotIn('vbmeta chain verification failed', result.stderr)
+
+    def test_invalid_payload_or_vbmeta_signature_and_wrong_avb_identity_fail(self):
+        self.verify_fails('FAKE_PAYLOAD_BAD', 'OTA package or payload signature verification failed')
+
+    def test_invalid_vbmeta_chain_fails(self):
+        self.verify_fails('FAKE_AVB_BAD', 'vbmeta chain verification failed')
+
+    def test_vbmeta_signed_by_another_key_fails(self):
+        self.verify_fails('FAKE_AVB_KEY_SHA1', 'vbmeta is not signed by the published AVB key', value='0' * 40)
+
     def test_checksums_are_written_after_verification_and_cover_it(self):
         failed, _ = self.run_builder_job()
         self.assertIsNone(failed)
@@ -471,10 +587,10 @@ class PipelineTest(unittest.TestCase):
         real = self.root/'p1-ota.zip'
         ota(real, '2026102801', '1793147782', post_build='google/frankel/frankel:17/CP3A.261005.005/2026102801:user/release-keys')
         config = json.loads(self.config.read_text())
-        failures = pipeline.check_ota(config, {'build': '2026102801', 'timestamp': '1793147782'}, real, self.root/'fixtures')
+        failures = pipeline.check_ota(config, {'build': '2026102801', 'timestamp': '1793147782'}, real, self.root/'fixtures', {})
         self.assertEqual(failures, [])
         self.assertEqual(pipeline.check_payload(real), [])
-        self.assertTrue(pipeline.check_ota(config, {'build': '2026102802', 'timestamp': '1793147782'}, real, self.root/'fixtures'))
+        self.assertTrue(pipeline.check_ota(config, {'build': '2026102802', 'timestamp': '1793147782'}, real, self.root/'fixtures', {}))
 
     def test_production_preflight_fails_closed_naming_every_missing_input(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('GCP_', 'ROSEOS_', 'PIXEL_OTA'))}
