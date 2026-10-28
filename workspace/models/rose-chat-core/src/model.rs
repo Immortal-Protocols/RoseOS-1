@@ -110,6 +110,9 @@ pub struct ChatResponse {
     pub served_model: Option<String>,
     pub request_id: Option<String>,
     pub usage: Option<Usage>,
+    /// Separate reasoning text, if the server returned one. Never used as the answer and never
+    /// added to the history.
+    pub reasoning: Option<String>,
 }
 
 /// A validated assistant turn, already committed to the history.
@@ -122,5 +125,8 @@ pub struct Reply {
     pub served_model: Option<String>,
     pub request_id: Option<String>,
     pub usage: Option<Usage>,
+    /// Character count of any separate reasoning text the server returned. The text itself is
+    /// not kept, shown or replayed.
+    pub reasoning_chars: Option<usize>,
     pub latency: Duration,
 }

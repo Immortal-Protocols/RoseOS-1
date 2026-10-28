@@ -58,12 +58,22 @@ pub enum ChatError {
     Server {
         status: u16,
     },
+    /// HTTP 404: the request URL does not exist on the server (check the endpoint URL).
+    NotFound {
+        status: u16,
+    },
     /// Any other status, including 3xx: redirects are never followed.
     UnexpectedStatus {
         status: u16,
     },
-    /// A success status whose body does not have the expected shape.
+    /// A success status whose body does not have the expected shape, or a body that ended early.
     MalformedResponse(String),
+    /// The response body exceeded `limits.max_response_bytes`.
+    ResponseTooLarge {
+        limit: u64,
+    },
+    /// TLS setup or certificate verification failed. Verification is never disabled.
+    Tls(String),
     /// The reply had no assistant text (missing, null, empty or whitespace only).
     EmptyCompletion,
     /// The endpoint reported serving a model other than the configured `model.id`.
@@ -95,6 +105,9 @@ impl ChatError {
             ChatError::RateLimited { .. } => "rate_limited",
             ChatError::BadRequest { .. } => "bad_request",
             ChatError::Server { .. } => "server",
+            ChatError::NotFound { .. } => "not_found",
+            ChatError::ResponseTooLarge { .. } => "response_too_large",
+            ChatError::Tls(_) => "tls",
             ChatError::UnexpectedStatus { .. } => "unexpected_status",
             ChatError::MalformedResponse(_) => "malformed_response",
             ChatError::EmptyCompletion => "empty_completion",
@@ -154,6 +167,16 @@ impl fmt::Display for ChatError {
             ChatError::BadRequest { status } => write!(f, "request rejected (HTTP {status})"),
             ChatError::Server { status } => write!(f, "server error (HTTP {status})"),
             ChatError::UnexpectedStatus { status } => write!(f, "unexpected HTTP status {status}"),
+            ChatError::NotFound { status } => {
+                write!(
+                    f,
+                    "request URL not found (HTTP {status}); check the endpoint URL"
+                )
+            }
+            ChatError::ResponseTooLarge { limit } => {
+                write!(f, "response body exceeded the {limit}-byte limit")
+            }
+            ChatError::Tls(m) => write!(f, "TLS failure: {m}"),
             ChatError::MalformedResponse(m) => write!(f, "malformed response: {m}"),
             ChatError::EmptyCompletion => write!(f, "the reply contained no assistant text"),
             ChatError::ModelIdentityMismatch { configured, served } => write!(

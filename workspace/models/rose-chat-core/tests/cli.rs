@@ -88,7 +88,7 @@ fn config_errors_exit_3() {
 }
 
 #[test]
-fn usage_errors_exit_2_and_live_chat_is_unavailable_5() {
+fn usage_and_config_exit_codes() {
     assert_eq!(rose_chat(&[], &[]).status.code(), Some(2));
     assert_eq!(rose_chat(&["config-check"], &[]).status.code(), Some(2));
     assert_eq!(
@@ -97,7 +97,14 @@ fn usage_errors_exit_2_and_live_chat_is_unavailable_5() {
             .code(),
         Some(2)
     );
-    let out = rose_chat(&["chat", "--config", "x.toml"], &[]);
-    assert_eq!(out.status.code(), Some(5));
-    assert!(text(&out.stderr).contains("No request was made"));
+    assert_eq!(rose_chat(&["chat"], &[]).status.code(), Some(2));
+    assert_eq!(
+        rose_chat(&["config-check", "--config", "x", "--script", "y"], &[])
+            .status
+            .code(),
+        Some(2),
+        "--script is a chat-only flag"
+    );
+    let out = rose_chat(&["chat", "--config", "/nonexistent/x.toml"], &[]);
+    assert_eq!(out.status.code(), Some(3));
 }
