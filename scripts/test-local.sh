@@ -24,6 +24,7 @@ python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
 python3 os/tests/test_tray_contract.py
+python3 os/tests/test_installed_precedence.py
 python3 os/tests/test_updater_channels.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
