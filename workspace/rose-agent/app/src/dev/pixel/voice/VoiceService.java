@@ -290,13 +290,13 @@ public class VoiceService extends Service {
  long selfVersion(){try{return getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){return -1;}}
  /** Explicit "Update Rose Agent" install of the offered record. Admission is decided here against the service's
   * own voice state and the shared installing flag, so only one download/install runs at a time. */
- SelfUpdate.Admission installSelf(String id,long version){
+ SelfUpdate.Admission installSelf(DirectUpdate.Offer offer){
   long installed=selfVersion();
-  SelfUpdate.Admission a=SelfUpdate.admit(id!=null&&id.matches("[a-f0-9]{64}")?version:-1,installed,voiceBusy(),installing.get(),getPackageManager().canRequestPackageInstalls());
+  SelfUpdate.Admission a=SelfUpdate.admit(offer==null?-1:offer.versionCode,installed,voiceBusy(),installing.get(),getPackageManager().canRequestPackageInstalls());
   if(a!=SelfUpdate.Admission.START)return a;
   if(!installing.compareAndSet(false,true))return SelfUpdate.Admission.IN_PROGRESS;
-  recordSelfUpdate(version,"downloading");
-  requests.submit(()->{try{Delivery.installSelf(VoiceService.this,id,version,endpoint,ssl);}finally{installing.set(false);}});
+  recordSelfUpdate(offer.versionCode,"downloading");
+  requests.submit(()->{try{Delivery.installSelf(VoiceService.this,offer);}finally{installing.set(false);}});
   return a;
  }
  /** The last explicit self-update attempt: its target version and state (see SelfUpdate.attemptText). */

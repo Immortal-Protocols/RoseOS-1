@@ -32,7 +32,8 @@
       "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
       "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
       "debugfs": "/usr/sbin/debugfs",
-      "otatoolsBin": "releases/{build}/release-{device}-{build}/bin"
+      "otatoolsBin": "releases/{build}/release-{device}-{build}/bin",
+      "fsckErofs": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs"
     },
     "integrate": {
       "project": "protocols-465723",
@@ -76,7 +77,8 @@
           "frameworks/base",
           "build/make",
           "build/release",
-          "packages/apps/Updater"
+          "packages/apps/Updater",
+          "packages/modules/Permission"
         ],
         "integrationOwnedRoots": [
           "packages/apps/PixelBackgroundControl",
@@ -91,6 +93,9 @@
           ],
           "packages/apps/Updater": [
             "res/values/config.xml"
+          ],
+          "packages/modules/Permission": [
+            "service/java/com/android/role/RoleService.java"
           ]
         },
         "installedIdentities": "os/release-evidence/frankel-2026102701/expected-identities.json",
@@ -156,6 +161,15 @@
           "dev.pixel.voice": 301
         },
         "basis": "Immutable draft frankel-2026102803 (pixel-ota draft 426456114, not promoted, not beta-eligible: it shipped without the system Updater; apps 301/4/28). A newer candidate needs a higher Rose Agent versionCode (its source changed with PR50), build number and BUILD_DATETIME; controller 28 and Calculator 4 are unchanged in source and may stay equal"
+      },
+      {
+        "build": "2026102804",
+        "source": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+        "buildTimestamp": 1793180700,
+        "mustExceed": {
+          "dev.pixel.voice": 302
+        },
+        "basis": "Published Beta frankel-2026102804 (pixel-ota Latest; apps 302/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME; its Rose Agent must also exceed every app-only version (appRelease: 303 delivered, 304 reserved). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
       }
     ]
   },
@@ -176,14 +190,19 @@
         "size": 1381533,
         "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
         "run": 40676568143,
-        "basis": "INFRA-APP-080 app-only run on candidate 62286c08; private artifact only, never published or catalogued. Its version is consumed: a newer build needs 304 or above, and these bytes are never relabelled"
+        "basis": "INFRA-APP-080 app-only run on candidate 62286c08. Delivered through the authenticated private catalog at 14:39 UTC (lead record); it has no public GitHub release. Its version is consumed: a newer build needs 304 or above, and these bytes are never relabelled",
+        "delivered": {
+          "route": "authenticated catalog",
+          "at": "2026-10-28T14:39Z",
+          "publicRelease": false
+        }
       }
     ],
     "minimumTestedOs": {
       "build": "2026102804",
       "controller": 28
     },
-    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 was built but never published) and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is not a claim that the app was accepted on a phone",
+    "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 was built and delivered through the authenticated catalog, without a public release; 304 is reserved for the queued app-only candidate) and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is not a claim that the app was accepted on a phone",
     "publication": {
       "repository": "Immortal-Protocols/pixel-ota",
       "tag": "rose-agent-{versionCode}",
@@ -193,7 +212,23 @@
       "makeLatest": false,
       "preserveLatest": "frankel-2026102804",
       "basis": "INFRA-APP-096 / APR024: public signed Rose Agent APKs through the existing pixel-ota Releases with the existing publisher App (Contents:write), anonymous client download with the client's SHA-256 and size binding (APP-GITHUB-001-IFACE-001, PublicApkDownload.java: https://github.com/Immortal-Protocols/pixel-ota/releases/download/{versioned-tag}/{asset}.apk). Each app release is its own prerelease tag that never becomes Latest; OTA Latest stays frankel-2026102804"
-    }
+    },
+    "reserved": [
+      {
+        "versionCode": 304,
+        "versionName": "304-app-beta",
+        "candidate": "a3d839e6805b514aa6cad6f86c15e5db622e10cc",
+        "route": "app-only",
+        "basis": "INFRA-APP-096: queued app-only build and public prerelease rose-agent-304 from exactly this candidate; consumed before it is built, so no other bytes may carry 304"
+      },
+      {
+        "versionCode": 305,
+        "versionName": "305-home-beta",
+        "candidate": null,
+        "route": "os-release",
+        "basis": "INFRA-HOME-098: bundled Rose Agent of the Frankel 2026102805 OS candidate (the INFRA-HOME-098 merge on main, which cannot name its own commit). The app-only route may not reuse 305"
+      }
+    ]
   },
   "updater": {
     "packageName": "app.seamlessupdate.client",
@@ -257,5 +292,22 @@
       "host.sign.otatools": "Path copied by the successful P1 signing run (lead-supplied); check it exists under OUT_DIR after the build in the coordinated host window",
       "reconcile adoption": "One-time, after a fresh read-only preview: scripts/host-reconcile.py adopt ... --path P --reason R for each reviewed remaining conflict (e.g. order-only handheld_product.mk); never a blanket adoption"
     }
+  },
+  "permissionApex": {
+    "module": "com.android.permission",
+    "paths": [
+      "SYSTEM/apex/com.android.permission.apex",
+      "SYSTEM/apex/com.android.permission.capex"
+    ],
+    "version": 370399999,
+    "payloadJar": "javalib/service-permission.jar",
+    "markers": [
+      "rose_home_role_selected",
+      "dev.pixel.voice"
+    ],
+    "sourcePayloadKeySha256": "1ab7920a9fcfc8611cbb8fdee454ff6d4b4d6d09d70ee0a90aaf05cd4b84e3ab",
+    "containerSigner": "otaCertificate",
+    "payloadKey": "avbPublicKey",
+    "basis": "INFRA-HOME-098: OS #70 patches packages/modules/Permission 4d6005db RoleService (os/patches/rose-home-role-permission.patch) and ships in the com.android.permission APEX. The gate reads the target-files: exactly this module (no Google prebuilt), apex_manifest version from the pinned RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION (cur -> cp2a), the patch's setting and package constants in service-permission.jar, the payload AVB signature, and the payload key: the module's own key unsigned, avb.pem (avbPublicKeySha256) signed, with the container signed by releasekey (otaCertificateSha256), as generate-release.sh maps it. Derivations: scripts/tests/fixtures/permission-apex/README.md. Artifact inclusion only; selected HOME, boot and migration are runtime evidence"
   }
 }

@@ -283,12 +283,14 @@ timestamp, channel and expected app versions. The jobs are:
      manifest.
    - The job runs `installclean` plus the make goals. It verifies the build
      identity and every `META/misc_info.txt` AVB fingerprint, app bytes,
-     PRESIGNED state and signers, and the compiled framework policy.
+     PRESIGNED state and signers, the compiled framework policy, and the
+     Permission APEX gate (see below).
    - `scripts/host-sign.py` validates the pinned OS key archive, checks the
      public certificate and AVB key against the pins, and runs the source
      tree's release command.
    - The job verifies again: OTA metadata, OTA package and payload signatures,
-     the vbmeta signature and AVB key, and the public pins.
+     the vbmeta signature and AVB key, the Permission APEX with its release
+     signers and image bytes, and the public pins.
    - Finally it transfers only the allowlisted public files and receipts as a
      3-day Actions artifact.
 
@@ -550,7 +552,11 @@ the action revokes at job end; the builder never receives it. The job then runs
     digest matching;
   - the receipt is non-simulated and names this candidate and the dispatched
     `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (303,
-    because the 303 bytes were built and never published);
+    built and delivered through the authenticated catalog, never published
+    on GitHub). `host-app-release.py` also accepts a version in
+    `appRelease.reserved` only for its app-only candidate (304, `a3d839e6`),
+    and any other N must exceed every reservation (305 is the bundled Rose
+    Agent of the 2026102805 OS candidate);
   - the APK's size, sha256 and signer match the receipt, and the APK's own
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;
@@ -617,6 +623,54 @@ The host adapters implement the retained recipe:
     locked-session patch.
   - `adopt --path P --reason ...` adopts only the named conflicting files, for
     example a makefile that differs only in package order.
+  - The projects include `packages/modules/Permission`, sparse
+    `service/java/com/android/role/RoleService.java`, for OS #70's
+    `rose-home-role-permission.patch`. The patcher applies that patch only to a
+    build that preinstalls Rose Agent. Without the project in the shadow tree,
+    the patcher fails and nothing is written (INFRA-HOME-098). The file is
+    pristine at the pinned `4d6005db` (`8bc87856…`), so the first reconcile
+    installs it with a backup and receipt; an owner change to it is a conflict.
+
+**Permission APEX gate** (INFRA-HOME-098, `scripts/permission_apex.py`,
+`permissionApex` in `frankel.json`). The Home selection ships in the
+`com.android.permission` APEX, so the patched source is not enough; the gate
+reads the target-files at both verify stages:
+
+- **Location:** exactly one `SYSTEM/apex/com.android.permission.apex` (or
+  `.capex`, whose `original_apex` is checked the same way and must match its
+  outer manifest and key), and no Google prebuilt or second copy.
+- **Identity:** `apex_manifest.pb` name `com.android.permission` and version
+  370399999. That version is the pinned `RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION`
+  for `cur` (`cur` -> `aosp_current` -> `cp2a`), which Soong writes over the
+  source's placeholder 0.
+- **Payload:** `avbtool info_image` must show the `apex_pubkey` key, and
+  `avbtool verify_image` must pass. The filesystem is read from its superblock:
+  ext4 through `debugfs`, erofs through `host.tools.fsckErofs` (the retained P1
+  otatools `fsck.erofs`). Anything else fails.
+- **Patch markers:** `javalib/service-permission.jar` must exist, and its dex
+  must hold both patch constants, `rose_home_role_selected` and
+  `dev.pixel.voice`. Neither is in the pinned upstream RoleService.
+- **Keys:**
+  - Unsigned: the payload key must be the module's own
+    `com.android.permission.avbpubkey` (`1ab7920a…`).
+  - Signed, as `generate-release.sh` maps them:
+    - payload: `avb.pem`, so `avbPublicKeySha256`;
+    - container: `releasekey`, so `otaCertificateSha256`, checked by
+      `apksigner` on the APEX and any `original_apex`.
+  - The image bytes in `system.img` must equal the checked copy.
+
+A prebuilt, an unpatched module, other keys or a missing pin fails. A missing
+pin or tool exits 4 and names the input. The receipt (path, sha256, container,
+version, payload key, filesystem, jar sha256, markers, signers) is in the
+bytes-verify output and in `verification.json` (`permissionApex`). The static
+source-selection evidence and the fixtures it is derived from are listed in
+`scripts/tests/fixtures/permission-apex/README.md`. Those files are not build
+evidence; only the gate run on a real build is.
+
+The gate proves inclusion in the artifact, not behavior. The Home holder after
+an update, at first boot and after a reboot, a later owner choice and the
+rendered Rose Home are runtime evidence that needs a compatible booted
+candidate.
 - **`host-sign.py`:** derives the release script from the source tree's
   `generate-release.sh`, each edit asserted to occur exactly once with hashes
   recorded:
@@ -647,6 +701,7 @@ The configured tool paths come from the retained P1 run:
 
 - `simg2img`: P1 release `bin/`;
 - `debugfs`: `/usr/sbin/debugfs`;
+- `fsckErofs`: P1 release `bin/` (the alpha adapter pins the same file);
 - `otatools`: the path relative to `OUT_DIR`.
 
 Their existence and versions are checked only in the coordinated host window.

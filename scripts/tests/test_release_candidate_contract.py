@@ -1,6 +1,7 @@
-"""Checked-in candidate contract for build 2026102804 (Rose Agent 302, controller 28, Calculator 4), the immutable
-2026102802 and 2026102803 drafts it supersedes, and the controller's async builder start/stop, using the retained nonsecret evidence in
-this repository and a fake gcloud."""
+"""Checked-in candidate contract for build 2026102805 (Rose Agent 305, controller 28, Calculator 4), the published
+2026102804 Beta and the immutable 2026102802/2026102803 drafts it supersedes, the app-only versions it must pass (303
+delivered, 304 reserved), and the controller's async builder start/stop, using the retained nonsecret evidence in this
+repository and a fake gcloud."""
 import hashlib
 import importlib.util
 import json
@@ -21,11 +22,12 @@ spec.loader.exec_module(pipeline)
 from background_apks import installed_precedence  # noqa: E402
 
 CONFIG = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
-APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
-DRAFT = {'build': '2026102804', 'timestamp': '1793180700'}
+APPS = [['dev.pixel.voice', 305], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+DRAFT = {'build': '2026102805', 'timestamp': '1793206861'}
 # The verified 2026102802 draft's notes are immutable evidence (pixel-ota draft frankel-2026102802).
 NOTES_2802_SHA256 = 'a84fac7a77cd521d53226bcf1d8b89528f6f23b0f8a0eb42b73570055a4f865f'
 NOTES_2803_SHA256 = '04f91df28af8e021177a10740731849da9e605d52af2faee78f33d6fc96579cb'  # draft 426456114, immutable
+NOTES_2804_SHA256 = '5e206e3db4d656f508dc322f23809b6251b47288ba9f6cf2370d3ffb58710a0e'  # published Beta 2804 UPDATE.md
 
 def manifest_version(path):
     text = (ROOT/path).read_text()
@@ -74,9 +76,13 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertIn('updater-product-build-make.patch', (ROOT/'scripts/apply-os-changes.py').read_text())
 
     def test_source_manifests_match_the_allocated_versions(self):
-        # 2804 built Rose Agent 302; the source has since moved to the reserved app-only 304 (303 was built, never published).
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 304, '304-app-beta'))
-        self.assertEqual(CONFIG['appRelease']['published']['versionCode'], dict(APPS)['dev.pixel.voice'])
+        # 2804 carried Rose Agent 302; 303 was delivered through the catalog, 304 is reserved for the app-only a3d839e6, so the
+        # 2805 candidate bundles 305 (reserved for the OS route).
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 305, '305-home-beta'))
+        reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
+        self.assertEqual((reserved[304]['route'], reserved[304]['candidate']), ('app-only', 'a3d839e6805b514aa6cad6f86c15e5db622e10cc'))
+        self.assertEqual((reserved[305]['route'], reserved[305]['versionName']), ('os-release', '305-home-beta'))
+        self.assertEqual(pipeline.app_versions_consumed(CONFIG), ('dev.pixel.voice', 304))
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
@@ -89,15 +95,16 @@ class CheckedInCandidateTest(unittest.TestCase):
             self.assertIn(f'"{extra}"', consumer)
 
     def test_release_notes_bind_to_the_candidate_and_describe_the_draft(self):
-        for build, digest in (('2026102802', NOTES_2802_SHA256), ('2026102803', NOTES_2803_SHA256)):
+        for build, digest in (('2026102802', NOTES_2802_SHA256), ('2026102803', NOTES_2803_SHA256), ('2026102804', NOTES_2804_SHA256)):
             self.assertEqual(hashlib.sha256((ROOT/f'os/release-notes/frankel-{build}.md').read_bytes()).hexdigest(), digest)
-        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build='2026102804')
+        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build=DRAFT['build'])
         notes = (ROOT/path).read_text()
         flat = ' '.join(notes.split())
-        for expected in ('2026102804', 'frankel', 'user build', 'versionCode 302 (302-wave-beta)', '28 (2.1.5-pip, unchanged)',
-                '4 (unchanged)', 'not promoted', 'Beta channel (pixel-ota Latest) is unchanged', 'not been accepted on a phone',
-                'locked sessions off', 'prototype agent list empty', 'not yet verified at runtime',
-                'system Updater is built into the image again', 'install a verified newer Rose Agent', 'release-key signature'):
+        for expected in ('2026102805', 'frankel', 'user build', 'versionCode 305 (305-home-beta)', '28 (2.1.5-pip, unchanged)',
+                '4 (unchanged)', 'not promoted', 'Beta channel (pixel-ota Latest, 2026102804) is unchanged', 'not been accepted on a phone',
+                'locked sessions off', 'prototype agent list empty', 'not yet verified at runtime', 'Home app once for each user',
+                'com.android.permission', 'a Home app the owner picks later stays', 'built from the patched source',
+                'release-key signature', 'size and SHA-256'):
             self.assertIn(expected, flat)
         for claim in ('downgrade', 'available on Alpha', 'available on Prod'):
             self.assertNotIn(claim, flat)
@@ -118,9 +125,23 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertEqual(issues, [])
         self.assertEqual(len(notes), 1)  # unchanged calculator 4 equals the delivered copy; voice and controller are newer
 
+    def test_reconcile_and_gate_carry_the_permission_module(self):
+        reconcile = CONFIG['host']['integrate']['reconcile']
+        self.assertIn('packages/modules/Permission', reconcile['projects'])
+        self.assertIn('--preinstall-apk', reconcile['applyArgs'])  # the patch applies only to a build preinstalling Rose Agent
+        self.assertIn("ROSE_HOME_PATCHES = {'packages/modules/Permission': ['rose-home-role-permission.patch']}",
+            (ROOT/'scripts/background_apks.py').read_text())
+        self.assertEqual(pipeline.permission_apex.missing(CONFIG['permissionApex']), [])
+        self.assertEqual(CONFIG['host']['tools']['fsckErofs'],
+            '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs')
+
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
         pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
         for apps, cand, message in (
+                ([['dev.pixel.voice', 304], *APPS[1:]], DRAFT,
+                    'dev.pixel.voice versionCode 304 must exceed 304, the newest app-only version published, built or reserved'),
+                ([['dev.pixel.voice', 303], *APPS[1:]], DRAFT, 'must exceed 304, the newest app-only version'),
+                ([['dev.pixel.voice', 302], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 302 must exceed retained 2026102804 versionCode 302'),
                 ([['dev.pixel.voice', 301], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 301 must exceed retained 2026102803 versionCode 301'),
                 ([['dev.pixel.voice', 300], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 300 must exceed retained 2026102802 versionCode 300'),
                 ([*APPS[:2], ['dev.pixel.backgroundcontrol', 27]], DRAFT,
@@ -128,8 +149,8 @@ class CheckedInCandidateTest(unittest.TestCase):
                 ([['dev.pixel.voice', 299], *APPS[1:]], DRAFT, 'must exceed retained 2026102801 versionCode 299'),
                 ([['dev.pixel.voice', 297], *APPS[1:]], DRAFT, 'below delivered 2026102701 versionCode 298'),
                 (APPS[1:], DRAFT, 'dev.pixel.voice versionCode None must exceed'),
-                (APPS, {'build': '2026102804', 'timestamp': '1793176860'}, 'must exceed retained 2026102803 \\(1793176860\\)'),
-                (APPS, {'build': '2026102803', 'timestamp': '1793180700'}, 'must exceed retained 2026102803')):
+                (APPS, {'build': '2026102805', 'timestamp': '1793180700'}, 'must exceed retained 2026102804 \\(1793180700\\)'),
+                (APPS, {'build': '2026102804', 'timestamp': '1793206861'}, 'must exceed retained 2026102804')):
             with self.assertRaisesRegex(pipeline.CheckFailed, message):
                 pipeline.check_version_baselines(CONFIG, cand, apps)
         without = {k: v for k, v in CONFIG.items() if k != 'versionBaselines'}

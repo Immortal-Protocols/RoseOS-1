@@ -17,6 +17,8 @@ import time
 import unittest
 import zipfile
 
+import apex_fixture
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 PIPELINE, STAGE = SCRIPTS/'release-pipeline.py', SCRIPTS/'release-stage.py'
 PY = sys.executable
@@ -41,7 +43,7 @@ FRAMEWORK_DUMP = '''\
         resource 0x01110331 android:bool/config_useSystemWallpaperDuringUserSwitch: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
           (boolean) false
 '''
-APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+APPS = [['dev.pixel.voice', 305], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
 PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
 WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
@@ -80,6 +82,8 @@ UPDATER_APK = 'SYSTEM_EXT/priv-app/Updater/Updater.apk'
 UPDATER_XML = ('SYSTEM_EXT/etc/permissions/privapp-permissions-updater.xml',
     'SYSTEM_EXT/etc/default-permissions/default-permissions-updater.xml', 'SYSTEM_EXT/etc/sysconfig/updater.xml')
 UPDATER_URL = 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/'
+PERMISSION_APEX = 'SYSTEM/apex/com.android.permission.apex'
+PERMISSION_SPEC = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['permissionApex']
 
 def updater_apk(rose_channels=True):
     """A stand-in Updater APK: an archive whose classes.dex names the RoseChannels type when it is compiled in."""
@@ -98,7 +102,7 @@ def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.sea
     for name in xml:
         z.writestr(name, f'<permissions><privapp-permissions package="{package}"/></permissions>\n')
 
-def target_files(path, keys, policy_apks, stale_misc=False, image_override=None):
+def target_files(path, keys, policy_apks, stale_misc=False, image_override=None, apex=None):
     """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, images."""
     fp = f'google/frankel/frankel:17/CP3A.261005.005/{BUILD}:user/{keys}'
     with zipfile.ZipFile(path, 'w') as z:
@@ -124,7 +128,12 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None)
         embedded.update(image_override or {})
         z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
         z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
-        z.writestr('IMAGES/system.img', image({'/system/framework/framework-res.apk': b'framework'}))
+        system = {'/system/framework/framework-res.apk': b'framework'}
+        if apex is not None:  # the Permission APEX built from the patched source (apex_fixture.py)
+            z.writestr(PERMISSION_APEX, apex)
+            system['/system/apex/com.android.permission.apex'] = apex
+        system.update({'/system/' + k[len('SYSTEM/'):]: v for k, v in (image_override or {}).items() if k.startswith('SYSTEM/')})
+        z.writestr('IMAGES/system.img', image(system))
 
 spec = __import__('importlib.util').util.spec_from_file_location('release_pipeline', PIPELINE)
 release_pipeline = __import__('importlib.util').util.module_from_spec(spec)
@@ -199,8 +208,9 @@ class PipelineTest(unittest.TestCase):
         pem = (fixtures/'releasekey.x509.pem').read_text()
         cert_pin = hashlib.sha256(base64.b64decode(''.join(pem.split('-----')[2].split()))).hexdigest()
         (fixtures/'avb_pkmd.bin').write_bytes(b'synthetic avb key blob')
-        target_files(fixtures/'unsigned.zip', 'test-keys', self.placed)
-        target_files(fixtures/'signed.zip', 'release-keys', self.placed)
+        target_files(fixtures/'unsigned.zip', 'test-keys', self.placed, apex=apex_fixture.apex())
+        self.signed_apex = apex_fixture.apex(key=b'synthetic avb key blob', signer=cert_pin)
+        target_files(fixtures/'signed.zip', 'release-keys', self.placed, apex=self.signed_apex)
         ota(fixtures/'ota.zip', BUILD, STAMP)
         # Lead-managed entry points and tools, replaced by harmless fixtures.
         integrate = script(tools/'integrate.py', f'''
@@ -237,7 +247,7 @@ class PipelineTest(unittest.TestCase):
         avb_sha1 = hashlib.sha1(b'synthetic avb key blob').hexdigest()
         # avbtool contract: info_image lists the referenced partitions; verify_image --follow_chain_partitions needs
         # each <partition>.img beside vbmeta.img.
-        script(tools/'avbtool.py', f'''
+        vbmeta_avbtool = script(tools/'vbmeta_avbtool.py', f'''
             import os, sys
             image = sys.argv[sys.argv.index('--image') + 1]
             if sys.argv[1] == 'info_image':
@@ -248,7 +258,8 @@ class PipelineTest(unittest.TestCase):
                 if not os.path.exists(os.path.join(os.path.dirname(image), 'boot.img')):
                     sys.exit("boot.img: No such file or directory")
                 sys.exit(1 if os.environ.get("FAKE_AVB_BAD") else 0)''')
-        script(tools/'apksigner', f'print("Signer #1 certificate SHA-256 digest: {SIGNER.lower()}")')
+        apex_fixture.fake_avbtool(tools/'avbtool.py', passthrough=vbmeta_avbtool)
+        apex_fixture.fake_apksigner(tools/'apksigner', passthrough_digest=SIGNER.lower())
         # The real `aapt dump --values resources` layout (see FRAMEWORK_DUMP): spec rows before value blocks.
         script(tools/'aapt', '''
             import os, sys
@@ -289,9 +300,13 @@ class PipelineTest(unittest.TestCase):
         script(tools/'simg2img', '''
             import sys; data = open(sys.argv[1], 'rb').read(); assert data[:4] == b'\\x3a\\xff\\x26\\xed'
             open(sys.argv[2], 'wb').write(data[4:])''')
-        script(tools/'debugfs', '''
-            import base64, json, sys; inside, out = sys.argv[2].split()[-2:]
-            files = json.load(open(sys.argv[3]))
+        # Partition stand-ins are JSON; a real ext4 image (the APEX payload) goes to the real debugfs.
+        script(tools/'debugfs', f'''
+            import base64, json, subprocess, sys; inside, out = sys.argv[2].split()[-2:]
+            try:
+                files = json.load(open(sys.argv[3]))
+            except ValueError:
+                sys.exit(subprocess.run([{apex_fixture.DEBUGFS!r}, *sys.argv[1:]], capture_output=True).returncode)
             if inside in files: open(out, 'wb').write(base64.b64decode(files[inside]))''')
         self.config = root/'config.json'
         self.config.write_text(json.dumps({'schemaVersion': 1, 'fixture': True,
@@ -310,6 +325,7 @@ class PipelineTest(unittest.TestCase):
             'framework': {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False},
             'updater': {'packageName': 'app.seamlessupdate.client', 'channelDefault': 'prod', 'channelValues': ['prod', 'stable', 'alpha'],
                 'apkPath': UPDATER_APK, 'signer': SIGNER.lower(), 'requiredFiles': list(UPDATER_XML)},
+            'permissionApex': PERMISSION_SPEC,
             'publication': {'repository': 'example/none', 'tag': 'frankel-{build}',
                 'channels': {'beta': {'promoteLatest': True, 'feedChannel': 'stable'}, 'prod': None}}}))
         self.base = root/'actions'
@@ -352,7 +368,10 @@ class PipelineTest(unittest.TestCase):
         tools = json.loads((artifact/'assets/verification.json').read_text())['imageTools']
         self.assertEqual(sorted(tools), ['debugfs', 'simg2img'])  # the fixture product image is sparse
         verifier = json.loads((artifact/'assets/verification.json').read_text())['verifierTools']
-        self.assertEqual(sorted(verifier), ['avbtool', 'checkOtaSignature', 'delta_generator'])
+        self.assertEqual(sorted(verifier), ['avbtool', 'checkOtaSignature', 'debugfs', 'delta_generator'])  # debugfs: APEX payload
+        apex = json.loads((artifact/'assets/verification.json').read_text())['permissionApex']
+        self.assertEqual((apex['path'], apex['version'], apex['markers'], apex['payloadFs'], apex['sha256']),
+            (PERMISSION_APEX, 370399999, PERMISSION_SPEC['markers'], 'ext4', hashlib.sha256(self.signed_apex).hexdigest()))
         self.assertEqual(tools['debugfs']['sha256'], hashlib.sha256((self.root/'tools/debugfs').read_bytes()).hexdigest())
         code, out = self.pipeline('publish', *self.common[:8], '--config', self.config, '--artifact-dir', artifact,
             '--adapter', 'fake', '--fake-state', self.root/'fake', '--promote')
@@ -574,6 +593,29 @@ class PipelineTest(unittest.TestCase):
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'ota-verify')
         self.assertIn('image bytes of ' + apk + ' differ from the policy pin', result.stderr)
+
+    def test_permission_apex_must_be_the_patched_source_build(self):
+        # bytes-verify: an unpatched module (no RoleService markers) or a Google prebuilt stops before signing.
+        target_files(self.root/'fixtures/unsigned.zip', 'test-keys', self.placed,
+            apex=apex_fixture.apex(files={'javalib/service-permission.jar': apex_fixture.service_jar(markers=())}))
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'bytes-verify')
+        self.assertIn('dex lacks the RoleService migration markers', result.stderr)
+        self.assertFalse((self.base/'release/signed-target_files.zip').exists())
+
+    def test_signed_permission_apex_needs_the_release_signer(self):
+        target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, apex=apex_fixture.apex(key=b'synthetic avb key blob',
+            signer='d' * 64))
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify')
+        self.assertIn('apex container is not signed by the expected certificate', result.stderr)
+
+    def test_signed_permission_apex_image_bytes_must_match(self):
+        target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, apex=self.signed_apex,
+            image_override={PERMISSION_APEX: b'stale apex in the image'})
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify')
+        self.assertIn(f'image bytes of {PERMISSION_APEX} differ from the checked target-files copy', result.stderr)
 
     def test_payload_properties_must_describe_payload(self):
         ota(self.root/'fixtures/ota.zip', BUILD, STAMP, bad_properties=True)

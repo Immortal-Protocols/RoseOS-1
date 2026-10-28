@@ -841,9 +841,11 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual({k: binding[k] for k in ('candidate', 'reconcileReceipt', 'reconcileReceiptSha256', 'apps')},
             {'candidate': BOUND, 'reconcileReceipt': '0004-2026102804.json',
              'reconcileReceiptSha256': 'db1cc9a215f92a09d772c01efc15590b37fd6e748f97893908838340c9da9de0', 'apps': APPS})
-        # The documented order is the 2804 dispatch contract's.
-        self.assertIn("APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]",
-            (SCRIPTS/'tests/test_release_candidate_contract.py').read_text())
+        # The bound apps are the published 2804 Beta's, as the Pixel version baselines record it (source ae9cfd4d, 302/4/28).
+        published = {r['build']: r for r in FRANKEL['versionBaselines']['retained']}['2026102804']
+        self.assertEqual((published['source'], published['mustExceed']), (BOUND, {'dev.pixel.voice': dict(APPS)['dev.pixel.voice']}))
+        self.assertIn('apps 302/4/28', published['basis'])
+        self.assertEqual(APPS, [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]])
         self.assertEqual(CHECKED_IN['hostEvidence']['probeReceiptSha256'], '9c19b5cbcb731fb6dfc0eaf05845a6be1bc4a2a2990b4f650ff60a012c91750e')
         self.assertEqual((CHECKED_IN['prepared']['preparationId'], CHECKED_IN['prepared']['receiptSha256']),
             ('b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87', '18582916250d5cc7236a4813fba0c758d9cee3c199681b0ac6ee11b953ca206e'))

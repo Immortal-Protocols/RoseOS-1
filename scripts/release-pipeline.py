@@ -28,6 +28,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
 import github_release_publisher  # noqa: E402
+import permission_apex  # noqa: E402
 from release_receipts import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +101,7 @@ def preflight(job, config, env, adapter):
         if not config.get('versionBaselines'):
             missing.append('versionBaselines')
         missing += [f'updater.{key}' for key in UPDATER_REQUIRED if not (config.get('updater') or {}).get(key)]
+        missing += permission_apex.missing(config.get('permissionApex'))
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
@@ -285,6 +287,10 @@ def check_version_baselines(config, cand, apps):
     failures = [f'{app["packageName"]} versionCode {apps[app["packageName"]]} is below delivered '
         f'{baselines["installedEvidence"]["build"]} versionCode {app["versionCode"]}'
         for app in installed['apps'] if app['packageName'] in apps and apps[app['packageName']] < app['versionCode']]
+    consumed = app_versions_consumed(config)
+    if consumed and apps.get(consumed[0], 0) <= consumed[1]:
+        failures.append(f'{consumed[0]} versionCode {apps.get(consumed[0])} must exceed {consumed[1]}, the newest app-only '
+            'version published, built or reserved')
     for retained in baselines.get('retained', []):
         for package, version in retained['mustExceed'].items():
             if package not in apps or apps[package] <= version:
@@ -293,6 +299,16 @@ def check_version_baselines(config, cand, apps):
             failures.append(f'build number and BUILD_DATETIME must exceed retained {retained["build"]} ({retained["buildTimestamp"]})')
     if failures:
         raise CheckFailed('; '.join(failures))
+
+def app_versions_consumed(config):
+    """(package, newest versionCode) the app-only route has published, built or reserved: an OS candidate's bundled copy
+    must be newer, so a version never names two different APKs. A reservation for the OS route is the candidate's own."""
+    release = config.get('appRelease')
+    if not release:
+        return None
+    rows = [release.get('published') or {}, *release.get('built', []),
+        *(row for row in release.get('reserved', []) if row.get('route') != 'os-release')]
+    return release['packageName'], max(row.get('versionCode', 0) for row in rows)
 
 def build(a, config, cand, adapter):
     host = config['host']
@@ -563,6 +579,30 @@ def tool(config, name):
         raise SetupMissing([f'host.tools.{name}'])
     return str(host_path(config, path))
 
+def check_permission_apex(path, config, used, apksigner=None):
+    """(failures, receipt) for the packaged Permission APEX (permission_apex.py). Unsigned target-files must carry the
+    source module's own payload key; signed ones the established route's keys (generate-release.sh: container
+    releasekey, payload avb.pem), i.e. the OTA certificate and AVB key pins, with the container signer checked."""
+    spec = config.get('permissionApex') or {}
+    absent = permission_apex.missing(spec)
+    if absent:
+        raise SetupMissing(absent)
+    with zipfile.ZipFile(path) as archive:
+        location, failures = permission_apex.locate(archive.namelist(), spec)
+        if failures:
+            return failures, None
+        data = archive.read(location)
+    identities = config['identities']
+    if apksigner:
+        key = identities['avbPublicKeySha256'] if spec['payloadKey'] == 'avbPublicKey' else spec['payloadKey']
+        signer = identities['otaCertificateSha256'] if spec['containerSigner'] == 'otaCertificate' else spec['containerSigner']
+    else:
+        key, signer = spec['sourcePayloadKeySha256'], None
+    with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        facts, failures = permission_apex.inspect(data, spec, lambda name: tool_receipt(config, name, used), workdir, key,
+            signer, apksigner)
+    return failures, {'path': location, 'sha256': hashlib.sha256(data).hexdigest(), **facts}
+
 def verify_build(a, config, cand, adapter):
     release_dir = Path(a.release_dir)
     target_files = release_dir/'unsigned-target_files.zip'
@@ -570,10 +610,15 @@ def verify_build(a, config, cand, adapter):
     failures += check_apps(target_files, release_dir/'background-policy.json', tool(config, 'apksigner'))
     failures += check_framework(target_files, config, tool(config, 'aapt'))
     failures += check_updater(target_files, config, tool(config, 'aapt'))
+    apex_tools = {}
+    apex_failures, apex = check_permission_apex(target_files, config, apex_tools)
+    failures += apex_failures
     if failures:
         raise CheckFailed('; '.join(failures))
     return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
-        'Updater presence/identity/supporting XML/compiled channel config']}
+        'Updater presence/identity/supporting XML/compiled channel config',
+        'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers'],
+        'permissionApex': apex, 'apexTools': apex_tools}
 
 def cert_sha256(pem):
     body = pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0]
@@ -707,6 +752,9 @@ def check_image_bytes(config, signed, policy_path, used):
         if updater and updater in archive.namelist() and hashlib.sha256(image_file(config, archive, updater, workdir, cache, used)).digest() \
                 != hashlib.sha256(archive.read(updater)).digest():
             failures.append(f'image bytes of {updater} differ from the checked target-files copy')
+        apex = next((p for p in (config.get('permissionApex') or {}).get('paths', []) if p in archive.namelist()), None)
+        if apex and hashlib.sha256(image_file(config, archive, apex, workdir, cache, used)).digest() != hashlib.sha256(archive.read(apex)).digest():
+            failures.append(f'image bytes of {apex} differ from the checked target-files copy')
         framework = 'SYSTEM/framework/framework-res.apk'
         if hashlib.sha256(image_file(config, archive, framework, workdir, cache, used)).digest() != hashlib.sha256(archive.read(framework)).digest():
             failures.append('framework-res.apk in system.img differs from the checked target-files copy')
@@ -765,6 +813,8 @@ def verify_signed(a, config, cand, adapter):
         failures += check_build_identity(signed, config, cand, 'release-keys')
         failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
         failures += check_updater(signed, config, tool(config, 'aapt'), tool(config, 'apksigner'))
+        apex_failures, apex = check_permission_apex(signed, config, verifier_tools, tool(config, 'apksigner'))
+        failures += apex_failures
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
@@ -777,9 +827,11 @@ def verify_signed(a, config, cand, adapter):
     receipt = {'receiptType': 'candidate-verification', 'candidate': cand, 'simulated': adapter.simulated,
         'signedTargetFilesSha256': sha256_file(signed), 'published': False,
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
-            'Updater presence/identity/config/signer', 'image-embedded app/framework bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'Updater presence/identity/config/signer',
+            'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
+            'image-embedded app/framework/Permission APEX bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
-        'imageTools': image_tools, 'verifierTools': verifier_tools}
+        'permissionApex': apex, 'imageTools': image_tools, 'verifierTools': verifier_tools}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)
     return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}
