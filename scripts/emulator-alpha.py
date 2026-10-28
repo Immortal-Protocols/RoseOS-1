@@ -511,7 +511,7 @@ def release_pipeline():
     return module
 
 def image_content(config, preparation_id, product_out):
-    """OS58 contract against the partitions packed into product_out/super.img (scripts/alpha_image.py)."""
+    """The pinned OS alpha contract against the partitions packed into product_out/super.img (scripts/alpha_image.py)."""
     document, _ = contract(config)
     policy_file = config['preparation']['baseEvidence']['policy']
     if not Path(policy_file['path']).is_file() or sha256_file(policy_file['path']) != policy_file['sha256']:

@@ -414,9 +414,10 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
   5. the partition `build.prop` identity must match: emulator build id
      `rose-cf-alpha-<run id>` as `BUILD_NUMBER`, the dispatched timestamp,
      `userdebug` and `test-keys`;
-  6. the image-content gate (`scripts/alpha_image.py`) checks OS58's
-     `imageExpectations` from the partitions packed into the built `super.img`,
-     never from loose files:
+  6. the image-content gate (`scripts/alpha_image.py`) checks the
+     `imageExpectations` of the pinned OS alpha contract (`preparation.osDelta`:
+     contract `c825aa19…`, delta `f21bf683…`, OS PR61) from the partitions packed
+     into the built `super.img`, never from loose files:
      - **Extraction:** `super.img` is unsparsed with `simg2img` when sparse and
        must be an LP super image. `lpunpack` writes its partitions, of which
        `system`, `system_ext`, `product` and `vendor` are inspected; each must
@@ -438,6 +439,20 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
        sha256, with app digests equal to the contract's).
      - **Tray:** the last `persist.wm.debug.pixel_agent_tray` in the system
        `build.prop` must be `1`.
+     - **Seedvault closure** (`imageVerification.closure`):
+       - `system/priv-app/Seedvault/Seedvault.apk` and
+         `system/app/LocalContactsBackup/LocalContactsBackup.apk` must be
+         non-empty regular files, not links, whose `aapt` package is the pinned
+         `com.stevesoltys.seedvault` or `app.grapheneos.backup.contacts`.
+       - The four XML files under `system/etc/{sysconfig,default-permissions,permissions}`
+         must be non-empty regular files that parse with the pinned root element
+         and name the pinned package.
+       - The paths, packages and roots are derived in tests from the pinned
+         Android.bp files (OS fixtures) and the pinned Seedvault `7cfffed7`
+         manifests and XML (`scripts/tests/fixtures/seedvault-7cfffed7`).
+       - These are compiled OS modules, so no version, digest or certificate is
+         pinned for them and the Rose app signer does not apply. The receipt
+         records their paths, hashes and identities.
      - **No Updater:** no `app/` or `priv-app/` Updater directory, no
        `app.seamlessupdate.client.xml`, and no APK of that package among every
        APK inspected. An APK that `aapt` cannot read fails the gate, because
