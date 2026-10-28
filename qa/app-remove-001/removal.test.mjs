@@ -16,7 +16,10 @@ const BASE=process.env.QA_BASE_REF||'eca1fef9e7baa01238b1abd87195af8c429eff65';
 const {loadPage}=await import(pathToFileURL(path.join(SRC,'tests/web-ui-harness.mjs')).href);
 const J='app/src/dev/pixel/voice/';
 const cur=rel=>fs.readFileSync(path.join(SRC,rel),'utf8');
-const base=rel=>execFileSync('git',['-C',REPO,'show',`${BASE}:workspace/rose-agent/${rel}`],{encoding:'utf8',maxBuffer:64<<20});
+// MainActivity is compared with its own pre-change parent when given (QA_MAINACTIVITY_BASE_REF, e.g. the
+// Product PR's parent): later unrelated MainActivity changes, such as OS #83 Home reuse, then don't count.
+const MAIN_BASE=process.env.QA_MAINACTIVITY_BASE_REF||BASE;
+const base=rel=>execFileSync('git',['-C',REPO,'show',`${rel.endsWith('MainActivity.java')?MAIN_BASE:BASE}:workspace/rose-agent/${rel}`],{encoding:'utf8',maxBuffer:64<<20});
 
 const RETIRED={commands:['toggle_deepseek_trial','toggle_luna_first','toggle_artemis_trial'],
  functions:['toggleDeepseekTrial','toggleLunaFirst','toggleArtemisTrial'],
