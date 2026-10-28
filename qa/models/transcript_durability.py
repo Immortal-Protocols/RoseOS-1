@@ -68,7 +68,7 @@ class Durability:
             self.server.requests.clear()
             self.server.seq_counters.clear()
 
-    def launch(self, selector, turns):
+    def launch(self, selector, turns, transcript=None):
         cfg = os.path.join(self.work, 'config.toml')
         with open(cfg, 'w') as f:
             f.write(f'[endpoint]\nbase_url = "{self.server.url(selector)}"\nprotocol = "openai-chat-candidate"\n\n'
@@ -77,9 +77,10 @@ class Durability:
         script = os.path.join(self.work, 'turns.txt')
         with open(script, 'w') as f:
             f.write(''.join(t + '\n' for t in turns))
-        transcript = os.path.join(self.work, 'transcript.jsonl')
-        if os.path.exists(transcript):
-            os.remove(transcript)
+        if transcript is None:
+            transcript = os.path.join(self.work, 'transcript.jsonl')
+            if os.path.exists(transcript):
+                os.remove(transcript)
         p = subprocess.Popen([self.bin, 'chat', '--config', cfg, '--script', script, '--transcript', transcript],
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              env=dict(os.environ, **{TOKEN_VAR: SENTINEL}))
@@ -107,6 +108,20 @@ class Durability:
                 'expected': "exit 0; complete JSONL [run, turn, turn, summary]; no forbidden text",
                 'observed': f'exit {p.returncode}; types={types}; complete={complete}; leaks={leaks}; '
                             f'stdout lines={len(out.splitlines())}'}
+
+    def unwritable(self):
+        """Transcript on /dev/full: Product contract (a286d2dc README) is exit 2 before any request."""
+        if not os.path.exists('/dev/full'):
+            return {'case': 'unwritable transcript (/dev/full)', 'state': 'UNAVAILABLE', 'expected': '-',
+                    'observed': '/dev/full not present'}
+        self.reset()
+        p, _ = self.launch('ok', MESSAGES, transcript='/dev/full')
+        out = p.communicate(timeout=30)[0].decode('utf-8', 'replace')
+        sent = len(self.server.requests)
+        ok = p.returncode == 2 and sent == 0 and 'panicked at' not in out
+        return {'case': 'unwritable transcript (/dev/full)', 'state': 'PASS' if ok else 'FAIL',
+                'expected': 'exit 2 before any request (0 fixture requests), no panic',
+                'observed': f'exit {p.returncode}; fixture requests={sent}'}
 
     def one(self, turn1, sig):
         self.reset()
@@ -169,6 +184,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='models-qa-durability-') as work:
         d = Durability(args.bin, work)
         results.append(d.control())
+        results.append(d.unwritable())
         for sig in (signal.SIGINT, signal.SIGTERM):
             for turn1 in TURN1:
                 runs = [d.one(turn1, sig) for _ in range(args.runs)]
