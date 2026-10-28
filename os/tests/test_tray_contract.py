@@ -57,6 +57,16 @@ class TrayContractTest(unittest.TestCase):
         self.assertIn('"com.android.systemui"', self.service)
         self.assertIn('getPackageUidAsUser(\n                    "dev.pixel.voice", user)', self.tray)
 
+    def test_tray_keeps_at_most_one_pending_rebind(self):
+        # Every failed bind, binding death and screen/user broadcast used to start its own 3 s chain.
+        self.assertNotIn('postDelayed(this::bind', self.tray)
+        self.assertEqual(self.tray.count('handler.postDelayed(retryBind, 3000);'), 1)
+        schedule = self.tray[self.tray.index('private void scheduleBind()'):]
+        self.assertLess(schedule.index('handler.removeCallbacks(retryBind);'),
+            schedule.index('handler.postDelayed(retryBind, 3000);'))
+        bind = self.tray[self.tray.index('private void bind()'):]
+        self.assertTrue(bind.split('\n')[1].strip() == 'handler.removeCallbacks(retryBind);')
+
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))
 

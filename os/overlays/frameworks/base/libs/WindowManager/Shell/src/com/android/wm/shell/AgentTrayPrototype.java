@@ -74,6 +74,8 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     }
     private final Context context;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    // One pending retry at most; screen, user and binding events would otherwise each start a chain.
+    private final Runnable retryBind = this::bind;
     private final WindowManager windows;
     private Messenger voice;
     private boolean bound, listening, muted, connected, screenOff;
@@ -157,10 +159,16 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         if (bound) context.unbindService(connection);
         bound = false;
         clearAudio();
-        handler.postDelayed(this::bind, 3000);
+        scheduleBind();
+    }
+
+    private void scheduleBind() {
+        handler.removeCallbacks(retryBind);
+        handler.postDelayed(retryBind, 3000);
     }
 
     private void bind() {
+        handler.removeCallbacks(retryBind);
         int next = ActivityManager.getCurrentUser();
         if (bound && next == user) return;
         if (bound) { send(2); context.unbindService(connection); bound = false; }
@@ -171,7 +179,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
                     "dev.pixel.voice", "dev.pixel.voice.AgentTrayService")), connection,
                     Context.BIND_AUTO_CREATE, UserHandle.of(user));
         } catch (RuntimeException e) { Log.w(TAG, "Voice binding unavailable", e); }
-        if (!bound) handler.postDelayed(this::bind, 3000);
+        if (!bound) scheduleBind();
     }
 
     private void send(int action) {
