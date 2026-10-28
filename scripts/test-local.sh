@@ -69,6 +69,11 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \
  os/tests/AgentStatusControlsTest.java
 java -cp "$JAVA_TESTS/AgentStatusControls" com.android.wm.shell.AgentStatusControlsTest
+# SystemUI tray subscription lifecycle (screen-off suspend, exactly-once resume), same way.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentTrayLink" \
+ os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java \
+ os/tests/AgentTrayLinkTest.java
+java -cp "$JAVA_TESTS/AgentTrayLink" com.android.wm.shell.AgentTrayLinkTest
 # Updater channel rules (Prod/Beta/Alpha, legacy migration, unpublished feeds).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseChannels" \
  os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java os/tests/RoseChannelsTest.java
