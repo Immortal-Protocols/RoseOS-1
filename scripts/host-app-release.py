@@ -72,7 +72,7 @@ def requested_version(config, apps):
         raise AdapterFailed(f'app-only mode releases exactly [["{PACKAGE}", versionCode]]')
     version, floor = apps[0][1], config['appRelease']['mustExceed']
     if version <= floor:
-        raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed the published {floor}')
+        raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed {floor}, the newest built or published')
     return version
 
 def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', build=None):
@@ -141,7 +141,7 @@ def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, 
         'sha256': sha256(artifact/signed.name), 'signerSha256': config['identities']['appSignerSha256'].lower(),
         'minimumTestedOs': config['appRelease']['minimumTestedOs'],
         'checks': ['candidate worktree at the selected commit', 'Rose Agent built alone', 'unsigned package and versionCode',
-            f'versionCode above published {config["appRelease"]["mustExceed"]}', 'signed with the pinned app signer (sign-apk.py)',
+            f'versionCode above {config["appRelease"]["mustExceed"]} (newest built or published)', 'signed with the pinned app signer (sign-apk.py)',
             'independent apksigner verification: exactly the pinned signer', 'signed package and versionCode']}
     (artifact/'app-release-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     (artifact/'SHA256SUMS').write_text(''.join(f'{sha256(artifact/n)}  {n}\n' for n in sorted(p.name for p in artifact.iterdir())))

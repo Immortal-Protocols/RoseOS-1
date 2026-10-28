@@ -538,6 +538,38 @@ Source-only contract for the OS owner:
   step needs provenance checks against the receipt hashes,
   `sys.boot_completed`, UI, viewer, input and Stop evidence, and cleanup.
 
+**Public app publication** (INFRA-APP-096, APR024) is optional, using
+`app_publish: true`, which the guard allows only with `mode: app-only`. The hosted
+`app-publisher` job downloads the builder's private artifact through the
+workflow's own artifact step. It mints the existing pixel-ota App token, which
+the action revokes at job end; the builder never receives it. The job then runs
+`scripts/app_release_publisher.py`, which:
+
+- **verifies before any API call:**
+  - the artifact is exactly the APK, the receipt and `SHA256SUMS`, with every
+    digest matching;
+  - the receipt is non-simulated and names this candidate and the dispatched
+    `[["dev.pixel.voice", N]]`, with N above `appRelease.mustExceed` (303,
+    because the 303 bytes were built and never published);
+  - the APK's size, sha256 and signer match the receipt, and the APK's own
+    v2/v3 signing certificate, read from its signing block, is the pinned app
+    signer;
+- **requires** OTA Latest to be `frankel-2026102804` before and after;
+- **publishes** its own prerelease, `rose-agent-N`, with `make_latest` false.
+  The prerelease holds only `dev.pixel.voice-N.apk`, a sanitized
+  `dev.pixel.voice-N.receipt.json` (package, version, size, sha256, signer,
+  candidate, minimum tested OS, repository, tag, asset and `apkUrl`) and
+  `SHA256SUMS`;
+- **never changes a published release:** a published release with identical
+  assets is a no-op, any other published release is refused, and its own
+  leftover draft is reconciled;
+- **checks the result:** it downloads every asset back with authentication, and
+  the APK once more anonymously from the exact public URL the client uses;
+- **keeps the receipt:** the public receipt becomes the Actions artifact
+  `app-publication-dev.pixel.voice-<run id>`.
+
+Emulator-alpha and OS modes are unchanged.
+
 `workspace/rose-agent/delivery/catalog.mjs` adds such an artifact to an existing
 `/apps` catalog directory (the layout `server/delivery.mjs` reads). Before it
 writes anything, it checks that:
@@ -550,7 +582,13 @@ writes anything, it checks that:
 It then writes the APK, an optional verified `--idsig` and the JSON record last,
 each through a temporary file and a rename. It never alters retained records, and
 rerunning the same artifact changes nothing. It writes a write-once, nonsecret
-publish receipt. A paired-device id from `--device-id-file` goes only into the
+publish receipt. With `--public-receipt` (the app-publication receipt, after the
+lead has verified the public bytes), the record also carries the canonical
+`apkUrl`, `https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-N/dev.pixel.voice-N.apk`.
+That receipt's package, version, size, sha256, signer and candidate must equal
+the verified artifact, its tag and asset must be the configured names, and the
+URL must be exactly that shape, or nothing is written. Without the option,
+records are unchanged. A paired-device id from `--device-id-file` goes only into the
 catalog record. The writer has no transport: copying the artifact to the service
 host is a separate, authorized step, and no persistent automated transport
 exists. A catalog entry is not a phone install; an install is verified only on

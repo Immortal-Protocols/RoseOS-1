@@ -74,9 +74,9 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertIn('updater-product-build-make.patch', (ROOT/'scripts/apply-os-changes.py').read_text())
 
     def test_source_manifests_match_the_allocated_versions(self):
-        # 2804 built Rose Agent 302; the source has since moved to the reserved app-only 303, above the published 302.
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 303, '303-app-beta'))
-        self.assertEqual(CONFIG['appRelease']['mustExceed'], dict(APPS)['dev.pixel.voice'])
+        # 2804 built Rose Agent 302; the source has since moved to the reserved app-only 304 (303 was built, never published).
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 304, '304-app-beta'))
+        self.assertEqual(CONFIG['appRelease']['published']['versionCode'], dict(APPS)['dev.pixel.voice'])
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
