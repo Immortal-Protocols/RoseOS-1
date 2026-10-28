@@ -207,12 +207,16 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(code, 4)
         missing = json.loads(out)['missing']
         for name in ('ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
-                     'GCP_SIGNER_SERVICE_ACCOUNT', 'host.integrateCommand', 'host.signCommand'):
+                     'GCP_SIGNER_SERVICE_ACCOUNT', 'host.integrate.reconcileCommand', 'host.sign.releaseCommand', 'host.tools.apksigner'):
             self.assertIn(name, missing)
+        self.assertEqual(len(missing), len(set(missing)))
         self.assertTrue(any(m.startswith('PIXEL_OTA_PUBLISHER') for m in missing))
-        code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app', PIXEL_OTA_TOKEN='x'))
-        self.assertEqual(code, 4, 'no publisher mechanism is supported until the credential decision')
-        self.assertNotIn('"x"', out)
+        code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app'))
+        self.assertEqual(code, 4)
+        self.assertEqual(json.loads(out)['missing'], ['PIXEL_OTA_APP_ID', 'PIXEL_OTA_APP_PRIVATE_KEY'])
+        code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app',
+            PIXEL_OTA_APP_ID='123', PIXEL_OTA_APP_KEY_PRESENT='true'))
+        self.assertEqual(code, 0, out)
         code, out = self.pipeline('preflight', '--job', 'builder', '--config', self.config)
         self.assertEqual(code, 2)
         self.assertIn('fixture config cannot be used for production', out)

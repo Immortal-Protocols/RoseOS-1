@@ -65,6 +65,9 @@ jobs:
           GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
           GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
           PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+          PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
+          # Presence only; the key itself is read solely by the publisher job's token step.
+          PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
         run: python3 scripts/release-pipeline.py preflight --job guard
 
   controller:
@@ -82,8 +85,10 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 scripts/release-pipeline.py preflight --job controller
-      - run: bash scripts/actions-gcp-login.sh "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
       - run: python3 scripts/release-pipeline.py start-builder
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
 
   builder:
     needs: controller
@@ -98,38 +103,51 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0  # the integration adapter checks out the exact candidate commit
           persist-credentials: false
       - run: python3 scripts/release-pipeline.py preflight --job builder
-      - run: bash scripts/actions-gcp-login.sh "$GCP_SIGNER_SERVICE_ACCOUNT"
-      - name: Build, verify, sign and verify under stage receipts
+      - name: Prepare stage receipts
         run: |
           set -euo pipefail
           base="$HOME/rose-actions/frankel-$BUILD_NUMBER"
           test ! -e "$base" || { echo "::error::$base already exists; use a new build number" >&2; exit 1; }
-          common=(--candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --release-dir "$base/release")
-          stage() { python3 scripts/release-stage.py run --state "$base/stages" --source-revision "$CANDIDATE_SHA" "$1" -- python3 scripts/release-pipeline.py "$2" "${common[@]}"; }
           python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device frankel --build-number "$BUILD_NUMBER"
-          stage build build
-          stage bytes-verify verify-build
-          stage sign sign
-          stage ota-verify verify-signed
-          python3 scripts/release-stage.py run --state "$base/stages" --source-revision "$CANDIDATE_SHA" transfer -- \
-            python3 scripts/release-pipeline.py stage-artifact "${common[@]}" --artifact-dir "$base/artifact" --apps "$APPS"
-          echo "ARTIFACT_DIR=$base/artifact" >> "$GITHUB_ENV"
-      - name: Transfer only public files and receipts
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      # Signer access exists only around the two stages that need it; the pipeline drops it as soon
+      # as each lead-managed entry point returns, and the final logout always runs.
+      - name: Signer access for app signing
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Integrate (apps signed first) and build
+        run: bash scripts/os-release-stage.sh build build
+      - name: Verify the unsigned build
+        run: bash scripts/os-release-stage.sh bytes-verify verify-build
+      - name: Signer access for OS signing
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Sign
+        run: bash scripts/os-release-stage.sh sign sign
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Verify the signed candidate
+        run: bash scripts/os-release-stage.sh ota-verify verify-signed
+      - name: Stage only public files and receipts
+        run: bash scripts/os-release-stage.sh transfer stage-artifact --artifact-dir "$ROSE_BASE/artifact" --apps "$APPS"
+      - name: Transfer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: os-release-frankel-${{ inputs.build_number }}
-          path: ${{ env.ARTIFACT_DIR }}
+          path: ${{ env.ROSE_BASE }}/artifact
           retention-days: 3
           if-no-files-found: error
 
   publisher:
     needs: builder
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+      PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
+      PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -139,7 +157,19 @@ jobs:
         with:
           name: os-release-frankel-${{ inputs.build_number }}
           path: ${{ runner.temp }}/artifact
+      # Short-lived token for the pixel-ota installation only; the action revokes it when the job ends.
+      - name: Mint pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
       - name: Revalidate, draft, download-check and promote if requested
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
           python3 scripts/release-pipeline.py publish --candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" \
@@ -162,6 +192,8 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 scripts/release-pipeline.py preflight --job cleanup
-      - run: bash scripts/actions-gcp-login.sh "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
       # The existing 12h automatic STOP on the builder remains the independent fallback.
       - run: python3 scripts/release-pipeline.py stop-builder
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout

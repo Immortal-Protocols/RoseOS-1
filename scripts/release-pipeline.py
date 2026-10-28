@@ -24,12 +24,13 @@ import time
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
+import github_release_publisher  # noqa: E402
 from release_receipts import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/frankel.json'
 TARGET_FILES_VERIFIER = ROOT/'qa/first-update/runtime/verify-target-files.py'
-SUPPORTED_PUBLISHERS = ()  # Filled once the publisher credential mechanism is decided.
+SUPPORTED_PUBLISHERS = ('github-app',)  # pixel-ota-only App; token minted in the hosted publisher job.
 BUILDER = {'project': 'protocols-465723', 'zone': 'us-west2-a', 'instance': 'immortal-os-builder'}
 PROPS = ('SYSTEM/build.prop', 'VENDOR/build.prop', 'PRODUCT/etc/build.prop', 'SYSTEM_EXT/etc/build.prop')
 
@@ -87,26 +88,29 @@ def preflight(job, config, env, adapter):
             missing.append('ROSEOS_BUILDER_RUNNER_READY')
         missing += [n for n in ('GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
             'GCP_SIGNER_SERVICE_ACCOUNT') if not env.get(n)]
-        if env.get('PIXEL_OTA_PUBLISHER') not in SUPPORTED_PUBLISHERS:
-            missing.append('PIXEL_OTA_PUBLISHER (no supported publisher mechanism configured)')
-        missing += [f'host.{k}' for k in ('integrateCommand', 'signCommand') if not config['host'].get(k)]
+        missing += publisher_inputs(env)
+        missing += adapter_inputs(config)
         missing += [f'host.tools.{k}' for k, v in config['host']['tools'].items() if not v]
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
         host = config['host']
-        missing += [f'host.{k}' for k in ('integrateCommand', 'signCommand') if not host.get(k)]
+        missing += adapter_inputs(config)
         missing += [f'host.tools.{k}' for k, v in host['tools'].items() if not v or not host_path(config, v).exists()]
         if not Path(host['sourceRoot']).is_dir():
             missing.append('host.sourceRoot (not present on this runner)')
         if not Path(host['lockPath']).parent.is_dir():
             missing.append('host.lockPath directory')
     if job == 'publisher':
-        if env.get('PIXEL_OTA_PUBLISHER') not in SUPPORTED_PUBLISHERS:
-            missing.append('PIXEL_OTA_PUBLISHER (no supported publisher mechanism configured)')
-        elif not env.get('PIXEL_OTA_TOKEN'):
-            missing.append('PIXEL_OTA_TOKEN (short-lived publisher token from the configured mechanism)')
-    return missing
+        missing += publisher_inputs(env)
+    return list(dict.fromkeys(missing))
+
+def publisher_inputs(env):
+    # Presence only: the workflow passes 'true'/'false' for the secret, never its value.
+    if env.get('PIXEL_OTA_PUBLISHER') not in SUPPORTED_PUBLISHERS:
+        return ['PIXEL_OTA_PUBLISHER (must be github-app)']
+    return [n for n, ok in (('PIXEL_OTA_APP_ID', bool(env.get('PIXEL_OTA_APP_ID'))),
+        ('PIXEL_OTA_APP_PRIVATE_KEY', env.get('PIXEL_OTA_APP_KEY_PRESENT') == 'true')) if not ok]
 
 # ---------------------------------------------------------------- adapters
 
@@ -127,10 +131,25 @@ class Production:
         subprocess.run(['bash', '-euo', 'pipefail', '-c', ' && '.join(steps)], cwd=host['sourceRoot'], env=env, check=True)
 
     def publish(self, config, cand, directory, receipt_dir):
-        raise SetupMissing(['PIXEL_OTA_PUBLISHER (no supported publisher mechanism configured)'])
+        if not os.environ.get('PIXEL_OTA_TOKEN'):
+            raise SetupMissing(['PIXEL_OTA_TOKEN (minted by the publisher job; never on the builder)'])
+        self.client = github_release_publisher.client_from_environment(config)
+        tag = config['publication']['tag'].format(build=cand['build'])
+        run = os.environ.get('GITHUB_SERVER_URL', '') + '/' + os.environ.get('GITHUB_REPOSITORY', '') + \
+            '/actions/runs/' + os.environ.get('GITHUB_RUN_ID', '')
+        body = (f'RoseOS {config["target"]["device"]} build {cand["build"]} from RoseOS-1 {cand["sha"]}, '
+            f'channel {cand["channel"]}. Verified and published by {run}.')
+        manifest = json.loads((Path(receipt_dir)/'manifest.json').read_text())
+        self.release, download, self.already_published = github_release_publisher.publish_release(
+            self.client, tag, tag, body, manifest, directory, Path(receipt_dir).parent/f'published-{cand["build"]}')
+        return download
 
     def promote(self, config, cand, draft):
-        raise SetupMissing(['PIXEL_OTA_PUBLISHER (no supported publisher mechanism configured)'])
+        if self.already_published:
+            return
+        promoted = self.client.promote(self.release['id'])
+        if promoted.get('draft') is not False:
+            raise CheckFailed('release is still a draft after promotion')
 
 class Fake:
     """Swaps only external edges; everything it produces is marked simulated."""
@@ -180,6 +199,39 @@ def stage_env(config, cand, release_dir):
         ROSE_RELEASE_DIR=str(release_dir))
     return env
 
+def entry_point(argv):
+    """argv lists only, never a shell string; {python} and {checkout} become this trusted checkout's absolute paths."""
+    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
+        raise InvalidInput('host entry points must be argv lists')
+    return [x.replace('{python}', sys.executable).replace('{checkout}', str(ROOT)) for x in argv]
+
+def run_entry_point(argv, env, cwd):
+    subprocess.run(entry_point(argv), env=env, cwd=cwd, check=True)
+
+def adapter_inputs(config):
+    """Recipe keys the checked-in host adapters still need (their --check mode)."""
+    missing = []
+    for key in ('integrateCommand', 'signCommand'):
+        argv = config['host'].get(key)
+        if not argv:
+            missing.append(f'host.{key}')
+            continue
+        argv = entry_point(argv)
+        if len(argv) == 2 and argv[1].startswith(str(ROOT/'scripts')+'/host-'):
+            result = subprocess.run([*argv, '--check'], capture_output=True, text=True)
+            if result.returncode == 4:
+                missing += json.loads(result.stderr)['missing']
+            elif result.returncode:
+                missing.append(f'host.{key} (adapter check failed)')
+    return missing
+
+def drop_signer_access():
+    """Remove the per-job gcloud config (actions-gcp-login.py) as soon as an entry point returns."""
+    directory = os.environ.get('CLOUDSDK_CONFIG')
+    runner_temp = os.environ.get('RUNNER_TEMP')
+    if directory and runner_temp and Path(directory) == Path(runner_temp)/'gcloud-job-config' and Path(directory).exists():
+        shutil.rmtree(directory)
+
 def build(a, config, cand, adapter):
     host = config['host']
     if not host.get('integrateCommand'):
@@ -195,8 +247,10 @@ def build(a, config, cand, adapter):
         env = stage_env(config, cand, release_dir)
         # Lead-managed entry point: reconcile the exact candidate into the retained tree and write the
         # resolved manifest and the background policy receipt into the release directory.
-        subprocess.run(host['integrateCommand'], shell=isinstance(host['integrateCommand'], str), env=env,
-            cwd=host['sourceRoot'], check=True)
+        try:
+            run_entry_point(host['integrateCommand'], env, host['sourceRoot'])
+        finally:
+            drop_signer_access()
         for name in ('resolved-manifest.xml', 'background-policy.json'):
             if not (release_dir/name).is_file():
                 raise CheckFailed(f'integration did not produce $ROSE_RELEASE_DIR/{name}')
@@ -224,8 +278,10 @@ def sign(a, config, cand, adapter):
         raise CheckFailed('the source/output lock is held by another job')
     try:
         # Lead-managed entry point: signs with the existing identities; secrets stay on the builder.
-        subprocess.run(host['signCommand'], shell=isinstance(host['signCommand'], str),
-            env=stage_env(config, cand, release_dir), cwd=host['sourceRoot'], check=True)
+        try:
+            run_entry_point(host['signCommand'], stage_env(config, cand, release_dir), host['sourceRoot'])
+        finally:
+            drop_signer_access()
     finally:
         lock.close()
     for name in ('signed-target_files.zip', 'public'):
@@ -509,7 +565,8 @@ def main(argv=None):
     except InvalidInput as error:
         print(json.dumps({'verdict': 'INVALID', 'error': str(error)}), file=sys.stderr)
         return 2
-    except (CheckFailed, subprocess.CalledProcessError, release_receipts.ReceiptExists) as error:
+    except (CheckFailed, subprocess.CalledProcessError, release_receipts.ReceiptExists,
+            github_release_publisher.PublishError) as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, sort_keys=True))

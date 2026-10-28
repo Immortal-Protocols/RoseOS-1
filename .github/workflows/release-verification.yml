@@ -7,10 +7,20 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
-      - 'scripts/actions-gcp-login.sh'
+      - 'scripts/actions-gcp-login.py'
+      - 'scripts/github_release_publisher.py'
+      - 'scripts/host-integrate.py'
+      - 'scripts/host-sign.py'
+      - 'scripts/host_secrets.py'
+      - 'scripts/os-release-stage.sh'
+      - 'scripts/sign-apk.py'
+      - 'scripts/prepare-background-policy.py'
       - 'os/release-pipeline/**'
       - '.github/workflows/os-release.yml'
       - 'scripts/tests/test_release_*.py'
+      - 'scripts/tests/test_github_publisher.py'
+      - 'scripts/tests/test_host_adapters.py'
+      - 'scripts/tests/test_actions_gcp_login.py'
       - 'os/release-evidence/**'
       - '.github/workflows/release-verification.yml'
   push:
@@ -20,10 +30,20 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
-      - 'scripts/actions-gcp-login.sh'
+      - 'scripts/actions-gcp-login.py'
+      - 'scripts/github_release_publisher.py'
+      - 'scripts/host-integrate.py'
+      - 'scripts/host-sign.py'
+      - 'scripts/host_secrets.py'
+      - 'scripts/os-release-stage.sh'
+      - 'scripts/sign-apk.py'
+      - 'scripts/prepare-background-policy.py'
       - 'os/release-pipeline/**'
       - '.github/workflows/os-release.yml'
       - 'scripts/tests/test_release_*.py'
+      - 'scripts/tests/test_github_publisher.py'
+      - 'scripts/tests/test_host_adapters.py'
+      - 'scripts/tests/test_actions_gcp_login.py'
       - 'os/release-evidence/**'
       - '.github/workflows/release-verification.yml'
   workflow_dispatch:
@@ -55,6 +75,9 @@ jobs:
           python3 scripts/tests/test_release_manifest.py
           python3 scripts/tests/test_release_stage.py
           python3 scripts/tests/test_release_pipeline.py
+          python3 scripts/tests/test_github_publisher.py
+          python3 scripts/tests/test_host_adapters.py
+          python3 scripts/tests/test_actions_gcp_login.py
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
 
   public-distribution:
