@@ -167,19 +167,56 @@ are at risk at first boot. Measure each package's installed version code, signer
 and code path before building a frankel candidate, and give every bundled APK a
 higher version code.
 
-An existing phone keeps its HOME role holder across an OTA (expected, not yet
-observed on this phone). This Permission module's HOME role has no configurable
-default; it falls back to the highest-priority HOME activity, and a tie produces
-a chooser (`HomeRoleBehavior.getFallbackHolderAsUser` at the pinned revision).
+At the pinned Permission module (`4d6005db`) the HOME role has no configurable
+default. With no holder it falls back to the highest-priority HOME activity, and a
+tie produces a chooser (`HomeRoleBehavior.getFallbackHolderAsUser`). Rose Agent is
+a non-privileged import, so its HOME filter priority counts as 0. The default grant
+that runs after an update (`RoleControllerServiceImpl.onGrantDefaultRoles`) keeps
+any holder that still qualifies. So a phone updated from 2804 keeps the launcher
+it had, and neither a filter priority nor a fresh-install default can move it.
 
-Rose Agent never changes that choice: there is no role request, preferred-activity
-or wallpaper write. Its entries route in `MainActivity` (`HomeEntry`): a HOME
-intent shows Rose Home, and the app icon (MAIN/LAUNCHER) shows Rose Home with the
-Rose conversation (`RoseConversationActivity`) opened over it, so Back returns to
-Rose Home. Agent 302 (build 2026102804) kept the legacy voice page for the app
-icon, which is why its icon showed the blue "Tap to talk" screen. A phone whose
-owner kept another HOME app sees that app on HOME; Rose Home appears on HOME only
-when the owner selects Rose Agent in Settings > Apps > Default apps > Home app.
+A product build that preinstalls Rose Agent therefore also applies
+`os/patches/rose-home-role-permission.patch` to `packages/modules/Permission`
+(`apply-os-changes.py`, via `rose_home_projects`). The patch changes only
+`RoleService`, and its effect is as follows:
+
+- **When it runs.** On each user start, right after the existing default grant,
+  `maybeSelectRoseHomeSync` makes Rose Agent the HOME holder **once per user**.
+- **How it selects.** It asks the role controller for `ROLE_HOME`. This is the same
+  `onAddRoleHolder` path that Settings > Apps > Default apps > Home app uses. That
+  path replaces the exclusive holder and points the preferred HOME activity at
+  `dev.pixel.voice/.MainActivity`.
+- **The marker.** It records the attempt as `rose_home_role_selected=1` in that
+  user's `Settings.Secure`. It never runs again for that user, so the owner can
+  later pick another Home and it stays picked across reboots and updates.
+- **What it never does.** It never selects a non-preinstalled (non-system) app named
+  `dev.pixel.voice`.
+- **When Rose Agent doesn't qualify.** If it is absent, disabled or has no HOME
+  activity, the current holder stays and the attempt is still recorded.
+  Re-enabling Rose Agent later does not take the Home.
+- **Profiles.** Profiles have no HOME role, so each full user is handled on its own
+  start.
+- **If the controller doesn't answer.** If it doesn't answer within 30 s, nothing is
+  recorded and the next start retries.
+- **What it doesn't add.** No new permission, device or profile owner, preferred
+  activity write or wallpaper change. Rose Home draws its own bundled image.
+- **Where it runs.** It runs inside `system_server` (`RoleService`) with the
+  authority that service already has. The patched APEX `com.android.permission`
+  must be built from this source, and it is signed like the rest of the image.
+
+`os/tests/test_rose_home_role.py` applies the patch to the pinned
+`RoleService.java` and runs the added method against stand-ins for the role
+controller, settings and package manager. That covers source and fixture logic, not
+an image or a device.
+
+Rose Agent's own entries route in `MainActivity` (`HomeEntry`):
+
+- A HOME intent shows Rose Home.
+- The app icon (MAIN/LAUNCHER) shows Rose Home with the Rose conversation
+  (`RoseConversationActivity`) opened over it, so Back returns to Rose Home.
+
+Agent 302 (build 2026102804) kept the legacy voice page for the app icon, which is
+why its icon showed the blue "Tap to talk" screen.
 
 ## Cuttlefish alpha product (no Updater)
 

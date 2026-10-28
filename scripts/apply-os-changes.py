@@ -10,7 +10,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from integration_copy import Conflict, install_bytes, install_copy
 from background_apks import (BACKGROUND_FRAMEWORK_PATCHES, installed_precedence, preinstall_blueprint,
-    preinstall_make_block, preinstall_plan, validate_policy)
+    preinstall_make_block, preinstall_plan, rose_home_projects, validate_policy)
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('source', help='Existing GrapheneOS checkout matching os/pinned-manifest.xml')
@@ -89,6 +89,7 @@ if a.background_policy:
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
+projects.update(rose_home_projects(preinstalls))
 if a.installed_identities:
     bundled = [policy['agent']] + [row for row in [policy['voice'], *policy['targets']]
         if row['packageName'] in {p['packageName'] for p in preinstalls}]

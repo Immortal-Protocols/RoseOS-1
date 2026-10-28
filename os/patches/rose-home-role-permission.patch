@@ -1,0 +1,65 @@
+diff --git a/service/java/com/android/role/RoleService.java b/service/java/com/android/role/RoleService.java
+--- a/service/java/com/android/role/RoleService.java
++++ b/service/java/com/android/role/RoleService.java
+@@ -102,6 +102,10 @@ import java.util.concurrent.TimeoutException;
+ @RequiresApi(Build.VERSION_CODES.S)
+ public class RoleService extends SystemService implements RoleUserState.Callback {
+     private static final String LOG_TAG = RoleService.class.getSimpleName();
++
++    /** RoseOS: the preinstalled Home app selected once per user, and that user's marker setting. */
++    private static final String ROSE_HOME_PACKAGE = "dev.pixel.voice";
++    private static final String ROSE_HOME_SELECTED_SETTING = "rose_home_role_selected";
+     private static final String TRACE_TAG = RoleService.class.getSimpleName();
+ 
+     private static final boolean DEBUG = false;
+@@ -298,11 +302,50 @@ public class RoleService extends SystemService implements RoleUserState.Callback
+             }
+ 
+             maybeGrantDefaultRolesSync(user.getUserHandle().getIdentifier());
++            maybeSelectRoseHomeSync(user.getUserHandle().getIdentifier());
+         } finally {
+             Trace.endSection();
+         }
+     }
+ 
++    /**
++     * RoseOS: make Rose Agent the Home app once per user (OS-HOME-2804-FIX-001). The HOME role
++     * keeps a qualifying holder across an update, so a phone updated from a build without this
++     * would keep its old launcher. This makes the same selection as Settings > Default apps, through
++     * the role controller, then records it in that user's secure settings: it never runs again, so
++     * a later owner choice stands. Profiles have no HOME role; a missing, disabled or
++     * non-preinstalled Rose Agent keeps the current holder, and that outcome is recorded too. An
++     * unfinished selection is not recorded and is retried at the user's next start.
++     */
++    @MainThread
++    private void maybeSelectRoseHomeSync(@UserIdInt int userId) {
++        Context userContext = UserUtils.getUserContext(userId, getContext());
++        android.content.ContentResolver resolver = userContext.getContentResolver();
++        if (Settings.Secure.getInt(resolver, ROSE_HOME_SELECTED_SETTING, 0) != 0) {
++            return;
++        }
++        boolean preinstalled;
++        try {
++            preinstalled = (userContext.getPackageManager().getApplicationInfo(ROSE_HOME_PACKAGE, 0)
++                    .flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
++        } catch (PackageManager.NameNotFoundException e) {
++            preinstalled = false;
++        }
++        if (preinstalled) {
++            AndroidFuture<Boolean> future = new AndroidFuture<>();
++            getOrCreateController(userId).onAddRoleHolder(RoleManager.ROLE_HOME, ROSE_HOME_PACKAGE,
++                    0, new RemoteCallback(result -> future.complete(result != null)));
++            try {
++                Log.i(LOG_TAG, "Rose Home selected for user " + userId + ": "
++                        + future.get(30, TimeUnit.SECONDS));
++            } catch (InterruptedException | ExecutionException | TimeoutException e) {
++                Log.e(LOG_TAG, "Rose Home selection unfinished for user " + userId, e);
++                return;
++            }
++        }
++        Settings.Secure.putInt(resolver, ROSE_HOME_SELECTED_SETTING, 1);
++    }
++
+     private void upgradeLegacyFallbackEnabledRolesIfNeeded(@NonNull TargetUser user) {
+         int userId = user.getUserHandle().getIdentifier();
+         RoleUserState userState = getOrCreateUserState(userId);
