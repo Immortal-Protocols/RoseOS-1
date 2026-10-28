@@ -36,10 +36,25 @@
     this.polling=false;if(this.started){this.cancel(this.pollTimer);this.pollTimer=this.schedule(()=>this.poll(),this.connected?5000:800);}
    }
   }
+  // The command's own server record (GET /phone/commands/:id). A lost reply is asked again, never
+  // guessed; if no answer arrives before the command expires it is not run.
+  async serverStatus(item){
+   let delay=200;
+   while(item.epoch===this.epoch&&this.now()<=item.command.expires+5000){
+    try{const record=await this.api('GET','/phone/commands/'+item.command.id);return typeof record?.status==='string'?record.status:'unknown';}
+    catch(e){if(e.status===404)return 'unknown';await this.sleep(delay);delay=Math.min(2000,delay*2);}
+   }
+   return 'unavailable';
+  }
   async drain(){
    if(this.running)return;this.running=true;
    try{while(this.queue.length){
     const item=this.queue.shift(),c=item.command;if(item.epoch!==this.epoch)continue;
+    // Owner Stop withdraws queued commands on the server before it is acknowledged. A command
+    // fetched earlier (queued here, or in a batch that arrived late) runs only if the server still
+    // holds it pending right now; anything else (cancelled, completed, expired, unknown) is skipped.
+    const current=await this.serverStatus(item);
+    if(current!=='pending'){item.done=true;this.report({id:c.id,channel:item.channel,skipped:current});continue;}
     const startedAt=this.now();let result;
     try{
      // Native also keeps a durable result cache. 'running' means query that
