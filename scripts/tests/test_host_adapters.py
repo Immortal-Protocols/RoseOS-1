@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ import tarfile
 import tempfile
 import textwrap
 import unittest
+import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 PY = sys.executable
@@ -88,17 +90,31 @@ mkdir -p $RELEASE_OUT
 cmp releases/$BUILD/$DEVICE-otatools.zip "$OUT_DIR/host/otatools.zip"
 cp releases/$BUILD/$DEVICE-target_files.zip "$RELEASE_OUT/$DEVICE-target_files.zip"
 cd $RELEASE_OUT
+mkdir bin
+# Stand-ins for the otatools signapk (java) and avbtool: they open every key file named on their command line.
+printf '#!/bin/bash\nfor a in "$@"; do case $a in *.pem|*.pk8) [[ -r $a ]] || { echo "$0: $a not found" >&2; exit 1; };; esac; done\n' > bin/java
+cp bin/java bin/avbtool
+chmod +x bin/java bin/avbtool
 # reproducible key path for otacerts.zip
 ln -s "$KEY_DIR" keys
 KEY_DIR=keys
+export PATH="$PWD/bin:$PATH"
 [[ -f $KEY_DIR/releasekey.x509.pem ]]
-echo "otacerts $KEY_DIR/releasekey.x509.pem" > otacerts.txt
+# Top-level APK: signapk from this directory, relative keys as releasetools passes them.
+java -jar signapk.jar $KEY_DIR/releasekey.x509.pem $KEY_DIR/releasekey.pk8 in.apk out.apk
 for arg in --extra_apex_payload_key com.android.mediaprovider.apex="$KEY_DIR/avb.pem"; do
   [[ $arg == --* ]] && continue
-  # Like apexer under sign_target_files_apks: the key is opened from a temporary working directory.
+  # Like apexer under sign_target_files_apks: the payload key is opened from a temporary working directory.
   (cd "$(mktemp -d)" && openssl pkey -in "${arg#*=}" -noout)
 done
-echo "ota $BUILD" > "$DEVICE-ota_update-$BUILD.zip"
+# Like an APK nested in an APEX and the payload re-pack: same relative keys, another working directory.
+(cd "$(mktemp -d)" && java -jar signapk.jar $KEY_DIR/releasekey.x509.pem $KEY_DIR/releasekey.pk8 in.apk out.apk)
+(cd "$(mktemp -d)" && avbtool add_hashtree_footer --key $KEY_DIR/avb.pem --image payload.img)
+# Like WriteOtacerts: the entry name is the key path as given, so it must stay keys/releasekey.x509.pem.
+python3 -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    info = zipfile.ZipInfo(sys.argv[2], (2009, 1, 1, 0, 0, 0))
+    z.writestr(info, open(sys.argv[2], "rb").read())' "$DEVICE-ota_update-$BUILD.zip" $KEY_DIR/releasekey.x509.pem
 img_from_target_files "$DEVICE-target_files.zip" factory.zip
 """
 
@@ -142,8 +158,18 @@ class SignAdapterTest(Base):
             self.assertFalse(path.exists(), path)
 
     def test_signs_with_derived_recipe_and_maps_exact_outputs(self):
+        shm_before = set(os.listdir('/dev/shm'))
         self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
         public = self.release/'public'
+        # Nested signers ran from other directories, yet the certificate archive keeps the reproducible entry name.
+        with zipfile.ZipFile(public/'frankel-ota_update-2026102802.zip') as otacerts:
+            self.assertEqual([(i.filename, i.date_time) for i in otacerts.infolist()],
+                [('keys/releasekey.x509.pem', (2009, 1, 1, 0, 0, 0))])
+            self.assertEqual(otacerts.read('keys/releasekey.x509.pem'), self.cert)
+        # RAM key directory, release-local keys link and the key-path wrappers are all gone.
+        self.assertEqual(set(os.listdir('/dev/shm')) - shm_before, set())
+        self.assertFalse(os.path.lexists(self.src/'releases/2026102802/release-frankel-2026102802/keys'))
+        self.assertFalse((self.release/'key-path-tools').exists())
         self.assertEqual(sorted(p.name for p in public.iterdir()), sorted(['frankel-ota_update-2026102802.zip', 'frankel-stable',
             'releasekey.x509.pem', 'avb_pkmd.bin', 'UPDATE.md']))
         self.assertEqual((public/'frankel-stable').read_text(), '2026102802 1793200000 frankel stable\n')
@@ -160,6 +186,32 @@ class SignAdapterTest(Base):
         self.assertNotIn(b'synthetic-passphrase', everything)
         self.assertTrue((self.src/'releases/2026102802/.rose-actions-owner.json').is_file())
         self.assert_secrets_gone()
+
+    def test_nested_signers_fail_without_the_key_path_wrappers(self):
+        # Regression evidence: without the PATH wrappers the nested signapk call cannot open keys/releasekey.x509.pem.
+        original = host_sign.derive_release_script
+        def unwrapped(*args, **kwargs):
+            return re.sub(r'export PATH=\S*key-path-tools:"\$PATH"\n', '', original(*args, **kwargs))
+        host_sign.derive_release_script = unwrapped
+        self.addCleanup(setattr, host_sign, 'derive_release_script', original)
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'derived release script exited'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assert_secrets_gone()
+
+    def test_key_path_wrapper_rewrites_only_key_arguments(self):
+        tools = self.root/'fake-tools'
+        tools.mkdir()
+        (tools/'openssl').write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n')
+        (tools/'openssl').chmod(0o755)
+        host_sign.write_key_path_wrappers(self.root/'wrap', '/R/rel/keys')
+        result = subprocess.run([str(self.root/'wrap/openssl'), 'pkcs8', '-in', 'keys/releasekey.pk8', '--private_key=keys/a b.pk8',
+            'otherkeys/x', 'out/keys/y', '--flag'], capture_output=True, text=True, cwd='/',
+            env=dict(os.environ, PATH=f'{self.root/"wrap"}:{tools}:/usr/bin:/bin'))
+        self.assertEqual(result.stdout.splitlines(), ['pkcs8', '-in', '/R/rel/keys/releasekey.pk8',
+            '--private_key=/R/rel/keys/a b.pk8', 'otherkeys/x', 'out/keys/y', '--flag'])
+        missing = subprocess.run([str(self.root/'wrap/avbtool')], capture_output=True, text=True,
+            env=dict(os.environ, PATH=f'{self.root/"wrap"}:/nonexistent'))
+        self.assertEqual(missing.returncode, 127)
 
     def test_release_notes_must_come_from_the_candidate_and_name_the_build(self):
         self.write_config(*json.loads(self.config.read_text())['identities'].values(), notes='README.md')
@@ -228,7 +280,7 @@ class SignAdapterTest(Base):
 
     def test_release_script_anchors_must_each_occur_once(self):
         derive = lambda text: host_sign.derive_release_script(text, '/R/script/common.sh', '/dev/shm/k', '/dev/shm/p',
-            '/R/releases/2026102802/release-frankel-2026102802/keys')
+            '/R/releases/2026102802/release-frankel-2026102802/keys', '/dev/shm/w')
         derived = derive(RELEASE_SCRIPT)
         self.assertNotIn('img_from_target_files', derived)
         self.assertIn("source /R/script/common.sh", derived)
@@ -238,7 +290,9 @@ class SignAdapterTest(Base):
         # Only the APEX payload key becomes absolute; KEY_DIR=keys and the certificate paths stay relative.
         self.assertIn('com.android.mediaprovider.apex="/R/releases/2026102802/release-frankel-2026102802/keys/avb.pem"', derived)
         self.assertIn('\nKEY_DIR=keys\n', derived)
-        self.assertIn('echo "otacerts $KEY_DIR/releasekey.x509.pem"', derived)
+        # The key-path wrappers go first on PATH right after KEY_DIR=keys and again after the script's own PATH export.
+        self.assertIn('\nKEY_DIR=keys\nexport PATH=/dev/shm/w:"$PATH"\nexport PATH="$PWD/bin:$PATH"\nexport PATH=/dev/shm/w:"$PATH"\n', derived)
+        self.assertIn('java -jar signapk.jar $KEY_DIR/releasekey.x509.pem', derived)
         for text, message in ((RELEASE_SCRIPT.replace('="$KEY_DIR/avb.pem"', '="$OTHER/avb.pem"'), 'does not use'),
                               (RELEASE_SCRIPT.replace('--extra_apex_payload_key ', '--other '), 'found 0 times'),
                               (RELEASE_SCRIPT.replace('\nKEY_DIR=keys\n', '\n'), 'anchor')):

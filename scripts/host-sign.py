@@ -41,14 +41,52 @@ def missing_inputs(config):
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
-def derive_release_script(original, common_sh, key_dir, passfile, release_keys, python=sys.executable,
+# Signing tools that open key files given on their command line. releasetools passes them relative keys/... paths.
+KEY_TOOLS = ('java', 'openssl', 'avbtool', 'delta_generator')
+
+def key_path_wrapper(tool, wrapper_dir, release_keys):
+    """A PATH wrapper that runs the next `tool` on PATH with keys/... arguments (and --opt=keys/...) made absolute."""
+    wrapper_dir, release_keys = shlex.quote(str(wrapper_dir)), shlex.quote(str(release_keys))
+    return f'''#!/bin/bash
+# RoseOS host-sign key-path wrapper for {tool}; see scripts/host-sign.py.
+set -o errexit -o nounset -o pipefail
+real=
+IFS=: read -ra dirs <<< "$PATH"
+for dir in "${{dirs[@]}}"; do
+  [[ -z $dir || $dir == {wrapper_dir} ]] && continue
+  if [[ -f $dir/{tool} && -x $dir/{tool} ]]; then real=$dir/{tool}; break; fi
+done
+[[ -n $real ]] || {{ echo "{tool}: not found on PATH after the key-path wrapper" >&2; exit 127; }}
+args=()
+for arg in "$@"; do
+  case $arg in
+    keys/*) args+=({release_keys}/"${{arg#keys/}}") ;;
+    --*=keys/*) args+=("${{arg%%=*}}="{release_keys}/"${{arg#*=keys/}}") ;;
+    *) args+=("$arg") ;;
+  esac
+done
+exec "$real" ${{args[@]+"${{args[@]}}"}}
+'''
+
+def write_key_path_wrappers(wrapper_dir, release_keys):
+    Path(wrapper_dir).mkdir(mode=0o700)
+    for tool in KEY_TOOLS:
+        path = Path(wrapper_dir)/tool
+        path.write_text(key_path_wrapper(tool, wrapper_dir, release_keys))
+        path.chmod(0o700)
+
+def derive_release_script(original, common_sh, key_dir, passfile, release_keys, wrapper_dir, python=sys.executable,
                           helper=str(ROOT/'scripts/host-decrypt-keys.py')):
     """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing.
 
     release_keys is the absolute path of the `keys` link the script creates in its release directory (to the RAM key
-    directory). The script then sets KEY_DIR=keys so that otacerts.zip and the recorded certificate and AVB key paths
-    stay relative and reproducible; those are left alone. Only the APEX payload keys become that absolute path: the
-    APEX re-pack opens them from another working directory, where keys/avb.pem does not resolve (run 40641163775)."""
+    directory). The script then sets KEY_DIR=keys, so every path releasetools records (otacerts.zip entry names,
+    apkcerts, misc_info AVB key paths) is relative and reproducible; none of those strings changes here. Signing
+    subprocesses, however, can run where keys/... does not resolve: the APEX payload re-pack (run 40641163775) and
+    the signapk call for an APK nested in an APEX (run 40643229025) both failed that way, while top-level APKs signed
+    with the same relative paths. So the operational paths become absolute at the subprocess boundary instead:
+    wrapper_dir holds key_path_wrapper() for KEY_TOOLS and is put first on PATH after KEY_DIR=keys and after every
+    later `export PATH=`. The APEX payload key arguments also name the absolute path directly."""
     def once(pattern, text, flags=0):
         found = list(re.finditer(pattern, text, flags))
         if len(found) != 1:
@@ -64,9 +102,14 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     text = text[:decrypt.start()] + ' '.join(map(shlex.quote, (python, helper))) + ' ' + decrypt.group(1) + ' ' + \
         shlex.quote(str(passfile)) + text[decrypt.end():]
     once(r'^KEY_DIR=keys$', text, re.M)
-    if not re.fullmatch(r'/[\w./-]+', str(release_keys)):
-        raise AdapterFailed('release keys path must be a plain absolute path')
+    for path in (release_keys, wrapper_dir):
+        if not re.fullmatch(r'/[\w./-]+', str(path)):
+            raise AdapterFailed('release keys and wrapper paths must be plain absolute paths')
     lines = text.splitlines(keepends=True)
+    prepend = f'export PATH={shlex.quote(str(wrapper_dir))}:"$PATH"\n'
+    start = next(i for i, line in enumerate(lines) if line.rstrip('\n') == 'KEY_DIR=keys')
+    for i in reversed([start] + [i for i in range(start + 1, len(lines)) if re.match(r'\s*export PATH=', lines[i])]):
+        lines.insert(i + 1, re.match(r'\s*', lines[i]).group(0) + prepend)
     apex = [i for i, line in enumerate(lines) if '--extra_apex_payload_key' in line]
     if not apex:
         raise AdapterFailed('release script anchor --extra_apex_payload_key found 0 times, expected at least once')
@@ -143,13 +186,20 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         extracted = host_secrets.extract_key_archive(archive, private/'keys')
         archive.unlink()
         key_dir = host_secrets.discover_key_directory(extracted, config['identities'])
+        release_keys = releases/f'release-{device}-{build}'/'keys'
+        # The wrappers hold no secret, only paths; they live on the task-owned release disk (RAM may be noexec).
+        wrappers = release_dir/'key-path-tools'
+        write_key_path_wrappers(wrappers, release_keys)
         derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase,
-            releases/f'release-{device}-{build}'/'keys')
+            release_keys, wrappers)
         script = private/'generate-release-derived.sh'
         script.write_text(derived)
         java = Path(sign['javaHome'])
-        result = subprocess.run(['bash', str(script), device, build], cwd=str(source_root),
-            env=dict(env, JAVA_HOME=str(java), PATH=f'{java}/bin:' + env.get('PATH', '')))
+        try:
+            result = subprocess.run(['bash', str(script), device, build], cwd=str(source_root),
+                env=dict(env, JAVA_HOME=str(java), PATH=f'{java}/bin:' + env.get('PATH', '')))
+        finally:
+            shutil.rmtree(wrappers, ignore_errors=True)
         if result.returncode:
             raise AdapterFailed(f'derived release script exited {result.returncode}')
         shutil.copyfile(key_dir/'releasekey.x509.pem', public/'releasekey.x509.pem')
