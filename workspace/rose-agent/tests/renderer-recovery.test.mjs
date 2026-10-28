@@ -27,7 +27,7 @@ test('voice renderer loss ends the call truthfully and leaves tasks alone',()=>{
  assert.ok(!/task\/stop|taskStop|"end"/.test(body),'no task Stop and no voice command replayed');
  // The recreated view is built by the same code as at startup: same bridge, request filter and permissions.
  const create=voice.slice(voice.indexOf('void createVoiceWeb('),voice.indexOf('final RendererRecovery voiceRenderer'));
- for(const part of ['addJavascriptInterface(new Bridge(),"Native")','shouldInterceptRequest','onPermissionRequest','appassets.androidplatform.net'])
+ for(const part of ['addJavascriptInterface(new Bridge(callbacks.open()),"Native")','shouldInterceptRequest','onPermissionRequest','appassets.androidplatform.net'])
   assert.ok(create.includes(part),`createVoiceWeb keeps ${part}`);
  assert.equal((voice.match(/new WebView\(this\)/g)||[]).length,1,'one place creates the voice WebView');
  assert.match(source('ConversationState.java'),/case "renderer_gone":return Failure\.DISCONNECTED/,'the surface understands the reason');
@@ -41,4 +41,17 @@ test('result cards and the Mac screen recover locally',()=>{
  assert.match(mac,/renderer\.allow\(SystemClock\.elapsedRealtime\(\)\)\)\{createWeb\(\);return;\}/,'recreated through the same setup, within a budget');
  assert.match(mac,/Mac screen unavailable/,'otherwise an honest unavailable state');
  assert.ok(!/web\.evaluateJavascript/.test(mac.replace(/(if\([^)]*web!=null[^)]*\)|&&web!=null\))web\.evaluateJavascript/g,'')),'every panel call checks for a live view');
+});
+
+test('R20: voice bridge callbacks reach only the view generation that issued them',()=>{
+ const voice=source('VoiceService.java');
+ assert.match(voice,/addJavascriptInterface\(new Bridge\(callbacks\.open\(\)\),"Native"\)/,'each new voice view opens a new generation for its own bridge');
+ const request=voice.slice(voice.indexOf('public void request('),voice.indexOf('\n',voice.indexOf('public void request(')));
+ assert.match(request,/runOnUiThread\(\(\)->callbacks\.run\(generation,\(\)->web\.evaluateJavascript\(js,null\)\)\)/,'request completions are checked when they run');
+ const resume=voice.slice(voice.indexOf('public void readerResume('),voice.indexOf('\n',voice.indexOf('public void readerResume(')));
+ assert.match(resume,/callbacks\.run\(generation,/,'readerResume answers only its own page');
+ const destroy=voice.slice(voice.indexOf('public void onDestroy('));
+ assert.ok(destroy.indexOf('callbacks.close()')>=0&&destroy.indexOf('callbacks.close()')<destroy.indexOf('web.destroy()'),'teardown closes ownership before destroying the view');
+ const bridge=voice.slice(voice.indexOf('class Bridge {'),voice.indexOf('public void onDestroy('));
+ assert.ok(!/\(\)->web\.evaluateJavascript/.test(bridge.replace(/callbacks\.run\(generation,\(\)->web\.evaluateJavascript/g,'')),'no bridge callback evaluates into whichever view is current');
 });
