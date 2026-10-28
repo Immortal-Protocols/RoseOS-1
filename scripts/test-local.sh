@@ -51,6 +51,8 @@ python3 scripts/tests/test_app_release_publisher.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py
 python3 scripts/tests/test_rose_verify.py
+# MODELS-QA: loopback chat-completions fixture self-tests (fixture behaviour only, no client or model).
+python3 qa/models/test_fixture_server.py
 python3 os/tests/test_cuttlefish_alpha_product.py
 node --test workspace/rose-agent/delivery/catalog.test.mjs
 # Pure controller logic; each test compiles with only the class it covers.
