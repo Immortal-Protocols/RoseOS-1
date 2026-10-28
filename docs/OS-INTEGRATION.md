@@ -187,8 +187,19 @@ also required for the build: `aosp_cf.mk` uses the Soong-defined
 `aosp_shared_system_image`, which does not list `Updater`, and `file_list_diff`
 fails on system files installed by make but missing from that image.
 
-`os/patches/cuttlefish-alpha-no-updater.patch` removes only the RoseOS
-`PRODUCT_PACKAGES += Updater` block from `build/make/target/product/media_system.mk`.
+GrapheneOS `media_system.mk` also installs `Seedvault` on system, and no
+`build/make` `Android.bp` lists it or its `required` closure (pinned
+`packages/apps/Seedvault` `7cfffed7`: `LocalContactsBackup`, the three
+`com.stevesoltys.backup_*` permission files and
+`default-permissions_app.grapheneos.backup.contacts`), so `file_list_diff` would
+fail on those too. The alpha keeps Seedvault and adds that six-module closure to
+`aosp_shared_system_image` deps; the allowlist, `file_list_diff` and the Soong
+image switch are unchanged.
+
+`os/patches/cuttlefish-alpha-no-updater.patch` therefore makes two changes in
+`build/make`: it removes only the RoseOS `PRODUCT_PACKAGES += Updater` block from
+`target/product/media_system.mk` and adds the Seedvault closure to
+`target/product/generic/Android.bp`.
 Infra applies it with `git apply` to an already independent alpha source root that
 holds the 2804 integration, never to the retained Pixel root; on any other base
 `git apply --check` fails. `apply-os-changes.py` never applies it, so Frankel keeps
@@ -196,3 +207,10 @@ its Updater. The exact delta, base, app and policy hashes and the image
 expectations are in `os/alpha/cuttlefish-product-contract.json`, checked by
 `os/tests/test_cuttlefish_alpha_product.py` on pinned fixtures. That test evaluates
 product variables only; image contents and boot need the alpha build.
+
+The tray property needs no override for the Soong image: its `system-build.prop`
+(`build/soong` `250710f7`) reads `:product_config`, which carries the product's
+`PRODUCT_SYSTEM_PROPERTIES` (`core/soong_extra_config.mk`), and
+`gen_build_prop.py` writes them into the system `build.prop`. The test runs the
+pinned `gen_build_prop.py` on the evaluated product to show
+`persist.wm.debug.pixel_agent_tray=1` reaches that output.
