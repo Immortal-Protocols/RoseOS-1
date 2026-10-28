@@ -18,10 +18,12 @@ plan fails closed (exit 4) naming it.
   probe            --preparation-id ID, under the shared lock: the prepared tree's checks plus lunch resolution (which
                    writes build-system state only inside the alpha OUT_DIR of that tree); writes a probe receipt whose
                    values the lead records in hostEvidence and prepared
+  verify-image     under the shared lock: the image-content gate (scripts/alpha_image.py) on the pinned preparation's
+                   existing build output; writes nothing
   build            under the shared lock: every check against the pinned preparation, lunch resolution equal to
                    hostEvidence, make of the configured goals, fresh required outputs, build identity in the partition
-                   build.props, then a receipt hashing every top-level image and the host package. Unsigned, test-only,
-                   boot not attempted
+                   build.props, the OS contract checked from the partitions in super.img, then a receipt hashing every
+                   top-level image and the host package. Unsigned, test-only, boot not attempted
 Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
 """
 import argparse
@@ -34,10 +36,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import alpha_image  # noqa: E402
 import alpha_source  # noqa: E402
+import importlib.util  # noqa: E402
 import release_receipts  # noqa: E402
 from release_receipts import sha256_file  # noqa: E402
 
@@ -45,7 +50,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/cuttlefish-alpha.json'
 CUTTLEFISH = 'device/google/cuttlefish'
 LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_BOARD_PLATFORM', 'PRODUCT_DEVICE',
-    'PRODUCT_OUT', 'HOST_OUT')
+    'PRODUCT_OUT', 'HOST_OUT', 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE')
 # Read from the shell after lunch, not get_build_var: the retained tree's lunch exports TARGET_RELEASE
 # (build/envsetup.sh) while get_build_var TARGET_RELEASE returns empty there.
 SHELL_VARS = ('TARGET_RELEASE',)
@@ -72,6 +77,8 @@ def load(path=CONFIG):
     shared = json.loads((ROOT/config['sharedHost']).read_text())
     config['host'] = {k: shared['host'][k] for k in ('sourceRoot', 'lockPath', 'outDir')}
     config['host']['reconcile'] = {k: shared['host']['integrate']['reconcile'][k] for k in ('receiptDir', 'integrationOwnedRoots')}
+    config['host']['lockedSessions'] = shared['framework']['lockedSessions']
+    config['host']['appSigner'] = shared['identities']['appSignerSha256'].lower()
     return config
 
 def token(value):
@@ -117,6 +124,14 @@ def missing_evidence(config):
     if lunch:
         missing += [f'hostEvidence.lunch.{k}' for k in LUNCH_VARS if not lunch.get(k)]
     missing += [f'prepared.{k}' for k in ('preparationId', 'receiptSha256') if not prepared.get(k)]
+    tools = config['imageVerification']['tools']
+    needed = ['lpunpack', 'aapt', 'apksigner', 'simg2img']
+    filesystem = lunch.get('BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE')
+    if filesystem in alpha_image.EXTRACTORS:
+        needed.append(alpha_image.EXTRACTORS[filesystem])
+    elif filesystem:
+        missing.append(f'a supported extractor for the recorded system file system {filesystem}')
+    missing += [f'imageVerification.tools.{k}' for k in needed if not tools.get(k)]
     return missing
 
 def check_dispatch(config, sha, apps):
@@ -489,6 +504,46 @@ def identity_failures(props, config, build, timestamp, device):
         failures.append('ro.build.type is not ' + config['target']['variant'])
     return failures
 
+def release_pipeline():
+    spec = importlib.util.spec_from_file_location('release_pipeline', ROOT/'scripts/release-pipeline.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def image_content(config, preparation_id, product_out):
+    """OS58 contract against the partitions packed into product_out/super.img (scripts/alpha_image.py)."""
+    document, _ = contract(config)
+    policy_file = config['preparation']['baseEvidence']['policy']
+    if not Path(policy_file['path']).is_file() or sha256_file(policy_file['path']) != policy_file['sha256']:
+        raise CheckFailed(f'the bound policy {policy_file["path"]} is absent or differs from its sha256')
+    if document['policySha256'] != policy_file['sha256']:
+        raise CheckFailed('the contract policySha256 differs from the bound policy')
+    filesystem = config['hostEvidence']['lunch']['BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE']
+    if sorted(config['imageVerification']['apps']) != sorted(a['package'] for a in document['apps']):
+        raise CheckFailed('imageVerification.apps differs from the contract apps')
+    try:
+        with tempfile.TemporaryDirectory(prefix='image-check-', dir=preparation_dir(config, preparation_id)) as workdir:
+            return alpha_image.verify(product_out, config['imageVerification'], document, json.loads(Path(policy_file['path']).read_text()),
+                config['host']['appSigner'], filesystem, config['host']['lockedSessions'], release_pipeline().default_value, workdir)
+    except alpha_image.ToolMissing as error:
+        raise SetupMissing(error.missing)
+    except alpha_image.ImageCheckFailed as error:
+        raise CheckFailed('image content: ' + str(error))
+
+def verify_image(config):
+    """Re-run the image-content gate on the pinned preparation's existing build output; writes nothing."""
+    guard(config)
+    prepared = config['prepared']
+    lock = locked(config)
+    try:
+        _, failures = prepared_failures(config, prepared['preparationId'], prepared['receiptSha256'])
+        if failures:
+            raise CheckFailed('; '.join(failures))
+        product_out = preparation_dir(config, prepared['preparationId'])/'tree'/config['hostEvidence']['lunch']['PRODUCT_OUT']
+        return image_content(config, prepared['preparationId'], product_out)
+    finally:
+        lock.close()
+
 def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
     if not re.fullmatch(r'[0-9a-f]{40}', sha or '') or not re.fullmatch(r'\d{10}', timestamp or ''):
         raise InvalidInput('a full candidate SHA and a ten-digit BUILD_DATETIME are required')
@@ -520,6 +575,7 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
         failures = identity_failures(read_props(product_out), config, identity, timestamp, values['PRODUCT_DEVICE'])
         if failures:
             raise CheckFailed('; '.join(failures))
+        content = image_content(config, prepared['preparationId'], product_out)
         images = {p.name: {'size': p.stat().st_size, 'sha256': sha256_file(p)} for p in sorted(product_out.glob('*.img'))}
         hosts = {n: {'size': (host_out/n).stat().st_size, 'sha256': sha256_file(host_out/n)} for n in [config['hostPackage']['output']]}
     finally:
@@ -532,7 +588,7 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
             'effectiveSourceIdentity': preparation['effectiveSourceIdentity'], 'osDeltaCommit': preparation['osDeltaCommit'],
             'updaterMode': preparation['updaterMode'], 'preparedRoot': preparation['preparedRoot']},
         'emulatorBuildId': identity, 'buildDatetime': timestamp, 'lunch': values, 'outDir': config['build']['outDir'],
-        'makeGoals': config['build']['makeGoals'], 'images': images, 'hostOutputs': hosts,
+        'makeGoals': config['build']['makeGoals'], 'images': images, 'hostOutputs': hosts, 'imageContent': content,
         'buildProps': {k: props.get(k) for k in ('ro.build.fingerprint', 'ro.build.type', 'ro.build.version.incremental', 'ro.build.date.utc')},
         'notProven': NOT_PROVEN, 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
     receipt_dir.mkdir(parents=True)
@@ -543,7 +599,7 @@ def build(config, sha, apps, run_id, timestamp, receipt_dir, make=None):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['plan', 'preflight', 'prepare', 'verify-prepared', 'probe', 'build'])
+    p.add_argument('command', choices=['plan', 'preflight', 'prepare', 'verify-prepared', 'probe', 'verify-image', 'build'])
     p.add_argument('--job', choices=['guard', 'builder'], default='guard')
     p.add_argument('--config', default=str(CONFIG))
     p.add_argument('--candidate-sha')
@@ -572,6 +628,8 @@ def main(argv=None):
             if result['verdict'] != 'OK':
                 print(json.dumps(result, indent=2, sort_keys=True))
                 return 1
+        elif a.command == 'verify-image':
+            result = verify_image(config)
         elif a.command == 'probe':
             if not a.receipt:
                 raise InvalidInput('--receipt is required')
