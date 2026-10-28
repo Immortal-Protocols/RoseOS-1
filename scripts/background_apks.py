@@ -108,6 +108,15 @@ def preinstall_plan(policy, apks):
         plan.append({'module': module, 'packageName': row['packageName'], 'apk': Path(apk)})
     return sorted(plan, key=lambda p: p['module'])
 
+# Rose Agent's Home is selected once per user by the patched RoleService (OS-HOME-2804-FIX-001); the patch names
+# this package, so it applies only to a build that preinstalls exactly this app.
+ROSE_HOME_PACKAGE = 'dev.pixel.voice'
+ROSE_HOME_PATCHES = {'packages/modules/Permission': ['rose-home-role-permission.patch']}
+
+def rose_home_projects(preinstalls):
+    """Projects and patches that make the preinstalled Rose Agent the Home app; none without that preinstall."""
+    return dict(ROSE_HOME_PATCHES) if any(row['packageName'] == ROSE_HOME_PACKAGE for row in preinstalls) else {}
+
 def installed_precedence(rows, installed):
     """(issues, notes) for bundled apps against the phone's installed copies. Android keeps an
     installed app unless the image's copy has the same signer and a higher versionCode, so a lower
