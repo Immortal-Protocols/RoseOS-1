@@ -5,21 +5,32 @@ Artifact and source inspection never touch a device. Runtime capture talks to on
 only with an explicit, recorded host handback (docs/VERIFY.md). Every result names its kind: artifact-inspection,
 source-inspection, runtime-readonly, runtime-interactive or screenshot-comparison. One kind never stands in for another.
 
-  expected  print the identities a build is checked against: app bytes/versions/signer from the checked-in contracts
-            and the Fold prototype reference (Rose-Fold-v3 Home wallpaper)
+Identity checks compare against one explicit candidate expectation (--expect FILE, schema below), never an implicit
+default: a build is checked against exactly the identities Infra recorded for it. Runtime observations are bound to
+one recorded tested user (--user, default the current foreground user, resolved and recorded).
+
+  expected  print the repository's pinned identities and the Fold prototype reference; --expect FILE validates and
+            prints an expectation
   release   DIR: a downloaded pixel-ota release directory. Checks SHA256SUMS for every file present,
-            verification.json, the feed line and the AVB key pin, and reads OTA metadata. --extract-apps DIR also
-            extracts the contract partitions from payload.bin (every operation and partition hash checked), copies the
-            contract APKs out of the ext4/erofs images and inspects them like `apk`
+            verification.json, the feed line and the AVB key pin, and reads OTA metadata. --extract-apps DIR (needs
+            --expect) also extracts the expected apps' partitions from payload.bin (every operation and partition
+            hash checked), copies those APKs out of the ext4/erofs images and inspects them like `apk`
   apk       APK...: sha256, package/version/SDK/ABI, launchable and HOME activities, signer, Fold wallpaper resource
-            and Home/conversation classes, compared with the contract when the package is in it
+            and Home/conversation classes; with --expect, also bytes/version/signer against the expectation
   source    [REV]: the manifest and Home routing of a source revision (git show; no build)
-  runtime   --serial S --handback REF --out DIR: read-only properties, installed app paths/bytes/versions and the HOME
-            resolution. --interactive also drives HOME, the launcher-icon entry and Home -> conversation -> back,
-            with screenshots, UI dumps and a comparison of each Home screenshot with the reference
+  runtime   --serial S --handback REF --expect FILE --out DIR [--user ID]: read-only properties, the tested user's
+            installed app paths/state/bytes/versions, HOME role holders and unqualified MAIN/HOME resolution.
+            --interactive (tested user must be the foreground user) also drives HOME, the launcher-icon entry and
+            Home -> conversation -> back, with screenshots, UI dumps and a comparison of each Home screenshot
   compare   SCREENSHOT --out DIR: a screenshot against the reference wallpaper (cover crop), black-screen detection
             and a side-by-side image for human review
 Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
+
+Expectation schema (schemaVersion 1; unknown keys, nulls and malformed values are rejected):
+  {"schemaVersion": 1, "kind": "rose-verify-expectation", "label": str, "channel": "alpha"|"beta"|"app",
+   "candidate": 40-hex source SHA, "build": digits (optional), "target": {str: str} (device/lunch/...),
+   "apps": [{"package": str, "version": int >= 1, "sha256": 64-hex, "imagePath": "partition/path.apk" (needed by --extract-apps)}],
+   "appSignerSha256": 64-hex, "avbPublicKeySha256": 64-hex (optional), "basis": str (where each value came from)}
 """
 import argparse
 import bz2
@@ -38,6 +49,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+METHOD = 'rose-verify r2 (INFRA-VERIFY-002): explicit candidate expectation; tested-user binding'
 CONTRACT = ROOT/'os/alpha/cuttlefish-product-contract.json'
 PIPELINE = ROOT/'os/release-pipeline/frankel.json'
 WALLPAPER = 'workspace/rose-agent/app/res/drawable-nodpi/rose_home_wallpaper.jpg'
@@ -58,6 +70,7 @@ APP_PATHS = {
 }
 DEX_MARKERS = ['MainActivity', 'RoseHomeView', 'RoseConversationActivity', 'LauncherPager', 'PairingActivity']
 EMULATOR_DEVICES = ('vsoc_',)
+ROSE_HOME_MARKER = 'rose_home_role_selected'  # per-user Settings.Secure marker of the OS default-HOME selection
 HOME = 'android.intent.category.HOME'
 LAUNCHER = 'android.intent.category.LAUNCHER'
 
@@ -79,6 +92,77 @@ def sha256(path):
 def check(name, ok, detail=None):
     """ok: True pass, False fail, None unavailable (not measured; never counted as a pass)."""
     return {'check': name, 'result': {True: 'pass', False: 'fail', None: 'unavailable'}[ok], 'detail': detail}
+
+
+EXPECTATION_KEYS = {'schemaVersion', 'kind', 'label', 'channel', 'candidate', 'build', 'target', 'apps',
+                    'appSignerSha256', 'avbPublicKeySha256', 'basis'}
+HEX64 = re.compile(r'[0-9a-f]{64}')
+
+
+def load_expectation(path):
+    """One candidate's exact identities, validated fail-closed. Nothing is defaulted or inferred."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as e:
+        raise Fail(f'expectation {path}: {e}')
+    errors = []
+    if not isinstance(data, dict):
+        raise Fail(f'expectation {path}: not a JSON object')
+    errors += [f'unknown key {k}' for k in sorted(set(data) - EXPECTATION_KEYS)]
+    if data.get('schemaVersion') != 1 or data.get('kind') != 'rose-verify-expectation':
+        errors.append('schemaVersion must be 1 and kind rose-verify-expectation')
+    for key in ('label', 'basis'):
+        if not isinstance(data.get(key), str) or not data[key].strip():
+            errors.append(f'{key} must be a non-empty string')
+    if data.get('channel') not in ('alpha', 'beta', 'app'):
+        errors.append('channel must be alpha, beta or app')
+    if not isinstance(data.get('candidate'), str) or not re.fullmatch(r'[0-9a-f]{40}', data['candidate']):
+        errors.append('candidate must be a full 40-hex source SHA')
+    if 'build' in data and (not isinstance(data['build'], str) or not data['build'].isdigit()):
+        errors.append('build must be a digit string')
+    target = data.get('target')
+    if not isinstance(target, dict) or not target or not all(isinstance(k, str) and isinstance(v, str) and v
+                                                             for k, v in target.items()):
+        errors.append('target must be a non-empty object of non-empty strings')
+    for key in ('appSignerSha256',) + (('avbPublicKeySha256',) if 'avbPublicKeySha256' in data else ()):
+        if not isinstance(data.get(key), str) or not HEX64.fullmatch(data[key]):
+            errors.append(f'{key} must be 64 lowercase hex')
+    apps, seen = data.get('apps'), set()
+    if not isinstance(apps, list) or not apps:
+        errors.append('apps must be a non-empty list')
+        apps = []
+    for i, app in enumerate(apps):
+        if not isinstance(app, dict) or set(app) - {'package', 'version', 'sha256', 'imagePath'}:
+            errors.append(f'apps[{i}] must have only package, version, sha256, imagePath')
+            continue
+        pkg = app.get('package')
+        if not isinstance(pkg, str) or not re.fullmatch(r'[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)+', pkg):
+            errors.append(f'apps[{i}].package invalid')
+        elif pkg in seen:
+            errors.append(f'apps[{i}].package {pkg} repeated')
+        seen.add(pkg)
+        if not isinstance(app.get('version'), int) or isinstance(app.get('version'), bool) or app['version'] < 1:
+            errors.append(f'apps[{i}].version must be an integer >= 1')
+        if not isinstance(app.get('sha256'), str) or not HEX64.fullmatch(app['sha256']):
+            errors.append(f'apps[{i}].sha256 must be 64 lowercase hex')
+        if 'imagePath' in app and (not isinstance(app['imagePath'], str) or
+                                   not re.fullmatch(r'(product|system_ext|system|vendor)/\S+\.apk', app['imagePath'])):
+            errors.append(f'apps[{i}].imagePath must be partition/path.apk')
+    if errors:
+        raise Fail(f'expectation {path} rejected: ' + '; '.join(errors))
+    return dict(data, path=str(path), fileSha256=sha256(path))
+
+
+def expectation_summary(e):
+    return None if e is None else {k: e.get(k) for k in ('label', 'channel', 'candidate', 'build', 'path', 'fileSha256')}
+
+
+def image_location(app):
+    """(partition, path inside it) from the expectation's imagePath; None when the expectation does not say."""
+    if 'imagePath' not in app:
+        return None
+    part, inner = app['imagePath'].split('/', 1)
+    return part, inner
 
 
 def expected():
@@ -217,7 +301,7 @@ def dex_markers(apk):
     return {'dexFiles': dex, 'classes': present}
 
 
-def inspect_apk(tools, apk, contract_apps=None, signer_pin=None):
+def inspect_apk(tools, apk, expectation=None):
     apk = Path(apk)
     if not apk.is_file():
         raise Fail(f'not a file: {apk}')
@@ -240,15 +324,18 @@ def inspect_apk(tools, apk, contract_apps=None, signer_pin=None):
         result['checks'].append(check('MainActivity declares HOME and LAUNCHER',
                                       'dev.pixel.voice.MainActivity' in result['homeActivities'] and
                                       'dev.pixel.voice.MainActivity' in result['launcherActivities']))
-    entry = next((a for a in (contract_apps or []) if a['package'] == badging['packageName']), None)
+    if expectation is None:
+        return result
+    entry = next((a for a in expectation['apps'] if a['package'] == badging['packageName']), None)
+    result['checks'].append(check(f'{badging["packageName"]} listed in expectation', entry is not None, expectation['label']))
     if entry:
-        result['checks'].append(check('contract versionCode', badging['versionCode'] == entry['version'],
+        result['checks'].append(check('expected versionCode', badging['versionCode'] == entry['version'],
                                       {'expected': entry['version'], 'actual': badging['versionCode']}))
-        result['checks'].append(check('contract bytes (sha256)', digest == entry['sha256'],
+        result['checks'].append(check('expected bytes (sha256)', digest == entry['sha256'],
                                       {'expected': entry['sha256'], 'actual': digest}))
-    if signer_pin and entry:
-        result['checks'].append(check('approved app signer', sig['verified'] and sig['certSha256'] == [signer_pin],
-                                      {'expected': signer_pin, 'actual': sig['certSha256']}))
+        pin = expectation['appSignerSha256']
+        result['checks'].append(check('expected app signer', sig['verified'] and sig['certSha256'] == [pin],
+                                      {'expected': pin, 'actual': sig['certSha256']}))
     return result
 
 
@@ -490,13 +577,17 @@ def ota_metadata(ota):
             'payloadProperties': sorted(line.split('=', 1)[0] for line in props.splitlines() if '=' in line)}
 
 
-def release(directory, extract_dir=None, partitions=None, expect_source=None, tools_override=None):
+def release(directory, extract_dir=None, partitions=None, expect_source=None, tools_override=None, expectation=None):
     d = Path(directory)
     sums = d/'SHA256SUMS'
     if not sums.is_file():
         raise Fail(f'{sums} missing')
+    if extract_dir and expectation is None:
+        raise Fail('--extract-apps needs --expect: the exact identities recorded for this candidate')
+    if expectation and expect_source and expect_source != expectation['candidate']:
+        raise Fail(f'--expect-source {expect_source} contradicts the expectation candidate {expectation["candidate"]}')
+    expect_source = expectation['candidate'] if expectation else expect_source
     pipeline = json.loads(PIPELINE.read_text())
-    contract = json.loads(CONTRACT.read_text())
     listed = {}
     for line in sums.read_text().splitlines():
         m = re.fullmatch(r'([0-9a-f]{64})  (\S+)', line.strip())
@@ -511,10 +602,13 @@ def release(directory, extract_dir=None, partitions=None, expect_source=None, to
             checks.append(check(f'SHA256SUMS {name}', actual == digest))
         else:
             files[name] = {'sha256Listed': digest, 'present': False}
-    result = {'kind': 'artifact-inspection', 'directory': str(d), 'files': files, 'checks': checks}
+    result = {'kind': 'artifact-inspection', 'directory': str(d), 'expectation': expectation_summary(expectation),
+              'files': files, 'checks': checks}
     avb = listed.get('avb_pkmd.bin')
-    checks.append(check('AVB public key pin (SHA256SUMS listing)', None if avb is None else
-                        avb == pipeline['identities']['avbPublicKeySha256'], avb))
+    avb_pin = (expectation or {}).get('avbPublicKeySha256') or pipeline['identities']['avbPublicKeySha256']
+    checks.append(check('AVB public key pin (SHA256SUMS listing)', None if avb is None else avb == avb_pin,
+                        {'listed': avb, 'expected': avb_pin,
+                         'pinSource': 'expectation' if (expectation or {}).get('avbPublicKeySha256') else str(PIPELINE.relative_to(ROOT))}))
     if (d/'verification.json').is_file():
         v = json.loads((d/'verification.json').read_text())
         result['candidate'] = v.get('candidate')
@@ -522,6 +616,9 @@ def release(directory, extract_dir=None, partitions=None, expect_source=None, to
         if expect_source:
             checks.append(check('candidate source', v.get('candidate', {}).get('sha') == expect_source,
                                 {'expected': expect_source, 'actual': v.get('candidate', {}).get('sha')}))
+        if expectation and 'build' in expectation:
+            checks.append(check('candidate build', v.get('candidate', {}).get('build') == expectation['build'],
+                                {'expected': expectation['build'], 'actual': v.get('candidate', {}).get('build')}))
     feeds = sorted(p.name for p in d.glob('*-stable'))
     for feed in feeds:
         parts = (d/feed).read_text().split()
@@ -535,6 +632,9 @@ def release(directory, extract_dir=None, partitions=None, expect_source=None, to
         meta = ota_metadata(ota)
         result['ota'] = {'file': ota.name, **meta}
         device = meta['metadata'].get('pre-device', '')
+        if expectation and 'device' in expectation['target']:
+            checks.append(check('OTA device equals expectation target', device == expectation['target']['device'],
+                                {'expected': expectation['target']['device'], 'actual': device}))
         if device == pipeline['target']['device']:
             result['runtime']['cuttlefishBootable'] = False
             result['runtime']['reason'] = (f'{device} is a physical Pixel 10 (arm64) OTA; it cannot boot on x86_64 '
@@ -548,13 +648,19 @@ def release(directory, extract_dir=None, partitions=None, expect_source=None, to
             out.mkdir(parents=True, exist_ok=True)
             tools = build_tools(tools_override)
             images, apps = {}, []
-            wanted = partitions or sorted({p for p, _ in APP_PATHS.values()})
+            located = {a['package']: image_location(a) for a in expectation['apps']}
+            wanted = partitions or sorted({loc[0] for loc in located.values() if loc})
             for name in wanted:
                 images[name] = extract_partition(ota, payload, name, out/f'{name}.img')
                 checks.append(check(f'payload {name} operation and partition hashes', True, images[name]['sha256']))
                 images[name]['buildProps'] = build_props(out/f'{name}.img', name)
-            for package, (part, inner) in APP_PATHS.items():
+            for package, loc in located.items():
+                if loc is None:
+                    checks.append(check(f'{package} image path known', False, 'the expectation has no imagePath for it'))
+                    continue
+                part, inner = loc
                 if part not in images:
+                    checks.append(check(f'{package} partition {part} extracted', False, 'add --partition ' + part))
                     continue
                 dest = out/f'{package}.apk'
                 fs, data = image_read(out/f'{part}.img', inner)
@@ -562,7 +668,7 @@ def release(directory, extract_dir=None, partitions=None, expect_source=None, to
                     checks.append(check(f'{package} present at {part}/{inner}', False))
                     continue
                 dest.write_bytes(data)
-                info = inspect_apk(tools, dest, contract['apps'], pipeline['identities']['appSignerSha256'])
+                info = inspect_apk(tools, dest, expectation)
                 info.update(imagePath=f'{part}/{inner}', filesystem=fs)
                 apps.append(info)
                 checks.extend(info['checks'])
@@ -750,13 +856,32 @@ def tap_desc(adb, nodes, prefix):
     return None
 
 
-def runtime(serial, handback, out, interactive=False, physical=False, adb_path=None, settle=3.0):
+def parse_users(text):
+    """`pm list users` as ids, flags and running state only; user names are personal and never recorded."""
+    return [{'id': int(m.group(1)), 'flags': m.group(2), 'running': bool(m.group(3))}
+            for m in re.finditer(r'UserInfo\{(\d+):[^\n]*:([0-9a-fA-F]+)\}( running)?', text)]
+
+
+def user_package_state(dump, user):
+    """The `User N:` line of `dumpsys package PKG`: per-user installed/hidden/suspended/stopped/enabled."""
+    m = re.search(rf'^\s*User {user}:(.*)$', dump, re.M)
+    if not m:
+        return None
+    fields = dict(re.findall(r'(\w+)=(\S+)', m.group(1)))
+    return {k: fields[k] for k in ('installed', 'hidden', 'suspended', 'stopped', 'enabled') if k in fields}
+
+
+def runtime(serial, handback, out, expectation, user='current', interactive=False, physical=False, adb_path=None,
+            settle=3.0):
     if not handback or not handback.strip():
         raise Fail('runtime needs --handback: the explicit serialized host handback reference from Chief/Infra')
+    if expectation is None:
+        raise Fail('runtime needs --expect: the exact identities recorded for the build on this guest')
+    if user != 'current' and not str(user).isdigit():
+        raise Fail('--user must be current or a numeric user id')
     out = outside_repo(out)
     out.mkdir(parents=True, exist_ok=True)
     adb = Adb(serial, adb_path)
-    contract = json.loads(CONTRACT.read_text())
     keys = ['ro.product.device', 'ro.product.name', 'ro.hardware', 'ro.build.fingerprint', 'ro.build.type',
             'ro.build.version.sdk', 'ro.build.version.release', 'ro.product.cpu.abi', 'ro.product.cpu.abilist',
             'sys.boot_completed', 'persist.wm.debug.pixel_agent_tray']
@@ -765,38 +890,82 @@ def runtime(serial, handback, out, interactive=False, physical=False, adb_path=N
     if not emulator and not physical:
         raise Fail(f'{props["ro.product.device"] or "device"} is not a Cuttlefish guest; pass --physical-device only '
                    'for an owner-approved phone (its evidence stays private)')
+    foreground = adb.shell('am get-current-user').strip()
+    if not foreground.isdigit():
+        raise Fail('the current user is unavailable (am get-current-user); nothing is attributed to an unknown user', 1)
+    foreground = int(foreground)
+    users = parse_users(adb.shell('pm list users'))
+    tested = foreground if user == 'current' else int(user)
+    if tested not in [u['id'] for u in users]:
+        raise Fail(f'user {tested} is not on the device (pm list users: {[u["id"] for u in users]})')
+    binding = {'tested': tested, 'selection': 'current' if user == 'current' else 'explicit --user',
+               'mechanism': 'am get-current-user' if user == 'current' else 'explicit id checked against pm list users',
+               'foreground': foreground, 'users': users,
+               'notTested': [u['id'] for u in users if u['id'] != tested],
+               'boundCommands': [f'pm path --user {tested}', 'dumpsys package (User line for the tested user)',
+                                 f'cmd role get-role-holders --user {tested}',
+                                 f'settings --user {tested} get secure {ROSE_HOME_MARKER}',
+                                 f'cmd package resolve-activity --brief --user {tested} -a MAIN -c HOME'],
+               'note': 'Every user-scoped observation names the tested user. Other users and profiles are not measured '
+                       'and stay unavailable; package versionCode and APK bytes are device-wide.'}
     checks = [check('boot completed', props['sys.boot_completed'] == '1', props['sys.boot_completed']),
               check('agent tray property', props['persist.wm.debug.pixel_agent_tray'] == '1',
                     props['persist.wm.debug.pixel_agent_tray'])]
+    if 'device' in expectation['target']:
+        checks.append(check('guest device equals expectation target', props['ro.product.device'] == expectation['target']['device'],
+                            {'expected': expectation['target']['device'], 'actual': props['ro.product.device']}))
+    for other in binding['notTested']:
+        checks.append(check(f'user {other} observations', None, f'not tested; only user {tested} was measured'))
     apps = []
-    for entry in contract['apps']:
+    for entry in expectation['apps']:
         pkg = entry['package']
-        paths = [line[8:] for line in adb.shell(f'pm path {pkg}').splitlines() if line.startswith('package:')]
+        paths = [line[8:] for line in adb.shell(f'pm path --user {tested} {pkg}').splitlines() if line.startswith('package:')]
         dump = adb.shell(f'dumpsys package {pkg}')
+        state = user_package_state(dump, tested)
         versions = sorted({int(v) for v in re.findall(r'versionCode=(\d+)', dump)})
         names = sorted(set(re.findall(r'versionName=(\S+)', dump)))
+        flags = re.search(r'pkgFlags=\[([^\]]*)\]', dump)
         digests = {p: adb.shell(f'sha256sum {p}').split()[0] if p else None for p in paths}
-        installed = {'package': pkg, 'paths': paths, 'versionCodes': versions, 'versionNames': names, 'sha256': digests}
-        apps.append(installed)
-        checks.append(check(f'{pkg} installed', bool(paths), paths))
-        checks.append(check(f'{pkg} active bytes equal the contract', bool(paths) and digests[paths[0]] == entry['sha256'],
+        apps.append({'package': pkg, 'user': tested, 'paths': paths, 'userState': state, 'versionCodes': versions,
+                     'versionNames': names, 'systemApp': None if flags is None else 'SYSTEM' in flags.group(1).split(),
+                     'sha256': digests})
+        checks.append(check(f'{pkg} installed for user {tested}', bool(paths) and (state or {}).get('installed') == 'true',
+                            {'paths': paths, 'userState': state}))
+        checks.append(check(f'{pkg} active versionCode equals expectation (device-wide)', entry['version'] in versions[-1:],
+                            {'expected': entry['version'], 'dumpsys': versions}))
+        checks.append(check(f'{pkg} active bytes equal expectation (path for the tested user)', bool(paths) and digests[paths[0]] == entry['sha256'],
                             {'expected': entry['sha256'], 'active': digests.get(paths[0]) if paths else None}))
-    home = adb.shell('cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME')
+    home = adb.shell(f'cmd package resolve-activity --brief --user {tested} -a android.intent.action.MAIN '
+                     '-c android.intent.category.HOME')
     home_component = home.strip().splitlines()[-1] if home.strip() else None
-    roles = adb.shell('cmd role get-role-holders android.app.role.HOME').strip()
+    roles = adb.shell(f'cmd role get-role-holders --user {tested} android.app.role.HOME').strip()
+    marker = adb.shell(f'settings --user {tested} get secure {ROSE_HOME_MARKER}').strip()
     result = {'kind': 'runtime-interactive' if interactive else 'runtime-readonly', 'handback': handback.strip(),
+              'expectation': expectation_summary(expectation), 'user': binding,
               'device': {'emulator': emulator, 'privateEvidence': not emulator, 'serial': 'not recorded', **props},
-              'apps': apps, 'home': {'resolveActivity': home_component, 'roleHolders': roles.split(';') if roles else []},
+              'apps': apps, 'home': {'user': tested, 'unqualifiedResolveActivity': home_component,
+                                     'roleHolders': roles.split(';') if roles else [],
+                                     ROSE_HOME_MARKER: None if marker in ('', 'null') else marker,
+                                     'markerNote': 'Set by builds with os/patches/rose-home-role-permission.patch on '
+                                                   'the first start of each full user (once per user; see '
+                                                   'docs/OS-INTEGRATION.md). Absent on builds without it.'},
               'checks': checks, 'artifacts': {}}
-    checks.append(check('HOME resolves to Rose Agent', home_component == 'dev.pixel.voice/.MainActivity', home_component))
-    if interactive:
+    checks.append(check(f'HOME role held by Rose Agent for user {tested}', 'dev.pixel.voice' in result['home']['roleHolders'],
+                        result['home']['roleHolders']))
+    checks.append(check(f'unqualified MAIN/HOME resolves to Rose Agent for user {tested}',
+                        home_component == 'dev.pixel.voice/.MainActivity', home_component))
+    if interactive and tested != foreground:
+        checks.append(check(f'interactive observations for user {tested}', None,
+                            f'user {tested} is not the foreground user ({foreground}); switching users is a guest '
+                            'mutation this method does not perform'))
+    elif interactive:
         steps = []
 
         def capture(label):
             time.sleep(settle)
             shot = screenshot(adb, out, label)
             nodes = ui_dump(adb, out, label)
-            step = {'step': label, 'focus': focus(adb), 'screenshot': shot.name,
+            step = {'step': label, 'user': tested, 'focus': focus(adb), 'screenshot': shot.name,
                     'pageDescriptions': sorted({n['desc'] for n in nodes if n['desc'] in ('Home', 'Voice home', 'Widgets')}),
                     'roseEntry': next((n['desc'] for n in nodes if (n['desc'] or '').startswith('Open Rose')), None),
                     'visibleText': sorted({n['text'] for n in nodes if n['text']})[:40]}
@@ -815,14 +984,20 @@ def runtime(serial, handback, out, interactive=False, physical=False, adb_path=N
         checks.append(check('Rose entry opens RoseConversationActivity', opened is not None and
                             'RoseConversationActivity' in (conv['focus'] or ''), conv['focus']))
         adb.shell('input keyevent KEYCODE_BACK')
-        back, _, _ = capture('conversation-back')
-        adb.shell('am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n dev.pixel.voice/.MainActivity')
+        capture('conversation-back')
+        adb.shell(f'am start --user {tested} -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER '
+                  '-n dev.pixel.voice/.MainActivity')
         icon, _, shot = capture('launcher-icon-entry')
         icon['comparison'] = compare(shot, out, label='launcher-icon-entry')
         adb.shell('input keyevent KEYCODE_HOME')
         capture('home-key-again')
+        after = adb.shell('am get-current-user').strip()
+        checks.append(check('foreground user unchanged during interactive capture', after == str(tested),
+                            {'before': tested, 'after': after}))
         result['steps'] = steps
-    result['ok'] = all(c['result'] == 'pass' for c in checks)
+    result['ok'] = not any(c['result'] == 'fail' for c in checks)
+    result['unmeasured'] = [c['check'] for c in checks if c['result'] == 'unavailable']
+    result['method'] = METHOD
     (out/'runtime-receipt.json').write_text(json.dumps(result, indent=1) + '\n')
     return result
 
@@ -832,7 +1007,7 @@ def runtime(serial, handback, out, interactive=False, physical=False, adb_path=N
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='command', required=True)
-    sub.add_parser('expected')
+    e = sub.add_parser('expected')
     r = sub.add_parser('release')
     r.add_argument('directory')
     r.add_argument('--extract-apps', metavar='DIR')
@@ -848,6 +1023,7 @@ def main(argv=None):
     rt.add_argument('--serial', required=True)
     rt.add_argument('--handback', required=True)
     rt.add_argument('--out', required=True)
+    rt.add_argument('--user', default='current', help='tested user id, or current (resolved and recorded)')
     rt.add_argument('--interactive', action='store_true')
     rt.add_argument('--physical-device', action='store_true')
     rt.add_argument('--adb')
@@ -855,30 +1031,37 @@ def main(argv=None):
     c.add_argument('screenshot')
     c.add_argument('--out', required=True)
     c.add_argument('--reference')
+    for p in (e, r, a, rt):
+        p.add_argument('--expect', metavar='FILE', help='candidate expectation (schema in the module docstring)')
     for p in (r, a, s, rt, c):
         p.add_argument('--receipt', help='also write the JSON result to this new file')
     args = parser.parse_args(argv)
     try:
+        expectation = load_expectation(args.expect) if getattr(args, 'expect', None) else None
         if args.command == 'expected':
-            result = expected()
+            result = {'kind': 'expectation', **expectation} if expectation else expected()
         elif args.command == 'release':
-            result = release(args.directory, args.extract_apps, args.partition, args.expect_source, args.build_tools)
+            result = release(args.directory, args.extract_apps, args.partition, args.expect_source, args.build_tools,
+                             expectation)
         elif args.command == 'apk':
             tools = build_tools(args.build_tools)
-            pipeline = json.loads(PIPELINE.read_text())
-            contract = json.loads(CONTRACT.read_text())
-            apps = [inspect_apk(tools, p, contract['apps'], pipeline['identities']['appSignerSha256']) for p in args.apks]
-            result = {'kind': 'artifact-inspection', 'apps': apps, 'checks': [c for x in apps for c in x['checks']],
+            apps = [inspect_apk(tools, p, expectation) for p in args.apks]
+            result = {'kind': 'artifact-inspection', 'expectation': expectation_summary(expectation), 'apps': apps,
+                      'checks': [c for x in apps for c in x['checks']],
                       'runtime': {'performed': False, 'reason': 'artifact inspection only'}}
+            if expectation is None:
+                result['note'] = 'No --expect: identity only; nothing was compared with an expected candidate.'
         elif args.command == 'source':
             result = source(args.rev)
         elif args.command == 'runtime':
-            result = runtime(args.serial, args.handback, args.out, args.interactive, args.physical_device, args.adb)
+            result = runtime(args.serial, args.handback, args.out, expectation, args.user, args.interactive,
+                             args.physical_device, args.adb)
         else:
             result = compare(args.screenshot, args.out, args.reference)
-    except Fail as e:
-        print(f'rose-verify: {e}', file=sys.stderr)
-        return e.code
+    except Fail as err:
+        print(f'rose-verify: {err}', file=sys.stderr)
+        return err.code
+    result['method'] = METHOD
     text = json.dumps(result, indent=1) + '\n'
     receipt = getattr(args, 'receipt', None)
     if receipt:
