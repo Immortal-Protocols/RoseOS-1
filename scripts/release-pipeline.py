@@ -287,7 +287,7 @@ def check_version_baselines(config, cand, apps):
     failures = [f'{app["packageName"]} versionCode {apps[app["packageName"]]} is below delivered '
         f'{baselines["installedEvidence"]["build"]} versionCode {app["versionCode"]}'
         for app in installed['apps'] if app['packageName'] in apps and apps[app['packageName']] < app['versionCode']]
-    consumed = app_versions_consumed(config)
+    consumed = app_versions_consumed(config, apps)
     if consumed and apps.get(consumed[0], 0) <= consumed[1]:
         failures.append(f'{consumed[0]} versionCode {apps.get(consumed[0])} must exceed {consumed[1]}, the newest app-only '
             'version published, built or reserved')
@@ -300,14 +300,20 @@ def check_version_baselines(config, cand, apps):
     if failures:
         raise CheckFailed('; '.join(failures))
 
-def app_versions_consumed(config):
+def app_versions_consumed(config, apps=None):
     """(package, newest versionCode) the app-only route has published, built or reserved: an OS candidate's bundled copy
-    must be newer, so a version never names two different APKs. A reservation for the OS route is the candidate's own."""
+    must be newer, so a version never names two different APKs. A reservation for the OS route is the candidate's own:
+    an OS candidate bundling exactly that version passes the app-only reservations made after it (but never equals one,
+    and still exceeds everything published or built)."""
     release = config.get('appRelease')
     if not release:
         return None
-    rows = [release.get('published') or {}, *release.get('built', []),
-        *(row for row in release.get('reserved', []) if row.get('route') != 'os-release')]
+    reserved = release.get('reserved', [])
+    bundled = (apps or {}).get(release['packageName'])
+    own = any(row.get('route') == 'os-release' and row['versionCode'] == bundled for row in reserved)
+    app_only = [row for row in reserved if row.get('route') != 'os-release'
+        and not (own and row['versionCode'] > bundled)]
+    rows = [release.get('published') or {}, *release.get('built', []), *app_only]
     return release['packageName'], max(row.get('versionCode', 0) for row in rows)
 
 def build(a, config, cand, adapter):
