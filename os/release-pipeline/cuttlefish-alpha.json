@@ -122,6 +122,39 @@
     "receiptSha256": null,
     "basis": "The immutable preparation the build uses (alpha-source/<preparationId>/tree with preparation.json), recorded after the lead runs prepare and a probe passes against it. Until then guard and builder fail closed; the build never falls back to the retained Pixel tree"
   },
+  "imageVerification": {
+    "partitions": [
+      "system",
+      "system_ext",
+      "product",
+      "vendor"
+    ],
+    "apps": {
+      "dev.pixel.voice": "product:app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk",
+      "dev.pixel.calculator.agent": "product:app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk",
+      "dev.pixel.backgroundcontrol": "system_ext:priv-app/PixelBackgroundControl/PixelBackgroundControl.apk"
+    },
+    "framework": "system:system/framework/framework-res.apk",
+    "buildProp": "system:system/build.prop",
+    "trayProperty": "persist.wm.debug.pixel_agent_tray",
+    "trayValue": "1",
+    "updater": {
+      "package": "app.seamlessupdate.client",
+      "dirNames": [
+        "Updater"
+      ],
+      "xml": "app.seamlessupdate.client.xml"
+    },
+    "tools": {
+      "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
+      "lpunpack": null,
+      "debugfs": "/usr/sbin/debugfs",
+      "fsckErofs": null,
+      "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+      "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner"
+    },
+    "basis": "INFRA-ALPHA-087: OS58 imageExpectations (contract fcb5f5e4) checked from the partitions in the built super.img, never loose files. Paths follow the contract: PRODUCT/app/RosePreinstall_*, SYSTEM_EXT/priv-app/PixelBackgroundControl, system framework-res and build.prop (system-as-root, as release-pipeline IMAGE_LOCATIONS). Pinned Cuttlefish shared/BoardConfig.mk packs product, system, system_ext, vendor and others into an A/B super image and leaves their file system to TARGET_RO_FILE_SYSTEM_TYPE, so the probe records BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE and the guard requires its extractor (ext4: debugfs, erofs: fsck.erofs). simg2img, debugfs, aapt and apksigner are the Pixel pipeline's retained paths; lpunpack and fsck.erofs have no verified builder path yet and stay null (fail closed)"
+  },
   "artifact": {
     "name": "emulator-alpha-receipt-{run_id}",
     "basis": "Only the nonsecret build receipt and SHA256SUMS; the images stay in the alpha OUT_DIR, hashed in the receipt for the separate guest operation"
