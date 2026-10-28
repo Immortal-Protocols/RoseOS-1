@@ -18,8 +18,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -435,17 +437,114 @@ def check_vbmeta(config, signed, public):
         failures.append('vbmeta is not signed by the published AVB key')
     return failures
 
+SPARSE_MAGIC = b'\x3a\xff\x26\xed'
+# Loose target-files prefix -> (signed partition image, path inside that image).
+IMAGE_LOCATIONS = (('SYSTEM_EXT/', 'IMAGES/system_ext.img', '/'), ('PRODUCT/', 'IMAGES/product.img', '/'),
+    ('SYSTEM/', 'IMAGES/system.img', '/system/'))
+
+def image_file(config, archive, loose_name, workdir, cache):
+    """Bytes of a file as embedded in the signed partition image (simg2img when sparse, then debugfs)."""
+    for prefix, image, root in IMAGE_LOCATIONS:
+        if loose_name.startswith(prefix):
+            break
+    else:
+        raise CheckFailed(f'no image mapping for {loose_name}')
+    if image not in cache:
+        if image not in archive.namelist():
+            raise CheckFailed(f'signed target-files has no {image}')
+        raw = Path(workdir)/Path(image).name
+        with archive.open(image) as source, open(raw, 'wb') as out:
+            shutil.copyfileobj(source, out)
+        with open(raw, 'rb') as f:
+            sparse = f.read(4) == SPARSE_MAGIC
+        if sparse:
+            unsparse = raw.with_suffix('.raw')
+            subprocess.run([tool(config, 'simg2img'), str(raw), str(unsparse)], check=True, capture_output=True)
+            raw.unlink()
+            raw = unsparse
+        cache[image] = raw
+    out = Path(workdir)/('extract-' + hashlib.sha256(loose_name.encode()).hexdigest()[:16])
+    inside = root + loose_name[len(prefix):]
+    subprocess.run([tool(config, 'debugfs'), '-R', f'dump -p {inside} {out}', str(cache[image])], capture_output=True)
+    if not out.is_file():
+        raise CheckFailed(f'{inside} not found in {image}')
+    return out.read_bytes()
+
+def check_image_bytes(config, signed, policy_path):
+    """Loose target-files entries are not enough: compare the bytes actually embedded in the signed images."""
+    policy = json.loads(Path(policy_path).read_text())
+    expected = {'SYSTEM_EXT/priv-app/PixelBackgroundControl/': policy['agent']['apkSha256']}
+    for row in [policy['voice'], *policy['targets']]:
+        expected['PRODUCT/app/RosePreinstall_' + row['packageName'].replace('.', '_') + '/'] = row['apkSha256']
+    failures = []
+    with zipfile.ZipFile(signed) as archive, tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        cache = {}
+        for prefix, digest in expected.items():
+            names = [n for n in archive.namelist() if n.startswith(prefix) and n.endswith('.apk')]
+            if len(names) != 1:
+                failures.append(f'expected one APK under {prefix}, found {len(names)}')
+                continue
+            if hashlib.sha256(image_file(config, archive, names[0], workdir, cache)).hexdigest() != digest:
+                failures.append(f'image bytes of {names[0]} differ from the policy pin')
+        framework = 'SYSTEM/framework/framework-res.apk'
+        if hashlib.sha256(image_file(config, archive, framework, workdir, cache)).digest() != hashlib.sha256(archive.read(framework)).digest():
+            failures.append('framework-res.apk in system.img differs from the checked target-files copy')
+    return failures
+
+def check_payload(ota):
+    """payload_properties.txt must describe payload.bin exactly: size, whole-file hash, metadata size and hash."""
+    with zipfile.ZipFile(ota) as archive:
+        if not {'payload.bin', 'payload_properties.txt'} <= set(archive.namelist()):
+            return ['OTA lacks payload.bin or payload_properties.txt']
+        properties = dict(line.split('=', 1) for line in archive.read('payload_properties.txt').decode().splitlines() if '=' in line)
+        digest, size = hashlib.sha256(), 0
+        with archive.open('payload.bin') as payload:
+            header = payload.read(24)
+            digest.update(header)
+            size += len(header)
+            if len(header) < 24 or header[:4] != b'CrAU':
+                return ['payload.bin has no valid header']
+            manifest_size = struct.unpack('>Q', header[12:20])[0]
+            metadata_size = 24 + manifest_size
+            metadata = hashlib.sha256(header)
+            remaining = manifest_size
+            while remaining:
+                block = payload.read(min(remaining, 1 << 20))
+                if not block:
+                    return ['payload.bin is shorter than its manifest']
+                metadata.update(block)
+                digest.update(block)
+                size += len(block)
+                remaining -= len(block)
+            for block in iter(lambda: payload.read(1 << 20), b''):
+                digest.update(block)
+                size += len(block)
+    failures = []
+    expected = {'FILE_SIZE': str(size), 'FILE_HASH': base64.b64encode(digest.digest()).decode(),
+        'METADATA_SIZE': str(metadata_size), 'METADATA_HASH': base64.b64encode(metadata.digest()).decode()}
+    for key, value in expected.items():
+        if properties.get(key) != value:
+            failures.append(f'payload_properties {key} does not match payload.bin')
+    return failures
+
+def write_checksums(public):
+    names = sorted(p.name for p in public.iterdir() if p.name != 'SHA256SUMS')
+    (public/'SHA256SUMS').write_text(''.join(f'{sha256_file(public/n)}  {n}\n' for n in names))
+
 def verify_signed(a, config, cand, adapter):
     release_dir = Path(a.release_dir)
     public, signed = release_dir/'public', release_dir/'signed-target_files.zip'
     device, build = config['target']['device'], cand['build']
-    expected = set(public_assets(device, build)) - {'verification.json'}
+    # The signer hands over five files; verification.json and then SHA256SUMS are written here, after the checks.
+    expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
     present = {p.name for p in public.iterdir()}
     failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
     if not failures:
         failures += check_build_identity(signed, config, cand, 'release-keys')
         failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
+        failures += check_image_bytes(config, signed, release_dir/'background-policy.json')
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public)
+        failures += check_payload(public/f'{device}-ota_update-{build}.zip')
         failures += check_vbmeta(config, signed, public)
         feed = (public/f'{device}-stable').read_text().splitlines()[:1]
         if feed != [f'{build} {cand["timestamp"]} {device} {config["publication"]["channels"]["beta"]["feedChannel"]}']:
@@ -455,8 +554,10 @@ def verify_signed(a, config, cand, adapter):
     receipt = {'receiptType': 'candidate-verification', 'candidate': cand, 'simulated': adapter.simulated,
         'signedTargetFilesSha256': sha256_file(signed), 'published': False,
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
-            'OTA metadata', 'OTA package and payload signatures', 'vbmeta signature and AVB key', 'public pins', 'feed line']}
+            'image-embedded app/framework bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'vbmeta signature and AVB key', 'public pins', 'feed line']}
     release_receipts.write_once(public/'verification.json', receipt)
+    write_checksums(public)
     return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}
 
 # ---------------------------------------------------------------- transfer and publication

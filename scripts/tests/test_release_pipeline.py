@@ -25,8 +25,31 @@ def script(path, body):
     path.chmod(0o755)
     return str(path)
 
-def target_files(path, keys, policy_apks, stale_misc=False):
-    """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, vbmeta."""
+SPARSE = b'\x3a\xff\x26\xed'
+
+def image(files, sparse=False):
+    """Stand-in partition image read by the fake debugfs: JSON of path -> base64 bytes (sparse adds the magic)."""
+    data = json.dumps({k: base64.b64encode(v).decode() for k, v in files.items()}).encode()
+    return SPARSE + data if sparse else data
+
+def ota(path, build, stamp, post_build=None, bad_properties=False):
+    """OTA zip with real-format payload.bin header and payload_properties.txt."""
+    manifest = b'synthetic manifest' * 4
+    header = b'CrAU' + (2).to_bytes(8, 'big') + len(manifest).to_bytes(8, 'big') + (0).to_bytes(4, 'big')
+    payload = header + manifest + b'synthetic partition data' * 100
+    properties = {'FILE_HASH': base64.b64encode(hashlib.sha256(payload).digest()).decode(), 'FILE_SIZE': str(len(payload)),
+        'METADATA_HASH': base64.b64encode(hashlib.sha256(header + manifest).digest()).decode(),
+        'METADATA_SIZE': str(len(header) + len(manifest))}
+    if bad_properties:
+        properties['FILE_SIZE'] = '1'
+    with zipfile.ZipFile(path, 'w') as z:
+        z.writestr('META-INF/com/android/metadata', f'post-build={post_build or "google/frankel/frankel:17/CP3A/" + build + ":user/release-keys"}\n'
+            f'post-timestamp={stamp}\npre-device=frankel\n')
+        z.writestr('payload.bin', payload)
+        z.writestr('payload_properties.txt', ''.join(f'{k}={v}\n' for k, v in properties.items()))
+
+def target_files(path, keys, policy_apks, stale_misc=False, image_override=None):
+    """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, images."""
     fp = f'google/frankel/frankel:17/CP3A.261005.005/{BUILD}:user/{keys}'
     with zipfile.ZipFile(path, 'w') as z:
         z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={BUILD}\nro.build.date.utc={STAMP}\n'
@@ -42,6 +65,11 @@ def target_files(path, keys, policy_apks, stale_misc=False):
         z.writestr('META/apkcerts.txt', '\n'.join(certs) + '\n')
         z.writestr('SYSTEM/framework/framework-res.apk', b'framework')
         z.writestr('IMAGES/vbmeta.img', b'vbmeta')
+        embedded = {prefix + name: data for prefix, name, data in policy_apks}
+        embedded.update(image_override or {})
+        z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
+        z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
+        z.writestr('IMAGES/system.img', image({'/system/framework/framework-res.apk': b'framework'}))
 
 class PipelineTest(unittest.TestCase):
     def setUp(self):
@@ -69,9 +97,7 @@ class PipelineTest(unittest.TestCase):
         (fixtures/'avb_pkmd.bin').write_bytes(b'synthetic avb key blob')
         target_files(fixtures/'unsigned.zip', 'test-keys', self.placed)
         target_files(fixtures/'signed.zip', 'release-keys', self.placed)
-        with zipfile.ZipFile(fixtures/'ota.zip', 'w') as z:
-            z.writestr('META-INF/com/android/metadata', f'post-build=google/frankel/frankel:17/CP3A/{BUILD}:user/release-keys\n'
-                f'post-timestamp={STAMP}\npre-device=frankel\n')
+        ota(fixtures/'ota.zip', BUILD, STAMP)
         # Lead-managed entry points and tools, replaced by harmless fixtures.
         integrate = script(tools/'integrate.py', f'''
             import os, shutil; d = os.environ['ROSE_RELEASE_DIR']
@@ -86,7 +112,7 @@ class PipelineTest(unittest.TestCase):
             shutil.copy({str(fixtures/'ota.zip')!r}, os.path.join(p, 'frankel-ota_update-' + b + '.zip'))
             for n in ('releasekey.x509.pem', 'avb_pkmd.bin'): shutil.copy(os.path.join({str(fixtures)!r}, n), p)
             open(os.path.join(p, 'frankel-stable'), 'w').write(b + ' ' + os.environ['BUILD_DATETIME'] + ' frankel stable\\n')
-            open(os.path.join(p, 'UPDATE.md'), 'w').write('# synthetic\\n'); open(os.path.join(p, 'SHA256SUMS'), 'w').write('x\\n')''')
+            open(os.path.join(p, 'UPDATE.md'), 'w').write('# synthetic\\n')''')
         script(tools/'check_ota.py', 'import os, sys; sys.exit(1 if os.environ.get("FAKE_OTA_BAD") else 0)')
         avb_sha1 = hashlib.sha1(b'synthetic avb key blob').hexdigest()
         script(tools/'avbtool.py', f'import sys; print("Public key (sha1): {avb_sha1}") if sys.argv[1] == "info_image" else None')
@@ -101,6 +127,13 @@ class PipelineTest(unittest.TestCase):
                 for t in filter(None, os.environ.get("FAKE_PROTOTYPE", "").split(",")): print('        (string8) "%s"' % t)
             print("      resource 0x01050001 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x0 (s=0x0008 r=0x00)")
             print("        (bool) false")''')
+        script(tools/'simg2img', '''
+            import sys; data = open(sys.argv[1], 'rb').read(); assert data[:4] == b'\\x3a\\xff\\x26\\xed'
+            open(sys.argv[2], 'wb').write(data[4:])''')
+        script(tools/'debugfs', '''
+            import base64, json, sys; inside, out = sys.argv[2].split()[-2:]
+            files = json.load(open(sys.argv[3]))
+            if inside in files: open(out, 'wb').write(base64.b64decode(files[inside]))''')
         self.config = root/'config.json'
         self.config.write_text(json.dumps({'schemaVersion': 1, 'fixture': True,
             'target': {'device': 'frankel', 'variant': 'user', 'lunch': 'frankel-cur-user'},
@@ -108,7 +141,8 @@ class PipelineTest(unittest.TestCase):
                 'makeJobs': 2, 'makeGoals': ['target-files-package'], 'integrateCommand': [PY, integrate], 'signCommand': [PY, sign],
                 'fakeMake': [PY, fake_make],
                 'tools': {'checkOtaSignature': str(tools/'check_ota.py'), 'avbtool': str(tools/'avbtool.py'),
-                    'apksigner': str(tools/'apksigner'), 'aapt': str(tools/'aapt')}},
+                    'apksigner': str(tools/'apksigner'), 'aapt': str(tools/'aapt'),
+                    'simg2img': str(tools/'simg2img'), 'debugfs': str(tools/'debugfs')}},
             'identities': {'appSignerSha256': SIGNER.lower(), 'otaCertificateSha256': cert_pin,
                 'avbPublicKeySha256': hashlib.sha256(b'synthetic avb key blob').hexdigest()},
             'framework': {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False},
@@ -217,13 +251,47 @@ class PipelineTest(unittest.TestCase):
         self.assertIn('verify-published failed', out)
         self.assertFalse((self.root/f'fake/releases/frankel-{BUILD}').exists())
 
+    def test_image_embedded_bytes_must_match_the_policy(self):
+        apk = 'PRODUCT/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk'
+        target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, image_override={apk: b'stale bytes in the image'})
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify')
+        self.assertIn('image bytes of ' + apk + ' differ from the policy pin', result.stderr)
+
+    def test_payload_properties_must_describe_payload(self):
+        ota(self.root/'fixtures/ota.zip', BUILD, STAMP, bad_properties=True)
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'ota-verify')
+        self.assertIn('payload_properties FILE_SIZE does not match payload.bin', result.stderr)
+
+    def test_checksums_are_written_after_verification_and_cover_it(self):
+        failed, _ = self.run_builder_job()
+        self.assertIsNone(failed)
+        sums = (self.base/'artifact/assets/SHA256SUMS').read_text()
+        self.assertIn('  verification.json', sums)
+        self.assertEqual(len(sums.splitlines()), 6)
+
+    def test_ota_metadata_parser_accepts_real_p1_values(self):
+        # Values from the published P1 OTA (frankel 2026102801); fixture bytes, real metadata strings.
+        spec = __import__('importlib.util').util.spec_from_file_location('pipeline', PIPELINE)
+        pipeline = __import__('importlib.util').util.module_from_spec(spec)
+        sys.path.insert(0, str(SCRIPTS))
+        spec.loader.exec_module(pipeline)
+        real = self.root/'p1-ota.zip'
+        ota(real, '2026102801', '1793147782', post_build='google/frankel/frankel:17/CP3A.261005.005/2026102801:user/release-keys')
+        config = json.loads(self.config.read_text())
+        failures = pipeline.check_ota(config, {'build': '2026102801', 'timestamp': '1793147782'}, real, self.root/'fixtures')
+        self.assertEqual(failures, [])
+        self.assertEqual(pipeline.check_payload(real), [])
+        self.assertTrue(pipeline.check_ota(config, {'build': '2026102802', 'timestamp': '1793147782'}, real, self.root/'fixtures'))
+
     def test_production_preflight_fails_closed_naming_every_missing_input(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('GCP_', 'ROSEOS_', 'PIXEL_OTA'))}
         code, out = self.pipeline('preflight', '--job', 'guard', env=env)
         self.assertEqual(code, 4)
         missing = json.loads(out)['missing']
         for name in ('ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
-                     'GCP_SIGNER_SERVICE_ACCOUNT', 'host.integrate.reconcileCommand', 'host.sign.releaseCommand', 'host.tools.apksigner'):
+                     'GCP_SIGNER_SERVICE_ACCOUNT', 'host.sign.updateNotes', 'host.tools.simg2img', 'host.tools.debugfs'):
             self.assertIn(name, missing)
         self.assertEqual(len(missing), len(set(missing)))
         self.assertTrue(any(m.startswith('PIXEL_OTA_PUBLISHER') for m in missing))

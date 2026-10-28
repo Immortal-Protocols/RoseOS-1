@@ -303,8 +303,40 @@ timestamp, channel and expected app versions. The jobs are:
 Configuration, the host recipe used as adapter input, the public pins and the
 exact bootstrap input names are in `os/release-pipeline/frankel.json`. Until they
 exist, `scripts/release-pipeline.py preflight` fails with exit 4 and lists them.
-That includes the source-tree recipe steps the host adapters still need:
-`host.integrate.*`, `host.sign.*` and a stable `apksigner`. The fake adapter,
+That includes any source-tree recipe input the host adapters still need.
+
+The host adapters implement the retained recipe:
+
+- **`host-app-build.py`:** restores the five staged public connection inputs,
+  checking them against their digest receipt and `check-public-assets.mjs`. It
+  then runs `npm ci --ignore-scripts`, both app `build.sh` scripts and the
+  controller compile with the stable SDK layout, and captures each new output by
+  comparing directory listings from before and after.
+- **`host-reconcile.py`:** runs the candidate's `apply-os-changes.py` on a
+  shadow tree made of shared sparse clones. It writes only files that are
+  pristine, task-owned (according to its receipts) or under Rose-only roots, and
+  backs each one up. Any owner change is a conflict and stops the run with
+  nothing written.
+- **`host-sign.py`:** derives the release script from the source tree's
+  `generate-release.sh`, each edit asserted to occur exactly once with hashes
+  recorded:
+  - OTA only;
+  - an absolute `common.sh`;
+  - the uniquely discovered, pinned key directory;
+  - RAM-only decryption through `host-decrypt-keys.py`.
+
+  It then maps the exact outputs.
+
+One-time host steps, run during a coordinated builder window:
+
+1. `scripts/host-sdk-layout.py --apksigner-jar <retained jar>` installs the stable
+   SDK layout.
+2. `scripts/host-app-build.py stage <original inputs> /home/pixelbuild/rose-actions/public-assets <candidate>`
+   stages the public connection inputs.
+3. `scripts/host-reconcile.py adopt ... --reason "..."` records the hand-made P1
+   integration as task-owned.
+
+The fake adapter,
 used only in `scripts/tests/test_release_pipeline.py`,
 runs the real verification code against synthetic artifacts. Everything it
 produces is marked simulated, and production refuses it.
