@@ -70,6 +70,7 @@ APP_PATHS = {
 }
 DEX_MARKERS = ['MainActivity', 'RoseHomeView', 'RoseConversationActivity', 'LauncherPager', 'PairingActivity']
 EMULATOR_DEVICES = ('vsoc_',)
+ROSE_HOME_MARKER = 'rose_home_role_selected'  # per-user Settings.Secure marker of the OS default-HOME selection
 HOME = 'android.intent.category.HOME'
 LAUNCHER = 'android.intent.category.LAUNCHER'
 
@@ -903,6 +904,7 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
                'notTested': [u['id'] for u in users if u['id'] != tested],
                'boundCommands': [f'pm path --user {tested}', 'dumpsys package (User line for the tested user)',
                                  f'cmd role get-role-holders --user {tested}',
+                                 f'settings --user {tested} get secure {ROSE_HOME_MARKER}',
                                  f'cmd package resolve-activity --brief --user {tested} -a MAIN -c HOME'],
                'note': 'Every user-scoped observation names the tested user. Other users and profiles are not measured '
                        'and stay unavailable; package versionCode and APK bytes are device-wide.'}
@@ -922,9 +924,11 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
         state = user_package_state(dump, tested)
         versions = sorted({int(v) for v in re.findall(r'versionCode=(\d+)', dump)})
         names = sorted(set(re.findall(r'versionName=(\S+)', dump)))
+        flags = re.search(r'pkgFlags=\[([^\]]*)\]', dump)
         digests = {p: adb.shell(f'sha256sum {p}').split()[0] if p else None for p in paths}
         apps.append({'package': pkg, 'user': tested, 'paths': paths, 'userState': state, 'versionCodes': versions,
-                     'versionNames': names, 'sha256': digests})
+                     'versionNames': names, 'systemApp': None if flags is None else 'SYSTEM' in flags.group(1).split(),
+                     'sha256': digests})
         checks.append(check(f'{pkg} installed for user {tested}', bool(paths) and (state or {}).get('installed') == 'true',
                             {'paths': paths, 'userState': state}))
         checks.append(check(f'{pkg} active versionCode equals expectation (device-wide)', entry['version'] in versions[-1:],
@@ -935,11 +939,16 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
                      '-c android.intent.category.HOME')
     home_component = home.strip().splitlines()[-1] if home.strip() else None
     roles = adb.shell(f'cmd role get-role-holders --user {tested} android.app.role.HOME').strip()
+    marker = adb.shell(f'settings --user {tested} get secure {ROSE_HOME_MARKER}').strip()
     result = {'kind': 'runtime-interactive' if interactive else 'runtime-readonly', 'handback': handback.strip(),
               'expectation': expectation_summary(expectation), 'user': binding,
               'device': {'emulator': emulator, 'privateEvidence': not emulator, 'serial': 'not recorded', **props},
               'apps': apps, 'home': {'user': tested, 'unqualifiedResolveActivity': home_component,
-                                     'roleHolders': roles.split(';') if roles else []},
+                                     'roleHolders': roles.split(';') if roles else [],
+                                     ROSE_HOME_MARKER: None if marker in ('', 'null') else marker,
+                                     'markerNote': 'Set by builds with os/patches/rose-home-role-permission.patch on '
+                                                   'the first start of each full user (once per user; see '
+                                                   'docs/OS-INTEGRATION.md). Absent on builds without it.'},
               'checks': checks, 'artifacts': {}}
     checks.append(check(f'HOME role held by Rose Agent for user {tested}', 'dev.pixel.voice' in result['home']['roleHolders'],
                         result['home']['roleHolders']))

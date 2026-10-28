@@ -258,7 +258,7 @@ cmd = sys.argv[4] if len(sys.argv) > 4 else ''
 log = open(sys.argv[0] + '.log', 'a'); log.write(cmd + '\n')
 words = cmd.split()
 user = words[words.index('--user') + 1] if '--user' in words else None
-if cmd.startswith(('pm path', 'cmd package resolve-activity', 'cmd role', 'am start')) and user is None:
+if cmd.startswith(('pm path', 'cmd package resolve-activity', 'cmd role', 'am start', 'settings')) and user is None:
     sys.exit(3)  # every user-scoped command must name the tested user
 if cmd.startswith('getprop '):
     print(state['props'].get(words[1], ''))
@@ -273,7 +273,7 @@ elif cmd.startswith('pm path '):
     if int(user) in state['installed'].get(pkg, []): print('package:' + state['paths'][pkg])
 elif cmd.startswith('dumpsys package '):
     pkg = words[2]
-    print('Packages:\n  Package [%s]\n    versionCode=%s minSdk=29 targetSdk=35\n    versionName=x' % (pkg, state['versions'].get(pkg, 0)))
+    print('Packages:\n  Package [%s]\n    versionCode=%s minSdk=29 targetSdk=35\n    versionName=x\n    pkgFlags=[ SYSTEM HAS_CODE ]' % (pkg, state['versions'].get(pkg, 0)))
     for uid, _, _, _ in state['users']:
         print('    User %s: ceDataInode=1 installed=%s hidden=false suspended=false stopped=false enabled=0'
               % (uid, 'true' if uid in state['installed'].get(pkg, []) else 'false'))
@@ -283,6 +283,8 @@ elif cmd.startswith('cmd package resolve-activity'):
     print('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\n' + state['home'][user])
 elif cmd.startswith('cmd role get-role-holders'):
     print(state['roles'][user])
+elif cmd.startswith('settings ') and words[3:5] == ['get', 'secure']:
+    print(state['markers'].get(user, 'null'))
 elif cmd.startswith('screencap'):
     sys.stdout.buffer.write(open(state['screenshot'], 'rb').read())
 elif cmd.startswith('cat /data/local/tmp/rose-verify-ui.xml'):
@@ -296,7 +298,8 @@ else:
     sys.exit(3)
 '''
 READONLY_PREFIXES = ('getprop', 'am get-current-user', 'pm list users', 'pm path', 'dumpsys package', 'sha256sum',
-                     'cmd package resolve-activity', 'cmd role get-role-holders')
+                     'cmd package resolve-activity', 'cmd role get-role-holders', 'settings --user 0 get secure ',
+                     'settings --user 10 get secure ')
 
 
 class RuntimeTests(unittest.TestCase):
@@ -311,7 +314,8 @@ class RuntimeTests(unittest.TestCase):
                                 'persist.wm.debug.pixel_agent_tray': '1', 'ro.product.cpu.abi': 'x86_64'},
                       'current': 0, 'users': [[0, 'Private Owner Name', 'c13', True], [10, 'Private Work', '1030', False]],
                       'installed': {}, 'paths': {}, 'versions': {}, 'digests': {},
-                      'home': {'0': rose, '10': rose}, 'roles': {'0': 'dev.pixel.voice', '10': 'dev.pixel.voice'}}
+                      'home': {'0': rose, '10': rose}, 'roles': {'0': 'dev.pixel.voice', '10': 'dev.pixel.voice'},
+                      'markers': {'0': '1'}}
         for a in ALPHA['apps']:
             path = f'/product/app/{a["package"]}/{a["package"]}.apk'
             self.state['installed'][a['package']] = [0, 10]
@@ -379,6 +383,7 @@ class RuntimeTests(unittest.TestCase):
                                               {'id': 10, 'flags': '1030', 'running': False}])
         self.assertNotIn('Private', json.dumps(r), 'user names are never recorded')
         self.assertEqual({a['user'] for a in r['apps']} | {r['home']['user']}, {0})
+        self.assertEqual((r['home']['rose_home_role_selected'], {a['systemApp'] for a in r['apps']}), ('1', {True}))
         self.assertEqual([c['result'] for c in r['checks'] if c['check'] == 'user 10 observations'], ['unavailable'])
         self.assertEqual((r['ok'], r['unmeasured']), (True, ['user 10 observations']))
         self.assertEqual(r['expectation']['label'], ALPHA['label'])
@@ -387,7 +392,7 @@ class RuntimeTests(unittest.TestCase):
         commands = self.commands()
         self.assertEqual([c for c in commands if not c.startswith(READONLY_PREFIXES)], [],
                          'read-only mode issues no input, launch, dump or removal')
-        scoped = [c for c in commands if c.startswith(('pm path', 'cmd package resolve-activity', 'cmd role'))]
+        scoped = [c for c in commands if c.startswith(('pm path', 'cmd package resolve-activity', 'cmd role', 'settings'))]
         self.assertTrue(scoped and all('--user 0 ' in c for c in scoped), scoped)
 
     def test_explicit_background_user_is_read_only_and_interactive_unavailable(self):
@@ -403,6 +408,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual([c['result'] for c in r['checks'] if c['check'] == 'interactive observations for user 10'],
                          ['unavailable'])
         self.assertNotIn('steps', r)
+        self.assertIsNone(r['home']['rose_home_role_selected'], 'user 10 has no marker; user 0 is not read for it')
         self.assertEqual([c for c in self.commands() if not c.startswith(READONLY_PREFIXES)], [])
 
     def test_unknown_user_or_unreadable_current_user_fails_closed(self):

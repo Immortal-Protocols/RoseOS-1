@@ -226,14 +226,20 @@ serializes runtime work.
      - `pm path --user U`;
      - the `User U:` state line of `dumpsys package` (installed, hidden,
        suspended, stopped, enabled);
-     - the `dumpsys` versionCodes (device-wide);
+     - the `dumpsys` versionCodes and whether the package is a SYSTEM
+       (preinstalled) app (both device-wide);
      - the on-device `sha256sum` of the active APK for that user, compared with
        the expectation (an updated `/data/app` copy shows here);
    - the HOME role holders (`cmd role get-role-holders --user U
      android.app.role.HOME`);
    - the **unqualified** MAIN/HOME resolution (`cmd package resolve-activity
      --brief --user U -a MAIN -c HOME`, no component). An explicit component
-     launch never stands in for it.
+     launch never stands in for it;
+   - the user's default-HOME marker (`settings --user U get secure
+     rose_home_role_selected`). Builds with
+     `os/patches/rose-home-role-permission.patch` (OS PR70) set it once per full
+     user. It is absent on builds without that patch, and it is read only, never
+     written.
 
    It issues no input, launch or file write.
 
@@ -299,13 +305,28 @@ where it came from.
 | 10 | Truthful unavailable states | runtime-interactive | An unpaired guest opens `PairingActivity`; no backend means no fake connected/task state; alpha has no Updater |
 | 11 | Visual review of side-by-sides against the prototype | screenshot-comparison + human | Consistent with the delivered prototype, not "accepted" |
 | 12 | Tested user and the other users/profiles | runtime-readonly | One recorded tested user and how it was selected. Every other user/profile is `unavailable` unless run separately with `--user` |
+| 13 | Default HOME selection (OS PR70 contract, `docs/OS-INTEGRATION.md`) | runtime-readonly, per tested user, on an image that contains the patch | See the cases below. Active alpha and 2804: patch absent, so not testable there |
+
+For item 13, the expected per-user outcomes are:
+
+- **First start of a full user on a fresh or updated image:** the HOME role
+  holder is `dev.pixel.voice`, unqualified HOME resolves to
+  `dev.pixel.voice/.MainActivity`, and the marker is `1`.
+- **After a later owner choice:** that holder stays across reboot and update.
+  The marker stays `1` and the choice is not reverted.
+- **Rose Agent absent, disabled, without HOME, or not a SYSTEM app:** the
+  holder is unchanged and the marker is `1`.
+- **Profiles:** they have no HOME role.
+
+An x86 Cuttlefish fixture of an "updated from 2804" state is labeled as such. It
+is never a physical frankel OTA result.
 
 ## Method revisions
 
 | Revision | Where | Change |
 | --- | --- | --- |
 | r1 (INFRA-VERIFY-001) | PR69, `f35b860c` | First method. App checks used the fixed alpha contract (302/4/28); HOME resolution and role holders were read without a user argument. The 2804 record (`qa/verification/frankel-2026102804.md`) was made with r1 and stays as recorded |
-| r2 (INFRA-VERIFY-002) | This revision | An explicit, fail-closed `--expect` replaces the fixed contract. Every runtime observation is bound to one recorded tested user. Interactive capture runs only for the foreground user. Every receipt carries `method`. Re-running r2 on the same 2804 bytes passed 26 of 26 checks (`qa/verification/expectations/README.md`) |
+| r2 (INFRA-VERIFY-002) | This revision | An explicit, fail-closed `--expect` replaces the fixed contract. Every runtime observation is bound to one recorded tested user: package path, user state, HOME role holders, unqualified HOME resolution, the PR70 default-HOME marker and interactive steps. Interactive capture runs only for the foreground user. Every receipt carries `method`. Re-running r2 on the same 2804 bytes passed 26 of 26 checks (`qa/verification/expectations/README.md`) |
 
 **Limitations (r2):**
 - Only one user is measured per run. Other users and profiles stay
