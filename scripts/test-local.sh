@@ -26,6 +26,7 @@ node --test \
  workspace/experiments/guardian-voice/bridge.test.mjs
 python3 os/background-control/tests/test_policy.py
 python3 os/background-control/tests/test_stop_wiring.py
+python3 os/background-control/tests/test_watch_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
@@ -43,7 +44,7 @@ python3 scripts/tests/test_actions_gcp_login.py
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT
-for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip \
+for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip \
  PanePolicy:agent-split InstallerRecoveryPolicy:agent-split; do
  name="${pair%%:*}" variant="${pair##*:}"
  java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/$name" \
