@@ -384,6 +384,9 @@ public class VoiceService extends Service {
     }
    }
    if("diagnostics".equals(c.optString("action"))||"screenshot".equals(c.optString("action"))){JSONObject result=PhoneControl.execute(VoiceService.this,c);savePhoneResult(saved,id,result);return result.toString();}
+   // Claim the id with a durable running receipt before scheduling: a re-query never posts a second action.
+   PhoneCommandGate gate=new PhoneCommandGate(new PhoneCommandGate.Receipts(){public String get(String k){return saved.getString(k,null);}public void put(String k,String v){try{savePhoneResult(saved,k,new JSONObject(v));}catch(Exception e){throw new IllegalStateException(e);}}},VoiceService.this);
+   String owned=gate.claim(id);if(owned!=null)return owned;
    java.util.concurrent.CompletableFuture<String> task=new java.util.concurrent.CompletableFuture<>();
    main.post(()->{
     JSONObject result;
@@ -402,7 +405,8 @@ public class VoiceService extends Service {
      main.postDelayed(()->observeOpenedApp(task,saved,id,completed,completed.optString("packageName"),SystemClock.elapsedRealtime()+3000),150);
     }else task.complete(result.toString());
    });
-   return task.get(5,TimeUnit.SECONDS);
+   // A wait that runs out returns the current receipt (running until the action saves its result).
+   return gate.await(task,id,5000);
   }catch(Exception e){return "{\"status\":\"error\",\"message\":"+JSONObject.quote(e.toString())+"}";}
  }
 

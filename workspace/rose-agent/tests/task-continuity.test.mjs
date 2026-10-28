@@ -90,3 +90,15 @@ test('Watch carries the selected task and its session to the viewer, read after 
  // Existing unbound entries (app reveal and automatic view) are unchanged.
  for(const name of ['WorkspaceLauncher.java','AutoAgentPip.java'])assert.ok(!/WATCH_(TASK|SESSION)_ID/.test(source(name)),`${name} stays unbound`);
 });
+
+test('W1: the generic phone-command path claims the id before posting and never turns a slow wait into an error',()=>{
+ const voice=source('VoiceService.java');
+ const start=voice.indexOf('PhoneCommandGate gate=new PhoneCommandGate(');
+ const path=voice.slice(start,voice.indexOf('private void observeOpenedApp('));
+ assert.ok(start>0,'the bridge uses PhoneCommandGate');
+ assert.ok(path.indexOf('gate.claim(id)')<path.indexOf('main.post('),'the id is claimed before the action is scheduled');
+ assert.match(path,/String owned=gate\.claim\(id\);if\(owned!=null\)return owned;/,'an owned id answers from its receipt');
+ assert.match(path,/return gate\.await\(task,id,5000\);/,'the bounded wait answers from the receipt');
+ assert.ok(!/task\.get\(5,TimeUnit\.SECONDS\)/.test(voice),'no bare five-second get whose timeout becomes an error');
+ assert.equal((voice.match(/savePhoneResult\(saved,id,result\);\s*final JSONObject completed=result;/g)||[]).length,1,'the posted action still saves its real result first');
+});
