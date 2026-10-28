@@ -5,10 +5,10 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from integration_copy import Conflict, install_bytes, install_copy
 from background_apks import preinstall_blueprint, preinstall_make_block, preinstall_plan, validate_policy
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -153,11 +153,14 @@ for project, patches in projects.items():
     for patch in patches:
         subprocess.run(['git', '-C', str(source/project), 'apply',
             str(bundle/'patches'/patch)], check=True)
-for file, target in copies:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(file, target)
-for target, data in generated:
-    target.write_bytes(data)
+# Fresh mtimes so incremental builds rebuild from replaced inputs; identical bytes stay untouched.
+try:
+    for file, target in copies:
+        install_copy(file, target)
+    for target, data in generated:
+        install_bytes(target, data)
+except Conflict as error:
+    raise SystemExit(str(error))
 if preinstalls:
     product = source/'build/make'/PRODUCT_MAKEFILE
     product.write_text(product.read_text() + preinstall_make_block([row['module'] for row in preinstalls]))
