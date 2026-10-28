@@ -35,6 +35,8 @@ public class VoiceService extends Service {
 
  volatile String status="Connecting…",task="",guardianName="",pendingCommand;
  volatile boolean connected=false,live=false,muted=false;
+ // Typed voice facts from the web client (Bridge.voiceLifecycle/backendReachable), read by the conversation surface.
+ volatile String lastEndReason="",lastStartError="";volatile Boolean backendReachable;
  volatile float level=0, trayInputLevel=0, trayOutputLevel=0;
  volatile long trayAudioObservedAt=0;
  GlassesReconnect glassesReconnect;
@@ -266,7 +268,11 @@ public class VoiceService extends Service {
   if(!kind.matches("cleanup|provider_disconnect|start_timeout|start_error|user_end|handoff"))return;
   if(detail==null||!detail.matches("[a-zA-Z0-9_:-]{0,100}"))detail="other";
   traceVoice(kind,detail);
+  // Typed end/failure facts for the conversation surface; display status text is never parsed.
+  if(kind.equals("cleanup"))lastEndReason=detail;else if(kind.equals("start_error"))lastStartError=detail;
  }
+ /** The voice client's own /health result; null until first checked. */
+ @JavascriptInterface public void backendReachable(boolean reachable){backendReachable=reachable;}
 
  @JavascriptInterface public void taskState(String raw){try{if(raw==null||raw.length()>80000)return;JSONObject data=new JSONObject(raw);if(data.optInt("version")!=1)return;taskStateJson=raw;taskStateReceivedAt=SystemClock.elapsedRealtime();taskStateAvailable=true;}catch(Exception ignored){taskStateAvailable=false;}}
  @JavascriptInterface public void taskStateUnavailable(){taskStateAvailable=false;}

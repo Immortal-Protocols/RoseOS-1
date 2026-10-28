@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Rose Agent page voice state, loaded with its real assets and a fake provider.
+node --test workspace/rose-agent/tests/voice-state.test.mjs
 node --test \
  workspace/rose-agent/security/device-auth.test.mjs \
  workspace/rose-agent/security/recovery-download.test.mjs \
@@ -38,3 +40,7 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \
  os/tests/AgentStatusControlsTest.java
 java -cp "$JAVA_TESTS/AgentStatusControls" com.android.wm.shell.AgentStatusControlsTest
+# Pure Rose Agent app logic, compiled the same way.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
+java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
