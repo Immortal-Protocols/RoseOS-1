@@ -16,6 +16,7 @@ import java.util.regex.Pattern;
  *    (port absent or 443; no userinfo, query, fragment, latest alias, encoding, dot segments or backslashes);
  *  - then a direct 200, or exactly one 302 to
  *    https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/{asset-id}
+ *    where {asset-id} is a canonical lowercase UUID, the shape GitHub was observed to redirect to,
  *    followed by a 200. Any other status, host, repository, scheme or a second redirect fails closed.
  * The CDN's redirect query is opaque and transient: it is used for that one request and never appears in
  * an error, a log or stored state. Requests carry no headers at all (no credentials, cookies or referer).
@@ -24,7 +25,7 @@ import java.util.regex.Pattern;
 final class PublicApkDownload {
  static final String INITIAL_HOST="github.com",CDN_HOST="release-assets.githubusercontent.com";
  static final String RELEASES="/Immortal-Protocols/pixel-ota/releases/download/",CDN_PATH="/github-production-release-asset/1430356511/";
- private static final Pattern TAG=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}"),ASSET=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.apk"),ASSET_ID=Pattern.compile("[0-9]{1,20}");
+ private static final Pattern TAG=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}"),ASSET=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.apk"),ASSET_ID=Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
  /** One anonymous GET without following redirects; status, Location (for a redirect) and the body. */
  interface Http { Response get(String url,Map<String,String> headers)throws IOException; }
