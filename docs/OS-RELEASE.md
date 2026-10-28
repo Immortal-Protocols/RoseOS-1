@@ -677,7 +677,7 @@ Source-only contract for the OS owner:
   `sys.boot_completed`, UI, viewer, input and Stop evidence, and cleanup.
 
 **Public app publication** (INFRA-APP-096, APR024) is optional, using
-`app_publish: true`, which the guard allows only with `mode: app-only`. The hosted
+`app_publish: true`, which the guard allows only with `mode: app-only` or `mode: app-reuse` (below). The hosted
 `app-publisher` job downloads the builder's private artifact through the
 workflow's own artifact step. It mints the existing pixel-ota App token, which
 the action revokes at job end; the builder never receives it. The job then runs
@@ -697,7 +697,9 @@ the action revokes at job end; the builder never receives it. The job then runs
     exceed every reservation. `host-app-release.py` applies the same rule:
     - 305 belongs to the 2026102805 OS candidate `7fb94ae6`;
     - 308 (`308-home-tray-beta`) belongs to the 2026102806 OS candidate
-      (INFRA-CANDIDATE-115), so the next app-only version is 309 or above.
+      `93ad1c2b` (INFRA-CANDIDATE-115, BUILD_DATETIME 1793220605), so the next
+      app-only version is 309 or above. Only `mode: app-reuse` publishes 308,
+      and only as that build's own signed bytes.
   - the APK's size, sha256 and signer match the receipt, and the APK's own
     v2/v3 signing certificate, read from its signing block, is the pinned app
     signer;
@@ -718,6 +720,46 @@ the action revokes at job end; the builder never receives it. The job then runs
   the APK once more anonymously from the exact public URL the client uses;
 - **keeps the receipt:** the public receipt becomes the Actions artifact
   `app-publication-dev.pixel.voice-<run id>`.
+
+**Publishing an OS-bundled Rose Agent unchanged** (INFRA-APP-118, `mode: app-reuse`).
+This publishes the exact signed Rose Agent a verified OS candidate preinstalls as its own `rose-agent-N`
+prerelease. Nothing is rebuilt or re-signed and OS Latest does not move. It uses the same dispatch, guard,
+controller, shared builder lock, cleanup and hosted `app-publisher` job (and its App token) as app-only. The builder
+job `app-reuse` has only `contents: read`: no signer login, cloud identity, secret, app build, OS compile, signing or
+promotion. `scripts/host-app-reuse.py` reads the original attempt `$HOME/rose-actions/frankel-<build>/` without
+writing to it and refuses unless:
+
+- `apps` is exactly `[["dev.pixel.voice", N]]`, N is above `mustExceed`, and N is the `appRelease.reserved` row for the
+  os-release route whose `candidate`, `osBuild` and `buildTimestamp` equal the dispatched `candidate_sha`,
+  `build_number` and `build_timestamp`; the candidate's own `AndroidManifest.xml` declares N;
+- the attempt's stage receipt chain is valid and is the original attempt (not a resume) of this candidate and build,
+  with build, bytes-verify, sign, ota-verify and transfer completed with exit code 0;
+- `unsigned-target_files.zip`, `signed-target_files.zip` and `signed-apps/dev.pixel.voice.apk` have the digests in
+  `reuse_binding`; `sign-receipt.json` and the passing, non-simulated `public/verification.json` name that signed
+  target-files for this candidate, build and timestamp;
+- `background-policy.json` pins Rose Agent to those APK bytes and the app signer, and both target-files preinstall
+  exactly those bytes at `PRODUCT/app/RosePreinstall_dev_pixel_voice/`, marked PRESIGNED;
+- `aapt` reads the reserved package, versionCode and versionName and the source's minSdk from the retained APK, and
+  `apksigner`, run again on those bytes, prints exactly the pinned app signer.
+
+Only the APK, an app-release receipt with a `source` block (route `os-release-reuse`, OS build, timestamp, run,
+target-files digests and preinstall path) and `SHA256SUMS` go into the same private artifact app-only uploads. The
+publisher then applies every app-only check, plus these:
+- the reservation must match the dispatched candidate, build and timestamp;
+- the receipt's `source` must equal the dispatch;
+- the APK sha256 must be `reuse_binding.apkSha256`.
+
+An app-only artifact never carries `source`, and a reuse artifact is never accepted without it. The public receipt
+keeps schemaVersion 1 unchanged, because the app refuses unknown keys. The release body states that the bytes are the
+ones the OS build bundles, not rebuilt or re-signed. `publication.json` (an Actions artifact) keeps the `source` block.
+
+`reuse_binding` is `{"sourceRun", "apkSha256", "unsignedTargetFilesSha256", "signedTargetFilesSha256"}`, taken from the
+original os-release run. The builder records no run id, so the run is bound through those digests:
+- the unsigned digest is the one the run's build stage printed (`unsignedTargetFiles`);
+- the signed one is `signedTargetFilesSha256` in the run's transferred `verification.json`;
+- the APK's is `background-policy.json` `voice.apkSha256`, which the lead reads on the builder after the OS run.
+
+The run's Actions artifact is not downloaded by this mode.
 
 **The public receipt is the phone's update manifest** (INFRA-APP-102,
 APP-GITHUB-002-SCHEMA-001). Rose Agent from App #74 (`DirectUpdate`) reads it
