@@ -1,5 +1,7 @@
-"""Checked-in candidate contract for the first draft rehearsal (build 2026102802, Rose Agent 300) and the
-controller's async builder start/stop, using the retained nonsecret evidence in this repository and a fake gcloud."""
+"""Checked-in candidate contract for build 2026102803 (Rose Agent 301, controller 28, Calculator 4), the immutable
+2026102802 draft it supersedes, and the controller's async builder start/stop, using the retained nonsecret evidence in
+this repository and a fake gcloud."""
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -19,8 +21,10 @@ spec.loader.exec_module(pipeline)
 from background_apks import installed_precedence  # noqa: E402
 
 CONFIG = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
-APPS = [['dev.pixel.voice', 300], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 27]]
-DRAFT = {'build': '2026102802', 'timestamp': '1793147783'}
+APPS = [['dev.pixel.voice', 301], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+DRAFT = {'build': '2026102803', 'timestamp': '1793176860'}
+# The verified 2026102802 draft's notes are immutable evidence (pixel-ota draft frankel-2026102802).
+NOTES_2802_SHA256 = 'a84fac7a77cd521d53226bcf1d8b89528f6f23b0f8a0eb42b73570055a4f865f'
 
 def manifest_version(path):
     text = (ROOT/path).read_text()
@@ -40,16 +44,26 @@ class CheckedInCandidateTest(unittest.TestCase):
             'PIXEL_OTA_PUBLISHER': 'github-app', 'PIXEL_OTA_APP_ID': '1', 'PIXEL_OTA_APP_KEY_PRESENT': 'true'}, 'production'), [])
 
     def test_source_manifests_match_the_allocated_versions(self):
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 300, '300-wave-beta'))
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 301, '301-wave-beta'))
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
-        self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml')[:2], ('dev.pixel.backgroundcontrol', 27))
+        self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
+            ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
+
+    def test_watch_extras_match_between_producer_and_consumer(self):
+        producer = (ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/TaskControl.java').read_text()
+        consumer = (ROOT/'os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/WatchBinding.java').read_text()
+        for extra in ('dev.pixel.backgroundcontrol.extra.WATCH_TASK_ID', 'dev.pixel.backgroundcontrol.extra.WATCH_SESSION_ID'):
+            self.assertIn(f'"{extra}"', producer)
+            self.assertIn(f'"{extra}"', consumer)
 
     def test_release_notes_bind_to_the_candidate_and_describe_the_draft(self):
-        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build='2026102802')
+        self.assertEqual(hashlib.sha256((ROOT/'os/release-notes/frankel-2026102802.md').read_bytes()).hexdigest(), NOTES_2802_SHA256)
+        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build='2026102803')
         notes = (ROOT/path).read_text()
         flat = ' '.join(notes.split())
-        for expected in ('2026102802', 'frankel', 'user build', 'versionCode 300', '300-wave-beta', ') 4,', ') 27.',
-                'not promoted', 'Beta channel (pixel-ota Latest) is unchanged', 'not been accepted on a phone'):
+        for expected in ('2026102803', 'frankel', 'user build', 'versionCode 301 (301-wave-beta)', '28 (2.1.5-pip)', '4 (unchanged)',
+                'not promoted', 'Beta channel (pixel-ota Latest) is unchanged', 'not been accepted on a phone',
+                'locked sessions off', 'prototype agent list empty', 'not yet verified at runtime'):
             self.assertIn(expected, flat)
         for claim in ('downgrade', 'available on Alpha', 'available on Prod'):
             self.assertNotIn(claim, flat)
@@ -68,16 +82,19 @@ class CheckedInCandidateTest(unittest.TestCase):
         rows = [{'packageName': p, 'versionCode': v, 'certificates': [signer]} for p, v in APPS]
         issues, notes = installed_precedence(rows, installed)
         self.assertEqual(issues, [])
-        self.assertEqual(len(notes), 2)  # unchanged calculator 4 and controller 27 equal the delivered copies
+        self.assertEqual(len(notes), 1)  # unchanged calculator 4 equals the delivered copy; voice and controller are newer
 
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
         pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
         for apps, cand, message in (
+                ([['dev.pixel.voice', 300], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 300 must exceed retained 2026102802 versionCode 300'),
+                ([*APPS[:2], ['dev.pixel.backgroundcontrol', 27]], DRAFT,
+                    'dev.pixel.backgroundcontrol versionCode 27 must exceed retained 2026102802 versionCode 27'),
                 ([['dev.pixel.voice', 299], *APPS[1:]], DRAFT, 'must exceed retained 2026102801 versionCode 299'),
                 ([['dev.pixel.voice', 297], *APPS[1:]], DRAFT, 'below delivered 2026102701 versionCode 298'),
                 (APPS[1:], DRAFT, 'dev.pixel.voice versionCode None must exceed'),
-                (APPS, {'build': '2026102802', 'timestamp': '1793147782'}, 'BUILD_DATETIME must exceed'),
-                (APPS, {'build': '2026102801', 'timestamp': '1793147783'}, 'BUILD_DATETIME must exceed')):
+                (APPS, {'build': '2026102803', 'timestamp': '1793163120'}, 'must exceed retained 2026102802 \\(1793163120\\)'),
+                (APPS, {'build': '2026102802', 'timestamp': '1793176860'}, 'must exceed retained 2026102802')):
             with self.assertRaisesRegex(pipeline.CheckFailed, message):
                 pipeline.check_version_baselines(CONFIG, cand, apps)
         without = {k: v for k, v in CONFIG.items() if k != 'versionBaselines'}

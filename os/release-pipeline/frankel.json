@@ -137,6 +137,16 @@
           "dev.pixel.voice": 299
         },
         "basis": "Immutable, unpublished P1; a newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME"
+      },
+      {
+        "build": "2026102802",
+        "source": "29a0f5df3fd5bc291253b368ba5cae709f7c996e",
+        "buildTimestamp": 1793163120,
+        "mustExceed": {
+          "dev.pixel.voice": 300,
+          "dev.pixel.backgroundcontrol": 27
+        },
+        "basis": "Immutable verified draft frankel-2026102802 (pixel-ota draft, not promoted; apps 300/4/27); a newer candidate with changed Rose Agent and controller sources needs higher versionCodes, build number and BUILD_DATETIME. Calculator 4 is unchanged and may stay equal"
       }
     ]
   },
