@@ -171,3 +171,28 @@ An existing phone keeps its HOME role holder across an OTA (expected, not yet
 observed on this phone). This Permission module's HOME role has no configurable
 default; it falls back to the highest-priority HOME activity, and a tie produces
 a chooser (`HomeRoleBehavior.getFallbackHolderAsUser` at the pinned revision).
+
+## Cuttlefish alpha product (no Updater)
+
+The first emulator alpha targets `aosp_cf_x86_64_only_phone-cur-userdebug`
+(`device/google/cuttlefish/vsoc_x86_64_only/phone/aosp_cf.mk`, pinned `283645aa`).
+`aosp_cf.mk` inherits `generic_system.mk` → `handheld_system.mk` →
+`media_system.mk`, `handheld_system_ext.mk` and `aosp_product.mk` →
+`handheld_product.mk`, so the 2804 Rose integration (tray property, controller,
+`VirtualDeviceManager`, Rose Agent and Calculator preinstalls) reaches it unchanged.
+
+There is no emulator update feed, so the phone Updater is excluded:
+`updaterMode` is `excluded-no-compatible-feed` and there is no endpoint. This is
+also required for the build: `aosp_cf.mk` uses the Soong-defined
+`aosp_shared_system_image`, which does not list `Updater`, and `file_list_diff`
+fails on system files installed by make but missing from that image.
+
+`os/patches/cuttlefish-alpha-no-updater.patch` removes only the RoseOS
+`PRODUCT_PACKAGES += Updater` block from `build/make/target/product/media_system.mk`.
+Infra applies it with `git apply` to an already independent alpha source root that
+holds the 2804 integration, never to the retained Pixel root; on any other base
+`git apply --check` fails. `apply-os-changes.py` never applies it, so Frankel keeps
+its Updater. The exact delta, base, app and policy hashes and the image
+expectations are in `os/alpha/cuttlefish-product-contract.json`, checked by
+`os/tests/test_cuttlefish_alpha_product.py` on pinned fixtures. That test evaluates
+product variables only; image contents and boot need the alpha build.
