@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,13 +31,15 @@ BOUND = 'ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9'  # 2804, the run that wrote t
 FIXTURES = SCRIPTS/'tests/fixtures/cuttlefish-283645aa'  # unmodified pinned upstream files (see its README)
 LUNCH = {'TARGET_PRODUCT': 'aosp_cf_x86_64_only_phone', 'TARGET_RELEASE': 'cur', 'TARGET_BUILD_VARIANT': 'userdebug',
     'TARGET_BOARD_PLATFORM': 'vsoc_x86_64', 'PRODUCT_DEVICE': 'vsoc_x86_64_only', 'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only',
-    'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86'}
+    'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86', 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE': 'ext4'}
+PIN = 'ab' * 32
+CERT = PIN.upper()
 
 ENVSETUP = r'''
 lunch() {
   [ "$1" = "${FAKE_LUNCH_ACCEPT:-aosp_cf_x86_64_only_phone-cur-userdebug}" ] || return 1
   TARGET_PRODUCT=aosp_cf_x86_64_only_phone TARGET_BUILD_VARIANT=userdebug PRODUCT_DEVICE=vsoc_x86_64_only
-  TARGET_BOARD_PLATFORM="${FAKE_BOARD:-vsoc_x86_64}"
+  TARGET_BOARD_PLATFORM="${FAKE_BOARD:-vsoc_x86_64}" BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE="${FAKE_FS:-ext4}"
   # As in the retained tree: lunch exports the release into the shell (build/envsetup.sh)...
   [ -n "${FAKE_RELEASE_UNSET:-}" ] || export TARGET_RELEASE="${FAKE_RELEASE:-cur}"
   PRODUCT_OUT="${FAKE_PRODUCT_OUT:-$OUT_DIR/target/product/vsoc_x86_64_only}" HOST_OUT="$OUT_DIR/host/linux-x86"
@@ -51,6 +54,11 @@ m() {
     case " ${FAKE_SKIP:-} " in *" $image "*) continue;; esac
     echo "$image $BUILD_NUMBER" > "$PRODUCT_OUT/$image.img"
   done
+  # super.img in the LP format (geometry magic after the 4096 reserved bytes); its partitions come from the fake lpunpack.
+  case " ${FAKE_SKIP:-} " in *" super "*) ;; *)
+    if [ -n "${FAKE_SUPER_SPARSE:-}" ]; then printf '\072\377\046\355' > "$PRODUCT_OUT/super.img"; else : > "$PRODUCT_OUT/super.img"; fi
+    [ -n "${FAKE_SUPER_PLAIN:-}" ] || { head -c 4096 /dev/zero; printf 'gDla'; echo "$BUILD_NUMBER"; } >> "$PRODUCT_OUT/super.img";;
+  esac
   incremental="${FAKE_INCREMENTAL:-$BUILD_NUMBER}"
   fingerprint="Android/aosp_cf_x86_64_only_phone/vsoc_x86_64_only:17/CUR/$incremental:userdebug/test-keys"
   printf 'ro.build.type=%s\nro.build.version.incremental=%s\nro.build.date.utc=%s\nro.build.fingerprint=%s\nro.product.system.device=vsoc_x86_64_only\n' \
@@ -81,6 +89,57 @@ def media_2804(directory):
 
 def tree_listing(root):
     return sorted((str(p.relative_to(root)), p.is_symlink() or p.is_dir() or sha(p)) for p in Path(root).rglob('*'))
+
+
+AAPT = r"""
+import pathlib, sys
+a = sys.argv[1:]
+data = pathlib.Path(a[-1]).read_bytes()
+if a[:2] == ['dump', 'badging']:
+    head = data.split(b' ')[0].decode(errors='replace')
+    if ':' not in head or b'UNREADABLE' in data:
+        sys.exit(1)
+    package, version = head.split(':', 1)
+    print(f"package: name='{package}' versionCode='{version}' versionName='x'")
+elif a[:3] == ['dump', '--values', 'resources']:
+    sys.stdout.write(data.decode())
+"""
+APKSIGNER = r"""
+import pathlib, sys
+data = pathlib.Path(sys.argv[-1]).read_bytes()
+print('Signer #1 certificate SHA-256 digest: ' + ('cd' * 32 if b'OTHER-SIGNER' in data else 'ab' * 32))
+"""
+# Stands in for unsparsing: drops the sparse magic the fixture adds in front of an LP image.
+SIMG2IMG = r"""
+import sys
+data = open(sys.argv[1], 'rb').read()
+assert data[:4] == bytes.fromhex('3aff26ed')
+open(sys.argv[2], 'wb').write(data[4:])
+"""
+# Copies the partition images the test built (real ext4 images) into lpunpack's output directory.
+LPUNPACK = r"""
+import os, shutil, sys
+image, out = sys.argv[1:3]
+assert open(image, 'rb').read(4100)[4096:4100] == b'gDla'
+for name in os.listdir(os.environ['FAKE_LP_DIR']):
+    shutil.copy(os.path.join(os.environ['FAKE_LP_DIR'], name), out)
+"""
+
+def script(path, body):
+    path.write_text('#!/usr/bin/env python3\n' + body)
+    path.chmod(0o755)
+    return str(path)
+
+def framework_dump(agents, targets, prototype=(), locked=False):
+    """`aapt dump --values resources` rows for the four computer-control values, as the real parser reads them."""
+    def array(name, items):
+        rows = ''.join(f'          #{i} (Key=0x01000000): (string8) "{v}"\n' for i, v in enumerate(items))
+        return (f'      resource 0x01070001 android:array/config_pixelComputerControl{name}: <bag>\n'
+            f'        Parent=0x00000000(Resolved=0x00000000), Count={len(items)}\n{rows}')
+    return ('android:36 framework-res (the fake aapt reads this identity; the parser skips it)\nPackage Groups (1)\n  Package Group 0 id=0x01 packageCount=1 name=android\n    type 4 configCount=1 entryCount=4\n'
+        '      config (default) flags=0x0:\n' + array('Agents', agents) + array('Targets', targets) + array('PrototypeAgents', prototype)
+        + f'      resource 0x01050001 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x{0xffffffff if locked else 0:08x} (s=0x0008 r=0x00)\n'
+        + f'          (boolean) {"true" if locked else "false"}\n')
 
 class AlphaTreeTest(unittest.TestCase):
     """A synthetic retained base (2804-shaped build/make, pinned Cuttlefish files, integrated apps, reconcile receipt and
@@ -117,9 +176,9 @@ class AlphaTreeTest(unittest.TestCase):
         self.pixel_out = src/'out-rose-first-update-2026102701'
         (self.pixel_out/'target').mkdir(parents=True)
         (self.pixel_out/'target/marker').write_text('pixel build output')
-        apps = {'packages/apps/RosePreinstall/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk': 'voice 302',
-            'packages/apps/RosePreinstall/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk': 'calculator 4',
-            'packages/apps/PixelBackgroundControl/PixelBackgroundControl.apk': 'controller 28'}
+        apps = {'packages/apps/RosePreinstall/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk': 'dev.pixel.voice:302 apk',
+            'packages/apps/RosePreinstall/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk': 'dev.pixel.calculator.agent:4 apk',
+            'packages/apps/PixelBackgroundControl/PixelBackgroundControl.apk': 'dev.pixel.backgroundcontrol:28 apk'}
         for path, text in apps.items():
             (src/path).parent.mkdir(parents=True, exist_ok=True)
             (src/path).write_text(text)
@@ -137,7 +196,12 @@ class AlphaTreeTest(unittest.TestCase):
         release = self.root/'frankel-2026102804/release'
         release.mkdir(parents=True)
         (release/'resolved-manifest.xml').write_text('<manifest/>')
-        (release/'background-policy.json').write_text('{"sdk": 37}')
+        digest = {path.split('/')[-1]: sha(src/path) for path in apps}
+        row = lambda package, apk: {'packageName': package, 'certificates': [CERT], 'versionCode': 1, 'apkSha256': digest[apk]}
+        (release/'background-policy.json').write_text(json.dumps({'schemaVersion': 1, 'sdk': 37, 'prototypeControl': False,
+            'agent': row('dev.pixel.backgroundcontrol', 'PixelBackgroundControl.apk'),
+            'voice': row('dev.pixel.voice', 'RosePreinstall_dev_pixel_voice.apk'),
+            'targets': [row('dev.pixel.calculator.agent', 'RosePreinstall_dev_pixel_calculator_agent.apk')]}))
         # OS's contract with this fixture's receipt and app digests (the real ones belong to the real 2804 bytes).
         contract = json.loads(json.dumps(CONTRACT))
         contract['base']['reconcileSha256'] = sha(self.receipt)
@@ -148,7 +212,8 @@ class AlphaTreeTest(unittest.TestCase):
         self.contract.write_text(json.dumps(contract))
         self.lock = self.root/'frankel-build.lock'
         shared = self.root/'shared.json'
-        shared.write_text(json.dumps({'host': {'sourceRoot': str(src), 'lockPath': str(self.lock),
+        shared.write_text(json.dumps({'framework': {'lockedSessions': False}, 'identities': {'appSignerSha256': PIN},
+            'host': {'sourceRoot': str(src), 'lockPath': str(self.lock),
             'outDir': 'out-rose-first-update-2026102701', 'integrate': {'reconcile': {'receiptDir': str(self.receipts),
                 'integrationOwnedRoots': ['packages/apps/PixelBackgroundControl', 'packages/apps/RosePreinstall']}}}}))
         self.data = json.loads(json.dumps(CHECKED_IN))
@@ -170,10 +235,52 @@ class AlphaTreeTest(unittest.TestCase):
         self.tree = self.prepared_dir/'tree'
         self.data['prepared'].update(preparationId=self.preparation['preparationId'], receiptSha256=sha(self.prepared_dir/'preparation.json'))
         self.data['hostEvidence'].update(probeReceiptSha256='e' * 64, lunch=LUNCH)
+        self.tools = self.root/'image-tools'
+        self.tools.mkdir()
+        self.data['imageVerification']['tools'].update(
+            aapt=script(self.tools/'aapt', AAPT), apksigner=script(self.tools/'apksigner', APKSIGNER),
+            lpunpack=script(self.tools/'lpunpack', LPUNPACK), simg2img=script(self.tools/'simg2img', SIMG2IMG), fsckErofs=None,
+            debugfs=shutil.which('debugfs'))
         self.write()
+        self.partitions = self.root/'built-partitions'
+        self.env['FAKE_LP_DIR'] = str(self.partitions)
+        self.make_partitions()
 
     def write(self):
         self.config_path.write_text(json.dumps(self.data))
+
+    def make_partitions(self, change=None, filesystem='ext4'):
+        """Real ext4 partition images (mke2fs -d) holding what a correct alpha build packs; change(trees) edits them first."""
+        if self.partitions.exists():
+            shutil.rmtree(self.partitions)
+        self.partitions.mkdir()
+        trees = {name: self.root/'partition-src'/name for name in ('system', 'system_ext', 'product', 'vendor')}
+        shutil.rmtree(self.root/'partition-src', ignore_errors=True)
+        for tree in trees.values():
+            tree.mkdir(parents=True)
+        place = lambda tree, rel, data: ((tree/rel).parent.mkdir(parents=True, exist_ok=True), (tree/rel).write_bytes(data))
+        for app, location in self.data['imageVerification']['apps'].items():
+            partition, inside = location.split(':', 1)
+            source = next(p for p in self.app_paths if p.endswith(inside.split('/')[-1]))
+            place(trees[partition], inside, (self.src/source).read_bytes())
+        place(trees['system'], 'system/framework/framework-res.apk', framework_dump([f'dev.pixel.backgroundcontrol:{CERT}'],
+            [f'dev.pixel.calculator.agent:{CERT}']).encode())
+        place(trees['system'], 'system/build.prop', b'ro.build.type=userdebug\npersist.wm.debug.pixel_agent_tray=1\n')
+        place(trees['system'], 'system/priv-app/Settings/Settings.apk', b'com.android.settings:36 apk')
+        place(trees['vendor'], 'etc/vintf/manifest.xml', b'<manifest/>')
+        if change:
+            change(trees)
+        for name, tree in trees.items():
+            image = self.partitions/f'{name}_a.img'
+            if filesystem == 'ext4':
+                subprocess.run(['mke2fs', '-q', '-t', 'ext4', '-d', str(tree), str(image), '8M'], check=True)
+            else:
+                image.write_bytes(filesystem)
+            (self.partitions/f'{name}_b.img').write_bytes(b'')
+
+    def image_failure(self, message, **kwargs):
+        with self.assertRaisesRegex(alpha.CheckFailed, message):
+            self.run_build(**kwargs)
 
     def with_env(self, function, *args):
         old = {k: os.environ.get(k) for k in self.env}
@@ -285,12 +392,105 @@ class AlphaTreeTest(unittest.TestCase):
         self.assertEqual(receipt['images']['super.img'], {'size': (out/'super.img').stat().st_size, 'sha256': sha(out/'super.img')})
         self.assertEqual(receipt['hostOutputs']['cvd-host_package.tar.gz']['sha256'], sha(self.tree/LUNCH['HOST_OUT']/'cvd-host_package.tar.gz'))
         self.assertIn('guest boot (sys.boot_completed)', receipt['notProven'])
+        content = receipt['imageContent']
+        self.assertEqual((content['verified'], content['source'], content['filesystem'], content['osImages']),
+            (True, 'partitions unpacked from the built super.img', 'ext4', 'unsigned, test-only (AOSP test keys)'))
+        self.assertEqual(sorted(content['partitions']), ['product', 'system', 'system_ext', 'vendor'])
+        self.assertEqual(content['partitions']['system']['image'], 'system_a.img')
+        self.assertEqual([(r['package'], r['partition'], r['sha256'], r['identity'], r['signers']) for r in content['apps']],
+            [(package, location.split(':')[0], sha(self.src/path), [package, version], [PIN]) for (package, location), path, version in
+             zip(self.data['imageVerification']['apps'].items(), self.app_paths, (302, 4, 28))])
+        self.assertEqual(content['framework'], {'Agents': [f'dev.pixel.backgroundcontrol:{CERT}'],
+            'Targets': [f'dev.pixel.calculator.agent:{CERT}'], 'PrototypeAgents': [], 'LockedSessions': False})
+        self.assertEqual(content['tray'], {'persist.wm.debug.pixel_agent_tray': '1'})
+        self.assertEqual(content['updaterAbsent'], {'package': 'app.seamlessupdate.client', 'apksInspected': 5})
+        self.assertEqual(sorted(content['tools']), ['aapt', 'apksigner', 'debugfs', 'lpunpack'], 'simg2img ran only for a sparse super')
+        self.assertFalse([p for p in self.prepared_dir.iterdir() if p.name.startswith('image-check-')], 'extraction workspace removed')
         written = self.root/'receipt'
         self.assertEqual(sorted(p.name for p in written.iterdir()), ['SHA256SUMS', 'emulator-alpha-receipt.json'])
         self.base_untouched()
         self.assertFalse((self.src/'out-rose-cf-alpha').exists(), 'nothing is built in the retained tree')
         self.assertEqual(alpha.verify_prepared(alpha.load(self.config_path), self.preparation['preparationId'])['verdict'], 'OK',
             'build output stays in the excluded OUT_DIR')
+
+    def test_image_content_failures_are_named_and_write_no_receipt(self):
+        voice, controller = 'app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk', 'priv-app/PixelBackgroundControl/PixelBackgroundControl.apk'
+        def put(partition, rel, data):
+            return lambda trees: ((trees[partition]/rel).parent.mkdir(parents=True, exist_ok=True), (trees[partition]/rel).write_bytes(data))
+        cases = (
+            (lambda trees: (trees['product']/voice).unlink(), 'dev.pixel.voice APK product:app/RosePreinstall_dev_pixel_voice/.* is absent'),
+            (put('product', voice, b'dev.pixel.voice:302 apk altered'), 'dev.pixel.voice image bytes differ from the contract'),
+            (put('product', voice, b'dev.pixel.other:302 apk'), "dev.pixel.voice image APK identifies as \\('dev.pixel.other', 302\\)"),
+            (put('product', voice, b'dev.pixel.voice:303 apk'), "identifies as \\('dev.pixel.voice', 303\\), expected dev.pixel.voice 302"),
+            (put('system_ext', controller, b'dev.pixel.backgroundcontrol:28 apk OTHER-SIGNER'), 'dev.pixel.backgroundcontrol image APK is not signed by exactly the approved'),
+            (put('system', 'system/framework/framework-res.apk', framework_dump([f'dev.pixel.backgroundcontrol:{CERT}'], []).encode()),
+                'config_pixelComputerControlTargets is \\[\\], expected'),
+            (put('system', 'system/framework/framework-res.apk', framework_dump([f'dev.pixel.backgroundcontrol:{CERT}'],
+                [f'dev.pixel.calculator.agent:{CERT}'], locked=True).encode()), 'config_pixelComputerControlLockedSessions is True'),
+            (put('system', 'system/build.prop', b'persist.wm.debug.pixel_agent_tray=1\npersist.wm.debug.pixel_agent_tray=0\n'),
+                "persist.wm.debug.pixel_agent_tray in system:system/build.prop is '0'"),
+            (put('system', 'system/build.prop', b'ro.build.type=userdebug\n'), 'pixel_agent_tray .* is None'),
+            (put('system', 'system/priv-app/Updater/Updater.apk', b'app.seamlessupdate.client:1 apk'), 'Updater directory system:system/priv-app/Updater'),
+            (put('system', 'system/etc/permissions/app.seamlessupdate.client.xml', b'<permissions/>'), 'app.seamlessupdate.client.xml is in the image'),
+            (put('product', 'app/Renamed/Renamed.apk', b'app.seamlessupdate.client:1 apk'), 'an APK of app.seamlessupdate.client is in the image at product:app/Renamed'),
+            (put('vendor', 'app/Odd/Odd.apk', b'UNREADABLE'), 'vendor:app/Odd/Odd.apk could not be read; Updater absence is unproven'),
+        )
+        for index, (change, message) in enumerate(cases):
+            self.make_partitions(change)
+            self.image_failure('image content: .*' + message, receipt=f'r{index}')
+            self.assertFalse((self.root/f'r{index}').exists())
+        self.assertFalse([p for p in self.prepared_dir.iterdir() if p.name.startswith('image-check-')], 'extraction workspace removed on failure')
+
+    def test_image_formats_tools_and_slots_fail_closed(self):
+        self.env['FAKE_SUPER_PLAIN'] = '1'
+        self.image_failure('super.img is not an LP super image \\(detected unknown\\)', receipt='a')
+        del self.env['FAKE_SUPER_PLAIN']
+        self.env['FAKE_SUPER_SPARSE'] = '1'
+        self.assertEqual(self.run_build(receipt='sparse')['imageContent']['tools']['simg2img']['path'], self.data['imageVerification']['tools']['simg2img'])
+        self.data['imageVerification']['tools']['simg2img'] = None
+        self.write()
+        with self.assertRaises(alpha.SetupMissing) as missing:
+            self.run_build(receipt='b')
+        self.assertEqual(missing.exception.missing, ['imageVerification.tools.simg2img'])
+        del self.env['FAKE_SUPER_SPARSE']
+        self.data['imageVerification']['tools']['simg2img'] = str(self.tools/'simg2img')
+        self.write()
+        self.make_partitions(filesystem=b'\0' * 1024 + bytes.fromhex('e2e1f5e0') + b'\0' * 4096)
+        self.image_failure('system_a.img is erofs, not the recorded ext4', receipt='c')
+        self.make_partitions(filesystem=b'\0' * 8192)
+        self.image_failure('system_a.img has an unsupported format \\(unknown\\)', receipt='d')
+        self.make_partitions()
+        (self.partitions/'system_b.img').write_bytes(b'slot b content')
+        self.image_failure('non-empty system_b.img; the inspected slot is ambiguous', receipt='e')
+        self.make_partitions()
+        (self.partitions/'vendor_a.img').unlink()
+        self.image_failure('0 non-empty images for partition vendor', receipt='f')
+        self.make_partitions()
+        self.data['imageVerification']['tools']['debugfs'] = str(self.root/'absent-debugfs')
+        self.write()
+        self.image_failure('imageVerification.tools.debugfs .* is not an executable file', receipt='g')
+        # An erofs system needs its extractor configured before any build starts.
+        lunch = dict(LUNCH, BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE='erofs')
+        self.data['hostEvidence']['lunch'] = lunch
+        self.write()
+        self.assertIn('imageVerification.tools.fsckErofs', alpha.missing_evidence(alpha.load(self.config_path)))
+        self.data['hostEvidence']['lunch'] = dict(LUNCH, BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE='f2fs')
+        self.write()
+        with self.assertRaises(alpha.SetupMissing) as missing:
+            self.run_build(receipt='h')
+        self.assertIn('a supported extractor for the recorded system file system f2fs', missing.exception.missing)
+
+    def test_image_gate_is_bound_to_the_policy_and_contract(self):
+        policy = Path(self.data['preparation']['baseEvidence']['policy']['path'])
+        original = policy.read_text()
+        policy.write_text(original.replace('"prototypeControl": false', '"prototypeControl": true'))
+        self.image_failure('the bound policy .* is absent or differs from its sha256')
+        self.assertFalse((self.root/'receipt').exists())
+        policy.write_text(original)
+        config = alpha.load(self.config_path)
+        config['imageVerification']['apps'].pop('dev.pixel.voice')
+        with self.assertRaisesRegex(alpha.CheckFailed, 'imageVerification.apps differs from the contract apps'):
+            alpha.image_content(config, self.preparation['preparationId'], self.tree/LUNCH['PRODUCT_OUT'])
 
     def test_another_candidate_or_app_set_is_refused_before_the_lock_and_make(self):
         with self.assertRaisesRegex(alpha.CheckFailed, 'based on ae9cfd4d'):
@@ -458,7 +658,7 @@ class CheckedInAlphaTest(unittest.TestCase):
         result = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', '--job', 'guard'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr)['missing'], ['hostEvidence.probeReceiptSha256', 'hostEvidence.lunch',
-            'prepared.preparationId', 'prepared.receiptSha256'])
+            'prepared.preparationId', 'prepared.receiptSha256', 'imageVerification.tools.lpunpack'])
         prepare = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'prepare'], capture_output=True, text=True)
         self.assertEqual((prepare.returncode, json.loads(prepare.stderr)['missing']), (4, ['preparation.baseEvidence.resolvedManifest.sha256']))
         build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
@@ -534,6 +734,29 @@ class CheckedInAlphaTest(unittest.TestCase):
         code = (SCRIPTS/'alpha_source.py').read_text().split('"""', 2)[2]
         for absent in ('os.link(', '--reflink', 'FICLONE', 'chown', 'mount -', 'copy_file_range', 'sendfile', 'shutil.copytree', 'gcloud', 'secret'):
             self.assertFalse(absent in code, absent)
+
+    def test_image_verification_follows_the_os_contract_and_retained_tools(self):
+        spec = CHECKED_IN['imageVerification']
+        present = ' '.join(CONTRACT['imageExpectations']['present'])
+        prefixes = {'product': 'PRODUCT/', 'system_ext': 'SYSTEM_EXT/'}
+        for package, location in spec['apps'].items():
+            partition, inside = location.split(':', 1)
+            self.assertIn(f'{prefixes[partition]}{inside} byte-identical to the {package} sha256', present)
+        self.assertEqual(sorted(spec['apps']), sorted(a['package'] for a in CONTRACT['apps']))
+        self.assertIn('persist.wm.debug.pixel_agent_tray=1 in the system build.prop', present)
+        self.assertEqual((spec['trayProperty'], spec['trayValue']), ('persist.wm.debug.pixel_agent_tray', '1'))
+        absent = ' '.join(CONTRACT['imageExpectations']['absent'])
+        for fragment in ('priv-app/Updater/', 'app/Updater/', spec['updater']['xml'], spec['updater']['package']):
+            self.assertIn(fragment, absent)
+        self.assertEqual(spec['partitions'], ['system', 'system_ext', 'product', 'vendor'])
+        tools = spec['tools']
+        for name in ('simg2img', 'debugfs', 'aapt', 'apksigner'):
+            self.assertEqual(tools[name], FRANKEL['host']['tools'][name], name)
+        self.assertEqual((tools['lpunpack'], tools['fsckErofs']), (None, None), 'no verified builder path yet: fail closed')
+        self.assertIn('BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE', alpha.LUNCH_VARS)
+        code = (SCRIPTS/'alpha_image.py').read_text().split('"""', 2)[2]
+        for absent_text in ('apt-get', 'pip install', 'curl', 'wget', 'shell=True'):
+            self.assertFalse(absent_text in code, absent_text)
 
     def test_plan_runs_nothing_and_says_so(self):
         original = subprocess.run

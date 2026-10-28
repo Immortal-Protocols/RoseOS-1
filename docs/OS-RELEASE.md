@@ -413,9 +413,40 @@ Cuttlefish image, `aosp_cf_x86_64_only_phone-cur-userdebug`, on the same builder
   4. the required images and the host package must be written by this build;
   5. the partition `build.prop` identity must match: emulator build id
      `rose-cf-alpha-<run id>` as `BUILD_NUMBER`, the dispatched timestamp,
-     `userdebug` and `test-keys`.
+     `userdebug` and `test-keys`;
+  6. the image-content gate (`scripts/alpha_image.py`) checks OS58's
+     `imageExpectations` from the partitions packed into the built `super.img`,
+     never from loose files:
+     - **Extraction:** `super.img` is unsparsed with `simg2img` when sparse and
+       must be an LP super image. `lpunpack` writes its partitions, of which
+       `system`, `system_ext`, `product` and `vendor` are inspected; each must
+       have one non-empty image, `<name>.img` or `<name>_a.img`, and a
+       non-empty `_b` is refused as ambiguous. Each partition must be the file
+       system the probe recorded (`BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE`) and is
+       extracted with its tool: `debugfs rdump` for ext4,
+       `fsck.erofs --extract` for erofs. An unknown format, or a tool that is
+       absent or not executable, stops the gate and is named. Nothing is
+       installed.
+     - **Apps:** Rose Agent 302, Calculator 4 and controller 28 at their contract
+       paths (`PRODUCT/app/RosePreinstall_*`,
+       `SYSTEM_EXT/priv-app/PixelBackgroundControl`) must match the contract by
+       exact bytes, by package and versionCode (`aapt`), and by exactly the
+       approved app signer (`apksigner`).
+     - **Framework policy:** framework-res's compiled computer-control Agents,
+       Targets and PrototypeAgents arrays and its LockedSessions value must equal
+       those derived from the bound `background-policy.json` (re-checked by its
+       sha256, with app digests equal to the contract's).
+     - **Tray:** the last `persist.wm.debug.pixel_agent_tray` in the system
+       `build.prop` must be `1`.
+     - **No Updater:** no `app/` or `priv-app/` Updater directory, no
+       `app.seamlessupdate.client.xml`, and no APK of that package among every
+       APK inspected. An APK that `aapt` cannot read fails the gate, because
+       absence must be proven.
+
+     The images stay unsigned and test-only, and this is not a boot, UI or
+     phone result. `verify-image` re-runs the gate on existing build output.
 - **Receipt:** it hashes every top-level image and `cvd-host_package.tar.gz`,
-  and binds the preparation id, its receipt digest and the effective source
+  records the image-content result and the tools that ran, and binds the preparation id, its receipt digest and the effective source
   identity. It records `testOnly`, `signed: false`, `published: false` and
   `bootAttempted: false`, and lists what it does not prove. Only the receipt
   and `SHA256SUMS` become the Actions artifact `emulator-alpha-receipt-<run id>`;
@@ -447,7 +478,11 @@ the lock:
    runs the prepared tree's checks and `lunch` only, never make. `lunch` writes
    build-system state only inside that tree's alpha `OUT_DIR`.
 4. Record the preparation id and receipt sha256 in `prepared`, and the passing
-   probe's sha256 and `lunch` values in `hostEvidence`, in one config commit.
+   probe's sha256 and `lunch` values (including
+   `BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE`) in `hostEvidence`, in one config
+   commit. In the same commit, record the verified builder paths of `lpunpack`
+   and, for an erofs system, `fsck.erofs` in `imageVerification.tools`. Until
+   then the guard names them.
 
 Source-only contract for the OS owner:
 
