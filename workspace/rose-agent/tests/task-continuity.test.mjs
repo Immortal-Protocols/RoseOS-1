@@ -76,3 +76,17 @@ test('Stop answers from the real TaskStop are each handled by TaskControl',async
  for(const status of ['stale_task','not_active','stopping'])assert.ok(control.includes(`"${status}"`),`TaskControl handles ${status}`);
  assert.ok(control.includes('"close_failed"')&&control.includes('"interrupt_failed"'),'TaskControl reads the failure prefixes the server uses');
 });
+
+test('Watch carries the selected task and its session to the viewer, read after the tap (APP-FIX-004)',()=>{
+ const activity=source('RoseConversationActivity.java');
+ const open=activity.slice(activity.indexOf('void openWorkspace('),activity.indexOf('\n }',activity.indexOf('void openWorkspace(')));
+ assert.match(open,/final String selected=shownTaskId;/,'the selected task id is captured at the tap');
+ assert.ok(open.indexOf('controllerState()')>0&&open.indexOf('controllerState()')<open.indexOf('startActivity('),'controller state is read fresh before opening');
+ assert.match(open,/TaskControl\.watchBinding\(selected,selected\.equals\(shownTaskId\),c\[0\],c\[1\],c\[2\]\)/,'binding from the fresh read for the tapped task');
+ assert.match(open,/if\(binding==null\)\{[^}]*return;\}/,'no binding, no viewer');
+ assert.match(open,/putExtra\(TaskControl\.EXTRA_WATCH_TASK_ID,binding\[0\]\)\.putExtra\(TaskControl\.EXTRA_WATCH_SESSION_ID,binding\[1\]\)/,'the viewer intent carries both ids');
+ assert.equal((activity.match(/AgentWorkspaceActivity/g)||[]).length,1,'the conversation surface has one, bound, viewer launch');
+ assert.ok(!/task\/stop|sendStop|send\("end"\)/.test(open),'opening the viewer stops nothing and ends no voice');
+ // Existing unbound entries (app reveal and automatic view) are unchanged.
+ for(const name of ['WorkspaceLauncher.java','AutoAgentPip.java'])assert.ok(!/WATCH_(TASK|SESSION)_ID/.test(source(name)),`${name} stays unbound`);
+});
