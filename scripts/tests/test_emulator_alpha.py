@@ -14,6 +14,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import xml.etree.ElementTree as ET
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
@@ -29,6 +30,9 @@ APPS = [['dev.pixel.voice', 302], ['dev.pixel.calculator.agent', 4], ['dev.pixel
 TS = '1793180700'
 BOUND = 'ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9'  # 2804, the run that wrote the retained tree's latest reconcile receipt
 FIXTURES = SCRIPTS/'tests/fixtures/cuttlefish-283645aa'  # unmodified pinned upstream files (see its README)
+SEEDVAULT = SCRIPTS/'tests/fixtures/seedvault-7cfffed7'  # unmodified pinned Seedvault files (see its README)
+OS_SEEDVAULT = ROOT/'os/tests/fixtures/cuttlefish-alpha/seedvault'
+SEEDVAULT_XML = {p.name: p.read_bytes() for p in SEEDVAULT.rglob('*.xml') if p.name != 'AndroidManifest.xml'}
 LUNCH = {'TARGET_PRODUCT': 'aosp_cf_x86_64_only_phone', 'TARGET_RELEASE': 'cur', 'TARGET_BUILD_VARIANT': 'userdebug',
     'TARGET_BOARD_PLATFORM': 'vsoc_x86_64', 'PRODUCT_DEVICE': 'vsoc_x86_64_only', 'PRODUCT_OUT': 'out-rose-cf-alpha/target/product/vsoc_x86_64_only',
     'HOST_OUT': 'out-rose-cf-alpha/host/linux-x86', 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE': 'ext4'}
@@ -270,6 +274,14 @@ class AlphaTreeTest(unittest.TestCase):
             [f'dev.pixel.calculator.agent:{CERT}']).encode())
         place(trees['system'], 'system/build.prop', b'ro.build.type=userdebug\npersist.wm.debug.pixel_agent_tray=1\n')
         place(trees['system'], 'system/priv-app/Settings/Settings.apk', b'com.android.settings:36 apk')
+        # The Seedvault closure: synthetic APK bytes the fake aapt reads as the pinned package (the version is not
+        # checked), and the real pinned XML files at the paths the pinned Android.bp files install them to.
+        for app in self.data['imageVerification']['closure']['apps']:
+            partition, inside = app['path'].split(':', 1)
+            place(trees[partition], inside, f'{app["package"]}:1 synthetic {app["module"]} apk'.encode())
+        for xml in self.data['imageVerification']['closure']['xml']:
+            partition, inside = xml['path'].split(':', 1)
+            place(trees[partition], inside, SEEDVAULT_XML[inside.split('/')[-1]])
         place(trees['vendor'], 'etc/vintf/manifest.xml', b'<manifest/>')
         if change:
             change(trees)
@@ -412,7 +424,17 @@ class AlphaTreeTest(unittest.TestCase):
         self.assertEqual(content['framework'], {'Agents': [f'dev.pixel.backgroundcontrol:{CERT}'],
             'Targets': [f'dev.pixel.calculator.agent:{CERT}'], 'PrototypeAgents': [], 'LockedSessions': False})
         self.assertEqual(content['tray'], {'persist.wm.debug.pixel_agent_tray': '1'})
-        self.assertEqual(content['updaterAbsent'], {'package': 'app.seamlessupdate.client', 'apksInspected': 5})
+        self.assertEqual(content['updaterAbsent'], {'package': 'app.seamlessupdate.client', 'apksInspected': 7})
+        closure = content['closure']
+        self.assertEqual(closure['source'], {'project': 'packages/apps/Seedvault', 'revision': '7cfffed7ceeda60a10bf2a6d9818d6fda81828ba'})
+        self.assertEqual([(a['module'], a['path'], a['present'], a['identity'][0]) for a in closure['apps']],
+            [('Seedvault', 'system:system/priv-app/Seedvault/Seedvault.apk', True, 'com.stevesoltys.seedvault'),
+             ('LocalContactsBackup', 'system:system/app/LocalContactsBackup/LocalContactsBackup.apk', True, 'app.grapheneos.backup.contacts')])
+        self.assertTrue(all(len(a['sha256']) == 64 and a['size'] > 0 for a in closure['apps']))
+        self.assertEqual([(x['path'].split('/')[-1], x['present'], x['sha256']) for x in closure['xml']],
+            [(name, True, hashlib.sha256(SEEDVAULT_XML[name]).hexdigest()) for name in ('allowlist_com.stevesoltys.seedvault.xml',
+             'default-permissions_com.stevesoltys.seedvault.xml', 'com.stevesoltys.seedvault.xml',
+             'default-permissions_app.grapheneos.backup.contacts.xml')])
         self.assertEqual(sorted(content['tools']), ['aapt', 'apksigner', 'debugfs', 'lpunpack'], 'simg2img ran only for a sparse super')
         self.assertFalse([p for p in self.prepared_dir.iterdir() if p.name.startswith('image-check-')], 'extraction workspace removed')
         written = self.root/'receipt'
@@ -449,6 +471,44 @@ class AlphaTreeTest(unittest.TestCase):
             self.image_failure('image content: .*' + message, receipt=f'r{index}')
             self.assertFalse((self.root/f'r{index}').exists())
         self.assertFalse([p for p in self.prepared_dir.iterdir() if p.name.startswith('image-check-')], 'extraction workspace removed on failure')
+
+    def test_seedvault_closure_is_checked_from_partition_content(self):
+        seedvault, contacts = 'system/priv-app/Seedvault/Seedvault.apk', 'system/app/LocalContactsBackup/LocalContactsBackup.apk'
+        privapp = 'system/etc/permissions/com.stevesoltys.seedvault.xml'
+        def put(rel, data, partition='system'):
+            return lambda trees: ((trees[partition]/rel).parent.mkdir(parents=True, exist_ok=True), (trees[partition]/rel).write_bytes(data))
+        def remove(rel):
+            return lambda trees: (trees['system']/rel).unlink()
+        def link(rel):
+            def change(trees):
+                (trees['system']/rel).unlink()
+                os.symlink('/dev/null', trees['system']/rel)
+            return change
+        def move_to_product(rel):
+            def change(trees):
+                data = (trees['system']/rel).read_bytes()
+                (trees['system']/rel).unlink()
+                put(rel.replace('system/', '', 1), data, 'product')(trees)
+            return change
+        cases = [(remove(seedvault), 'system:system/priv-app/Seedvault/Seedvault.apk is absent'),
+                 (remove(contacts), 'system:system/app/LocalContactsBackup/LocalContactsBackup.apk is absent'),
+                 (move_to_product(seedvault), 'Seedvault.apk is absent from the image'),
+                 (put(seedvault, b'com.example.renamed:1 apk'), 'Seedvault.apk is package com.example.renamed, not the pinned com.stevesoltys.seedvault'),
+                 (put(contacts, b'com.stevesoltys.seedvault:1 apk'), 'LocalContactsBackup.apk is package com.stevesoltys.seedvault, not the pinned app.grapheneos.backup.contacts'),
+                 (put(seedvault, b'UNREADABLE'), 'Seedvault.apk could not be read as an APK'),
+                 (put(seedvault, b''), 'Seedvault.apk is empty'),
+                 (link(seedvault), 'Seedvault.apk is a symlink'),
+                 (put(privapp, b'<permissions><privapp-permissions package="com.stevesoltys.seedvault">'), 'com.stevesoltys.seedvault.xml is not well-formed XML'),
+                 (put(privapp, b'<config><privapp-permissions package="com.stevesoltys.seedvault"/></config>'), 'has root <config>, not <permissions>'),
+                 (put(privapp, b'<permissions><privapp-permissions package="com.example"/></permissions>'), 'does not name package com.stevesoltys.seedvault'),
+                 (put(privapp, b''), 'com.stevesoltys.seedvault.xml is empty'),
+                 (link(privapp), 'com.stevesoltys.seedvault.xml is a symlink')]
+        for xml in self.data['imageVerification']['closure']['xml']:
+            cases.append((remove(xml['path'].split(':', 1)[1]), xml['path'] + ' is absent'))
+        for index, (change, message) in enumerate(cases):
+            self.make_partitions(change)
+            self.image_failure('image content: .*Seedvault closure: .*' + message, receipt=f's{index}')
+            self.assertFalse((self.root/f's{index}').exists())
 
     def test_image_formats_tools_and_slots_fail_closed(self):
         self.env['FAKE_SUPER_PLAIN'] = '1'
@@ -767,6 +827,44 @@ class CheckedInAlphaTest(unittest.TestCase):
         code = (SCRIPTS/'alpha_image.py').read_text().split('"""', 2)[2]
         for absent_text in ('apt-get', 'pip install', 'curl', 'wget', 'shell=True'):
             self.assertFalse(absent_text in code, absent_text)
+
+    def test_seedvault_closure_is_derived_from_the_pinned_sources(self):
+        closure = CHECKED_IN['imageVerification']['closure']
+        manifest = ET.parse(ROOT/'os/pinned-manifest.xml').getroot()
+        revision = next(p.get('revision') for p in manifest.iter('project') if p.get('path') == closure['source']['project'])
+        self.assertEqual(closure['source']['revision'], revision)
+        self.assertIn(revision, (SEEDVAULT/'README.md').read_text())
+        for name in [p for p in SEEDVAULT.rglob('*') if p.is_file() and p.name != 'README.md']:
+            self.assertIn(hashlib.sha256(name.read_bytes()).hexdigest(), (SEEDVAULT/'README.md').read_text(), name)
+        # Packages from the pinned manifests; modules, privileged flag and install file names from OS's pinned Android.bp files.
+        packages = {'Seedvault': ET.parse(SEEDVAULT/'app/src/main/AndroidManifest.xml').getroot().get('package'),
+                    'LocalContactsBackup': ET.parse(SEEDVAULT/'contactsbackup/src/main/AndroidManifest.xml').getroot().get('package')}
+        blueprint = (OS_SEEDVAULT/'Android.bp').read_text() + (OS_SEEDVAULT/'contactsbackup/Android.bp').read_text()
+        modules = {m[2]: m[3] for m in re.finditer(r'(android_app|prebuilt_etc) \{\s*name: "([^"]+)",(.*?)\n\}', blueprint, re.S)}
+        for app in closure['apps']:
+            body = modules[app['module']]
+            directory = 'priv-app' if re.search(r'privileged: true', body) else 'app'
+            self.assertEqual(app['path'], f'system:system/{directory}/{app["module"]}/{app["module"]}.apk')
+            self.assertEqual(app['package'], packages[app['module']])
+        required = re.findall(r'"([^"]+)"', modules['Seedvault'].split('required:')[1].split(']')[0]) + \
+            re.findall(r'"([^"]+)"', modules['LocalContactsBackup'].split('required:')[1].split(']')[0])
+        self.assertEqual(sorted(x['module'] for x in closure['xml']), sorted(r for r in required if r != 'LocalContactsBackup'))
+        for xml in closure['xml']:
+            body = modules[xml['module']]
+            sub_dir, src = re.search(r'sub_dir: "([^"]+)"', body)[1], re.search(r'src: "([^"]+)"', body)[1]
+            self.assertIn('filename_from_src: true', body)
+            self.assertEqual(xml['path'], f'system:system/etc/{sub_dir}/{src.split("/")[-1]}')
+            pinned = next(p for p in SEEDVAULT.rglob(src.split('/')[-1]))
+            root = ET.parse(pinned).getroot()
+            self.assertEqual(xml['root'], root.tag)
+            self.assertIn(xml['package'], {e.get('package') for e in root.iter() if e.get('package')})
+        # The contract names exactly this closure; these compiled modules carry no pinned version, digest or signer.
+        self.assertIn('SYSTEM/priv-app/Seedvault/Seedvault.apk and SYSTEM/app/LocalContactsBackup/LocalContactsBackup.apk with their etc XML',
+            ' '.join(CONTRACT['imageExpectations']['present']))
+        for item in closure['apps'] + closure['xml']:
+            self.assertFalse({'sha256', 'version', 'signer', 'certificate'} & set(item), item)
+        self.assertIn('c825aa19', CHECKED_IN['imageVerification']['basis'])
+        self.assertNotIn('OS58', CHECKED_IN['imageVerification']['basis'] + (SCRIPTS/'alpha_image.py').read_text())
 
     def test_plan_runs_nothing_and_says_so(self):
         original = subprocess.run

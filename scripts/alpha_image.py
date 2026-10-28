@@ -1,5 +1,6 @@
-"""Image-content gate for the Cuttlefish emulator alpha (INFRA-ALPHA-087): the OS58 contract checked against the
-partitions actually packed into the built super.img, never against loose APKs or source.
+"""Image-content gate for the Cuttlefish emulator alpha (INFRA-ALPHA-087/088): the OS alpha contract pinned by
+preparation.osDelta checked against the partitions actually packed into the built super.img, never against loose APKs
+or source.
 
 super.img (unsparsed with simg2img when sparse) must be an LP super image; lpunpack writes its partitions; each
 inspected partition is extracted with the extractor for its detected file system (ext4: debugfs rdump; erofs:
@@ -12,6 +13,10 @@ Checks, all from extracted partition content:
   * framework-res.apk's compiled computer-control Agents, Targets and PrototypeAgents arrays and LockedSessions bool,
     derived from the bound background-policy.json (whose app digests must equal the contract's);
   * the tray property's last assignment in the system build.prop;
+  * the contract's Seedvault closure: each compiled OS module APK (Seedvault, LocalContactsBackup) at its system path,
+    a non-empty regular file whose aapt package is the pinned one (no version, digest or signer is imposed on these
+    compiled modules), and each required XML at its path, a non-empty regular file that parses with the pinned root
+    element and names the pinned package;
   * no Updater: no app/ or priv-app/ Updater directory, no app.seamlessupdate.client.xml, and no APK of that package
     among every APK in the inspected partitions (an APK aapt cannot read fails the gate: absence must be proven).
 The result says unsigned/test-only for the OS images; it is not a boot, UI or phone result.
@@ -23,6 +28,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import xml.etree.ElementTree as ET
 
 SPARSE_MAGIC = b'\x3a\xff\x26\xed'
 LP_GEOMETRY_MAGIC = struct.pack('<I', 0x616C4467)  # liblp LP_METADATA_GEOMETRY_MAGIC, at LP_PARTITION_RESERVED_BYTES
@@ -136,6 +142,56 @@ def expected_framework(policy, locked):
     return {'Agents': agent, 'Targets': [f'{t["packageName"]}:{c}' for t in policy['targets'] for c in t['certificates']],
         'PrototypeAgents': agent if policy.get('prototypeControl') else [], 'LockedSessions': locked}
 
+def regular_file(roots, location):
+    """(partition, path, failure): the file at partition:path if it is a non-empty regular file, not a link."""
+    partition, inside = location.split(':', 1)
+    path = roots[partition]/inside
+    if os.path.islink(path):
+        return partition, path, f'{location} is a symlink, not the module file'
+    if not path.is_file():
+        return partition, path, f'{location} is absent from the image'
+    if path.stat().st_size == 0:
+        return partition, path, f'{location} is empty'
+    return partition, path, None
+
+def closure_report(closure, roots, aapt, failures):
+    """The contract's Seedvault closure from extracted partition content; failures are appended to the list."""
+    report = {'source': closure['source'], 'apps': [], 'xml': []}
+    for app in closure['apps']:
+        partition, path, problem = regular_file(roots, app['path'])
+        row = {'module': app['module'], 'path': app['path'], 'package': app['package']}
+        if problem:
+            failures.append(f'Seedvault closure: {problem}')
+            report['apps'].append({**row, 'present': False})
+            continue
+        identity = badging(aapt, path)
+        row.update(present=True, sha256=sha256_path(path), size=path.stat().st_size, identity=list(identity) if identity else None)
+        if identity is None:
+            failures.append(f'Seedvault closure: {app["path"]} could not be read as an APK')
+        elif identity[0] != app['package']:
+            failures.append(f'Seedvault closure: {app["path"]} is package {identity[0]}, not the pinned {app["package"]}')
+        report['apps'].append(row)
+    for xml in closure['xml']:
+        partition, path, problem = regular_file(roots, xml['path'])
+        row = {'module': xml['module'], 'path': xml['path'], 'root': xml['root'], 'package': xml['package']}
+        if problem:
+            failures.append(f'Seedvault closure: {problem}')
+            report['xml'].append({**row, 'present': False})
+            continue
+        row.update(present=True, sha256=sha256_path(path))
+        try:
+            document = ET.parse(path).getroot()
+        except ET.ParseError:
+            failures.append(f'Seedvault closure: {xml["path"]} is not well-formed XML')
+            report['xml'].append(row)
+            continue
+        if document.tag != xml['root']:
+            failures.append(f'Seedvault closure: {xml["path"]} has root <{document.tag}>, not <{xml["root"]}>')
+        elif not any(e.get('package') == xml['package'] for e in document.iter()):
+            failures.append(f'Seedvault closure: {xml["path"]} does not name package {xml["package"]}')
+        report['xml'].append(row)
+    return report
+
 def verify(product_out, spec, contract, policy, signer, filesystem, locked, default_value, workdir):
     """Returns the content report; raises ImageCheckFailed (or ToolMissing) on the first structural problem and
     ImageCheckFailed listing every content failure otherwise. default_value is release-pipeline.py's parser."""
@@ -185,6 +241,7 @@ def verify(product_out, spec, contract, policy, signer, filesystem, locked, defa
                 failures.append(f'framework-res {problem}')
             elif value != want:
                 failures.append(f'framework-res config_pixelComputerControl{name} is {value!r}, expected {want!r} from the bound policy')
+    closure = closure_report(spec['closure'], roots, aapt, failures)
     prop_partition, prop_inside = spec['buildProp'].split(':', 1)
     prop = roots[prop_partition]/prop_inside
     tray = last_property(prop, spec['trayProperty']) if prop.is_file() else None
@@ -211,6 +268,6 @@ def verify(product_out, spec, contract, policy, signer, filesystem, locked, defa
     if failures:
         raise ImageCheckFailed('; '.join(failures))
     return {'verified': True, 'source': 'partitions unpacked from the built super.img', 'filesystem': filesystem,
-        'partitions': partitions, 'apps': apps, 'framework': compiled, 'tray': {spec['trayProperty']: tray},
+        'partitions': partitions, 'apps': apps, 'framework': compiled, 'tray': {spec['trayProperty']: tray}, 'closure': closure,
         'updaterAbsent': {'package': updater['package'], 'apksInspected': inspected}, 'tools': used,
         'osImages': 'unsigned, test-only (AOSP test keys)', 'notProven': 'boot, UI, viewer, input, Stop or phone behaviour'}

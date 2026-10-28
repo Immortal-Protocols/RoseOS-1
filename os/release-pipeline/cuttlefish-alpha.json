@@ -145,6 +145,50 @@
       ],
       "xml": "app.seamlessupdate.client.xml"
     },
+    "closure": {
+      "source": {
+        "project": "packages/apps/Seedvault",
+        "revision": "7cfffed7ceeda60a10bf2a6d9818d6fda81828ba"
+      },
+      "apps": [
+        {
+          "module": "Seedvault",
+          "package": "com.stevesoltys.seedvault",
+          "path": "system:system/priv-app/Seedvault/Seedvault.apk"
+        },
+        {
+          "module": "LocalContactsBackup",
+          "package": "app.grapheneos.backup.contacts",
+          "path": "system:system/app/LocalContactsBackup/LocalContactsBackup.apk"
+        }
+      ],
+      "xml": [
+        {
+          "module": "com.stevesoltys.backup_allowlist",
+          "path": "system:system/etc/sysconfig/allowlist_com.stevesoltys.seedvault.xml",
+          "root": "config",
+          "package": "com.stevesoltys.seedvault"
+        },
+        {
+          "module": "com.stevesoltys.backup_default-permissions",
+          "path": "system:system/etc/default-permissions/default-permissions_com.stevesoltys.seedvault.xml",
+          "root": "exceptions",
+          "package": "com.stevesoltys.seedvault"
+        },
+        {
+          "module": "com.stevesoltys.backup_privapp_allowlist",
+          "path": "system:system/etc/permissions/com.stevesoltys.seedvault.xml",
+          "root": "permissions",
+          "package": "com.stevesoltys.seedvault"
+        },
+        {
+          "module": "default-permissions_app.grapheneos.backup.contacts",
+          "path": "system:system/etc/default-permissions/default-permissions_app.grapheneos.backup.contacts.xml",
+          "root": "exceptions",
+          "package": "app.grapheneos.backup.contacts"
+        }
+      ]
+    },
     "tools": {
       "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
       "lpunpack": null,
@@ -153,7 +197,7 @@
       "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
       "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner"
     },
-    "basis": "INFRA-ALPHA-087: OS58 imageExpectations (contract fcb5f5e4) checked from the partitions in the built super.img, never loose files. Paths follow the contract: PRODUCT/app/RosePreinstall_*, SYSTEM_EXT/priv-app/PixelBackgroundControl, system framework-res and build.prop (system-as-root, as release-pipeline IMAGE_LOCATIONS). Pinned Cuttlefish shared/BoardConfig.mk packs product, system, system_ext, vendor and others into an A/B super image and leaves their file system to TARGET_RO_FILE_SYSTEM_TYPE, so the probe records BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE and the guard requires its extractor (ext4: debugfs, erofs: fsck.erofs). simg2img, debugfs, aapt and apksigner are the Pixel pipeline's retained paths; lpunpack and fsck.erofs have no verified builder path yet and stay null (fail closed)"
+    "basis": "INFRA-ALPHA-087/088: the current OS alpha contract (os/alpha/cuttlefish-product-contract.json at preparation.osDelta, contract c825aa19, delta f21bf683, OS PR61) checked from the partitions in the built super.img, never from loose files. Rose app paths follow the contract: PRODUCT/app/RosePreinstall_*, SYSTEM_EXT/priv-app/PixelBackgroundControl, system framework-res and build.prop (system-as-root, as release-pipeline IMAGE_LOCATIONS). closure is the contract's Seedvault requirement (SYSTEM/priv-app/Seedvault and SYSTEM/app/LocalContactsBackup with their etc XML): module names, privileged flag, sub_dir and src file names from the pinned Android.bp files (OS fixtures os/tests/fixtures/cuttlefish-alpha/seedvault), packages from the pinned manifests and XML root elements and packages from the pinned XML files (scripts/tests/fixtures/seedvault-7cfffed7). These are compiled OS modules: their APKs must be readable with the pinned package; no version, digest or certificate is pinned for them and the Rose app signer does not apply. Pinned Cuttlefish shared/BoardConfig.mk packs product, system, system_ext, vendor and others into an A/B super image and leaves their file system to TARGET_RO_FILE_SYSTEM_TYPE, so the probe records BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE and the guard requires its extractor (ext4: debugfs, erofs: fsck.erofs). simg2img, debugfs, aapt and apksigner are the Pixel pipeline's retained paths; lpunpack and fsck.erofs have no verified builder path yet and stay null (fail closed). No host path, probe or image has been verified"
   },
   "artifact": {
     "name": "emulator-alpha-receipt-{run_id}",
