@@ -18,11 +18,17 @@ test('the HOME activity identity is unchanged',()=>{
  assert.ok(Number(manifest.match(/android:versionCode="(\d+)"/)[1])>298);
 });
 
-test('HOME intents land on the Home page; other opens keep the conversation page',()=>{
+test('HOME and the app icon land on Rose Home; the icon opens the Rose conversation; other opens keep their page',()=>{
  assert.match(main,/int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;/);
- assert.match(main,/home\(\);showHomeFor\(getIntent\(\)\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);home\(\);showHomeFor\(i\);\}/);
- assert.match(main,/void showHomeFor\(Intent intent\)\{if\(intent!=null&&intent\.hasCategory\(Intent\.CATEGORY_HOME\)&&launcherPager!=null\)launcherPager\.showPage\(homePage,false\);\}/);
+ // Cold start routes only a fresh intent; recreation (saved state) keeps Home without reopening the conversation.
+ assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);home\(\);showHomeFor\(i,true\);\}/);
+ const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh)'));
+ assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(homePage,false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
+ // The same explicit Intent the Rose presence uses; routing never touches voice, the HOME role or the wallpaper.
+ assert.match(main,/void openRoseConversation\(\)\{startActivity\(new Intent\(this,RoseConversationActivity\.class\)\);\}/);
+ for(const absent of ['RoleManager','ROLE_HOME','WallpaperManager','setPreferredActivity','clearPackagePreferredActivities'])assert.ok(!main.includes(absent),absent);
+ assert.doesNotMatch(route.slice(0,route.indexOf('\n')),/VoiceService|talk|endConversation|mute/i);
  // Rebuilding the pages for menu actions or package changes keeps the conversation (or current) page.
  assert.match(main,/launcherPager\.currentPage\(\):voicePage;/);
 });
