@@ -51,6 +51,10 @@ java -cp "$JAVA_TESTS/RoseChannels" app.seamlessupdate.client.RoseChannelsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
 java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeSessionMark" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/HomeSessionMark.java \
+ workspace/rose-agent/app/tests/HomeSessionMarkTest.java
+java -cp "$JAVA_TESTS/HomeSessionMark" dev.pixel.voice.HomeSessionMarkTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/UpdateCheck" \
  workspace/rose-agent/app/src/dev/pixel/voice/UpdateCheck.java workspace/rose-agent/app/tests/UpdateCheckTest.java
 java -cp "$JAVA_TESTS/UpdateCheck" dev.pixel.voice.UpdateCheckTest
