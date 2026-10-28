@@ -17,7 +17,7 @@ public final class PublicApkDownloadTest {
         checks++; if (!condition) throw new AssertionError(message);
     }
     static final String GOOD = "https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/rose-agent-304.apk";
-    static final String CDN = "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/987654321";
+    static final String CDN = "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda";
     static final String SECRET_QUERY = "?X-Amz-Signature=SECRET-TOKEN&response-content-disposition=attachment";
     static final byte[] BYTES = "fixture apk bytes, not an APK".getBytes();
 
@@ -50,6 +50,11 @@ public final class PublicApkDownloadTest {
         expect(PublicApkDownload.fetch(viaCdn, GOOD, new ByteArrayOutputStream(), id, size, 1 << 20) == size, "One 302 to the approved CDN path, then 200");
         expect(viaCdn.requested.size() == 2 && viaCdn.requested.get(1).equals(CDN + SECRET_QUERY), "The redirect query is used only for that one request");
         for (Map<String, String> h : viaCdn.headers) expect(h.isEmpty(), "No credentials, cookies, referer or other headers are sent");
+        // The asset-id path GitHub was observed to redirect to (2804 SHA256SUMS, 15:22:55Z), with an inert stand-in query.
+        String observed = "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda";
+        expect(PublicApkDownload.redirect(observed + "?inert=opaque-fixture") == null, "The observed UUID asset path is accepted, query left opaque");
+        Script observedFlow = new Script().answer(GOOD, 302, observed + "?inert=opaque-fixture", null).answer(observed + "?inert=opaque-fixture", 200, null, BYTES);
+        expect(PublicApkDownload.fetch(observedFlow, GOOD, new ByteArrayOutputStream(), id, size, 1 << 20) == size, "Download via the observed UUID redirect");
         expect(PublicApkDownload.initial("https://github.com:443/Immortal-Protocols/pixel-ota/releases/download/rose-agent-304/rose-agent-304.apk") == null, "Explicit port 443 is the same origin");
 
         // Initial URLs outside the boundary are refused before any request.
@@ -86,18 +91,28 @@ public final class PublicApkDownloadTest {
 
         // Redirects outside the boundary fail closed; the CDN is never contacted.
         String[] badRedirect = {
-            null, "", "/relative/path", "http://release-assets.githubusercontent.com/github-production-release-asset/1430356511/987654321",
-            "https://objects.githubusercontent.com/github-production-release-asset/1430356511/987654321",
-            "https://release-assets.githubusercontent.com.evil.example/github-production-release-asset/1430356511/987654321",
-            "https://evil.example/github-production-release-asset/1430356511/987654321",
-            "https://release-assets.githubusercontent.com/github-production-release-asset/999999/987654321",
+            null, "", "/relative/path", "http://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://objects.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://release-assets.githubusercontent.com.evil.example/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://evil.example/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/999999/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
             "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/../1/2",
-            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/987654321/extra",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda/extra",
             "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/abc",
-            "https://user@release-assets.githubusercontent.com/github-production-release-asset/1430356511/987654321",
-            "https://release-assets.githubusercontent.com:444/github-production-release-asset/1430356511/987654321",
-            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/987654321#x",
+            "https://user@release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://release-assets.githubusercontent.com:444/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda#x",
             GOOD,
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/987654321",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/DC8DFAE4-58F4-44D1-B98D-0879FBB4CBDA",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae458f444d1b98d0879fbb4cbda",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda0",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbd",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbdg",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda%2F..",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/{dc8dfae4-58f4-44d1-b98d-0879fbb4cbda}",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1430356512/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
+            "https://release-assets.githubusercontent.com/github-production-release-asset/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda",
         };
         for (String loc : badRedirect) {
             Script s = new Script().answer(GOOD, 302, loc, null);
