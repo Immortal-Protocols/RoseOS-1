@@ -354,7 +354,10 @@ def check_framework(path, config, aapt):
     if targets is None or sorted(t.split(':')[0] for t in targets) != sorted(expected['computerControlTargets']):
         failures.append(f'compiled computer-control targets are {targets}')
     prototype = array('config_pixelComputerControlPrototypeAgents')
-    if expected['prototypeAgentsEmpty'] and prototype:
+    # A missing array means the dump was not understood; fail closed rather than read it as empty.
+    if expected['prototypeAgentsEmpty'] and prototype is None:
+        failures.append('compiled prototype agents not found in framework-res')
+    elif expected['prototypeAgentsEmpty'] and prototype:
         failures.append('compiled prototype agents are not empty')
     locked = re.search(r'bool/config_pixelComputerControlLockedSessions:.*?\(bool\)\s*(\w+)', dump, re.S)
     if not locked or (locked.group(1) == 'true') != expected['lockedSessions']:

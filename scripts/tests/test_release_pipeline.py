@@ -96,7 +96,9 @@ class PipelineTest(unittest.TestCase):
             targets = os.environ.get("FAKE_TARGETS", "dev.pixel.calculator.agent:AAAA")
             print("      resource 0x01070001 android:array/config_pixelComputerControlTargets: t=0x10")
             for t in targets.split(","): print('        (string8) "%s"' % t)
-            print("      resource 0x01070002 android:array/config_pixelComputerControlPrototypeAgents: t=0x10")
+            if not os.environ.get("FAKE_NO_PROTOTYPE"):
+                print("      resource 0x01070002 android:array/config_pixelComputerControlPrototypeAgents: t=0x10")
+                for t in filter(None, os.environ.get("FAKE_PROTOTYPE", "").split(",")): print('        (string8) "%s"' % t)
             print("      resource 0x01050001 android:bool/config_pixelComputerControlLockedSessions: t=0x12 d=0x0 (s=0x0008 r=0x00)")
             print("        (bool) false")''')
         self.config = root/'config.json'
@@ -166,6 +168,20 @@ class PipelineTest(unittest.TestCase):
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'bytes-verify')
         self.assertIn('computer-control targets', result.stderr)
+
+    def test_compiled_prototype_agent_fails(self):
+        os.environ['FAKE_PROTOTYPE'] = 'dev.pixel.backgroundcontrol:AAAA'
+        self.addCleanup(os.environ.pop, 'FAKE_PROTOTYPE', None)
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'bytes-verify')
+        self.assertIn('compiled prototype agents are not empty', result.stderr)
+
+    def test_missing_prototype_array_fails_closed(self):
+        os.environ['FAKE_NO_PROTOTYPE'] = '1'
+        self.addCleanup(os.environ.pop, 'FAKE_NO_PROTOTYPE', None)
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'bytes-verify')
+        self.assertIn('compiled prototype agents not found', result.stderr)
 
     def test_bad_ota_signature_fails_after_signing(self):
         os.environ['FAKE_OTA_BAD'] = '1'
