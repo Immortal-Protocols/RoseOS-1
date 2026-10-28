@@ -229,9 +229,9 @@ public final class RoseConversationActivity extends Activity {
   * A new attempt withdraws the previous session's notice at once rather than waiting for the next poll. */
  void send(String action){if("talk".equals(action))clearNotice();startForegroundService(new Intent(this,VoiceService.class).setAction(action));}
 
- /** "Update Rose Agent": one authenticated GET /apps over the voice service's existing pinned connection.
-  * An available newer version can be installed only by tapping Install (SelfUpdate admission, then the
-  * service's verified delivery); checking alone never downloads or installs. */
+ /** "Update Rose Agent": checks public pixel-ota GitHub releases directly (DirectUpdate), with no PixelVoice catalog,
+  * pairing or credential. A compatible newer version can be installed only by tapping Install (SelfUpdate admission,
+  * then the service's verified delivery); checking alone never downloads the APK or installs. */
  void checkForUpdate(){
   android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Update Rose Agent").setMessage("Checking for updates…")
    .setNegativeButton("Close",null).setNeutralButton("Check again",null).setPositiveButton("Install",null).create();
@@ -241,34 +241,28 @@ public final class RoseConversationActivity extends Activity {
  }
  void runUpdateCheck(android.app.AlertDialog dialog,Button again,Button install){
   dialog.setMessage("Checking for updates…");again.setEnabled(false);install.setVisibility(View.GONE);
-  boolean busy=state!=null&&(state.active()||state.phase==ConversationState.Phase.CONNECTING);
-  String self=getPackageName();long installed;
-  try{installed=getPackageManager().getPackageInfo(self,0).getLongVersionCode();}catch(Exception e){installed=-1;}
-  final long version=installed;VoiceService s=VoiceService.instance;
   new Thread(()->{
-   int status=0;java.util.List<UpdateCheck.Record> apps=null;
-   if(s!=null&&s.ssl!=null&&s.endpoint!=null)try{
-    javax.net.ssl.HttpsURLConnection c=(javax.net.ssl.HttpsURLConnection)new java.net.URL(s.endpoint+"/apps").openConnection();
-    try{c.setSSLSocketFactory(s.ssl);c.setHostnameVerifier((h,x)->true);c.setConnectTimeout(6000);c.setReadTimeout(15000);
-     status=c.getResponseCode();if(status==200)apps=parseApps(VoiceService.read(c.getInputStream()));}
-    finally{c.disconnect();}
-   }catch(Exception e){status=0;android.util.Log.w("RoseUpdate","check failed: "+e.getClass().getSimpleName());}
-   UpdateCheck result=UpdateCheck.evaluate(status,apps,version,self,busy);
+   DirectUpdate.Device device=Delivery.localDevice(this);DirectUpdate.Result result;
+   try{result=DirectUpdate.check(new Delivery.PublicHttp(),device);}
+   catch(Exception e){result=new DirectUpdate.Result(DirectUpdate.State.ERROR,"Couldn’t check for updates ("+e.getClass().getSimpleName()+").",null);}
+   final DirectUpdate.Result r=result;
    runOnUiThread(()->{if(!dialog.isShowing())return;
-    String attempt=selfUpdateText(result.offered,version);dialog.setMessage(result.message+(attempt.isEmpty()?"":"\n\n"+attempt));again.setEnabled(true);
-    if(result.state==UpdateCheck.State.AVAILABLE&&result.offeredId!=null){install.setVisibility(View.VISIBLE);install.setOnClickListener(v->startSelfUpdate(dialog,install,result));}});
+    boolean busy=state!=null&&(state.active()||state.phase==ConversationState.Phase.CONNECTING);
+    String attempt=r.offer==null?"":selfUpdateText(r.offer.versionCode,device.installed);
+    dialog.setMessage(r.message+(r.state==DirectUpdate.State.AVAILABLE&&busy?" Install after this call ends; nothing will interrupt it.":"")+(attempt.isEmpty()?"":"\n\n"+attempt));again.setEnabled(true);
+    if(r.state==DirectUpdate.State.AVAILABLE&&r.offer!=null){install.setVisibility(View.VISIBLE);install.setOnClickListener(v->startSelfUpdate(dialog,install,r.offer));}});
   },"rose-update-check").start();
  }
  /** The owner's explicit Install: admitted by the service (voice idle, newer, not already installing, install
   * capability present), then followed from its recorded state until the dialog closes. */
- void startSelfUpdate(android.app.AlertDialog dialog,Button install,UpdateCheck offer){
-  VoiceService s=VoiceService.instance;if(s==null){dialog.setMessage("Rose Agent’s voice service isn’t running, so nothing was installed.");return;}
-  SelfUpdate.Admission a=s.installSelf(offer.offeredId,offer.offered);
+ void startSelfUpdate(android.app.AlertDialog dialog,Button install,DirectUpdate.Offer offer){
+  VoiceService s=VoiceService.instance;if(s==null){dialog.setMessage("Rose Agent’s service isn’t running, so nothing was installed.");return;}
+  SelfUpdate.Admission a=s.installSelf(offer);
   dialog.setMessage(SelfUpdate.admissionText(a));if(a!=SelfUpdate.Admission.START)return;
   install.setVisibility(View.GONE);
   Runnable follow=new Runnable(){public void run(){if(!dialog.isShowing())return;
    long installed;try{installed=getPackageManager().getPackageInfo(getPackageName(),0).getLongVersionCode();}catch(Exception e){installed=-1;}
-   String text=selfUpdateText(offer.offered,installed);if(!text.isEmpty())dialog.setMessage(text);content.postDelayed(this,500);}};
+   String text=selfUpdateText(offer.versionCode,installed);if(!text.isEmpty())dialog.setMessage(text);content.postDelayed(this,500);}};
   content.postDelayed(follow,500);
  }
  /** The recorded attempt for this offered version only; an earlier attempt for another version says nothing. */
@@ -276,15 +270,6 @@ public final class RoseConversationActivity extends Activity {
   android.content.SharedPreferences p=getSharedPreferences("self-update",0);
   return p.getLong("target",-1)==offered?SelfUpdate.attemptText(offered,p.getString("state",""),installed):"";
  }
- /** {apps:[...]} → records, or null when the body is not that shape. Unknown fields (e.g. deviceId) are ignored. */
- static java.util.List<UpdateCheck.Record> parseApps(String body){
-  try{org.json.JSONArray a=new org.json.JSONObject(body).optJSONArray("apps");if(a==null)return null;
-   java.util.List<UpdateCheck.Record> out=new java.util.ArrayList<>();
-   for(int i=0;i<a.length();i++){org.json.JSONObject o=a.optJSONObject(i);if(o==null)continue;
-    out.add(new UpdateCheck.Record(str(o,"id"),str(o,"label"),str(o,"packageName"),o.opt("versionCode"),str(o,"sha256")));}
-   return out;}catch(Exception e){return null;}
- }
- static String str(org.json.JSONObject o,String k){Object v=o.opt(k);return v instanceof String?(String)v:null;}
 
  /** Simple folded presence: overlapping translucent petals around an aperture. Opening follows the
   * session (closed when idle or muted, open when listening); Rose's output level articulates the edges.

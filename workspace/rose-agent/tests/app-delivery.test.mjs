@@ -64,26 +64,30 @@ test('APP-UPDATER-002: explicit self-update is admitted by the service and verif
  assert.ok(admit.indexOf('SelfUpdate.admit(')<admit.indexOf('installing.compareAndSet(false,true)'),'admission precedes taking the single install slot');
  assert.match(admit,/voiceBusy\(\)/);assert.match(admit,/canRequestPackageInstalls\(\)/);
  assert.match(receiver,/getLongExtra\(SELF_TARGET,-1\)/,'installer outcomes are recorded for the targeted version');
- assert.match(activity,/install\.setOnClickListener\(v->startSelfUpdate\(dialog,install,result\)\)/,'Install runs only from the owner tapping it');
+ assert.match(activity,/install\.setOnClickListener\(v->startSelfUpdate\(dialog,install,r\.offer\)\)/,'Install runs only from the owner tapping it');
  assert.ok(!/startSelfUpdate\(/.test(activity.slice(0,activity.indexOf('void checkForUpdate('))),'nothing starts an install on its own');
  assert.match(activity,/p\.getLong\("target",-1\)==offered\?SelfUpdate\.attemptText/,'only an attempt for the offered version is shown');
 });
 
-test('APP-GITHUB-001: self-update bytes come only from the manifest apkUrl over the anonymous public transport',()=>{
- const delivery=fs.readFileSync(new URL('../app/src/dev/pixel/voice/Delivery.java',import.meta.url),'utf8');
- const self=delivery.slice(delivery.indexOf('static void installSelf('),delivery.indexOf('static final class PublicHttp'));
+test('APP-GITHUB-002: self-update discovery and download use public GitHub only, with no PixelVoice dependency',()=>{
+ const src=n=>fs.readFileSync(new URL('../app/src/dev/pixel/voice/'+n,import.meta.url),'utf8');
+ const delivery=src('Delivery.java'),activity=src('RoseConversationActivity.java'),voice=src('VoiceService.java');
+ const self=delivery.slice(delivery.indexOf('static void installSelf('),delivery.indexOf('static DirectUpdate.Device localDevice('));
  const at=s=>{const i=self.indexOf(s);assert.ok(i>0,s);return i;};
- assert.ok(at('m.optString("apkUrl","")')<at('PublicApkDownload.fetch(new PublicHttp(),apkUrl,'),'apkUrl comes from the pinned manifest');
- assert.match(self,/if\(apkUrl\.isEmpty\(\)\)throw new IOException\("No public download is published/,'a missing apkUrl is unavailable, with no fallback');
- assert.ok(!/"\/apk"/.test(self),'the self path no longer downloads from the pinned /apk route');
- assert.ok(at('PublicApkDownload.fetch(')<at('SelfUpdate.verify('),'the existing identity verification still runs on the downloaded bytes');
- assert.match(self,/download\(endpoint\+"\/apps\/"\+id\+"\/idsig",ssl,/,'the optional idsig stays on the pinned same-origin route');
+ assert.match(self,/static void installSelf\(VoiceService a,DirectUpdate\.Offer offer\)/,'the installer takes the validated GitHub offer');
+ assert.ok(!/endpoint|\bssl\b|manifest\(|\/apps\/|idsig/.test(self),'no PixelVoice endpoint, pinned connection, catalog manifest or sidecar route');
+ assert.ok(at('PublicApkDownload.fetch(new PublicHttp(),offer.apkUrl,out,offer.sha256,offer.size,')<at('SelfUpdate.verify('),'bytes from the offer, bound to its hash and size, then verified');
+ assert.match(self,/offer\.signerSha256\.equals\(signerSha256\(archive\)\)/,'the archive signer must equal the receipt signer');
+ assert.ok(at('DirectUpdate.incompatibility(offer,localDevice(a))')<at('session.commit('),'compatibility is rechecked right before commit');
+ assert.ok(at('SelfUpdate.beforeCommit(version,a.selfVersion(),a.voiceBusy())')<at('session.commit('),'voice and version are rechecked right before commit');
+ const check=activity.slice(activity.indexOf('void runUpdateCheck('),activity.indexOf('void startSelfUpdate('));
+ assert.match(check,/DirectUpdate\.check\(new Delivery\.PublicHttp\(\),device\)/,'the check reads GitHub directly');
+ assert.ok(!/VoiceService|endpoint|\.ssl|\/apps/.test(check),'the check does not need the voice service, PixelVoice or its catalog');
  const http=delivery.slice(delivery.indexOf('static final class PublicHttp'),delivery.indexOf('static boolean sameSigners('));
- assert.match(http,/context\.init\(null,null,null\)/,'system trust and no client KeyManager');
- assert.match(http,/setHostnameVerifier\(HttpsURLConnection\.getDefaultHostnameVerifier\(\)\)/,'hostname verification is the platform default, not trust-all');
- assert.match(http,/setInstanceFollowRedirects\(false\)/);assert.match(http,/setUseCaches\(false\)/);
- assert.match(http,/CookieHandler\.getDefault\(\)!=null\)throw/,'refuses to run with a shared cookie store');
- assert.ok(!/\bssl\b|DeviceIdentity|systemTrustedSsl|identity|setDefault/.test(http),'no device identity, pinned factory or global change');
+ assert.match(http,/context\.init\(null,null,null\)/);assert.match(http,/setInstanceFollowRedirects\(false\)/);
+ assert.ok(!/\bssl\b|DeviceIdentity|systemTrustedSsl|setDefault/.test(http),'anonymous transport with no device identity or global change');
+ assert.match(voice,/SelfUpdate\.Admission installSelf\(DirectUpdate\.Offer offer\)/,'admission stays in the local service');
  const generic=delivery.slice(delivery.indexOf('public static void install('),delivery.indexOf('static void installSelf('));
  assert.match(generic,/download\(endpoint\+"\/apps\/"\+id\+"\/apk",ssl,/,'other apps keep the existing pinned delivery');
+ assert.match(generic,/Use Update Rose Agent/,'and still refuse Rose Agent itself');
 });
