@@ -21,7 +21,9 @@ import re
 import subprocess
 import sys
 import time
-import release_receipts
+# Import the shared helper beside this file, also under python3 -I (no script directory on sys.path).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_receipts  # noqa: E402
 from release_receipts import sha256_file
 
 SCHEMA = 1

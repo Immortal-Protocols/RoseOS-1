@@ -206,6 +206,11 @@ class StageTest(unittest.TestCase):
         text = json.dumps(report) + json.dumps(self.status()[1]) + ''.join(p.read_text() for p in self.state.iterdir())
         self.assertNotIn(marker, text)
 
+    def test_release_tools_run_in_isolated_mode(self):
+        for script in (SCRIPT, SCRIPT.parent/'release-manifest.py'):
+            result = subprocess.run([PY, '-I', str(script), '--help'], capture_output=True, text=True, cwd=self.root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_uninitialized_is_not_failed_and_abandon_is_explicit(self):
         empty = self.root/'empty'
         empty.mkdir()

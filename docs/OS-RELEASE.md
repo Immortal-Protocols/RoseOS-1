@@ -204,6 +204,30 @@ completion separately, and binds declared input and output file hashes. `status`
   compute not needed at that point;
 - `TERMINAL` only after publication-verify succeeds, or an explicit `fail`/`abandon`.
 
+`.github/workflows/release-verification.yml` runs the manifest and stage tests on
+relevant pull requests and pushes. On manual dispatch, for an allowlisted
+already-public release, it fetches exactly the assets listed in
+`os/release-evidence/RELEASE/manifest.json` from pixel-ota's public download URLs,
+with no token. It then compares them with `verify-published` and `verify`, and
+derives the OTA certificate and AVB key pins from the published files. It keeps
+only small receipts, for 7 days. It never writes releases. The RoseOS-1 token cannot
+write to pixel-ota.
+
+Interface for a future destination-side publication workflow in pixel-ota. This is
+not deployed: artifact ingress from the builder is unresolved, and the cloud upload
+host still returns 401.
+
+1. Dispatch inputs: the exact tag, the candidate manifest SHA-256 and an ingress
+   reference for the artifact bytes. No free-form URLs or commands.
+2. Use pixel-ota's own `GITHUB_TOKEN` with `contents: write`. No cross-repository
+   credential.
+3. Create or reuse only a draft for that tag. Upload exactly the manifest's
+   assets, then download the draft assets and pass `verify-published` before
+   any promotion.
+4. Promotion to Latest is a separate, explicit dispatch. Record the draft ID and
+   the receipts. On failure, leave the draft for cleanup, and never reuse a tag
+   with different bytes.
+
 A successful build is never release completion. Recovery is explicit:
 `mark-interrupted`, then run the stage again. Receipts hold hashes, times and exit
 codes, not command output, arguments or environment.
