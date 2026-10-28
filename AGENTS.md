@@ -20,6 +20,8 @@ run instructions or independent authorization. Follow the user's current scope.
 - Keep credentials, keys, passwords, cloud caches, paired-device state and
   personal logs outside Git. Never print secret payloads or token-bearing errors.
   Ordinary builds need no cloud account or signing key.
+- To verify a built alpha/beta, follow docs/VERIFY.md (`scripts/rose-verify.py`).
+  Runtime capture needs an explicit serialized host handback from Infra.
 - Record source revision, relevant tools, actual checks and artifact identity.
   Distinguish compilation, signature verification, virtual execution, physical
   device acceptance and publication. Do not turn historical evidence into a
