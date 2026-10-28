@@ -181,9 +181,17 @@ serving runtime and Agent Platform invocation API, and only the adapter changes.
 | Command | Behaviour | Exit |
 | --- | --- | --- |
 | `config-check --config FILE [overrides]` | Prints resolved settings and the exact request URL. For bearer-env, reports only whether the variable is set. Never runs the token command. No network. | 0 OK, 3 config error |
-| `chat --config FILE [--script FILE] [--transcript FILE] [--label TEXT] [overrides]` | Sends each line as a turn over HTTP and prints `assistant> ...`. Failed turns are reported on stderr, history stays unchanged and the next line still runs. Resolves the credential once at start; bearer-command runs the configured program. | 0 all turns OK, 3 config or credential error, 4 one or more turns failed |
+| `chat --config FILE [--script FILE] [--transcript FILE] [--label TEXT] [overrides]` | Sends each line as a turn over HTTP and prints `assistant> ...`. Failed turns are reported on stderr, history stays unchanged and the next line still runs. Resolves the credential once at start; bearer-command runs the configured program. | 0 all turns OK, 2 transcript cannot be written, 3 config or credential error, 4 one or more turns failed; killed by SIGINT/SIGTERM when interrupted (below) |
 | `fixture-demo` | Two in-process scripted turns, labelled FIXTURE | 0 OK, 4 chat error |
 | anything else | Usage (also unreadable script or transcript path) | 2 |
+
+There is no exit code 5; it existed only before the HTTP transport.
+
+**Interrupts.** `rose-chat` installs no signal handler. SIGINT (Ctrl-C) or SIGTERM ends the process
+immediately by that signal: the wait status is "killed by signal 2/15", which shells report as exit
+130/143. An in-flight request is abandoned and its socket closed by the OS. Output and transcript
+records for turns that already finished are kept. Nothing is written for the interrupted turn,
+and there is no `summary` record.
 
 ### Transcript (`--transcript`)
 
@@ -195,13 +203,22 @@ served model, request id, usage, reasoning character count) and a final `summary
 contains message text, reasoning text, credentials or URL queries. Same script, config and server
 give the same records apart from times, which a loopback test checks (C15).
 
+**Durability.** Each record is one complete line written with a single unbuffered `write` before
+the next turn starts. The `run` record is written before any request, so an unwritable transcript
+(for example `/dev/full`) fails with exit 2 before anything is sent. A later write failure prints
+`cannot write transcript record for turn N` and exits 2 before the next turn. A run interrupted by
+SIGINT/SIGTERM keeps every finished turn's record, with no record for the interrupted turn and no
+`summary`, so a missing `summary` marks an incomplete run. Records are not fsynced, so this is
+not a power-loss or OS-crash guarantee.
+
 ## Test tiers
 
 | Tier | Files | Proves |
 | --- | --- | --- |
 | Unit | `tests/config.rs`, `tests/wire.rs` (encode/decode), `tests/redaction.rs` | Parsing, validation, URL contract, status mapping, redaction |
 | In-process FIXTURE | `tests/session.rs`, `tests/wire.rs` (session cases), `tests/cli.rs` (`fixture-demo`) | Client history and error handling against scripted responses |
-| LOOPBACK FIXTURE | `tests/http_loopback.rs`, `tests/cli.rs` (`chat`) | The real HTTP transport and CLI over 127.0.0.1 sockets, against QA's `fixture_server.py` and small in-test servers |
+| LOOPBACK FIXTURE | `tests/http_loopback.rs`, `tests/cli.rs` (`chat`), `tests/signals.rs` | The real HTTP transport and CLI over 127.0.0.1 sockets, against QA's `fixture_server.py` and small in-test servers, including transcript durability under SIGINT/SIGTERM |
+| QA direct harness | `qa/models/rust_cli_checks.py` (QA-owned), run by CI on the built binary | QA's independent loopback cases for the binary |
 | Live | none | Requires the selected model on an approved endpoint and an approved client identity. UNAVAILABLE; never in generic test runs |
 
 Not implemented: streaming (`:streamRawPredict`), automatic retry, token-exact context

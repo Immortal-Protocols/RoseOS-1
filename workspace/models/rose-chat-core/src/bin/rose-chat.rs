@@ -1,8 +1,10 @@
 //! rose-chat: configuration check, scripted or interactive chat over HTTP, and an in-process
 //! FIXTURE demonstration.
 //!
-//! Exit codes: 0 success, 2 usage error, 3 configuration or credential error, 4 one or more
-//! chat turns failed (each failure is reported; later turns still run with unchanged history).
+//! Exit codes: 0 success, 2 usage error or transcript write failure, 3 configuration or credential
+//! error, 4 one or more chat turns failed (each failure is reported; later turns still run with
+//! unchanged history). No signal handler is installed: SIGINT/SIGTERM end the process by that
+//! signal (shells report 130/143). Transcript records already written stay on disk.
 
 use std::env;
 use std::fs;
@@ -210,7 +212,10 @@ fn chat(raw: &[String]) -> ExitCode {
         if let Some(t) = transcript.as_mut()
             && let Err(e) = t.turn(text.chars().count(), &result, status, started.elapsed())
         {
-            eprintln!("cannot write transcript: {}", e.kind());
+            eprintln!(
+                "cannot write transcript record for turn {turn}: {}; stopping before the next turn",
+                e.kind()
+            );
             return ExitCode::from(2);
         }
     }
