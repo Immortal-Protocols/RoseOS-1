@@ -183,6 +183,9 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (artifact/'assets').iterdir()), sorted([f'frankel-ota_update-{BUILD}.zip',
             'frankel-stable', 'releasekey.x509.pem', 'avb_pkmd.bin', 'SHA256SUMS', 'UPDATE.md', 'verification.json']))
         self.assertTrue(json.loads((artifact/'pipeline-receipt.json').read_text())['simulated'])
+        tools = json.loads((artifact/'assets/verification.json').read_text())['imageTools']
+        self.assertEqual(sorted(tools), ['debugfs', 'simg2img'])  # the fixture product image is sparse
+        self.assertEqual(tools['debugfs']['sha256'], hashlib.sha256((self.root/'tools/debugfs').read_bytes()).hexdigest())
         code, out = self.pipeline('publish', *self.common[:8], '--config', self.config, '--artifact-dir', artifact,
             '--adapter', 'fake', '--fake-state', self.root/'fake', '--promote')
         self.assertEqual(code, 0, out)
@@ -290,11 +293,9 @@ class PipelineTest(unittest.TestCase):
         code, out = self.pipeline('preflight', '--job', 'guard', env=env)
         self.assertEqual(code, 4)
         missing = json.loads(out)['missing']
-        for name in ('ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
-                     'GCP_SIGNER_SERVICE_ACCOUNT', 'host.sign.updateNotes', 'host.tools.simg2img', 'host.tools.debugfs'):
-            self.assertIn(name, missing)
-        self.assertEqual(len(missing), len(set(missing)))
-        self.assertTrue(any(m.startswith('PIXEL_OTA_PUBLISHER') for m in missing))
+        # Only the proposed admin setup remains; the host recipe in the checked-in config is complete.
+        self.assertEqual(missing, ['ROSEOS_BUILDER_RUNNER_READY', 'GCP_WORKLOAD_IDENTITY_PROVIDER', 'GCP_CONTROLLER_SERVICE_ACCOUNT',
+            'GCP_SIGNER_SERVICE_ACCOUNT', 'PIXEL_OTA_PUBLISHER (must be github-app)'])
         code, out = self.pipeline('preflight', '--job', 'publisher', env=dict(env, PIXEL_OTA_PUBLISHER='github-app'))
         self.assertEqual(code, 4)
         self.assertEqual(json.loads(out)['missing'], ['PIXEL_OTA_APP_ID', 'PIXEL_OTA_APP_PRIVATE_KEY'])

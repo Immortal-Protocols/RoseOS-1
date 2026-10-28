@@ -34,6 +34,9 @@ CONFIG = ROOT/'os/release-pipeline/frankel.json'
 TARGET_FILES_VERIFIER = ROOT/'qa/first-update/runtime/verify-target-files.py'
 SUPPORTED_PUBLISHERS = ('github-app',)  # pixel-ota-only App; token minted in the hosted publisher job.
 BUILDER = {'project': 'protocols-465723', 'zone': 'us-west2-a', 'instance': 'immortal-os-builder'}
+# action: (target state, state a request is submitted from, transitional states that need no new request)
+BUILDER_STATES = {'start': ('RUNNING', 'TERMINATED', {'PROVISIONING', 'STAGING'}),
+    'stop': ('TERMINATED', 'RUNNING', {'STOPPING'})}
 PROPS = ('SYSTEM/build.prop', 'VENDOR/build.prop', 'PRODUCT/etc/build.prop', 'SYSTEM_EXT/etc/build.prop')
 
 class CheckFailed(Exception):
@@ -93,6 +96,8 @@ def preflight(job, config, env, adapter):
         missing += publisher_inputs(env)
         missing += adapter_inputs(config)
         missing += [f'host.tools.{k}' for k, v in config['host']['tools'].items() if not v]
+        if not config.get('versionBaselines'):
+            missing.append('versionBaselines')
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
@@ -119,9 +124,38 @@ def publisher_inputs(env):
 class Production:
     simulated = False
 
-    def control_builder(self, action):
-        subprocess.run(['gcloud', 'compute', 'instances', action, BUILDER['instance'], '--zone', BUILDER['zone'],
-            '--project', BUILDER['project'], '--quiet'], check=True)
+    def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic):
+        """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
+        this one instance, no operations read), within the 10-minute job limit. Never resubmits: a failed or uncertain request is reconciled against
+        the observed state. RUNNING is the VM state, not runner readiness."""
+        target, source, passing = BUILDER_STATES[action]
+        where = [f'--project={BUILDER["project"]}', f'--zone={BUILDER["zone"]}']
+
+        def describe():
+            result = subprocess.run([gcloud, 'compute', 'instances', 'describe', BUILDER['instance'], *where,
+                '--format=value(status)'], capture_output=True, text=True)
+            if result.returncode:
+                raise CheckFailed(f'builder describe failed (exit {result.returncode})')
+            return result.stdout.strip()
+        state = describe()
+        if state == source:
+            result = subprocess.run([gcloud, 'compute', 'instances', action, BUILDER['instance'], *where, '--async', '--quiet'],
+                capture_output=True, text=True)
+            if result.returncode:
+                state = describe()
+                if state not in passing | {target}:
+                    raise CheckFailed(f'builder {action} request failed (exit {result.returncode}); observed {state}')
+        elif state not in passing | {target}:
+            raise CheckFailed(f'builder is {state}; refusing to {action} it')
+        deadline = clock() + timeout
+        while state != target:
+            if state not in passing | {source}:
+                raise CheckFailed(f'builder moved to {state} while waiting for {target}')
+            if clock() >= deadline:
+                raise CheckFailed(f'builder did not reach {target} within {timeout}s; last observed {state}')
+            sleep(interval)
+            state = describe()
+        return state
 
     def make(self, config, cand, env):
         host = config['host']
@@ -234,8 +268,32 @@ def drop_signer_access():
     if directory and runner_temp and Path(directory) == Path(runner_temp)/'gcloud-job-config' and Path(directory).exists():
         shutil.rmtree(directory)
 
+def check_version_baselines(config, cand, apps):
+    """Before anything is built: the dispatched apps must replace the delivered release's identities (Android keeps
+    an installed app unless the image's copy is at least as new) and must be strictly newer than retained candidates
+    whose content differs (e.g. the unpublished P1 299); the build number and BUILD_DATETIME must move past them."""
+    baselines = config.get('versionBaselines')
+    if baselines is None:
+        if config.get('fixture'):
+            return
+        raise SetupMissing(['versionBaselines'])
+    apps = {package: version for package, version in apps}
+    installed = json.loads((ROOT/baselines['installedEvidence']['identities']).read_text())
+    failures = [f'{app["packageName"]} versionCode {apps[app["packageName"]]} is below delivered '
+        f'{baselines["installedEvidence"]["build"]} versionCode {app["versionCode"]}'
+        for app in installed['apps'] if app['packageName'] in apps and apps[app['packageName']] < app['versionCode']]
+    for retained in baselines.get('retained', []):
+        for package, version in retained['mustExceed'].items():
+            if package not in apps or apps[package] <= version:
+                failures.append(f'{package} versionCode {apps.get(package)} must exceed retained {retained["build"]} versionCode {version}')
+        if int(cand['build']) <= int(retained['build']) or int(cand['timestamp']) <= int(retained['buildTimestamp']):
+            failures.append(f'build number and BUILD_DATETIME must exceed retained {retained["build"]} ({retained["buildTimestamp"]})')
+    if failures:
+        raise CheckFailed('; '.join(failures))
+
 def build(a, config, cand, adapter):
     host = config['host']
+    check_version_baselines(config, cand, json.loads(a.apps))
     if not host.get('integrateCommand'):
         raise SetupMissing(['host.integrateCommand'])
     release_dir = Path(a.release_dir)
@@ -442,7 +500,13 @@ SPARSE_MAGIC = b'\x3a\xff\x26\xed'
 IMAGE_LOCATIONS = (('SYSTEM_EXT/', 'IMAGES/system_ext.img', '/'), ('PRODUCT/', 'IMAGES/product.img', '/'),
     ('SYSTEM/', 'IMAGES/system.img', '/system/'))
 
-def image_file(config, archive, loose_name, workdir, cache):
+def tool_receipt(config, name, used):
+    # Which retained tool actually ran, with its bytes: the sparse branch is conditional, so only use is recorded.
+    path = tool(config, name)
+    used.setdefault(name, {'path': path, 'sha256': sha256_file(path)})
+    return path
+
+def image_file(config, archive, loose_name, workdir, cache, used):
     """Bytes of a file as embedded in the signed partition image (simg2img when sparse, then debugfs)."""
     for prefix, image, root in IMAGE_LOCATIONS:
         if loose_name.startswith(prefix):
@@ -459,18 +523,18 @@ def image_file(config, archive, loose_name, workdir, cache):
             sparse = f.read(4) == SPARSE_MAGIC
         if sparse:
             unsparse = raw.with_suffix('.raw')
-            subprocess.run([tool(config, 'simg2img'), str(raw), str(unsparse)], check=True, capture_output=True)
+            subprocess.run([tool_receipt(config, 'simg2img', used), str(raw), str(unsparse)], check=True, capture_output=True)
             raw.unlink()
             raw = unsparse
         cache[image] = raw
     out = Path(workdir)/('extract-' + hashlib.sha256(loose_name.encode()).hexdigest()[:16])
     inside = root + loose_name[len(prefix):]
-    subprocess.run([tool(config, 'debugfs'), '-R', f'dump -p {inside} {out}', str(cache[image])], capture_output=True)
+    subprocess.run([tool_receipt(config, 'debugfs', used), '-R', f'dump -p {inside} {out}', str(cache[image])], capture_output=True)
     if not out.is_file():
         raise CheckFailed(f'{inside} not found in {image}')
     return out.read_bytes()
 
-def check_image_bytes(config, signed, policy_path):
+def check_image_bytes(config, signed, policy_path, used):
     """Loose target-files entries are not enough: compare the bytes actually embedded in the signed images."""
     policy = json.loads(Path(policy_path).read_text())
     expected = {'SYSTEM_EXT/priv-app/PixelBackgroundControl/': policy['agent']['apkSha256']}
@@ -484,10 +548,10 @@ def check_image_bytes(config, signed, policy_path):
             if len(names) != 1:
                 failures.append(f'expected one APK under {prefix}, found {len(names)}')
                 continue
-            if hashlib.sha256(image_file(config, archive, names[0], workdir, cache)).hexdigest() != digest:
+            if hashlib.sha256(image_file(config, archive, names[0], workdir, cache, used)).hexdigest() != digest:
                 failures.append(f'image bytes of {names[0]} differ from the policy pin')
         framework = 'SYSTEM/framework/framework-res.apk'
-        if hashlib.sha256(image_file(config, archive, framework, workdir, cache)).digest() != hashlib.sha256(archive.read(framework)).digest():
+        if hashlib.sha256(image_file(config, archive, framework, workdir, cache, used)).digest() != hashlib.sha256(archive.read(framework)).digest():
             failures.append('framework-res.apk in system.img differs from the checked target-files copy')
     return failures
 
@@ -539,10 +603,11 @@ def verify_signed(a, config, cand, adapter):
     expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
     present = {p.name for p in public.iterdir()}
     failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
+    image_tools = {}
     if not failures:
         failures += check_build_identity(signed, config, cand, 'release-keys')
         failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
-        failures += check_image_bytes(config, signed, release_dir/'background-policy.json')
+        failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
         failures += check_vbmeta(config, signed, public)
@@ -555,7 +620,8 @@ def verify_signed(a, config, cand, adapter):
         'signedTargetFilesSha256': sha256_file(signed), 'published': False,
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
             'image-embedded app/framework bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
-            'vbmeta signature and AVB key', 'public pins', 'feed line']}
+            'vbmeta signature and AVB key', 'public pins', 'feed line'],
+        'imageTools': image_tools}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)
     return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}
@@ -657,8 +723,7 @@ def main(argv=None):
                 raise SetupMissing(missing)
             report = {'job': a.job, 'preflight': 'ready'}
         elif a.command in ('start-builder', 'stop-builder'):
-            adapter.control_builder(a.command.split('-')[0])
-            report = {'builder': a.command}
+            report = {'builder': a.command, 'observed': adapter.control_builder(a.command.split('-')[0])}
         else:
             cand = candidate(a)
             report = {'build': build, 'verify-build': verify_build, 'sign': sign, 'verify-signed': verify_signed,
