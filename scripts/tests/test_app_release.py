@@ -290,9 +290,9 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             block = self.jobs[name].replace("    if: inputs.mode == 'os-release'\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: builder\n', self.jobs['publisher'])  # skipped whenever builder is skipped
-        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, app-only, emulator-alpha\]\n        default: os-release\n")
+        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, app-only, emulator-alpha, emulator-alpha-successor\]\n        default: os-release\n")
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']

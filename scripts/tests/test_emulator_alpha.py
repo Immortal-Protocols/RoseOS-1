@@ -1052,6 +1052,95 @@ class SuccessorTest(unittest.TestCase):
             alpha.alpha_source.apply_patch = original_apply
         self.assertFalse(list((self.prepared_dir/'successors').rglob('successor.json')))
 
+    def run_successor(self, sha=BOUND, apps=APPS, evidence='evidence', run_id='40680000010', **kwargs):
+        return self.with_env(lambda: alpha.successor_run(self.config(), sha, apps, run_id, TS, self.root/evidence, **kwargs))
+
+    def test_successor_run_transitions_verifies_probes_and_hands_back_sanitized_evidence(self):
+        config_before = self.config_path.read_bytes()
+        summary = self.run_successor()
+        evidence = self.root/'evidence'
+        self.assertEqual(sorted(p.name for p in evidence.iterdir()),
+            ['SHA256SUMS', 'probe.json', 'successor.json', 'summary.json', 'verification.json'])
+        self.assertEqual(json.loads((evidence/'summary.json').read_text()), summary)
+        for line in (evidence/'SHA256SUMS').read_text().splitlines():
+            digest, name = line.split('  ')
+            self.assertEqual(sha(evidence/name), digest)
+        self.assertEqual((summary['executedMake'], summary['compiled'], summary['signed'], summary['published'], summary['configWritten']),
+            (False, False, False, False, False))
+        self.assertEqual(self.made(), [], 'no make in preparation mode')
+        self.assertEqual(self.config_path.read_bytes(), config_before, 'measured values are handed back, never written')
+        record = self.prepared_dir/'successors'/summary['successorId']
+        self.assertEqual(summary['successorReceiptSha256'], sha(record/'successor.json'))
+        self.assertEqual(summary['probeReceiptSha256'], sha(record/'probe-rose-cf-alpha-40680000010.json'))
+        self.assertEqual(sha(evidence/'probe.json'), summary['probeReceiptSha256'])
+        self.assertEqual((summary['fullRehash'], summary['lunch'], summary['predecessor'], summary['incremental'], summary['osDeltaCommit']),
+            ({'verdict': 'OK', 'failureCount': 0}, LUNCH, self.predecessor['preparationId'], INCREMENTAL['sha256'], '156ccb8ed0bbc871222bfa206009560b1c9907be'))
+        self.untouched()
+        # The lead records exactly the handed-back values; only then does the normal alpha build run.
+        with self.assertRaises(alpha.SetupMissing):
+            self.run_build()
+        self.data['prepared']['successor'] = summary['toRecord']['prepared.successor']
+        self.data['hostEvidence'].update(summary['toRecord']['hostEvidence'])
+        self.write()
+        self.assertEqual(self.run_build()['preparation']['successor'], summary['toRecord']['prepared.successor'])
+        # A second run is a verified no-op transition with its own probe and evidence.
+        again = self.run_successor(evidence='evidence2', run_id='40680000011')
+        self.assertTrue(again['alreadyTransitioned'])
+        self.assertEqual(again['successorReceiptSha256'], summary['successorReceiptSha256'])
+
+    def test_successor_run_refuses_another_base_dispatch_capacity_or_evidence_directory_before_any_write(self):
+        for kwargs, error, message in ((dict(sha='a' * 40), alpha.CheckFailed, 'based on ae9cfd4d'),
+                (dict(apps=list(reversed(APPS))), alpha.CheckFailed, 'differ from the bound'),
+                (dict(sha='abc'), alpha.InvalidInput, 'full candidate SHA')):
+            with self.assertRaisesRegex(error, message):
+                self.run_successor(**kwargs)
+        self.data['build']['minFreeGiB'] = 10**9
+        self.write()
+        with self.assertRaisesRegex(alpha.CheckFailed, 'below build.minFreeGiB'):
+            self.run_successor()
+        self.data['build']['minFreeGiB'] = 0
+        self.write()
+        (self.root/'taken').mkdir()
+        with self.assertRaisesRegex(alpha.CheckFailed, 'already exists'):
+            self.run_successor(evidence='taken')
+        self.assertFalse((self.prepared_dir/'successors').exists(), 'nothing was transitioned')
+        self.assertEqual(sha(self.generic), INCREMENTAL['beforeSha256'])
+        self.data['preparation'].pop('successorOf')
+        self.write()
+        with self.assertRaisesRegex(alpha.SetupMissing, 'successorOf'):
+            self.run_successor()
+
+    def test_a_failed_probe_leaves_no_evidence_and_the_receipt_bound_state_reruns(self):
+        self.env['FAKE_LUNCH_ACCEPT'] = 'another-product'
+        with self.assertRaisesRegex(alpha.CheckFailed, 'did not resolve'):
+            self.run_successor()
+        self.assertFalse((self.root/'evidence').exists(), 'no evidence for a failed run')
+        record = next((self.prepared_dir/'successors').iterdir())
+        self.assertTrue((record/'successor.json').is_file(), 'the completed transition stays recorded')
+        self.assertFalse(list(record.glob('probe-*.json')))
+        del self.env['FAKE_LUNCH_ACCEPT']
+        summary = self.run_successor(run_id='40680000012')
+        self.assertTrue(summary['alreadyTransitioned'])
+        self.assertEqual(summary['fullRehash']['verdict'], 'OK')
+
+    def test_drift_after_the_transition_or_a_probe_tree_failure_hands_back_nothing(self):
+        self.successor()
+        media = self.tree/'build/make'/MEDIA
+        media.write_bytes(media.read_bytes() + b'# drift after the transition\n')
+        with self.assertRaisesRegex(alpha.CheckFailed, 'failed its full re-hash .*media_system.mk: file differs'):
+            self.run_successor()
+        self.assertFalse((self.root/'evidence').exists())
+        self.assertFalse(list((self.prepared_dir/'successors').rglob('probe-*.json')), 'no probe of a drifted tree')
+        media.write_bytes(media.read_bytes().replace(b'# drift after the transition\n', b''))
+        original = alpha.probe
+        alpha.probe = lambda *args, **kwargs: {**original(*args, **kwargs), 'treeFailures': ['synthetic tree failure']}
+        try:
+            with self.assertRaisesRegex(alpha.CheckFailed, 'probe found tree failures: synthetic tree failure'):
+                self.run_successor(run_id='40680000013')
+        finally:
+            alpha.probe = original
+        self.assertFalse((self.root/'evidence').exists())
+
     def test_the_predecessor_alone_is_never_built_for_the_new_delta(self):
         with self.assertRaises(alpha.SetupMissing):
             self.run_build()
@@ -1089,6 +1178,23 @@ class CheckedInAlphaTest(unittest.TestCase):
         build = subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'build', '--candidate-sha', BOUND, '--apps', json.dumps(APPS),
             '--run-id', '1', '--build-timestamp', TS, '--receipt-dir', '/nonexistent/alpha-receipt'], capture_output=True, text=True)
         self.assertEqual(build.returncode, 4, 'no build without the recorded successor and its probe')
+
+    def test_successor_preflights_admit_only_the_bound_base_and_need_the_predecessor_on_the_builder(self):
+        run = lambda *args: subprocess.run([PY, str(SCRIPTS/'emulator-alpha.py'), 'preflight', *args], capture_output=True, text=True)
+        guard = run('--job', 'successor-guard', '--candidate-sha', BOUND, '--apps', json.dumps(APPS))
+        self.assertEqual(guard.returncode, 0, guard.stderr)
+        self.assertEqual(json.loads(guard.stdout), {'verdict': 'OK', 'job': 'successor-guard',
+            'predecessor': 'b02dafbbed5dd4788fb68201ad82d17423f74771bbae9495aa83a3af9c85ce87',
+            'incremental': 'c935059085f780afea423df1466d65526eb00fe15d5438bbabb928c755df7c67'})
+        for sha, apps in ((SHA, APPS), (BOUND, list(reversed(APPS)))):
+            refused = run('--job', 'successor-guard', '--candidate-sha', sha, '--apps', json.dumps(apps))
+            self.assertEqual((refused.returncode, json.loads(refused.stderr)['verdict']), (1, 'FAIL'))
+        builder = run('--job', 'successor-builder', '--candidate-sha', BOUND, '--apps', json.dumps(APPS))
+        self.assertEqual((builder.returncode, json.loads(builder.stderr)['verdict']), (1, 'FAIL'))
+        self.assertIn('differs from preparation.successorOf.receiptSha256', builder.stderr)  # no predecessor on this runner
+        self.assertEqual(CHECKED_IN['preparation']['successorOf'], {**CHECKED_IN['preparation']['successorOf'],
+            'preparationId': CHECKED_IN['prepared']['preparationId'], 'receiptSha256': CHECKED_IN['prepared']['receiptSha256'],
+            'incrementalDelta': 'alpha099IncrementalDelta'})
 
     def test_missing_host_inputs_still_fail_closed_by_name(self):
         data = json.loads(json.dumps(CHECKED_IN))
@@ -1300,9 +1406,37 @@ class WorkflowAlphaTest(unittest.TestCase):
             "        run: python3 scripts/emulator-alpha.py preflight --job guard\n", guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
-        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: inputs.mode == 'os-release'\n", self.jobs['builder'])
         self.assertIn('    needs: builder\n', self.jobs['publisher'])
+
+    def test_successor_mode_is_isolated_and_runs_exactly_the_bound_sequence(self):
+        guard = self.jobs['guard']
+        self.assertIn("      - name: Emulator-alpha successor preflight\n        if: inputs.mode == 'emulator-alpha-successor'\n"
+            '        run: python3 scripts/emulator-alpha.py preflight --job successor-guard --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"\n', guard)
+        self.assertIn('[[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]', guard)
+        self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only ]]', guard)  # no publication in this mode
+        job = self.jobs['alpha-successor']
+        self.assertIn("    needs: controller\n    if: inputs.mode == 'emulator-alpha-successor'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", job)
+        self.assertIn('    permissions:\n      contents: read\n    steps:\n', job)
+        runs = re.findall(r'^      (?:- |  )run: (.+)$', job, re.M)
+        self.assertEqual(runs, ['python3 scripts/emulator-alpha.py preflight --job successor-builder --candidate-sha "$CANDIDATE_SHA" --apps "$APPS"', '|',
+            'python3 scripts/emulator-alpha.py successor-run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" '
+            '--build-timestamp "$BUILD_TIMESTAMP" --evidence-dir "$ROSE_BASE/evidence" $ALPHA_RECOVER',
+            'test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"'])
+        self.assertIn("          ALPHA_RECOVER: ${{ inputs.alpha_recover && '--recover' || '' }}\n", job)
+        self.assertIn('base="$HOME/rose-actions/cf-alpha-successor-$GITHUB_RUN_ID"\n          test ! -e "$base"', job)
+        for absent in ('id-token', 'secrets.', 'GCP_', 'actions-gcp-login', 'os-release-stage', 'host-app-release', 'PIXEL_OTA',
+                       'sign', 'publish', 'build --', 'prepare --', 'git ', 'make'):
+            self.assertNotIn(absent, job, absent)
+        self.assertIn('          name: emulator-alpha-successor-${{ github.run_id }}\n          path: ${{ env.ROSE_BASE }}/evidence\n', job)
+        self.assertIn("      - name: Remove the attempt directory (the successor and probe receipts stay beside the predecessor)\n        if: always()\n", job)
+        # No other job runs in this mode: each builder job is bound to its own mode, the publishers to theirs.
+        for name, mode in (('builder', 'os-release'), ('app-builder', 'app-only'), ('alpha-builder', 'emulator-alpha')):
+            self.assertIn(f"    if: inputs.mode == '{mode}'\n", self.jobs[name])
+        self.assertIn("    if: inputs.mode == 'app-only' && inputs.app_publish\n", self.jobs['app-publisher'])
+        self.assertIn('alpha_recover:\n        description: emulator-alpha-successor only', WORKFLOW)
+        self.assertIn('        type: boolean\n        default: false\n', WORKFLOW.split('alpha_recover:', 1)[1])
 
 if __name__ == '__main__':
     unittest.main()
