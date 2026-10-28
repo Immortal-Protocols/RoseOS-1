@@ -425,6 +425,29 @@ absolute only at the subprocess boundary:
 - The `--extra_apex_payload_key` arguments also name that absolute path.
 - The RAM cleanup trap is unchanged.
 
+Runs 40641163775, 40643229025 and 40646237776 failed because a signing tool
+could not open a key file that existed earlier in the same run. The last
+failure named the absolute path, so the paths themselves are not the cause.
+No code path in the adapter or the derived script removes the key family before
+the script's EXIT trap runs. Every signing run therefore writes a nonsecret
+lifecycle trace, `sign-trace.jsonl`, in the release directory
+(`scripts/sign_trace.py`):
+
+- every 0.1 s, role-based booleans for the private directory, the source keys,
+  the release `keys` link, its RAM target and the key files through it, plus
+  the script's liveness and this uid's logind state and session count;
+- one event per wrapped tool start: tool, pid, ppid, and the readability of
+  each key argument by basename;
+- when the script's own EXIT trap starts, when the script exits, and when
+  the private directory is removed;
+- once, host facts: uid, the effective logind `RemoveIPC`, linger and the
+  `/dev/shm` mount options.
+
+On failure, a one-line JSON summary in the job log names the first key role
+that went from present to missing, whether the script was alive or already
+exiting at that moment, and the first tool start that found a key unreadable.
+The trace never contains key bytes, argv, environment or raw key paths.
+
 Receipts hold hashes, times and exit codes, not command output, arguments or
 environment.
 
