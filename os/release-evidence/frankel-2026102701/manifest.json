@@ -1,0 +1,82 @@
+{
+  "assets": [
+    {
+      "name": "SHA256SUMS",
+      "sha256": "e39f08cd0cdc4ad997a2ad6d2a2eb7e5421bc8918d2a0e57ad477badda50246d",
+      "size": 506
+    },
+    {
+      "name": "UPDATE.md",
+      "sha256": "408f74943e516c3fa6c0dc207335b54b68f735d0ef5d0759a3db585aa29887f6",
+      "size": 1875
+    },
+    {
+      "name": "avb_pkmd.bin",
+      "sha256": "7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822",
+      "size": 1032
+    },
+    {
+      "name": "frankel-ota_update-2026102701.zip",
+      "sha256": "689a6d9db53171d1a5c138b031e6807f37893590bf2474c075f59a9a4a431e42",
+      "size": 1673956764
+    },
+    {
+      "name": "frankel-stable",
+      "sha256": "0c388489412f347ef7b801c1ce438d3115f939b7e8368baeb149dc6c8351297a",
+      "size": 37
+    },
+    {
+      "name": "releasekey.x509.pem",
+      "sha256": "9d5bd12f2cb9518e3bd40a90c17d8d5584dfbc3dd49fe90974446aeec33f6a79",
+      "size": 1814
+    },
+    {
+      "name": "verification.json",
+      "sha256": "57ada11667494195530d53d660ebce264dddfc6b1673167ed6e8411d55178138",
+      "size": 3925
+    }
+  ],
+  "build": {
+    "number": 2026102701,
+    "timestamp": 1793129847
+  },
+  "channel": "beta",
+  "cryptographicVerification": "not-performed",
+  "feed": {
+    "feedChannel": "stable",
+    "metadataAsset": "frankel-stable"
+  },
+  "identities": {
+    "apps": [
+      {
+        "packageName": "dev.pixel.backgroundcontrol",
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "versionCode": 27
+      },
+      {
+        "packageName": "dev.pixel.calculator.agent",
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "versionCode": 4
+      },
+      {
+        "packageName": "dev.pixel.voice",
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "versionCode": 298
+      }
+    ],
+    "avbPublicKeySha256": "7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822",
+    "otaCertificateSha256": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a"
+  },
+  "identityStatus": "claimed metadata; matched against expected pins, not cryptographically verified",
+  "kind": "rose-os-candidate-manifest",
+  "receiptType": "pre-publication",
+  "schemaVersion": 1,
+  "source": {
+    "resolvedManifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+    "revision": "34fa48ff16d046e16c7d680731bf01058d794279"
+  },
+  "target": {
+    "device": "frankel",
+    "variant": "user"
+  }
+}

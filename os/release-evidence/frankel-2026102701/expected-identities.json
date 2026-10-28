@@ -1,0 +1,21 @@
+{
+  "apps": [
+    {
+      "packageName": "dev.pixel.voice",
+      "versionCode": 298,
+      "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+    },
+    {
+      "packageName": "dev.pixel.calculator.agent",
+      "versionCode": 4,
+      "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+    },
+    {
+      "packageName": "dev.pixel.backgroundcontrol",
+      "versionCode": 27,
+      "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+    }
+  ],
+  "otaCertificateSha256": "2ce41f9e7efb04cd7fa61b32e09091719304f7101405c3ef7ffcf0f0f5ec268a",
+  "avbPublicKeySha256": "7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822"
+}
