@@ -384,7 +384,7 @@ public class MainActivity extends Activity {
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   page.setBackgroundColor(Color.TRANSPARENT);homePageDots=makePageDots(titles);page.addView(homePageDots,new LinearLayout.LayoutParams(-1,dp(30)));
-  launcherPager.addView(new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),()->launcherPager.showPage(voicePage,true),this::apps,makePageDots(titles)));
+  launcherPager.addView(new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::openRoseConversation,this::apps,makePageDots(titles)));
   launcherPager.addView(page);
   for(int number=voicePage+1;number<count;number++){
    LinearLayout appPage=new LinearLayout(this);appPage.setOrientation(1);
@@ -550,6 +550,9 @@ public class MainActivity extends Activity {
  @Override protected void onResume(){super.onResume();screenHostActive=true;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();if(clockWidget!=null&&launcherPager!=null)clockWidget.setActive(launcherPager.currentPage()==widgetsPage);if(weatherWidget!=null&&launcherPager!=null)weatherWidget.setActive(launcherPager.currentPage()==widgetsPage);if(galleryWidget!=null&&launcherPager!=null)galleryWidget.setActive(launcherPager.currentPage()==widgetsPage);handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onPause(){ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
  @Override public void onNewIntent(Intent i){super.onNewIntent(i);home();showHomeFor(i);}
+ /** Home's Rose entry: App's conversation surface (APP-P2-002-HOOK-001). Plain explicit Intent in this task, so Back
+  * returns Home and HOME clears it; navigation only, never a voice or task command. */
+ void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
  /** HOME (boot, the Home button) lands on the launcher Home; other opens keep the conversation page. */
  void showHomeFor(Intent intent){if(intent!=null&&intent.hasCategory(Intent.CATEGORY_HOME)&&launcherPager!=null)launcherPager.showPage(homePage,false);}
  @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
