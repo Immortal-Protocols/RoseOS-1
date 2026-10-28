@@ -68,3 +68,22 @@ test('APP-UPDATER-002: explicit self-update is admitted by the service and verif
  assert.ok(!/startSelfUpdate\(/.test(activity.slice(0,activity.indexOf('void checkForUpdate('))),'nothing starts an install on its own');
  assert.match(activity,/p\.getLong\("target",-1\)==offered\?SelfUpdate\.attemptText/,'only an attempt for the offered version is shown');
 });
+
+test('APP-GITHUB-001: self-update bytes come only from the manifest apkUrl over the anonymous public transport',()=>{
+ const delivery=fs.readFileSync(new URL('../app/src/dev/pixel/voice/Delivery.java',import.meta.url),'utf8');
+ const self=delivery.slice(delivery.indexOf('static void installSelf('),delivery.indexOf('static final class PublicHttp'));
+ const at=s=>{const i=self.indexOf(s);assert.ok(i>0,s);return i;};
+ assert.ok(at('m.optString("apkUrl","")')<at('PublicApkDownload.fetch(new PublicHttp(),apkUrl,'),'apkUrl comes from the pinned manifest');
+ assert.match(self,/if\(apkUrl\.isEmpty\(\)\)throw new IOException\("No public download is published/,'a missing apkUrl is unavailable, with no fallback');
+ assert.ok(!/"\/apk"/.test(self),'the self path no longer downloads from the pinned /apk route');
+ assert.ok(at('PublicApkDownload.fetch(')<at('SelfUpdate.verify('),'the existing identity verification still runs on the downloaded bytes');
+ assert.match(self,/download\(endpoint\+"\/apps\/"\+id\+"\/idsig",ssl,/,'the optional idsig stays on the pinned same-origin route');
+ const http=delivery.slice(delivery.indexOf('static final class PublicHttp'),delivery.indexOf('static boolean sameSigners('));
+ assert.match(http,/context\.init\(null,null,null\)/,'system trust and no client KeyManager');
+ assert.match(http,/setHostnameVerifier\(HttpsURLConnection\.getDefaultHostnameVerifier\(\)\)/,'hostname verification is the platform default, not trust-all');
+ assert.match(http,/setInstanceFollowRedirects\(false\)/);assert.match(http,/setUseCaches\(false\)/);
+ assert.match(http,/CookieHandler\.getDefault\(\)!=null\)throw/,'refuses to run with a shared cookie store');
+ assert.ok(!/\bssl\b|DeviceIdentity|systemTrustedSsl|identity|setDefault/.test(http),'no device identity, pinned factory or global change');
+ const generic=delivery.slice(delivery.indexOf('public static void install('),delivery.indexOf('static void installSelf('));
+ assert.match(generic,/download\(endpoint\+"\/apps\/"\+id\+"\/apk",ssl,/,'other apps keep the existing pinned delivery');
+});

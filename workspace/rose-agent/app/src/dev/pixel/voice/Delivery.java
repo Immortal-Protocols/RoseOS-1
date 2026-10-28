@@ -30,7 +30,9 @@ public class Delivery {
   String self=a.getPackageName();
   try{
    JSONObject m=manifest(endpoint+"/apps/"+id+"/manifest",ssl);
-   long size=download(endpoint+"/apps/"+id+"/apk",ssl,file,id,150L*1024*1024); // throws unless SHA-256 == id
+   // Bytes come only from the manifest's public release asset (APP-GITHUB-001), never the pinned /apk route or any fallback.
+   String apkUrl=m.optString("apkUrl","");if(apkUrl.isEmpty())throw new IOException("No public download is published for this update, so it can’t be installed here.");
+   long size;try(OutputStream out=new FileOutputStream(file)){size=PublicApkDownload.fetch(new PublicHttp(),apkUrl,out,id,UpdateCheck.version(m.opt("size")),150L*1024*1024);} // throws unless SHA-256 == id and the size matches
    android.content.pm.PackageManager pm=a.getPackageManager();
    android.content.pm.PackageInfo archive=pm.getPackageArchiveInfo(file.getPath(),android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
    android.content.pm.PackageInfo installed=pm.getPackageInfo(self,android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
@@ -46,6 +48,25 @@ public class Delivery {
    Intent callback=new Intent(a,InstallReceiver.class).putExtra(InstallReceiver.SELF_TARGET,version);PendingIntent result=PendingIntent.getBroadcast(a,sessionId,callback,PendingIntent.FLAG_UPDATE_CURRENT|(android.os.Build.VERSION.SDK_INT>=31?PendingIntent.FLAG_MUTABLE:0));
    a.recordSelfUpdate(version,"committed");try(PackageInstaller.Session session=pi.openSession(sessionId)){session.commit(result.getIntentSender());}sessionId=-1;
   }catch(Exception e){a.recordSelfUpdate(version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();signature.delete();}
+ }
+ /** Anonymous public HTTPS for release assets (PublicApkDownload): system CA trust and hostname verification,
+  * no client key (unlike VoiceService.ssl and DeviceIdentity.systemTrustedSsl), no redirects followed, no
+  * cache, and no cookies. Nothing global is changed; the PixelVoice pin and identity are not involved. */
+ static final class PublicHttp implements PublicApkDownload.Http {
+  private final SSLSocketFactory tls;
+  PublicHttp()throws Exception{
+   if(java.net.CookieHandler.getDefault()!=null)throw new IOException("Public download refused: a shared cookie store is installed.");
+   SSLContext context=SSLContext.getInstance("TLS");context.init(null,null,null);tls=context.getSocketFactory();
+  }
+  @Override public PublicApkDownload.Response get(String url,java.util.Map<String,String> headers)throws IOException{
+   final HttpsURLConnection c=(HttpsURLConnection)new URL(url).openConnection();
+   c.setSSLSocketFactory(tls);c.setHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
+   c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setConnectTimeout(10000);c.setReadTimeout(60000);
+   for(java.util.Map.Entry<String,String> h:headers.entrySet())c.setRequestProperty(h.getKey(),h.getValue());
+   int status=c.getResponseCode();
+   if(status!=200){String location=c.getHeaderField("Location");c.disconnect();return new PublicApkDownload.Response(status,location,null);}
+   return new PublicApkDownload.Response(status,null,new FilterInputStream(c.getInputStream()){@Override public void close()throws IOException{try{super.close();}finally{c.disconnect();}}});
+  }
  }
  /** Same current signing certificates as the installed app (no rotation is introduced by this flow). */
  static boolean sameSigners(android.content.pm.PackageInfo archive,android.content.pm.PackageInfo installed){
