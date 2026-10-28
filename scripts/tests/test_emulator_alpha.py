@@ -340,12 +340,12 @@ class AlphaTreeTest(unittest.TestCase):
         self.assertEqual({k: receipt[k] for k in ('baseCandidate', 'baseReconcileReceipt', 'baseReconcileSha256', 'osDeltaCommit',
             'target', 'updaterMode', 'updaterEndpoint', 'outDir', 'preparedRoot')},
             {'baseCandidate': BOUND, 'baseReconcileReceipt': '0004-2026102804.json', 'baseReconcileSha256': sha(self.receipt),
-             'osDeltaCommit': 'f21bf68322b3fa0a8924840554ab3e9398f79125', 'target': 'aosp_cf_x86_64_only_phone-cur-userdebug',
+             'osDeltaCommit': '156ccb8ed0bbc871222bfa206009560b1c9907be', 'target': 'aosp_cf_x86_64_only_phone-cur-userdebug',
              'updaterMode': 'excluded-no-compatible-feed', 'updaterEndpoint': None, 'outDir': 'out-rose-cf-alpha', 'preparedRoot': str(self.tree)})
         self.assertEqual(receipt['baseResolvedManifestSha256'], self.data['preparation']['baseEvidence']['resolvedManifest']['sha256'])
         self.assertEqual(receipt['policySha256'], self.data['preparation']['baseEvidence']['policy']['sha256'])
         self.assertEqual(receipt['patchDigests'], [{'path': 'os/patches/cuttlefish-alpha-no-updater.patch', 'project': 'build/make',
-            'sha256': 'e000da0d1247dfcb341bc97df3098a2ed57faed31af0e5a837733537ae567858'}])
+            'sha256': 'aa975499e15021cdae01665961c2cbb3037ea34a0dc173b3d1a488b3a5d0ff84'}])
         self.assertEqual([(a['package'], a['version'], a['path']) for a in receipt['apps']],
             [('dev.pixel.voice', 302, self.app_paths[0]), ('dev.pixel.calculator.agent', 4, self.app_paths[1]),
              ('dev.pixel.backgroundcontrol', 28, self.app_paths[2])])
@@ -483,7 +483,7 @@ class AlphaTreeTest(unittest.TestCase):
              'makeGoals': ['droid', 'hosttar'], 'lunch': LUNCH})
         self.assertEqual(receipt['preparation'], {'preparationId': self.preparation['preparationId'],
             'receiptSha256': sha(self.prepared_dir/'preparation.json'), 'effectiveSourceIdentity': self.preparation['effectiveSourceIdentity'],
-            'osDeltaCommit': 'f21bf68322b3fa0a8924840554ab3e9398f79125', 'updaterMode': 'excluded-no-compatible-feed', 'preparedRoot': str(self.tree)})
+            'osDeltaCommit': '156ccb8ed0bbc871222bfa206009560b1c9907be', 'updaterMode': 'excluded-no-compatible-feed', 'preparedRoot': str(self.tree)})
         self.assertEqual(sorted(receipt['images']), ['boot.img', 'init_boot.img', 'super.img', 'userdata.img', 'vbmeta.img', 'vendor_boot.img'])
         self.assertEqual(receipt['images']['super.img'], {'size': (out/'super.img').stat().st_size, 'sha256': sha(out/'super.img')})
         self.assertEqual(receipt['hostOutputs']['cvd-host_package.tar.gz']['sha256'], sha(self.tree/LUNCH['HOST_OUT']/'cvd-host_package.tar.gz'))
@@ -900,7 +900,7 @@ class CheckedInAlphaTest(unittest.TestCase):
         self.assertEqual((boundary['provenance']['adevtool']['revision'], boundary['provenance']['soong']['revision']),
             tuple(alpha.pinned_revision(p) for p in ('vendor/adevtool', 'build/soong')))
         self.assertIn('f6b8af249ab1feafe020bba1ac12a656c2c3e4d862a905a67e0b6983df8c3a1a', boundary['provenance']['builder'])
-        self.assertEqual(preparation['osDelta']['commit'], 'f21bf68322b3fa0a8924840554ab3e9398f79125')
+        self.assertEqual(preparation['osDelta']['commit'], '156ccb8ed0bbc871222bfa206009560b1c9907be')
         self.assertEqual(hashlib.sha256((ROOT/preparation['osDelta']['contract']).read_bytes()).hexdigest(), preparation['osDelta']['contractSha256'])
         document, delta = alpha.contract(alpha.load())
         self.assertEqual(delta['changedFiles'], [{'project': 'build/make', 'path': GENERIC}, {'project': 'build/make', 'path': MEDIA}])
@@ -981,7 +981,7 @@ class CheckedInAlphaTest(unittest.TestCase):
             ' '.join(CONTRACT['imageExpectations']['present']))
         for item in closure['apps'] + closure['xml']:
             self.assertFalse({'sha256', 'version', 'signer', 'certificate'} & set(item), item)
-        self.assertIn('c825aa19', CHECKED_IN['imageVerification']['basis'])
+        self.assertIn('a9c757c0', CHECKED_IN['imageVerification']['basis'])
         self.assertNotIn('OS58', CHECKED_IN['imageVerification']['basis'] + (SCRIPTS/'alpha_image.py').read_text())
 
     def test_plan_runs_nothing_and_says_so(self):
