@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # Rose Agent page voice state, loaded with its real assets and a fake provider.
 node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent/tests/app-delivery.test.mjs workspace/rose-agent/tests/task-continuity.test.mjs
+# Every Native.* call in the app's pages names a method its Java bridge exposes.
+node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test \
  workspace/rose-agent/security/device-auth.test.mjs \
  workspace/rose-agent/security/recovery-download.test.mjs \
