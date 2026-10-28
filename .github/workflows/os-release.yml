@@ -1,0 +1,167 @@
+name: OS release
+
+# Build, sign, verify and publish one Frankel candidate on the existing builder. Proposed setup is
+# NOT applied: until the bootstrap inputs in os/release-pipeline/frankel.json exist, the guard job
+# fails closed and names what is missing; no job reports a simulated success.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: RoseOS-1 commit to build (must be on main)
+        required: true
+      build_number:
+        description: New monotonic ten-digit build number
+        required: true
+      build_timestamp:
+        description: BUILD_DATETIME (UTC epoch) for the build
+        required: true
+      channel:
+        type: choice
+        options: [beta, prod]
+        default: beta
+      apps:
+        description: 'JSON [[package, versionCode], ...] expected in the image'
+        required: true
+      promote:
+        description: Promote the verified draft (beta means pixel-ota Latest)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # One candidate at a time across the builder's source/output tree and the publisher.
+  group: os-release-frankel
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  BUILD_NUMBER: ${{ inputs.build_number }}
+  BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
+  CHANNEL: ${{ inputs.channel }}
+  APPS: ${{ inputs.apps }}
+
+jobs:
+  guard:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Candidate is an exact commit on main
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BUILD_NUMBER" =~ ^[0-9]{10}$ && "$BUILD_TIMESTAMP" =~ ^[0-9]{10}$ ]]
+          python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
+          git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+      - name: Bootstrap preflight
+        env:
+          ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+          GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+          PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+        run: python3 scripts/release-pipeline.py preflight --job guard
+
+  controller:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job controller
+      - run: bash scripts/actions-gcp-login.sh "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      - run: python3 scripts/release-pipeline.py start-builder
+
+  builder:
+    needs: controller
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 600
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job builder
+      - run: bash scripts/actions-gcp-login.sh "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Build, verify, sign and verify under stage receipts
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/frankel-$BUILD_NUMBER"
+          test ! -e "$base" || { echo "::error::$base already exists; use a new build number" >&2; exit 1; }
+          common=(--candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --release-dir "$base/release")
+          stage() { python3 scripts/release-stage.py run --state "$base/stages" --source-revision "$CANDIDATE_SHA" "$1" -- python3 scripts/release-pipeline.py "$2" "${common[@]}"; }
+          python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device frankel --build-number "$BUILD_NUMBER"
+          stage build build
+          stage bytes-verify verify-build
+          stage sign sign
+          stage ota-verify verify-signed
+          python3 scripts/release-stage.py run --state "$base/stages" --source-revision "$CANDIDATE_SHA" transfer -- \
+            python3 scripts/release-pipeline.py stage-artifact "${common[@]}" --artifact-dir "$base/artifact" --apps "$APPS"
+          echo "ARTIFACT_DIR=$base/artifact" >> "$GITHUB_ENV"
+      - name: Transfer only public files and receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: os-release-frankel-${{ inputs.build_number }}
+          path: ${{ env.ARTIFACT_DIR }}
+          retention-days: 3
+          if-no-files-found: error
+
+  publisher:
+    needs: builder
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job publisher
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: os-release-frankel-${{ inputs.build_number }}
+          path: ${{ runner.temp }}/artifact
+      - name: Revalidate, draft, download-check and promote if requested
+        run: |
+          set -euo pipefail
+          python3 scripts/release-pipeline.py publish --candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" \
+            --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --artifact-dir "$RUNNER_TEMP/artifact" \
+            ${{ inputs.promote && '--promote' || '' }}
+
+  cleanup:
+    needs: [controller, builder, publisher]
+    if: always() && needs.controller.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job cleanup
+      - run: bash scripts/actions-gcp-login.sh "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      # The existing 12h automatic STOP on the builder remains the independent fallback.
+      - run: python3 scripts/release-pipeline.py stop-builder

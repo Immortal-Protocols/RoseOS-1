@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # Proposed repository-scoped runner on immortal-os-builder (not registered yet).
+  labels:
+    - roseos-frankel-builder
