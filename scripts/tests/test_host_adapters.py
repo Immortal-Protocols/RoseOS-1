@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -42,10 +43,9 @@ def fake_gcloud(tools, secrets, log):
         if a[:3] != ['secrets', 'versions', 'access'] or a[3] != '1' or not __import__('os').path.exists(src): sys.exit(1)
         shutil.copy(src, out)''')
 
-def key_archive(path, cert_pem, avb, extra=None):
+def key_archive(path, files):
     with tarfile.open(path, 'w:gz') as tar:
-        for name, data in [('frankel/releasekey.x509.pem', cert_pem), ('frankel/avb_pkmd.bin', avb),
-                           ('frankel/releasekey.pk8', b'synthetic private key'), *(extra or [])]:
+        for name, data in files:
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
@@ -67,74 +67,131 @@ class Base(unittest.TestCase):
     def fetched_paths(self):
         return [Path(json.loads(l)[json.loads(l).index('--out-file') + 1]) for l in self.log.read_text().splitlines()]
 
+RELEASE_SCRIPT = r"""#!/bin/bash
+set -o errexit -o nounset -o pipefail
+source "$(dirname ${BASH_SOURCE[0]})/common.sh"
+[[ $# -eq 2 ]] || exit 1
+DEVICE=$1
+BUILD=$2
+PERSISTENT_KEY_DIR=keys/$DEVICE
+RELEASE_OUT=releases/$BUILD/release-$DEVICE-$BUILD
+KEY_DIR=$(mktemp -d /dev/shm/release_keys.XXXXXXXXXX)
+trap "rm -rf \"$KEY_DIR\"" EXIT
+cp "$PERSISTENT_KEY_DIR"/* "$KEY_DIR"
+script/decrypt-keys "$KEY_DIR"
+openssl pkcs8 -inform DER -nocrypt -in "$KEY_DIR/releasekey.pk8" -out /dev/null
+openssl pkey -in "$KEY_DIR/avb.pem" -noout
+[[ $COMMON_LOADED == yes ]]
+mkdir -p "$RELEASE_OUT"
+cp releases/$BUILD/$DEVICE-target_files.zip "$RELEASE_OUT/$DEVICE-target_files.zip"
+cmp releases/$BUILD/$DEVICE-otatools.zip "$OUT_DIR/host/otatools.zip"
+echo "ota $BUILD" > "$RELEASE_OUT/$DEVICE-ota_update-$BUILD.zip"
+img_from_target_files "$RELEASE_OUT/$DEVICE-target_files.zip" factory.zip
+"""
+
 class SignAdapterTest(Base):
     def setUp(self):
         super().setUp()
-        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(self.root/'k.pem'),
-            '-subj', '/CN=synthetic', '-days', '1', '-out', str(self.root/'cert.pem')], check=True, capture_output=True)
-        self.cert = (self.root/'cert.pem').read_bytes()
-        self.avb = b'synthetic avb blob'
-        key_archive(self.secrets/'KEYS', self.cert, self.avb)
+        (self.src/'script').mkdir()
+        (self.src/'script/generate-release.sh').write_text(RELEASE_SCRIPT)
+        (self.src/'script/common.sh').write_text('COMMON_LOADED=yes\n')
+        script(self.src/'script/decrypt-keys', f'open({str(self.root/"interactive-decrypt-ran")!r}, "w")')
+        (self.src/'out/host').mkdir(parents=True)
+        (self.src/'out/host/otatools.zip').write_bytes(b'otatools package')
+        (self.release/'unsigned-target_files.zip').write_bytes(b'unsigned target files')
+        keys = self.root/'k'
+        keys.mkdir()
+        (keys/'pass').write_text('synthetic-passphrase')
+        run = lambda *a: subprocess.run(a, check=True, capture_output=True, cwd=keys)
+        run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'k.pem', '-subj', '/CN=synthetic', '-days', '1', '-out', 'cert.pem')
+        run('openssl', 'pkcs8', '-topk8', '-inform', 'PEM', '-outform', 'DER', '-in', 'k.pem', '-out', 'releasekey.pk8', '-passout', 'file:pass')
+        run('openssl', 'pkcs8', '-topk8', '-in', 'k.pem', '-out', 'avb.pem', '-passout', 'file:pass')
+        self.cert, self.avb = (keys/'cert.pem').read_bytes(), b'synthetic avb blob'
+        self.members = [('release/keys/frankel/releasekey.x509.pem', self.cert), ('release/keys/frankel/avb_pkmd.bin', self.avb),
+            ('release/keys/frankel/releasekey.pk8', (keys/'releasekey.pk8').read_bytes()), ('release/keys/frankel/avb.pem', (keys/'avb.pem').read_bytes())]
+        key_archive(self.secrets/'KEYS', self.members)
         (self.secrets/'PASS').write_text('synthetic-passphrase')
-        release = script(self.tools/'release.py', '''
-            import os, sys; keys, passfile, build = sys.argv[1:4]
-            assert os.path.exists(os.path.join(keys, 'frankel/releasekey.pk8')) and open(passfile).read()
-            os.makedirs('releases/' + build, exist_ok=True); open('releases/keys-path', 'w').write(keys)
-            if os.environ.get('FAKE_RELEASE_FAIL'): sys.exit(3)
-            for n in ('signed.zip', 'ota.zip', 'stable', 'UPDATE.md', 'SHA256SUMS'): open('releases/' + build + '/' + n, 'w').write(n)
-            import shutil; shutil.copy(os.path.join(keys, 'frankel/releasekey.x509.pem'), 'releases/' + build + '/cert.pem')
-            shutil.copy(os.path.join(keys, 'frankel/avb_pkmd.bin'), 'releases/' + build + '/avb_pkmd.bin')''')
         der = base64.b64decode(''.join(self.cert.decode().split('-----')[2].split()))
         self.config = self.root/'config.json'
-        self.write_config(hashlib.sha256(der).hexdigest(), hashlib.sha256(self.avb).hexdigest(), release)
-        self.env = dict(os.environ, BUILD_NUMBER='2026102901', ROSE_RELEASE_DIR=str(self.release))
+        self.write_config(hashlib.sha256(der).hexdigest(), hashlib.sha256(self.avb).hexdigest())
+        self.head = subprocess.run(['git', '-C', str(SCRIPTS.parent), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        self.env = dict(os.environ, BUILD_NUMBER='2026102901', BUILD_DATETIME='1793200000', OUT_DIR='out',
+            ROSE_CANDIDATE_SHA=self.head, ROSE_RELEASE_DIR=str(self.release))
 
-    def write_config(self, cert_pin, avb_pin, release):
+    def write_config(self, cert_pin, avb_pin):
         self.config.write_text(json.dumps({'target': {'device': 'frankel'}, 'identities': {'otaCertificateSha256': cert_pin,
-            'avbPublicKeySha256': avb_pin}, 'host': {'sign': {'project': 'p', 'keysSecret': 'KEYS', 'passphraseSecret': 'PASS',
-            'secretVersion': '1', 'keyDirectory': 'frankel',
-            'releaseCommand': [PY, release, '{keys}', '{passphrase_file}', '{build}'],
-            'outputs': {'signedTargetFiles': 'releases/{build}/signed.zip', 'public': {
-                '{device}-ota_update-{build}.zip': 'releases/{build}/ota.zip', '{device}-stable': 'releases/{build}/stable',
-                'releasekey.x509.pem': 'releases/{build}/cert.pem', 'avb_pkmd.bin': 'releases/{build}/avb_pkmd.bin',
-                'UPDATE.md': 'releases/{build}/UPDATE.md', 'SHA256SUMS': 'releases/{build}/SHA256SUMS'}}}}}))
+            'avbPublicKeySha256': avb_pin}, 'publication': {'channels': {'beta': {'feedChannel': 'stable'}}},
+            'host': {'sign': {'project': 'p', 'keysSecret': 'KEYS', 'passphraseSecret': 'PASS', 'secretVersion': '1',
+                'otatools': 'host/otatools.zip', 'javaHome': '/usr', 'updateNotes': 'README.md'}}}))
 
     def assert_secrets_gone(self):
         for path in self.fetched_paths():
             self.assertFalse(path.exists(), path)
-        if (self.src/'releases/keys-path').exists():
-            self.assertFalse(Path((self.src/'releases/keys-path').read_text()).exists())
 
-    def test_signs_with_pinned_versions_and_leaves_only_public_outputs(self):
+    def test_signs_with_derived_recipe_and_maps_exact_outputs(self):
         self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
-        self.assertTrue((self.release/'signed-target_files.zip').is_file())
-        self.assertEqual(sorted(p.name for p in (self.release/'public').iterdir()), sorted(['frankel-ota_update-2026102901.zip',
-            'frankel-stable', 'releasekey.x509.pem', 'avb_pkmd.bin', 'UPDATE.md', 'SHA256SUMS']))
-        calls = [json.loads(l) for l in self.log.read_text().splitlines()]
-        self.assertEqual([c[3] for c in calls], ['1', '1'])
-        self.assertTrue(all('synthetic-passphrase' not in ' '.join(c) for c in calls))
+        public = self.release/'public'
+        self.assertEqual(sorted(p.name for p in public.iterdir()), sorted(['frankel-ota_update-2026102901.zip', 'frankel-stable',
+            'releasekey.x509.pem', 'avb_pkmd.bin', 'UPDATE.md']))
+        self.assertEqual((public/'frankel-stable').read_text(), '2026102901 1793200000 frankel stable\n')
+        self.assertEqual((public/'UPDATE.md').read_bytes(), subprocess.run(['git', '-C', str(SCRIPTS.parent), 'show',
+            f'{self.head}:README.md'], capture_output=True).stdout)
+        self.assertEqual((self.release/'signed-target_files.zip').read_bytes(), b'unsigned target files')
+        receipt = json.loads((self.release/'sign-receipt.json').read_text())
+        self.assertEqual(receipt['keyDirectoryInArchive'], 'release/keys/frankel')
+        self.assertEqual(receipt['releaseScriptSha256'], hashlib.sha256(RELEASE_SCRIPT.encode()).hexdigest())
+        self.assertNotEqual(receipt['derivedScriptSha256'], receipt['releaseScriptSha256'])
+        self.assertFalse((self.root/'interactive-decrypt-ran').exists(), 'script/decrypt-keys must be replaced')
+        self.assertEqual([json.loads(l)[3] for l in self.log.read_text().splitlines()], ['1', '1'])
         everything = b''.join(p.read_bytes() for p in self.release.rglob('*') if p.is_file())
         self.assertNotIn(b'synthetic-passphrase', everything)
-        self.assertNotIn(b'synthetic private key', everything)
+        self.assertTrue((self.src/'releases/2026102901/.rose-actions-owner.json').is_file())
         self.assert_secrets_gone()
 
-    def test_pin_mismatch_refuses_and_cleans_up(self):
-        self.write_config(PIN, PIN, json.loads(self.config.read_text())['host']['sign']['releaseCommand'][1])
+    def test_foreign_or_completed_release_directory_is_not_touched(self):
+        (self.src/'releases/2026102901').mkdir(parents=True)
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'not this task'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertEqual(self.fetched_paths() if self.log.exists() else [], [])
+
+    def test_key_discovery_requires_one_pinned_directory(self):
+        key_archive(self.secrets/'KEYS', self.members + [('other/releasekey.x509.pem', self.cert)])
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'exactly one'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assert_secrets_gone()
+        key_archive(self.secrets/'KEYS', self.members)
+        self.write_config(PIN, PIN)
+        shutil.rmtree(self.src/'releases')
+        shutil.rmtree(self.release/'public')
         with self.assertRaisesRegex(host_sign.AdapterFailed, 'established pin'):
             host_sign.main(self.config, self.env, self.gcloud)
-        self.assertFalse((self.release/'public').exists())
         self.assert_secrets_gone()
 
     def test_unsafe_archive_member_is_refused(self):
-        key_archive(self.secrets/'KEYS', self.cert, self.avb, extra=[('../escape', b'x')])
+        key_archive(self.secrets/'KEYS', self.members + [('../escape', b'x')])
         with self.assertRaisesRegex(host_sign.AdapterFailed, 'unexpected member'):
             host_sign.main(self.config, self.env, self.gcloud)
         self.assert_secrets_gone()
 
-    def test_release_command_failure_still_cleans_up(self):
-        with self.assertRaisesRegex(host_sign.AdapterFailed, 'exited 3'):
-            host_sign.main(self.config, dict(self.env, FAKE_RELEASE_FAIL='1'), self.gcloud)
-        self.assert_secrets_gone()
+    def test_release_script_anchors_must_each_occur_once(self):
+        derive = lambda text: host_sign.derive_release_script(text, '/R/script/common.sh', '/dev/shm/k', '/dev/shm/p')
+        derived = derive(RELEASE_SCRIPT)
+        self.assertNotIn('img_from_target_files', derived)
+        self.assertIn("source /R/script/common.sh", derived)
+        self.assertIn('PERSISTENT_KEY_DIR=/dev/shm/k', derived)
+        self.assertIn('host-decrypt-keys.py', derived)
+        self.assertNotIn('script/decrypt-keys', derived)
+        for broken in (RELEASE_SCRIPT.replace('PERSISTENT_KEY_DIR=keys/$DEVICE', 'PERSISTENT_KEY_DIR=keys/$DEVICE\nPERSISTENT_KEY_DIR=keys/$DEVICE'),
+                       RELEASE_SCRIPT.replace('img_from_target_files', 'image_from_target'),
+                       RELEASE_SCRIPT.replace('script/decrypt-keys', 'script/unlock-keys')):
+            with self.assertRaisesRegex(host_sign.AdapterFailed, 'anchor'):
+                derive(broken)
+
+    def test_decrypt_helper_refuses_directories_outside_ram(self):
+        result = subprocess.run([PY, str(SCRIPTS/'host-decrypt-keys.py'), str(self.root), str(self.root/'k/pass')],
+            capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('outside a temporary RAM directory', result.stderr)
 
 class IntegrateAdapterTest(Base):
     def setUp(self):
@@ -195,10 +252,10 @@ class IntegrateAdapterTest(Base):
 
 class CheckedInConfigTest(unittest.TestCase):
     def test_checked_in_config_names_every_missing_recipe_input(self):
-        for script_name, expected in (('host-integrate.py', 'host.integrate.reconcileCommand'), ('host-sign.py', 'host.sign.releaseCommand')):
-            result = subprocess.run([PY, str(SCRIPTS/script_name), '--check'], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 4, script_name)
-            self.assertIn(expected, json.loads(result.stderr)['missing'])
+        self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-integrate.py'), '--check']).returncode, 0)
+        result = subprocess.run([PY, str(SCRIPTS/'host-sign.py'), '--check'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 4)
+        self.assertEqual(json.loads(result.stderr)['missing'], ['host.sign.updateNotes'])
 
 if __name__ == '__main__':
     unittest.main()

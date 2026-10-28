@@ -69,7 +69,8 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     try:
         if subprocess.run(['git', '-C', str(candidate), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip() != sha:
             raise AdapterFailed('candidate worktree is not at the selected commit')
-        values = {'candidate': str(candidate), 'release_dir': str(release_dir), 'build': env['BUILD_NUMBER']}
+        values = {'candidate': str(candidate), 'release_dir': str(release_dir), 'build': env['BUILD_NUMBER'],
+            'python': sys.executable, 'checkout': str(ROOT)}
         run([expand(p, values) for p in integrate['appBuildCommand']], cwd=str(candidate), env=dict(env))
         aapt, apksigner = (str(host_path(config, host['tools'][k])) for k in ('aapt', 'apksigner'))
         signed_dir = release_dir/'signed-apps'

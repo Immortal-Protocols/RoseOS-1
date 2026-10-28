@@ -92,3 +92,13 @@ def check_public_pins(key_dir, identities):
         failures.append('AVB public key does not match the established pin')
     if failures:
         raise AdapterFailed('; '.join(failures))
+
+def discover_key_directory(root, identities):
+    """The archive's nesting was never recorded: require exactly one releasekey.x509.pem and exactly one avb_pkmd.bin,
+    in the same directory, matching the established pins. Zero or several of either fails."""
+    certs = [p for p in Path(root).rglob('releasekey.x509.pem') if p.is_file() and not p.is_symlink()]
+    avbs = [p for p in Path(root).rglob('avb_pkmd.bin') if p.is_file() and not p.is_symlink()]
+    if len(certs) != 1 or len(avbs) != 1 or certs[0].parent != avbs[0].parent:
+        raise AdapterFailed('key archive must hold exactly one releasekey.x509.pem and avb_pkmd.bin in one directory')
+    check_public_pins(certs[0].parent, identities)
+    return certs[0].parent

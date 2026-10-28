@@ -28,8 +28,10 @@
     "tools": {
       "checkOtaSignature": "build/make/tools/releasetools/check_ota_package_signature.py",
       "avbtool": "external/avb/avbtool.py",
-      "apksigner": null,
-      "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt"
+      "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
+      "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+      "simg2img": null,
+      "debugfs": null
     },
     "integrate": {
       "project": "protocols-465723",
@@ -41,20 +43,78 @@
         "storePassword": "PIXEL_APP_SIGNING_STORE_PASSWORD",
         "keyPassword": "PIXEL_APP_SIGNING_KEY_PASSWORD"
       },
-      "appSdkRoot": null,
-      "appBuildCommand": null,
-      "unsignedApks": null,
-      "reconcileCommand": null,
-      "repo": "repo"
+      "appSdkRoot": "/home/pixelbuild/rose-actions/tools/android-sdk",
+      "appBuildCommand": [
+        "{python}",
+        "{checkout}/scripts/host-app-build.py",
+        "build",
+        "{candidate}",
+        "{release_dir}"
+      ],
+      "unsignedApks": {
+        "voice": "{release_dir}/unsigned/voice.apk",
+        "agent": "{release_dir}/unsigned/controller/Agent-unsigned.apk",
+        "target:dev.pixel.calculator.agent": "{release_dir}/unsigned/calculator.apk"
+      },
+      "reconcileCommand": [
+        "{python}",
+        "{checkout}/scripts/host-reconcile.py",
+        "apply",
+        "{candidate}",
+        "{release_dir}",
+        "{policy}",
+        "{signed_apps}"
+      ],
+      "repo": "repo",
+      "javaHome": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21/linux-x86",
+      "publicAssetsDir": "/home/pixelbuild/rose-actions/public-assets",
+      "publicAssetDigests": null,
+      "reconcile": {
+        "receiptDir": "/home/pixelbuild/rose-actions/reconcile",
+        "projects": [
+          "frameworks/base",
+          "build/make",
+          "build/release",
+          "packages/apps/Updater"
+        ],
+        "integrationOwnedRoots": [
+          "packages/apps/PixelBackgroundControl",
+          "packages/apps/RosePreinstall"
+        ],
+        "sparsePaths": {
+          "frameworks/base": [
+            "core/res/res/values/config.xml"
+          ],
+          "build/make": [
+            "target/product/handheld_product.mk"
+          ],
+          "packages/apps/Updater": [
+            "res/values/config.xml"
+          ]
+        },
+        "applyArgs": [
+          "--background-policy",
+          "{policy}",
+          "--background-agent",
+          "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+          "--agent-tray",
+          "--updater-url",
+          "https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/",
+          "--preinstall-apk",
+          "{signed_apps}/dev.pixel.voice.apk",
+          "--preinstall-apk",
+          "{signed_apps}/dev.pixel.calculator.agent.apk"
+        ]
+      }
     },
     "sign": {
       "project": "protocols-465723",
       "keysSecret": "PIXEL_OS_SIGNING_KEYS_FRANKEL_V5",
       "passphraseSecret": "PIXEL_OS_SIGNING_PASSPHRASE_FRANKEL_V5",
       "secretVersion": "1",
-      "keyDirectory": null,
-      "releaseCommand": null,
-      "outputs": null
+      "otatools": "host/linux-x86/obj/ETC/otatools-package_linux_glibc_x86_64_intermediates/otatools-package_linux_glibc_x86_64",
+      "javaHome": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21/linux-x86",
+      "updateNotes": null
     }
   },
   "identities": {
@@ -95,14 +155,13 @@
       "PIXEL_OTA_APP_PRIVATE_KEY": "Publisher App private key; read only by the hosted publisher token step"
     },
     "hostInputs": {
-      "host.tools.apksigner": "Stable apksigner on the runner, configured only after its installation is verified",
-      "host.integrate.appSdkRoot": "Android SDK root whose build-tools/android-15 holds zipalign and apksigner for scripts/sign-apk.py",
-      "host.integrate.appBuildCommand": "argv recipe building the unsigned apps from {candidate} with the real public connection assets; placeholders {candidate} {release_dir} {build}",
-      "host.integrate.unsignedApks": "{\"voice\": path, \"agent\": path, \"target:<package>\": path} written by appBuildCommand",
-      "host.integrate.reconcileCommand": "argv recipe applying the candidate into the retained tree; placeholders {candidate} {release_dir} {policy} {signed_apps}",
-      "host.sign.keyDirectory": "Directory inside the key archive holding releasekey.x509.pem and avb_pkmd.bin",
-      "host.sign.releaseCommand": "argv recipe for the source tree release script; placeholders {device} {build} {keys} {passphrase_file} {release_dir}",
-      "host.sign.outputs": "{\"signedTargetFiles\": path, \"public\": {asset name: path}} produced by releaseCommand (all seven assets except verification.json)"
+      "stable SDK layout": "Install with scripts/host-sdk-layout.py --apksigner-jar <retained public apksigner.jar> during the coordinated builder window; preflight checks host.tools.apksigner exists",
+      "public connection assets": "Stage the five original inputs with scripts/host-app-build.py stage SOURCE /home/pixelbuild/rose-actions/public-assets CANDIDATE; optionally pin host.integrate.publicAssetDigests",
+      "host.tools.simg2img": "simg2img path on the builder (image gate)",
+      "host.tools.debugfs": "debugfs path on the builder (image gate)",
+      "host.sign.updateNotes": "Candidate-relative path of the release notes published as UPDATE.md, e.g. os/release-notes/{device}-{build}.md",
+      "host.sign.otatools": "Confirm the otatools package path relative to OUT_DIR",
+      "reconcile adoption": "One-time: scripts/host-reconcile.py adopt ... --reason to record the hand-made P1 integration as task-owned"
     }
   }
 }
