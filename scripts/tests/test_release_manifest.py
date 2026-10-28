@@ -193,7 +193,61 @@ class ReleaseManifestTest(unittest.TestCase):
         self.manifest.write_text(json.dumps(manifest))
         code, report = self.verify()
         self.assertEqual(code, 2)
-        self.assertIn('unsafe', report['error'])
+        self.assertIn('asset name', report['error'])
+
+    def test_both_verify_modes_reject_incomplete_or_malformed_provenance(self):
+        self.create()
+        original = json.loads(self.manifest.read_text())
+        def without(*path):
+            def change(m):
+                for key in path[:-1]:
+                    m = m[key]
+                del m[path[-1]]
+            return change
+        def setting(value, *path):
+            def change(m):
+                for key in path[:-1]:
+                    m = m[key]
+                m[path[-1]] = value
+            return change
+        cases = {
+            'no source': without('source'),
+            'no revision': without('source', 'revision'),
+            'short revision': setting('34fa48f', 'source', 'revision'),
+            'no resolved manifest': without('source', 'resolvedManifestSha256'),
+            'uppercase resolved manifest': setting('A'*64, 'source', 'resolvedManifestSha256'),
+            'no variant': without('target', 'variant'),
+            'bad variant': setting('debug', 'target', 'variant'),
+            'no channel': without('channel'),
+            'bad channel': setting('stable', 'channel'),
+            'string build': setting('2026102801', 'build', 'number'),
+            'boolean timestamp': setting(True, 'build', 'timestamp'),
+            'empty assets': setting([], 'assets'),
+            'asset not object': setting(['x'], 'assets'),
+            'negative size': setting(-1, 'assets', 0, 'size'),
+            'oversize': setting(2 * 1024**3 + 1, 'assets', 0, 'size'),
+            'no feed': without('feed'),
+            'foreign metadata asset': setting('otherdev-stable', 'feed', 'metadataAsset'),
+            'unlisted metadata asset': setting('testdev-stable', 'feed', 'metadataAsset'),
+            'metadata check skipped': setting(None, 'feed', 'metadataAsset'),
+            'wrong receipt type': setting('delivery-verification', 'receiptType'),
+            'not an object': lambda m: m.clear(),
+        }
+        downloaded = self.root/'downloaded'
+        shutil.copytree(self.candidate, downloaded)
+        for label, change in cases.items():
+            manifest = json.loads(json.dumps(original))
+            if label == 'unlisted metadata asset':
+                manifest['assets'] = [a for a in manifest['assets'] if a['name'] != 'testdev-stable']
+            change(manifest)
+            self.manifest.write_text(json.dumps(manifest))
+            code, report = self.verify()
+            self.assertEqual(code, 2, label)
+            self.assertEqual(report['verdict'], 'INVALID_INPUT', label)
+            code, report = run('verify-published', self.manifest, '--dir', downloaded)
+            self.assertEqual(code, 2, label)
+        self.manifest.write_text('{not json')
+        self.assertEqual(self.verify()[0], 2)
 
     def test_verify_published_accepts_byte_identical_delivery_with_pre_publication_flags(self):
         self.create()

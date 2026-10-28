@@ -29,6 +29,7 @@ DEVICE = re.compile(r'[a-z0-9_]{1,64}')
 SHA1 = re.compile(r'[0-9a-f]{40}')
 SHA256 = re.compile(r'[0-9a-f]{64}')
 PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+')
+FEED_CHANNEL = re.compile(r'[a-z]{1,32}')
 CLAIMED = 'claimed metadata; matched against expected pins, not cryptographically verified'
 
 class InputError(Exception):
@@ -123,6 +124,8 @@ def create(a):
         raise InputError('--source-revision must be a full 40-character lowercase commit SHA')
     if not DEVICE.fullmatch(a.device):
         raise InputError('--device must be a lowercase device codename')
+    if not FEED_CHANNEL.fullmatch(a.feed_channel):
+        raise InputError('--feed-channel must be a lowercase word')
     build = {'number': positive_int(a.build_number, '--build-number'),
         'timestamp': positive_int(a.build_timestamp, '--build-timestamp')}
     if a.resolved_manifest.is_symlink() or not a.resolved_manifest.is_file():
@@ -155,24 +158,55 @@ def create(a):
     return {'verdict': 'CREATED', 'manifest': Path(a.output).name,
         'manifestSha256': sha256_file(a.output), 'assets': len(assets)}
 
+def field(container, key, kind, name):
+    value = container.get(key) if isinstance(container, dict) else None
+    if not isinstance(value, kind) or isinstance(value, bool):
+        raise InputError(f'manifest {name} is missing or has the wrong type')
+    return value
+
+def matches(pattern, value, name):
+    if not isinstance(value, str) or not pattern.fullmatch(value):
+        raise InputError(f'manifest {name} is missing or invalid')
+    return value
+
 def load_manifest(path):
+    """Validate the complete candidate provenance; both verify modes refuse an incomplete manifest.
+    Claimed identities are checked by verify itself, so delivery comparison stays byte-only."""
     manifest = read_json(path, 'manifest')
     if not isinstance(manifest, dict) or manifest.get('schemaVersion') != SCHEMA or manifest.get('kind') != KIND:
         raise InputError('unsupported manifest schema')
-    try:
-        names = [row['name'] for row in manifest['assets']]
-        if any(not ASSET_NAME.fullmatch(n) for n in names) or len(set(names)) != len(names):
-            raise InputError('manifest asset names are unsafe or duplicated')
-        for row in manifest['assets']:
-            if isinstance(row['size'], bool) or not isinstance(row['size'], int) or row['size'] < 0:
-                raise InputError('manifest asset size must be a non-negative integer')
-            digest(row['sha256'], 'manifest asset sha256')
-        if not DEVICE.fullmatch(manifest['target']['device']):
-            raise InputError('manifest target device is invalid')
-        positive_int(manifest['build']['number'], 'manifest build number')
-        positive_int(manifest['build']['timestamp'], 'manifest build timestamp')
-    except (KeyError, TypeError) as error:
-        raise InputError(f'manifest is missing a required field: {error}')
+    if manifest.get('receiptType') != 'pre-publication':
+        raise InputError('manifest receiptType must be pre-publication')
+    source = field(manifest, 'source', dict, 'source')
+    matches(SHA1, source.get('revision'), 'source.revision')
+    matches(SHA256, source.get('resolvedManifestSha256'), 'source.resolvedManifestSha256')
+    target = field(manifest, 'target', dict, 'target')
+    device = matches(DEVICE, target.get('device'), 'target.device')
+    if target.get('variant') not in VARIANTS:
+        raise InputError('manifest target.variant is missing or invalid')
+    if manifest.get('channel') not in CHANNELS:
+        raise InputError('manifest channel is missing or invalid')
+    build = field(manifest, 'build', dict, 'build')
+    for key in ('number', 'timestamp'):
+        if field(build, key, int, 'build.'+key) < 1:
+            raise InputError(f'manifest build.{key} must be positive')
+    assets = field(manifest, 'assets', list, 'assets')
+    if not assets:
+        raise InputError('manifest assets must not be empty')
+    names = set()
+    for row in assets:
+        name = matches(ASSET_NAME, row.get('name') if isinstance(row, dict) else None, 'asset name')
+        if name in names:
+            raise InputError(f'manifest asset name is duplicated: {name}')
+        names.add(name)
+        if not 0 <= field(row, 'size', int, 'asset size') <= MAX_ASSET_BYTES:
+            raise InputError(f'manifest asset size is out of range: {name}')
+        matches(SHA256, row.get('sha256'), 'asset sha256')
+    feed = field(manifest, 'feed', dict, 'feed')
+    matches(FEED_CHANNEL, feed.get('feedChannel'), 'feed.feedChannel')
+    metadata = feed.get('metadataAsset')
+    if metadata != (f'{device}-stable' if f'{device}-stable' in names else None):
+        raise InputError('manifest feed.metadataAsset must name the listed DEVICE-stable asset, or be null without one')
     return manifest
 
 def compare_bytes(manifest, directory):
@@ -280,7 +314,7 @@ def verify_published(a):
     report = {'verdict': 'FAIL' if failures else 'PASS', 'failures': failures,
         'manifestSha256': sha256_file(a.manifest), 'receiptType': 'delivery-verification',
         'source': a.source, 'assets': len(manifest['assets']),
-        'note': 'compares a separately downloaded directory; no network action was taken'}
+        'note': 'compared the caller-supplied directory; how its bytes were obtained is not proven by this tool, and no network action was taken'}
     if a.receipt:
         write_once(a.receipt, report)
     return report
