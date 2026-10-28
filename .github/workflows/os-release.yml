@@ -131,7 +131,7 @@ jobs:
       - name: Verify the signed candidate
         run: bash scripts/os-release-stage.sh ota-verify verify-signed
       - name: Stage only public files and receipts
-        run: bash scripts/os-release-stage.sh transfer stage-artifact --artifact-dir "$ROSE_BASE/artifact" --apps "$APPS"
+        run: bash scripts/os-release-stage.sh transfer stage-artifact --artifact-dir "$ROSE_BASE/artifact"
       - name: Transfer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -19,6 +21,8 @@ PY = sys.executable
 SHA, BUILD, STAMP = '34fa48ff16d046e16c7d680731bf01058d794279', '2026102901', '1793200000'
 SIGNER = 'A'*64
 APPS = [['dev.pixel.voice', 300], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 27]]
+WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
+    (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text(), re.M)
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))
@@ -143,6 +147,7 @@ class PipelineTest(unittest.TestCase):
                 'tools': {'checkOtaSignature': str(tools/'check_ota.py'), 'avbtool': str(tools/'avbtool.py'),
                     'apksigner': str(tools/'apksigner'), 'aapt': str(tools/'aapt'),
                     'simg2img': str(tools/'simg2img'), 'debugfs': str(tools/'debugfs')}},
+            'versionBaselines': json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['versionBaselines'],
             'identities': {'appSignerSha256': SIGNER.lower(), 'otaCertificateSha256': cert_pin,
                 'avbPublicKeySha256': hashlib.sha256(b'synthetic avb key blob').hexdigest()},
             'framework': {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False},
@@ -156,20 +161,22 @@ class PipelineTest(unittest.TestCase):
         result = subprocess.run([PY, str(PIPELINE), *map(str, args)], capture_output=True, text=True, env=env, timeout=120)
         return result.returncode, (result.stdout + result.stderr)
 
-    def stage(self, name, command, *extra):
-        argv = [PY, str(STAGE), 'run', '--state', str(self.base/'stages'), '--source-revision', SHA, name, '--',
-            PY, str(PIPELINE), command, *self.common, *extra]
-        return subprocess.run(argv, capture_output=True, text=True, timeout=120)
-
-    def run_builder_job(self):
+    def run_builder_job(self, apps=APPS):
+        """The builder job's stage steps exactly as os-release.yml runs them, through the real os-release-stage.sh with
+        the workflow's candidate environment; only the fake adapter and fixture config are appended."""
         subprocess.run([PY, str(STAGE), 'init', '--state', str(self.base/'stages'), '--source-revision', SHA, '--device', 'frankel',
             '--build-number', BUILD], check=True, capture_output=True)
-        for name, command in (('build', 'build'), ('bytes-verify', 'verify-build'), ('sign', 'sign'), ('ota-verify', 'verify-signed')):
-            result = self.stage(name, command)
+        env = dict(os.environ, ROSE_BASE=str(self.base), CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP,
+            CHANNEL='beta', APPS=json.dumps(apps), PATH=f'{Path(PY).parent}:{os.environ["PATH"]}')
+        if apps is None:
+            env.pop('APPS')
+        fake = ' '.join(shlex.quote(str(x)) for x in self.common[10:])
+        for line in WORKFLOW_STAGES:
+            result = subprocess.run(['bash', '-c', f'{line} {fake}'], cwd=SCRIPTS.parent, env=env, capture_output=True,
+                text=True, timeout=120)
             if result.returncode:
-                return name, result
-        result = self.stage('transfer', 'stage-artifact', '--artifact-dir', str(self.base/'artifact'), '--apps', json.dumps(APPS))
-        return ('transfer', result) if result.returncode else (None, result)
+                return line.split()[2], result
+        return None, result
 
     def status(self):
         return json.loads(subprocess.run([PY, str(STAGE), 'status', '--state', str(self.base/'stages')], capture_output=True, text=True).stdout)
@@ -226,6 +233,19 @@ class PipelineTest(unittest.TestCase):
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'ota-verify')
         self.assertIn('OTA package or payload signature verification failed', result.stderr)
+
+    def test_workflow_stages_pass_the_dispatched_apps_to_every_command(self):
+        self.assertEqual([l.split()[2:4] for l in WORKFLOW_STAGES], [['build', 'build'], ['bytes-verify', 'verify-build'],
+            ['sign', 'sign'], ['ota-verify', 'verify-signed'], ['transfer', 'stage-artifact']])
+        failed, result = self.run_builder_job(apps=[['dev.pixel.voice', 299], *APPS[1:]])
+        self.assertEqual(failed, 'build')
+        self.assertIn('dev.pixel.voice versionCode 299 must exceed retained 2026102801 versionCode 299', result.stderr)
+        self.assertNotIn('versionCode None', result.stderr)
+
+    def test_wrapper_refuses_to_run_without_apps(self):
+        failed, result = self.run_builder_job(apps=None)
+        self.assertEqual(failed, 'build')
+        self.assertIn('APPS is required', result.stderr)
 
     def test_held_lock_refuses_the_build(self):
         import fcntl
