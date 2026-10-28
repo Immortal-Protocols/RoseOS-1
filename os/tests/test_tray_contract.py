@@ -31,15 +31,16 @@ class TrayContractTest(unittest.TestCase):
         self.service = (APP/'AgentTrayService.java').read_text()
         self.tray = (SHELL/'AgentTrayPrototype.java').read_text()
         self.controls = (SHELL/'AgentStatusControls.java').read_text()
+        self.link = (SHELL/'AgentTrayLink.java').read_text()
 
     def test_message_codes_match(self):
         codes = dict((name, int(value)) for name, value in
             re.findall(r'\b(REGISTER|UNREGISTER|START|MUTE|UNMUTE|END|STATE)=(\d+)', self.service))
         self.assertEqual(codes, {'REGISTER': 1, 'UNREGISTER': 2, 'START': 3, 'MUTE': 4,
             'UNMUTE': 5, 'END': 6, 'STATE': 100})
-        # The tray registers on connect, unregisters on user switch and accepts only STATE replies.
-        self.assertIn('send(1);', self.tray)
-        self.assertIn('send(2);', self.tray)
+        # SystemUI's subscription (AgentTrayLink) uses the service's REGISTER/UNREGISTER codes and
+        # the tray accepts only STATE replies.
+        self.assertIn('static final int REGISTER = 1, UNREGISTER = 2;', self.link)
         self.assertIn('message.what != 100', self.tray)
         # Tap commands the tray can send are exactly START/MUTE/UNMUTE/END.
         self.assertIn('return !active ? 3 : tapped == 1 ? 6 : muted ? 5 : 4;', self.controls)
@@ -55,17 +56,29 @@ class TrayContractTest(unittest.TestCase):
         self.assertIn('android:name=".AgentTrayService" android:exported="true" android:permission="android.permission.STATUS_BAR_SERVICE"',
             (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text())
         self.assertIn('"com.android.systemui"', self.service)
-        self.assertIn('getPackageUidAsUser(\n                    "dev.pixel.voice", user)', self.tray)
+        self.assertIn('getPackageUidAsUser(\n                    "dev.pixel.voice", link.user())', self.tray)
 
     def test_tray_keeps_at_most_one_pending_rebind(self):
         # Every failed bind, binding death and screen/user broadcast used to start its own 3 s chain.
         self.assertNotIn('postDelayed(this::bind', self.tray)
         self.assertEqual(self.tray.count('handler.postDelayed(retryBind, 3000);'), 1)
-        schedule = self.tray[self.tray.index('private void scheduleBind()'):]
+        schedule = self.tray[self.tray.index('public void scheduleRetry()'):]
         self.assertLess(schedule.index('handler.removeCallbacks(retryBind);'),
             schedule.index('handler.postDelayed(retryBind, 3000);'))
-        bind = self.tray[self.tray.index('private void bind()'):]
-        self.assertTrue(bind.split('\n')[1].strip() == 'handler.removeCallbacks(retryBind);')
+
+    def test_lifecycle_is_delegated_to_the_tested_link(self):
+        # AgentTrayLinkTest exercises the behaviour; this pins the Android wiring to it.
+        for wiring in ('link.connected();', 'public void onServiceDisconnected(ComponentName name) { link.disconnected(); }',
+                'public void onBindingDied(ComponentName name) { link.bindingDied(); }',
+                'public void onNullBinding(ComponentName name) { link.bindingDied(); }',
+                'link.screenOff();', 'link.screenOn(ActivityManager.getCurrentUser());',
+                'link.userSwitched(ActivityManager.getCurrentUser());',
+                'this.link.retry(ActivityManager.getCurrentUser())'):
+            self.assertIn(wiring, self.tray, wiring)
+        # Only the link registers or unregisters; the prototype never sends codes 1 or 2 itself.
+        self.assertNotRegex(self.tray, r'send\((1|2)\)')
+        self.assertNotIn('bindServiceAsUser', self.tray.replace(
+            self.tray[self.tray.index('new AgentTrayLink.Port()'):self.tray.index('AgentTrayPrototype(Context source')], ''))
 
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))
