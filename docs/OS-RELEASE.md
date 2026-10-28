@@ -191,6 +191,23 @@ separately downloaded directory with the manifest and writes a delivery receipt.
 Matching identity fields against pins is not cryptographic signature verification.
 Record apksigner/OTA verifier results separately.
 
+`scripts/release-stage.py` records the release lifecycle offline as a chain of
+immutable receipts. Each receipt is bound to one candidate (source revision,
+device and build number). The stage order is build, bytes-verify, sign, ota-verify,
+transfer, publish and publication-verify. `run` executes only the next legal stage,
+under a non-blocking lock that the stage command inherits. It records start and
+completion separately, and binds declared input and output file hashes. `status` reports:
+
+- `RUNNING` only when the lock is held and the owner's boot id and process are live;
+- `INTERRUPTED` when a started stage has no live owner;
+- `AWAITING_EXTERNAL` for publication, which this tool never performs, with builder
+  compute not needed at that point;
+- `TERMINAL` only after publication-verify succeeds, or an explicit `fail`/`abandon`.
+
+A successful build is never release completion. Recovery is explicit:
+`mark-interrupted`, then run the stage again. Receipts hold hashes, times and exit
+codes, not command output, arguments or environment.
+
 Promote the candidate and channel metadata only after its acceptance gates pass.
 Publishing `frankel-stable` may make an update available to existing users; it is
 not a harmless documentation change. Nathan requested a released OS build, but a
