@@ -4,43 +4,67 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import javax.net.ssl.HttpsURLConnection;
 
 /**
  * Platform HTTPS transport for one local-agent-v1 need_inference at a time, on a worker thread,
  * with the platform trust store and the app's network security config (no cleartext). POSTs the
  * agent's request body to the configured URL unchanged and reports the raw status and body, or a
- * transport failure kind. Redirects are not followed. Cancel disconnects the socket; the agent also
- * rejects any reply that still arrives. No credentials are configured in this app.
+ * transport failure kind. Redirects are not followed, so the bearer token is only ever sent to the
+ * origin it was entered for. Cancel disconnects the socket; the agent also rejects any reply that
+ * still arrives. Failures are reported as fixed kinds only, never exception text.
  */
 final class HttpsInferenceClient implements InferenceClient {
     static final int CONNECT_TIMEOUT_MS = 10_000;
     static final int MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-    private final String url;
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    /** Opens the connection for a URL; the platform's HTTPS stack outside tests. */
+    interface Opener {
+        HttpURLConnection open(URL url) throws IOException;
+    }
 
-    /** url must already pass EndpointPolicy.check. */
-    HttpsInferenceClient(String url) {
+    private final String url;
+    private final EndpointCredential credential;
+    private final Opener opener;
+    /** One daemon worker for the process: one request at a time, and no thread left per client. */
+    private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "rose-models-https");
+        t.setDaemon(true);
+        return t;
+    });
+
+    HttpsInferenceClient(String url, EndpointCredential credential) {
+        this(url, credential, u -> (javax.net.ssl.HttpsURLConnection) u.openConnection());
+    }
+
+    HttpsInferenceClient(String url, EndpointCredential credential, Opener opener) {
+        if (EndpointPolicy.check(url) != null) {
+            throw new IllegalArgumentException("endpoint rejected: " + EndpointPolicy.check(url));
+        }
+        if (credential == null || !credential.matches(url)) {
+            throw new IllegalArgumentException("no access token for " + EndpointCredential.origin(url));
+        }
         this.url = url;
+        this.credential = credential;
+        this.opener = opener;
     }
 
     @Override
     public Call send(final String requestBody, final long timeoutMs, final Callback callback) {
-        final HttpsURLConnection[] connection = {null};
+        final HttpURLConnection[] connection = {null};
         final boolean[] cancelled = {false};
-        worker.execute(() -> {
+        WORKER.execute(() -> {
             int status = -1;
             String retryAfter = null;
             String body = null;
             String failure = null;
             boolean connected = false;
             try {
-                HttpsURLConnection c = (HttpsURLConnection) new URL(url).openConnection();
+                HttpURLConnection c = opener.open(new URL(url));
                 synchronized (connection) {
                     if (cancelled[0]) {
                         return;
@@ -54,6 +78,7 @@ final class HttpsInferenceClient implements InferenceClient {
                 c.setDoOutput(true);
                 c.setRequestProperty("Content-Type", "application/json");
                 c.setRequestProperty("Accept", "application/json");
+                c.setRequestProperty("Authorization", credential.authorizationHeader());
                 byte[] out = requestBody.getBytes(StandardCharsets.UTF_8);
                 c.setFixedLengthStreamingMode(out.length);
                 c.connect();

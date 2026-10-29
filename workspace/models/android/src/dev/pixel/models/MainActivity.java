@@ -23,7 +23,8 @@ import java.util.List;
  * Rose Models text chat: transcript, input and Send, status, Stop, Continue and the last app
  * action. Conversation and agent state live in Core's local-agent-v1 agent on this phone
  * (NativeAgent); the configured HTTPS endpoint is used only for inference. There is no default
- * endpoint or model: until both are set in Settings, Send stays disabled.
+ * endpoint, model or token: until all three are set in Settings, Send stays disabled. The access
+ * token is entered masked, bound to the endpoint's origin and kept in memory only (CredentialStore).
  */
 public final class MainActivity extends Activity implements TurnView {
     private static final String PREFS = "rose-models";
@@ -52,10 +53,8 @@ public final class MainActivity extends Activity implements TurnView {
         String endpoint = prefs.getString(KEY_ENDPOINT, "");
         String model = prefs.getString(KEY_MODEL, "").trim();
         buildUi();
-        setupProblem = EndpointPolicy.check(endpoint);
-        if (setupProblem == null && model.isEmpty()) {
-            setupProblem = "no model id is configured";
-        }
+        EndpointCredential credential = CredentialStore.forEndpoint(endpoint);
+        setupProblem = SetupCheck.problem(endpoint, model, credential);
         if (setupProblem != null) {
             setStatus("Setup needed: " + setupProblem + ". Use Settings.");
             setControls(false, false, false);
@@ -70,7 +69,7 @@ public final class MainActivity extends Activity implements TurnView {
             setControls(false, false, false);
             return;
         }
-        host = new LocalAgentHost(agent, new HttpsInferenceClient(endpoint),
+        host = new LocalAgentHost(agent, new HttpsInferenceClient(endpoint, credential),
                 new AllowlistLauncher(allowlist, new AndroidAppLauncher(this)), this, main::post,
                 (millis, task) -> main.postDelayed(task, millis));
         showReadyStatus();
@@ -174,7 +173,10 @@ public final class MainActivity extends Activity implements TurnView {
         return false;
     }
 
-    /** HTTPS endpoint and exact served model id. Nothing is pre-filled. */
+    /**
+     * HTTPS endpoint, exact served model id and access token. Nothing is pre-filled; the token
+     * field is masked, never shown back, not kept in saved instance state and never persisted.
+     */
     private void editSettings() {
         if (busy()) {
             return;
@@ -186,21 +188,48 @@ public final class MainActivity extends Activity implements TurnView {
         final EditText model = new EditText(this);
         model.setHint("Exact model id served by the endpoint");
         model.setText(prefs().getString(KEY_MODEL, ""));
+        final EditText token = new EditText(this);
+        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        token.setSaveEnabled(false);
+        token.setHint(CredentialStore.isSet()
+                ? "Access token set (memory only); type to replace"
+                : "Access token (memory only, cleared on exit)");
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         form.addView(endpoint);
         form.addView(model);
+        form.addView(token);
         new AlertDialog.Builder(this)
                 .setTitle("Inference settings")
                 .setView(form)
                 .setPositiveButton("Save", (d, w) -> {
+                    String newEndpoint = endpoint.getText().toString().trim();
+                    String newToken = token.getText().toString();
+                    token.setText("");
+                    if (!newEndpoint.equals(prefs().getString(KEY_ENDPOINT, ""))) {
+                        CredentialStore.clear(); // a token never follows a changed endpoint
+                    }
                     prefs().edit()
-                            .putString(KEY_ENDPOINT, endpoint.getText().toString().trim())
+                            .putString(KEY_ENDPOINT, newEndpoint)
                             .putString(KEY_MODEL, model.getText().toString().trim())
                             .apply();
+                    if (!newToken.isEmpty()) {
+                        try {
+                            CredentialStore.set(EndpointCredential.bind(newEndpoint, newToken));
+                        } catch (IllegalArgumentException e) {
+                            CredentialStore.clear();
+                            setStatus("Token not saved: " + e.getMessage());
+                            return;
+                        }
+                    }
                     recreate();
                 })
-                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Clear token", (d, w) -> {
+                    token.setText("");
+                    CredentialStore.clear();
+                    recreate();
+                })
+                .setNegativeButton("Cancel", (d, w) -> token.setText(""))
                 .show();
     }
 
