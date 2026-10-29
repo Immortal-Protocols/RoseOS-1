@@ -29,7 +29,8 @@ spec.loader.exec_module(pipeline)
 FRANKEL = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
 LIMIT = cm.FLOOR_BYTES + cm.STOP_BUFFER_BYTES
 GiB = 1 << 30
-POLICY = {'floor': cm.FLOOR_BYTES, 'buffer': cm.STOP_BUFFER_BYTES, 'interval': 0.1, 'termGrace': 0.3, 'killVerify': 1.0}
+POLICY = {'floor': cm.FLOOR_BYTES, 'buffer': cm.STOP_BUFFER_BYTES, 'transientStop': cm.TRANSIENT_STOP_BYTES,
+    'interval': 0.1, 'termGrace': 0.3, 'killVerify': 1.0}
 
 # A TERM-resistant parent that forks a TERM-resistant descendant; both record their pid and sleep.
 TREE = textwrap.dedent('''
@@ -118,9 +119,10 @@ class Policy(unittest.TestCase):
         good = FRANKEL['host']['capacity']
         self.assertEqual(good['mode'], 'budgeted')
         self.assertIsNone(good['osBuildAllowanceBytes'])
-        self.assertEqual(cm.policy_from(good), {'floor': 322122547200, 'buffer': 68719476736, 'interval': 1.0,
-            'termGrace': 2.0, 'killVerify': 2.0})
+        self.assertEqual(cm.policy_from(good), {'floor': 322122547200, 'buffer': 68719476736, 'transientStop': 1073741824,
+            'interval': 1.0, 'termGrace': 2.0, 'killVerify': 2.0})
         for change in ({'reserveBytes': cm.FLOOR_BYTES - 1}, {'stopBufferBytes': 32 * GiB}, {'sampleIntervalSeconds': 1.5},
+                       {'transientStopBytes': 0}, {'transientStopBytes': cm.FLOOR_BYTES},
                        {'termGraceSeconds': 3}, {'killVerifySeconds': 0}, {'sampleIntervalSeconds': True}, {'termGraceSeconds': None}):
             with self.assertRaises(cm.CapacityAbort, msg=change):
                 cm.policy_from({**good, **change})
@@ -158,6 +160,92 @@ class Admission(unittest.TestCase):
         ticks = iter([0.0, 5.0] * 10)
         with self.assertRaisesRegex(cm.CapacityAbort, 'stale'):
             f.budget(Space(), clock=lambda: next(ticks)).start()
+
+
+class Roles(unittest.TestCase):
+    """Realistic host shape: retained build disk plus a RAM-sized tmpfs /dev/shm on its own device."""
+
+    def setUp(self):
+        self.f = Fixture(self)
+        for name in ('disk/src/out', 'disk/actions', 'shm', 'tmp'):
+            (self.f.root/name).mkdir(parents=True)
+        self.devices = {'disk': 1, 'shm': 2, 'tmp': 3}
+
+    def stat(self, path):
+        rel = Path(path).relative_to(self.f.root).parts
+        return types.SimpleNamespace(st_dev=self.devices.get(rel[0] if rel else 'disk', 1))
+
+    def space(self, disk, shm, tmp=None):
+        values = {1: disk, 2: shm, 3: tmp if tmp is not None else shm}
+
+        def statvfs(path):
+            return types.SimpleNamespace(f_bavail=values[self.stat(path).st_dev], f_frsize=1, f_blocks=4 * values[1])
+        return statvfs
+
+    def paths(self):
+        r = self.f.root
+        return {'source tree': r/'disk/src', 'OUT_DIR': r/'disk/src/out', 'release workspace': r/'disk/actions/r/release',
+            'temporary directory': r/'tmp', 'RAM secret staging': r/'shm', 'RUNNER_TEMP': r/'disk/actions/_temp'}
+
+    def budget(self, disk, shm, tmp=None):
+        return cm.Budget(dict(POLICY), self.paths(), self.space(disk, shm, tmp), self.stat, log=lambda line: None,
+            retained=pipeline.RETAINED_ROLES)
+
+    def test_small_tmpfs_is_admitted_while_the_retained_disk_keeps_the_reserve(self):
+        budget = self.budget(LIMIT + GiB, 16 * GiB).start()
+        roles = {fs['label']: (fs['role'], fs['stopAt']) for fs in budget.filesystems}
+        self.assertEqual(roles, {'source tree': ('retained', LIMIT), 'temporary directory': ('transient', cm.TRANSIENT_STOP_BYTES),
+            'RAM secret staging': ('transient', cm.TRANSIENT_STOP_BYTES)})
+        # RUNNER_TEMP on the build disk is covered by the retained line, not a weaker one.
+        self.assertIn('RUNNER_TEMP', budget.filesystems[0]['covers'])
+
+    def test_retained_disk_at_the_line_is_refused_whatever_the_tmpfs_has(self):
+        with self.assertRaisesRegex(cm.CapacityAbort, 'source tree filesystem.*300|source tree filesystem'):
+            self.budget(LIMIT, 1 << 50).start()
+
+    def test_tmpfs_at_its_stop_line_is_refused_and_monitored(self):
+        with self.assertRaisesRegex(cm.CapacityAbort, 'RAM secret staging filesystem has 1073741824.*transient-only'):
+            self.budget(LIMIT + GiB, cm.TRANSIENT_STOP_BYTES, tmp=16 * GiB).start()
+        budget = self.budget(LIMIT + GiB, 16 * GiB).start()
+        budget.statvfs = self.space(LIMIT + GiB, 512 << 20, tmp=16 * GiB)
+        with self.assertRaisesRegex(cm.CapacityAbort, 'RAM secret staging'):
+            budget.check()
+
+    def test_transient_path_sharing_a_retained_device_keeps_the_full_line(self):
+        self.devices['shm'] = 1  # /dev/shm on the build disk (not a tmpfs): the retained rule applies
+        budget = self.budget(LIMIT + GiB, 16 * GiB, tmp=16 * GiB)
+        self.assertEqual([fs['role'] for fs in budget.filesystems], ['retained', 'transient'])
+        with self.assertRaises(cm.CapacityAbort):
+            self.budget(LIMIT, 1 << 50, tmp=1 << 50).start()
+
+    def test_build_stage_with_realistic_tmpfs_reaches_integration(self):
+        cfg = copy.deepcopy(FRANKEL)
+        r = self.f.root
+        cfg['host'].update(sourceRoot=str(r/'disk/src'), outDir='out', lockPath=str(r/'disk/build.lock'),
+            integrateCommand=[sys.executable, '-c', 'pass'])
+        events = []
+        originals = {}
+        for name, value in {'check_version_baselines': lambda *a: None, 'stage_env': lambda *a: dict(os.environ),
+                            'drop_signer_access': lambda: None,
+                            'stage_write_paths': lambda config, release_dir, *extra: self.paths()}.items():
+            originals[name] = getattr(pipeline, name)
+            setattr(pipeline, name, value)
+        try:
+            space, statfn = self.space(LIMIT + 100 * GiB, 16 * GiB), self.stat
+
+            class Adapter:
+                statvfs = staticmethod(space)
+                stat = staticmethod(statfn)
+
+                def make(self, *a):
+                    events.append('make')
+            args = types.SimpleNamespace(apps='[]', release_dir=str(r/'disk/actions/r/release'))
+            with self.assertRaisesRegex(pipeline.CheckFailed, 'integration did not produce'):
+                pipeline.build(args, cfg, {}, Adapter())
+        finally:
+            for name, value in originals.items():
+                setattr(pipeline, name, value)
+        self.assertTrue((r/'disk/actions/r/release').is_dir())  # admitted; integration ran
 
 
 class OwnedTree(unittest.TestCase):
@@ -361,7 +449,7 @@ class MutationControls(unittest.TestCase):
 
     def test_strict_line_and_stop_are_load_bearing(self):
         f = Fixture(self)
-        m = self.mutated('            if available - need <= self.limit:', '            if available - need < self.limit:')
+        m = self.mutated("            if available - need <= fs['stopAt']:", "            if available - need < fs['stopAt']:")
         m.Budget(dict(POLICY), {'w': f.root}, Space(high=LIMIT), log=lambda line: None).start()
         m = self.mutated('            self.stop(pgid, proc)\n', '            pass\n')
         with self.assertRaises(m.CapacityAbort):

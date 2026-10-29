@@ -1,8 +1,10 @@
 """Runtime-measured capacity budget for the os-release build and sign stages (OCT29-INFRA-S008).
 
 A Budget is created under the existing source/output lock, before any stage write. It resolves the stage's write
-paths to their filesystems (nearest existing ancestor, one entry per device) and requires every one to have strictly
-more than floor + stop buffer available to this user (statvfs f_bavail * f_frsize). It then runs each owned child in
+paths to their filesystems (nearest existing ancestor, one entry per device). A filesystem holding a retained build
+path (source, OUT_DIR, release workspace, artifact) must have strictly more than floor + stop buffer available to this
+user (statvfs f_bavail * f_frsize); one holding only transient paths (RAM secret staging, temp, RUNNER_TEMP on their
+own device) must stay above the transient stop line instead, since a RAM-sized tmpfs never holds the 300 GiB reserve. It then runs each owned child in
 its own session/process group, sampling every filesystem at most every interval seconds, and copies parent-managed
 files in checked chunks. A threshold crossing, stat error, stale sample or monitor exception stops the owned process
 group: SIGTERM, up to term_grace seconds, then SIGKILL, and termination verified within kill_verify seconds. Only the
@@ -25,6 +27,10 @@ import time
 
 FLOOR_BYTES = 322122547200   # 300 GiB reserve that must stay available
 STOP_BUFFER_BYTES = 68719476736  # 64 GiB abort margin; not a peak estimate
+# Stop line for a transient-only filesystem (RAM secret staging, a separate temp or RUNNER_TEMP device). The budgeted
+# stages write only small files there (signing key archive and passphrase, gcloud job config); the 300 GiB reserve
+# belongs to the retained build disks and does not apply to a RAM-sized tmpfs.
+TRANSIENT_STOP_BYTES = 1073741824  # 1 GiB
 MAX_INTERVAL, MAX_TERM_GRACE, MAX_KILL_VERIFY = 1.0, 2.0, 2.0
 CHUNK_BYTES = 64 << 20
 PR_SET_CHILD_SUBREAPER = 36
@@ -40,6 +46,8 @@ def policy_from(capacity):
         raise CapacityAbort(f'host.capacity.reserveBytes must be {FLOOR_BYTES} (300 GiB); the reserve is never lowered')
     if capacity.get('stopBufferBytes') != STOP_BUFFER_BYTES:
         raise CapacityAbort(f'host.capacity.stopBufferBytes must be {STOP_BUFFER_BYTES} (64 GiB)')
+    if capacity.get('transientStopBytes') != TRANSIENT_STOP_BYTES:
+        raise CapacityAbort(f'host.capacity.transientStopBytes must be {TRANSIENT_STOP_BYTES} (1 GiB)')
     limits = {'sampleIntervalSeconds': MAX_INTERVAL, 'termGraceSeconds': MAX_TERM_GRACE, 'killVerifySeconds': MAX_KILL_VERIFY}
     values = {}
     for key, limit in limits.items():
@@ -47,7 +55,8 @@ def policy_from(capacity):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= limit:
             raise CapacityAbort(f'host.capacity.{key} must be > 0 and <= {limit}')
         values[key] = float(value)
-    return {'floor': FLOOR_BYTES, 'buffer': STOP_BUFFER_BYTES, 'interval': values['sampleIntervalSeconds'],
+    return {'floor': FLOOR_BYTES, 'buffer': STOP_BUFFER_BYTES, 'transientStop': TRANSIENT_STOP_BYTES,
+        'interval': values['sampleIntervalSeconds'],
         'termGrace': values['termGraceSeconds'], 'killVerify': values['killVerifySeconds']}
 
 
@@ -91,19 +100,27 @@ def reap(pgid):
 
 class Budget:
     def __init__(self, policy, paths, statvfs=os.statvfs, stat=os.stat, clock=time.monotonic, sleep=time.sleep,
-                 log=lambda line: print(line, file=sys.stderr, flush=True)):
+                 log=lambda line: print(line, file=sys.stderr, flush=True), retained=None):
+        """paths: {label: path}. retained: the labels that are retained build disks (default: all). A filesystem
+        holding any retained path must keep floor + buffer; one holding only transient paths keeps transientStop."""
         self.policy, self.statvfs, self.clock, self.sleep, self.log = policy, statvfs, clock, sleep, log
-        self.filesystems, seen = [], {}
+        retained = set(paths) if retained is None else set(retained)
+        self.limit = policy['floor'] + policy['buffer']
+        by_device = {}
         for label, path in paths.items():
             try:
                 base = nearest_existing(path)
                 device = stat(base).st_dev
             except OSError as error:
                 raise CapacityAbort(f'filesystem of the {label} ({path}) could not be established: {error.__class__.__name__}')
-            if device not in seen:
-                seen[device] = label
-                self.filesystems.append({'label': label, 'path': str(base), 'device': device})
-        self.limit = policy['floor'] + policy['buffer']
+            by_device.setdefault(device, []).append((label, str(base)))
+        self.filesystems = []
+        for device, members in by_device.items():
+            kept = [m for m in members if m[0] in retained]
+            label, base = (kept or members)[0]
+            self.filesystems.append({'label': label, 'path': base, 'device': device,
+                'role': 'retained' if kept else 'transient', 'covers': [m[0] for m in members],
+                'stopAt': self.limit if kept else policy['transientStop']})
         self.groups = []
 
     def sample(self):
@@ -122,13 +139,16 @@ class Budget:
         return result
 
     def check(self, extra=None):
-        """Stop unless every filesystem keeps strictly more than floor + buffer (after extra[label] bytes, if given)."""
-        for label, (available, _) in self.sample().items():
-            need = (extra or {}).get(label, 0)
-            if available - need <= self.limit:
-                raise CapacityAbort(f'the {label} filesystem has {available} bytes available' +
-                    (f' before a {need}-byte copy' if need else '') +
-                    f'; the budget stops at {self.limit} ({self.policy["floor"]} reserve plus {self.policy["buffer"]} stop buffer)')
+        """Stop unless every filesystem keeps strictly more than its stop line (after extra[label] bytes, if given):
+        floor + buffer for a retained build disk, transientStop for a transient-only filesystem."""
+        sample = self.sample()
+        for fs in self.filesystems:
+            available, need = sample[fs['label']][0], (extra or {}).get(fs['label'], 0)
+            if available - need <= fs['stopAt']:
+                rule = (f'{self.policy["floor"]} reserve plus {self.policy["buffer"]} stop buffer' if fs['role'] == 'retained'
+                    else 'transient-only filesystem stop line')
+                raise CapacityAbort(f'the {fs["label"]} filesystem has {available} bytes available' +
+                    (f' before a {need}-byte copy' if need else '') + f'; the budget stops at {fs["stopAt"]} ({rule})')
 
     def start(self):
         """Initial admission and the before-writes report (policy, total and available bytes per filesystem)."""
@@ -136,7 +156,8 @@ class Budget:
         # One plain line (no JSON object, so stage receipts parsed from stderr stay unambiguous).
         self.log('capacity budgeted: floor=%d buffer=%d stopAt=%d interval=%gs termGrace=%gs killVerify=%gs; %s' % (
             self.policy['floor'], self.policy['buffer'], self.limit, self.policy['interval'], self.policy['termGrace'],
-            self.policy['killVerify'], '; '.join(f'{fs["label"]} dev={fs["device"]} path={fs["path"]} '
+            self.policy['killVerify'], '; '.join(f'{fs["label"]} ({fs["role"]}; covers {",".join(fs["covers"])}) '
+            f'dev={fs["device"]} path={fs["path"]} stopAt={fs["stopAt"]} '
             f'available={sample[fs["label"]][0]} total={sample[fs["label"]][1]}' for fs in self.filesystems)))
         self.check()
         return self
