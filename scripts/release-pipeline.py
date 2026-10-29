@@ -39,6 +39,8 @@ CONFIG = ROOT/'os/release-pipeline/frankel.json'
 SUPPORTED_DEVICES = ('frankel',)
 LATEST_DEVICES = ('frankel',)
 DEVICE = re.compile(r'[a-z][a-z0-9]{1,31}')
+# The shared generic system image's fingerprint prefix, as the 2806 build recorded it for the system partition.
+GENERIC_SYSTEM_FINGERPRINT = 'Android/generic_system/generic:'
 TARGET_FILES_VERIFIER = ROOT/'qa/first-update/runtime/verify-target-files.py'
 SUPPORTED_PUBLISHERS = ('github-app',)  # pixel-ota-only App; token minted in the hosted publisher job.
 BUILDER = {'project': 'protocols-465723', 'zone': 'us-west2-a', 'instance': 'immortal-os-builder'}
@@ -417,9 +419,21 @@ def check_build_identity(path, config, cand, keys):
     failures = []
     device, build = config['target']['device'], cand['build']
     marker = f'/{build}:{config["target"]["variant"]}/{keys}'
-    # Fingerprints are brand/product/device:release/id/incremental:type/tags (e.g. google/frankel/frankel:17/...), so
-    # every partition's and every AVB fingerprint must also name the dispatched device.
+    # Fingerprints are brand/product/device:release/id/incremental:type/tags. The system partition is the shared generic
+    # system image, so its fingerprints (SYSTEM/build.prop and the AVB system property) may carry the generic identity
+    # instead; 2806 (run 40778491188) has Android/generic_system/generic:... there and google/frankel/frankel:... on
+    # vendor, odm, product, system_ext and the dlkm partitions. Every other fingerprint must name the device, and at
+    # least one must, so an artifact built for another device (or carrying no device at all) is refused.
     named = f'/{device}:'
+    device_named = []
+
+    def device_failure(where, value, system):
+        if named in value:
+            device_named.append(where)
+            return None
+        if system and value.startswith(GENERIC_SYSTEM_FINGERPRINT):
+            return None
+        return f'{where} does not name device {device}'
     with zipfile.ZipFile(path) as archive:
         props = read_props(archive)
         for name, values in props.items():
@@ -430,8 +444,8 @@ def check_build_identity(path, config, cand, keys):
                     failures.append(f'{name}: {key}={value}')
                 if key.endswith('build.fingerprint') and marker not in value:
                     failures.append(f'{name}: {key} does not name build {build} with {keys}')
-                if key.endswith('build.fingerprint') and named not in value:
-                    failures.append(f'{name}: {key} does not name device {device}')
+                if key.endswith('build.fingerprint'):
+                    failures.append(device_failure(f'{name}: {key}', value, name == 'SYSTEM/build.prop'))
                 if (key.endswith('product.device') or key == 'ro.product.vendor.device') and value != device:
                     failures.append(f'{name}: {key}={value}')
         system = props['SYSTEM/build.prop']
@@ -440,13 +454,17 @@ def check_build_identity(path, config, cand, keys):
         if 'META/misc_info.txt' not in archive.namelist():
             failures.append('META/misc_info.txt missing')
         else:
-            fingerprints = re.findall(r'\.fingerprint:(\S+)', archive.read('META/misc_info.txt').decode(errors='replace'))
+            text = archive.read('META/misc_info.txt').decode(errors='replace')
+            fingerprints = re.findall(r'\.fingerprint:(\S+)', text)
             if not fingerprints:
                 failures.append('META/misc_info.txt has no AVB fingerprint properties')
             failures += [f'META/misc_info.txt fingerprint {f} does not name build {build}'
                 for f in fingerprints if marker not in f]
-            failures += [f'META/misc_info.txt fingerprint {f} does not name device {device}' for f in fingerprints if named not in f]
-    return failures
+            for partition, value in re.findall(r'com\.android\.build\.([a-z_]+)\.fingerprint:(\S+)', text):
+                failures.append(device_failure(f'META/misc_info.txt fingerprint {value}', value, partition == 'system'))
+        if not device_named:
+            failures.append(f'no partition fingerprint names device {device}')
+    return [f for f in failures if f]
 
 def check_framework(path, config, aapt):
     """Compiled framework allowlist and switches, read from framework-res.apk in the image."""

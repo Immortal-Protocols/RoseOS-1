@@ -121,12 +121,16 @@ def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.sea
 
 def target_files(path, keys, policy_apks, stale_misc=False, image_override=None, apex=None, systemui=SYSTEMUI_APK_BYTES):
     """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, images."""
+    # As the 2806 build recorded them (run 40778491188): the system partition is the shared generic system image, every
+    # other partition names the device.
     fp = f'google/frankel/frankel:17/CP3A.261005.005/{BUILD}:user/{keys}'
+    system_fp = f'Android/generic_system/generic:17/CP3A.261005.005/{BUILD}:user/{keys}'
     with zipfile.ZipFile(path, 'w') as z:
         z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={BUILD}\nro.build.date.utc={STAMP}\n'
-            f'ro.build.type=user\nro.product.system.device=frankel\nro.system.build.fingerprint={fp}\nro.build.fingerprint={fp}\n')
-        z.writestr('VENDOR/build.prop', f'ro.vendor.build.version.incremental={BUILD}\nro.vendor.build.fingerprint={fp}\n')
-        misc_fp = fp.replace(BUILD, '2026102701') if stale_misc else fp
+            f'ro.build.type=user\nro.product.system.device=generic\nro.system.build.fingerprint={system_fp}\n')
+        z.writestr('VENDOR/build.prop', f'ro.vendor.build.version.incremental={BUILD}\nro.product.vendor.device=frankel\n'
+            f'ro.vendor.build.fingerprint={fp}\n')
+        misc_fp = system_fp.replace(BUILD, '2026102701') if stale_misc else system_fp
         z.writestr('META/misc_info.txt', f'avb_system_add_hashtree_footer_args=--prop com.android.build.system.fingerprint:{misc_fp}\n'
             f'avb_vendor_add_hashtree_footer_args=--prop com.android.build.vendor.fingerprint:{fp}\n')
         certs = []
