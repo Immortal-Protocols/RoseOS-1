@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness inspects the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; lunch and selected build variables only, in task scratch; no make, signing, secrets, login, download or publication; admits no device)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device)
         type: choice
         options: [os-release, device-readiness, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
         default: os-release
@@ -558,11 +558,12 @@ jobs:
         if: always()
         run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
 
-  # FAM-HOST-READINESS-S002: one bounded inspection of the retained tree for frankel, blazer and rango under the shared
-  # lock (scripts/device-readiness.py). contents: read only - no OIDC token, signer login, secret or publisher. Filesystem
-  # bytes, bounded usage, pinned HEADs, required product and generated vendor files and factory presence; lunch plus
-  # selected build variables only through the inspected chain, with a fresh task-owned OUT_DIR/HOME/TMPDIR (no make,
-  # download, sync, generation or clean). Only the sanitized receipt leaves; this attempt's own task root is removed.
+  # FAM-HOST-READINESS-S002 (FIX001): one bounded, metadata-only inspection of the retained tree for frankel, blazer and
+  # rango under the shared lock (scripts/device-readiness.py). contents: read only - no OIDC token, signer login, secret or
+  # publisher. Filesystem bytes, bounded usage, pinned HEADs, hashes of required product, generated vendor and lunch-chain
+  # files and factory presence. Nothing from the tree is executed (no envsetup, lunch, vendorsetup or cmds-for-envsetup:
+  # no supported mechanism confines them), so the receipt is PARTIAL with lunch and target results unknown. No make,
+  # download, sync, generation or clean. Only the sanitized receipt leaves; this attempt's own task root is removed.
   device-readiness:
     needs: controller
     if: inputs.mode == 'device-readiness'

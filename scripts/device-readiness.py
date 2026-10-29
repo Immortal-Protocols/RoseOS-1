@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""os-release device-readiness mode (FAM-HOST-READINESS-S002): one bounded, read-mostly inspection of the retained Pixel
-source tree on the existing builder for the fixed Pixel 10 targets of os/devices/pixel10.json. It admits nothing to
-delivery (release-pipeline.py SUPPORTED_DEVICES stays frankel only), never compiles, signs, downloads, syncs, generates
-vendor trees, cleans or deletes outputs, and reads no secret, key or credential.
+"""os-release device-readiness mode (FAM-HOST-READINESS-S002, FIX001): one bounded, metadata-only inspection of the
+retained Pixel source tree on the existing builder for the fixed Pixel 10 targets of os/devices/pixel10.json. It admits
+nothing to delivery (release-pipeline.py SUPPORTED_DEVICES stays frankel only), never compiles, signs, downloads, syncs,
+generates vendor trees, cleans or deletes outputs, and reads no secret, key or credential.
+
+It never executes anything from the tree: no envsetup.sh, lunch, soong_ui, vendorsetup.sh or cmds-for-envsetup.sh.
+Those scripts run as ordinary host bash with the runner's full access, and OUT_DIR, HOME and TMPDIR only redirect
+conventional paths; no existing supported mechanism confines them. Lunch and target results are therefore unknown, and
+every finished inspection is PARTIAL (metadata only); none is complete or target-ready.
 
   check    the checked-in contract and this script's pins agree (before the builder starts); reads only the checkout
-  plan     print what run would inspect and the lunch commands it would run, marked executed: false; runs nothing
+  plan     print what run would inspect, marked executed: false; runs nothing
   run      --run-id, --run-attempt, --recipe-sha, --evidence-dir: on the builder, under the shared lock. Refuses foreign
            work, a wrong instance or recipe, and an existing task root. Measures filesystem bytes/type and bounded named
            usage; reads vendor/adevtool and vendor/state HEADs against the contract pins; hashes the contract-required
-           product files and generated vendor/google_devices/<device> files (presence is not completeness); records
-           factory-image presence separately from a checksum validated within budget. Only if the pinned lunch chain is
-           byte-identical to the inspected revision and the device's inputs exist, runs lunch plus selected
-           get_build_var reads with a fresh task-owned OUT_DIR, HOME and TMPDIR (no make). Writes one sanitized receipt
-           and SHA256SUMS to --evidence-dir
+           product files, generated vendor/google_devices/<device> files and the lunch-chain files (compared, never run;
+           presence is not completeness); records factory-image presence separately from a checksum validated within
+           budget. Writes one sanitized receipt and SHA256SUMS to --evidence-dir
   cleanup  --run-id, --run-attempt: removes only this attempt's task root, and only when its ownership marker matches
-Exit status: 0 ok (measurements may still be unknown), 1 check failed or refused, 2 invalid input, 4 setup missing.
+Exit status: 0 inspected (PARTIAL, metadata only), 1 check failed or refused, 2 invalid input, 4 setup missing.
 """
 import argparse
 import errno
@@ -27,7 +30,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -41,18 +43,18 @@ PROVENANCE = ROOT/'os/tests/fixtures/adevtool-17df3b79/PROVENANCE.json'
 READINESS_DEVICES = ('frankel', 'blazer', 'rango')
 EXPECTED_PINS = {'vendor/adevtool': '17df3b79a73e67ad68387b35c7d41c85e1d8103c',
     'vendor/state': '1469180711293a5852bfda9a5f67b8f53d9828ad'}
-# The lunch call chain read at the pinned build/make b0f697df and build/soong 250710f7: every write it makes goes to
-# getoutdir (OUT_DIR) - soong_ui and its microfactory tools, dumpvars state and lunch's .leftovers. Any other bytes are
-# an uninspected chain, so lunch is skipped as SETUP_MISSING rather than run.
+# The lunch call chain as read at the pinned build/make b0f697df and build/soong 250710f7. Compared as metadata only:
+# matching bytes are not a confinement mechanism, so nothing here is ever executed.
 LUNCH_CHAIN = {
     'build/make/envsetup.sh': '0edc666156d0690ae762b8958efaca109c3b012e88471c317794c63679f978ba',
     'build/make/shell_utils.sh': 'b78e69ad82924546bfd74154ef8e95442bff51131564b66c4620c9155dcd8487',
     'build/soong/soong_ui.bash': '3b50c94ed3e209d573b1e34f1fc2ea1778bca049bec922292ddd3548e0a68675',
     'build/soong/scripts/microfactory.bash': '29d650997a0bdfbd9f3be7f424bb5e2106a80859c7c12f01065613ee77b165f4',
 }
-LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_BUILD_VARIANT', 'PRODUCT_DEVICE', 'TARGET_BOARD_PLATFORM', 'TARGET_CPU_ABI',
-    'PLATFORM_SDK_VERSION', 'PRODUCT_OUT')
-SHELL_VARS = ('TARGET_RELEASE',)  # exported by lunch itself (build/make/envsetup.sh _lunch_meat)
+CONFINEMENT_UNAVAILABLE = ('no supported mechanism confines tree scripts: lunch sources build/envsetup.sh, every '
+    'vendorsetup.sh under device/, vendor/ and product/, and vendor/*/<product>/cmds-for-envsetup.sh as ordinary host bash '
+    'with the runner\'s access; OUT_DIR, HOME and TMPDIR only redirect conventional paths, and a before/after scan is not '
+    'preventive confinement')
 GENERATED_FILES = ('AndroidProducts.mk', '{device}.mk', 'cmds-for-envsetup.sh', 'firmware/android-info.txt')
 USAGE = {'generatedVendor': 'vendor/google_devices', 'adevtoolDownloads': 'vendor/adevtool/dl', 'defaultOutput': 'out',
     'repoMetadata': '.repo'}  # plus retainedOutput, frankel.json host.outDir
@@ -60,9 +62,10 @@ FOREIGN = frozenset({'soong_ui', 'soong_build', 'ninja', 'n2', 'ckati', 'kati', 
     'qemu-system-x86', 'qemu-system-aarch64', 'repo', 'adevtool'})
 SECRET_NAMES = frozenset({'keys', '.ssh', '.gnupg', '.android', 'secrets', '.config', 'credentials'})
 MARKER = '.rose-device-readiness-owner'
-LIMITS = {'deadlineSeconds': 900, 'lunchSeconds': 300, 'gitSeconds': 30, 'usageSeconds': 45, 'usageEntries': 2_000_000,
+LIMITS = {'deadlineSeconds': 900, 'gitSeconds': 30, 'usageSeconds': 45, 'usageEntries': 2_000_000,
     'hashSeconds': 90, 'smallFileBytes': 4 << 20, 'listedNames': 50}
-NOT_PROVEN = ['completeness of any generated vendor tree or factory download', 'that any target compiles, signs or boots',
+NOT_PROVEN = ['lunch, product configuration or any target variable (not executed)', 'source-tree integrity',
+    'completeness of any generated vendor tree or factory download', 'that any target compiles, signs or boots',
     'artifact, signature, runtime or phone acceptance', 'release admission (frankel only, unchanged)']
 SAFE_VALUE = re.compile(r'[A-Za-z0-9_.,:/+=@-]{0,256}')
 SECRETISH = re.compile(r'(?i)(token|secret|passw|private|credential|authoriz|bearer|api[_-]?key|BEGIN [A-Z ]*KEY)')
@@ -144,12 +147,6 @@ def check():
         raise CheckFailed('release admission is not frankel only')
     return {'contract': str(CONTRACT.relative_to(ROOT)), 'contractSha256': sha256_file(CONTRACT), 'devices': list(READINESS_DEVICES),
         'lock': config['host']['lockPath'], 'sourceRoot': config['host']['sourceRoot'], 'instance': pipeline.BUILDER['instance']}
-
-def lunch_script(device):
-    if device not in READINESS_DEVICES:
-        raise InvalidInput(f'{device} is not an inspected target')
-    reads = [f'echo {v}=${{{v}:-}}' for v in SHELL_VARS] + [f'echo {v}=$(get_build_var {v})' for v in LUNCH_VARS]
-    return ' && '.join(['source build/envsetup.sh >/dev/null', f'lunch {device}-cur-user >/dev/null', *reads])
 
 # ---------------------------------------------------------------- bounded reads
 
@@ -254,11 +251,6 @@ def foreign_work(proc='/proc'):
 def sanitize(value):
     return value if SAFE_VALUE.fullmatch(value) and not SECRETISH.search(value) else '(withheld)'
 
-def tail(text, lines=5):
-    """A short, redacted stderr tail: secret-looking lines dropped, unsafe characters replaced, length capped."""
-    kept = [re.sub(r'[^\x20-\x7e]', '?', line)[:200] for line in text.splitlines() if line.strip() and not SECRETISH.search(line)]
-    return kept[-lines:]
-
 # ---------------------------------------------------------------- host steps
 
 def git_head(root, project, runner, timeout):
@@ -269,7 +261,7 @@ def git_head(root, project, runner, timeout):
         return {'status': 'escapes-root'}
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0', 'LANG': 'C'}
     try:
-        result = runner(['git', '--no-optional-locks', '-C', str(path), 'rev-parse', '--verify', 'HEAD^{commit}'],
+        result = runner(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(path), 'rev-parse', '--verify', 'HEAD^{commit}'],
             env=env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {'status': 'timeout'}
@@ -279,52 +271,15 @@ def git_head(root, project, runner, timeout):
     return {'status': 'read', 'observed': head}
 
 def lunch_chain(root):
-    observed, problems = {}, []
+    """The chain files' bytes against the inspected revision: metadata, never a reason to run them."""
+    files = {}
     for rel, expected in LUNCH_CHAIN.items():
-        path, status = regular(root, rel)
-        observed[rel] = sha256_file(path) if path else status
-        if observed[rel] != expected:
-            problems.append(f'{rel} is {"not the inspected pinned bytes" if path else status}')
+        record = file_record(root, rel)
+        record['matchesInspectedRevision'] = record.get('sha256') == expected
+        files[rel] = record
     entry = Path(root)/'build/envsetup.sh'
-    if not os.path.lexists(entry) or os.path.realpath(entry) != os.path.realpath(Path(root)/'build/make/envsetup.sh'):
-        problems.append('build/envsetup.sh does not resolve to build/make/envsetup.sh')
-    return observed, problems
-
-def run_lunch(root, device, scratch, timeout, popen=subprocess.Popen):
-    """lunch plus selected get_build_var reads; every writable location it is given is this device's fresh scratch."""
-    out, home, tmp = scratch/'out', scratch/'home', scratch/'tmp'
-    for path in (out, home, tmp):
-        path.mkdir(parents=True)
-    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(home), 'TMPDIR': str(tmp), 'XDG_CACHE_HOME': str(home/'.cache'),
-        'OUT_DIR': str(out), 'LANG': 'C.UTF-8', 'ANDROID_QUIET_BUILD': 'true', 'BUILD_DATETIME': '1', 'BUILD_NUMBER': 'readiness'}
-    process = popen(['bash', '--noprofile', '--norc', '-c', lunch_script(device)], cwd=root, env=env, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
-        return {'status': 'timeout', 'seconds': timeout}
-    record = {'exit': process.returncode, 'stderrTail': tail(stderr)}
-    if process.returncode:
-        return {'status': 'failed', **record}
-    values = {}
-    for line in stdout.splitlines():
-        key, _, value = line.partition('=')
-        if key in LUNCH_VARS + SHELL_VARS:
-            values[key] = sanitize(value.strip())
-    product_out = values.get('PRODUCT_OUT', '')
-    if product_out.startswith(str(out) + '/'):
-        values['PRODUCT_OUT'] = '$OUT_DIR/' + product_out[len(str(out)) + 1:]
-    expected = {'TARGET_PRODUCT': device, 'TARGET_RELEASE': 'cur', 'TARGET_BUILD_VARIANT': 'user', 'PRODUCT_DEVICE': device,
-        'TARGET_CPU_ABI': 'arm64-v8a'}
-    wrong = [f'{k}={values.get(k) or "(empty)"}' for k, v in expected.items() if values.get(k) != v]
-    if not values.get('PRODUCT_OUT', '').startswith('$OUT_DIR/'):
-        wrong.append('PRODUCT_OUT outside the task scratch')
-    return {'status': 'mismatch' if wrong else 'resolved', 'values': values, 'mismatches': wrong, **record}
-
-def top_level(root):
-    return sorted(os.listdir(root))
+    linked = os.path.lexists(entry) and os.path.realpath(entry) == os.path.realpath(Path(root)/'build/make/envsetup.sh')
+    return {'files': files, 'envsetupEntryResolvesToBuildMake': linked}
 
 # ---------------------------------------------------------------- run
 
@@ -336,7 +291,6 @@ class Host:
         self.hostname = lambda: socket.gethostname().split('.')[0]
         self.foreign = foreign_work
         self.runner = subprocess.run
-        self.popen = subprocess.Popen
         self.clock = time.monotonic
         self.mounts = '/proc/mounts'
         self.head = lambda: subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
@@ -392,26 +346,16 @@ def inspect(host, receipt, deadline, targets):
         receipt['factory'][device] = {'path': dl, 'status': status, 'sizeBytes': path.stat().st_size if path else None,
             'checksum': 'notValidated', 'expectedSha256': target['factorySha256'],
             'unpacked': 'present' if unpacked.is_dir() and not unpacked.is_symlink() and inside(root, unpacked) else 'missing'}
-    # lunch: only through the inspected chain and only for a device whose inputs exist.
-    observed, problems = lunch_chain(root)
-    pins_ok = all(p['matches'] for p in receipt['pins'].values())
-    receipt['lunch'] = {'chain': observed, 'chainProblems': problems, 'devices': {}}
-    scratch = Path(receipt['taskRoot'])/'scratch'
-    before = top_level(root)
+    # Never executed: no supported mechanism confines tree scripts. The inputs a later confined route would need are
+    # reported per device; lunch and target results stay unknown.
+    receipt['lunch'] = {'executed': False, 'status': 'NOT_EXECUTED', 'reason': CONFINEMENT_UNAVAILABLE,
+        'chain': lunch_chain(root), 'devices': {}}
     for device, target in targets.items():
-        missing = list(problems)
-        missing += [] if pins_ok else ['vendor/adevtool or vendor/state is not at the contract pin']
-        missing += [f'{r["path"]} {r["status"]}' for r in receipt['products'][device]['files'] if r['status'] != 'present']
+        missing = [f'{r["path"]} {r["status"]}' for r in receipt['products'][device]['files'] if r['status'] != 'present']
         if receipt['generatedVendor'][device]['status'] != 'present-unverified':
             missing.append(f'vendor/google_devices/{device} {receipt["generatedVendor"][device]["status"]}')
-        budget = deadline.budget(LIMITS['lunchSeconds'])
-        if missing:
-            receipt['lunch']['devices'][device] = {'status': 'SETUP_MISSING', 'missing': missing}
-        elif budget < min(30, LIMITS['lunchSeconds']):
-            receipt['lunch']['devices'][device] = {'status': 'skipped', 'reason': 'inspection deadline'}
-        else:
-            receipt['lunch']['devices'][device] = run_lunch(root, device, scratch/device, budget, host.popen)
-    receipt['lunch']['sourceTopLevelUnchanged'] = top_level(root) == before
+        receipt['lunch']['devices'][device] = {'lunch': 'unknown', 'target': 'unknown', 'combo': target['lunch'],
+            'missingInputs': missing}
     # Bounded usage last: an unavailable category is reported as such, never as zero.
     names = {**USAGE, 'retainedOutput': host.retained_out}
     receipt['usage'] = {name: usage(root, rel, deadline, host.clock) for name, rel in names.items()}
@@ -461,8 +405,9 @@ def run(host, run_id, run_attempt, recipe_sha, evidence_dir):
             raise CheckFailed(f'task root {root_dir} already exists; it is not this attempt\'s and is left untouched')
         (root_dir/MARKER).write_text(attempt + '\n')
         inspect(host, receipt, deadline, targets)
-        # Complete only within the deadline and with the tree's top level as it was before lunch.
-        receipt['status'] = 'complete' if deadline.budget(1) > 0 and receipt['lunch']['sourceTopLevelUnchanged'] else 'partial'
+        # Metadata only: never complete or target-ready, whatever the metadata says.
+        receipt['status'] = 'partial'
+        receipt['partialReasons'] = [CONFINEMENT_UNAVAILABLE] + ([] if deadline.budget(1) > 0 else ['inspection deadline reached'])
     except (CheckFailed, SetupMissing) as error:
         receipt['refusal'] = f'{type(error).__name__}: {error}'
         raise
@@ -493,7 +438,7 @@ def plan():
     summary = check()
     targets = contract_targets(json.loads(CONTRACT.read_text()))
     return {'receiptType': 'device-readiness-plan', 'executed': False, **summary, 'lunchChain': LUNCH_CHAIN,
-        'commands': {d: ['bash', '--noprofile', '--norc', '-c', lunch_script(d)] for d in targets},
+        'lunch': {'executed': False, 'reason': CONFINEMENT_UNAVAILABLE}, 'commands': {},
         'requiredFiles': {d: t['required'] for d, t in targets.items()}, 'limits': LIMITS,
         'note': 'planned only; nothing was run or inspected'}
 
@@ -517,7 +462,7 @@ def main(argv=None):
             result = plan()
         elif args.command == 'run':
             result = run(Host.production(), args.run_id, args.run_attempt, args.recipe_sha, args.evidence_dir)
-            result = {k: result[k] for k in ('status', 'attempt', 'devices', 'filesystem', 'lunch') if k in result}
+            result = {k: result[k] for k in ('status', 'partialReasons', 'attempt', 'devices', 'filesystem') if k in result}
         else:
             result = cleanup(Host.production(), args.run_id, args.run_attempt)
     except InvalidInput as error:

@@ -1,12 +1,16 @@
-"""FAM-HOST-READINESS-S002: the os-release device-readiness mode and scripts/device-readiness.py.
+"""FAM-HOST-READINESS-S002 (FIX001): the os-release device-readiness mode and scripts/device-readiness.py.
 
 The workflow mode reuses the guard, controller, shared builder runner, global concurrency and cleanup; the inspection job
 holds contents: read only and no build, sign, publish or alpha job can run in it; cleanup always waits for it and always
 stops the builder. The probe runs here against a representative fixture tree (the pinned adevtool and platform_build
-fixture files, the adevtool vendor skeletons and a stand-in lunch chain), never against a fabricated host result: lock
-conflict, invalid input, contract and pin refusal, symlink escape, missing generated vendor inputs, tool timeout, secret
-non-disclosure, scratch collision and foreign-file preservation, and cleanup after early and late failure. Offline; no
-builder, network or cloud access."""
+fixture files and the adevtool vendor skeletons), never against a fabricated host result. Every lunch-chain, vendorsetup
+and cmds-for-envsetup script in the fixture is deliberately unsafe: it appends to and deletes files nested inside
+existing vendor and output directories and leaves a sentinel. The metadata-only route must never run them (no process
+is started at all), nested bytes must survive, and the receipt must stay PARTIAL with lunch and target unknown - even
+when the chain bytes match the inspected revision. Stand-in scripts are never treated as proof of the real chain. Also
+covered: lock conflict, invalid input, contract and pin refusal, symlink escape, missing generated vendor inputs, the
+deadline, secret non-disclosure, scratch collision and foreign-file preservation, and cleanup after early and late
+failure. Offline; no builder, network or cloud access."""
 import contextlib
 import fcntl
 import hashlib
@@ -147,26 +151,48 @@ class WorkflowTest(unittest.TestCase):
 
 # ---------------------------------------------------------------- fixture host
 
-FAKE_ENVSETUP = r'''lunch() {
-  IFS=- read -r p r v <<< "$1"
-  export TARGET_PRODUCT=$p TARGET_RELEASE=$r TARGET_BUILD_VARIANT=$v
-  mkdir -p "$OUT_DIR" && echo "$p $r $v" > "$OUT_DIR/.leftovers" && env > "$OUT_DIR/lunch-env.txt"
-  [[ -z "${READINESS_SLEEP:-}" && ! -e "$PWD/slow-$p" ]] || { sleep 60 & sleep 60; }
-  [[ ! -e "$PWD/write-outside-$p" ]] || : > "$PWD/stray-$p"
-  echo "PIXEL_OTA_TOKEN=leaked-token-value private key material" >&2
-  echo "plain diagnostic line" >&2
-}
-get_build_var() {
-  case $1 in
-    PRODUCT_DEVICE) echo "$TARGET_PRODUCT" ;;
-    TARGET_CPU_ABI) echo arm64-v8a ;;
-    TARGET_BOARD_PLATFORM) echo laguna ;;
-    PLATFORM_SDK_VERSION) echo 37 ;;
-    PRODUCT_OUT) echo "$OUT_DIR/target/product/$TARGET_PRODUCT" ;;
-    *) eval "echo \${$1:-}" ;;
-  esac
-}
-'''
+# Realistic hostile tree scripts: each would modify a nested vendor file, delete nested retained outputs and leave a
+# sentinel if anything ever sourced or ran it.
+UNSAFE_SCRIPT = """# {name}
+echo injected >> "{source}/vendor/google_devices/frankel/proprietary/vendor/lib64/libexisting.so"
+rm -f "{source}/out-rose-first-update-2026102701/target/product/frankel/vendor.img"
+rm -rf "{source}/vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor"
+echo "{name}" >> "{sentinel}"
+"""
+UNSAFE = ('build/make/envsetup.sh', 'build/make/shell_utils.sh', 'build/soong/soong_ui.bash', 'build/soong/scripts/microfactory.bash',
+    'device/google/laguna/vendorsetup.sh', 'vendor/google_devices/rango/cmds-for-envsetup.sh')
+
+def snapshot(root):
+    """Every path under root by lstat, with file bytes' digests and link targets: nested changes show up here."""
+    state = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            path = Path(dirpath)/name
+            rel = str(path.relative_to(root))
+            if path.is_symlink():
+                state[rel] = ('link', os.readlink(path))
+            elif path.is_dir():
+                state[rel] = ('dir',)
+            else:
+                state[rel] = ('file', hashlib.sha256(path.read_bytes()).hexdigest())
+    return state
+
+@contextlib.contextmanager
+def no_processes():
+    """Any process start (subprocess.run, Popen, os.system) fails the test and is recorded."""
+    started, saved = [], (subprocess.Popen, os.system)
+    class Refused(subprocess.Popen):
+        def __init__(self, args, *a, **kw):
+            started.append(args)
+            raise AssertionError(f'process started: {args}')
+    def system(command):
+        started.append(command)
+        raise AssertionError(f'process started: {command}')
+    subprocess.Popen, os.system = Refused, system
+    try:
+        yield started
+    finally:
+        subprocess.Popen, os.system = saved
 
 def copy(src, dst):
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -181,12 +207,14 @@ def git_init(path, message='pin'):
 
 class Fixture:
     """A representative retained tree: the pinned fixture files at their tree paths, the adevtool vendor skeletons as the
-    generated vendor trees, factory archives, a stand-in lunch chain and a lock file, all under one temporary directory."""
+    generated vendor trees, existing nested vendor and output bytes, factory archives, unsafe tree scripts and a lock
+    file, all under one temporary directory."""
     def __init__(self, tmp):
         self.tmp = Path(tmp)
         self.source = self.tmp/'grapheneos'
         self.home = self.tmp/'home'
         self.home.mkdir()
+        self.sentinel = self.tmp/'scripts-ran'
         rows = json.loads((FIXTURES/'PROVENANCE.json').read_text())['files']
         for row in rows:
             fixture = FIXTURES/row['fixture']
@@ -212,12 +240,18 @@ class Fixture:
         self.factory_sha = hashlib.sha256(self.factory_bytes).hexdigest()
         (dl/CONTRACT['devices']['frankel']['vendorInputs']['factoryImage']['file']).write_bytes(self.factory_bytes)
         (dl/CONTRACT['devices']['blazer']['vendorInputs']['factoryImage']['file']).write_bytes(b'other bytes\n')
-        (dl/'unpacked/frankel-CP3A.261005.005').mkdir(parents=True)
-        (self.source/'build/make/envsetup.sh').write_text(FAKE_ENVSETUP)
-        (self.source/'build/make/shell_utils.sh').write_text('# stand-in\n')
-        (self.source/'build/soong/scripts').mkdir(parents=True)
-        (self.source/'build/soong/soong_ui.bash').write_text('# stand-in\n')
-        (self.source/'build/soong/scripts/microfactory.bash').write_text('# stand-in\n')
+        # Existing nested bytes the unsafe scripts target: a generated vendor blob, a retained output image, an unpack.
+        nested = {'vendor/google_devices/frankel/proprietary/vendor/lib64/libexisting.so': b'\x7fELF existing vendor blob\n',
+            'out-rose-first-update-2026102701/target/product/frankel/vendor.img': b'retained vendor image\n' * 64,
+            'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor/build.prop': b'ro.product.vendor.device=frankel\n'}
+        for rel, data in nested.items():
+            (self.source/rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.source/rel).write_bytes(data)
+        self.nested = nested
+        for rel in UNSAFE:
+            (self.source/rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.source/rel).write_text(UNSAFE_SCRIPT.format(name=rel, source=self.source, sentinel=self.sentinel))
+            os.chmod(self.source/rel, 0o755)
         os.symlink('make/envsetup.sh', self.source/'build/envsetup.sh')
         self.chain = {rel: readiness.sha256_file(self.source/rel) for rel in readiness.LUNCH_CHAIN}
         self.lock = self.tmp/'frankel-build.lock'
@@ -247,12 +281,14 @@ class Fixture:
         return json.loads((evidence/'device-readiness.json').read_text())
 
 @contextlib.contextmanager
-def fixture(**limits):
+def fixture(chain_matches=False, **limits):
+    """chain_matches makes the unsafe stand-in chain carry the inspected digests, to show matching bytes run nothing."""
     saved_chain, saved_limits = dict(readiness.LUNCH_CHAIN), dict(readiness.LIMITS)
     with tempfile.TemporaryDirectory() as tmp:
         f = Fixture(tmp)
-        readiness.LUNCH_CHAIN.clear()
-        readiness.LUNCH_CHAIN.update(f.chain)
+        if chain_matches:
+            readiness.LUNCH_CHAIN.clear()
+            readiness.LUNCH_CHAIN.update(f.chain)
         readiness.LIMITS.update(limits)
         try:
             yield f
@@ -265,8 +301,13 @@ def fixture(**limits):
 class ProbeTest(unittest.TestCase):
     def test_a_representative_tree_is_measured_and_cleaned_up(self):
         with fixture() as f:
-            receipt, evidence = f.run()
-            self.assertEqual(receipt['status'], 'complete')
+            before = snapshot(f.source)
+            with no_processes() as started:
+                receipt, evidence = f.run()
+            self.assertEqual(started, [])
+            self.assertEqual(snapshot(f.source), before)
+            self.assertFalse(f.sentinel.exists())
+            self.assertEqual((receipt['status'], receipt['partialReasons']), ('partial', [readiness.CONFINEMENT_UNAVAILABLE]))
             on_disk = f.receipt(evidence)
             self.assertEqual(on_disk, json.loads(json.dumps(receipt)))
             self.assertEqual((evidence/'SHA256SUMS').read_text(),
@@ -297,20 +338,28 @@ class ProbeTest(unittest.TestCase):
                 ('present', 'mismatch', 'present'))
             self.assertEqual((factory['blazer']['status'], factory['blazer']['checksum']), ('present', 'mismatch'))
             self.assertEqual((factory['rango']['status'], factory['rango']['checksum'], factory['rango']['sizeBytes']), ('missing', 'notValidated', None))
+            # Lunch never ran: results are unknown, not passed; the stand-in chain is not the inspected revision.
+            lunch = receipt['lunch']
+            self.assertEqual((lunch['executed'], lunch['status'], lunch['reason']), (False, 'NOT_EXECUTED', readiness.CONFINEMENT_UNAVAILABLE))
             for device in readiness.READINESS_DEVICES:
-                lunch = receipt['lunch']['devices'][device]
-                self.assertEqual(lunch['status'], 'resolved', lunch)
-                self.assertEqual(lunch['values'], {'TARGET_PRODUCT': device, 'TARGET_RELEASE': 'cur', 'TARGET_BUILD_VARIANT': 'user',
-                    'PRODUCT_DEVICE': device, 'TARGET_BOARD_PLATFORM': 'laguna', 'TARGET_CPU_ABI': 'arm64-v8a',
-                    'PLATFORM_SDK_VERSION': '37', 'PRODUCT_OUT': f'$OUT_DIR/target/product/{device}'})
-                self.assertEqual(lunch['stderrTail'], ['plain diagnostic line'])
-                # Every lunch write landed in this attempt's scratch.
-                self.assertTrue((f.home/'rose-actions/device-readiness-4081-1/scratch'/device/'out/.leftovers').is_file())
-            self.assertTrue(receipt['lunch']['sourceTopLevelUnchanged'])
+                self.assertEqual(lunch['devices'][device], {'lunch': 'unknown', 'target': 'unknown', 'combo': f'{device}-cur-user',
+                    'missingInputs': []})
+            self.assertEqual({r['matchesInspectedRevision'] for r in lunch['chain']['files'].values()}, {False})
+            self.assertTrue(lunch['chain']['envsetupEntryResolvesToBuildMake'])
+            # The unsafe rango cmds-for-envsetup.sh is reported as differing from the pinned skeleton, not as fine.
+            rango = {r['path']: r for r in receipt['generatedVendor']['rango']['files']}
+            self.assertFalse(rango['vendor/google_devices/rango/cmds-for-envsetup.sh']['matchesPinnedFixture'])
+            self.assertTrue({r['path']: r for r in receipt['generatedVendor']['frankel']['files']}[
+                'vendor/google_devices/frankel/cmds-for-envsetup.sh']['matchesPinnedFixture'])
+            text = json.dumps(receipt)
+            for claim in ('resolved', 'sourceTopLevelUnchanged', 'scratch'):
+                self.assertNotIn(claim, text, claim)
+            self.assertNotIn('complete', [receipt['status'], lunch['status']])
             usage = receipt['usage']
             self.assertEqual(usage['generatedVendor']['status'], 'complete')
             self.assertGreater(usage['generatedVendor']['entries'], 12)
-            self.assertEqual((usage['retainedOutput']['status'], usage['defaultOutput']['status']), ('absent', 'absent'))
+            self.assertEqual((usage['retainedOutput']['status'], usage['defaultOutput']['status']), ('complete', 'absent'))
+            self.assertGreater(usage['retainedOutput']['allocatedBytes'], 0)
             result = readiness.cleanup(f.host(), '4081', '1')
             self.assertEqual(result['removed'], True)
             self.assertFalse((f.home/'rose-actions/device-readiness-4081-1').exists())
@@ -364,8 +413,6 @@ class ProbeTest(unittest.TestCase):
             self.assertFalse((f.tmp/'never').exists())
             with self.assertRaises(readiness.InvalidInput):
                 readiness.cleanup(host, '../4081', '1')
-            with self.assertRaises(readiness.InvalidInput):
-                readiness.lunch_script('mustang')
 
     def test_the_contract_and_pins_are_checked(self):
         self.assertEqual(sorted(readiness.contract_targets(CONTRACT)), ['blazer', 'frankel', 'rango'])
@@ -386,20 +433,46 @@ class ProbeTest(unittest.TestCase):
             with self.assertRaises(readiness.CheckFailed, msg=name):
                 readiness.contract_targets(changed(edit))
 
-    def test_pins_or_lunch_chain_not_matching_skip_lunch_as_setup_missing(self):
+    def test_unsafe_tree_scripts_never_run_even_when_the_chain_bytes_match(self):
+        with fixture(chain_matches=True) as f:
+            before = snapshot(f.source)
+            with no_processes() as started:
+                receipt, _ = f.run()
+            self.assertEqual(started, [], 'no envsetup, lunch, vendorsetup or cmds-for-envsetup process')
+            self.assertFalse(f.sentinel.exists())
+            self.assertEqual(snapshot(f.source), before)
+            for rel, data in f.nested.items():
+                self.assertEqual((f.source/rel).read_bytes(), data, rel)
+            # Matching bytes are recorded as metadata and still authorize nothing.
+            self.assertEqual({r['matchesInspectedRevision'] for r in receipt['lunch']['chain']['files'].values()}, {True})
+            self.assertEqual((receipt['status'], receipt['lunch']['status']), ('partial', 'NOT_EXECUTED'))
+            self.assertEqual({d['lunch'] for d in receipt['lunch']['devices'].values()}, {'unknown'})
+            self.assertEqual(readiness.cleanup(f.host(), '4081', '1')['removed'], True)
+            self.assertEqual(snapshot(f.source), before)
+
+    def test_what_the_scripts_would_have_done_is_invisible_to_root_names(self):
+        """The FIX001 finding: running one unsafe script changes nested bytes while every top-level name stays, so names
+        can never stand for integrity - and the probe makes no such claim."""
+        with fixture() as f:
+            names, before = sorted(os.listdir(f.source)), snapshot(f.source)
+            subprocess.run(['bash', '--noprofile', '--norc', str(f.source/'device/google/laguna/vendorsetup.sh')], check=True)
+            self.assertEqual(sorted(os.listdir(f.source)), names)
+            after = snapshot(f.source)
+            changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+            self.assertIn('vendor/google_devices/frankel/proprietary/vendor/lib64/libexisting.so', changed)
+            self.assertIn('out-rose-first-update-2026102701/target/product/frankel/vendor.img', changed)
+            self.assertIn('vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor/build.prop', changed)
+            self.assertFalse(hasattr(readiness, 'top_level') or hasattr(readiness, 'run_lunch'))
+            self.assertNotIn('sourceTopLevelUnchanged', (SCRIPTS/'device-readiness.py').read_text())
+
+    def test_pins_not_matching_are_reported_and_nothing_runs(self):
         with fixture() as f:
             f.heads['vendor/state'] = '0' * 40
-            receipt, _ = f.run()
-            self.assertEqual(receipt['pins']['vendor/state']['matches'], False)
-            for device in readiness.READINESS_DEVICES:
-                self.assertEqual(receipt['lunch']['devices'][device]['status'], 'SETUP_MISSING')
-                self.assertIn('vendor/adevtool or vendor/state is not at the contract pin', receipt['lunch']['devices'][device]['missing'])
-            self.assertFalse((f.home/'rose-actions/device-readiness-4081-1/scratch').exists(), 'nothing was run')
-        with fixture() as f:
-            (f.source/'build/soong/soong_ui.bash').write_text('# a different, uninspected chain\n')
-            receipt, _ = f.run()
-            self.assertEqual(receipt['lunch']['chainProblems'], ['build/soong/soong_ui.bash is not the inspected pinned bytes'])
-            self.assertEqual({d['status'] for d in receipt['lunch']['devices'].values()}, {'SETUP_MISSING'})
+            with no_processes() as started:
+                receipt, _ = f.run()
+            self.assertEqual(started, [])
+            self.assertEqual((receipt['pins']['vendor/state']['matches'], receipt['pins']['vendor/adevtool']['matches']), (False, True))
+            self.assertEqual((receipt['status'], receipt['lunch']['status']), ('partial', 'NOT_EXECUTED'))
 
     def test_real_git_heads_are_read_and_compared(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -426,75 +499,58 @@ class ProbeTest(unittest.TestCase):
             os.symlink(outside, f.source/'vendor/google_devices/frankel/escape')
             receipt, evidence = f.run()
             self.assertEqual(receipt['generatedVendor']['blazer']['status'], 'link-not-followed')
-            self.assertEqual(receipt['lunch']['devices']['blazer']['status'], 'SETUP_MISSING')
+            self.assertIn('vendor/google_devices/blazer link-not-followed', receipt['lunch']['devices']['blazer']['missingInputs'])
             rango = {r['path']: r for r in receipt['products']['rango']['files']}['vendor/adevtool/config/device/rango.yml']
             self.assertEqual(rango, {'path': 'vendor/adevtool/config/device/rango.yml', 'status': 'escapes-root'})
-            self.assertEqual(receipt['lunch']['devices']['rango']['status'], 'SETUP_MISSING')
-            self.assertEqual(receipt['lunch']['devices']['frankel']['status'], 'resolved')
+            self.assertIn('vendor/adevtool/config/device/rango.yml escapes-root', receipt['lunch']['devices']['rango']['missingInputs'])
+            self.assertEqual(receipt['lunch']['devices']['frankel']['missingInputs'], [])
             self.assertLess(receipt['usage']['generatedVendor']['allocatedBytes'], 100000)
             self.assertNotIn('PRIVATE KEY', (evidence/'device-readiness.json').read_text())
 
-    def test_missing_generated_vendor_inputs_are_setup_missing_for_that_device_only(self):
+    def test_missing_generated_vendor_inputs_are_reported_for_that_device_only(self):
         with fixture() as f:
             shutil.rmtree(f.source/'vendor/google_devices/rango')
             (f.source/'vendor/google_devices/blazer/firmware/android-info.txt').unlink()
             receipt, _ = f.run()
             self.assertEqual(receipt['generatedVendor']['rango']['status'], 'missing')
             self.assertEqual(receipt['generatedVendor']['blazer']['status'], 'incomplete')
-            self.assertEqual(receipt['lunch']['devices']['rango'],
-                {'status': 'SETUP_MISSING', 'missing': ['vendor/google_devices/rango missing']})
-            self.assertEqual(receipt['lunch']['devices']['blazer']['status'], 'SETUP_MISSING')
-            self.assertEqual(receipt['lunch']['devices']['frankel']['status'], 'resolved')
-
-    def test_a_tool_timeout_is_recorded_and_its_process_group_killed(self):
-        with fixture(lunchSeconds=2) as f:
-            (f.source/'slow-blazer').write_text('')
-            start = time.monotonic()
-            receipt, _ = f.run()
-            self.assertLess(time.monotonic() - start, 30)
-            self.assertEqual(receipt['lunch']['devices']['blazer'], {'status': 'timeout', 'seconds': 2})
-            self.assertEqual(receipt['lunch']['devices']['rango']['status'], 'resolved')
-            self.assertEqual(subprocess.run(['pgrep', '-f', 'sleep 60'], capture_output=True).stdout, b'')
-
-    def test_a_write_outside_the_scratch_is_reported_and_the_run_is_not_complete(self):
-        with fixture() as f:
-            (f.source/'write-outside-rango').write_text('')
-            receipt, _ = f.run()
-            self.assertEqual((receipt['status'], receipt['lunch']['sourceTopLevelUnchanged']), ('partial', False))
-            self.assertTrue((f.source/'stray-rango').exists(), 'reported, never deleted by the probe')
+            self.assertEqual(receipt['lunch']['devices']['rango']['missingInputs'], ['vendor/google_devices/rango missing'])
+            self.assertEqual(receipt['lunch']['devices']['blazer']['missingInputs'], ['vendor/google_devices/blazer incomplete'])
+            self.assertEqual(receipt['lunch']['devices']['frankel']['missingInputs'], [])
+            self.assertEqual({d['lunch'] for d in receipt['lunch']['devices'].values()}, {'unknown'})
 
     def test_the_deadline_yields_skipped_and_unavailable_never_zero(self):
         with fixture() as f:
             ticks = iter(range(0, 10 ** 6, 300))
             receipt, _ = f.run(f.host(clock=lambda: next(ticks)))
             self.assertEqual(receipt['status'], 'partial')
-            self.assertIn('skipped', {d['status'] for d in receipt['lunch']['devices'].values()})
+            self.assertIn('inspection deadline reached', receipt['partialReasons'])
             for record in receipt['usage'].values():
                 self.assertIn(record['status'], ('unavailable', 'absent'))
                 self.assertNotIn('allocatedBytes', record)
             self.assertEqual(receipt['factory']['frankel']['checksum'], 'unavailable')
 
-    def test_no_key_environment_or_secret_reaches_lunch_or_the_receipt(self):
+    def test_no_key_environment_or_secret_reaches_the_receipt(self):
         with fixture() as f:
             secret = 'sk-live-very-secret-value'
             saved = dict(os.environ)
             os.environ.update(PIXEL_OTA_TOKEN=secret, GCP_SIGNER_SERVICE_ACCOUNT=secret, ACTIONS_ID_TOKEN_REQUEST_TOKEN=secret)
+            (f.source/'vendor/state/frankel-token=abc.json').write_text('{}\n')
             try:
                 receipt, evidence = f.run()
-                lunch_env = (f.home/'rose-actions/device-readiness-4081-1/scratch/frankel/out/lunch-env.txt').read_text()
             finally:
                 os.environ.clear()
                 os.environ.update(saved)
-            self.assertNotIn(secret, lunch_env)
-            self.assertEqual(sorted(line.split('=', 1)[0] for line in lunch_env.splitlines() if line.split('=', 1)[0] in
-                ('HOME', 'TMPDIR', 'OUT_DIR')), ['HOME', 'OUT_DIR', 'TMPDIR'])
-            self.assertIn(f'OUT_DIR={f.home}/rose-actions/device-readiness-4081-1/scratch/frankel/out\n', lunch_env)
             text = (evidence/'device-readiness.json').read_text()
-            for marker in (secret, 'leaked-token-value', 'private key material'):
-                self.assertNotIn(marker, text)
+            self.assertNotIn(secret, text)
+            self.assertNotIn('token=abc', text)
+            self.assertIn('(withheld)', receipt['generatedVendor']['frankel']['vendorStateEntries'])
+            refused = f.tmp/'evidence-refused'
+            with self.assertRaises(readiness.CheckFailed):
+                f.run(f.host(hostname=lambda: 'token-' + secret), evidence=refused)
+            self.assertNotIn(secret, (refused/'device-readiness.json').read_text())
             self.assertEqual(readiness.sanitize('$(id)'), '(withheld)')
             self.assertEqual(readiness.sanitize('api_key=abc'), '(withheld)')
-            self.assertEqual(readiness.tail('ok\nAuthorization: Bearer x\n\x1b[31mred\n'), ['ok', '?[31mred'])
 
     def test_secret_named_directories_are_neither_entered_nor_read(self):
         with fixture() as f:
@@ -527,7 +583,7 @@ class ProbeTest(unittest.TestCase):
                 self.assertEqual((root/'someone-elses-file').read_text(), 'keep me\n')
             # A new attempt of the same run has its own root; the earlier one stays.
             receipt, _ = f.run(attempt=2)
-            self.assertEqual(receipt['status'], 'complete')
+            self.assertEqual(receipt['status'], 'partial')
             readiness.cleanup(f.host(), '4081', '2')
             self.assertTrue((root/'someone-elses-file').is_file())
             link = f.home/'rose-actions/device-readiness-4081-3'
@@ -551,7 +607,7 @@ class ProbeTest(unittest.TestCase):
             receipt = f.receipt(evidence)
             self.assertEqual((receipt['status'], receipt['refusal'], receipt['lock']['acquired']),
                 ('refused', 'CheckFailed: disk went away', True))
-            self.assertEqual(receipt['lunch']['devices']['frankel']['status'], 'resolved')
+            self.assertEqual(receipt['lunch']['devices']['frankel']['lunch'], 'unknown')
             before = sorted(str(p.relative_to(f.source)) for p in f.source.rglob('*'))
             self.assertTrue(readiness.cleanup(f.host(), '4081', '1')['removed'])
             self.assertEqual(sorted(str(p.relative_to(f.source)) for p in f.source.rglob('*')), before, 'the tree is untouched')
@@ -572,8 +628,7 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = json.loads(result.stdout)
         self.assertEqual((plan['executed'], plan['devices']), (False, ['frankel', 'blazer', 'rango']))
-        self.assertNotIn(' m ', ' '.join(plan['commands']['frankel']))
-        self.assertNotRegex(json.dumps(plan['commands']), r'\b(make|installclean|m|repo sync|adevtool)\b ')
+        self.assertEqual((plan['commands'], plan['lunch']['executed']), ({}, False))
         bad = subprocess.run([sys.executable, str(SCRIPTS/'device-readiness.py'), 'run', '--run-id', 'x', '--run-attempt', '1',
             '--recipe-sha', 'a' * 40, '--evidence-dir', '/nonexistent/never'], capture_output=True, text=True)
         self.assertEqual(bad.returncode, 2)
