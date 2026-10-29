@@ -10,7 +10,7 @@ against it, and only against it. The schema is in the script's docstring and in
 | File | Candidate | Basis |
 | --- | --- | --- |
 | `beta-frankel-2026102804.json` | Published beta frankel-2026102804, source `ae9cfd4d`, apps 302/4/28 | Lead's INFRA-ALPHA-082 binding, plus the signer and AVB key from `os/release-pipeline/frankel.json`. Verified against the published release (`../frankel-2026102804.md`) |
-| `alpha-40719075730.json` | Alpha Actions 40719075730 (failed at `file_list_diff`; no image): recipe `2921d88d`, product base `ae9cfd4d` + OS delta `f21bf683`, `aosp_cf_x86_64_only_phone-cur-userdebug`, apps 302/4/28 | `os/alpha/cuttlefish-product-contract.json` and `os/release-pipeline/cuttlefish-alpha.json`, unchanged |
+| `alpha-40719075730.json` | Historical, not for any existing image. Alpha Actions 40719075730 (failed at `file_list_diff`; no image): recipe `2921d88d`, product base `ae9cfd4d` + OS delta `f21bf683`, `aosp_cf_x86_64_only_phone-cur-userdebug`, apps 302/4/28 | `os/alpha/cuttlefish-product-contract.json` and `os/release-pipeline/cuttlefish-alpha.json`, unchanged |
 | `app-rose-agent-304.json` | App-only Rose Agent 304: `pixel-ota` prerelease `rose-agent-304`, Actions 40733909409, product `a3d839e6`, recipe `31e58006`; no device target | Infra's receipt (1,385,629 bytes, `d8f69efc…26966`, signer `650d47f9…0bfb`). The verifier has not downloaded the bytes. Used for INFRA-RUNTIME-100 (`../rose-agent-304-infra-runtime-100.md`) |
 
 `scripts/tests/test_rose_verify.py` fails if either file diverges from those
@@ -19,6 +19,11 @@ checked-in pins.
 The alpha file binds apps and target only. Image hashes, guest fingerprint and
 boot state come from Infra's completed image receipt. They are recorded with the
 runtime receipt when that receipt is supplied.
+
+The verified alpha image (compile 40765631053, verification run 40777816699)
+has no file here. Its expectation is generated from that run's receipt with
+`scripts/alpha-runtime.py expectation` (`docs/VERIFY.md` section C), so it can
+never drift from the bytes the image gate measured.
 
 ## Adding a new candidate
 
