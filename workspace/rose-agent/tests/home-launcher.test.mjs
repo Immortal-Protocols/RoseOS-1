@@ -8,6 +8,7 @@ const main=read('../app/src/dev/pixel/voice/MainActivity.java');
 const home=read('../app/src/dev/pixel/voice/RoseHomeView.java');
 const homeTray=read('../app/src/dev/pixel/voice/HomeTray.java');
 const homeFrame=read('../app/src/dev/pixel/voice/HomeFrame.java');
+const homeRose=read('../app/src/dev/pixel/voice/HomeRose.java');
 const manifest=read('../app/AndroidManifest.xml');
 
 test('the HOME activity identity is unchanged',()=>{
@@ -58,8 +59,9 @@ test('Home comes first, the app pages follow it, and the legacy voice page is la
 
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
  assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),this::apps,/);
- // The tray's Rose is the same presence card, wired to the same hook.
- assert.match(homeTray,/presence = RoseHomeView\.presence\(activity, openRose\);/);
+ // The tray's Rose well is the plain navigation hook and nothing else.
+ assert.match(homeTray,/rose\.setOnClickListener\(v -> openRose\.run\(\)\);/);
+ assert.match(homeTray,/rose\.setContentDescription\("Open Rose"\);/);
  // APP-P2-002-HOOK-001: plain explicit Intent, same task, no flags or extras.
  const hook=main.match(/void openRoseConversation\(\)\{([^}]*)\}/)[1];
  assert.equal(hook,'startActivity(new Intent(this,RoseConversationActivity.class));');
@@ -67,7 +69,7 @@ test('the Rose entry opens App\'s conversation activity and only navigates',()=>
  assert.match(activity,/android:exported="false"/);
  assert.ok(!/launchMode|taskAffinity/.test(activity),'stays in the launcher task so HOME and Back return Home');
  for(const forbidden of ['VoiceService','command(','toggleVoice','startForegroundService','"talk"','"end"','"mute"'])
-  for(const [name,src] of [['RoseHomeView',home],['HomeTray',homeTray],['HomeFrame',homeFrame]])assert.ok(!src.includes(forbidden),name+': '+forbidden);
+  for(const [name,src] of [['RoseHomeView',home],['HomeTray',homeTray],['HomeFrame',homeFrame],['HomeRose',homeRose]])assert.ok(!src.includes(forbidden),name+': '+forbidden);
  // The conversation surface sends voice commands only from its own controls, never on open.
  const conversation=read('../app/src/dev/pixel/voice/RoseConversationActivity.java');
  for(const hook of ['onCreate','onResume']){
@@ -113,13 +115,34 @@ test('the Home tray stays fixed over the swiping pages, above system insets (OS-
  assert.match(homeFrame,/trayParams\.setMargins\(side \+ left, 0, side \+ right, gap \+ bottom\);/);
  // Production status and navigation bars stay: nothing hides system bars.
  for(const src of [homeFrame,homeTray])for(const hide of ['SYSTEM_UI_FLAG','hide(WindowInsets','setDecorFitsSystemWindows','FLAG_FULLSCREEN'])assert.ok(!src.includes(hide),hide);
- // Two native-size controls (66dp); Rose and its session mark moved here from the Home page.
- assert.equal((homeTray.match(/activity\.dp\(66\), activity\.dp\(66\)/g)||[]).length,2);
+ // The selected HiFi composition (ce126f56): a 92dp bar with 22dp corners and two 104x66dp wells at its ends.
+ assert.match(homeTray,/static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 104, WELL_H_DP = 66;/);
+ assert.match(homeTray,/metal\.setCornerRadius\(activity\.dp\(22\)\);/);
+ assert.equal((homeTray.match(/new LayoutParams\(activity\.dp\(WELL_W_DP\), activity\.dp\(WELL_H_DP\)\)/g)||[]).length,2);
+ assert.match(homeTray,/addView\(new View\(activity\), new LayoutParams\(0, 1, 1\)\);/);
  assert.ok(!home.includes('sessionMark')&&!home.includes('showSession'));
  // Overview: no permitted route yet, so the control is disabled and says so; no fake recents or app picker.
- assert.match(homeTray,/overview\.setEnabled\(false\);/);
- assert.match(homeTray,/overview\.setContentDescription\("Overview, not available yet"\);/);
- for(const fake of ['GLOBAL_ACTION_RECENTS','setOnClickListener','WorkspaceLauncher','apps'])assert.ok(!homeTray.slice(homeTray.indexOf('overview = new')).split('\n }')[0].includes(fake),fake);
+ assert.match(homeTray,/overviewWell\.setEnabled\(false\);/);
+ assert.match(homeTray,/overviewWell\.setContentDescription\("Overview, not available yet"\);/);
+ for(const fake of ['GLOBAL_ACTION_RECENTS','setOnClickListener','WorkspaceLauncher','apps'])assert.ok(!homeTray.slice(homeTray.indexOf('FrameLayout overviewWell = well(activity);'),homeTray.indexOf('overview = overviewWell;')).includes(fake),fake);
+});
+
+test('the tray Rose reads real state once per tick and stops when Home is hidden, rebuilt or gone (M004)',()=>{
+ // One read of VoiceService's published levels per existing refresh tick, through the merged RoseVisualState mapping.
+ assert.match(main,/void refreshHomeRose\(boolean shown\)\{if\(homeTray==null\)return;VoiceService s=VoiceService\.instance;ConversationState c=conversationState\(\);homeTray\.show\(c,HomeRose\.state\(c,s==null\?Float\.NaN:s\.trayInputLevel,s==null\?Float\.NaN:s\.trayOutputLevel,s==null\?0L:s\.trayAudioObservedAt,SystemClock\.elapsedRealtime\(\),HomeRose\.reducedMotion\(android\.provider\.Settings\.Global\.getFloat\(getContentResolver\(\),android\.provider\.Settings\.Global\.ANIMATOR_DURATION_SCALE,1f\)\),shown\)\);\}/);
+ assert.match(homeRose,/RoseVisualState\.from\(conversation, RoseVisualState\.fresh\(inputLevel, observedAtMs, nowMs\),\n    RoseVisualState\.fresh\(outputLevel, observedAtMs, nowMs\), reducedMotion, homeShown\);/);
+ assert.equal((main.match(/refreshHomeRose\(/g)||[]).length,3,'defined, called by refresh and by onPause only');
+ // Pause renders hidden first; a rebuilt tray and a destroyed activity release the old one, which then ignores frames.
+ assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);/);
+ assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseConversation\);/);
+ assert.match(main,/protected void onDestroy\(\)\{if\(homeTray!=null\)homeTray\.release\(\);/);
+ assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual\) \{\n  if \(released\) return;/);
+ assert.match(homeTray,/applyVisual\(RoseVisualState\.from\(shownConversation, Float\.NaN, Float\.NaN, true, false\)\)/);
+ // One mount point for App's renderer; no second poller, timer or animation of Home's own.
+ assert.equal((homeTray.match(/void applyVisual\(RoseVisualState visual\)/g)||[]).length,1);
+ for(const src of [homeTray,homeRose])for(const timer of ['postDelayed','Handler','ValueAnimator','Choreographer','Timer','schedule'])assert.ok(!src.includes(timer),timer);
+ // No duplicate renderer: Home draws no WebGL, shader or surface of its own.
+ for(const src of [homeTray,homeRose])for(const gl of ['GLSurfaceView','GLES','Shader','TextureView','SurfaceView'])assert.ok(!src.includes(gl),gl);
 });
 
 test('dock labels are fitted whole, never cut on one line (M008)',()=>{
@@ -164,7 +187,7 @@ test('the Home session mark renders the same authoritative state as the tray and
  assert.equal(snapshot(main),snapshot(conversation));
  assert.match(main,/static ConversationState conversationState\(\)\{VoiceService s=VoiceService\.instance;return s==null\?/);
  // Updated on every refresh tick, before the conversation-page early return, so the fixed Home tray is live too.
- assert.match(main,/void refresh\(\)\{\n  if\(homeTray!=null\)homeTray\.showSession\(conversationState\(\)\);\n  if\(drawer\|\|micButton==null\)return;/);
+ assert.match(main,/void refresh\(\)\{\n  refreshHomeRose\(HomeRose\.shown\(screenHostActive,homeFrame!=null&&homeFrame\.getParent\(\)!=null\)\);\n  if\(drawer\|\|micButton==null\)return;/);
  // The tick starts on resume and stops on pause, so returning to Home reads fresh state.
  assert.match(main,/onResume\(\)\{[^\n]*handler\.removeCallbacks\(tick\);handler\.post\(tick\);\}/);
  assert.match(main,/onPause\(\)\{[^\n]*handler\.removeCallbacks\(tick\);/);

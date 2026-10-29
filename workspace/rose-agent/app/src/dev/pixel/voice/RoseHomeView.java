@@ -28,7 +28,7 @@ import java.util.List;
 /**
  * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): the prototype wallpaper and a
  * light dock of real installed apps. Rose and its session mark live in the fixed HomeTray, which
- * reuses this class's presence card and rose mark; this page owns no voice state.
+ * uses this class's static rose mark until App's renderer mounts; this page owns no voice state.
  */
 final class RoseHomeView extends FrameLayout {
  static final int DOCK_SIZE = 4;
@@ -146,24 +146,6 @@ final class RoseHomeView extends FrameLayout {
    }
    super.onMeasure(widthSpec, heightSpec);
   }
- }
-
- /** Opens the conversation surface; never starts, mutes or ends the voice session. */
- static View presence(MainActivity activity, Runnable openRose) {
-  FrameLayout card = new FrameLayout(activity);
-  GradientDrawable back = new GradientDrawable();
-  back.setColor(0xdbfbfcf5);
-  back.setStroke(Math.max(1, activity.dp(1)), 0xc9ffffff);
-  back.setCornerRadius(activity.dp(38));
-  card.setBackground(back);
-  card.setElevation(activity.dp(6));
-  card.addView(new RoseMark(activity), new FrameLayout.LayoutParams(-1, -1));
-  card.setPadding(activity.dp(8), activity.dp(8), activity.dp(8), activity.dp(8));
-  card.setClickable(true);
-  card.setFocusable(true);
-  card.setContentDescription("Open Rose");
-  card.setOnClickListener(v -> openRose.run());
-  return card;
  }
 
  /** The prototype's static rose mark (its SVG fallback, viewBox 320), drawn natively. */
