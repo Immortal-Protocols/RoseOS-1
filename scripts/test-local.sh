@@ -110,14 +110,14 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
  workspace/rose-agent/app/tests/RoseVisualStateTest.java
 java -cp "$JAVA_TESTS/RoseVisualState" dev.pixel.voice.RoseVisualStateTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRose" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeRose.java workspace/rose-agent/app/tests/HomeRoseTest.java
+java -cp "$JAVA_TESTS/HomeRose" dev.pixel.voice.HomeRoseTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RosePresence" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
  workspace/rose-agent/app/src/dev/pixel/voice/RosePresenceModel.java workspace/rose-agent/app/tests/RosePresenceModelTest.java
 java -cp "$JAVA_TESTS/RosePresence" dev.pixel.voice.RosePresenceModelTest
-java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeSessionMark" \
- workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/HomeSessionMark.java \
- workspace/rose-agent/app/tests/HomeSessionMarkTest.java
-java -cp "$JAVA_TESTS/HomeSessionMark" dev.pixel.voice.HomeSessionMarkTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeEntry" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeEntry.java workspace/rose-agent/app/tests/HomeEntryTest.java
 java -cp "$JAVA_TESTS/HomeEntry" dev.pixel.voice.HomeEntryTest
