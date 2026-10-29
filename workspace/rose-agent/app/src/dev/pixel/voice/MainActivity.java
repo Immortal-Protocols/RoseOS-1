@@ -12,7 +12,7 @@ public class MainActivity extends Activity {
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
  LauncherPager launcherPager;LinearLayout homePageDots;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
- boolean launcherReceiverRegistered;RoseHomeView roseHome;
+ boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){packageGeneration++;if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
  /** Home visual card trial. false removes the card, its detail view and its Home options entry. */
@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
  // The Quick Settings tile can change the choice while this activity stays resumed under the shade.
  final android.content.SharedPreferences.OnSharedPreferenceChangeListener screenPolicyChanged=(prefs,key)->{if(ScreenPolicy.KEEP_ON.equals(key))ScreenPolicy.apply(this,screenHostActive);};
  void toggleLockedControl(){if(LockedControl.enabled(this)){LockedControl.disable(this);Toast.makeText(this,"App control while locked is off.",0).show();}else LockedControl.enable(this,()->{});}
- @Override public void onCreate(Bundle b){PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);startForegroundService(new Intent(this,VoiceService.class));home();showHomeFor(getIntent(),b==null);IntentFilter packages=new IntentFilter();packages.addAction(Intent.ACTION_PACKAGE_ADDED);packages.addAction(Intent.ACTION_PACKAGE_REMOVED);packages.addAction(Intent.ACTION_PACKAGE_CHANGED);packages.addAction(Intent.ACTION_PACKAGE_REPLACED);packages.addDataScheme("package");if(Build.VERSION.SDK_INT>=33)registerReceiver(launcherPackages,packages,Context.RECEIVER_EXPORTED);else registerReceiver(launcherPackages,packages);launcherReceiverRegistered=true;if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class));if(!PhoneEnvironment.permitted(this)&&!getSharedPreferences("location-context",0).getBoolean("asked",false))requestLocationContext();}
+ @Override public void onCreate(Bundle b){PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);startForegroundService(new Intent(this,VoiceService.class));home();showHomeFor(getIntent(),b==null);if(b!=null&&b.containsKey("home-page")&&launcherPager!=null)launcherPager.showPage(HomePages.restore(b.getInt("home-page"),launcherPager.getChildCount()),false);IntentFilter packages=new IntentFilter();packages.addAction(Intent.ACTION_PACKAGE_ADDED);packages.addAction(Intent.ACTION_PACKAGE_REMOVED);packages.addAction(Intent.ACTION_PACKAGE_CHANGED);packages.addAction(Intent.ACTION_PACKAGE_REPLACED);packages.addDataScheme("package");if(Build.VERSION.SDK_INT>=33)registerReceiver(launcherPackages,packages,Context.RECEIVER_EXPORTED);else registerReceiver(launcherPackages,packages);launcherReceiverRegistered=true;if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class));if(!PhoneEnvironment.permitted(this)&&!getSharedPreferences("location-context",0).getBoolean("asked",false))requestLocationContext();}
  void requestLocationContext(){getSharedPreferences("location-context",0).edit().putBoolean("asked",true).apply();requestPermissions(new String[]{"android.permission.ACCESS_COARSE_LOCATION","android.permission.ACCESS_FINE_LOCATION"},72);}
  void requestPhotoAccess(){if(Build.VERSION.SDK_INT>=34)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES","android.permission.READ_MEDIA_VISUAL_USER_SELECTED"},74);else if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES"},74);else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},74);}
  @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==74){if(galleryWidget!=null)galleryWidget.reload();return;}if(r==72){VoiceService s=VoiceService.instance;if(s!=null){s.notification(s.communicating);PhoneEnvironment.get(this).setActive(s.communicating);s.appWindowChanged();}return;}if(checkSelfPermission("android.permission.RECORD_AUDIO")==PackageManager.PERMISSION_GRANTED){startForegroundService(new Intent(this,VoiceService.class));command("talk");}}
@@ -349,7 +349,8 @@ public class MainActivity extends Activity {
   }catch(PackageManager.NameNotFoundException|IllegalArgumentException|SecurityException unavailable){return false;}
  }
  void attachLauncherPages(boolean preservePage){
-  int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():voicePage;
+  // A rebuild that keeps the page keeps the legacy voice page too, even when the app pages before it change in number.
+  int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():-1;boolean onVoice=selected>=0&&selected==voicePage;
   if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);
   Intent query=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
   ArrayList<ResolveInfo> ourApps=new ArrayList<>(),systemApps=new ArrayList<>(),storeApps=new ArrayList<>(),otherApps=new ArrayList<>();HashSet<String> seen=new HashSet<>(),suiteSeen=new HashSet<>();
@@ -369,24 +370,26 @@ public class MainActivity extends Activity {
   final int gridColumns=Math.max(4,Math.min(8,getResources().getConfiguration().screenWidthDp/104));
   int rows=Math.max(3,Math.min(6,(int)((height-250)/108))),perPage=rows*gridColumns;
   ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>(),subtitles=new ArrayList<>();
+  // Home, then the app pages next to it under the fixed tray, then Widgets and the legacy voice page last (HomePages).
   titles.add("Home");subtitles.add("");pages.add(new ArrayList<>());
-  titles.add("Voice home");subtitles.add("");pages.add(new ArrayList<>());
-  titles.add("Widgets");subtitles.add("");pages.add(new ArrayList<>());widgetsPage=2;ourAppsPage=3;
   ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,systemApps,storeApps,otherApps))launchable.addAll(group);
   addAppGroup(pages,titles,subtitles,ourApps,"Our apps","Your everyday apps",Math.max(1,ourApps.size()));
   addAppGroup(pages,titles,subtitles,systemApps,"Preinstalled","Included with this operating system",perPage);
   addAppGroup(pages,titles,subtitles,storeApps,"Play Store","Installed through Google Play",perPage);
   if(!otherApps.isEmpty())addAppGroup(pages,titles,subtitles,otherApps,"Other installs","Installed from other sources",perPage);
-  int count=pages.size();
+  titles.add("Widgets");subtitles.add("");pages.add(new ArrayList<>());
+  titles.add("Voice home");subtitles.add("");pages.add(new ArrayList<>());
+  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;widgetsPage=HomePages.widgets(count);voicePage=HomePages.voice(count);
+  if(selected<0||onVoice)selected=voicePage;
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new PlayfulTheme.World());
   launcherPager.permission=this::canSwipePages;
   launcherPager.listener=index->{drawer=index!=voicePage;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setAlpha(((Integer)dot.getTag())==index?1f:.27f);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   page.setBackgroundColor(Color.TRANSPARENT);homePageDots=makePageDots(titles);page.addView(homePageDots,new LinearLayout.LayoutParams(-1,dp(30)));
-  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::openRoseConversation,this::apps,makePageDots(titles)));
-  launcherPager.addView(page);
-  for(int number=voicePage+1;number<count;number++){
+  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::apps,makePageDots(titles)));
+  for(int number=HomePages.FIRST_APPS;number<count;number++){
+   if(number==voicePage){launcherPager.addView(page);continue;}
    LinearLayout appPage=new LinearLayout(this);appPage.setOrientation(1);
    appPage.setPadding(dp(18),dp(20),dp(18),dp(12));
    appPage.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(18)+i.getSystemWindowInsetLeft(),dp(20)+i.getSystemWindowInsetTop(),dp(18)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());return i;});
@@ -418,7 +421,8 @@ public class MainActivity extends Activity {
    appPage.addView(makePageDots(titles),new LinearLayout.LayoutParams(-1,dp(30)));
    launcherPager.addView(appPage);
   }
-  setContentView(launcherPager);launcherPager.showPage(selected,false);launcherPager.requestApplyInsets();
+  homeTray=new HomeTray(this,this::openRoseConversation);homeFrame=new HomeFrame(this,launcherPager,homeTray);
+  setContentView(homeFrame);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
  /** A small square uses one of two columns; wide screens do not inflate it. */
@@ -516,7 +520,7 @@ public class MainActivity extends Activity {
  String audioLabel(VoiceService s){if(!s.communicating)return "Microphone off";AudioDeviceInfo d=s.audio==null?null:s.audio.getCommunicationDevice();if(d==null)return "Connecting audio…";if(VoiceService.isBluetooth(d))return "Glasses";if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)return "Phone speaker";if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)return "Phone earpiece";return d.getProductName().toString();}
  final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,250);}};
  void refresh(){
-  if(roseHome!=null)roseHome.showSession(conversationState());
+  if(homeTray!=null)homeTray.showSession(conversationState());
   if(drawer||micButton==null)return;syncVisual();VoiceService s=VoiceService.instance;boolean active=s!=null&&s.live&&s.connected,starting=s!=null&&s.communicating&&!active,isMuted=active&&s.muted;
   String error=s!=null&&!active&&!starting&&s.status.toLowerCase(java.util.Locale.ROOT).matches(".*(failed|unavailable|not ready|denied|error|timed out).*")?"Couldn’t connect. Tap to retry.":"";
   if(active||starting||!error.isEmpty())startFeedbackUntil=0;
@@ -549,13 +553,16 @@ public class MainActivity extends Activity {
   endSlot.setVisibility(active||starting||ending?View.VISIBLE:View.GONE);end.setEnabled(!ending&&(active||starting));if(!ending){end.animate().cancel();end.setAlpha(1f);}
   updateText(end,"×");end.setContentDescription(ending?endingLabel:starting?"Cancel connection":"End session");
  }
- @Override protected void onResume(){super.onResume();screenHostActive=true;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();if(clockWidget!=null&&launcherPager!=null)clockWidget.setActive(launcherPager.currentPage()==widgetsPage);if(weatherWidget!=null&&launcherPager!=null)weatherWidget.setActive(launcherPager.currentPage()==widgetsPage);if(galleryWidget!=null&&launcherPager!=null)galleryWidget.setActive(launcherPager.currentPage()==widgetsPage);handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();if(clockWidget!=null&&launcherPager!=null)clockWidget.setActive(launcherPager.currentPage()==widgetsPage);if(weatherWidget!=null&&launcherPager!=null)weatherWidget.setActive(launcherPager.currentPage()==widgetsPage);if(galleryWidget!=null&&launcherPager!=null)galleryWidget.setActive(launcherPager.currentPage()==widgetsPage);handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onStop(){super.onStop();homeStopped=true;}
+ /** The shown page survives recreation (HomePages.restore). */
+ @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
  @Override protected void onPause(){ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
- @Override public void onNewIntent(Intent i){super.onNewIntent(i);if(!reuseHome(i))home();showHomeFor(i,true);}
+ @Override public void onNewIntent(Intent i){super.onNewIntent(i);int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);}
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
  String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
  /** An unchanged HOME or app-icon return keeps the built Home, pager, catalog, conversation page and draft (OS-HOME-REUSE-001). */
- boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,launcherPager!=null&&launcherPager.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null||screenDetail!=null,experimentalHome!=getPreferences(0).getBoolean("conversation-home",true));}
+ boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,homeFrame!=null&&homeFrame.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null||screenDetail!=null,experimentalHome!=getPreferences(0).getBoolean("conversation-home",true));}
  /** The same snapshot RoseConversationActivity and AgentTrayService build: no service is inactive, never guessed. */
  static ConversationState conversationState(){VoiceService s=VoiceService.instance;return s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);}
@@ -563,7 +570,9 @@ public class MainActivity extends Activity {
   * returns Home and HOME clears it; navigation only, never a voice or task command. */
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
  /** HOME shows Rose Home; the app icon also opens the Rose conversation over it (HomeEntry). Never changes the HOME choice or voice. */
- void showHomeFor(Intent intent,boolean fresh){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome&&launcherPager!=null)launcherPager.showPage(homePage,false);if(entry.openConversation)openRoseConversation();}
+ void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
+ /** HOME returning from an app or the conversation keeps the page left (previous); HOME on Home, or the app icon, shows Home (HomePages). */
+ void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
  @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
  boolean macScreenEnabled(){return getPreferences(0).getBoolean("mac-screen-enabled",false);}

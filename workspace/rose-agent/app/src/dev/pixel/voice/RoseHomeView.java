@@ -26,22 +26,19 @@ import java.util.HashSet;
 import java.util.List;
 
 /**
- * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): the prototype wallpaper, a
- * centered Rose presence and a light dock of real installed apps. It owns no voice state: the
- * presence only navigates, and its quiet session mark renders the ConversationState it is given.
+ * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): the prototype wallpaper and a
+ * light dock of real installed apps. Rose and its session mark live in the fixed HomeTray, which
+ * reuses this class's presence card and rose mark; this page owns no voice state.
  */
 final class RoseHomeView extends FrameLayout {
  static final int DOCK_SIZE = 4;
  /** Decoded once per process: MainActivity rebuilds its pages on every HOME press. */
  static Bitmap cachedWallpaper;
  final Bitmap wallpaper;
- final View presence;
- final TextView sessionMark;
- HomeSessionMark.Mark shownMark;
  final Rect source = new Rect(), target = new Rect();
  final Paint picture = new Paint(Paint.FILTER_BITMAP_FLAG);
 
- RoseHomeView(MainActivity activity, List<ResolveInfo> dock, Runnable openRose, Runnable openApps, View pageDots) {
+ RoseHomeView(MainActivity activity, List<ResolveInfo> dock, Runnable openApps, View pageDots) {
   super(activity);
   setWillNotDraw(false);
   setContentDescription("Home");
@@ -59,26 +56,8 @@ final class RoseHomeView extends FrameLayout {
   });
   addView(column, new LayoutParams(-1, -1));
 
-  // The prototype centers the presence in the space above the dock.
-  FrameLayout organism = new FrameLayout(activity);
-  presence = presence(activity, openRose);
-  organism.addView(presence, new FrameLayout.LayoutParams(activity.dp(146), activity.dp(146), Gravity.CENTER));
-  // Sits on the card's top-right corner, outside its padding, above its elevation.
-  sessionMark = activity.text("", 15, 0xff283e39);
-  sessionMark.setGravity(Gravity.CENTER);
-  sessionMark.setIncludeFontPadding(false);
-  GradientDrawable markBack = new GradientDrawable();
-  markBack.setShape(GradientDrawable.OVAL);
-  markBack.setColor(0xf2fbfcf5);
-  markBack.setStroke(Math.max(1, activity.dp(1)), 0xffe0e6d8);
-  sessionMark.setBackground(markBack);
-  sessionMark.setElevation(activity.dp(7));
-  sessionMark.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-  sessionMark.setTranslationX(activity.dp(73 - 10));
-  sessionMark.setTranslationY(-activity.dp(73 - 10));
-  sessionMark.setVisibility(GONE);
-  organism.addView(sessionMark, new FrameLayout.LayoutParams(activity.dp(32), activity.dp(32), Gravity.CENTER));
-  column.addView(organism, new LinearLayout.LayoutParams(-1, 0, 1));
+  // Rose now sits in the fixed HomeTray (OS-HIFI-HOME-001); the wallpaper fills the space above the dock.
+  column.addView(new View(activity), new LinearLayout.LayoutParams(-1, 0, 1));
 
   LinearLayout tray = new LinearLayout(activity);
   tray.setGravity(Gravity.CENTER_VERTICAL);
@@ -102,23 +81,6 @@ final class RoseHomeView extends FrameLayout {
   trayParams.bottomMargin = activity.dp(8);
   column.addView(tray, trayParams);
   column.addView(pageDots, new LinearLayout.LayoutParams(-1, activity.dp(30)));
- }
-
- /** Shows the session from the authoritative state: microphone on, muted or connecting; nothing when
-  * voice is unavailable or ended. Called from the activity's refresh tick, so returning shows fresh state. */
- void showSession(ConversationState state) {
-  HomeSessionMark.Mark mark = HomeSessionMark.of(state);
-  if (mark == shownMark) return;
-  shownMark = mark;
-  switch (mark) {
-   case LISTENING: sessionMark.setText("🎙"); break;
-   case MUTED: sessionMark.setText("🔇"); break;
-   case CONNECTING: sessionMark.setText("◌"); break;
-   default: sessionMark.setText(""); break;
-  }
-  sessionMark.setVisibility(mark == HomeSessionMark.Mark.NONE ? GONE : VISIBLE);
-  String spoken = HomeSessionMark.description(mark);
-  presence.setContentDescription(spoken.isEmpty() ? "Open Rose" : "Open Rose. " + spoken);
  }
 
  /** A plain icon over its label, as in the prototype dock; no tile background. */
