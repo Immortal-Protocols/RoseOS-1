@@ -2,8 +2,9 @@
 # Unsigned Rose Models APK (dev.pixel.models). Never creates, reads or uses a signing key; the
 # output is not installable until Infra signs an admitted artifact.
 #
-#   bash workspace/models/android/build.sh                      # Java shell only (FAKE engine)
-#   ROSE_MODELS_NATIVE_LIB=path/to/librose_chat_android.so bash workspace/models/android/build.sh
+#   lib="$(bash workspace/models/android/build-native.sh)"   # arm64 JNI adapter (needs an NDK)
+#   ROSE_MODELS_NATIVE_LIB="$lib" bash workspace/models/android/build.sh
+#   bash workspace/models/android/build.sh                   # packaging only: no native library
 #
 # A native library, when given, is stored uncompressed at lib/arm64-v8a/ and the APK is aligned
 # for 16 KiB pages. Output goes to an ignored out/rose-models.* directory with a build receipt.
@@ -53,7 +54,7 @@ DIRTY="$(git -C "$ROOT" status --porcelain -- workspace/models/android | wc -l |
   echo "source_rev: $REV"
   echo "android_tree: $TREE (uncommitted files in workspace/models/android: $DIRTY)"
   echo "native_lib_arm64_sha256: $NATIVE"
-  echo "engine: $([[ "$NATIVE" == none ]] && echo 'FAKE (local fixture), not a model' || echo 'native library present')"
+  echo "agent: $([[ "$NATIVE" == none ]] && echo 'NONE (no native library; this APK cannot chat)' || echo "Core local-agent-v1 via librose_chat_android (arm64-v8a)")"
   echo "build_tools: $(basename "$BT"); platform: android-35; d8 --min-api 29"
   echo "javac: $("$JAVA" -version 2>&1 | grep -v JAVA_TOOL_OPTIONS | head -1)"
   grep -E "^(package|sdkVersion|targetSdkVersion|uses-permission|native-code|application-label):" "$OUT/apk-metadata.txt"

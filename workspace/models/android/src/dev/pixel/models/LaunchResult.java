@@ -8,7 +8,7 @@ public final class LaunchResult {
         LOCKED("locked"),
         NOT_ALLOWED("not_allowed"),
         CANCELLED("cancelled"),
-        PLATFORM_ERROR("platform_error");
+        FAILED("failed");
 
         public final String wire;
 

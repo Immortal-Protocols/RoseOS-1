@@ -1,18 +1,24 @@
 name: Models Android app
 
-# Rose Models (dev.pixel.models): JVM policy tests and an UNSIGNED APK build with a manifest
-# policy check. No signing key, secrets, cloud, device or emulator; the APK is not uploaded.
+# Rose Models (dev.pixel.models): the JNI adapter over Core's local-agent-v1 agent, JVM host tests
+# against that real agent, the arm64-v8a native library from the runner's preinstalled NDK, and an
+# UNSIGNED APK with packaging checks. No signing key, secrets, cloud, device or emulator; nothing
+# is uploaded.
 on:
   pull_request:
     paths:
       - 'workspace/models/android/**'
       - 'workspace/models/rose-chat-android/**'
+      - 'workspace/models/rose-chat-core/**'
+      - 'workspace/models/contracts/**'
       - '.github/workflows/models-android.yml'
   push:
     branches: [main]
     paths:
       - 'workspace/models/android/**'
       - 'workspace/models/rose-chat-android/**'
+      - 'workspace/models/rose-chat-core/**'
+      - 'workspace/models/contracts/**'
       - '.github/workflows/models-android.yml'
   workflow_dispatch:
 
@@ -26,19 +32,36 @@ concurrency:
 jobs:
   rose-models-apk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Tool versions
-        run: java -version
-      - name: JVM policy tests
+      - name: Rust 1.97.0 with the Android target
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy,rustfmt --target aarch64-linux-android
+          rustup default 1.97.0
+          rustc --version
+          java -version
+          echo "NDK: ${ANDROID_NDK_LATEST_HOME:-none}"
+      - name: JNI adapter checks
+        working-directory: workspace/models/rose-chat-android
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
+      - name: JVM host tests over the real agent (x86_64 adapter)
         run: bash workspace/models/android/tests/run.sh
+      - name: arm64-v8a native library (runner NDK)
+        run: |
+          lib="$(bash workspace/models/android/build-native.sh)"
+          echo "ROSE_MODELS_NATIVE_LIB=$lib" >> "$GITHUB_ENV"
       - name: Unsigned APK build
         run: |
           unset ANDROID_SDK_ROOT
           bash scripts/setup-android-sdk.sh
           bash workspace/models/android/build.sh
       - name: APK policy check
-        run: bash workspace/models/android/tests/check-apk-policy.sh out/rose-models.*/apk-metadata.txt
+        run: bash workspace/models/android/tests/check-apk-policy.sh out/rose-models.*/apk-metadata.txt --require-native

@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# JVM tests for the Rose Models shell policy. Compiles only the Android-free classes, so it needs
-# a JDK but no Android SDK, device or emulator.
+# JVM tests for the Rose Models host. Builds the JNI adapter for THIS machine (not arm64) so the
+# tests drive Core's real local-agent-v1 agent; needs a JDK and cargo, no Android SDK or device.
 set -euo pipefail
 APP="$(cd "$(dirname "$0")/.." && pwd)"
+ADAPTER="$(cd "$APP/../rose-chat-android" && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
-PURE=(Effect AgentEngine LaunchResult AppLauncher InferenceClient TurnView TurnController
-      AppAllowlist EndpointPolicy FakeEngine FakeInferenceClient AllowlistLauncher)
+(cd "$ADAPTER" && cargo build --locked -q)
+HOST_CLASSES=(Json AgentPort NativeAgent AgentConfigJson LocalAgentHost InferenceClient AppLauncher
+              LaunchResult TurnView AppAllowlist EndpointPolicy AllowlistLauncher)
 SOURCES=()
-for c in "${PURE[@]}"; do SOURCES+=("$APP/src/dev/pixel/models/$c.java"); done
-# Fail if a class meant to be platform-free imports android.*.
+for c in "${HOST_CLASSES[@]}"; do SOURCES+=("$APP/src/dev/pixel/models/$c.java"); done
+# These classes must stay free of android.* so they run on a plain JVM.
 if grep -l '^import android\.' "${SOURCES[@]}"; then
-  echo "platform-free class imports android.*" >&2
+  echo "host class imports android.*" >&2
   exit 1
 fi
 javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options -d "$OUT" \
   "${SOURCES[@]}" "$APP"/tests/dev/pixel/models/*.java
-java -cp "$OUT" dev.pixel.models.ShellPolicyTest
+java -Djava.library.path="$ADAPTER/target/debug" -cp "$OUT" dev.pixel.models.HostTest

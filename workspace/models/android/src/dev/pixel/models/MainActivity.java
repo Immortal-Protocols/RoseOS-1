@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -19,16 +20,19 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Rose Models text chat: transcript, input and Send, status, Stop, Continue and the last action
- * result. This shell runs the labelled FakeEngine until Core's local-agent-v1 engine is wired in
- * through the native adapter; the banner always names the engine in use.
+ * Rose Models text chat: transcript, input and Send, status, Stop, Continue and the last app
+ * action. Conversation and agent state live in Core's local-agent-v1 agent on this phone
+ * (NativeAgent); the configured HTTPS endpoint is used only for inference. There is no default
+ * endpoint or model: until both are set in Settings, Send stays disabled.
  */
 public final class MainActivity extends Activity implements TurnView {
     private static final String PREFS = "rose-models";
     private static final String KEY_ALLOWLIST = "allowlist";
+    private static final String KEY_ENDPOINT = "endpoint";
+    private static final String KEY_MODEL = "model";
 
     private final Handler main = new Handler(Looper.getMainLooper());
-    private TurnController controller;
+    private LocalAgentHost host;
     private TextView transcript;
     private TextView status;
     private TextView actionCard;
@@ -38,45 +42,71 @@ public final class MainActivity extends Activity implements TurnView {
     private Button stop;
     private Button resume;
     private AppAllowlist allowlist = AppAllowlist.empty();
+    private String setupProblem;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        allowlist = AppAllowlist.parse(prefs().getString(KEY_ALLOWLIST, ""));
-        AgentEngine engine = new FakeEngine();
-        InferenceClient client = new FakeInferenceClient(main::postDelayed, 600);
-        buildUi(engine.label());
-        controller = new TurnController(engine, client,
+        SharedPreferences prefs = prefs();
+        allowlist = AppAllowlist.parse(prefs.getString(KEY_ALLOWLIST, ""));
+        String endpoint = prefs.getString(KEY_ENDPOINT, "");
+        String model = prefs.getString(KEY_MODEL, "").trim();
+        buildUi();
+        setupProblem = EndpointPolicy.check(endpoint);
+        if (setupProblem == null && model.isEmpty()) {
+            setupProblem = "no model id is configured";
+        }
+        if (setupProblem != null) {
+            setStatus("Setup needed: " + setupProblem + ". Use Settings.");
+            setControls(false, false, false);
+            return;
+        }
+        NativeAgent agent;
+        try {
+            agent = new NativeAgent(AgentConfigJson.build(model, AgentConfigJson.DEFAULT_SYSTEM_PROMPT, allowlist));
+        } catch (IllegalArgumentException e) {
+            setupProblem = "the agent rejected the settings: " + e.getMessage();
+            setStatus("Setup needed: " + setupProblem);
+            setControls(false, false, false);
+            return;
+        }
+        host = new LocalAgentHost(agent, new HttpsInferenceClient(endpoint),
                 new AllowlistLauncher(allowlist, new AndroidAppLauncher(this)), this, main::post);
-        showAllowlistStatus();
+        showReadyStatus();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        controller.onForeground();
+        if (host != null) {
+            host.onForeground();
+        }
     }
 
     @Override
     protected void onPause() {
-        controller.onBackground();
+        if (host != null) {
+            host.onBackground();
+        }
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        controller.onDestroy();
+        if (host != null) {
+            host.onDestroy();
+        }
         super.onDestroy();
     }
 
-    private void buildUi(String engineLabel) {
+    private void buildUi() {
         int pad = dp(12);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, pad, pad, pad);
 
         TextView banner = new TextView(this);
-        banner.setText("Rose Models: " + engineLabel);
+        banner.setText("Rose Models: text chat with a local agent");
         banner.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(banner);
 
@@ -92,26 +122,39 @@ public final class MainActivity extends Activity implements TurnView {
         root.addView(actionCard);
 
         status = new TextView(this);
-        status.setText("Ready.");
         root.addView(status);
 
         input = new EditText(this);
         input.setHint("Message");
         root.addView(input);
 
-        LinearLayout buttons = new LinearLayout(this);
+        LinearLayout row1 = new LinearLayout(this);
         send = button("Send", v -> {
             String text = input.getText().toString();
             input.setText("");
-            controller.send(text);
+            if (host != null) {
+                host.send(text);
+            }
         });
-        stop = button("Stop", v -> controller.stop());
-        resume = button("Continue", v -> controller.continueTurn());
-        Button apps = button("Apps", v -> chooseApps());
-        for (Button b : new Button[] {send, stop, resume, apps}) {
-            buttons.addView(b, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        stop = button("Stop", v -> {
+            if (host != null) {
+                host.stop();
+            }
+        });
+        resume = button("Continue", v -> {
+            if (host != null) {
+                host.continueTurn();
+            }
+        });
+        for (Button b : new Button[] {send, stop, resume}) {
+            row1.addView(b, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         }
-        root.addView(buttons);
+        root.addView(row1);
+        LinearLayout row2 = new LinearLayout(this);
+        for (Button b : new Button[] {button("Apps", v -> chooseApps()), button("Settings", v -> editSettings())}) {
+            row2.addView(b, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        root.addView(row2);
         setContentView(root);
     }
 
@@ -122,10 +165,47 @@ public final class MainActivity extends Activity implements TurnView {
         return b;
     }
 
+    private boolean busy() {
+        if (host != null && host.hasActiveTurn()) {
+            setStatus("Stop the current turn first.");
+            return true;
+        }
+        return false;
+    }
+
+    /** HTTPS endpoint and exact served model id. Nothing is pre-filled. */
+    private void editSettings() {
+        if (busy()) {
+            return;
+        }
+        final EditText endpoint = new EditText(this);
+        endpoint.setHint("https://… inference URL (POST)");
+        endpoint.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+        endpoint.setText(prefs().getString(KEY_ENDPOINT, ""));
+        final EditText model = new EditText(this);
+        model.setHint("Exact model id served by the endpoint");
+        model.setText(prefs().getString(KEY_MODEL, ""));
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.addView(endpoint);
+        form.addView(model);
+        new AlertDialog.Builder(this)
+                .setTitle("Inference settings")
+                .setView(form)
+                .setPositiveButton("Save", (d, w) -> {
+                    prefs().edit()
+                            .putString(KEY_ENDPOINT, endpoint.getText().toString().trim())
+                            .putString(KEY_MODEL, model.getText().toString().trim())
+                            .apply();
+                    recreate();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     /** Lets the user pick which launcher apps open_app may open. Only this list is allowed. */
     private void chooseApps() {
-        if (controller.hasActiveTurn()) {
-            setStatus("Stop the current turn before changing apps.");
+        if (busy()) {
             return;
         }
         final List<AppAllowlist.Launchable> installed = new AndroidAppLauncher(this).launcherActivities();
@@ -158,16 +238,16 @@ public final class MainActivity extends Activity implements TurnView {
                 .show();
     }
 
-    private void showAllowlistStatus() {
+    private void showReadyStatus() {
         if (allowlist.isEmpty()) {
-            setStatus("Ready. No apps selected: open_app will refuse everything. Use Apps to choose.");
+            setStatus("Ready. No apps selected, so the model cannot open any. Use Apps to choose.");
             return;
         }
         StringBuilder ids = new StringBuilder();
         for (AppAllowlist.Entry e : allowlist.entries()) {
             ids.append(ids.length() == 0 ? "" : ", ").append(e.appId);
         }
-        setStatus("Ready. Apps that may be opened: " + ids);
+        setStatus("Ready. Apps the model may open: " + ids);
     }
 
     private SharedPreferences prefs() {
@@ -201,7 +281,7 @@ public final class MainActivity extends Activity implements TurnView {
         if (send == null) {
             return;
         }
-        send.setEnabled(canSend);
+        send.setEnabled(canSend && setupProblem == null);
         stop.setEnabled(canStop);
         resume.setEnabled(canContinue);
     }
