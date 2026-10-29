@@ -13,9 +13,12 @@ def data_uri(name, mime):
     return 'data:%s;base64,%s' % (mime, base64.b64encode((SRC / 'assets' / name).read_bytes()).decode())
 
 # Horizontal brushed-metal grain: anisotropic turbulence, desaturated.
-BRUSH_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' width='220' height='120'>"
-             "<filter id='b'><feTurbulence type='fractalNoise' baseFrequency='0.004 0.9' numOctaves='2' seed='7'/>"
-             "<feColorMatrix values='0 0 0 0 .5  0 0 0 0 .52  0 0 0 0 .55  0 0 0 .9 0'/></filter>"
+BRUSH_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' width='640' height='160'>"
+             "<filter id='b' x='0' y='0' width='100%' height='100%'>"
+             "<feTurbulence type='fractalNoise' baseFrequency='0.0015 1.1' numOctaves='2' seed='7' stitchTiles='stitch' result='n'/>"
+             "<feTurbulence type='fractalNoise' baseFrequency='0.004 0.03' numOctaves='1' seed='3' stitchTiles='stitch' result='w'/>"
+             "<feDisplacementMap in='n' in2='w' scale='4' xChannelSelector='R' yChannelSelector='G'/>"
+             "<feColorMatrix values='1.3 0 0 0 -.15  1.3 0 0 0 -.15  1.3 0 0 0 -.15  0 0 0 0 1'/></filter>"
              "<rect width='100%' height='100%' filter='url(#b)'/></svg>")
 
 def build():
