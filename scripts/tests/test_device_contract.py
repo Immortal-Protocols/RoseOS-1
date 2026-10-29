@@ -129,25 +129,51 @@ class BindingTest(unittest.TestCase):
                 with self.subTest(device=device), self.assertRaisesRegex(pipeline.CheckFailed, 'does not belong to this candidate'):
                     pipeline.stage_artifact(a, FRANKEL, cand, types.SimpleNamespace(simulated=True))
 
-    def test_build_identity_and_ota_metadata_name_the_dispatched_device(self):
+    def target(self, tmp, system, vendor, product=None, misc_system=None, vendor_device='frankel'):
         cand = pipeline.candidate(self.args(), 'frankel')
+        path = Path(tmp)/'target.zip'
+        tail = f':17/CP3A.261005.005/{cand["build"]}:user/release-keys'
+        with zipfile.ZipFile(path, 'w') as z:
+            z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={cand["build"]}\nro.build.date.utc={cand["timestamp"]}\n'
+                f'ro.build.type=user\nro.product.system.device=generic\nro.system.build.fingerprint={system}{tail}\n')
+            z.writestr('VENDOR/build.prop', f'ro.product.vendor.device={vendor_device}\nro.vendor.build.fingerprint={vendor}{tail}\n')
+            if product:
+                z.writestr('PRODUCT/etc/build.prop', f'ro.product.build.fingerprint={product}{tail}\n')
+            z.writestr('META/misc_info.txt', f'avb_system_add_hashtree_footer_args=--prop com.android.build.system.fingerprint:{misc_system or system}{tail}\n'
+                f'avb_vendor_add_hashtree_footer_args=--prop com.android.build.vendor.fingerprint:{vendor}{tail}\n')
+        return pipeline.check_build_identity(path, FRANKEL, cand, 'release-keys'), tail
+
+    def test_the_generic_system_image_passes_and_wrong_device_artifacts_fail(self):
+        generic, frankel, blazer = 'Android/generic_system/generic', 'google/frankel/frankel', 'google/blazer/blazer'
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp)/'target.zip'
-            fp = f'google/blazer/blazer:17/CP3A/{cand["build"]}:user/release-keys'
-            with zipfile.ZipFile(target, 'w') as z:
-                z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={cand["build"]}\nro.build.date.utc={cand["timestamp"]}\n'
-                    f'ro.build.type=user\nro.product.system.device=blazer\nro.build.fingerprint={fp}\n')
-                z.writestr('META/misc_info.txt', f'avb_system_add_hashtree_footer_args=--prop com.android.build.system.fingerprint:{fp}\n')
-            failures = pipeline.check_build_identity(target, FRANKEL, cand, 'release-keys')
-            self.assertIn('SYSTEM/build.prop: ro.build.fingerprint does not name device frankel', failures)
-            self.assertIn(f'META/misc_info.txt fingerprint {fp} does not name device frankel', failures)
-            with zipfile.ZipFile(target, 'w') as z:
-                good = fp.replace('blazer/blazer', 'frankel/frankel')
-                z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={cand["build"]}\nro.build.date.utc={cand["timestamp"]}\n'
-                    f'ro.build.type=user\nro.build.fingerprint={good}\n')
-                z.writestr('VENDOR/build.prop', f'ro.product.vendor.device=blazer\nro.vendor.build.fingerprint={good}\n')
-                z.writestr('META/misc_info.txt', f'avb_system_add_hashtree_footer_args=--prop com.android.build.system.fingerprint:{good}\n')
-            self.assertEqual(pipeline.check_build_identity(target, FRANKEL, cand, 'release-keys'), ['VENDOR/build.prop: ro.product.vendor.device=blazer'])
+            # Positive: exactly the 2806 shape (run 40778491188): generic system partition, frankel everywhere else.
+            failures, _ = self.target(tmp, generic, frankel, product=frankel)
+            self.assertEqual(failures, [])
+            failures, _ = self.target(tmp, frankel, frankel)  # a device-named system partition is fine too
+            self.assertEqual(failures, [])
+            # A blazer build: its vendor/product fingerprints and vendor device are refused even with a generic system.
+            failures, tail = self.target(tmp, generic, blazer, product=blazer, vendor_device='blazer')
+            self.assertIn('VENDOR/build.prop: ro.product.vendor.device=blazer', failures)
+            self.assertIn('VENDOR/build.prop: ro.vendor.build.fingerprint does not name device frankel', failures)
+            self.assertIn('PRODUCT/etc/build.prop: ro.product.build.fingerprint does not name device frankel', failures)
+            self.assertIn(f'META/misc_info.txt fingerprint {blazer}{tail} does not name device frankel', failures)
+            self.assertIn('no partition fingerprint names device frankel', failures)
+            # A system partition naming another device is not the generic image: refused.
+            failures, tail = self.target(tmp, blazer, frankel)
+            self.assertIn('SYSTEM/build.prop: ro.system.build.fingerprint does not name device frankel', failures)
+            self.assertIn(f'META/misc_info.txt fingerprint {blazer}{tail} does not name device frankel', failures)
+            # The generic identity is only accepted on the system partition, and an artifact naming no device fails.
+            failures, _ = self.target(tmp, generic, generic)
+            self.assertIn('VENDOR/build.prop: ro.vendor.build.fingerprint does not name device frankel', failures)
+            self.assertIn('no partition fingerprint names device frankel', failures)
+            # A look-alike prefix is not the generic system image.
+            failures, _ = self.target(tmp, 'Android/generic_system_x/generic', frankel)
+            self.assertIn('SYSTEM/build.prop: ro.system.build.fingerprint does not name device frankel', failures)
+
+    def test_ota_metadata_names_the_dispatched_device(self):
+        cand = pipeline.candidate(self.args(), 'frankel')
+        fp = f'google/blazer/blazer:17/CP3A/{cand["build"]}:user/release-keys'
+        with tempfile.TemporaryDirectory() as tmp:
             ota, public = Path(tmp)/'ota.zip', Path(tmp)/'public'
             public.mkdir()
             (public/'releasekey.x509.pem').write_text('-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n')
