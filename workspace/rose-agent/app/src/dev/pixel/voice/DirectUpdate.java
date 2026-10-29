@@ -25,7 +25,9 @@ import java.util.regex.Pattern;
  *    plus schemaVersion 1 and a required compatibility object. Anything missing, unknown or contradictory is
  *    unavailable, never eligible.
  *  - Eligibility: strictly newer integral version, signer equal to the installed signer, exact device codename,
- *    a supported ABI, minimum SDK, minimum Rose OS build and (when required) minimum controller version. */
+ *    a supported ABI, minimum SDK, minimum Rose OS build and (when required) minimum controller version.
+ *  - Channels: Beta is the rose-agent-N prerelease stream above and the only configured channel. Alpha and Prod
+ *    have no publication yet: they are unavailable without any request, and nothing falls back to Beta. */
 final class DirectUpdate {
  static final String SELF="dev.pixel.voice",REPOSITORY="Immortal-Protocols/pixel-ota";
  static final String API="https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases?per_page=";
@@ -60,6 +62,17 @@ final class DirectUpdate {
    this.codenames=codenames;this.abis=abis;this.minSdk=minSdk;this.minOsBuild=minOsBuild;this.minController=minController;}
  }
  enum State { NO_UPDATE, AVAILABLE, UNAVAILABLE, ERROR }
+ /** The update stream to check. Only BETA has a published route. */
+ enum Channel {
+  ALPHA("Alpha"),BETA("Beta"),PROD("Prod");
+  final String label;
+  Channel(String label){this.label=label;}
+  /** Exactly alpha, beta or prod; anything else is rejected, never mapped to a default. */
+  static Channel parse(String name){
+   if(name!=null)for(Channel c:values())if(c.name().toLowerCase(java.util.Locale.ROOT).equals(name))return c;
+   throw new IllegalArgumentException("Unknown update channel.");
+  }
+ }
  static final class Result {
   final State state;final String message;final Offer offer;
   Result(State state,String message,Offer offer){this.state=state;this.message=message;this.offer=offer;}
@@ -140,8 +153,16 @@ final class DirectUpdate {
   return null;
  }
 
- /** The whole check: discovery, the newest release's receipt and this phone's eligibility. */
- static Result check(PublicApkDownload.Http http,Device d){
+ /** The existing check is the Beta channel, unchanged. */
+ static Result check(PublicApkDownload.Http http,Device d){return check(http,d,Channel.BETA);}
+ /** The whole check for one channel. A channel without a published route is unavailable before any request. */
+ static Result check(PublicApkDownload.Http http,Device d,Channel channel){
+  if(channel==null)throw new IllegalArgumentException("No update channel selected.");
+  if(channel!=Channel.BETA)return new Result(State.UNAVAILABLE,channel.label+" updates for Rose Agent aren’t published yet.",null);
+  return checkBeta(http,d);
+ }
+ /** Beta: discovery, the newest release's receipt and this phone's eligibility. */
+ private static Result checkBeta(PublicApkDownload.Http http,Device d){
   if(d.installed<0)return new Result(State.ERROR,"Couldn’t read the installed version of Rose Agent.",null);
   Discovery found;
   try{found=discover(http);}catch(IOException e){return new Result(State.ERROR,e.getMessage(),null);}
