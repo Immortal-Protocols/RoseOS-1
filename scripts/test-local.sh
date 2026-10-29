@@ -56,6 +56,7 @@ python3 scripts/tests/test_app_release_publisher.py
 python3 scripts/tests/test_app_reuse.py
 python3 scripts/tests/test_device_contract.py
 python3 scripts/tests/test_device_readiness.py
+python3 scripts/tests/test_blazer_preparation_preflight.py
 python3 scripts/tests/test_alpha_runtime.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py
@@ -103,6 +104,11 @@ java -cp "$JAVA_TESTS/RoseChannels" app.seamlessupdate.client.RoseChannelsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
 java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
+# Independent Rose visual axes (connection, microphone, voice) derived from ConversationState.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseVisualState" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
+ workspace/rose-agent/app/tests/RoseVisualStateTest.java
+java -cp "$JAVA_TESTS/RoseVisualState" dev.pixel.voice.RoseVisualStateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeSessionMark" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/HomeSessionMark.java \
  workspace/rose-agent/app/tests/HomeSessionMarkTest.java
@@ -113,6 +119,9 @@ java -cp "$JAVA_TESTS/HomeEntry" dev.pixel.voice.HomeEntryTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeReuse" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeReuse.java workspace/rose-agent/app/tests/HomeReuseTest.java
 java -cp "$JAVA_TESTS/HomeReuse" dev.pixel.voice.HomeReuseTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePages" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomePages.java workspace/rose-agent/app/tests/HomePagesTest.java
+java -cp "$JAVA_TESTS/HomePages" dev.pixel.voice.HomePagesTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DockLabel" \
  workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java workspace/rose-agent/app/tests/DockLabelTest.java
 java -Djava.awt.headless=true -cp "$JAVA_TESTS/DockLabel" dev.pixel.voice.DockLabelTest workspace/rose-agent/app/assets/fonts/nunito.ttf

@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 const read=path=>fs.readFileSync(new URL(path,import.meta.url),'utf8');
 const main=read('../app/src/dev/pixel/voice/MainActivity.java');
 const home=read('../app/src/dev/pixel/voice/RoseHomeView.java');
+const homeTray=read('../app/src/dev/pixel/voice/HomeTray.java');
+const homeFrame=read('../app/src/dev/pixel/voice/HomeFrame.java');
 const manifest=read('../app/AndroidManifest.xml');
 
 test('the HOME activity identity is unchanged',()=>{
@@ -19,31 +21,45 @@ test('the HOME activity identity is unchanged',()=>{
 });
 
 test('HOME and the app icon land on Rose Home; the icon opens the Rose conversation; other opens keep their page',()=>{
+ // Page indices are named and set from the built page list (HomePages): Home, apps, Widgets, legacy voice last.
  assert.match(main,/int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;/);
- // Cold start routes only a fresh intent; recreation (saved state) keeps Home without reopening the conversation.
- assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true\);\}/);
- const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh)'));
- assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(homePage,false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
+ assert.match(main,/homePage=HomePages\.HOME;ourAppsPage=HomePages\.FIRST_APPS;widgetsPage=HomePages\.widgets\(count\);voicePage=HomePages\.voice\(count\);/);
+ // Cold start routes only a fresh intent; recreation (saved state) keeps the saved page, never reopening the conversation.
+ assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);\}/);
+ const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
+ assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
+ assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
+ // "Home shown" means only paused, never stopped: an app or the conversation over Home stops it.
+ assert.match(main,/@Override protected void onStop\(\)\{super\.onStop\(\);homeStopped=true;\}/);
+ assert.match(main,/screenHostActive=true;homeStopped=false;/);
+ assert.match(main,/onSaveInstanceState\(Bundle out\)\{super\.onSaveInstanceState\(out\);if\(launcherPager!=null\)out\.putInt\("home-page",launcherPager\.currentPage\(\)\);\}/);
  // The same explicit Intent the Rose presence uses; routing never touches voice, the HOME role or the wallpaper.
  assert.match(main,/void openRoseConversation\(\)\{startActivity\(new Intent\(this,RoseConversationActivity\.class\)\);\}/);
  for(const absent of ['RoleManager','ROLE_HOME','WallpaperManager','setPreferredActivity','clearPackagePreferredActivities'])assert.ok(!main.includes(absent),absent);
  assert.doesNotMatch(route.slice(0,route.indexOf('\n')),/VoiceService|talk|endConversation|mute/i);
- // Rebuilding the pages for menu actions or package changes keeps the conversation (or current) page.
- assert.match(main,/launcherPager\.currentPage\(\):voicePage;/);
+ // Rebuilding for menu actions or package changes keeps the current page, and the legacy voice page if shown.
+ assert.match(main,/int selected=preservePage&&launcherPager!=null\?launcherPager\.currentPage\(\):-1;boolean onVoice=selected>=0&&selected==voicePage;/);
+ assert.match(main,/if\(selected<0\|\|onVoice\)selected=voicePage;/);
 });
 
-test('Home comes first and the existing conversation page follows it',()=>{
+test('Home comes first, the app pages follow it, and the legacy voice page is last (OS-HIFI-HOME-001)',()=>{
  const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
- assert.ok(pages.indexOf('titles.add("Home")')<pages.indexOf('titles.add("Voice home")'));
- assert.ok(pages.indexOf('launcherPager.addView(new RoseHomeView(')<pages.indexOf('launcherPager.addView(page);'));
- assert.match(pages,/for\(int number=voicePage\+1;number<count;number\+\+\)/);
+ const order=['titles.add("Home")','"Our apps"','"Preinstalled"','"Play Store"','titles.add("Widgets")','titles.add("Voice home")'].map(t=>pages.indexOf(t));
+ assert.deepEqual([...order].sort((a,b)=>a-b),order);
+ assert.ok(order.every(i=>i>=0));
+ assert.ok(pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView(')<pages.indexOf('if(number==voicePage){launcherPager.addView(page);continue;}'));
+ assert.match(pages,/for\(int number=HomePages\.FIRST_APPS;number<count;number\+\+\)\{\n   if\(number==voicePage\)\{launcherPager\.addView\(page\);continue;\}/);
  // Only the conversation page runs the voice refresh and the swipe-up gesture.
  assert.match(pages,/drawer=index!=voicePage;/);
+ // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
+ assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation\);homeFrame=new HomeFrame\(this,launcherPager,homeTray\);\n  setContentView\(homeFrame\);/);
 });
 
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
- assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),this::openRoseConversation,this::apps,/);
+ assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),this::apps,/);
+ // The tray's Rose is the same presence card, wired to the same hook.
+ assert.match(homeTray,/presence = RoseHomeView\.presence\(activity, openRose\);/);
  // APP-P2-002-HOOK-001: plain explicit Intent, same task, no flags or extras.
  const hook=main.match(/void openRoseConversation\(\)\{([^}]*)\}/)[1];
  assert.equal(hook,'startActivity(new Intent(this,RoseConversationActivity.class));');
@@ -51,7 +67,7 @@ test('the Rose entry opens App\'s conversation activity and only navigates',()=>
  assert.match(activity,/android:exported="false"/);
  assert.ok(!/launchMode|taskAffinity/.test(activity),'stays in the launcher task so HOME and Back return Home');
  for(const forbidden of ['VoiceService','command(','toggleVoice','startForegroundService','"talk"','"end"','"mute"'])
-  assert.ok(!home.includes(forbidden),forbidden);
+  for(const [name,src] of [['RoseHomeView',home],['HomeTray',homeTray],['HomeFrame',homeFrame]])assert.ok(!src.includes(forbidden),name+': '+forbidden);
  // The conversation surface sends voice commands only from its own controls, never on open.
  const conversation=read('../app/src/dev/pixel/voice/RoseConversationActivity.java');
  for(const hook of ['onCreate','onResume']){
@@ -74,18 +90,36 @@ test('the dock shows real installed apps through the existing launch path',()=>{
 
 test('an unchanged HOME or app-icon return reuses the built Home; changes rebuild it (OS-HOME-REUSE-001)',()=>{
  // The route is decided after reuse, so HOME still lands on Home and the app icon still opens the conversation.
- assert.match(main,/if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true\);/);
+ assert.match(main,/if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);/);
  // Only Home entries (HOME, MAIN\/LAUNCHER) qualify, judged by the same HomeEntry rule as routing.
  assert.match(main,/boolean reuseHome\(Intent i\)\{return i!=null&&HomeReuse\.reuse\(HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(i\.getAction\(\)\),i\.hasCategory\(Intent\.CATEGORY_HOME\),i\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),true,false,true\)\.showHome,/);
  // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, a changed Home setting, another view in place.
- assert.match(main,/launcherPager!=null&&launcherPager\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,experimentalHome!=getPreferences\(0\)\.getBoolean\("conversation-home",true\)\);\}/);
+ assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,experimentalHome!=getPreferences\(0\)\.getBoolean\("conversation-home",true\)\);\}/);
  // The stamp is recorded by every catalog build and covers packages, configuration and the dock's default apps.
- assert.match(main,/launcherPager\.requestApplyInsets\(\);\n  builtHomeStamp=homeStamp\(\);\n \}/);
+ assert.match(main,/homeFrame\.requestApplyInsets\(\);\n  builtHomeStamp=homeStamp\(\);\n \}/);
  assert.match(main,/public void onReceive\(Context context,Intent intent\)\{packageGeneration\+\+;if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}/);
  for(const field of ['screenWidthDp','screenHeightDp','densityDpi','orientation','fontScale','uiMode','getLocales().toLanguageTags()'])assert.ok(main.includes('c.'+field),field);
  assert.match(main,/RoseHomeView\.dockRolePackages\(getPackageManager\(\),getPackageName\(\)\)\);\}/);
  // The dock is built from the same role list the stamp compares.
  assert.match(home,/for \(String pkg : dockRolePackages\(pm, self\)\)/);
+});
+
+test('the Home tray stays fixed over the swiping pages, above system insets (OS-HIFI-HOME-001)',()=>{
+ // The tray is the frame's own child, outside the pager, so it never scrolls with a page.
+ assert.match(homeFrame,/addView\(pager, new LayoutParams\(-1, -1\)\);/);
+ assert.match(homeFrame,/LayoutParams trayParams = new LayoutParams\(-1, activity\.dp\(HomeTray\.HEIGHT_DP\), Gravity\.BOTTOM\);/);
+ // Pages get the tray's height as extra bottom inset, so dots and grids stay above it; the tray sits above the nav bar.
+ assert.match(homeFrame,/pager\.dispatchApplyWindowInsets\(insets\.replaceSystemWindowInsets\(left, insets\.getSystemWindowInsetTop\(\), right,\n    bottom \+ reserved\)\);/);
+ assert.match(homeFrame,/trayParams\.setMargins\(side \+ left, 0, side \+ right, gap \+ bottom\);/);
+ // Production status and navigation bars stay: nothing hides system bars.
+ for(const src of [homeFrame,homeTray])for(const hide of ['SYSTEM_UI_FLAG','hide(WindowInsets','setDecorFitsSystemWindows','FLAG_FULLSCREEN'])assert.ok(!src.includes(hide),hide);
+ // Two native-size controls (66dp); Rose and its session mark moved here from the Home page.
+ assert.equal((homeTray.match(/activity\.dp\(66\), activity\.dp\(66\)/g)||[]).length,2);
+ assert.ok(!home.includes('sessionMark')&&!home.includes('showSession'));
+ // Overview: no permitted route yet, so the control is disabled and says so; no fake recents or app picker.
+ assert.match(homeTray,/overview\.setEnabled\(false\);/);
+ assert.match(homeTray,/overview\.setContentDescription\("Overview, not available yet"\);/);
+ for(const fake of ['GLOBAL_ACTION_RECENTS','setOnClickListener','WorkspaceLauncher','apps'])assert.ok(!homeTray.slice(homeTray.indexOf('overview = new')).split('\n }')[0].includes(fake),fake);
 });
 
 test('dock labels are fitted whole, never cut on one line (M008)',()=>{
@@ -129,14 +163,14 @@ test('the Home session mark renders the same authoritative state as the tray and
  assert.equal(snapshot(main).replace(/s\./g,'v.'),snapshot(tray));
  assert.equal(snapshot(main),snapshot(conversation));
  assert.match(main,/static ConversationState conversationState\(\)\{VoiceService s=VoiceService\.instance;return s==null\?/);
- // Updated on every refresh tick, before the conversation-page early return, so Home is live too.
- assert.match(main,/void refresh\(\)\{\n  if\(roseHome!=null\)roseHome\.showSession\(conversationState\(\)\);\n  if\(drawer\|\|micButton==null\)return;/);
+ // Updated on every refresh tick, before the conversation-page early return, so the fixed Home tray is live too.
+ assert.match(main,/void refresh\(\)\{\n  if\(homeTray!=null\)homeTray\.showSession\(conversationState\(\)\);\n  if\(drawer\|\|micButton==null\)return;/);
  // The tick starts on resume and stops on pause, so returning to Home reads fresh state.
  assert.match(main,/onResume\(\)\{[^\n]*handler\.removeCallbacks\(tick\);handler\.post\(tick\);\}/);
  assert.match(main,/onPause\(\)\{[^\n]*handler\.removeCallbacks\(tick\);/);
  // Home chooses its mark only through HomeSessionMark, never from audio levels or status text.
- assert.match(home,/HomeSessionMark\.Mark mark = HomeSessionMark\.of\(state\);/);
- for(const guess of ['inputLevel','outputLevel','status','.live','.connected'])assert.ok(!home.includes(guess),guess);
+ assert.match(homeTray,/HomeSessionMark\.Mark mark = HomeSessionMark\.of\(state\);/);
+ for(const src of [home,homeTray])for(const guess of ['inputLevel','outputLevel','status','.live','.connected'])assert.ok(!src.includes(guess),guess);
 });
 
 test('Back from the conversation or app pages returns Home',()=>{
