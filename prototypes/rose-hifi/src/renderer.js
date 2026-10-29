@@ -76,7 +76,7 @@ void main(){
     const fallback = opts.fallback;
     const report = opts.onStatus || function () {};
     let gl = null, program = null, uniforms = {}, raf = 0, last = 0, time = 0;
-    let lost = false, forced = false, reduced = false, failed = '';
+    let lost = false, forced = false, reduced = false, failed = '', destroyed = false;
     let target = { mic: 1, gap: GAPS.disconnected, voice: 0 };
     let current = Object.assign({}, target);
     let energy = 0.6;
@@ -84,7 +84,7 @@ void main(){
     let draws = 0;
 
     function status() {
-      const mode = forced ? 'static-forced' : lost ? 'static-context-lost' : failed ? 'static-unavailable' : program ? 'webgl' : 'starting';
+      const mode = destroyed ? 'destroyed' : forced ? 'static-forced' : lost ? 'static-context-lost' : failed ? 'static-unavailable' : program ? 'webgl' : 'starting';
       return {
         mode, failed, reduced, draws,
         renderer: gl && !lost ? rendererName() : null,
@@ -161,7 +161,7 @@ void main(){
       draws++;
     }
     function moving() { return Object.keys(current).some((k) => Math.abs(target[k] - current[k]) > 0.0005); }
-    function request() { if (!raf && !document.hidden) raf = requestAnimationFrame(tick); }
+    function request() { if (!raf && !document.hidden && !destroyed) raf = requestAnimationFrame(tick); }
     function tick(now) {
       raf = 0;
       const dt = last ? Math.min((now - last) / 1000, 0.05) : 0;
@@ -178,13 +178,23 @@ void main(){
       if (live) request(); else last = 0;
     }
 
-    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; cancelAnimationFrame(raf); raf = 0; last = 0; showFallback(true); });
-    canvas.addEventListener('webglcontextrestored', () => { program = null; initialize(); });
+    const onLost = (e) => { e.preventDefault(); lost = true; cancelAnimationFrame(raf); raf = 0; last = 0; showFallback(true); };
+    const onRestored = () => { if (destroyed) return; program = null; initialize(); };
+    canvas.addEventListener('webglcontextlost', onLost);
+    canvas.addEventListener('webglcontextrestored', onRestored);
     function onVisibility() { cancelAnimationFrame(raf); raf = 0; last = 0; if (!document.hidden) request(); report(status()); }
     document.addEventListener('visibilitychange', onVisibility);
     let ro = null;
-    if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(() => request()); ro.observe(canvas); }
-    else window.addEventListener('resize', request);
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => request());
+      try { ro.observe(canvas, { box: 'device-pixel-content-box' }); } catch (e) { ro.observe(canvas); }
+    }
+    // Runtime DPR changes (zoom, moving between displays) re-size the backing store.
+    let dprQuery = null;
+    const onDpr = () => { request(); watchDpr(); };
+    function watchDpr() { if (dprQuery) dprQuery.removeEventListener('change', onDpr); dprQuery = matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)'); dprQuery.addEventListener('change', onDpr); }
+    watchDpr();
+    if (typeof ResizeObserver === 'undefined') window.addEventListener('resize', request);
 
     initialize();
 
@@ -206,7 +216,11 @@ void main(){
       },
       refresh() { request(); },
       destroy() {
+        destroyed = true;
         cancelAnimationFrame(raf); raf = 0;
+        canvas.removeEventListener('webglcontextlost', onLost);
+        canvas.removeEventListener('webglcontextrestored', onRestored);
+        if (dprQuery) dprQuery.removeEventListener('change', onDpr);
         if (ro) ro.disconnect();
         document.removeEventListener('visibilitychange', onVisibility);
         if (gl && program) { gl.deleteProgram(program); program = null; }

@@ -400,3 +400,33 @@ span.well{cursor:default}
 /* Clip (not hidden) so focusing an off-screen control can never scroll the phone itself. */
 .screen,.home-pages,.stage{overflow:clip}
 .view{overflow:clip}
+
+/* ---------- Glass sheen over the display (decorative; never intercepts input) ---------- */
+.glass{position:absolute;inset:0;z-index:90;pointer-events:none;border-radius:inherit;--sx:0;--sy:0;
+  background:
+    linear-gradient(118deg,transparent 0 31%,rgba(255,255,255,.04) 33%,rgba(255,255,255,.26) 36.5%,rgba(255,255,255,.07) 39%,transparent 43%,transparent 61%,rgba(255,255,255,.10) 63.5%,transparent 66%),
+    radial-gradient(55% 28% at 6% 0%,rgba(255,255,255,.20),transparent 70%);
+  background-size:240% 240%,100% 100%;
+  background-position:calc(38% + var(--sx)*12%) calc(38% + var(--sy)*8%),0 0;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),inset 1px 0 0 rgba(255,255,255,.22);
+  transition:background-position 600ms var(--ease)}
+.device{box-shadow:0 0 0 1px #6b7078 inset,0 0 0 2px #0b0c0e inset,inset 2px 2px 1px rgba(255,255,255,.28),inset -1px -1px 1px rgba(255,255,255,.12),0 40px 80px rgba(20,35,55,.35),0 12px 24px rgba(20,35,55,.25)}
+.static-motion .glass{transition:none}
+/* Gloss strength follows the surface: vivid over imagery, faint over reading surfaces. */
+.glass{opacity:1;transition:background-position 600ms var(--ease),opacity var(--t-slow) var(--ease)}
+.screen[data-view=rose] .glass,.screen[data-view=agents] .glass,.screen[data-view=app] .glass,.screen[data-view=window] .glass{opacity:.4}
+.screen[data-view=home] .glass,.screen.locked .glass{filter:brightness(1.35)}
+
+/* ---------- Second-pass fixes ---------- */
+.rose-fly{position:absolute;left:0;top:0;z-index:42;pointer-events:none;transform-origin:center}
+.rose-fly canvas,.rose-fly .rose-fallback{position:absolute;inset:0;width:100%!important;height:100%!important;transform:none!important}
+.home-date{top:140px}
+.screen[data-view=rose] .notices{left:auto;right:var(--margin);width:auto;max-width:calc(100% - 132px)}
+.screen[data-view=rose] .notice{white-space:nowrap}
+.screen[data-view=rose] .notice small{display:none}
+.wcard .wstate{font-size:11.5px}
+.wcard.small .c-browser p{display:none}
+.wcard.small .c-browser h4{font-size:1.1em}
+.detail:has(.choice) .detail-frame{height:290px}
+.detail{padding-bottom:64px}
+.sw-human:focus-visible,.sw-agent:focus-visible{outline-offset:-6px;border-radius:26px}

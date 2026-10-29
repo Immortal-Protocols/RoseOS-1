@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Assemble Rose-HiFi.html from src/ (editable source) with embedded assets.
 
-Usage: python3 prototypes/rose-hifi/build.py
+Usage: python3 prototypes/rose-hifi/build.py [output.html]
 No network, no dependencies. Output is a single self-contained HTML file.
 """
-import base64, hashlib, pathlib, urllib.parse
+import base64, hashlib, pathlib, sys, urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parent
 SRC = ROOT / 'src'
@@ -16,7 +16,7 @@ def data_uri(name, mime):
 BRUSH_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' width='220' height='120'>"
              "<filter id='b'><feTurbulence type='fractalNoise' baseFrequency='0.004 0.9' numOctaves='2' seed='7'/>"
              "<feColorMatrix values='0 0 0 0 .5  0 0 0 0 .52  0 0 0 0 .55  0 0 0 .9 0'/></filter>"
-             "<rect width='100%' height='100%' filter='url(%23b)'/></svg>")
+             "<rect width='100%' height='100%' filter='url(#b)'/></svg>")
 
 def build():
     html = (SRC / 'index.html').read_text()
@@ -30,7 +30,7 @@ def build():
     for name in ('firefox', 'thunderbird', 'vlc'):
         html = html.replace('%%ICON_' + name.upper() + '%%', data_uri(name + '.png', 'image/png'))
     assert '%%' not in html, 'unreplaced placeholder'
-    out = ROOT / 'Rose-HiFi.html'
+    out = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'Rose-HiFi.html'
     out.write_text(html)
     print(out.name, len(html.encode()), 'bytes sha256', hashlib.sha256(html.encode()).hexdigest())
 

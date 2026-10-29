@@ -4,7 +4,7 @@
   'use strict';
   let ctx = null, built = false;
   const LABEL = { idle: 'Not started', running: 'Working', attention: 'Needs your choice', stopping: 'Stopping…', stopped: 'Stopped', done: 'Done' };
-  const SHORT = Object.assign({}, LABEL, { attention: 'Needs choice' });
+  const SHORT = Object.assign({}, LABEL, { attention: 'Choose' });
   const OBSERVE = {
     running: 'You’re watching. Rose keeps working in this window.',
     attention: 'Rose is waiting for your choice before continuing.',
@@ -65,9 +65,9 @@
       case 'maps': {
         const dash = Math.max(0, 1 - step / 8);
         // Portrait-authored map so the destination pin survives every window crop.
-        return '<div class="c-maps"><svg viewBox="0 0 120 150" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect x="-60" y="-20" width="240" height="190" fill="#eef2ea"/>' +
-          '<path d="M-60 40h240M-60 92h240M-60 128h240M24 -20v190M70 -20v190M104 -20v190" stroke="#dde3d8" stroke-width="3.2"/>' +
-          '<path d="M-20 120C10 112 28 96 44 78s40-30 50-46 30-40 60-46" stroke="#9cc6ef" stroke-width="15" fill="none"/>' +
+        return '<div class="c-maps"><svg viewBox="0 0 120 150" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="-200" y="-200" width="520" height="550" fill="#eef2ea"/>' +
+          '<path d="M-200 40h520M-200 92h520M-200 128h520M-40 -200v550M24 -200v550M70 -200v550M104 -200v550M150 -200v550" stroke="#dde3d8" stroke-width="3.2"/>' +
+          '<path d="M-200 170C-80 150 -20 130 10 116C28 104 32 92 44 78s40-30 50-46 30-40 60-46 80-20 160-30" stroke="#9cc6ef" stroke-width="15" fill="none"/>' +
           '<rect x="76" y="100" width="30" height="24" rx="5" fill="#cfe5c4"/><rect x="8" y="16" width="26" height="18" rx="4" fill="#cfe5c4"/>' +
           '<path class="route" d="M30 132C38 120 46 112 56 104s14-22 22-36 8-24 12-32" pathLength="1" stroke="#2f6be6" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="0.04 0.03" fill="none" style="opacity:' + (step ? 1 : 0) + ';clip-path:inset(' + (dash * 100).toFixed(0) + '% 0 0 0)"/>' +
           '<circle cx="30" cy="132" r="5" fill="#2f6be6" stroke="#fff" stroke-width="2"/>' +
@@ -242,7 +242,7 @@
   }
 
   // ---------- Renderers ----------
-  let lastStopWindow = null;
+  let lastStopWindow = null, lastViewSeen = 'home';
   let lastHumanKey = '', lastAgentKey = '', lastGridKey = '', lastWindowKey = '', lastAppKey = '', lastStopButton = null, lastSheet = null;
   function renderSwitcher(s) {
     const { $ } = ctx;
@@ -293,7 +293,8 @@
     const w = ctx.M.WINDOWS[s.window], t = s.tasks[w.task], app = ctx.M.APPS[w.app];
     const key = s.window + t.state + t.step + ctx.reduced();
     if (key === lastWindowKey) return;
-    const refocus = $('wdetail').contains(document.activeElement) && document.activeElement.matches('[data-stop]');
+    const act = document.activeElement;
+    const refocus = $('wdetail').contains(act) ? (act.matches('[data-stop]') ? 'stop' : act.matches('[data-choose]') ? 'choose' : 'back') : null;
     lastWindowKey = key;
     const siblings = ctx.M.TASKS[w.task].windows.map((x) => ctx.M.APPS[ctx.M.WINDOWS[x].app].name).join(', ');
     $('wdetail').innerHTML =
@@ -303,7 +304,11 @@
       '<section class="task-strip"><div>' + dot(t.state) + '<b>' + esc(ctx.M.TASKS[w.task].title) + '</b><span>' + esc(LABEL[t.state]) + ' · uses ' + esc(siblings) + '</span></div>' + stopButton(w.task, s, 'wide') + '</section>' +
       (t.state === 'attention' ? '<section class="choice" aria-label="Rose needs your choice"><p>' + esc(CHOICES[w.task].q) + '</p><div>' + CHOICES[w.task].a.map((x) => '<button class="sbtn" data-choose="' + w.task + '">' + esc(x) + '</button>').join('') + '</div></section>' : '') +
       '<p class="observe">' + esc(OBSERVE[t.state]) + '</p>';
-    if (refocus) { const b = $('wdetail').querySelector('[data-stop]'); (b.disabled ? $('wdetail').querySelector('.back-btn') : b).focus({ preventScroll: true }); }
+    if (refocus) {
+      const d = $('wdetail'), stopB = d.querySelector('[data-stop]'), choose = d.querySelector('[data-choose]');
+      const el = refocus === 'back' ? d.querySelector('.back-btn') : refocus === 'choose' && choose ? choose : !stopB.disabled ? stopB : d.querySelector('.back-btn');
+      el.focus({ preventScroll: true });
+    }
   }
 
   function renderApp(s) {
@@ -355,7 +360,9 @@
       renderSwitcher(s);
       renderAgents(s);
       renderWindow(s); renderApp(s); renderSheet(s);
-      if (s.view !== 'switcher') delete ctx.$('sw-agent').dataset.placed;
+      if (s.view === 'switcher' && lastViewSeen !== 'switcher') requestAnimationFrame(() => { const h = ctx.$('sw-human'); scrollToIndex(h, Math.min(s.humanCarousel, s.recentApps.length - 1), true); depth(h); });
+    if (s.view !== 'switcher') delete ctx.$('sw-agent').dataset.placed;
+    lastViewSeen = s.view;
     },
     content,
   };

@@ -109,12 +109,31 @@ only. It is not physical-device acceptance:
 - Headless Chromium 153.0.8010.12 rendered WebGL through ANGLE with SwiftShader,
   which is software Vulkan.
 - The rAF intervals measured there are not GPU timings or device performance.
-- Chromium logs four "GPU stall due to ReadPixels" performance warnings, then
-  stops repeating them. The app makes no readPixels calls. An independent
-  reviewer reproduced the warning with a transparent WebGL canvas under
-  SwiftShader. Switching the canvas to straight alpha did not remove it in this
-  environment.
+- Chromium logs "GPU stall due to ReadPixels" performance warnings, capped at
+  four per browser process. An independent reviewer reproduced the warning on a
+  minimal page that only clears a visible WebGL canvas once per frame. The
+  canvas options made no difference: alpha, premultipliedAlpha,
+  preserveDrawingBuffer, CSS transforms and re-parenting all produced it. Only a
+  hidden canvas suppressed it. It is headless software-compositing readback.
+  The app itself makes no readPixels calls.
 - Physical-device rendering, touch feel and GPU performance remain unverified.
+
+## Review history
+
+Two independent multi-agent reviews ran against this prototype, each in a real
+browser:
+
+1. Lenses: requirements, visual fidelity, accessibility and WebGL. Each finding
+   went to a separate verifier that tried to refute it.
+2. A fix-verification pass checked each finding again and looked for
+   regressions.
+
+Every confirmed defect from both passes is fixed. `browser-check.cjs` includes
+regression checks for the stuck-UI, lock, focus and target-size findings.
+
+A decorative glass sheen covers the display. It never intercepts input, it is
+fainter over reading surfaces, and it follows the pointer slightly. Reduced
+motion turns that movement off.
 
 ## Provenance
 

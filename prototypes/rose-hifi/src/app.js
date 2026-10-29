@@ -40,6 +40,8 @@
   // ---------- Renderer ----------
   const renderer = window.RoseRenderer.create({ canvas: $('rose-canvas'), fallback: $('rose-fallback'), onStatus: () => setTimeout(updateRenderStatus, 0) });
   const park = document.createElement('div'); park.hidden = true; screen.appendChild(park);
+  const fly = document.createElement('div'); fly.className = 'rose-fly'; fly.setAttribute('aria-hidden', 'true'); screen.appendChild(fly);
+  let flyToken = 0;
   function roseSlotFor(view) {
     if (view === 'home') return $('slot-tray');
     if (view === 'rose') return $('slot-stage');
@@ -117,17 +119,25 @@
   function flyRose(toSlot) {
     const canvas = $('rose-canvas');
     const from = canvas.isConnected && canvas.parentElement !== park ? canvas.getBoundingClientRect() : null;
+    flyToken++;
+    fly.getAnimations().forEach((x) => x.cancel());
     if (toSlot) renderer.attach(toSlot); else { park.appendChild(canvas); park.appendChild($('rose-fallback')); }
     if (!toSlot || !from || !from.width || reduced()) return;
     const to = canvas.getBoundingClientRect();
     if (!to.width) return;
-    const dx = (from.left + from.width / 2) - (to.left + to.width / 2), dy = (from.top + from.height / 2) - (to.top + to.height / 2);
-    const k = screen.getBoundingClientRect().width / screen.offsetWidth;
-    const s = from.width / to.width, base = 'translate(-50%,-50%)';
-    const frames = [{ transform: base + ' translate(' + dx / k + 'px,' + dy / k + 'px) scale(' + s + ')' }, { transform: base }];
-    let anim;
-    for (const el of [canvas, $('rose-fallback')]) anim = el.animate(frames, { duration: 560, easing: 'cubic-bezier(.2,.8,.2,1)' });
-    anim.finished.then(() => renderer.refresh(), () => {});
+    // Fly on a layer above both views so Rose stays visible for the whole move.
+    const sr = screen.getBoundingClientRect(), k = sr.width / screen.offsetWidth;
+    const toW = to.width / k;
+    const box = (r) => ({ x: (r.left + r.width / 2 - sr.left) / k, y: (r.top + r.height / 2 - sr.top) / k });
+    const a = box(from), b = box(to), s = from.width / to.width;
+    fly.style.width = fly.style.height = toW + 'px';
+    for (const el of [canvas, $('rose-fallback')]) fly.appendChild(el);
+    const token = flyToken;
+    const anim = fly.animate([
+      { transform: 'translate(' + (a.x - toW / 2) + 'px,' + (a.y - toW / 2) + 'px) scale(' + s + ')' },
+      { transform: 'translate(' + (b.x - toW / 2) + 'px,' + (b.y - toW / 2) + 'px)' },
+    ], { duration: 560, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+    anim.finished.then(() => { if (token === flyToken) { renderer.attach(toSlot); anim.cancel(); } renderer.refresh(); }, () => {});
   }
   let transitionToken = 0;
   const after = (fn, ms) => { const token = transitionToken; setTimeout(() => { if (token === transitionToken) fn(); }, ms); };
@@ -169,7 +179,7 @@
       a.style.zIndex = 3;
       const bg = a.querySelector('.ivory-bg');
       const R = farCorner(c);
-      bg.animate([{ clipPath: 'circle(' + R + 'px at ' + c.x + 'px ' + c.y + 'px)' }, { clipPath: 'circle(0px at ' + c.x + 'px ' + c.y + 'px)' }], { duration: 560, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+      bg.animate([{ clipPath: 'circle(' + R + 'px at ' + c.x + 'px ' + c.y + 'px)', opacity: 1 }, { clipPath: 'circle(60px at ' + c.x + 'px ' + c.y + 'px)', opacity: .9, offset: .7 }, { clipPath: 'circle(34px at ' + c.x + 'px ' + c.y + 'px)', opacity: 0 }], { duration: 520, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
       // The Rose tray fades as a whole so Home's identical tray reads as continuous.
       for (const el of a.querySelectorAll('.rose-head,.rose-caption,.rose-output,.tray')) el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'linear', fill: 'forwards' });
       after(() => { a.style.zIndex = ''; done(); a.getAnimations({ subtree: true }).forEach((x) => x.cancel()); }, 580);
@@ -240,12 +250,17 @@
       el.classList.add('leaving');
       el.addEventListener('animationend', () => { el.remove(); shownNotices.delete(id); }, { once: true });
     }
+    // Keep the stack short so it never buries content: two notices, one over Rose's results.
+    const cap = state.view === 'rose' ? 1 : 2;
+    const visible = new Set(state.notices.slice(-cap).map((n) => n.id));
+    for (const [id, el] of shownNotices) el.hidden = !visible.has(id);
     for (const n of state.notices) {
       if (shownNotices.has(n.id)) continue;
       const el = document.createElement(n.kind === 'task' ? 'button' : 'div');
       el.className = 'notice ' + n.kind;
       el.innerHTML = noticeIcon(n) + '<span>' + n.text + (n.kind === 'task' ? '<small>Tap to see Rose’s apps</small>' : '') + '</span>';
       if (n.kind === 'task') el.addEventListener('click', () => { dispatch({ type: 'dismissNotice', value: n.id }); dispatch({ type: 'agents' }); });
+      el.hidden = !visible.has(n.id);
       host.appendChild(el); shownNotices.set(n.id, el);
       $('announcer').textContent = n.text;
       const dismiss = () => { if (el.matches(':hover,:focus-within')) later(dismiss, 1200); else dispatch({ type: 'dismissNotice', value: n.id }); };
@@ -254,6 +269,7 @@
   }
 
   // ---------- Render ----------
+  let wasLocked = false;
   function render() {
     if (shownView !== state.view) rememberFocus(shownView);
     device.classList.toggle('unfolded', state.layout === 'unfolded');
@@ -306,6 +322,10 @@
     if (window.RoseViews) window.RoseViews.render(state, ctx);
     fit();
     if (pendingFocus) requestAnimationFrame(applyFocus);
+    // Unlocking with a confirmation open returns focus to it.
+    if (wasLocked && !state.locked && state.pendingStop) requestAnimationFrame(() => { const c = $('sheet-cancel'); if (c) c.focus({ preventScroll: true }); });
+    if (!wasLocked && state.locked) requestAnimationFrame(() => $('unlock').focus({ preventScroll: true }));
+    wasLocked = state.locked;
   }
 
   function updateRenderStatus() {
@@ -407,7 +427,21 @@
     if ($('fit').style.getPropertyValue('--fit') !== kk) { $('fit').style.setProperty('--fit', kk); renderer.refresh(); }
   }
   window.addEventListener('resize', fit);
+  // Glass sheen follows the pointer slightly, like light across a real display.
+  let sheenRaf = 0;
+  $('stage').addEventListener('pointermove', (e) => {
+    if (reduced() || sheenRaf) return;
+    sheenRaf = requestAnimationFrame(() => {
+      sheenRaf = 0;
+      const r = device.getBoundingClientRect();
+      const x = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width - 0.5) * 2));
+      const y = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height - 0.5) * 2));
+      const g = screen.querySelector('.glass'); g.style.setProperty('--sx', x.toFixed(3)); g.style.setProperty('--sy', y.toFixed(3));
+    });
+  });
 
+  $('rose-stage').addEventListener('transitionend', () => renderer.refresh());
+  window.addEventListener('pagehide', (e) => { if (!e.persisted) renderer.destroy(); });
   buildHome(); bindHomeGestures();
   renderer.attach($('slot-tray'));
   render(); startClock();

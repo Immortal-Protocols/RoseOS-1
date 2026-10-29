@@ -22,7 +22,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   const errors = [];
   const warnings = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); else if (m.type() === 'warning') warnings.push(m.text()); });
-  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message + ' @ ' + String(e.stack).split('\n').slice(1, 4).join(' | ')));
   await page.goto(FILE);
   await page.waitForTimeout(800);
   const st = () => page.evaluate(() => window.__rose.getState());
