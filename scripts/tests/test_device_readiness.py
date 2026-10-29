@@ -205,6 +205,47 @@ def git_init(path, message='pin'):
         subprocess.run(['git', '-C', str(path), *args], check=True, env=env, capture_output=True)
     return subprocess.run(['git', '-C', str(path), 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
 
+@contextlib.contextmanager
+def watched():
+    """Records the resolved path of every successful os.open, every directory listed with os.scandir (with how many
+    entries the listing actually produced) and every content read through read_fd, so tests can prove what was never
+    opened, enumerated or read - not only what the receipt shows."""
+    log = {'opened': [], 'listed': [], 'read': []}
+    real_open, real_scandir, real_read = os.open, os.scandir, readiness.read_fd
+    def where(fd):
+        return os.readlink(f'/proc/self/fd/{fd}')
+    def open_(path, flags, mode=0o777, *, dir_fd=None):
+        fd = real_open(path, flags, mode, dir_fd=dir_fd)
+        log['opened'].append(where(fd))
+        return fd
+    class Listing:
+        def __init__(self, target='.'):
+            self.inner = real_scandir(target)
+            self.record = [where(target) if isinstance(target, int) else os.path.realpath(target), 0]
+            log['listed'].append(self.record)
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            self.inner.close()
+        def __iter__(self):
+            for entry in self.inner:
+                self.record[1] += 1
+                yield entry
+        def close(self):
+            self.inner.close()
+    def read(fd, size):
+        log['read'].append(where(fd))
+        return real_read(fd, size)
+    os.open, os.scandir, readiness.read_fd = open_, Listing, read
+    try:
+        yield log
+    finally:
+        os.open, os.scandir, readiness.read_fd = real_open, real_scandir, real_read
+
+def touched(log, prefix):
+    prefix = os.path.realpath(prefix)
+    return sorted({p for p in log['opened'] + log['read'] + [r[0] for r in log['listed']] if p == prefix or p.startswith(prefix + '/')})
+
 class Fixture:
     """A representative retained tree: the pinned fixture files at their tree paths, the adevtool vendor skeletons as the
     generated vendor trees, existing nested vendor and output bytes, factory archives, unsafe tree scripts and a lock
@@ -330,7 +371,8 @@ class ProbeTest(unittest.TestCase):
             self.assertEqual(receipt['products']['rango']['kernelDir'], 'present')
             generated = receipt['generatedVendor']['frankel']
             self.assertEqual(generated['status'], 'present-unverified')
-            self.assertEqual(generated['vendorStateEntries'], ['frankel.json'])
+            self.assertEqual((receipt['vendorState']['status'], receipt['vendorState']['devices']['frankel']),
+                ('complete', {'names': ['frankel.json'], 'truncated': False}))
             self.assertTrue({r['path']: r for r in generated['files']}['vendor/google_devices/frankel/AndroidProducts.mk']['matchesPinnedFixture'])
             # Factory presence and checksum are separate facts.
             factory = receipt['factory']
@@ -498,11 +540,11 @@ class ProbeTest(unittest.TestCase):
             os.symlink(outside/'secret.pem', target)
             os.symlink(outside, f.source/'vendor/google_devices/frankel/escape')
             receipt, evidence = f.run()
-            self.assertEqual(receipt['generatedVendor']['blazer']['status'], 'link-not-followed')
-            self.assertIn('vendor/google_devices/blazer link-not-followed', receipt['lunch']['devices']['blazer']['missingInputs'])
+            self.assertEqual(receipt['generatedVendor']['blazer']['status'], 'symlink-refused')
+            self.assertIn('vendor/google_devices/blazer symlink-refused', receipt['lunch']['devices']['blazer']['missingInputs'])
             rango = {r['path']: r for r in receipt['products']['rango']['files']}['vendor/adevtool/config/device/rango.yml']
-            self.assertEqual(rango, {'path': 'vendor/adevtool/config/device/rango.yml', 'status': 'escapes-root'})
-            self.assertIn('vendor/adevtool/config/device/rango.yml escapes-root', receipt['lunch']['devices']['rango']['missingInputs'])
+            self.assertEqual(rango, {'path': 'vendor/adevtool/config/device/rango.yml', 'status': 'symlink-refused'})
+            self.assertIn('vendor/adevtool/config/device/rango.yml symlink-refused', receipt['lunch']['devices']['rango']['missingInputs'])
             self.assertEqual(receipt['lunch']['devices']['frankel']['missingInputs'], [])
             self.assertLess(receipt['usage']['generatedVendor']['allocatedBytes'], 100000)
             self.assertNotIn('PRIVATE KEY', (evidence/'device-readiness.json').read_text())
@@ -526,7 +568,7 @@ class ProbeTest(unittest.TestCase):
             self.assertEqual(receipt['status'], 'partial')
             self.assertIn('inspection deadline reached', receipt['partialReasons'])
             for record in receipt['usage'].values():
-                self.assertIn(record['status'], ('unavailable', 'absent'))
+                self.assertIn(record['status'], ('incomplete', 'absent'))
                 self.assertNotIn('allocatedBytes', record)
             self.assertEqual(receipt['factory']['frankel']['checksum'], 'unavailable')
 
@@ -544,7 +586,7 @@ class ProbeTest(unittest.TestCase):
             text = (evidence/'device-readiness.json').read_text()
             self.assertNotIn(secret, text)
             self.assertNotIn('token=abc', text)
-            self.assertIn('(withheld)', receipt['generatedVendor']['frankel']['vendorStateEntries'])
+            self.assertIn('(withheld)', receipt['vendorState']['devices']['frankel']['names'])
             refused = f.tmp/'evidence-refused'
             with self.assertRaises(readiness.CheckFailed):
                 f.run(f.host(hostname=lambda: 'token-' + secret), evidence=refused)
@@ -615,6 +657,147 @@ class ProbeTest(unittest.TestCase):
             with open(f.lock, 'a') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
+class BoundaryTest(unittest.TestCase):
+    """FIX002: symlinks anywhere on a read or listed path (final or ancestor, into the secret subtree, elsewhere in the
+    root or outside it) are refused before anything behind them is opened; directory work is bounded per entry. Only
+    synthetic, nonsecret sentinels stand in for secret targets."""
+    SENTINEL = b'SYNTHETIC-SENTINEL-NOT-A-KEY\n'
+
+    def secret_subtree(self, f):
+        keys = f.source/'keys'
+        keys.mkdir()
+        for name in ('releasekey.pk8', 'AndroidProducts.mk', 'frankel.json'):
+            (keys/name).write_bytes(self.SENTINEL)
+        return keys
+
+    def test_direct_and_ancestor_links_into_the_secret_subtree_are_refused_before_any_access(self):
+        with fixture() as f:
+            keys = self.secret_subtree(f)
+            rango = f.source/'vendor/adevtool/config/device/rango.yml'
+            rango.unlink()
+            os.symlink('../../../../keys/releasekey.pk8', rango)  # direct, in root
+            shutil.rmtree(f.source/'vendor/google_devices/blazer')
+            os.symlink('../../keys', f.source/'vendor/google_devices/blazer')  # ancestor of every blazer generated file
+            with watched() as log:
+                receipt, evidence = f.run()
+                direct = readiness.file_record(f.source, 'keys/releasekey.pk8')
+            self.assertEqual(touched(log, keys), [], 'nothing under keys/ was opened, listed or read')
+            self.assertEqual(direct, {'path': 'keys/releasekey.pk8', 'status': 'secret-path-refused'})
+            rango_record = {r['path']: r for r in receipt['products']['rango']['files']}['vendor/adevtool/config/device/rango.yml']
+            self.assertEqual(rango_record, {'path': 'vendor/adevtool/config/device/rango.yml', 'status': 'symlink-refused'})
+            blazer = receipt['generatedVendor']['blazer']
+            self.assertEqual(blazer['status'], 'symlink-refused')
+            self.assertEqual({r['status'] for r in blazer['files']}, {'symlink-refused'})
+            self.assertNotIn(self.SENTINEL.decode().strip(), (evidence/'device-readiness.json').read_text())
+            self.assertNotIn(hashlib.sha256(self.SENTINEL).hexdigest(), (evidence/'device-readiness.json').read_text())
+
+    def test_ordinary_and_outside_root_links_are_refused_and_regular_files_are_read(self):
+        with fixture() as f:
+            outside = f.tmp/'outside'
+            (outside/'common').mkdir(parents=True)
+            (outside/'common/gen10pixel.yml').write_bytes(self.SENTINEL)
+            frankel = f.source/'vendor/adevtool/config/device/frankel.yml'
+            frankel.unlink()
+            os.symlink('../../../state/frankel.json', frankel)  # an ordinary in-root file
+            common = f.source/'vendor/adevtool/config/device/common'
+            shutil.rmtree(common)
+            os.symlink(outside/'common', common)  # an ancestor leaving the root
+            with watched() as log:
+                receipt, _ = f.run()
+            self.assertEqual(touched(log, outside), [])
+            self.assertNotIn(os.path.realpath(f.source/'vendor/state/frankel.json'), log['read'])
+            records = {r['path']: r for r in receipt['products']['frankel']['files']}
+            self.assertEqual(records['vendor/adevtool/config/device/frankel.yml']['status'], 'symlink-refused')
+            self.assertEqual(records['vendor/adevtool/config/device/common/gen10pixel.yml']['status'], 'symlink-refused')
+            allowed = records['vendor/adevtool/config/device/pixel-gen10.yml']
+            data = (FIXTURES/'adevtool/config/device/pixel-gen10.yml').read_bytes()
+            self.assertEqual((allowed['status'], allowed['sha256'], allowed['matchesPinnedFixture']),
+                ('present', hashlib.sha256(data).hexdigest(), True))
+            self.assertIn(os.path.realpath(f.source/'vendor/adevtool/config/device/pixel-gen10.yml'), log['read'])
+
+    def test_intermediate_directory_links_are_neither_listed_nor_entered(self):
+        with fixture() as f:
+            keys = self.secret_subtree(f)
+            outside = f.tmp/'outside-adevtool'
+            shutil.move(str(f.source/'vendor/adevtool'), outside)
+            os.symlink(outside, f.source/'vendor/adevtool')  # vendor/adevtool escapes the root
+            shutil.rmtree(f.source/'vendor/state')
+            os.symlink('../keys', f.source/'vendor/state')  # vendor/state enters the excluded subtree
+            os.symlink('../../../../keys', f.source/'vendor/google_devices/frankel/proprietary/keys-link')  # nested entry
+            with watched() as log:
+                receipt, _ = f.run()
+            self.assertEqual(touched(log, keys), [])
+            self.assertEqual(touched(log, outside), [], 'nothing behind the vendor/adevtool link was opened or listed')
+            self.assertEqual(receipt['usage']['adevtoolDownloads'], {'path': 'vendor/adevtool/dl', 'status': 'refused',
+                'reason': 'symlink-refused'})
+            self.assertEqual(receipt['vendorState'], {'status': 'refused', 'reason': 'symlink-refused'})
+            self.assertEqual(receipt['pins']['vendor/adevtool']['status'], 'symlink-refused')
+            self.assertEqual(receipt['factory']['frankel']['status'], 'symlink-refused')
+            self.assertEqual(receipt['usage']['generatedVendor']['status'], 'complete', 'the nested link is counted, not followed')
+
+    def wide(self, f, count):
+        wide = f.source/'out'
+        wide.mkdir()
+        for index in range(count):
+            (wide/f'part-{index:04d}.o').write_bytes(b'x')
+        return wide
+
+    def test_a_wide_directory_stops_at_the_entry_cap_inside_one_listing(self):
+        with fixture(usageEntries=250) as f:
+            wide = self.wide(f, 600)
+            with watched() as log:
+                result = readiness.usage(f.source, 'out', readiness.Deadline(600))
+            self.assertEqual(result, {'path': 'out', 'status': 'incomplete', 'reason': 'entry cap (250)', 'entriesExamined': 250})
+            produced = [n for p, n in log['listed'] if p == os.path.realpath(wide)]
+            self.assertEqual(len(produced), 1)
+            self.assertLessEqual(produced[0], 251, 'the listing stopped at the cap, not after the whole directory')
+            readiness.LIMITS['usageEntries'] = 600
+            self.assertEqual(readiness.usage(f.source, 'out', readiness.Deadline(600))['status'], 'complete', 'exactly at the cap')
+            readiness.LIMITS['usageEntries'] = 599
+            self.assertEqual(readiness.usage(f.source, 'out', readiness.Deadline(600))['reason'], 'entry cap (599)')
+
+    def test_a_wide_directory_stops_at_the_time_cap_inside_one_listing(self):
+        with fixture(usageSeconds=100) as f:
+            wide = self.wide(f, 600)
+            ticks = iter(range(10 ** 6))
+            clock = lambda: next(ticks)  # one tick per check: deterministic elapsed time within one directory
+            with watched() as log:
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual((result['status'], result['reason']), ('incomplete', 'time cap'))
+            self.assertNotIn('allocatedBytes', result)
+            self.assertLess(result['entriesExamined'], 110)
+            produced = [n for p, n in log['listed'] if p == os.path.realpath(wide)][0]
+            self.assertLess(produced, 112)
+            within = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6))
+            self.assertEqual((within['status'], within['entries']), ('complete', 600))
+
+    def test_an_oversized_vendor_state_listing_is_bounded_and_says_so(self):
+        with fixture(listingEntries=300) as f:
+            state = f.source/'vendor/state'
+            for index in range(400):
+                (state/f'frankel-{index:04d}.json').write_text('{}\n')
+                (state/f'other-{index:04d}.json').write_text('{}\n')
+            with watched() as log:
+                result = readiness.state_entries(f.source, ['frankel', 'blazer'], readiness.Deadline(600))
+            self.assertEqual((result['status'], result['reason'], result['scanned']), ('incomplete', 'entry cap (300)', 300))
+            self.assertLessEqual([n for p, n in log['listed'] if p == os.path.realpath(state)][0], 301)
+            self.assertLessEqual(len(result['devices']['frankel']['names']), 50)
+            self.assertIn('not its first names', result['note'])
+            readiness.LIMITS['listingEntries'] = 10_000
+            full = readiness.state_entries(f.source, ['frankel', 'blazer'], readiness.Deadline(600))
+            self.assertEqual((full['status'], full['scanned']), ('complete', 801))
+            self.assertEqual((len(full['devices']['frankel']['names']), full['devices']['frankel']['truncated']), (50, True))
+            self.assertEqual(full['devices']['frankel']['names'], sorted(full['devices']['frankel']['names']))
+            self.assertEqual(full['devices']['blazer'], {'names': [], 'truncated': False})
+            self.assertIn('not its first names', full['note'])
+            ticks = iter(range(10 ** 6))
+            clock = lambda: next(ticks)
+            readiness.LIMITS['listingSeconds'] = 40
+            timed = readiness.state_entries(f.source, ['frankel'], readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual((timed['status'], timed['reason']), ('incomplete', 'time cap'))
+            self.assertLess(timed['scanned'], 45)
+
+class ProcTest(unittest.TestCase):
     def test_foreign_processes_are_recognised_from_proc(self):
         with tempfile.TemporaryDirectory() as tmp:
             for pid, comm in (('1', 'systemd'), ('20', 'ninja'), ('30', 'run_cvd'), ('self', 'ninja'), ('40', 'python3')):

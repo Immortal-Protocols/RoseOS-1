@@ -9,6 +9,10 @@ Those scripts run as ordinary host bash with the runner's full access, and OUT_D
 conventional paths; no existing supported mechanism confines them. Lunch and target results are therefore unknown, and
 every finished inspection is PARTIAL (metadata only); none is complete or target-ready.
 
+Every tree file and directory is opened one component at a time with O_NOFOLLOW (open_under): a symlink anywhere on
+the path, or a secret-named component, is refused before anything behind it is opened, read, hashed or listed. Listings
+check their entry and time caps before each entry and report a stop as incomplete, never as a total or zero.
+
   check    the checked-in contract and this script's pins agree (before the builder starts); reads only the checkout
   plan     print what run would inspect, marked executed: false; runs nothing
   run      --run-id, --run-attempt, --recipe-sha, --evidence-dir: on the builder, under the shared lock. Refuses foreign
@@ -31,6 +35,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -63,7 +68,7 @@ FOREIGN = frozenset({'soong_ui', 'soong_build', 'ninja', 'n2', 'ckati', 'kati', 
 SECRET_NAMES = frozenset({'keys', '.ssh', '.gnupg', '.android', 'secrets', '.config', 'credentials'})
 MARKER = '.rose-device-readiness-owner'
 LIMITS = {'deadlineSeconds': 900, 'gitSeconds': 30, 'usageSeconds': 45, 'usageEntries': 2_000_000,
-    'hashSeconds': 90, 'smallFileBytes': 4 << 20, 'listedNames': 50}
+    'hashSeconds': 90, 'smallFileBytes': 4 << 20, 'listedNames': 50, 'listingEntries': 10_000, 'listingSeconds': 10}
 NOT_PROVEN = ['lunch, product configuration or any target variable (not executed)', 'source-tree integrity',
     'completeness of any generated vendor tree or factory download', 'that any target compiles, signs or boots',
     'artifact, signature, runtime or phone acceptance', 'release admission (frankel only, unchanged)']
@@ -150,69 +155,161 @@ def check():
 
 # ---------------------------------------------------------------- bounded reads
 
-def inside(root, path):
-    try:
-        Path(os.path.realpath(path)).relative_to(os.path.realpath(root))
-        return True
-    except ValueError:
-        return False
+DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
-def regular(root, rel):
-    """A regular file under root reached without leaving it; symlinks are resolved only to check containment."""
-    path = Path(root)/rel
-    if not os.path.lexists(path):
-        return None, 'missing'
-    if not inside(root, path):
-        return None, 'escapes-root'
-    if any(part in SECRET_NAMES for part in Path(rel).parts):
+def open_under(root, rel, directory=False):
+    """An fd for root/rel, opened one component at a time with O_NOFOLLOW relative to its parent's fd. A secret-named or
+    unsafe component is refused before anything is opened, and a symlink anywhere on the path - the final component or
+    any ancestor, pointing inside or outside the root - is refused without opening what it points at. Nothing behind a
+    refused component is read, hashed or enumerated. Returns (fd, 'present') or (None, reason)."""
+    parts = Path(rel).parts
+    if not parts or Path(rel).is_absolute() or any(p in ('.', '..') for p in parts):
+        return None, 'unsafe-path'
+    if any(p in SECRET_NAMES for p in parts):
         return None, 'secret-path-refused'
-    if not path.is_file():
+    fd = os.open(os.path.realpath(root), DIRECTORY)
+    for index, part in enumerate(parts):
+        last = index == len(parts) - 1
+        try:
+            child = os.open(part, FILE if last and not directory else DIRECTORY, dir_fd=fd)
+        except OSError as error:
+            reason = 'missing' if error.errno == errno.ENOENT else 'symlink-refused' if error.errno == errno.ELOOP else None
+            if reason is None and error.errno == errno.ENOTDIR:
+                try:
+                    reason = 'symlink-refused' if stat.S_ISLNK(os.lstat(part, dir_fd=fd).st_mode) else 'not-a-directory'
+                except OSError:
+                    reason = 'missing'
+            os.close(fd)
+            return None, reason or f'unreadable ({errno.errorcode.get(error.errno, error.errno)})'
+        os.close(fd)
+        fd = child
+    if not directory and not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
         return None, 'not-regular'
-    return path, 'present'
+    return fd, 'present'
+
+def dir_status(root, rel):
+    fd, status = open_under(root, rel, directory=True)
+    if fd is not None:
+        os.close(fd)
+    return status
+
+def read_fd(fd, size):
+    """Every content read of a tree file goes through here, after open_under has validated its whole path."""
+    with os.fdopen(os.dup(fd), 'rb') as f:
+        return f.read(size)
 
 def file_record(root, rel, blobs=None, limit=LIMITS['smallFileBytes']):
-    path, status = regular(root, rel)
+    fd, status = open_under(root, rel)
     record = {'path': rel, 'status': status}
-    if path is None:
+    if fd is None:
         return record
-    size = path.stat().st_size
-    record['sizeBytes'] = size
-    if size > limit:
-        record['status'] = 'too-large-not-hashed'
-        return record
-    data = path.read_bytes()
+    try:
+        size = os.fstat(fd).st_size
+        record['sizeBytes'] = size
+        if size > limit:
+            record['status'] = 'too-large-not-hashed'
+            return record
+        data = read_fd(fd, limit + 1)
+    finally:
+        os.close(fd)
     record.update(sha256=hashlib.sha256(data).hexdigest(), gitBlob=git_blob(data))
     if blobs and rel in blobs:
         record['matchesPinnedFixture'] = record['gitBlob'] == blobs[rel]
     return record
 
-def usage(root, rel, deadline, clock=time.monotonic):
-    """Bytes and entries under root/rel by lstat only: no link is followed, no other filesystem or secret-named directory
-    is entered, and a timeout or entry cap yields unavailable, never a partial number."""
-    top = Path(root)/rel
-    if not os.path.lexists(top):
-        return {'path': rel, 'status': 'absent'}
-    if top.is_symlink() or not top.is_dir():
-        return {'path': rel, 'status': 'not-a-directory-or-link-not-followed'}
-    end = clock() + deadline.budget(LIMITS['usageSeconds'])
-    device, total, entries, skipped, stack = top.lstat().st_dev, 0, 0, 0, [str(top)]
-    while stack:
-        if clock() > end or entries > LIMITS['usageEntries']:
-            return {'path': rel, 'status': 'unavailable', 'reason': 'timeout' if clock() > end else 'entry cap'}
+def bounded_entries(fd, max_entries, end, clock):
+    """Directory entries of fd, checking the entry and time caps before each one is handled. Stops early (closing the
+    listing) and reports why; never yields more than max_entries."""
+    seen = 0
+    with os.scandir(fd) as items:
+        for item in items:
+            if seen >= max_entries:
+                return f'entry cap ({max_entries})'
+            if clock() > end:
+                return 'time cap'
+            seen += 1
+            yield item
+    return None
+
+def walk_entries(fd, max_entries, end, clock):
+    """(entries, stop reason) as a list; the generator's return value carries the reason."""
+    entries, generator = [], bounded_entries(fd, max_entries, end, clock)
+    while True:
         try:
-            with os.scandir(stack.pop()) as items:
-                for item in items:
-                    entries += 1
-                    st = item.stat(follow_symlinks=False)
-                    total += st.st_blocks * 512
-                    if item.is_dir(follow_symlinks=False):
-                        if item.name in SECRET_NAMES or st.st_dev != device:
-                            skipped += 1
-                        else:
-                            stack.append(item.path)
+            entries.append(next(generator))
+        except StopIteration as stop:
+            return entries, stop.value
+
+def usage(root, rel, deadline, clock=time.monotonic):
+    """Bytes and entries under root/rel by lstat only. Every directory is opened through open_under (no symlink on its
+    path is followed and no secret-named directory is entered), other filesystems are not entered, and the entry and
+    time caps are checked before each entry: a cap or an unreadable directory yields incomplete with its reason and no
+    total, never a partial number or zero."""
+    fd, status = open_under(root, rel, directory=True)
+    if fd is None:
+        return {'path': rel, 'status': 'absent' if status == 'missing' else 'refused', 'reason': status}
+    device = os.fstat(fd).st_dev
+    os.close(fd)
+    end = clock() + deadline.budget(LIMITS['usageSeconds'])
+    total, entries, skipped, stack = 0, 0, 0, [rel]
+    while stack:
+        current = stack.pop()
+        fd, status = open_under(root, current, directory=True)
+        if fd is None:
+            return {'path': rel, 'status': 'incomplete', 'reason': f'{current}: {status}', 'entriesExamined': entries}
+        try:
+            generator = bounded_entries(fd, LIMITS['usageEntries'] - entries, end, clock)
+            while True:
+                try:
+                    item = next(generator)
+                except StopIteration as stop:
+                    if stop.value:
+                        return {'path': rel, 'status': 'incomplete', 'reason': stop.value, 'entriesExamined': entries}
+                    break
+                entries += 1
+                st = item.stat(follow_symlinks=False)
+                total += st.st_blocks * 512
+                if stat.S_ISDIR(st.st_mode):
+                    if item.name in SECRET_NAMES or st.st_dev != device:
+                        skipped += 1
+                    else:
+                        stack.append(f'{current}/{item.name}')
         except OSError as error:
-            return {'path': rel, 'status': 'unavailable', 'reason': f'unreadable ({errno.errorcode.get(error.errno, error.errno)})'}
+            return {'path': rel, 'status': 'incomplete', 'reason': f'unreadable ({errno.errorcode.get(error.errno, error.errno)})',
+                'entriesExamined': entries}
+        finally:
+            os.close(fd)
     return {'path': rel, 'status': 'complete', 'allocatedBytes': total, 'entries': entries, 'skippedDirectories': skipped}
+
+def state_entries(root, devices, deadline, clock=time.monotonic):
+    """vendor/state names mentioning each device, from one bounded listing: the directory is opened through open_under,
+    caps are checked per entry, and only the bounded collection is sorted. A truncated or incomplete result says so; it
+    is never presented as the first names of the whole directory."""
+    fd, status = open_under(root, 'vendor/state', directory=True)
+    if fd is None:
+        return {'status': 'absent' if status == 'missing' else 'refused', 'reason': status}
+    end = clock() + deadline.budget(LIMITS['listingSeconds'])
+    found, truncated = {d: [] for d in devices}, set()
+    try:
+        entries, stopped = walk_entries(fd, LIMITS['listingEntries'], end, clock)
+    finally:
+        os.close(fd)
+    for item in entries:
+        for device in devices:
+            if device in item.name:
+                if len(found[device]) < LIMITS['listedNames']:
+                    found[device].append(sanitize(item.name))
+                else:
+                    truncated.add(device)
+    result = {'status': 'incomplete' if stopped else 'complete', 'scanned': len(entries),
+        'devices': {d: {'names': sorted(found[d]), 'truncated': d in truncated} for d in devices}}
+    if stopped:
+        result['reason'] = stopped
+    if stopped or truncated:
+        result['note'] = 'a bounded, unordered subset of the directory; not its first names'
+    return result
 
 def filesystem(root, mounts='/proc/mounts'):
     st = os.statvfs(root)
@@ -227,9 +324,12 @@ def filesystem(root, mounts='/proc/mounts'):
     return {'availableBytes': st.f_bavail * st.f_frsize, 'totalBytes': st.f_blocks * st.f_frsize,
         'freeBytes': st.f_bfree * st.f_frsize, 'mountPoint': best[0] or None, 'type': best[1]}
 
-def hash_within(path, seconds, clock=time.monotonic):
+def hash_within(root, rel, seconds, clock=time.monotonic):
+    fd, status = open_under(root, rel)
+    if fd is None:
+        return None
     digest, end = hashlib.sha256(), clock() + seconds
-    with open(path, 'rb') as f:
+    with os.fdopen(fd, 'rb') as f:
         for block in iter(lambda: f.read(8 << 20), b''):
             if clock() > end:
                 return None
@@ -254,11 +354,10 @@ def sanitize(value):
 # ---------------------------------------------------------------- host steps
 
 def git_head(root, project, runner, timeout):
-    path = Path(root)/project
-    if not path.is_dir():
-        return {'status': 'missing'}
-    if not inside(root, path):
-        return {'status': 'escapes-root'}
+    status = dir_status(root, project)
+    if status != 'present':
+        return {'status': status}
+    path = Path(os.path.realpath(root))/project
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0', 'LANG': 'C'}
     try:
         result = runner(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(path), 'rev-parse', '--verify', 'HEAD^{commit}'],
@@ -277,8 +376,14 @@ def lunch_chain(root):
         record = file_record(root, rel)
         record['matchesInspectedRevision'] = record.get('sha256') == expected
         files[rel] = record
-    entry = Path(root)/'build/envsetup.sh'
-    linked = os.path.lexists(entry) and os.path.realpath(entry) == os.path.realpath(Path(root)/'build/make/envsetup.sh')
+    fd, _ = open_under(root, 'build', directory=True)
+    try:
+        linked = fd is not None and os.readlink('envsetup.sh', dir_fd=fd) == 'make/envsetup.sh'
+    except OSError:
+        linked = False
+    finally:
+        if fd is not None:
+            os.close(fd)
     return {'files': files, 'envsetupEntryResolvesToBuildMake': linked}
 
 # ---------------------------------------------------------------- run
@@ -327,25 +432,26 @@ def inspect(host, receipt, deadline, targets):
     receipt['products'], receipt['generatedVendor'], receipt['factory'] = {}, {}, {}
     for device, target in targets.items():
         records = [file_record(root, rel, blobs) for rel in target['required']]
-        kernel = Path(root)/(target['kernelDir'] or '')
-        receipt['products'][device] = {'files': records, 'kernelDir': 'present' if target['kernelDir'] and kernel.is_dir()
-            and not kernel.is_symlink() and inside(root, kernel) else 'missing'}
+        receipt['products'][device] = {'files': records,
+            'kernelDir': dir_status(root, target['kernelDir']) if target['kernelDir'] else 'missing'}
         base, skel = f'vendor/google_devices/{device}', f'vendor/adevtool/vendor-skels/google_devices/{device}'
         names = [name.format(device=device) for name in GENERATED_FILES]
         files = [file_record(root, f'{base}/{n}', {f'{base}/{n}': blobs[f'{skel}/{n}']} if f'{skel}/{n}' in blobs else None)
             for n in names]
-        directory = Path(root)/base
-        state = 'missing' if not os.path.lexists(directory) else 'link-not-followed' if directory.is_symlink() else \
+        directory = dir_status(root, base)
+        state = directory if directory != 'present' else \
             'present-unverified' if all(f['status'] == 'present' for f in files) else 'incomplete'
-        receipt['generatedVendor'][device] = {'status': state, 'files': files,
-            'vendorStateEntries': sorted(sanitize(n) for n in os.listdir(Path(root)/'vendor/state') if device in n)[:LIMITS['listedNames']]
-                if (Path(root)/'vendor/state').is_dir() and not (Path(root)/'vendor/state').is_symlink() else None}
+        receipt['generatedVendor'][device] = {'status': state, 'files': files}
         dl = f'vendor/adevtool/dl/{target["factory"]}'
-        path, status = regular(root, dl)
-        unpacked = Path(root)/'vendor/adevtool/dl/unpacked'/target['unpacked']
-        receipt['factory'][device] = {'path': dl, 'status': status, 'sizeBytes': path.stat().st_size if path else None,
+        fd, status = open_under(root, dl)
+        size = None
+        if fd is not None:
+            size = os.fstat(fd).st_size
+            os.close(fd)
+        receipt['factory'][device] = {'path': dl, 'status': status, 'sizeBytes': size,
             'checksum': 'notValidated', 'expectedSha256': target['factorySha256'],
-            'unpacked': 'present' if unpacked.is_dir() and not unpacked.is_symlink() and inside(root, unpacked) else 'missing'}
+            'unpacked': dir_status(root, f'vendor/adevtool/dl/unpacked/{target["unpacked"]}')}
+    receipt['vendorState'] = state_entries(root, list(targets), deadline, host.clock)
     # Never executed: no supported mechanism confines tree scripts. The inputs a later confined route would need are
     # reported per device; lunch and target results stay unknown.
     receipt['lunch'] = {'executed': False, 'status': 'NOT_EXECUTED', 'reason': CONFINEMENT_UNAVAILABLE,
@@ -362,7 +468,7 @@ def inspect(host, receipt, deadline, targets):
     for device, record in receipt['factory'].items():
         if record['status'] == 'present':
             seconds = deadline.budget(LIMITS['hashSeconds'])
-            digest = hash_within(Path(root)/record['path'], seconds, host.clock) if seconds >= 1 else None
+            digest = hash_within(root, record['path'], seconds, host.clock) if seconds >= 1 else None
             record['checksum'] = 'unavailable' if digest is None else 'validated' if digest == record['expectedSha256'] else 'mismatch'
 
 def run(host, run_id, run_attempt, recipe_sha, evidence_dir):
