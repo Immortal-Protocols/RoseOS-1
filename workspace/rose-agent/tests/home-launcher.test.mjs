@@ -120,7 +120,7 @@ test('the Home tray stays fixed over the swiping pages, above system insets (OS-
  assert.match(homeTray,/metal\.setCornerRadius\(activity\.dp\(22\)\);/);
  assert.equal((homeTray.match(/new LayoutParams\(activity\.dp\(WELL_W_DP\), activity\.dp\(WELL_H_DP\)\)/g)||[]).length,2);
  assert.match(homeTray,/addView\(new View\(activity\), new LayoutParams\(0, 1, 1\)\);/);
- assert.ok(!home.includes('sessionMark')&&!home.includes('showSession'));
+ assert.ok(!home.includes('sessionMark')&&!home.includes('showSession')&&!home.includes('RoseMark'));
  // Overview: no permitted route yet, so the control is disabled and says so; no fake recents or app picker.
  assert.match(homeTray,/overviewWell\.setEnabled\(false\);/);
  assert.match(homeTray,/overviewWell\.setContentDescription\("Overview, not available yet"\);/);
@@ -140,6 +140,7 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
  assert.match(homeTray,/applyVisual\(RoseVisualState\.from\(shownConversation, Float\.NaN, Float\.NaN, true, false\)\)/);
  // One mount point for App's renderer; no second poller, timer or animation of Home's own.
  assert.equal((homeTray.match(/void applyVisual\(RoseVisualState visual\)/g)||[]).length,1);
+ assert.equal((homeTray.match(/new RosePresenceView\(/g)||[]).length,1);
  for(const src of [homeTray,homeRose])for(const timer of ['postDelayed','Handler','ValueAnimator','Choreographer','Timer','schedule'])assert.ok(!src.includes(timer),timer);
  // No duplicate renderer: Home draws no WebGL, shader or surface of its own.
  for(const src of [homeTray,homeRose])for(const gl of ['GLSurfaceView','GLES','Shader','TextureView','SurfaceView'])assert.ok(!src.includes(gl),gl);
@@ -178,7 +179,7 @@ test('no conversation-page check uses a literal page index',()=>{
  assert.match(main,/launcherPager\.currentPage\(\)==voicePage\)&&visualDetail==null&&screenDetail==null/);
 });
 
-test('the Home session mark renders the same authoritative state as the tray and conversation',()=>{
+test('the tray Rose renders and speaks the same authoritative state as the tray service and conversation',()=>{
  const snapshot=src=>src.match(/ConversationState\.of\(false[^;]*;/)[0].replace(/\s+/g,'');
  const tray=read('../app/src/dev/pixel/voice/AgentTrayService.java');
  const conversation=read('../app/src/dev/pixel/voice/RoseConversationActivity.java');
@@ -191,9 +192,10 @@ test('the Home session mark renders the same authoritative state as the tray and
  // The tick starts on resume and stops on pause, so returning to Home reads fresh state.
  assert.match(main,/onResume\(\)\{[^\n]*handler\.removeCallbacks\(tick\);handler\.post\(tick\);\}/);
  assert.match(main,/onPause\(\)\{[^\n]*handler\.removeCallbacks\(tick\);/);
- // Home chooses its mark only through HomeSessionMark, never from audio levels or status text.
- assert.match(homeTray,/HomeSessionMark\.Mark mark = HomeSessionMark\.of\(state\);/);
- for(const src of [home,homeTray])for(const guess of ['inputLevel','outputLevel','status','.live','.connected'])assert.ok(!src.includes(guess),guess);
+ // App's shared renderer draws it; the well alone is focusable and speaks App's description of the same state.
+ assert.match(homeTray,/roseView = new RosePresenceView\(activity\);\n  roseView\.setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
+ assert.match(homeTray,/roseView\.show\(visual\);\n  String spoken = "Open Rose\. " \+ RosePresenceModel\.describe\(visual\);/);
+ for(const src of [home,homeTray,homeRose])for(const guess of ['inputLevel)','outputLevel)','.status','.live','.connected'])assert.ok(!src.includes(guess),guess);
 });
 
 test('Back from the conversation or app pages returns Home',()=>{

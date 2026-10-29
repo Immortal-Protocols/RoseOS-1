@@ -8,23 +8,21 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 
 /**
  * The fixed Home tray of the selected HiFi (prototypes/rose-hifi at ce126f56, OS-HIFI-HOME-001): a brushed
  * light-metal bar, 92dp high with 22dp corners, holding two 104x66dp pill wells at its ends, Rose and
  * overview, that stay put while the pages swipe beneath. Rose only navigates to the conversation (never
- * starts, mutes or ends voice). Each Home refresh hands it the authoritative ConversationState and the
- * RoseVisualState read from the voice service (HomeRose); applyVisual is the one place App's RosePresenceView
- * mounts (show(RoseVisualState)) at final integration, and until then the well shows the existing static
- * rose mark. There is no permitted overview route for a non-system Home yet, so that well is disabled and
+ * starts, mutes or ends voice). Each Home refresh hands it the RoseVisualState read from the voice service
+ * (HomeRose), and applyVisual passes it to App's RosePresenceView (show(RoseVisualState)), the one shared
+ * renderer; the renderer is excluded from accessibility and the well speaks its state, so there is one focus
+ * target. There is no permitted overview route for a non-system Home yet, so that well is disabled and
  * says so; it never opens an unrelated picker.
  */
 final class HomeTray extends LinearLayout {
  static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 104, WELL_H_DP = 66;
  final View presence, overview;
- final TextView sessionMark;
- HomeSessionMark.Mark shownMark;
+ final RosePresenceView roseView;
  /** The last visual state applied, and the conversation it came from; null before the first refresh. */
  RoseVisualState shownVisual;
  ConversationState shownConversation;
@@ -43,26 +41,15 @@ final class HomeTray extends LinearLayout {
   setElevation(activity.dp(12));
 
   FrameLayout rose = well(activity);
-  rose.addView(new RoseHomeView.RoseMark(activity), new FrameLayout.LayoutParams(activity.dp(54), activity.dp(54), Gravity.CENTER));
+  // App's renderer draws the state; the well is the one focusable "Open Rose" action and speaks that state.
+  roseView = new RosePresenceView(activity);
+  roseView.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+  rose.addView(roseView, new FrameLayout.LayoutParams(activity.dp(64), activity.dp(64), Gravity.CENTER));
   rose.setClickable(true);
   rose.setFocusable(true);
   rose.setContentDescription("Open Rose");
   rose.setOnClickListener(v -> openRose.run());
   presence = rose;
-  sessionMark = activity.text("", 12, 0xff283e39);
-  sessionMark.setGravity(Gravity.CENTER);
-  sessionMark.setIncludeFontPadding(false);
-  GradientDrawable markBack = new GradientDrawable();
-  markBack.setShape(GradientDrawable.OVAL);
-  markBack.setColor(0xf2fbfcf5);
-  markBack.setStroke(Math.max(1, activity.dp(1)), 0xffe0e6d8);
-  sessionMark.setBackground(markBack);
-  sessionMark.setElevation(activity.dp(8));
-  sessionMark.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-  sessionMark.setVisibility(GONE);
-  FrameLayout.LayoutParams markParams = new FrameLayout.LayoutParams(activity.dp(24), activity.dp(24), Gravity.TOP | Gravity.END);
-  markParams.setMargins(0, activity.dp(2), activity.dp(10), 0);
-  rose.addView(sessionMark, markParams);
   addView(rose, new LayoutParams(activity.dp(WELL_W_DP), activity.dp(WELL_H_DP)));
 
   addView(new View(activity), new LayoutParams(0, 1, 1));
@@ -93,7 +80,6 @@ final class HomeTray extends LinearLayout {
  void show(ConversationState conversation, RoseVisualState visual) {
   if (released) return;
   shownConversation = conversation;
-  showSession(conversation);
   applyVisual(visual);
  }
 
@@ -104,25 +90,12 @@ final class HomeTray extends LinearLayout {
   released = true;
  }
 
- /** The single mount point for App's RosePresenceView.show(RoseVisualState); the interim static mark does not animate. */
+ /** The single mount point for App's RosePresenceView: it renders the state, and the well speaks it. */
  void applyVisual(RoseVisualState visual) {
   shownVisual = visual;
- }
-
- /** The session from the authoritative state: microphone on, muted or connecting; nothing otherwise. */
- void showSession(ConversationState state) {
-  HomeSessionMark.Mark mark = HomeSessionMark.of(state);
-  if (mark == shownMark) return;
-  shownMark = mark;
-  switch (mark) {
-   case LISTENING: sessionMark.setText("🎙"); break;
-   case MUTED: sessionMark.setText("🔇"); break;
-   case CONNECTING: sessionMark.setText("◌"); break;
-   default: sessionMark.setText(""); break;
-  }
-  sessionMark.setVisibility(mark == HomeSessionMark.Mark.NONE ? GONE : VISIBLE);
-  String spoken = HomeSessionMark.description(mark);
-  presence.setContentDescription(spoken.isEmpty() ? "Open Rose" : "Open Rose. " + spoken);
+  roseView.show(visual);
+  String spoken = "Open Rose. " + RosePresenceModel.describe(visual);
+  if (!spoken.contentEquals(presence.getContentDescription())) presence.setContentDescription(spoken);
  }
 
  /** The approved overview symbol: three separate rounded vertical rectangles, the last one accented blue. */
