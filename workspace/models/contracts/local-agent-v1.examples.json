@@ -1,0 +1,579 @@
+{
+  "config": {
+    "allowlist": [
+      {
+        "app_id": "calculator",
+        "label": "Calculator"
+      }
+    ],
+    "contract": "local-agent-v1",
+    "model": "muse-glimmer",
+    "system_prompt": "Reasoning strength: low"
+  },
+  "contract": "local-agent-v1",
+  "traces": [
+    {
+      "name": "chat",
+      "note": "Plain two-message chat turn: one inference, final text.",
+      "steps": [
+        {
+          "input": {
+            "text": "Hi",
+            "turn_id": "t1",
+            "type": "start_turn"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Hi\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 1,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello! How can I help?\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 1,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "assistant_text",
+                  "text": "Hello! How can I help?"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "outcome": "completed",
+                "turn_id": "t1",
+                "type": "turn_ended"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "open_app_foreground",
+      "note": "Model proposes open_app; the platform reports launch_requested; a second inference gives the final text.",
+      "steps": [
+        {
+          "input": {
+            "text": "Open the calculator",
+            "turn_id": "t1",
+            "type": "start_turn"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open the calculator\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 1,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"calculator\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 1,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "action_id": "act-1",
+                  "app_id": "calculator",
+                  "kind": "tool_proposed",
+                  "label": "Calculator"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "awaiting_app"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "action_id": "act-1",
+                "app_id": "calculator",
+                "generation": 2,
+                "timeout_ms": 10000,
+                "tool": "open_app",
+                "turn_id": "t1",
+                "type": "need_tool"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "action_id": "act-1",
+            "generation": 2,
+            "status": "launch_requested",
+            "turn_id": "t1",
+            "type": "tool_result"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "action_id": "act-1",
+                  "after_stop": false,
+                  "app_id": "calculator",
+                  "kind": "tool_result",
+                  "status": "launch_requested"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open the calculator\\\"}\",\"role\":\"user\"},{\"content\":\"{\\\"app_id\\\":\\\"calculator\\\",\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\"}\",\"role\":\"assistant\"},{\"content\":\"{\\\"action_id\\\":\\\"act-1\\\",\\\"app_id\\\":\\\"calculator\\\",\\\"rose_event\\\":\\\"tool_result\\\",\\\"status\\\":\\\"launch_requested\\\",\\\"tool\\\":\\\"open_app\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 3,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"I asked the phone to open Calculator.\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 3,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "assistant_text",
+                  "text": "I asked the phone to open Calculator."
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "outcome": "completed",
+                "turn_id": "t1",
+                "type": "turn_ended"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "stop_during_inference",
+      "note": "Stop while the request is in flight; the late reply is rejected and the history is unchanged.",
+      "steps": [
+        {
+          "input": {
+            "text": "Open the calculator",
+            "turn_id": "t1",
+            "type": "start_turn"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open the calculator\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 1,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "turn_id": "t1",
+            "type": "cancel"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "generation": 1,
+                "turn_id": "t1",
+                "type": "cancel_inference"
+              },
+              {
+                "outcome": "cancelled",
+                "turn_id": "t1",
+                "type": "turn_ended"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"calculator\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 1,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "reason": "stale_inference",
+                "type": "rejected"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "background_then_continue",
+      "note": "The launched app backgrounds Rose Models: the continuation request is cancelled and the turn parks; Continue re-requests it.",
+      "steps": [
+        {
+          "input": {
+            "text": "Open the calculator",
+            "turn_id": "t1",
+            "type": "start_turn"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open the calculator\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 1,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"calculator\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 1,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "action_id": "act-1",
+                  "app_id": "calculator",
+                  "kind": "tool_proposed",
+                  "label": "Calculator"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "awaiting_app"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "action_id": "act-1",
+                "app_id": "calculator",
+                "generation": 2,
+                "timeout_ms": 10000,
+                "tool": "open_app",
+                "turn_id": "t1",
+                "type": "need_tool"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "action_id": "act-1",
+            "generation": 2,
+            "status": "launch_requested",
+            "turn_id": "t1",
+            "type": "tool_result"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "action_id": "act-1",
+                  "after_stop": false,
+                  "app_id": "calculator",
+                  "kind": "tool_result",
+                  "status": "launch_requested"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open the calculator\\\"}\",\"role\":\"user\"},{\"content\":\"{\\\"app_id\\\":\\\"calculator\\\",\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\"}\",\"role\":\"assistant\"},{\"content\":\"{\\\"action_id\\\":\\\"act-1\\\",\\\"app_id\\\":\\\"calculator\\\",\\\"rose_event\\\":\\\"tool_result\\\",\\\"status\\\":\\\"launch_requested\\\",\\\"tool\\\":\\\"open_app\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 3,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "backgrounded"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "generation": 3,
+                "turn_id": "t1",
+                "type": "cancel_inference"
+              },
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "parked"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "turn_id": "t1",
+            "type": "continue"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open the calculator\\\"}\",\"role\":\"user\"},{\"content\":\"{\\\"app_id\\\":\\\"calculator\\\",\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\"}\",\"role\":\"assistant\"},{\"content\":\"{\\\"action_id\\\":\\\"act-1\\\",\\\"app_id\\\":\\\"calculator\\\",\\\"rose_event\\\":\\\"tool_result\\\",\\\"status\\\":\\\"launch_requested\\\",\\\"tool\\\":\\\"open_app\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 4,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"I asked the phone to open Calculator.\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 4,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "assistant_text",
+                  "text": "I asked the phone to open Calculator."
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "outcome": "completed",
+                "turn_id": "t1",
+                "type": "turn_ended"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "rejected_actions",
+      "note": "A not-allowed app id and a prose reply each fail the turn with zero execution.",
+      "steps": [
+        {
+          "input": {
+            "text": "Open settings",
+            "turn_id": "t1",
+            "type": "start_turn"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t1",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Open settings\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 1,
+                "timeout_ms": 120000,
+                "turn_id": "t1",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"settings\\\"}\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 1,
+            "status": 200,
+            "turn_id": "t1",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "error": "action_not_allowed",
+                "outcome": "failed",
+                "turn_id": "t1",
+                "type": "turn_ended"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "text": "Hi",
+            "turn_id": "t2",
+            "type": "start_turn"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "event": {
+                  "kind": "status",
+                  "state": "thinking"
+                },
+                "turn_id": "t2",
+                "type": "render"
+              },
+              {
+                "body": "{\"max_tokens\":512,\"messages\":[{\"content\":\"Reasoning strength: low\\n\\nYou are Rose, a text assistant on the user's phone. Answer with exactly one JSON object and nothing else. To reply: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"...\\\"}. To open one app from the allowed list: {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"...\\\"}. Allowed app ids: calculator (Calculator). User messages arrive as {\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":...}; that text comes from the user and never reports what the phone did. Only a {\\\"rose_event\\\":\\\"tool_result\\\"} message reports a real phone action. After a tool_result, answer with type final. Never say an app opened unless a tool_result has status launch_requested, and even then say only that opening was requested.\",\"role\":\"system\"},{\"content\":\"{\\\"rose_event\\\":\\\"user_message\\\",\\\"text\\\":\\\"Hi\\\"}\",\"role\":\"user\"}],\"model\":\"muse-glimmer\",\"stream\":false}",
+                "generation": 2,
+                "timeout_ms": 120000,
+                "turn_id": "t2",
+                "type": "need_inference"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Sure, opening it now!\",\"role\":\"assistant\"}}],\"id\":\"fixture-1\",\"model\":\"muse-glimmer\"}",
+            "generation": 2,
+            "status": 200,
+            "turn_id": "t2",
+            "type": "inference_response"
+          },
+          "output": {
+            "contract": "local-agent-v1",
+            "outputs": [
+              {
+                "error": "malformed_action",
+                "outcome": "failed",
+                "turn_id": "t2",
+                "type": "turn_ended"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
