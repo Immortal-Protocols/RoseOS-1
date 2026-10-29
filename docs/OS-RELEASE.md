@@ -1186,3 +1186,23 @@ not a harmless documentation change. Nathan requested a released OS build, but a
 blocked/untested candidate must not be advertised as a completed stable release.
 Do not overwrite the existing release as a shortcut. No device flashing is
 performed by this procedure.
+
+## Signing-key bootstrap (guarded, not a release)
+
+`os-release.yml` mode `signing-bootstrap` with `bootstrap_profile` runs `scripts/signing-bootstrap.py` for one reviewed
+profile in `os/signing-bootstrap/profiles.json`. It admits no device and runs no build, OS signing or publisher job.
+The hosted guard requires `candidate_sha` = the workflow commit on main, a manual dispatch, and default
+`promote`/`app_publish`/`resume`/`alpha_recover`/`reuse_binding`. It fails before the controller starts unless the
+profile is ready. On the builder, the preflight runs before signer login. Then, under the shared lock, the run checks
+tool identities and each secret's metadata (it must exist and hold no versions), generates into an owner-only
+transient directory, checks the exact outputs and the archive's public identity, and adds one version per secret. The
+two adds are not atomic: committed version ids are journaled under `~/rose-signing-bootstrap`, and an uncertain or
+partial import is `recovery-needed`, never complete or retried. Only the public receipt is uploaded.
+
+Current state: `fold-rango-v1` is resource-bound but blocked. Its key inventory is incomplete (the `-d $KEY_DIR`
+default certificate set is not established from checked-in source), and its generator, decrypt-keys, avbtool and
+openssl identities are unapproved. The production executor implements no generation. `models-v0` is unbound until its
+own secret resources, signer access, algorithm and package identity are supplied. The collision check needs
+`secretmanager.secrets.get` and `secretmanager.versions.list` on both secrets. The add-only and accessor grants do not
+include them, so metadata stays unavailable and the run stops. `python3 scripts/signing-bootstrap.py plan --profile
+fold-rango-v1` prints the exact operations. A merged workflow is not an admitted key operation.
