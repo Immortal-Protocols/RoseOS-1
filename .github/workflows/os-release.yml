@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready)
         type: choice
-        options: [os-release, device-readiness, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
+        options: [os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
         default: os-release
       device:
         description: Device to build and publish; only admitted devices are offered (FAM-02-INFRA-S001; frankel only)
@@ -65,6 +65,11 @@ on:
         description: emulator-alpha-successor only - continue an interrupted successor transition from its journal (exact preimage or postimage only)
         type: boolean
         default: false
+      bootstrap_profile:
+        description: signing-bootstrap only - reviewed profile in os/signing-bootstrap/profiles.json (not a device admission)
+        type: choice
+        options: [none, fold-rango-v1, models-v0]
+        default: none
 
 permissions:
   contents: read
@@ -88,6 +93,7 @@ env:
   RESUME_SOURCE_RUN: ${{ inputs.resume_source_run }}
   RESUME_SIGNED_SHA256: ${{ inputs.resume_signed_sha256 }}
   REUSE_BINDING: ${{ inputs.reuse_binding }}
+  BOOTSTRAP_PROFILE: ${{ inputs.bootstrap_profile || 'none' }}
 
 jobs:
   guard:
@@ -128,6 +134,9 @@ jobs:
           [[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]
           # device-readiness: the candidate is this exact workflow recipe; the probe takes no other input.
           [[ "$MODE" != device-readiness || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
+          # signing-bootstrap: bound to this workflow recipe; a bootstrap profile exists only in that mode.
+          [[ "$MODE" != signing-bootstrap || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
+          [[ ( "$MODE" == signing-bootstrap && "${BOOTSTRAP_PROFILE:-none}" != none ) || ( "$MODE" != signing-bootstrap && "${BOOTSTRAP_PROFILE:-none}" == none ) ]]
           [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
           # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
           [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
@@ -166,6 +175,15 @@ jobs:
       - name: Device-readiness contract check
         if: inputs.mode == 'device-readiness'
         run: python3 scripts/device-readiness.py check
+      # Fails closed before the controller starts unless the profile is resource-bound with an approved inventory, tool
+      # identities and unexpired access, and every other option is at its non-publishing default.
+      - name: Signing-bootstrap guard
+        if: inputs.mode == 'signing-bootstrap'
+        env:
+          PROMOTE: ${{ inputs.promote }}
+          APP_PUBLISH: ${{ inputs.app_publish }}
+          ALPHA_RECOVER: ${{ inputs.alpha_recover }}
+        run: python3 scripts/signing-bootstrap.py guard
       - name: Fetch the original verification receipt (run 40777816699)
         if: inputs.mode == 'emulator-alpha-export'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -673,8 +691,44 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  # OCT29-INFRA-S005: one reviewed signing-bootstrap profile (scripts/signing-bootstrap.py). The preflight runs before any
+  # login; signer access exists only around the bootstrap step. No build, integrate, OS signing or publisher job runs in
+  # this mode and no publisher credential reaches the builder. Only the allowlisted public receipt leaves.
+  signing-bootstrap:
+    needs: controller
+    if: inputs.mode == 'signing-bootstrap'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Profile, tool and access preflight (before any login)
+        run: python3 scripts/signing-bootstrap.py preflight --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA"
+      - name: Signer access for the bootstrap only
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Bootstrap under the shared lock
+        run: python3 scripts/signing-bootstrap.py run --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA" --state-dir "$HOME/rose-signing-bootstrap" --receipt-dir "$RUNNER_TEMP/signing-bootstrap"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Public receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signing-bootstrap/signing-bootstrap-receipt.json
+          retention-days: 7
+          if-no-files-found: warn
+
   cleanup:
-    needs: [controller, device-readiness, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]
+    needs: [controller, device-readiness, builder, signing-bootstrap, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

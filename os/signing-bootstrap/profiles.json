@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.signing-bootstrap-profiles",
+  "note": "Reviewed profiles for scripts/signing-bootstrap.py (OCT29-INFRA-S005). A profile is not a release admission and admits no device build. Unset tool identities, an incomplete key inventory or an unbound profile fail closed before the controller starts, before any login and before any secret access.",
+  "profiles": {
+    "fold-rango-v1": {
+      "status": "resource-bound",
+      "purpose": "Fold (rango) OS signing key bootstrap: generate once on the GCP builder and add version 1 of each existing secret",
+      "device": "rango",
+      "project": "protocols-465723",
+      "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "secrets": {
+        "keys": "PIXEL_OS_SIGNING_KEYS_RANGO_V1",
+        "passphrase": "PIXEL_OS_SIGNING_PASSPHRASE_RANGO_V1"
+      },
+      "access": {
+        "addVersionExpires": "2026-10-30T19:45:00Z",
+        "accessorExpires": "2026-11-27T23:59:59Z",
+        "minimumRemainingSeconds": 1800
+      },
+      "archive": {
+        "format": "tar.gz",
+        "consumer": "scripts/host_secrets.py discover_key_directory and extract_key_archive; scripts/host-decrypt-keys.py (openssl pkcs8 -passin file:)",
+        "consumerSha256": {
+          "scripts/host_secrets.py": "0fda56cc6f940ba89b892cd64ab76e7a36bb8d100d64102726069cb0142dfb03",
+          "scripts/host-decrypt-keys.py": "a022b8255a0372429c7f51b6670a46c28e707061c490bdf57b364b5bacc1432c"
+        },
+        "publicIdentityFiles": ["releasekey.x509.pem", "avb_pkmd.bin"]
+      },
+      "keyInventory": {
+        "complete": false,
+        "requiredByConsumer": ["releasekey.pk8", "releasekey.x509.pem", "bluetooth.pk8", "bluetooth.x509.pem", "avb.pem", "avb_pkmd.bin"],
+        "optionalByConsumer": ["id_ed25519"],
+        "basis": "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): $KEY_DIR/releasekey, $KEY_DIR/bluetooth, avb.pem, avb_pkmd.bin, optional id_ed25519, AVB_ALGORITHM=SHA256_RSA4096 for rango",
+        "missing": "the default certificate set that sign_target_files_apks -d $KEY_DIR expects (build/make b0f697df8cc9519408ca0a404e918cd51bde0735 releasetools) and the key algorithm of each certificate are not established from checked-in source; nothing is guessed"
+      },
+      "avbAlgorithm": "SHA256_RSA4096",
+      "tools": {
+        "generator": {
+          "path": null,
+          "sha256": null,
+          "provenance": "approved key generation recipe (owner-selected existing signing pattern); not checked in"
+        },
+        "decrypt-keys": {
+          "path": null,
+          "sha256": null,
+          "provenance": "script/decrypt-keys at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (referenced by generate-release.sh); bytes not checked in"
+        },
+        "avbtool": {
+          "path": null,
+          "sha256": null,
+          "provenance": "external/avb/avbtool.py at ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee; bytes not checked in"
+        },
+        "openssl": {
+          "path": null,
+          "sha256": null,
+          "provenance": "builder host openssl used by scripts/host-decrypt-keys.py; identity not recorded"
+        }
+      }
+    },
+    "models-v0": {
+      "status": "unbound",
+      "purpose": "Models package signing bootstrap interface; fails closed until its own resources are supplied",
+      "missing": [
+        "exact Secret Manager resources (project, secret names)",
+        "approved signer access for those resources",
+        "generation algorithm and key inventory",
+        "package identity"
+      ],
+      "note": "Rango authority and app-only Rose Agent signing do not cover Models."
+    }
+  }
+}
