@@ -7,12 +7,14 @@ on:
   pull_request:
     paths:
       - 'workspace/models/rose-chat-core/**'
+      - 'workspace/models/contracts/**'
       - 'qa/models/**'
       - '.github/workflows/models-rust.yml'
   push:
     branches: [main]
     paths:
       - 'workspace/models/rose-chat-core/**'
+      - 'workspace/models/contracts/**'
       - 'qa/models/**'
       - '.github/workflows/models-rust.yml'
   workflow_dispatch:
@@ -51,6 +53,13 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests (unit, in-process fixture, loopback fixture)
         run: cargo test --locked --no-fail-fast
+      - name: Android-shaped build (no desktop HTTP transport; local-agent-v1)
+        run: |
+          cargo clippy --all-targets --locked --no-default-features -- -D warnings
+          cargo test --locked --no-default-features --no-fail-fast
+          if cargo tree --locked --no-default-features -e normal | grep -E 'ureq|rustls'; then
+            echo "desktop HTTP stack leaked into the no-default-features build" >&2; exit 1
+          fi
       - name: QA direct CLI loopback checks (qa/models/rust_cli_checks.py)
         run: |
           cargo build --locked --bin rose-chat
