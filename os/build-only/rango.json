@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-build-only",
+  "basis": "OS-RANGO-BUILD-001: unsigned build-only route for the Pixel 10 Pro Fold on the existing GrapheneOS device support (os/devices/pixel10.json, FAM-03a). Device-scoped adevtool vendor generation, then lunch/make into its own OUT_DIR. No signing, secrets, publication or original-Fold (yogi) port patches. Allowances are null until measured: preflight fails closed while any is null.",
+  "device": "rango",
+  "lunch": "rango-cur-user",
+  "deviceContract": "os/devices/pixel10.json",
+  "factory": {
+    "file": "rango-cp3a.261005.005-factory-7110a4ac.zip",
+    "sha256": "7110a4ac2f939e028f102bd0f034552e19dc3c90a3bb5b9dcdaaede5ae049eb5",
+    "url": "https://dl.google.com/dl/android/aosp/rango-cp3a.261005.005-factory-7110a4ac.zip",
+    "sizeBytes": null
+  },
+  "host": {
+    "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
+    "lockPath": "/home/pixelbuild/frankel-build.lock",
+    "reconcileReceiptDir": "/home/pixelbuild/rose-actions/reconcile",
+    "outDirPrefix": "out-rango-",
+    "makeJobs": 48,
+    "makeGoals": ["vendorbootimage", "vendorkernelbootimage", "target-files-package", "otatools-package"]
+  },
+  "adevtool": {
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "depsDir": "out_adevtool_deps",
+    "depsTools": ["aapt2", "apksigner", "aprotoc", "arsclib", "debugfs", "dispol", "fsck.erofs", "lpdump", "lpunpack", "lz4",
+      "ota_extractor", "simg2img", "sqlite3", "toybox"]
+  },
+  "capacity": {
+    "reserveBytes": 322122547200,
+    "generateAllowanceBytes": null,
+    "compileAllowanceBytes": null,
+    "basis": "A - P >= reserve on the filesystem holding the source tree and download dir. P per stage must be measured (FAM-BLAZER-PREP: download + unpack + generated vendor; compile: OUT_DIR); never estimated here."
+  }
+}
