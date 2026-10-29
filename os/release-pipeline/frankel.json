@@ -14,10 +14,11 @@
       "reserveBytes": 322122547200,
       "osBuildAllowanceBytes": null,
       "stopBufferBytes": 68719476736,
+      "transientStopBytes": 1073741824,
       "sampleIntervalSeconds": 1,
       "termGraceSeconds": 2,
       "killVerifySeconds": 2,
-      "basis": "OCT29-INFRA-S008: budgeted mode. Each build/sign/transfer stage starts only if every distinct write filesystem has strictly more than reserveBytes + stopBufferBytes available (statvfs f_bavail), then runs its children in an owned process group sampled at least every second and stops it (SIGTERM, KILL after termGraceSeconds, verified within killVerifySeconds) when any filesystem reaches that line. The 64 GiB stop buffer is an abort margin, not an OS peak estimate or a hard quota; a stage may abort safely and is never promised to fit. osBuildAllowanceBytes stays null: static mode would still refuse."
+      "basis": "OCT29-INFRA-S008: budgeted mode. Each build/sign/transfer stage starts only if every distinct retained build filesystem (source, OUT_DIR, release workspace, artifact) has strictly more than reserveBytes + stopBufferBytes available (statvfs f_bavail), and every transient-only filesystem (RAM secret staging, temp or RUNNER_TEMP on its own device) more than transientStopBytes, then runs its children in an owned process group sampled at least every second and stops it (SIGTERM, KILL after termGraceSeconds, verified within killVerifySeconds) when any filesystem reaches that line. The 64 GiB stop buffer is an abort margin, not an OS peak estimate or a hard quota; a stage may abort safely and is never promised to fit. osBuildAllowanceBytes stays null: static mode would still refuse."
     },
     "installclean": true,
     "makeJobs": 48,

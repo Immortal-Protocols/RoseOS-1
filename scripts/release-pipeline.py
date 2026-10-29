@@ -401,6 +401,9 @@ def capacity_preflight(config, paths, statvfs=os.statvfs, stat=os.stat):
                 f'({OS_RESERVE_BYTES} reserve plus {allowance} OS build allowance)')
     return measured
 
+# Retained build disks keep the 300 GiB reserve plus the stop buffer; every other stage path is transient.
+RETAINED_ROLES = frozenset({'source tree', 'OUT_DIR', 'release workspace', 'artifact directory'})
+
 def stage_write_paths(config, release_dir, *extra):
     """Every filesystem a build or sign stage writes: source tree, OUT_DIR, release workspace (and its public/
     staging directories), the temporary directory, RAM secret staging and RUNNER_TEMP when present."""
@@ -426,7 +429,8 @@ def capacity_gate(config, paths, adapter):
         return None
     if mode != 'budgeted':
         raise CheckFailed(f'host.capacity.mode {mode!r} is not static or budgeted')
-    return capacity_monitor.Budget(capacity_monitor.policy_from(capacity), paths, adapter.statvfs, adapter.stat).start()
+    return capacity_monitor.Budget(capacity_monitor.policy_from(capacity), paths, adapter.statvfs, adapter.stat,
+        retained=RETAINED_ROLES & set(paths)).start()
 
 def budgeted_gate(config, paths, adapter):
     """Sign and transfer: a Budget in budgeted mode; static mode keeps their existing unguarded behavior."""
