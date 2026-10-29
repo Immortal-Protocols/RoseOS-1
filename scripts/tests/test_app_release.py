@@ -344,12 +344,12 @@ class CheckedInAppReleaseTest(unittest.TestCase):
              {'route': 'public GitHub prerelease rose-agent-307', 'at': '2026-10-28T20:40Z', 'publicRelease': True}))
         self.assertEqual([(r['versionCode'], r['versionName'], r['route'], r['candidate']) for r in app['reserved']],
             [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (308, '308-home-tray-beta', 'os-release', '93ad1c2bd7094d6b65c695ba239d05d272b87c57'),
-             (309, '309-hifi-beta', 'app-only', None)])
+             (309, '309-hifi-beta', 'app-only', None), (310, '310-hifi-os-beta', 'os-release', None)])
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
             {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
-        # AGENT309-DELIVERY-001: the source declares the reserved app-only 309; 308 stays the os-release binding.
-        self.assertIn('package="dev.pixel.voice" android:versionCode="309" android:versionName="309-hifi-beta"', manifest)
+        # FRANKEL310-ALLOC-001: the source declares the reserved os-release 310; 309 stays app-only and 308 the app-reuse binding.
+        self.assertIn('package="dev.pixel.voice" android:versionCode="310" android:versionName="310-hifi-os-beta"', manifest)
 
     def test_reserved_versions_belong_to_their_route_and_candidate(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
@@ -361,6 +361,8 @@ class CheckedInAppReleaseTest(unittest.TestCase):
         self.assertEqual(release.requested_version(appres, [['dev.pixel.voice', 309]], queued), 309)
         for cfg, version, sha, message in ((appres, 309, 'f' * 40, 'reserved for the app-only route and candidate ' + queued),
                 (config, 308, queued, 'reserved for the os-release route'),
+                (config, 310, queued, 'reserved for the os-release route'),
+                (config, 310, 'f' * 40, 'reserved for the os-release route'),
                 (config, 305, queued, 'must exceed 307, the newest built or published'),
                 (config, 307, queued, 'must exceed 307, the newest built or published')):
             with self.assertRaisesRegex(release.AdapterFailed, message):
