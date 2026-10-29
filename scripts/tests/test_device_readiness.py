@@ -797,6 +797,115 @@ class BoundaryTest(unittest.TestCase):
             self.assertEqual((timed['status'], timed['reason']), ('incomplete', 'time cap'))
             self.assertLess(timed['scanned'], 45)
 
+class DeadlineTest(unittest.TestCase):
+    """FIX003: the time budget is checked before each queued directory, after each listing ends (an empty one included)
+    and before reporting complete. A synthetic clock advances only when a listing is exhausted, by a per-directory cost,
+    so the elapsed time is deterministic; no real sleep. These are cooperative checks, not syscall timeouts."""
+    @contextlib.contextmanager
+    def costed(self, costs, close_costs=None):
+        """os.scandir whose listings charge costs[path] seconds when exhausted, and os.close charging close_costs[path]
+        when that directory's fd is closed (time passing after a listing's own checks); records each listing and every
+        directory open_under opens."""
+        state = {'now': 0, 'listed': [], 'opened': []}
+        real_scandir, real_open_under, real_close = os.scandir, readiness.open_under, os.close
+        def close(fd):
+            if close_costs:
+                try:
+                    state['now'] += close_costs.get(os.readlink(f'/proc/self/fd/{fd}'), 0)
+                except OSError:
+                    pass
+            real_close(fd)
+        class Listing:
+            def __init__(self, target):
+                self.inner = real_scandir(target)
+                self.path = os.readlink(f'/proc/self/fd/{target}')
+                state['listed'].append(self.path)
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                self.inner.close()
+            def __iter__(self):
+                yield from self.inner
+                state['now'] += costs.get(self.path, 0)
+        def open_under(root, rel, directory=False):
+            if directory:
+                state['opened'].append(rel)
+            return real_open_under(root, rel, directory)
+        os.scandir, readiness.open_under, os.close = Listing, open_under, close
+        try:
+            yield state, (lambda: state['now'])
+        finally:
+            os.scandir, readiness.open_under, os.close = real_scandir, real_open_under, real_close
+
+    def tree(self, f, names, files=()):
+        (f.source/'out').mkdir(exist_ok=True)
+        for name in names:
+            (f.source/'out'/name).mkdir(parents=True)
+        for name in files:
+            (f.source/'out'/name).write_bytes(b'x')
+        return {str(f.source/'out'/n): n for n in names}
+
+    def test_three_empty_directories_at_20_seconds_each_exceed_the_45_second_budget(self):
+        with fixture(usageSeconds=45) as f:
+            paths = self.tree(f, ['a', 'b', 'c'])
+            with self.costed({p: 20 for p in paths}) as (state, clock):
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual(result, {'path': 'out', 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': 3})
+            self.assertEqual(state['now'], 60, 'the over-budget observation is reported, not labelled complete')
+
+    def test_no_queued_directory_is_opened_or_listed_after_expiry(self):
+        with fixture(usageSeconds=45) as f:
+            paths = self.tree(f, ['a', 'b', 'c', 'd', 'e'])
+            with self.costed({p: 20 for p in paths}) as (state, clock):
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual((result['status'], result['reason']), ('incomplete', 'time cap'))
+            subdirs = [p for p in state['opened'] if p != 'out']
+            self.assertEqual(len(subdirs), 3, 'two directories within budget, the third crossing it, then nothing')
+            self.assertEqual(len([p for p in state['listed'] if p in paths]), 3)
+
+    def test_an_empty_listing_that_ends_after_the_deadline_is_a_time_cap(self):
+        with fixture(usageSeconds=45, listingSeconds=10) as f:
+            (f.source/'out').mkdir()
+            with self.costed({str(f.source/'out'): 50}) as (state, clock):
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual(result, {'path': 'out', 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': 0})
+            for name in os.listdir(f.source/'vendor/state'):
+                (f.source/'vendor/state'/name).unlink()
+            with self.costed({str(f.source/'vendor/state'): 50}) as (state, clock):
+                listing = readiness.state_entries(f.source, ['frankel'], readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual((listing['status'], listing['reason'], listing['scanned']), ('incomplete', 'time cap', 0))
+
+    def test_a_listing_whose_exhaustion_passes_the_deadline_is_a_time_cap(self):
+        with fixture(usageSeconds=45) as f:
+            self.tree(f, [], files=['one.o', 'two.o'])
+            with self.costed({str(f.source/'out'): 46}) as (state, clock):
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual(result, {'path': 'out', 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': 2})
+
+    def test_time_passing_between_directories_stops_before_the_next_is_opened(self):
+        with fixture(usageSeconds=45) as f:
+            paths = self.tree(f, ['a', 'b', 'c', 'd'])
+            first = max(paths)  # the stack pops the last-listed name first
+            with self.costed({}, close_costs={first: 50}) as (state, clock):
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual((result['status'], result['reason']), ('incomplete', 'time cap'))
+            self.assertEqual([p for p in state['opened'] if p != 'out'], [f'out/{paths[first]}'], 'nothing opened after expiry')
+
+    def test_time_passing_after_the_last_listing_is_not_reported_complete(self):
+        with fixture(usageSeconds=45) as f:
+            (f.source/'out').mkdir()
+            with self.costed({}, close_costs={str(f.source/'out'): 50}) as (state, clock):
+                result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+            self.assertEqual(result, {'path': 'out', 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': 0})
+
+    def test_within_budget_and_at_the_boundary_usage_completes(self):
+        with fixture(usageSeconds=45) as f:
+            paths = self.tree(f, ['a', 'b', 'c'])
+            for cost in (10, 15):  # 30 s, then exactly 45 s: not over the budget
+                with self.costed({p: cost for p in paths}) as (state, clock):
+                    result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
+                self.assertEqual((result['status'], result['entries'], state['now']), ('complete', 3, 3 * cost))
+
 class ProcTest(unittest.TestCase):
     def test_foreign_processes_are_recognised_from_proc(self):
         with tempfile.TemporaryDirectory() as tmp:
