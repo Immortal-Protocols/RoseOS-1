@@ -313,7 +313,7 @@
   $('h-reset').onclick = () => { shownNotices.forEach((el) => el.remove()); shownNotices.clear(); renderedResult = undefined; dispatch({ type: 'reset' }); };
   $('h-speak').onclick = () => dispatch({ type: 'speak', ms: 4200 });
   $('h-result').onclick = () => { const i = RESULT_ORDER.indexOf(state.result); dispatch({ type: 'result', value: RESULT_ORDER[(i + 1) % RESULT_ORDER.length] }); };
-  $('h-tasks').onclick = () => { for (const id of ['saturday', 'reply']) dispatch({ type: 'startTask', id }); };
+  $('h-tasks').onclick = () => { for (const id of Object.keys(M.TASKS)) dispatch({ type: 'startTask', id }); };
   $('h-attn').onclick = () => dispatch({ type: 'taskEvent', id: 'reply', value: 'attention' });
   $('h-done').onclick = () => { const id = Object.keys(state.tasks).find((k) => M.STOPPABLE.includes(state.tasks[k].state)); if (id) dispatch({ type: 'taskEvent', id, value: 'done' }); };
   $('h-reduced').checked = media.matches;

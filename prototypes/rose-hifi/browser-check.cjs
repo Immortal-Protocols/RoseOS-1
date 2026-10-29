@@ -153,6 +153,126 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   check('no horizontal page overflow at 390 px', !overflow);
 
+  // ---------- Hour two: switcher, agents, windows, stop ----------
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.locator('#h-folded').click();
+  await page.locator('#h-reset').click();
+  await settle(500);
+  await page.locator('.home-page.sparse .app[data-app=camera]').click();
+  await settle(400);
+  check('home app opens a simulated app view', (await st()).view === 'app' && (await st()).app === 'camera');
+  await shot('20-app-camera');
+  await page.locator('#home-bar').click();
+  await settle(400);
+  await page.locator('#tray-rose').click();
+  await page.waitForTimeout(1600);
+  await page.locator('#h-tasks').click();
+  await page.locator('#rose-agents').click();
+  await settle(500);
+  s = await st();
+  check('agents screen from Rose keeps call', s.view === 'agents' && s.connection === 'connected');
+  await page.waitForTimeout(2800);
+  await shot('21-agents-folded');
+  await page.locator('#h-unfolded').click();
+  await settle(900);
+  const cardsVisible = await page.evaluate(() => { const s = document.getElementById('screen').getBoundingClientRect(); return [...document.querySelectorAll('#agrid .wcard')].filter((c) => { const r = c.getBoundingClientRect(); return r.top >= s.top && r.bottom <= s.bottom && r.left >= s.left && r.right <= s.right; }).length; });
+  check('eight windows fully visible unfolded', cardsVisible === 8, cardsVisible);
+  const trayTop = await page.evaluate(() => document.querySelector('#v-agents .tray').getBoundingClientRect().top);
+  const maxCardBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('#agrid .wcard')].map((c) => c.getBoundingClientRect().bottom)));
+  check('stop controls not obscured by tray', maxCardBottom <= trayTop, maxCardBottom + ' <= ' + trayTop);
+  await shot('22-agents-unfolded-8');
+
+  // Stop: cancel, then confirm for one task; unrelated task continues.
+  await page.locator('#agrid [data-window=w-mail] [data-stop]').click();
+  await settle(400);
+  s = await st();
+  check('stop asks for confirmation', s.pendingStop === 'reply');
+  await shot('23-stop-confirm-unfolded');
+  await page.locator('#h-folded').click();
+  await settle(700);
+  check('fold preserves open confirmation', (await st()).pendingStop === 'reply' && await page.locator('.sheet').isVisible());
+  await shot('24-stop-confirm-folded');
+  await page.locator('#sheet-cancel').click();
+  await settle(300);
+  s = await st();
+  check('cancel preserves task', !s.pendingStop && s.tasks.reply.state === 'running');
+  await page.locator('#agrid [data-window=w-files] [data-stop]').focus();
+  await page.keyboard.press('Enter');
+  await settle(300);
+  await page.locator('[data-confirm-stop]').click();
+  await page.waitForTimeout(250);
+  s = await st();
+  check('confirm shows Stopping', s.tasks.reply.state === 'stopping' && s.tasks.saturday.state === 'running');
+  await shot('25-stopping');
+  await page.waitForTimeout(1800);
+  s = await st();
+  check('acknowledged Stopped; unrelated task continues', s.tasks.reply.state === 'stopped' && s.tasks.saturday.state === 'running', JSON.stringify(s.tasks));
+  const stoppedLabels = await page.locator('#agrid .wcard[data-state=stopped]').count();
+  check('both windows of the stopped task update', stoppedLabels === 2, stoppedLabels);
+  await shot('26-stopped');
+
+  // Window detail from agents; observation doesn't cancel work.
+  await page.locator('#agrid [data-open-window=w-maps]').click();
+  await settle(500);
+  s = await st();
+  check('window detail opens', s.view === 'window' && s.window === 'w-maps' && s.tasks.saturday.state === 'running');
+  await shot('27-window-detail');
+  await page.keyboard.press('Escape');
+  await settle(400);
+  check('Escape returns to agents', (await st()).view === 'agents');
+
+  // Switcher: two independent carousels.
+  await page.locator('#home-bar').click();
+  await settle(400);
+  await page.locator('#tray-overview').click();
+  await settle(700);
+  check('switcher opens', (await st()).view === 'switcher');
+  await shot('28-switcher');
+  const hBefore = await page.evaluate(() => document.getElementById('sw-human').scrollLeft);
+  const aBefore = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft);
+  await page.locator('#sw-agent').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await settle(800);
+  const hAfter = await page.evaluate(() => document.getElementById('sw-human').scrollLeft);
+  const aAfter = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft);
+  check('agent carousel moves independently', aAfter > aBefore && hAfter === hBefore, aBefore + '→' + aAfter + ' / human ' + hBefore + '→' + hAfter);
+  const hb = await page.locator('#sw-human').boundingBox();
+  await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height / 2); await page.mouse.down();
+  for (let i = 1; i <= 8; i++) await page.mouse.move(hb.x + hb.width * (0.7 - i * 0.05), hb.y + hb.height / 2);
+  await page.mouse.up();
+  await settle(800);
+  const aAfter2 = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft);
+  const hAfter2 = await page.evaluate(() => document.getElementById('sw-human').scrollLeft);
+  check('human carousel drags independently', hAfter2 !== hAfter && aAfter2 === aAfter, hAfter + '→' + hAfter2 + ' / agent ' + aAfter + '→' + aAfter2);
+  await shot('29-switcher-scrolled');
+  const working = await page.evaluate(() => document.getElementById('v-switcher').classList.contains('working'));
+  check('connector animates while work runs', working);
+  await page.locator('#sw-agent [data-open-window]').first().click();
+  await settle(500);
+  check('agent selection opens window detail', (await st()).view === 'window');
+  await page.locator('#home-bar').click();
+  await settle(300);
+  await page.locator('#tray-overview').click();
+  await settle(600);
+  await page.locator('#sw-human .hcard [data-open-app]').nth(0).click({ force: true });
+  await settle(500);
+  check('human selection foregrounds that app', (await st()).view === 'app');
+
+  // Lock/unlock: work continues.
+  const stepBefore = (await st()).tasks.saturday.step;
+  await page.locator('#h-lock').click();
+  await page.waitForTimeout(3000);
+  await shot('30-locked');
+  await page.locator('#unlock').click();
+  s = await st();
+  check('work continues through lock', s.tasks.saturday.step > stepBefore || s.tasks.saturday.state === 'done', stepBefore + '→' + s.tasks.saturday.step + ' ' + s.tasks.saturday.state);
+  await page.locator('#home-bar').click();
+  await page.waitForTimeout(6000);
+  await shot('31-home-task-notice');
+  s = await st();
+  check('completion notice is a task notice', s.tasks.saturday.state === 'done');
+
   r = await rs();
   const f = r.frames.slice().sort((a, b) => a - b);
   const env = await page.evaluate(() => ({ ua: navigator.userAgent, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight }));
