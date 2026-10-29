@@ -43,6 +43,7 @@ public final class HostTest {
         allowlistIdsMatchContract();
         endpointPolicyRequiresHttps();
         jsonRoundTrip();
+        AuthTest.all();
         System.out.println("HostTest: " + passed + " checks passed");
     }
 
