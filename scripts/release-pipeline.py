@@ -154,6 +154,8 @@ def publisher_inputs(env):
 
 class Production:
     simulated = False
+    statvfs = staticmethod(os.statvfs)
+    stat = staticmethod(os.stat)
 
     def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic):
         """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
@@ -221,6 +223,13 @@ class Production:
 class Fake:
     """Swaps only external edges; everything it produces is marked simulated."""
     simulated = True
+    stat = staticmethod(os.stat)
+
+    def statvfs(self, path):
+        """Synthetic builder free space: <fake-state>/available-bytes, else effectively unlimited."""
+        recorded = self.state/'available-bytes'
+        available = int(recorded.read_text()) if recorded.is_file() else 1 << 50
+        return os.statvfs_result((4096, 1, 0, 0, available, 0, 0, 0, 0, 255))
 
     def __init__(self, state):
         self.state = Path(state)
@@ -342,19 +351,69 @@ def app_versions_consumed(config, apps=None):
     rows = [release.get('published') or {}, *release.get('built', []), *app_only]
     return release['packageName'], max(row.get('versionCode', 0) for row in rows)
 
+# ---------------------------------------------------------------- capacity (OCT29-INFRA-S007)
+
+OS_RESERVE_BYTES = 322122547200  # 300 GiB that must stay available on the builder's filesystems
+
+def nearest_existing(path):
+    path = Path(path)
+    while not path.exists():
+        if path.parent == path:
+            raise FileNotFoundError(str(path))
+        path = path.parent
+    return path
+
+def capacity_preflight(config, paths, statvfs=os.statvfs, stat=os.stat):
+    """Fail unless every filesystem behind paths ({label: path}) has host.capacity.reserveBytes plus the measured OS
+    build allowance available to this user (f_bavail, not f_bfree). A path not created yet is measured on its nearest
+    existing ancestor; each filesystem is counted once. The allowance has no measured bound yet, so while it is null
+    the stage fails closed after reporting what it measured. The app-only workspace allowance is not an OS estimate."""
+    capacity = config['host'].get('capacity') or {}
+    if capacity.get('reserveBytes') != OS_RESERVE_BYTES:
+        raise CheckFailed(f'host.capacity.reserveBytes must be {OS_RESERVE_BYTES} (300 GiB); the reserve is never lowered')
+    allowance = capacity.get('osBuildAllowanceBytes')
+    measured, seen = [], set()
+    for label, path in paths.items():
+        try:
+            base = nearest_existing(path)
+            device = stat(base).st_dev
+            if device in seen:
+                continue
+            fs = statvfs(base)
+        except OSError as error:
+            raise CheckFailed(f'available space for the {label} ({path}) could not be established: {error.__class__.__name__}')
+        seen.add(device)
+        if fs.f_frsize <= 0:
+            raise CheckFailed(f'available space for the {label} ({path}) could not be established: no fragment size')
+        measured.append((label, fs.f_bavail * fs.f_frsize))
+    observed = ', '.join(f'{label} {available} bytes available' for label, available in measured)
+    if type(allowance) is not int or allowance <= 0:
+        raise CheckFailed('the OS build allowance is unknown (host.capacity.osBuildAllowanceBytes is null): no measured '
+            f'bound exists for the incremental OS workspace, so the build fails closed; observed {observed}')
+    needed = OS_RESERVE_BYTES + allowance
+    for label, available in measured:
+        if available < needed:
+            raise CheckFailed(f'the {label} filesystem has {available} bytes available; {needed} are required '
+                f'({OS_RESERVE_BYTES} reserve plus {allowance} OS build allowance)')
+    return measured
+
 def build(a, config, cand, adapter):
     host = config['host']
     check_version_baselines(config, cand, json.loads(a.apps))
     if not host.get('integrateCommand'):
         raise SetupMissing(['host.integrateCommand'])
     release_dir = Path(a.release_dir)
-    release_dir.mkdir(parents=True, exist_ok=True)
     lock = open(host['lockPath'], 'a')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
+        lock.close()
         raise CheckFailed('the source/output lock is held by another job')
     try:
+        # Under the lock and before integration or any workspace write: source, OUT_DIR and release workspace.
+        capacity_preflight(config, {'source tree': host['sourceRoot'], 'OUT_DIR': Path(host['sourceRoot'])/host['outDir'],
+            'release workspace': release_dir}, adapter.statvfs, adapter.stat)
+        release_dir.mkdir(parents=True, exist_ok=True)
         env = stage_env(config, cand, release_dir)
         # Lead-managed entry point: reconcile the exact candidate into the retained tree and write the
         # resolved manifest and the background policy receipt into the release directory.
