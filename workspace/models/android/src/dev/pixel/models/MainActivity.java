@@ -71,7 +71,8 @@ public final class MainActivity extends Activity implements TurnView {
             return;
         }
         host = new LocalAgentHost(agent, new HttpsInferenceClient(endpoint),
-                new AllowlistLauncher(allowlist, new AndroidAppLauncher(this)), this, main::post);
+                new AllowlistLauncher(allowlist, new AndroidAppLauncher(this)), this, main::post,
+                (millis, task) -> main.postDelayed(task, millis));
         showReadyStatus();
     }
 

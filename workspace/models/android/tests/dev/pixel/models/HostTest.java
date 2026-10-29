@@ -27,8 +27,10 @@ public final class HostTest {
         stopDuringRequestCancelsAndFencesLateReply();
         backgroundDuringFirstRequestCancelsTurn();
         backgroundAfterLaunchParksThenContinueFinishes();
+        backgroundDuringFinalRequestEndsTurnAtLimit();
+        stopAfterLaunchSendsReceiptAndSaysRequested();
         lastMomentCheckRefusesLaunchWhenBackgroundedBeforeDispatch();
-        repeatedBackgroundContinueKeepsOneLaunchAndOneRequest();
+        repeatedBackgroundContinueNeverExceedsTwoDispatches();
         stopBetweenProposalAndDispatchOpensNothing();
         launcherExceptionIsReportedFailed();
         lockedPhoneIsReportedNotLaunched();
@@ -139,6 +141,25 @@ public final class HostTest {
     static final AppAllowlist ALLOW = AppAllowlist.fromSelection(Collections.singletonList(CALC));
     static final Executor DIRECT = Runnable::run;
 
+    /** Delayed tasks the test runs explicitly (the receipt settle timer). */
+    static final class ManualDelay implements LocalAgentHost.Delay {
+        final List<Runnable> tasks = new ArrayList<>();
+        final List<Long> delays = new ArrayList<>();
+
+        public void after(long millis, Runnable task) {
+            delays.add(millis);
+            tasks.add(task);
+        }
+
+        void runAll() {
+            List<Runnable> due = new ArrayList<>(tasks);
+            tasks.clear();
+            for (Runnable t : due) {
+                t.run();
+            }
+        }
+    }
+
     static Platform platform() {
         Platform p = new Platform();
         p.installed.add(CALC);
@@ -150,6 +171,7 @@ public final class HostTest {
         final ManualClient client = new ManualClient();
         final Platform platform = platform();
         final NativeAgent agent = new NativeAgent(AgentConfigJson.build(MODEL, null, ALLOW));
+        final ManualDelay delay = new ManualDelay();
         final LocalAgentHost host;
 
         Rig() {
@@ -158,7 +180,7 @@ public final class HostTest {
 
         Rig(View view) {
             this.view = view;
-            host = new LocalAgentHost(agent, client, new AllowlistLauncher(ALLOW, platform), view, DIRECT);
+            host = new LocalAgentHost(agent, client, new AllowlistLauncher(ALLOW, platform), view, DIRECT, delay);
         }
 
         /** The chat messages (role:content) sent in request n. */
@@ -200,6 +222,9 @@ public final class HostTest {
         check(r.platform.started.equals(Collections.singletonList("com.android.calculator2/.Calculator")),
                 "explicit component launched: " + r.platform.started);
         check(r.view.results.get(0).status == LaunchResult.Status.LAUNCH_REQUESTED, "result card");
+        check(r.client.bodies.size() == 1 && r.delay.delays.equals(Collections.singletonList(1500L)),
+                "receipt held for the settle delay: " + r.delay.delays);
+        r.delay.runAll(); // still in the foreground after the settle delay
         check(r.client.bodies.size() == 2, "second request after the tool result");
         check(r.client.bodies.get(1).contains("tool_result") && r.client.bodies.get(1).contains("launch_requested"),
                 "tool result reported to the model");
@@ -254,24 +279,53 @@ public final class HostTest {
         check(r.platform.started.isEmpty(), "no launch from a cancelled turn");
     }
 
+    /** Permitted path: the launched app takes the foreground while the launch is out. */
     static void backgroundAfterLaunchParksThenContinueFinishes() {
         Rig r = new Rig();
         r.host.send("open calculator");
         r.client.reply(0, openApp("calculator"));
-        check(r.platform.started.size() == 1 && r.client.bodies.size() == 2, "launched, final request sent");
+        check(r.platform.started.size() == 1 && r.client.bodies.size() == 1, "launched, receipt held");
         r.host.onBackground(); // the opened app takes the foreground
-        check(r.host.isParked() && r.client.cancels == 1, "post-tool request cancelled and parked");
+        check(r.host.isParked() && r.client.cancels == 0 && r.client.bodies.size() == 1,
+                "parked on the receipt with no request sent");
+        r.delay.runAll();
+        check(r.client.bodies.size() == 1, "settle timer after background sends nothing");
         check(!r.view.canContinue, "no Continue while backgrounded");
         r.host.continueTurn();
-        check(r.client.bodies.size() == 2, "Continue ignored while backgrounded");
+        check(r.client.bodies.size() == 1, "Continue ignored while backgrounded");
         r.host.onForeground();
         check(r.view.canContinue && r.view.canStop, "Continue and Stop offered on return");
         r.host.continueTurn();
-        check(r.client.bodies.size() == 3, "Continue re-requested the final answer");
-        r.client.reply(1, finalText("stale"));
-        r.client.reply(2, finalText("Opening was requested."));
-        check(r.view.transcript.get(r.view.transcript.size() - 1).equals("rose: Opening was requested."),
-                "final answer after Continue: " + r.view.transcript);
+        check(r.client.bodies.size() == 2, "Continue: the agent emitted the second and last request");
+        check(r.client.bodies.get(1).contains("launch_requested"), "final request carries the receipt");
+        r.client.reply(1, finalText("Opening was requested."));
+        check(r.view.transcript.get(r.view.transcript.size() - 1).equals("rose: Opening was requested.")
+                && r.view.status().equals("Done."), "final answer after Continue: " + r.view.transcript);
+        check(r.platform.started.size() == 1 && r.client.bodies.size() == 2, "one launch, two requests");
+    }
+
+    /** Exhausted cap: background after the final request was emitted ends the turn. */
+    static void backgroundDuringFinalRequestEndsTurnAtLimit() {
+        Rig r = new Rig();
+        r.host.send("open calculator");
+        r.client.reply(0, openApp("calculator"));
+        r.delay.runAll();
+        check(r.client.bodies.size() == 2, "final request sent in the foreground");
+        int rejected = r.host.rejectedCount();
+        r.host.onBackground();
+        check(r.client.cancels == 1 && !r.host.hasActiveTurn() && !r.host.isParked(), "cancelled, ended, not parked");
+        check(r.view.status().contains("last") && r.view.status().contains("new message"),
+                "limit explained: " + r.view.status());
+        r.host.onForeground();
+        check(!r.view.canContinue && r.view.canSend, "no Continue; Send offered");
+        r.host.continueTurn();
+        check(r.client.bodies.size() == 2, "Continue sent nothing");
+        r.client.reply(1, finalText("late"));
+        check(r.host.rejectedCount() == rejected + 1 && !r.view.transcript.contains("rose: late"),
+                "late reply to the cancelled request rejected");
+        r.host.send("did it open?");
+        check(r.client.bodies.size() == 3 && r.client.bodies.get(2).contains("launch_requested"),
+                "next turn sees the tool record");
         check(r.platform.started.size() == 1, "still exactly one launch");
     }
 
@@ -295,26 +349,40 @@ public final class HostTest {
                 "reported cancelled: " + r.view.results);
     }
 
-    /**
-     * Host duties across repeated background/Continue: each Continue cancels nothing it should not,
-     * at most one request is open, and the app is launched once. How many re-requests a turn may
-     * make is Core's rule (local-agent-v1); this test does not set it.
-     */
-    static void repeatedBackgroundContinueKeepsOneLaunchAndOneRequest() {
+    /** Negative: no sequence of background/Continue sends a turn past its two requests. */
+    static void repeatedBackgroundContinueNeverExceedsTwoDispatches() {
+        for (boolean parkFirst : new boolean[] {true, false}) {
+            Rig r = new Rig();
+            r.host.send("open calculator");
+            r.client.reply(0, openApp("calculator"));
+            if (!parkFirst) {
+                r.delay.runAll();
+            }
+            for (int i = 0; i < 5; i++) {
+                r.host.onBackground();
+                r.delay.runAll();
+                r.host.onForeground();
+                r.host.continueTurn();
+            }
+            String path = parkFirst ? "park first" : "final request first";
+            check(r.client.bodies.size() == 2, path + ": exactly 2 requests dispatched, got " + r.client.bodies.size());
+            check(r.platform.started.size() == 1, path + ": one launch");
+            check(!r.view.canContinue, path + ": Continue no longer offered");
+        }
+    }
+
+    /** Stop after the Intent left: the held receipt is still sent and rendered truthfully. */
+    static void stopAfterLaunchSendsReceiptAndSaysRequested() {
         Rig r = new Rig();
         r.host.send("open calculator");
         r.client.reply(0, openApp("calculator"));
-        for (int i = 0; i < 3; i++) {
-            r.host.onBackground();
-            check(r.client.cancels == r.client.bodies.size() - 1, "background cancelled the open request, cycle " + i);
-            r.host.onForeground();
-            r.host.continueTurn();
-        }
-        check(r.platform.started.size() == 1, "one launch across background/Continue cycles");
-        int last = r.client.bodies.size() - 1;
-        r.client.reply(last, finalText("Opening was requested."));
-        check(!r.host.hasActiveTurn() && r.view.transcript.get(r.view.transcript.size() - 1)
-                .equals("rose: Opening was requested."), "latest request answers the turn");
+        r.host.stop();
+        check(!r.host.hasActiveTurn() && r.client.bodies.size() == 1 && r.host.rejectedCount() == 0,
+                "turn stopped, receipt accepted, no further request");
+        check(r.view.status().equals("Stopped. The app was requested before Stop and stays open."),
+                "truthful after-Stop receipt: " + r.view.status());
+        r.delay.runAll();
+        check(r.client.bodies.size() == 1 && r.host.rejectedCount() == 0, "settle timer sends no second receipt");
     }
 
     static void stopBetweenProposalAndDispatchOpensNothing() {
