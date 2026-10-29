@@ -111,14 +111,14 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
  workspace/rose-agent/app/tests/RoseVisualStateTest.java
 java -cp "$JAVA_TESTS/RoseVisualState" dev.pixel.voice.RoseVisualStateTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRose" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeRose.java workspace/rose-agent/app/tests/HomeRoseTest.java
+java -cp "$JAVA_TESTS/HomeRose" dev.pixel.voice.HomeRoseTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RosePresence" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
  workspace/rose-agent/app/src/dev/pixel/voice/RosePresenceModel.java workspace/rose-agent/app/tests/RosePresenceModelTest.java
 java -cp "$JAVA_TESTS/RosePresence" dev.pixel.voice.RosePresenceModelTest
-java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeSessionMark" \
- workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/HomeSessionMark.java \
- workspace/rose-agent/app/tests/HomeSessionMarkTest.java
-java -cp "$JAVA_TESTS/HomeSessionMark" dev.pixel.voice.HomeSessionMarkTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeEntry" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeEntry.java workspace/rose-agent/app/tests/HomeEntryTest.java
 java -cp "$JAVA_TESTS/HomeEntry" dev.pixel.voice.HomeEntryTest
@@ -144,6 +144,12 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/PublicApkDownload.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
  workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java workspace/rose-agent/app/tests/DirectUpdateTest.java
 java -cp "$JAVA_TESTS/DirectUpdate" dev.pixel.voice.DirectUpdateTest
+# Explicit update channels: legacy check is Beta unchanged; unconfigured Alpha/Prod never fall back.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DirectUpdateChannel" \
+ workspace/rose-agent/app/src/dev/pixel/voice/PublicApkDownload.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java workspace/rose-agent/app/tests/DirectUpdateTest.java \
+ workspace/rose-agent/app/tests/DirectUpdateChannelTest.java
+java -cp "$JAVA_TESTS/DirectUpdateChannel" dev.pixel.voice.DirectUpdateChannelTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TaskPresentation" \
  workspace/rose-agent/app/src/dev/pixel/voice/TaskPresentation.java workspace/rose-agent/app/tests/TaskPresentationTest.java
 java -cp "$JAVA_TESTS/TaskPresentation" dev.pixel.voice.TaskPresentationTest

@@ -27,8 +27,8 @@ import java.util.List;
 
 /**
  * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): the prototype wallpaper and a
- * light dock of real installed apps. Rose and its session mark live in the fixed HomeTray, which
- * reuses this class's presence card and rose mark; this page owns no voice state.
+ * light dock of real installed apps. Rose lives in the fixed HomeTray, drawn by App's RosePresenceView;
+ * this page owns no voice state.
  */
 final class RoseHomeView extends FrameLayout {
  static final int DOCK_SIZE = 4;
@@ -148,70 +148,6 @@ final class RoseHomeView extends FrameLayout {
   }
  }
 
- /** Opens the conversation surface; never starts, mutes or ends the voice session. */
- static View presence(MainActivity activity, Runnable openRose) {
-  FrameLayout card = new FrameLayout(activity);
-  GradientDrawable back = new GradientDrawable();
-  back.setColor(0xdbfbfcf5);
-  back.setStroke(Math.max(1, activity.dp(1)), 0xc9ffffff);
-  back.setCornerRadius(activity.dp(38));
-  card.setBackground(back);
-  card.setElevation(activity.dp(6));
-  card.addView(new RoseMark(activity), new FrameLayout.LayoutParams(-1, -1));
-  card.setPadding(activity.dp(8), activity.dp(8), activity.dp(8), activity.dp(8));
-  card.setClickable(true);
-  card.setFocusable(true);
-  card.setContentDescription("Open Rose");
-  card.setOnClickListener(v -> openRose.run());
-  return card;
- }
-
- /** The prototype's static rose mark (its SVG fallback, viewBox 320), drawn natively. */
- static final class RoseMark extends View {
-  final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), line = new Paint(Paint.ANTI_ALIAS_FLAG);
-  final Path inside = new Path(), left = new Path(), back = new Path(), right = new Path(), top = new Path();
-  Shader insideShader, petalShader;
-
-  RoseMark(android.content.Context context) {
-   super(context);
-   setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-   line.setStyle(Paint.Style.STROKE);
-   line.setStrokeWidth(1);
-   inside.moveTo(160, 68); inside.cubicTo(211, 82, 243, 125, 228, 186); inside.quadTo(198, 235, 160, 258);
-   inside.quadTo(105, 231, 91, 180); inside.quadTo(83, 116, 160, 68); inside.close();
-   left.moveTo(160, 258); left.cubicTo(72, 225, 58, 126, 100, 107); left.cubicTo(164, 119, 204, 180, 160, 258); left.close();
-   back.moveTo(100, 107); back.cubicTo(145, 109, 141, 34, 184, 52); back.cubicTo(210, 88, 162, 134, 160, 258);
-   back.cubicTo(151, 181, 141, 141, 100, 107); back.close();
-   right.moveTo(160, 258); right.cubicTo(186, 192, 199, 134, 257, 134); right.cubicTo(260, 205, 210, 243, 160, 258); right.close();
-   top.moveTo(184, 52); top.cubicTo(197, 112, 227, 107, 257, 134); top.cubicTo(209, 159, 181, 103, 184, 52); top.close();
-   // SVG gradients use the object bounding box; in viewBox units these approximate each shape's box.
-   insideShader = new LinearGradient(91, 0, 228, 0, 0xffefcdb5, 0xfff4f0db, Shader.TileMode.CLAMP);
-   petalShader = new LinearGradient(60, 34, 260, 258, new int[]{0xfffaf4df, 0xffd5e1cf, 0xff819c87},
-     new float[]{0, .45f, 1}, Shader.TileMode.CLAMP);
-  }
-
-  @Override protected void onDraw(Canvas canvas) {
-   float size = Math.min(getWidth(), getHeight());
-   if (size <= 0) return;
-   canvas.save();
-   canvas.translate((getWidth() - size) / 2f, (getHeight() - size) / 2f);
-   canvas.scale(size / 320f, size / 320f);
-   fill.setShader(insideShader);
-   canvas.drawPath(inside, fill);
-   fill.setShader(petalShader);
-   draw(canvas, left, 0xffa9bbaa);
-   draw(canvas, back, 0xffc4cfb9);
-   draw(canvas, right, 0xffa9bbaa);
-   draw(canvas, top, 0xffc4cfb9);
-   canvas.restore();
-  }
-
-  void draw(Canvas canvas, Path petal, int stroke) {
-   canvas.drawPath(petal, fill);
-   line.setColor(stroke);
-   canvas.drawPath(petal, line);
-  }
- }
 
  /**
   * The owner's default phone, messages, camera and browser apps, in that order, taken from the
