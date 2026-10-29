@@ -62,6 +62,11 @@ on:
       - 'workspace/rose-agent/app/AndroidManifest.xml'
       - 'workspace/pixel-calculator-agent/AndroidManifest.xml'
       - 'os/background-control/agent-pip/AndroidManifest.xml'
+      - 'scripts/device-readiness.py'
+      - 'scripts/tests/test_device_readiness.py'
+      - 'scripts/tests/test_device_contract.py'
+      - 'os/devices/**'
+      - 'os/tests/fixtures/adevtool-17df3b79/**'
       - '.github/workflows/release-verification.yml'
   push:
     branches: [main]
@@ -125,6 +130,11 @@ on:
       - 'workspace/rose-agent/app/AndroidManifest.xml'
       - 'workspace/pixel-calculator-agent/AndroidManifest.xml'
       - 'os/background-control/agent-pip/AndroidManifest.xml'
+      - 'scripts/device-readiness.py'
+      - 'scripts/tests/test_device_readiness.py'
+      - 'scripts/tests/test_device_contract.py'
+      - 'os/devices/**'
+      - 'os/tests/fixtures/adevtool-17df3b79/**'
       - '.github/workflows/release-verification.yml'
   workflow_dispatch:
     inputs:
@@ -167,6 +177,8 @@ jobs:
           python3 scripts/tests/test_emulator_alpha.py
           python3 scripts/tests/test_alpha_source.py
           python3 os/tests/test_cuttlefish_alpha_product.py
+          python3 scripts/tests/test_device_contract.py
+          python3 scripts/tests/test_device_readiness.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
 
