@@ -220,8 +220,10 @@ def file_record(root, rel, blobs=None, limit=LIMITS['smallFileBytes']):
     return record
 
 def bounded_entries(fd, max_entries, end, clock):
-    """Directory entries of fd, checking the entry and time caps before each one is handled. Stops early (closing the
-    listing) and reports why; never yields more than max_entries."""
+    """Directory entries of fd, checking the entry and time caps before each one is handled and again once the listing is
+    exhausted (an empty listing included), so a listing that ends past the deadline is a time cap, not complete. Stops
+    early (closing the listing) and reports why; never yields more than max_entries. These are cooperative checks
+    between calls: they bound scheduling and reporting, not a single blocking filesystem call."""
     seen = 0
     with os.scandir(fd) as items:
         for item in items:
@@ -231,7 +233,7 @@ def bounded_entries(fd, max_entries, end, clock):
                 return 'time cap'
             seen += 1
             yield item
-    return None
+    return 'time cap' if clock() > end else None
 
 def walk_entries(fd, max_entries, end, clock):
     """(entries, stop reason) as a list; the generator's return value carries the reason."""
@@ -255,6 +257,8 @@ def usage(root, rel, deadline, clock=time.monotonic):
     end = clock() + deadline.budget(LIMITS['usageSeconds'])
     total, entries, skipped, stack = 0, 0, 0, [rel]
     while stack:
+        if clock() > end:  # before each queued directory: nothing more is opened after the deadline
+            return {'path': rel, 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': entries}
         current = stack.pop()
         fd, status = open_under(root, current, directory=True)
         if fd is None:
@@ -281,6 +285,8 @@ def usage(root, rel, deadline, clock=time.monotonic):
                 'entriesExamined': entries}
         finally:
             os.close(fd)
+    if clock() > end:  # complete only within the budget
+        return {'path': rel, 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': entries}
     return {'path': rel, 'status': 'complete', 'allocatedBytes': total, 'entries': entries, 'skippedDirectories': skipped}
 
 def state_entries(root, devices, deadline, clock=time.monotonic):
