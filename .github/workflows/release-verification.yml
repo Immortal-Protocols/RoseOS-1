@@ -7,6 +7,7 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
+      - 'scripts/tests/test_release_capacity.py'
       - 'scripts/actions-gcp-login.py'
       - 'scripts/github_release_publisher.py'
       - 'scripts/host-integrate.py'
@@ -80,6 +81,7 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
+      - 'scripts/tests/test_release_capacity.py'
       - 'scripts/actions-gcp-login.py'
       - 'scripts/github_release_publisher.py'
       - 'scripts/host-integrate.py'
@@ -175,6 +177,7 @@ jobs:
           python3 scripts/tests/test_release_manifest.py
           python3 scripts/tests/test_release_stage.py
           python3 scripts/tests/test_release_pipeline.py
+          python3 scripts/tests/test_release_capacity.py
           python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_github_publisher.py

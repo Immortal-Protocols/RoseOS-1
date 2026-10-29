@@ -9,6 +9,11 @@
     "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
     "outDir": "out-rose-first-update-2026102701",
     "lockPath": "/home/pixelbuild/frankel-build.lock",
+    "capacity": {
+      "reserveBytes": 322122547200,
+      "osBuildAllowanceBytes": null,
+      "basis": "OCT29-INFRA-S007: the build stage needs reserveBytes plus a measured incremental OS workspace bound on the source, OUT_DIR and release-workspace filesystems (statvfs f_bavail). No retained evidence bounds that workspace, so the allowance is null and the build fails closed until the Infra manager records a measured or retained bound here. The app-only 16 GiB allowance is not an OS estimate."
+    },
     "installclean": true,
     "makeJobs": 48,
     "makeGoals": [
