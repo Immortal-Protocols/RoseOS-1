@@ -20,7 +20,7 @@ accessed. Prices are historical figures relayed by the Models Manager, not fresh
   - **Envelope conformance:** whether Muse Glimmer at the pinned revision emits the envelope reliably. Never measured. The H100 run proved plain text chat only, not the envelope or tools.
   - **Constrained decoding:** whether the pinned vLLM image's constrained JSON output (`response_format` with a JSON schema) works with this model and the `muse_glimmer` reasoning parser. Not verified: the vLLM source hold stands and there has been no live run. The first adapter therefore does not depend on it.
 - **Reasoning:** with the reasoning parser on, thinking arrives in `message.reasoning`. The agent ignores it, so only `content` must hold the envelope.
-- **Measurement for the first admitted window** (QA owns the receipt):
+- **Measurement for the first admitted window.** The receipt owner is **unassigned**: the QA session is held, and no conformance receipt or live run is assigned to it. Until an admitted route exists, engineers own only their fresh source tests (for the agent: `rose-chat-core/tests/agent.rs`, fixtures only). Proposed method:
   - 20 fixed prompts: 10 plain chat, 8 "open Calculator" variants, 2 not-allowed apps.
   - Record the parse result of every reply.
   - Proposed bar: at least 19 of 20 parse; every `open_app` names `calculator` only when asked; the not-allowed cases produce no `open_app`.
@@ -29,17 +29,17 @@ accessed. Prices are historical figures relayed by the Models Manager, not fresh
 ## Phone-reachable HTTPS route
 
 **Required properties:**
-- a public HTTPS origin whose certificate Android trusts by default — no user CA, no trust-all, no raw model port;
+- the phone must reach an **authenticated HTTPS** origin whose certificate Android trusts by default (no user CA, no trust-all, no raw model port). It need not be public: an already-authorized private route would also satisfy this, if one exists. None is known to Core today;
 - an inference-only credential scoped to this endpoint, revocable, and delivered to the device out of band, never embedded in source or the APK;
 - only `/v1/chat/completions` and `/v1/models` exposed;
 - rate limiting;
 - logs that keep request metadata only, not prompts.
 
-**Candidate shape.** It is not an agent server:
+**One candidate shape: a public IP, DNS name and TLS proxy.** It is not the only permissible architecture, and it is not an agent server:
 - vLLM stays bound to `127.0.0.1:8000`, exactly as in `render_local.py`.
 - A TLS reverse proxy on the same VM terminates HTTPS on :443, checks the bearer token and forwards only those two paths.
 
-**Missing operations.** Nothing is done. Each needs the owner's exact approval:
+**Missing operations for that candidate.** Nothing is done. Each needs the owner's exact approval. A private route would replace rows 2–5 with its own operations:
 
 | # | Operation | Creates |
 | --- | --- | --- |
@@ -55,17 +55,17 @@ accessed. Prices are historical figures relayed by the Models Manager, not fresh
 None of these is available to Models Core. Operations 2–6 are new network, credential and security scope.
 Existing GCP project facts (protocols-465723, us-central1) come from Chief's discovery and do not grant them.
 
-## Cost envelope (draft, not approved)
+## Cost envelope (draft only: not an all-in quote and not an approval request)
 
 | Item | Basis | Two-hour figure |
 | --- | --- | --- |
 | a3-highgpu-1g, one H100, Spot | Last observed rate $6.587557589/h (manager-relayed, historical) | ≈ $13.18 |
-| Boot disk, external IP, egress, DNS, certificate | Not quoted here. Small for 2 h, but unmeasured | Unknown, expected under a few dollars |
+| Boot disk, external IP, egress, DNS, certificate, any proxy or route cost | **Not quoted.** Expected to be small for 2 h, but neither measured nor priced | Unknown |
 | **Tentative reserve** | Plan envelope | **$20** (not an approved allocation) |
 
 - **Spot interruption:** the VM may be preempted at any time. The app then shows a connect or timeout failure (`inference_failed`), never a fake reply.
 - **Persistence:** there is no promise of a persistent service.
-- **Before any request:** refresh the rate and its source.
+- **What makes this incomplete:** the machine figure is a historical relayed rate, not a fresh quote, and every other line is unpriced. An all-in request needs a fresh price for each item (machine, disk, address, egress, DNS, certificate, chosen route), its source and date, Spot versus on-demand, and the teardown cost before any approval is asked.
 
 ## Out of scope here
 

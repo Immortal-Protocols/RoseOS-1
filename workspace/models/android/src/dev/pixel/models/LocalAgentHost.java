@@ -14,13 +14,37 @@ import java.util.concurrent.Executor;
  *
  * Runs on one thread (the UI thread on Android). Network callbacks are re-posted through
  * {@code uiThread} and ignored once the host is destroyed.
+ *
+ * A successful launch receipt is held briefly. The launched app normally takes the foreground
+ * right after the Intent leaves, and the contract parks the turn only when {@code backgrounded}
+ * arrives while the launch is out; sent at once, the receipt would emit the final request before
+ * onPause and the turn would end at the inference limit. So the receipt goes out on background
+ * (after {@code backgrounded}), on Stop, or after {@link #RECEIPT_SETTLE_MS} still in the
+ * foreground, always within the tool timeout.
  */
 public final class LocalAgentHost {
+    static final long RECEIPT_SETTLE_MS = 1500;
+
+    /** Runs a task later on the host thread (Handler.postDelayed on Android). */
+    public interface Delay {
+        void after(long millis, Runnable task);
+    }
+
+    /** A launch receipt not yet sent to the agent. */
+    private static final class Receipt {
+        final String json;
+
+        Receipt(String json) {
+            this.json = json;
+        }
+    }
+
     private final AgentPort agent;
     private final InferenceClient client;
     private final AppLauncher launcher;
     private final TurnView view;
     private final Executor uiThread;
+    private final Delay delay;
     private final Map<String, InferenceClient.Call> inflight = new HashMap<>();
     private final String turnPrefix = "t" + Long.toString(System.currentTimeMillis(), 36);
 
@@ -30,14 +54,16 @@ public final class LocalAgentHost {
     private boolean destroyed;
     private long turnSeq;
     private int rejectedCount;
+    private Receipt pendingReceipt;
 
     LocalAgentHost(AgentPort agent, InferenceClient client, AppLauncher launcher, TurnView view,
-                   Executor uiThread) {
+                   Executor uiThread, Delay delay) {
         this.agent = agent;
         this.client = client;
         this.launcher = launcher;
         this.view = view;
         this.uiThread = uiThread;
+        this.delay = delay;
         refreshControls();
     }
 
@@ -72,6 +98,7 @@ public final class LocalAgentHost {
         if (currentTurn != null) {
             step("{\"type\":\"cancel\",\"turn_id\":" + Json.quote(currentTurn) + "}");
         }
+        sendPendingReceipt(); // the launch already left; its one receipt renders after_stop
     }
 
     public void continueTurn() {
@@ -85,6 +112,7 @@ public final class LocalAgentHost {
         if (currentTurn != null) {
             step("{\"type\":\"backgrounded\"}");
         }
+        sendPendingReceipt(); // while the launch is out: the turn parks
         refreshControls();
     }
 
@@ -96,6 +124,7 @@ public final class LocalAgentHost {
     /** The activity is going away: cancel requests, release the native agent, dispatch nothing. */
     public void onDestroy() {
         destroyed = true;
+        pendingReceipt = null;
         for (InferenceClient.Call call : new ArrayList<>(inflight.values())) {
             call.cancel();
         }
@@ -141,7 +170,7 @@ public final class LocalAgentHost {
                 }
                 case "need_tool":
                     dispatchTool(Json.string(out, "turn_id"), Json.number(out, "generation"),
-                            Json.string(out, "action_id"), Json.string(out, "app_id"));
+                            Json.string(out, "action_id"), Json.string(out, "app_id"), Json.number(out, "timeout_ms"));
                     break;
                 case "render":
                     render(Json.string(out, "turn_id"), Json.object(out.get("event")));
@@ -187,7 +216,7 @@ public final class LocalAgentHost {
      * The host's last check before an Intent leaves the app: this turn is still the live one, the
      * activity is in the foreground and not destroyed. Always answers with exactly one tool_result.
      */
-    private void dispatchTool(String turnId, long generation, String actionId, String appId) {
+    private void dispatchTool(String turnId, long generation, String actionId, String appId, long timeoutMs) {
         LaunchResult result;
         if (destroyed || !foreground || !turnId.equals(currentTurn)) {
             result = new LaunchResult(appId, LaunchResult.Status.CANCELLED, "turn no longer active");
@@ -199,8 +228,27 @@ public final class LocalAgentHost {
             }
         }
         view.showActionResult(result);
-        step("{\"type\":\"tool_result\",\"turn_id\":" + Json.quote(turnId) + ",\"generation\":" + generation
-                + ",\"action_id\":" + Json.quote(actionId) + ",\"status\":" + Json.quote(result.status.wire) + "}");
+        String receipt = "{\"type\":\"tool_result\",\"turn_id\":" + Json.quote(turnId) + ",\"generation\":" + generation
+                + ",\"action_id\":" + Json.quote(actionId) + ",\"status\":" + Json.quote(result.status.wire) + "}";
+        if (result.status != LaunchResult.Status.LAUNCH_REQUESTED) {
+            step(receipt);
+            return;
+        }
+        final Receipt held = new Receipt(receipt);
+        pendingReceipt = held;
+        delay.after(Math.min(RECEIPT_SETTLE_MS, timeoutMs / 2), () -> {
+            if (pendingReceipt == held) {
+                sendPendingReceipt();
+            }
+        });
+    }
+
+    private void sendPendingReceipt() {
+        Receipt receipt = pendingReceipt;
+        if (receipt != null && !destroyed) {
+            pendingReceipt = null;
+            step(receipt.json);
+        }
     }
 
     private void render(String turnId, Map<String, Object> event) {
@@ -254,9 +302,14 @@ public final class LocalAgentHost {
                 view.setStatus("Done.");
                 break;
             case "cancelled":
-                view.setStatus("backgrounded".equals(error)
-                        ? "Cancelled because Rose Models left the foreground."
-                        : "Stopped. An app that was already opened stays open.");
+                if ("backgrounded".equals(error)) {
+                    view.setStatus("Cancelled because Rose Models left the foreground.");
+                } else if ("inference_limit".equals(error)) {
+                    view.setStatus("Rose Models left the foreground during the final request, which was this turn's"
+                            + " last. The app action is kept; send a new message to continue.");
+                } else {
+                    view.setStatus("Stopped. An app that was already opened stays open.");
+                }
                 break;
             case "superseded":
                 view.setStatus("The paused turn was replaced by your new message.");

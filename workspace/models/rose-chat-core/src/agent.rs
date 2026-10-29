@@ -824,20 +824,21 @@ impl Agent {
 
     fn backgrounded(&mut self) -> Vec<Output> {
         match std::mem::replace(&mut self.phase, Phase::Idle) {
-            Phase::Inference {
-                mut turn,
-                generation,
-            } => {
+            Phase::Inference { turn, generation } => {
                 let mut out = vec![Output::CancelInference {
                     turn_id: turn.id.clone(),
                     generation,
                 }];
+                // The emitted request counts toward the per-turn cap even though it is cancelled,
+                // so background/Continue can never buy extra requests. A turn with budget left
+                // after its tool result parks; otherwise it ends, and the next Send continues from
+                // the tool record already in the history.
                 if turn.actions == 0 {
                     out.extend(self.end_turn(turn, Outcome::Cancelled, Some("backgrounded")));
-                } else {
-                    // The cancelled continuation does not use up the turn's second request.
-                    turn.inferences -= 1;
+                } else if turn.inferences < MAX_INFERENCES_PER_TURN {
                     out.extend(self.park(turn));
+                } else {
+                    out.extend(self.end_turn(turn, Outcome::Cancelled, Some("inference_limit")));
                 }
                 out
             }
