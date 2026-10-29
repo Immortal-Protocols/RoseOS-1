@@ -115,6 +115,7 @@ class Preflight(unittest.TestCase):
         # The checked-in Frankel contract: reserve kept, allowance null, so the real build fails closed.
         self.assertEqual(FRANKEL['host']['capacity']['reserveBytes'], RESERVE)
         self.assertIsNone(FRANKEL['host']['capacity']['osBuildAllowanceBytes'])
+        self.assertEqual(FRANKEL['host']['capacity']['mode'], 'budgeted')  # S008; static mode would still refuse
         with self.assertRaisesRegex(pipeline.CheckFailed, 'OS build allowance is unknown'):
             pipeline.capacity_preflight(FRANKEL, p.paths(), fs.statvfs, fs.stat)
 
@@ -136,6 +137,7 @@ class BuildStage(unittest.TestCase):
         self.cfg = copy.deepcopy(FRANKEL)
         self.cfg['host'].update(sourceRoot=str(self.p.root/'src'), outDir='out', lockPath=str(self.p.root/'build.lock'),
             integrateCommand=['true'])
+        self.cfg['host']['capacity']['mode'] = 'static'  # S007's static bound; budgeted mode: test_capacity_monitor.py
         self.cfg['host']['capacity']['osBuildAllowanceBytes'] = 40 * GiB  # synthetic
         self.args = types.SimpleNamespace(apps='[]', release_dir=str(self.p.root/'actions/r1/release'))
         patches = {'check_version_baselines': lambda *a: None, 'stage_env': lambda *a: {},
@@ -146,7 +148,7 @@ class BuildStage(unittest.TestCase):
             self.addCleanup(setattr, pipeline, name, original)
 
     def adapter(self, available):
-        fs = Fs({str(self.p.root): (1, available)}, frsize=1)
+        fs = Fs({'': (1, available)}, frsize=1)  # every stage write path, temp and RAM staging included
         events = self.events
 
         class Adapter:
