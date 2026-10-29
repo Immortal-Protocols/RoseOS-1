@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rose HiFi Prototype</title>
+<style>
+:root{--wallpaper:url(%%WALLPAPER%%);--brush:url(%%BRUSH%%)}
+/*%%CSS%%*/
+</style></head>
+<body>
+<div class="page">
+<main class="stage" id="stage" aria-label="Rose HiFi prototype">
+ <div class="fit" id="fit">
+  <section class="device" id="device" aria-label="Simulated RoseOS phone">
+   <div class="screen" id="screen" data-view="home" data-result="false">
+    <div class="punch" aria-hidden="true"></div>
+
+    <!-- Home: wallpaper, horizontal pages, persistent tray -->
+    <section class="view" id="v-home" data-active="true" aria-label="Home">
+     <div class="wall" aria-hidden="true"></div>
+     <div class="home-pages" id="home-pages" aria-roledescription="carousel" aria-label="Home pages">
+      <div class="home-track" id="home-track"></div>
+     </div>
+     <nav class="page-dots" id="page-dots" aria-label="Home page"></nav>
+     <div class="tray two" id="home-tray" role="toolbar" aria-label="Persistent tray">
+      <button class="well" id="tray-rose" aria-label="Open Rose"><div class="rose-slot" id="slot-tray"></div></button>
+      <button class="well" id="tray-overview" aria-label="Open system switcher"><span class="overview-glyph" aria-hidden="true"><i></i><i></i><i></i></span></button>
+     </div>
+    </section>
+
+    <!-- Rose voice + results -->
+    <section class="view" id="v-rose" data-active="false" aria-label="Rose">
+     <div class="ivory-bg" aria-hidden="true"></div>
+     <header class="rose-head"><h2>Rose</h2></header>
+     <div class="rose-stage" id="rose-stage"><div class="rose-slot" id="slot-stage"></div></div>
+     <p class="rose-caption" id="rose-caption" aria-hidden="true"></p>
+     <article class="rose-output" id="rose-output" aria-live="polite" aria-label="Rose results"></article>
+     <div class="tray" role="toolbar" aria-label="Call controls">
+      <button class="well" id="rose-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+      <button class="well" id="rose-end" aria-label="End call"></button>
+      <button class="well" id="rose-agents" aria-label="Open Rose's apps"></button>
+     </div>
+    </section>
+
+    <section class="view" id="v-switcher" data-active="false" aria-label="System switcher"></section>
+    <section class="view" id="v-agents" data-active="false" aria-label="Rose's apps"></section>
+    <section class="view" id="v-app" data-active="false" aria-label="App"></section>
+    <section class="view" id="v-window" data-active="false" aria-label="Rose app window"></section>
+
+    <div class="lock" id="lock" hidden><div class="wall" aria-hidden="true"></div><div class="time">9:41</div><div class="date">Thursday, October 29</div><button class="unlock" id="unlock">Unlock</button></div>
+    <div class="notices" id="notices"></div>
+    <div id="sheet-host"></div>
+    <button class="home-bar" id="home-bar" aria-label="Go home"><i></i></button>
+    <canvas id="rose-canvas" aria-hidden="true"></canvas>
+    <div class="rose-fallback" id="rose-fallback" role="img" aria-label="Rose" hidden><div class="orb"><span class="h up"></span><span class="h lo"></span></div><span class="ring"></span></div>
+   </div>
+  </section>
+ </div>
+</main>
+
+<aside class="harness" aria-label="Prototype controls">
+ <h1>Rose HiFi<small>Simulation controls · outside the phone</small></h1>
+ <fieldset><legend>Device</legend>
+  <div class="row"><button class="hbtn" id="h-folded" aria-pressed="true">Folded</button><button class="hbtn" id="h-unfolded" aria-pressed="false">Unfolded</button></div>
+  <div class="row"><button class="hbtn" id="h-lock">Lock</button><button class="hbtn" id="h-reset">Reset</button></div>
+ </fieldset>
+ <fieldset><legend>Voice</legend>
+  <div class="row"><button class="hbtn" id="h-speak">Rose speaks</button><button class="hbtn" id="h-result">Next result</button></div>
+ </fieldset>
+ <fieldset><legend>Tasks</legend>
+  <div class="row"><button class="hbtn" id="h-tasks">Start tasks</button><button class="hbtn" id="h-attn">Needs choice</button><button class="hbtn" id="h-done">Finish one</button></div>
+  <div class="tasklist hstatus" id="h-tasklist"></div>
+ </fieldset>
+ <fieldset><legend>Rendering</legend>
+  <label class="hcheck"><input type="checkbox" id="h-reduced">Reduced motion</label>
+  <label class="hcheck"><input type="checkbox" id="h-static">Static fallback</label>
+  <div class="row"><button class="hbtn" id="h-lose">Lose WebGL context</button></div>
+  <p class="hstatus" id="h-render">Starting renderer…</p>
+ </fieldset>
+</aside>
+</div>
+<div class="sr" id="announcer" aria-live="polite"></div>
+<script>/*%%MODEL%%*/</script>
+<script>/*%%RENDERER%%*/</script>
+<script>/*%%APP%%*/</script>
+</body></html>
