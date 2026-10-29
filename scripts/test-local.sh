@@ -14,6 +14,7 @@ node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-
 # APP-REMOVE-001: retired DeepSeek, Luna-first and ARTEMIS trial controls stay removed; shared paths stay.
 node --test workspace/rose-agent/tests/trial-removal.test.mjs
 node --test workspace/rose-agent/tests/trial-menu-removal.test.mjs
+node --test workspace/rose-agent/tests/rose-presence.test.mjs
 # APP-BUG-OPEN-001: the shell open_app refusal stays fail-closed; registered launches keep their turn's task.
 node --test workspace/rose-agent/server/unbound-shell-open.test.mjs
 # APP-BUG-OPEN-002: registered phone navigation and input run as the current request and honour Stop.
@@ -109,6 +110,10 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
  workspace/rose-agent/app/tests/RoseVisualStateTest.java
 java -cp "$JAVA_TESTS/RoseVisualState" dev.pixel.voice.RoseVisualStateTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RosePresence" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RosePresenceModel.java workspace/rose-agent/app/tests/RosePresenceModelTest.java
+java -cp "$JAVA_TESTS/RosePresence" dev.pixel.voice.RosePresenceModelTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeSessionMark" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/HomeSessionMark.java \
  workspace/rose-agent/app/tests/HomeSessionMarkTest.java
