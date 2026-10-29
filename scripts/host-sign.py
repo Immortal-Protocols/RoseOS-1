@@ -24,7 +24,6 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -252,13 +251,7 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         'signedTargetFilesSha256': receipt['signedTargetFilesSha256']}, sort_keys=True) + '\n')
     return 0
 
-def terminate_cleanly(signum, frame):
-    """A capacity stop (SIGTERM to this process group) unwinds normally, so the RAM secret directory is still
-    overwritten and removed by host_secrets.private_directory before the stage fails."""
-    raise SystemExit(128 + signum)
-
 if __name__ == '__main__':
-    signal.signal(signal.SIGTERM, terminate_cleanly)
     try:
         if sys.argv[1:] == ['--check']:
             missing = missing_inputs(json.loads((ROOT/'os/release-pipeline/frankel.json').read_text()))

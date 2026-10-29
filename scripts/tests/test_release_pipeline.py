@@ -336,9 +336,6 @@ class PipelineTest(unittest.TestCase):
         self.config.write_text(json.dumps({'schemaVersion': 1, 'fixture': True,
             'target': {'device': 'frankel', 'variant': 'user', 'lunch': 'frankel-cur-user'},
             'host': {'sourceRoot': str(src), 'outDir': 'out', 'lockPath': str(root/'build.lock'), 'installclean': True,
-                # Synthetic allowance; the fake adapter reports synthetic free space (see CapacityTest).
-                'capacity': {'mode': 'budgeted', 'reserveBytes': 322122547200, 'osBuildAllowanceBytes': None,
-                    'stopBufferBytes': 68719476736, 'transientStopBytes': 1073741824, 'sampleIntervalSeconds': 1, 'termGraceSeconds': 2, 'killVerifySeconds': 2},
                 'makeJobs': 2, 'makeGoals': ['target-files-package'], 'integrateCommand': [PY, integrate], 'signCommand': [PY, sign],
                 'integrate': {'reconcile': {'applyArgs': ['--agent-tray', '--updater-url', UPDATER_URL]}},
                 'fakeMake': [PY, fake_make],

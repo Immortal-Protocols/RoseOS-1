@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
 import github_release_publisher  # noqa: E402
 import permission_apex  # noqa: E402
-import capacity_monitor  # noqa: E402
 import systemui_identity  # noqa: E402
 from release_receipts import sha256_file  # noqa: E402
 
@@ -155,8 +154,6 @@ def publisher_inputs(env):
 
 class Production:
     simulated = False
-    statvfs = staticmethod(os.statvfs)
-    stat = staticmethod(os.stat)
 
     def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic):
         """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
@@ -191,14 +188,14 @@ class Production:
             state = describe()
         return state
 
-    def make(self, config, cand, env, runner=None):
+    def make(self, config, cand, env):
         host = config['host']
         steps = ['source build/envsetup.sh', f'lunch {host_token(config["target"]["lunch"])}']
         if host.get('installclean'):
             # Regenerates installed metadata (including AVB fingerprints) after a build-number change.
             steps.append('m installclean')
         steps.append(f'm -j{int(host["makeJobs"])} ' + ' '.join(host_token(g) for g in host['makeGoals']))
-        (runner or plain_runner)(['bash', '-euo', 'pipefail', '-c', ' && '.join(steps)], env, host['sourceRoot'])
+        subprocess.run(['bash', '-euo', 'pipefail', '-c', ' && '.join(steps)], cwd=host['sourceRoot'], env=env, check=True)
 
     def publish(self, config, cand, directory, receipt_dir):
         if not os.environ.get('PIXEL_OTA_TOKEN'):
@@ -224,13 +221,6 @@ class Production:
 class Fake:
     """Swaps only external edges; everything it produces is marked simulated."""
     simulated = True
-    stat = staticmethod(os.stat)
-
-    def statvfs(self, path):
-        """Synthetic builder free space: <fake-state>/available-bytes, else effectively unlimited."""
-        recorded = self.state/'available-bytes'
-        available = int(recorded.read_text()) if recorded.is_file() else 1 << 50
-        return os.statvfs_result((4096, 1, 0, 0, available, 0, 0, 0, 0, 255))
 
     def __init__(self, state):
         self.state = Path(state)
@@ -243,9 +233,9 @@ class Fake:
     def control_builder(self, action):
         self.log(f'builder {action}')
 
-    def make(self, config, cand, env, runner=None):
+    def make(self, config, cand, env):
         self.log('make')
-        (runner or plain_runner)(config['host']['fakeMake'], env, None)
+        subprocess.run(config['host']['fakeMake'], env=env, check=True)
 
     def publish(self, config, cand, directory, receipt_dir):
         store = self.state/'releases'/config['publication']['tag'].format(build=cand['build'])
@@ -282,11 +272,8 @@ def entry_point(argv):
         raise InvalidInput('host entry points must be argv lists')
     return [x.replace('{python}', sys.executable).replace('{checkout}', str(ROOT)) for x in argv]
 
-def plain_runner(argv, env, cwd):
-    subprocess.run(argv, env=env, cwd=cwd, check=True)
-
-def run_entry_point(argv, env, cwd, runner=None):
-    (runner or plain_runner)(entry_point(argv), env, cwd)
+def run_entry_point(argv, env, cwd):
+    subprocess.run(entry_point(argv), env=env, cwd=cwd, check=True)
 
 def adapter_inputs(config):
     """Recipe keys the checked-in host adapters still need (their --check mode)."""
@@ -355,127 +342,37 @@ def app_versions_consumed(config, apps=None):
     rows = [release.get('published') or {}, *release.get('built', []), *app_only]
     return release['packageName'], max(row.get('versionCode', 0) for row in rows)
 
-# ---------------------------------------------------------------- capacity (OCT29-INFRA-S007)
-
-OS_RESERVE_BYTES = 322122547200  # 300 GiB that must stay available on the builder's filesystems
-
-def nearest_existing(path):
-    path = Path(path)
-    while not path.exists():
-        if path.parent == path:
-            raise FileNotFoundError(str(path))
-        path = path.parent
-    return path
-
-def capacity_preflight(config, paths, statvfs=os.statvfs, stat=os.stat):
-    """Fail unless every filesystem behind paths ({label: path}) has host.capacity.reserveBytes plus the measured OS
-    build allowance available to this user (f_bavail, not f_bfree). A path not created yet is measured on its nearest
-    existing ancestor; each filesystem is counted once. The allowance has no measured bound yet, so while it is null
-    the stage fails closed after reporting what it measured. The app-only workspace allowance is not an OS estimate."""
-    capacity = config['host'].get('capacity') or {}
-    if capacity.get('reserveBytes') != OS_RESERVE_BYTES:
-        raise CheckFailed(f'host.capacity.reserveBytes must be {OS_RESERVE_BYTES} (300 GiB); the reserve is never lowered')
-    allowance = capacity.get('osBuildAllowanceBytes')
-    measured, seen = [], set()
-    for label, path in paths.items():
-        try:
-            base = nearest_existing(path)
-            device = stat(base).st_dev
-            if device in seen:
-                continue
-            fs = statvfs(base)
-        except OSError as error:
-            raise CheckFailed(f'available space for the {label} ({path}) could not be established: {error.__class__.__name__}')
-        seen.add(device)
-        if fs.f_frsize <= 0:
-            raise CheckFailed(f'available space for the {label} ({path}) could not be established: no fragment size')
-        measured.append((label, fs.f_bavail * fs.f_frsize))
-    observed = ', '.join(f'{label} {available} bytes available' for label, available in measured)
-    if type(allowance) is not int or allowance <= 0:
-        raise CheckFailed('the OS build allowance is unknown (host.capacity.osBuildAllowanceBytes is null): no measured '
-            f'bound exists for the incremental OS workspace, so the build fails closed; observed {observed}')
-    needed = OS_RESERVE_BYTES + allowance
-    for label, available in measured:
-        if available < needed:
-            raise CheckFailed(f'the {label} filesystem has {available} bytes available; {needed} are required '
-                f'({OS_RESERVE_BYTES} reserve plus {allowance} OS build allowance)')
-    return measured
-
-# Retained build disks keep the 300 GiB reserve plus the stop buffer; every other stage path is transient.
-RETAINED_ROLES = frozenset({'source tree', 'OUT_DIR', 'release workspace', 'artifact directory'})
-
-def stage_write_paths(config, release_dir, *extra):
-    """Every filesystem a build or sign stage writes: source tree, OUT_DIR, release workspace (and its public/
-    staging directories), the temporary directory, RAM secret staging and RUNNER_TEMP when present."""
-    host = config['host']
-    paths = {'source tree': host['sourceRoot'], 'OUT_DIR': Path(host['sourceRoot'])/host['outDir'],
-        'release workspace': release_dir, 'temporary directory': tempfile.gettempdir()}
-    if os.path.isdir('/dev/shm'):
-        paths['RAM secret staging'] = '/dev/shm'
-    if os.environ.get('RUNNER_TEMP'):
-        paths['RUNNER_TEMP'] = os.environ['RUNNER_TEMP']
-    for label, path in extra:
-        paths[label] = path
-    return paths
-
-def capacity_gate(config, paths, adapter):
-    """Under the lock, before stage writes. Static mode (default) is S007's bound: reserve plus a measured allowance,
-    refusing while it is unknown, and returns None. Budgeted mode returns a started capacity_monitor.Budget that runs
-    the stage's children and copies."""
-    capacity = config['host'].get('capacity') or {}
-    mode = capacity.get('mode', 'static')
-    if mode == 'static':
-        capacity_preflight(config, paths, adapter.statvfs, adapter.stat)
-        return None
-    if mode != 'budgeted':
-        raise CheckFailed(f'host.capacity.mode {mode!r} is not static or budgeted')
-    return capacity_monitor.Budget(capacity_monitor.policy_from(capacity), paths, adapter.statvfs, adapter.stat,
-        retained=RETAINED_ROLES & set(paths)).start()
-
-def budgeted_gate(config, paths, adapter):
-    """Sign and transfer: a Budget in budgeted mode; static mode keeps their existing unguarded behavior."""
-    if (config['host'].get('capacity') or {}).get('mode', 'static') == 'static':
-        return None
-    return capacity_gate(config, paths, adapter)
-
 def build(a, config, cand, adapter):
     host = config['host']
     check_version_baselines(config, cand, json.loads(a.apps))
     if not host.get('integrateCommand'):
         raise SetupMissing(['host.integrateCommand'])
     release_dir = Path(a.release_dir)
+    release_dir.mkdir(parents=True, exist_ok=True)
     lock = open(host['lockPath'], 'a')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        lock.close()
         raise CheckFailed('the source/output lock is held by another job')
     try:
-        # Under the lock and before integration or any workspace write.
-        budget = capacity_gate(config, stage_write_paths(config, release_dir), adapter)
-        runner = budget.run if budget else None
-        release_dir.mkdir(parents=True, exist_ok=True)
         env = stage_env(config, cand, release_dir)
         # Lead-managed entry point: reconcile the exact candidate into the retained tree and write the
         # resolved manifest and the background policy receipt into the release directory.
         try:
-            run_entry_point(host['integrateCommand'], env, host['sourceRoot'], runner)
+            run_entry_point(host['integrateCommand'], env, host['sourceRoot'])
         finally:
             drop_signer_access()
         for name in ('resolved-manifest.xml', 'background-policy.json'):
             if not (release_dir/name).is_file():
                 raise CheckFailed(f'integration did not produce $ROSE_RELEASE_DIR/{name}')
         started = time.time()
-        adapter.make(config, cand, env, runner)
+        adapter.make(config, cand, env)
         # The retained OUT_DIR holds older target-files too; take only the one this build wrote.
         packaging = Path(host['sourceRoot'])/host['outDir']/'target/product'/config['target']['device']/'obj/PACKAGING/target_files_intermediates'
         fresh = [z for z in packaging.glob('*-target_files*.zip') if z.stat().st_mtime >= started - 1]
         if len(fresh) != 1:
             raise CheckFailed(f'expected exactly one target-files zip written by this build, found {len(fresh)}')
-        if budget:
-            budget.copy(fresh[0], release_dir/'unsigned-target_files.zip', adapter.stat)
-        else:
-            shutil.copyfile(fresh[0], release_dir/'unsigned-target_files.zip')
+        shutil.copyfile(fresh[0], release_dir/'unsigned-target_files.zip')
     finally:
         lock.close()
     return {'stage': 'build', 'unsignedTargetFiles': sha256_file(release_dir/'unsigned-target_files.zip')}
@@ -489,15 +386,11 @@ def sign(a, config, cand, adapter):
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        lock.close()
         raise CheckFailed('the source/output lock is held by another job')
     try:
-        # Lead-managed entry point: signs with the existing identities; secrets stay on the builder. In budgeted mode
-        # the signing child tree runs under the budget; signer access is dropped whether it completes or stops.
+        # Lead-managed entry point: signs with the existing identities; secrets stay on the builder.
         try:
-            budget = budgeted_gate(config, stage_write_paths(config, release_dir), adapter)
-            run_entry_point(host['signCommand'], stage_env(config, cand, release_dir), host['sourceRoot'],
-                budget.run if budget else None)
+            run_entry_point(host['signCommand'], stage_env(config, cand, release_dir), host['sourceRoot'])
         finally:
             drop_signer_access()
     finally:
@@ -1091,17 +984,13 @@ def stage_artifact(a, config, cand, adapter):
     verification = json.loads((release_dir/'public/verification.json').read_text())
     if verification.get('candidate') != cand or verification.get('simulated') != adapter.simulated:
         raise CheckFailed('verification receipt does not belong to this candidate and adapter')
-    budget = budgeted_gate(config, {'release workspace': release_dir, 'artifact directory': artifact}, adapter)
     assets = artifact/'assets'
     assets.mkdir(parents=True)
     for name in public_assets(device, build):
         source = release_dir/'public'/name
         if source.is_symlink() or not source.is_file():
             raise CheckFailed(f'public file missing or not regular: {name}')
-        if budget:
-            budget.copy(source, assets/name, adapter.stat)
-        else:
-            shutil.copyfile(source, assets/name)
+        shutil.copyfile(source, assets/name)
     apps = [tuple(x) for x in json.loads(a.apps)]
     write_identities(config, artifact/'expected-identities.json', apps)
     resolved = release_dir/'resolved-manifest.xml'
@@ -1190,7 +1079,7 @@ def main(argv=None):
         print(json.dumps({'verdict': 'INVALID', 'error': str(error)}), file=sys.stderr)
         return 2
     except (CheckFailed, subprocess.CalledProcessError, release_receipts.ReceiptExists,
-            github_release_publisher.PublishError, capacity_monitor.CapacityAbort) as error:
+            github_release_publisher.PublishError) as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, sort_keys=True))
