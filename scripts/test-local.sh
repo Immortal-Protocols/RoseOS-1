@@ -104,6 +104,11 @@ java -cp "$JAVA_TESTS/RoseChannels" app.seamlessupdate.client.RoseChannelsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
 java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
+# Independent Rose visual axes (connection, microphone, voice) derived from ConversationState.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseVisualState" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
+ workspace/rose-agent/app/tests/RoseVisualStateTest.java
+java -cp "$JAVA_TESTS/RoseVisualState" dev.pixel.voice.RoseVisualStateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeSessionMark" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/HomeSessionMark.java \
  workspace/rose-agent/app/tests/HomeSessionMarkTest.java
