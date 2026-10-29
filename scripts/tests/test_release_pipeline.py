@@ -43,7 +43,7 @@ FRAMEWORK_DUMP = '''\
         resource 0x01110331 android:bool/config_useSystemWallpaperDuringUserSwitch: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
           (boolean) false
 '''
-APPS = [['dev.pixel.voice', 308], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+APPS = [['dev.pixel.voice', 309], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
 PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
 WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
@@ -361,7 +361,7 @@ class PipelineTest(unittest.TestCase):
         the workflow's candidate environment; only the fake adapter and fixture config are appended."""
         subprocess.run([PY, str(STAGE), 'init', '--state', str(self.base/'stages'), '--source-revision', SHA, '--device', 'frankel',
             '--build-number', BUILD], check=True, capture_output=True)
-        env = dict(os.environ, ROSE_BASE=str(self.base), CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP,
+        env = dict(os.environ, ROSE_BASE=str(self.base), ROSE_DEVICE='frankel', CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP,
             CHANNEL='beta', APPS=json.dumps(apps), PATH=f'{Path(PY).parent}:{os.environ["PATH"]}')
         if apps is None:
             env.pop('APPS')
@@ -452,7 +452,7 @@ class PipelineTest(unittest.TestCase):
 
     def workflow_env(self):
         """The builder job's environment for running os-release.yml's prepare block and stage lines directly."""
-        return dict(os.environ, HOME=str(self.root/'home'), CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP,
+        return dict(os.environ, HOME=str(self.root/'home'), ROSE_DEVICE='frankel', CANDIDATE_SHA=SHA, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP,
             CHANNEL='beta', APPS=json.dumps(APPS), PATH=f'{Path(PY).parent}:{os.environ["PATH"]}', GITHUB_RUN_ID='4242',
             RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='', GITHUB_ENV=str(self.root/'github-env'))
 

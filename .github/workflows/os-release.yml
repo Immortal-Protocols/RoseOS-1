@@ -11,6 +11,11 @@ on:
         type: choice
         options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
         default: os-release
+      device:
+        description: Device to build and publish; only admitted devices are offered (FAM-02-INFRA-S001; frankel only)
+        type: choice
+        options: [frankel]
+        default: frankel
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
         required: true
@@ -71,6 +76,8 @@ concurrency:
 
 env:
   MODE: ${{ inputs.mode }}
+  # Read by release-pipeline.py, which admits only its SUPPORTED_DEVICES; the guard checks it before the controller.
+  ROSE_DEVICE: ${{ inputs.device || 'frankel' }}
   CANDIDATE_SHA: ${{ inputs.candidate_sha }}
   BUILD_NUMBER: ${{ inputs.build_number }}
   BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
@@ -103,6 +110,11 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BUILD_NUMBER" =~ ^[0-9]{10}$ && "$BUILD_TIMESTAMP" =~ ^[0-9]{10}$ ]]
+          # The device names attempt directories and artifacts: a plain codename, admitted by the pipeline's allowlist.
+          [[ "$ROSE_DEVICE" =~ ^[a-z][a-z0-9]{1,31}$ ]]
+          python3 -c 'import importlib.util, os; s = importlib.util.spec_from_file_location("p", "scripts/release-pipeline.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); m.resolve_device(os.environ["ROSE_DEVICE"])'
+          # Every mode other than os-release (app, alpha, reuse) is bound to frankel's records.
+          [[ "$MODE" == os-release || "$ROSE_DEVICE" == frankel ]]
           python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
           git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -211,10 +223,10 @@ jobs:
       - name: Prepare stage receipts
         run: |
           set -euo pipefail
-          base="$HOME/rose-actions/frankel-$BUILD_NUMBER"
+          base="$HOME/rose-actions/$ROSE_DEVICE-$BUILD_NUMBER"
           if [[ "$RESUME_STAGE" == none ]]; then
             test ! -e "$base" || { echo "::error::$base already exists; use a new build number" >&2; exit 1; }
-            python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device frankel --build-number "$BUILD_NUMBER"
+            python3 scripts/release-stage.py init --state "$base/stages" --source-revision "$CANDIDATE_SHA" --device "$ROSE_DEVICE" --build-number "$BUILD_NUMBER"
           else
             # The preserved attempt is only read: its build outputs are copied into a new attempt directory,
             # hashed into a new receipt chain bound to the old one, and the failed stage runs again there.
@@ -270,7 +282,7 @@ jobs:
       - name: Transfer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: os-release-frankel-${{ inputs.build_number }}
+          name: os-release-${{ env.ROSE_DEVICE }}-${{ inputs.build_number }}
           path: ${{ env.ROSE_BASE }}/artifact
           retention-days: 3
           if-no-files-found: error
@@ -556,7 +568,7 @@ jobs:
       - run: python3 scripts/release-pipeline.py preflight --job publisher
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: os-release-frankel-${{ inputs.build_number }}
+          name: os-release-${{ env.ROSE_DEVICE }}-${{ inputs.build_number }}
           path: ${{ runner.temp }}/artifact
       # Short-lived token for the pixel-ota installation only; the action revokes it when the job ends.
       - name: Mint pixel-ota publisher token
@@ -573,7 +585,7 @@ jobs:
           PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
-          python3 scripts/release-pipeline.py publish --candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" \
+          python3 scripts/release-pipeline.py publish --device "$ROSE_DEVICE" --candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" \
             --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --artifact-dir "$RUNNER_TEMP/artifact" \
             ${{ inputs.promote && '--promote' || '' }}
 

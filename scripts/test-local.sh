@@ -54,6 +54,7 @@ python3 scripts/tests/test_actions_gcp_login.py
 python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
 python3 scripts/tests/test_app_reuse.py
+python3 scripts/tests/test_device_contract.py
 python3 scripts/tests/test_alpha_runtime.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py

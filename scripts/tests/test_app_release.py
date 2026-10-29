@@ -28,8 +28,10 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # sha256 of the builder and publisher job blocks at ae9cfd4 (2804 candidate), without the added mode condition.
-OS_JOBS_AT_BASE = {'builder': '7dc3e244a826bb00bd8d112376c49721d3e18854607b7762b6b42a9a71d730d2',
-    'publisher': '9a3950690bead3cdd7ce754cc9d79a0feb7ffbd14979a78a540ef84b38e94513'}
+# The builder and publisher jobs as of FAM-02-INFRA-S001, whose only change is the admitted device in the attempt
+# directory, stage receipt, artifact name and publish call (exact lines pinned in test_device_contract.py).
+OS_JOBS_AT_BASE = {'builder': 'd3852bc970faf2c075b4597844711da32630b22eaf7be86b7eaeac5ee1e1b5eb',
+    'publisher': '3b7854d721b62851d5fc013c60c0122cdfe0dd6ce9ecbf5bd90cb78445e2c7dd'}
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))

@@ -33,6 +33,12 @@ from release_receipts import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/frankel.json'
+# FAM-02-INFRA-S001: the devices the delivery chain admits, each with its own os/release-pipeline/<device>.json, and the
+# devices whose beta may become the pixel-ota repository Latest. The compiled frankel Updater reads
+# releases/latest/download/frankel-stable, so no other device may ever move Latest, whatever its config says.
+SUPPORTED_DEVICES = ('frankel',)
+LATEST_DEVICES = ('frankel',)
+DEVICE = re.compile(r'[a-z][a-z0-9]{1,31}')
 TARGET_FILES_VERIFIER = ROOT/'qa/first-update/runtime/verify-target-files.py'
 SUPPORTED_PUBLISHERS = ('github-app',)  # pixel-ota-only App; token minted in the hosted publisher job.
 BUILDER = {'project': 'protocols-465723', 'zone': 'us-west2-a', 'instance': 'immortal-os-builder'}
@@ -61,7 +67,23 @@ def load_config(path):
         raise InvalidInput('unsupported pipeline config')
     return config
 
-def candidate(a):
+def resolve_device(value):
+    """An admitted device codename, or InvalidInput before any config, path or host action uses it."""
+    if not isinstance(value, str) or not DEVICE.fullmatch(value):
+        raise InvalidInput('--device must be a lowercase device codename')
+    if value not in SUPPORTED_DEVICES:
+        raise InvalidInput(f'device {value} is not admitted; supported: {", ".join(SUPPORTED_DEVICES)}')
+    return value
+
+def device_config(device, path=None):
+    """The admitted device's pipeline config (os/release-pipeline/<device>.json unless --config names another file),
+    whose target.device must be that device."""
+    config = load_config(path or ROOT/'os/release-pipeline'/f'{device}.json')
+    if (config.get('target') or {}).get('device') != device:
+        raise InvalidInput(f'config target.device is {(config.get("target") or {}).get("device")!r}, not the dispatched {device}')
+    return config
+
+def candidate(a, device):
     if not re.fullmatch(r'[0-9a-f]{40}', a.candidate_sha or ''):
         raise InvalidInput('--candidate-sha must be a full commit SHA')
     if not re.fullmatch(r'\d{10}', a.build_number or ''):
@@ -70,7 +92,7 @@ def candidate(a):
         raise InvalidInput('--build-timestamp must be a ten-digit UTC epoch')
     if a.channel not in ('beta', 'prod'):
         raise InvalidInput('--channel must be beta or prod')
-    return {'sha': a.candidate_sha, 'build': a.build_number, 'timestamp': a.build_timestamp, 'channel': a.channel}
+    return {'sha': a.candidate_sha, 'build': a.build_number, 'timestamp': a.build_timestamp, 'channel': a.channel, 'device': device}
 
 def public_assets(device, build):
     return [f'{device}-ota_update-{build}.zip', f'{device}-stable', 'releasekey.x509.pem', 'avb_pkmd.bin',
@@ -395,6 +417,9 @@ def check_build_identity(path, config, cand, keys):
     failures = []
     device, build = config['target']['device'], cand['build']
     marker = f'/{build}:{config["target"]["variant"]}/{keys}'
+    # Fingerprints are brand/product/device:release/id/incremental:type/tags (e.g. google/frankel/frankel:17/...), so
+    # every partition's and every AVB fingerprint must also name the dispatched device.
+    named = f'/{device}:'
     with zipfile.ZipFile(path) as archive:
         props = read_props(archive)
         for name, values in props.items():
@@ -405,7 +430,9 @@ def check_build_identity(path, config, cand, keys):
                     failures.append(f'{name}: {key}={value}')
                 if key.endswith('build.fingerprint') and marker not in value:
                     failures.append(f'{name}: {key} does not name build {build} with {keys}')
-                if key.endswith('product.device') and value != device:
+                if key.endswith('build.fingerprint') and named not in value:
+                    failures.append(f'{name}: {key} does not name device {device}')
+                if (key.endswith('product.device') or key == 'ro.product.vendor.device') and value != device:
                     failures.append(f'{name}: {key}={value}')
         system = props['SYSTEM/build.prop']
         if system.get('ro.build.type') != config['target']['variant']:
@@ -418,6 +445,7 @@ def check_build_identity(path, config, cand, keys):
                 failures.append('META/misc_info.txt has no AVB fingerprint properties')
             failures += [f'META/misc_info.txt fingerprint {f} does not name build {build}'
                 for f in fingerprints if marker not in f]
+            failures += [f'META/misc_info.txt fingerprint {f} does not name device {device}' for f in fingerprints if named not in f]
     return failures
 
 def check_framework(path, config, aapt):
@@ -929,6 +957,11 @@ def publish(a, config, cand, adapter):
     channel = config['publication']['channels'].get(cand['channel'])
     if channel is None:
         raise SetupMissing([f'publication.channels.{cand["channel"]} (no verified publication target)'])
+    device = config['target']['device']
+    if cand.get('device') != device or config['publication']['tag'].format(build=cand['build']) != f'{device}-{cand["build"]}':
+        raise CheckFailed(f'the release tag and candidate must name the dispatched device {device}')
+    if a.promote and device not in LATEST_DEVICES:
+        raise CheckFailed(f'{device} may never become the repository Latest; only {", ".join(LATEST_DEVICES)} is discovered there')
     # Revalidate the transferred bytes before anything leaves this job.
     manifest_tool('verify-published', artifact/'manifest.json', '--dir', artifact/'assets')
     manifest_tool('verify', artifact/'manifest.json', '--dir', artifact/'assets', '--expected-device', config['target']['device'],
@@ -940,7 +973,7 @@ def publish(a, config, cand, adapter):
     draft = adapter.publish(config, cand, public, artifact)
     # Download check of the draft before any promotion; promotion only when explicitly requested.
     manifest_tool('verify-published', artifact/'manifest.json', '--dir', draft)
-    promoted = bool(channel['promoteLatest'] and a.promote)
+    promoted = bool(channel['promoteLatest'] and a.promote and device in LATEST_DEVICES)
     if promoted:
         adapter.promote(config, cand, draft)
     return {'stage': 'publish', 'draft': 'verified', 'promoted': promoted, 'simulated': adapter.simulated}
@@ -954,7 +987,8 @@ def main(argv=None):
     p.add_argument('--job', choices=['guard', 'controller', 'builder', 'publisher', 'cleanup'])
     p.add_argument('--adapter', choices=['production', 'fake'], default='production')
     p.add_argument('--fake-state', help='Fake adapter state directory (tests only)')
-    p.add_argument('--config', default=str(CONFIG))
+    p.add_argument('--config', help='pipeline config (default os/release-pipeline/<device>.json)')
+    p.add_argument('--device', help='admitted device codename (default ROSE_DEVICE, else frankel)')
     p.add_argument('--candidate-sha')
     p.add_argument('--build-number')
     p.add_argument('--build-timestamp')
@@ -967,7 +1001,8 @@ def main(argv=None):
     try:
         if a.adapter == 'fake' and not a.fake_state:
             raise InvalidInput('--adapter fake needs --fake-state')
-        config = load_config(a.config)
+        device = resolve_device(a.device or os.environ.get('ROSE_DEVICE') or 'frankel')
+        config = device_config(device, a.config)
         if a.adapter == 'production' and config.get('fixture'):
             raise InvalidInput('a fixture config cannot be used for production')
         adapter = adapter_for(a)
@@ -979,7 +1014,7 @@ def main(argv=None):
         elif a.command in ('start-builder', 'stop-builder'):
             report = {'builder': a.command, 'observed': adapter.control_builder(a.command.split('-')[0])}
         else:
-            cand = candidate(a)
+            cand = candidate(a, device)
             report = {'build': build, 'verify-build': verify_build, 'sign': sign, 'verify-signed': verify_signed,
                 'stage-artifact': stage_artifact, 'publish': publish}[a.command](a, config, cand, adapter)
     except SetupMissing as error:

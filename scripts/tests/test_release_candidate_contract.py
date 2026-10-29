@@ -90,6 +90,12 @@ class CheckedInCandidateTest(unittest.TestCase):
             ('os-release', '305-home-beta', '7fb94ae6ed535066d50879a99b7c8e427da8e853'))
         self.assertEqual((reserved[308]['route'], reserved[308]['versionName'], reserved[308]['candidate'], reserved[308]['osBuild'],
             reserved[308]['buildTimestamp']), ('os-release', '308-home-tray-beta', '93ad1c2bd7094d6b65c695ba239d05d272b87c57', DRAFT['build'], int(DRAFT['timestamp'])))
+        # Delivered (FAM-02-INFRA-S001): the row carries the delivered bytes and runs; it is not an app-only build.
+        self.assertEqual((reserved[308]['sha256'], reserved[308]['size'], reserved[308]['signerSha256'], reserved[308]['osRun'],
+            reserved[308]['run'], reserved[308]['release'], reserved[308]['delivered']['at'], reserved[308]['delivered']['publicRelease']),
+            ('f4163ca86cd836861206139be74cc2cbe6a82f644bc8afd5533ab1dc6c6e7a41', 1393821, CONFIG['identities']['appSignerSha256'], 40778491188, 40787416518, 427306781,
+             '2026-10-28T23:38Z', True))
+        self.assertNotIn(308, [b['versionCode'] for b in CONFIG['appRelease']['built']])
         self.assertNotIn(307, reserved, 'the consumed 307 reservation is gone')
         built = {row['versionCode']: row for row in CONFIG['appRelease']['built']}
         self.assertEqual((built[307]['candidate'], built[307]['sha256'], built[307]['size'], built[307]['release'], built[307]['run']),
@@ -183,7 +189,13 @@ class CheckedInCandidateTest(unittest.TestCase):
             '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs')
 
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
-        pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
+        # 2806/308 is now the delivered, retained baseline (FAM-02-INFRA-S001): dispatching it again is refused, and a
+        # synthetic next candidate (not an allocation) must move past it.
+        nxt, nxt_apps = {'build': '2026102901', 'timestamp': '1793300000'}, [['dev.pixel.voice', 309], *APPS[1:]]
+        pipeline.check_version_baselines(CONFIG, nxt, nxt_apps)
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 308 must exceed retained 2026102806 versionCode 308.*'
+                'must exceed retained 2026102806 \\(1793220605\\)'):
+            pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
         for apps, cand, message in (
                 ([['dev.pixel.voice', 307], *APPS[1:]], DRAFT, 'versionCode 307 must exceed 307, the newest app-only version published, built or reserved'),
                 ([['dev.pixel.voice', 306], *APPS[1:]], DRAFT, 'versionCode 306 must exceed 307, the newest app-only version'),
@@ -197,12 +209,15 @@ class CheckedInCandidateTest(unittest.TestCase):
                 ([['dev.pixel.voice', 297], *APPS[1:]], DRAFT, 'below delivered 2026102701 versionCode 298'),
                 (APPS[1:], DRAFT, 'dev.pixel.voice versionCode None must exceed'),
                 (APPS, {'build': '2026102806', 'timestamp': '1793206861'}, 'must exceed retained 2026102805 \\(1793206861\\)'),
-                (APPS, {'build': '2026102805', 'timestamp': '1793220605'}, 'must exceed retained 2026102805')):
+                (APPS, {'build': '2026102805', 'timestamp': '1793220605'}, 'must exceed retained 2026102805'),
+                (nxt_apps, {'build': '2026102901', 'timestamp': '1793220605'}, 'must exceed retained 2026102806 \\(1793220605\\)')):
             with self.assertRaisesRegex(pipeline.CheckFailed, message):
                 pipeline.check_version_baselines(CONFIG, cand, apps)
-        retained = {r['build']: r for r in CONFIG['versionBaselines']['retained']}['2026102805']
-        self.assertEqual((retained['source'], retained['buildTimestamp'], retained['mustExceed']),
+        retained = {r['build']: r for r in CONFIG['versionBaselines']['retained']}
+        self.assertEqual((retained['2026102805']['source'], retained['2026102805']['buildTimestamp'], retained['2026102805']['mustExceed']),
             ('7fb94ae6ed535066d50879a99b7c8e427da8e853', 1793206861, {'dev.pixel.voice': 305}))
+        self.assertEqual((retained['2026102806']['source'], retained['2026102806']['buildTimestamp'], retained['2026102806']['mustExceed']),
+            ('93ad1c2bd7094d6b65c695ba239d05d272b87c57', 1793220605, {'dev.pixel.voice': 308}))
         without = {k: v for k, v in CONFIG.items() if k != 'versionBaselines'}
         with self.assertRaises(pipeline.SetupMissing):
             pipeline.check_version_baselines(without, DRAFT, APPS)
