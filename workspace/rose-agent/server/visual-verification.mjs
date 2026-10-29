@@ -16,18 +16,20 @@ export class VisualVerification {
   Object.assign(this,{phone,directory,review,evidence,now,log,enabled,background});
   this.generation=0;this.queue=Promise.resolve();this.reset('');
  }
- reset(request,context=[]) {this.generation++;this.request=request;this.context=context;this.corrections=[];this.active=false;this.frame=null;this.history=[];this.continuations=0;}
+ reset(request,context=[]) {this.generation++;this.request=request;this.context=context;this.corrections=[];this.active=false;this.frame=null;this.history=[];this.continuations=0;this.lastDisplay=undefined;}
+ // With the background workspace, a frame is evidence only for the display it was captured from.
+ target(display) {return this.background&&display==='phone'?'phone':'default';}
  needsReview(){this.evidence?.collect();return this.active||!!this.evidence?.requiresReview;}
  correct(text) {if(this.enabled&&this.needsReview()){this.corrections.push(text);this.log({stage:'visual_correction',generation:this.generation});}}
  invalidate() {if(this.active)this.frame=null;}
- record(capture) {
+ record(capture,display) {
   if(!this.enabled||capture?.status!=='ok'||!capture.imageBase64)return null;
   const data=Buffer.from(capture.imageBase64,'base64');
   if(data.length>800000||data[0]!==255||data[1]!==216)throw Error('Invalid verification screenshot');
   fs.mkdirSync(this.directory,{recursive:true,mode:0o700});
   const imagePath=path.join(this.directory,crypto.randomUUID()+'.jpg');
   fs.writeFileSync(imagePath,data,{mode:0o600});
-  this.frame={...capture,imagePath,hash:digest(data),observedAt:this.now(),seen:false,generation:this.generation};
+  this.frame={...capture,imagePath,hash:digest(data),observedAt:this.now(),seen:false,generation:this.generation,target:this.target(display)};
   // Keep bounded private evidence, including the latest frame used by a review.
   const files=fs.readdirSync(this.directory).filter(n=>n.endsWith('.jpg')).map(n=>({n,mtime:fs.statSync(path.join(this.directory,n)).mtimeMs})).sort((a,b)=>b.mtime-a.mtime);
   for(const f of files.slice(40))fs.unlinkSync(path.join(this.directory,f.n));
@@ -43,11 +45,11 @@ export class VisualVerification {
   try{if(digest(fs.readFileSync(absolute))!==this.frame.hash)return false;}catch{return false;}
   this.frame.seen=true;this.log({stage:'visual_viewed',generation:this.generation,imagePath:absolute});return true;
  }
- async capture() {
+ async capture(display) {
   const generation=this.generation;
-  const capture=await this.phone({action:'screenshot',visualOnly:true});
+  const capture=await this.phone({action:'screenshot',visualOnly:true,...(this.target(display)==='phone'?{display:'phone'}:{})});
   if(generation!==this.generation)throw Error('Task changed while capturing screen');
-  const reference=this.record(capture);
+  const reference=this.record(capture,display);
   if(!reference)throw Error('Screenshot unavailable: '+capture?.status);
   return reference;
  }
@@ -58,10 +60,13 @@ export class VisualVerification {
  async executeOne(command) {
   if(!this.enabled||!genericUiActions.has(command.action))return this.phone(command);
   this.active=true;
-  if(!(this.background&&command.action==='open_app')){
+  const target=this.target(command.display);
+  // Only a workspace launch is exempt: it starts a fresh workspace. A phone-screen launch is gated.
+  if(!(this.background&&command.action==='open_app'&&target!=='phone')){
+   if(this.frame&&this.frame.target!==target)this.frame=null;
    if(!this.frame||this.now()-this.frame.observedAt>30000){
     const previous=this.frame;
-    await this.capture();
+    await this.capture(command.display);
     // Renew previously viewed evidence only when a new capture is byte-identical.
     // A changed screen still requires the model's visual review.
     if(previous?.seen&&previous.generation===this.generation&&previous.hash===this.frame?.hash){
@@ -73,11 +78,11 @@ export class VisualVerification {
     return {status:'visual_check_required',actionExecuted:false,visualCheck:this.reference()};
    }
   }
-  this.frame=null;
+  this.frame=null;this.lastDisplay=command.display;
   const result=await this.phone(command);
-  this.history.push({action:command.action,status:result?.status,at:this.now()});
+  this.history.push({action:command.action,...(target==='phone'?{display:'phone'}:{}),status:result?.status,at:this.now()});
   this.log({stage:'visual_action_executed',action:command.action,status:result?.status});
-  try{return {...result,visualCheck:await this.capture()};}
+  try{return {...result,visualCheck:await this.capture(command.display)};}
   catch(error){return {...result,visualCheck:{status:'unavailable',reason:error.message},verificationRequired:true,message:'The action was attempted. Do not repeat it solely because the following screenshot failed.'};}
  }
  async assess(candidate,route,{signal,artifact=null,force=false}={}) {
@@ -85,7 +90,7 @@ export class VisualVerification {
   // Phone work still gets its independent final frame. Mac/research-only work
   // must not be blocked on an unrelated (or disconnected) phone screen.
   let screen=null;
-  if(this.active){await this.capture();screen=await this.phone({action:'inspect_ui'});}
+  if(this.active){const display=this.target(this.lastDisplay)==='phone'?{display:'phone'}:{};await this.capture(display.display);screen=await this.phone({action:'inspect_ui',...display});}
   signal?.throwIfAborted();
   const evidence=this.evidence?.snapshot()||{records:[],images:[],unavailable:[]};
   const result=await this.review({request:this.request,context:this.context,corrections:this.corrections,candidate,artifact,history:this.history,frame:this.active?this.frame:null,screen,evidence,route,signal});
