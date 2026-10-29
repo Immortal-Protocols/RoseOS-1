@@ -8,6 +8,31 @@ transport and the `rose-chat` CLI.
 loopback fixture servers on 127.0.0.1. Nothing here is evidence about a served model, a GPU
 deployment, Agent Platform or the final wire protocol. No live endpoint has been used.
 
+## On-device agent (`local-agent-v1`)
+
+`src/agent.rs` is the pure state machine for the Rose Models Android app (MODELS-ANDROID-CORE-001).
+The Android host owns HTTPS, timers and app launch. It calls `Agent::from_config_json` once,
+then `Agent::step_json` with each input, and carries out the returned outputs.
+
+The model may answer with one closed JSON envelope, either final text or `open_app` for a local
+allowlist id. Each turn allows at most two inferences and one action. Only platform tool results
+record what happened. Every input is fenced by turn id and generation.
+
+The contract is in `../contracts/local-agent-v1.md`, with exact JSON traces in
+`../contracts/local-agent-v1.examples.json`. Regenerate the traces with:
+
+```sh
+cargo run --example local_agent_trace > ../contracts/local-agent-v1.examples.json
+```
+
+`tests/agent.rs` checks that the file still matches.
+
+The desktop HTTP transport and the `rose-chat` CLI sit behind the default `http` feature.
+The Android library builds with `--no-default-features`, which leaves only `serde`,
+`serde_json` and `toml`, with no `ureq` or `rustls`. CI checks that.
+
+Every agent test runs against fixtures. Whether the pinned model follows the envelope is unmeasured.
+
 ## Build and test
 
 Requires Rust 1.97 or newer (`rust-version` in `Cargo.toml`; CI pins rustc/cargo 1.97.0) and
