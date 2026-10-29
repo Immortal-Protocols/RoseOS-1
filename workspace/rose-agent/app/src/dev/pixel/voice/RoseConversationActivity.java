@@ -1,6 +1,5 @@
 package dev.pixel.voice;
 
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -25,7 +24,7 @@ public final class RoseConversationActivity extends Activity {
  final Handler handler=new Handler(Looper.getMainLooper());
  final ConversationState.Notices notices=new ConversationState.Notices();
  ConversationState state;
- Presence presence;LinearLayout notice;TextView noticeIcon,noticeText,failure;
+ RosePresenceView presence;LinearLayout notice;TextView noticeIcon,noticeText,failure;
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
@@ -58,7 +57,7 @@ public final class RoseConversationActivity extends Activity {
   FrameLayout root=new FrameLayout(this);root.setBackgroundColor(paper());
   // Presence plus the presented output of the current task (Rose-Fold-v3 .presented): eyebrow, title, body.
   content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER);
-  presence=new Presence(this);content.addView(presence,new LinearLayout.LayoutParams(dp(240),dp(240)));
+  presence=new RosePresenceView(this);content.addView(presence,new LinearLayout.LayoutParams(dp(240),dp(240)));
   presentedScroll=new ScrollView(this);presentedScroll.setVisibility(View.GONE);
   LinearLayout presented=new LinearLayout(this);presented.setOrientation(LinearLayout.VERTICAL);presented.setPadding(dp(24),dp(8),dp(24),dp(16));
   taskEyebrow=presentedText(13,eyebrow(),"sans-serif-medium");presented.addView(taskEyebrow);
@@ -104,8 +103,10 @@ public final class RoseConversationActivity extends Activity {
  TextView presentedText(int size,int color,String family){TextView t=new TextView(this);t.setTextSize(size);t.setTextColor(color);t.setTypeface(Typeface.create(family,Typeface.NORMAL));return t;}
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
 
- @Override protected void onResume(){super.onResume();notices.reset();handler.removeCallbacks(tick);handler.post(tick);}
- @Override protected void onPause(){handler.removeCallbacks(tick);clearNotice();super.onPause();}
+ /** True between onResume and onPause: the presence animates only while this screen is visible. */
+ boolean resumed;
+ @Override protected void onResume(){super.onResume();resumed=true;notices.reset();handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);if(presence!=null&&state!=null)presence.show(RoseVisualState.from(state,Float.NaN,Float.NaN,true,false));clearNotice();super.onPause();}
 
  void refresh(){
   VoiceService s=VoiceService.instance;
@@ -119,7 +120,11 @@ public final class RoseConversationActivity extends Activity {
   else primary.show("🎙","Speak","Start voice conversation");
   end.setVisibility(state.canEnd()?View.VISIBLE:View.GONE);
   failure.setText(state.failureText());
-  presence.update(state,s==null||!active?0f:s.trayOutputLevel,reducedMotion());
+  // Core's RoseVisualState maps the session and VoiceService's own measured levels (stale or absent levels are
+  // NaN, never invented) into the presence's three independent axes; this screen only draws them.
+  long now=SystemClock.elapsedRealtime(),seen=s==null?0L:s.trayAudioObservedAt;
+  presence.show(RoseVisualState.from(state,s==null?Float.NaN:RoseVisualState.fresh(s.trayInputLevel,seen,now),
+   s==null?Float.NaN:RoseVisualState.fresh(s.trayOutputLevel,seen,now),reducedMotion(),resumed));
   renderTask(s);
  }
  /** The current task from VoiceService's copy of the server's task projection, which outlives this
@@ -271,29 +276,4 @@ public final class RoseConversationActivity extends Activity {
   return p.getLong("target",-1)==offered?SelfUpdate.attemptText(offered,p.getString("state",""),installed):"";
  }
 
- /** Simple folded presence: overlapping translucent petals around an aperture. Opening follows the
-  * session (closed when idle or muted, open when listening); Rose's output level articulates the edges.
-  * Visual only; it never creates session state. */
- static final class Presence extends View {
-  final Paint petal=new Paint(Paint.ANTI_ALIAS_FLAG),core=new Paint(Paint.ANTI_ALIAS_FLAG);final RectF oval=new RectF();
-  float open,target,voice;ValueAnimator anim;
-  Presence(android.content.Context c){super(c);setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);core.setColor(0x33283e39);}
-  void update(ConversationState s,float output,boolean reduced){
-   float next=s.active()&&!s.muted?1f:s.phase==ConversationState.Phase.CONNECTING?.45f:0f;
-   float v=reduced?0:Math.min(1f,output*3f);boolean voiceChanged=v!=voice;voice=v;
-   if(next!=target){target=next;if(anim!=null)anim.cancel();
-    if(reduced){open=target;invalidate();}
-    else{anim=ValueAnimator.ofFloat(open,target).setDuration(420);anim.addUpdateListener(a->{open=(float)a.getAnimatedValue();invalidate();});anim.start();}}
-   else if(voiceChanged)invalidate();
-  }
-  @Override protected void onDraw(Canvas c){
-   float cx=getWidth()/2f,cy=getHeight()/2f,r=Math.min(cx,cy)*.62f;
-   for(int i=0;i<5;i++){
-    float a=i*72f+open*12f,spread=r*(.30f+.22f*open)+r*.06f*voice*(i%2==0?1:-1);
-    petal.setColor(i%2==0?0x66b9d3c2:0x55e8e2cf);
-    c.save();c.rotate(a,cx,cy);oval.set(cx-r*.42f,cy-r-spread*.2f,cx+r*.42f,cy+spread);c.drawOval(oval,petal);c.restore();
-   }
-   c.drawCircle(cx,cy,r*(.10f+.16f*open),core);
-  }
- }
 }
