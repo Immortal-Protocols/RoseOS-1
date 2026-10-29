@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -31,7 +32,25 @@ def load(name):
 reuse = load('host-app-reuse')
 FRANKEL = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
 BUILD, STAMP, RUN = '2026102806', '1793220605', 40778491188
-HEAD = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+def candidate_declaring_308():
+    """A commit in this checkout whose Rose Agent manifest declares 308, as the 2806 candidate 93ad1c2b does. The source has
+    moved on (AGENT309-DELIVERY-001 declares 309) and CI checkouts are shallow, so this is this checkout's HEAD tree with
+    only the manifest's version fields set back to 308: an unreferenced object, never a branch or a release candidate."""
+    git = lambda *a, **k: subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True, check=True, **k).stdout.strip()
+    manifest = git('show', 'HEAD:workspace/rose-agent/app/AndroidManifest.xml')
+    declared = re.sub(r'android:versionCode="\d+" android:versionName="[^"]*"', 'android:versionCode="308" android:versionName="308-home-tray-beta"', manifest, count=1)
+    if declared == manifest:
+        return git('rev-parse', 'HEAD')
+    blob = git('hash-object', '-w', '--stdin', input=declared + '\n')
+    with tempfile.TemporaryDirectory() as temp:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(temp, 'index'))
+        git('read-tree', 'HEAD', env=env)
+        git('update-index', '--cacheinfo', f'100644,{blob},workspace/rose-agent/app/AndroidManifest.xml', env=env)
+        tree = git('write-tree', env=env)
+    return git('-c', 'user.name=test', '-c', 'user.email=test@invalid', 'commit-tree', tree, '-m', 'test-only candidate declaring 308',
+        env=dict(os.environ, GIT_AUTHOR_DATE='2026-10-28T00:00:00Z', GIT_COMMITTER_DATE='2026-10-28T00:00:00Z'))
+
+HEAD = candidate_declaring_308()
 CERT = b'synthetic DER app certificate'
 SIGNER = hashlib.sha256(CERT).hexdigest()
 PREINSTALL = 'PRODUCT/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk'
@@ -98,7 +117,7 @@ class AppReuseTest(unittest.TestCase):
         self.lock = self.root/'frankel-build.lock'
         config['host'].update(sourceRoot=str(self.root/'src'), lockPath=str(self.lock))
         config['host']['tools'].update(aapt=aapt, apksigner=apksigner)
-        # The reservation names the candidate; this checkout's HEAD declares 308 like 93ad1c2b, and is always present.
+        # The reservation names the candidate; HEAD here is a commit declaring 308 like 93ad1c2b, always present.
         row = next(r for r in config['appRelease']['reserved'] if r['versionCode'] == 308)
         self.assertEqual((row['candidate'], row['osBuild'], row['buildTimestamp']), ('93ad1c2bd7094d6b65c695ba239d05d272b87c57', BUILD, int(STAMP)))
         row['candidate'] = HEAD
