@@ -83,10 +83,13 @@ class CheckedInCandidateTest(unittest.TestCase):
 
     def test_source_manifests_match_the_allocated_versions(self):
         # 2805 bundled 305; 303 was delivered through the catalog and 304, 306 and 307 published on GitHub; the 2806
-        # candidate bundled 308, reserved for the OS route. AGENT309-DELIVERY-001: the source now declares the app-only 309.
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 309, '309-hifi-beta'))
+        # candidate bundled 308, reserved for the OS route. AGENT309-DELIVERY-001 reserved the app-only 309.
+        # FRANKEL310-ALLOC-001: the source now declares 310, the Frankel 2026102901 OS candidate's Rose Agent.
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 310, '310-hifi-os-beta'))
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
         self.assertEqual((reserved[309]['route'], reserved[309]['versionName'], reserved[309]['candidate']), ('app-only', '309-hifi-beta', None))
+        self.assertEqual((reserved[310]['route'], reserved[310]['versionName'], reserved[310]['candidate'], reserved[310]['osBuild'],
+            reserved[310]['buildTimestamp']), ('os-release', '310-hifi-os-beta', None, '2026102901', 1793311111))
         self.assertEqual((reserved[305]['route'], reserved[305]['versionName'], reserved[305]['candidate']),
             ('os-release', '305-home-beta', '7fb94ae6ed535066d50879a99b7c8e427da8e853'))
         self.assertEqual((reserved[308]['route'], reserved[308]['versionName'], reserved[308]['candidate'], reserved[308]['osBuild'],
@@ -190,10 +193,13 @@ class CheckedInCandidateTest(unittest.TestCase):
             '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs')
 
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
-        # 2806/308 is now the delivered, retained baseline (FAM-02-INFRA-S001): dispatching it again is refused, and a
-        # synthetic next candidate (not an allocation) must move past it and past the app-only reserved 309.
-        nxt, nxt_apps = {'build': '2026102901', 'timestamp': '1793300000'}, [['dev.pixel.voice', 310], *APPS[1:]]
+        # 2806/308 is now the delivered, retained baseline (FAM-02-INFRA-S001): dispatching it again is refused, and the
+        # allocated next candidate (FRANKEL310-ALLOC-001: 2026102901 at 1793311111, Rose Agent 310, controller 28 and
+        # Calculator 4 unchanged) moves past it and past the app-only reserved 309.
+        nxt, nxt_apps = {'build': '2026102901', 'timestamp': '1793311111'}, [['dev.pixel.voice', 310], *APPS[1:]]
         pipeline.check_version_baselines(CONFIG, nxt, nxt_apps)
+        reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
+        self.assertEqual((reserved[310]['osBuild'], str(reserved[310]['buildTimestamp'])), (nxt['build'], nxt['timestamp']))
         with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 309 must exceed 309, the newest app-only version published, built or reserved'):
             pipeline.check_version_baselines(CONFIG, nxt, [['dev.pixel.voice', 309], *APPS[1:]])
         with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 308 must exceed retained 2026102806 versionCode 308.*'
