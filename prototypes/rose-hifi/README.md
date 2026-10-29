@@ -2,11 +2,11 @@
 
 A separate, playable high-fidelity web prototype of RoseOS. It is built from the
 HiFi Prototype Plan dated 2026-10-29 and its four reference images. The two
-baselines are inputs only and remain unchanged:
+baselines were inputs only:
 
 | Baseline | Role | Revision |
 | --- | --- | --- |
-| `prototypes/rose-system-interactions` | Behavior baseline (Rose-Fold-v15 snapshot) | `9664372b6609545b1961626a7d9a0cede04593f4`; HTML SHA-256 `5e265dba824252ad948dbb805cf415daf08f23001bbcf36cb8823106bfed0128` |
+| `prototypes/rose-system-interactions` (removed from the tree after HiFi; recover with `git show 9664372:prototypes/rose-system-interactions/Rose-System-Interactions.html`) | Behavior baseline (Rose-Fold-v15 snapshot) | `9664372b6609545b1961626a7d9a0cede04593f4`; HTML SHA-256 `5e265dba824252ad948dbb805cf415daf08f23001bbcf36cb8823106bfed0128` |
 | `prototypes/rose-three-dimensions` | WebGL animation and signal mapping | `1a834e8776b0709973ae7fa2a4bc3232e1ec97c9`; HTML SHA-256 `48befc4d6028bce24e5500435a2d7827700c609829121bd8803b93ed4a5a76db` |
 
 This is an isolated browser experiment, not production app or OS code. Voice,
@@ -139,7 +139,7 @@ motion turns that movement off.
 
 | Asset | Source |
 | --- | --- |
-| Wallpaper (`src/assets/wallpaper.jpg`) | Extracted unchanged from the behavior baseline. Its README describes it as an original generated interpretation of Nathan's October 29 concept. |
+| Wallpaper (`src/assets/wallpaper.jpg`) | Extracted unchanged from the behavior baseline at `9664372`. Its README describes it as an original generated interpretation of Nathan's October 29 concept. |
 | Firefox, Thunderbird and VLC icons | Extracted unchanged from the behavior baseline (official sources via the Illustrator archive). |
 | All other app glyphs, procedural imagery and window content | Original drawings for this prototype. |
 

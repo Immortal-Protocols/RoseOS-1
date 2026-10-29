@@ -1,5 +1,5 @@
 // Rose HiFi — icon set. Firefox, Thunderbird and VLC use the authorized artwork
-// already embedded in prototypes/rose-system-interactions (official sources via the
+// embedded in the former prototypes/rose-system-interactions at 9664372 (official sources via the
 // Illustrator archive). Every other glyph here is an original procedural drawing.
 (function () {
   'use strict';
