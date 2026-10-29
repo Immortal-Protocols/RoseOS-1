@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion)
         type: choice
-        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse]
+        options: [os-release, app-only, emulator-alpha, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
         default: os-release
       candidate_sha:
         description: RoseOS-1 commit to build (must be on main)
@@ -87,6 +87,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read  # emulator-alpha-export only: the original verification receipt is fetched from its own run's artifact
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -141,6 +144,32 @@ jobs:
       - name: Emulator-alpha retained verification preflight
         if: inputs.mode == 'emulator-alpha-verify-retained'
         run: python3 scripts/emulator-alpha.py preflight --job guard
+      # INFRA-ALPHA-120: the verification run's attempt directory is gone; its receipt exists only as its private artifact,
+      # fetched here by the workflow's own artifact step with the job token and checked before the builder starts.
+      - name: Emulator-alpha export preflight
+        if: inputs.mode == 'emulator-alpha-export'
+        run: python3 scripts/emulator-alpha.py preflight --job guard
+      - name: Fetch the original verification receipt (run 40777816699)
+        if: inputs.mode == 'emulator-alpha-export'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: emulator-alpha-verification-40777816699
+          run-id: 40777816699
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/alpha-original
+      - name: Check the original run, artifact and receipt
+        if: inputs.mode == 'emulator-alpha-export'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/alpha-export.py check-original --receipt-dir "$RUNNER_TEMP/alpha-original"
+      - name: Hand the checked receipt to the export job
+        if: inputs.mode == 'emulator-alpha-export'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha-retained-verification-${{ github.run_id }}
+          path: ${{ runner.temp }}/alpha-original
+          retention-days: 3
+          if-no-files-found: error
 
   controller:
     needs: guard
@@ -435,6 +464,47 @@ jobs:
         if: always()
         run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
 
+  # INFRA-ALPHA-120: the retained alpha images and host package run 40777816699 verified, re-read under the shared lock and
+  # re-hashed against that run's checked receipt (alpha-export.py). No lunch, make, signing, secrets, login or publication;
+  # only those files, the original receipt and a sanitized export receipt leave the builder, as a private artifact for
+  # the separate alpha-runtime.yml workflow. The retained tree is only read; the attempt directory is removed.
+  alpha-export:
+    needs: controller
+    if: inputs.mode == 'emulator-alpha-export'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/emulator-alpha.py preflight --job builder
+      - name: Prepare the export attempt
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/cf-alpha-export-$GITHUB_RUN_ID"
+          test ! -e "$base"
+          mkdir -p "$base"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      - name: The receipt the guard checked
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha-retained-verification-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/original
+      - name: Re-read the verified images against the original receipt and stage them
+        run: python3 scripts/alpha-export.py export --receipt-dir "$ROSE_BASE/original" --export-dir "$ROSE_BASE/export" --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP"
+      - name: Private Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: emulator-alpha-export-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/export
+          retention-days: 3
+          if-no-files-found: error
+      - name: Remove the export attempt directory (the retained images stay in the alpha OUT_DIR)
+        if: always()
+        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"
+
   # INFRA-APP-118: the signed Rose Agent a verified OS candidate bundled, read unchanged from that build's original attempt
   # under the shared lock (host-app-reuse.py). No app build, OS compile, signing, secrets, signer login or cloud identity;
   # only the APK, its nonsecret receipt and SHA256SUMS leave the builder, as the same private artifact app-only uploads.
@@ -556,7 +626,7 @@ jobs:
           if-no-files-found: error
 
   cleanup:
-    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, app-reuse, publisher]
+    needs: [controller, builder, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

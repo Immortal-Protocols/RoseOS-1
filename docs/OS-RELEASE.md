@@ -676,6 +676,101 @@ Source-only contract for the OS owner:
   step needs provenance checks against the receipt hashes,
   `sys.boot_completed`, UI, viewer, input and Stop evidence, and cleanup.
 
+**Exporting the verified alpha and the separate alpha runtime** (INFRA-ALPHA-120;
+source only, the runtime is proposed and not admitted).
+
+The alpha compiled by run 40765631053 (BUILD_DATETIME 1793220134, product `ae9cfd4d`, apps 302/4/28) was fully
+verified in place by run 40777816699 (recipe `e07d535`, `emulator-alpha-verify-retained`): super.img 2410014072
+bytes, `e543c130…09ed3`. Run 40765631053 wrote no build receipt, and none is invented. Run 40777816699's attempt
+directory was removed after its private artifact `emulator-alpha-verification-40777816699` (id 12854389864) was
+uploaded, so that artifact is the only copy of its receipt. Pins: `os/release-pipeline/alpha-runtime.json`.
+
+*Export*, os-release.yml `mode: emulator-alpha-export`:
+- **Guard (hosted, `actions: read`).** The workflow's own `actions/download-artifact` fetches that artifact from run
+  40777816699 with the job token. `scripts/alpha-export.py check-original` then checks:
+  - through the API, the run: repository, `.github/workflows/os-release.yml`, main, `workflow_dispatch`, head SHA
+    `e07d535…` and success;
+  - through the API, the artifact: id, name, run, not expired, and a digest;
+  - the receipt itself: exactly the receipt and `SHA256SUMS`, matching; verdict PASS; the original compile with
+    `buildReceipt: null`; the matched super.img preimage; every required image and the host package measured;
+    imageContent apps 302/4/28 signed by the app signer.
+  The receipt's own sha256 was not recorded at hand-off (`receiptSha256: null`), so it is carried forward, and a
+  configured value is enforced exactly. The checked receipt goes to the export job as
+  `alpha-retained-verification-<run>`. All of this happens before the controller starts the builder.
+- **Builder (`alpha-export` job, `contents: read`, shared builder lock).**
+  - It re-checks the pinned tree and the retained build identity.
+  - It then reads every top-level image and the host package the receipt measured: each must be a regular file of
+    the measured size and sha256, and is hashed again after copying.
+  - Anything missing, linked or changed fails the export and leaves no partial export.
+  - It uploads only `images/*.img`, `host/cvd-host_package.tar.gz`, `original/emulator-alpha-verification.json`,
+    `alpha-export.json` and `SHA256SUMS` as `emulator-alpha-export-<run>` (3 days).
+  - Files the receipt did not measure (for example `android-info.txt`) are not exported.
+  - No lunch, make, signing, secret, login or publication; the attempt directory is removed.
+
+| Field | Value |
+| --- | --- |
+| `mode` | `emulator-alpha-export` |
+| `candidate_sha` | `ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9` |
+| `apps` | `[["dev.pixel.voice",302],["dev.pixel.calculator.agent",4],["dev.pixel.backgroundcontrol",28]]` |
+| `build_number` | any ten digits (unused) |
+| `build_timestamp` | `1793220134` |
+| `channel` | `beta` |
+| `promote`, `app_publish`, `alpha_recover` | `false` |
+| `resume_failed_stage` | `none`; `reuse_binding` empty |
+
+It runs in the `os-release-frankel` group, so it never overlaps an OS build.
+
+*Runtime*, `.github/workflows/alpha-runtime.yml`. It is never os-release.yml, never the builder, and in its own
+concurrency group `roseos-alpha-runtime`. Its inputs are the export run, the export artifact's API digest and the
+`alpha-export.json` sha256.
+- **`guard`** (hosted, `contents: read`, `actions: read`).
+  - `ROSEOS_ALPHA_RUNTIME_READY` must be `true` and both new identity variables set, or it stops (SETUP_MISSING)
+    before any controller step.
+  - The run must be this repository's alpha-runtime.yml on main by `workflow_dispatch`.
+  - The export run must be a successful os-release.yml run on main holding exactly one unexpired
+    `emulator-alpha-export-<run>` with the dispatched digest.
+- **`controller-start` / `controller-stop`** (hosted, `id-token: write`).
+  - They log in only with `ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER` / `ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT`.
+  - They make one async start or stop of `pixel-os-smoke-20261023-a` (us-west2-a), then `describe` polling only.
+  - The stop job always runs, with the existing 2h automatic STOP as fallback.
+  - The os-release provider admits any self-hosted os-release job to the signer, so it is never broadened or
+    reused here.
+- **`runtime`** (`[self-hosted, roseos-cuttlefish-runtime]`, 30 minutes, `contents: read`, `actions: read`; no
+  id-token, secret or publisher credential). It downloads the export and runs `scripts/alpha-runtime.py run`:
+  1. **Export check:** only regular files at safe paths, `SHA256SUMS` exactly over them, and the export receipt's
+     dispatched sha256. Every image and the host package must equal both the export receipt and the embedded
+     original receipt, which is checked again.
+  2. **Preflight, changing nothing:** `/dev/kvm` read/write, free space, no foreign Cuttlefish process or instance
+     lock, and a new task root. Anything absent is SETUP_MISSING; nothing is installed or granted.
+  3. **Extraction:** the host package (no absolute, parent, escaping-link, special or setuid entry) into
+     `~/rose-alpha-runtime/<run>-<attempt>` with its own HOME. The runner's historical `cuttlefish*` directories
+     and userdata are never touched, and their listing is compared before and after.
+  4. **Boot:** instance 21, `--start_webrtc=false`, then `sys.boot_completed` within 900 s.
+  5. **Evidence:** `scripts/rose-verify.py runtime --interactive` with the receipt-generated expectation.
+  6. **Cleanup, also after failure:** stop the guest, check that no task-root process remains, remove only the task
+     root this attempt created, and record each step.
+  7. **Output:** `alpha-runtime-evidence-<run>` holds the evidence receipt (unreached steps stay `null`), the
+     expectation and rose-verify's output, with no serial, secret or personal data.
+
+Required before the first runtime dispatch (admin, outside this source):
+- the runner group `roseos-alpha-runtime`, restricted to this private repository and to
+  `.github/workflows/alpha-runtime.yml`, with one runner labelled `roseos-cuttlefish-runtime` on
+  pixel-os-smoke-20261023-a;
+- a NEW workload identity pool/provider whose attribute condition admits only this repository, that workflow,
+  `refs/heads/main` and `workflow_dispatch`;
+- a NEW controller service account with only `compute.instances.get/start/stop` on that instance (no project or
+  zonal-operations grant);
+- the variables `ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER`, `ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT` and, last,
+  `ROSEOS_ALPHA_RUNTIME_READY=true`.
+
+Unverified host facts, each checked at run time and never assumed in a receipt:
+- the runner user's `/dev/kvm` access and the Cuttlefish host dependencies on that host;
+- that `launch_cvd`/`stop_cvd`/`adb` from the exported host package run there;
+- the adb port `6520 + instance - 1`;
+- that `launch_cvd --daemon` returns after boot;
+- that the image directory needs no file the receipt did not measure;
+- the Actions artifact size for the images.
+
 **Public app publication** (INFRA-APP-096, APR024) is optional, using
 `app_publish: true`, which the guard allows only with `mode: app-only` or `mode: app-reuse` (below). The hosted
 `app-publisher` job downloads the builder's private artifact through the

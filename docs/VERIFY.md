@@ -67,12 +67,17 @@ Checked-in expectations live in `qa/verification/expectations/`:
 | File | Build | Apps |
 | --- | --- | --- |
 | `beta-frankel-2026102804.json` | Published beta 2804, candidate `ae9cfd4d` | 302/4/28 |
-| `alpha-40719075730.json` | Alpha Actions 40719075730 (recipe `2921d88d`, base `ae9cfd4d` + OS delta `f21bf683`). The build failed, so no image exists | 302/4/28 |
+| `alpha-40719075730.json` | Historical: alpha Actions 40719075730 (recipe `2921d88d`, base `ae9cfd4d` + OS delta `f21bf683`). The build failed, so no image exists. Not the expectation for any existing alpha image; see section C | 302/4/28 |
 | `app-rose-agent-304.json` | App-only `pixel-ota` prerelease `rose-agent-304` (product `a3d839e6`); no device target | Rose Agent 304 only |
 
 Both copy the existing pins unchanged. The test suite fails if either diverges
 from `os/alpha/cuttlefish-product-contract.json` or
 `os/release-pipeline/frankel.json`.
+
+The existing alpha image (compile 40765631053, verified by 40777816699) has no
+checked-in file. Its expectation is **generated** from that verification
+receipt by `scripts/alpha-runtime.py` (section C), so the apps, bytes, image
+paths and signer are the ones the full image gate measured.
 
 A **new candidate** (for example the next beta, or app-only 304) gets its own
 file. It is written from Infra's actual image/APK receipt only after Infra
@@ -214,9 +219,31 @@ serializes runtime work.
   verbatim in `--handback`.
 - No concurrent VM change, reset or deploy. No new resources, credentials or
   network routes.
-- Before the session, the lead supplies the alpha receipt (`emulator-alpha-receipt-<run>`):
-  image SHA-256s, `testOnly`, `bootAttempted`, and the build id prefix
-  `rose-cf-alpha-`.
+- Before the session, the lead supplies the export of the verified image
+  (INFRA-ALPHA-120): the os-release `emulator-alpha-export` run, its
+  `emulator-alpha-export-<run>` artifact digest and the `alpha-export.json`
+  SHA-256. The export holds the images and host package that run 40777816699
+  measured (compile 40765631053, BUILD_DATETIME 1793220134, product `ae9cfd4d`,
+  apps 302/4/28, super.img `e543c130…`), that run's receipt, and a sanitized
+  export receipt. Run 40765631053 wrote no build receipt; none is claimed.
+- The expectation comes from that receipt, never from the historical
+  `alpha-40719075730.json`, source or a plan:
+
+  ```sh
+  python3 scripts/alpha-runtime.py expectation --artifact-dir EXPORT_DIR \
+    --export-receipt-sha256 SHA256 --out /scratch/alpha-expectation.json
+  ```
+
+  This checks the export as the runtime job does, then writes Rose Agent 302,
+  Calculator 4 and controller 28 with the measured bytes, image paths and the
+  pinned signer. It is the historical 2804-era alpha: no Pixel, Agent 308, OS
+  PR70 Home role or PR85 tray claim can be made from it.
+- `.github/workflows/alpha-runtime.yml` (proposed; runs only once Infra admits
+  the runtime host and sets `ROSEOS_ALPHA_RUNTIME_READY`) does all of this
+  itself on a fresh task-owned instance and stores the generated expectation,
+  rose-verify's output (screenshots and UI dumps; no WebRTC viewer) and the
+  stop/cleanup record in `alpha-runtime-evidence-<run>`. Its run id and attempt
+  are the handback reference.
 
 1. **Provenance.** Record the Actions run, the receipt's image and host-package
    hashes, the source recipe, and the launch command the lead used. Do not
@@ -225,7 +252,7 @@ serializes runtime work.
 
    ```sh
    python3 scripts/rose-verify.py runtime --serial SERIAL --handback 'HANDBACK REF' \
-     --expect qa/verification/expectations/alpha-40719075730.json --out /scratch/runtime-RUN
+     --expect /scratch/alpha-expectation.json --out /scratch/runtime-RUN
    ```
 
    This records:
