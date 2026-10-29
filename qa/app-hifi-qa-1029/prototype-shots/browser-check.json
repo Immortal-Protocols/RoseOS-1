@@ -1,0 +1,290 @@
+{
+ "file": "prototypes/rose-hifi/Rose-HiFi.html @ ce126f56 (QA scratch extraction)",
+ "browser": "153.0.8010.12",
+ "env": {
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+  "dpr": 1,
+  "vw": 1280,
+  "vh": 900
+ },
+ "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+ "frames": {
+  "n": 240,
+  "median": 16.700000000000728,
+  "p95": 33.400000000001455
+ },
+ "results": [
+  {
+   "name": "renderer initialises WebGL",
+   "ok": true,
+   "detail": "webgl \u00b7 ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  {
+   "name": "home view at load",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "swipe advances to the full app page",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "tray fixed during swipe",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "page dot returns to first page",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "Rose opens and starts connecting",
+   "ok": true,
+   "detail": "connecting \u2192 connected"
+  },
+  {
+   "name": "connected cue only",
+   "ok": true,
+   "detail": "[]"
+  },
+  {
+   "name": "Rose speaks with result",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "mute while speaking keeps speech",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "renderer mic=0 when muted",
+   "ok": true,
+   "detail": "{\"mic\":0,\"gap\":0.012,\"voice\":2}"
+  },
+  {
+   "name": "speech ends independently while muted",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "keyboard unmute",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "end call returns Home",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "end call keeps tasks running",
+   "ok": true,
+   "detail": "{\"saturday\":{\"state\":\"running\",\"step\":2},\"reply\":{\"state\":\"running\",\"step\":2},\"compare\":{\"state\":\"running\",\"step\":2}}"
+  },
+  {
+   "name": "call ended cue",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "no Interrupt control / composer",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "reduced motion stops animation loop",
+   "ok": true,
+   "detail": "{\"reduced\":true,\"animating\":false}"
+  },
+  {
+   "name": "static fallback visible",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "context loss \u2192 fallback",
+   "ok": true,
+   "detail": "static-context-lost"
+  },
+  {
+   "name": "context restored \u2192 WebGL",
+   "ok": true,
+   "detail": "webgl"
+  },
+  {
+   "name": "hidden page suspends drawing",
+   "ok": true,
+   "detail": "640 \u2192 640"
+  },
+  {
+   "name": "visible page resumes drawing",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "unfold preserves call/tasks/view",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "no horizontal page overflow at 390 px",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "home app opens a simulated app view",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "agents screen from Rose keeps call",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "eight windows fully visible unfolded",
+   "ok": true,
+   "detail": 8
+  },
+  {
+   "name": "stop controls not obscured by tray",
+   "ok": true,
+   "detail": "704 <= 740"
+  },
+  {
+   "name": "stop asks for confirmation",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "fold preserves open confirmation",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "cancel preserves task",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "confirm shows Stopping",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "acknowledged Stopped; unrelated task continues",
+   "ok": true,
+   "detail": "{\"saturday\":{\"state\":\"running\",\"step\":5},\"reply\":{\"state\":\"stopped\",\"step\":4},\"compare\":{\"state\":\"running\",\"step\":5}}"
+  },
+  {
+   "name": "both windows of the stopped task update",
+   "ok": true,
+   "detail": 2
+  },
+  {
+   "name": "window detail opens",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "Escape returns to agents",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "switcher opens",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "agent carousel moves independently",
+   "ok": true,
+   "detail": "24\u2192192 / human 0\u21920"
+  },
+  {
+   "name": "human carousel drags independently",
+   "ok": true,
+   "detail": "0\u2192226 / agent 192\u2192192"
+  },
+  {
+   "name": "connector animates while work runs",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "agent selection opens window detail",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "human selection foregrounds that app",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "work continues through lock",
+   "ok": true,
+   "detail": "7\u21928 done"
+  },
+  {
+   "name": "completion notice is a task notice",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "reset mid-transition leaves only Home active and tappable",
+   "ok": true,
+   "detail": "v-home"
+  },
+  {
+   "name": "lock screen covers an open Stop sheet; Unlock reachable",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "confirmation preserved through lock",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "focus returns to the Stop control\u2019s card after the sheet closes",
+   "ok": true,
+   "detail": "w-research"
+  },
+  {
+   "name": "needs-choice window offers a choice",
+   "ok": true,
+   "detail": 2
+  },
+  {
+   "name": "making the choice resumes the task",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "visible controls are at least 44 CSS px",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "phone surface never scrolls under focus",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "no console errors",
+   "ok": true,
+   "detail": ""
+  }
+ ],
+ "errors": [],
+ "warnings": [
+  "[.WebGL-0x29fc00192c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+  "[.WebGL-0x29fc00192c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+  "[.WebGL-0x29fc00192c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels",
+  "[.WebGL-0x29fc00192c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)"
+ ]
+}
