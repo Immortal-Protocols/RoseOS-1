@@ -51,7 +51,7 @@ jobs:
           rustup default 1.97.0
           rustc --version
           java -version
-          echo "NDK: ${ANDROID_NDK_LATEST_HOME:-none}"
+          echo "NDK used by build-native.sh: ${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-none}} (latest installed: ${ANDROID_NDK_LATEST_HOME:-none})"
       - name: JNI adapter checks
         working-directory: workspace/models/rose-chat-android
         run: |
