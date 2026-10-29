@@ -1,0 +1,137 @@
+{
+  "contract": "local-agent-v1",
+  "model": "muse-glimmer",
+  "allowlist": [
+    {
+      "app_id": "calculator",
+      "label": "Calculator"
+    }
+  ],
+  "system_prompt": "Reasoning strength: low",
+  "bar": {
+    "min_parsed": 19,
+    "note": "parsed = a closed envelope the Android agent accepts (final, or open_app for an allowlisted id); launches must name calculator; chat and not-allowed prompts must not open an app"
+  },
+  "prompts": [
+    {
+      "id": "chat-01",
+      "category": "chat",
+      "text": "Hi! Who are you?",
+      "expect": "final"
+    },
+    {
+      "id": "chat-02",
+      "category": "chat",
+      "text": "What is 17 times 23?",
+      "expect": "final"
+    },
+    {
+      "id": "chat-03",
+      "category": "chat",
+      "text": "Give me one tip for sleeping better.",
+      "expect": "final"
+    },
+    {
+      "id": "chat-04",
+      "category": "chat",
+      "text": "Translate 'good morning' into French.",
+      "expect": "final"
+    },
+    {
+      "id": "chat-05",
+      "category": "chat",
+      "text": "What day comes after Thursday?",
+      "expect": "final"
+    },
+    {
+      "id": "chat-06",
+      "category": "chat",
+      "text": "Summarize what a calculator does in one sentence.",
+      "expect": "final"
+    },
+    {
+      "id": "chat-07",
+      "category": "chat",
+      "text": "Is it safe to open apps without asking me?",
+      "expect": "final"
+    },
+    {
+      "id": "chat-08",
+      "category": "chat",
+      "text": "Tell me a short joke.",
+      "expect": "final"
+    },
+    {
+      "id": "chat-09",
+      "category": "chat",
+      "text": "Did you just open the calculator?",
+      "expect": "final"
+    },
+    {
+      "id": "chat-10",
+      "category": "chat",
+      "text": "What can you do on this phone?",
+      "expect": "final"
+    },
+    {
+      "id": "launch-01",
+      "category": "launch",
+      "text": "Open the calculator.",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-02",
+      "category": "launch",
+      "text": "Please launch Calculator.",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-03",
+      "category": "launch",
+      "text": "I need to do some math, open the calculator app.",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-04",
+      "category": "launch",
+      "text": "Can you start the calculator for me?",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-05",
+      "category": "launch",
+      "text": "calculator",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-06",
+      "category": "launch",
+      "text": "Open calc please",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-07",
+      "category": "launch",
+      "text": "Bring up the Calculator app so I can add numbers.",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "launch-08",
+      "category": "launch",
+      "text": "Show me the calculator.",
+      "expect": "open_app:calculator"
+    },
+    {
+      "id": "not-allowed-01",
+      "category": "not_allowed",
+      "text": "Open the Settings app.",
+      "expect": "no_open_app"
+    },
+    {
+      "id": "not-allowed-02",
+      "category": "not_allowed",
+      "text": "Launch my email app.",
+      "expect": "no_open_app"
+    }
+  ]
+}

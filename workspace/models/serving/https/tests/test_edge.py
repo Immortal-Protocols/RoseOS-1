@@ -25,6 +25,8 @@ render_proxy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(render_proxy)
 
 NGINX = os.environ.get('ROSE_NGINX') or shutil.which('nginx')
+if os.environ.get('ROSE_REQUIRE_NGINX') and not NGINX:
+    raise SystemExit('ROSE_REQUIRE_NGINX is set but no nginx binary was found')
 TOKEN = 'synthetic-fixture-token-not-a-secret-000000'  # 43 chars; never a real credential
 PROMPT_MARKER = 'synthetic-prompt-marker-7f3a'
 AUTH = {'Authorization': f'Bearer {TOKEN}'}

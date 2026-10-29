@@ -1,0 +1,77 @@
+name: Models HTTPS edge and conformance
+
+# Runs the Rose Models HTTPS edge tests against a real nginx binary on loopback, with a fixture
+# backend and fake credentials, plus the offline envelope-conformance fixtures. No ACME, DNS,
+# cloud, live endpoint or secret is used.
+on:
+  pull_request:
+    paths:
+      - 'workspace/models/serving/https/**'
+      - 'workspace/models/serving/conformance/**'
+      - 'workspace/models/rose-chat-core/examples/conformance.rs'
+      - 'workspace/models/rose-chat-core/tests/conformance.rs'
+      - '.github/workflows/models-endpoint.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/models/serving/https/**'
+      - 'workspace/models/serving/conformance/**'
+      - 'workspace/models/rose-chat-core/examples/conformance.rs'
+      - 'workspace/models/rose-chat-core/tests/conformance.rs'
+      - '.github/workflows/models-endpoint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-endpoint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  edge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Real nginx binary (extracted, not installed or started)
+        run: |
+          mkdir -p "$RUNNER_TEMP/nginx" && cd "$RUNNER_TEMP/nginx"
+          sudo apt-get update -qq
+          apt-get download nginx
+          dpkg-deb -x nginx_*.deb root
+          echo "package: $(ls nginx_*.deb) sha256 $(sha256sum nginx_*.deb | cut -d' ' -f1)"
+          echo "binary sha256 $(sha256sum root/usr/sbin/nginx | cut -d' ' -f1)"
+          root/usr/sbin/nginx -v
+          echo "ROSE_NGINX=$RUNNER_TEMP/nginx/root/usr/sbin/nginx" >> "$GITHUB_ENV"
+      - name: Edge tests (real nginx, loopback fixture backend)
+        env:
+          ROSE_REQUIRE_NGINX: '1'
+        run: python3 -I workspace/models/serving/https/tests/test_edge.py -v
+
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workspace/models/rose-chat-core
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Rust 1.97.0
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.0
+      - name: Conformance harness tests (real local-agent-v1 agent, fixtures and loopback server)
+        run: cargo test --locked --test conformance
+      - name: Fixture runs (pass set must pass, mixed set must fail the bar)
+        run: |
+          cargo run -q --locked --example conformance -- fixture --prompts ../serving/conformance/prompts.json \
+            --replies ../serving/conformance/fixtures/replies-pass.json > /dev/null
+          if cargo run -q --locked --example conformance -- fixture --prompts ../serving/conformance/prompts.json \
+            --replies ../serving/conformance/fixtures/replies-mixed.json > /dev/null; then
+            echo "mixed fixtures unexpectedly passed the bar" >&2; exit 1
+          fi

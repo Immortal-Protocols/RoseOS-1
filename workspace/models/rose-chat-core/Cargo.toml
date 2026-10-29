@@ -34,3 +34,11 @@ required-features = ["http"]
 [[test]]
 name = "signals"
 required-features = ["http"]
+
+[[example]]
+name = "conformance"
+required-features = ["http"]
+
+[[test]]
+name = "conformance"
+required-features = ["http"]

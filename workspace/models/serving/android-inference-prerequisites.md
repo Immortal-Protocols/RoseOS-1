@@ -26,6 +26,13 @@ accessed. Prices are historical figures relayed by the Models Manager, not fresh
   - Proposed bar: at least 19 of 20 parse; every `open_app` names `calculator` only when asked; the not-allowed cases produce no `open_app`.
   - If the bar fails, the next step is a separately scoped constrained-decoding trial, not prose extraction.
 
+## Executable preparation (MODELS-HTTPS-SOURCE-001)
+
+- **HTTPS edge:** `https/` holds the renderer, Nginx and Caddy configs, and real-Nginx synthetic tests, plus the operator sequence.
+- **Conformance:** `conformance/` holds the 20-prompt harness built on the real agent, with fixtures and the bounded live command.
+
+Neither has run against a live endpoint. Caddy was not obtainable from this session, so its configuration is unvalidated by a real binary; see `https/README.md`.
+
 ## Phone-reachable HTTPS route
 
 **Required properties:**

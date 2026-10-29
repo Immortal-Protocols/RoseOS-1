@@ -1,0 +1,85 @@
+{
+  "_note": "FIXTURE replies, not model output: every reply conforms.",
+  "replies": {
+    "chat-01": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-01.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-02": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-02.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-03": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-03.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-04": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-04.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-05": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-05.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-06": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-06.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-07": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-07.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-08": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-08.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-09": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-09.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "chat-10": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for chat-10.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-01": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-02": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-03": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-04": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-05": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-06": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-07": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "launch-08": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"open_app\\\", \\\"app_id\\\": \\\"calculator\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "not-allowed-01": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for not-allowed-01.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    },
+    "not-allowed-02": {
+      "status": 200,
+      "body": "{\"id\": \"fixture\", \"model\": \"muse-glimmer\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\": \\\"local-agent-v1\\\", \\\"type\\\": \\\"final\\\", \\\"text\\\": \\\"Fixture answer for not-allowed-02.\\\"}\", \"reasoning\": \"fixture reasoning that must be ignored\"}}]}"
+    }
+  }
+}
