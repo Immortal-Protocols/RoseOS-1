@@ -313,6 +313,13 @@
           "publicRelease": true
         },
         "basis": "FAM-02-INFRA-S001: delivered. Rose Agent bundled and signed by OS run 40778491188 (candidate 93ad1c2b, BUILD_DATETIME 1793220605) and republished unchanged by app-reuse run 40787416518 attempt 2 (completed 23:38:36 UTC) as release 427306781; APK 1393821 bytes, identical to the APK extracted from 2806 (lead record). Not an app-only build, so it is not in built. The row stays as the os-release binding so app-reuse can replay exactly these bytes idempotently; no other bytes, route or candidate may carry 308. INFRA-CANDIDATE-115: bundled Rose Agent of the Frankel 2026102806 OS candidate 93ad1c2b (the INFRA-CANDIDATE-115 merge; base e5c3eaa3 with OS #81/App #89 trial removal, #83 Home reuse and #85 tray lifecycle), dispatched with BUILD_DATETIME 1793220605. The app-only route may not use 308; INFRA-APP-118 app-reuse may publish only these OS-bundled signed bytes, bound to that candidate, build and timestamp"
+      },
+      {
+        "versionCode": 309,
+        "versionName": "309-hifi-beta",
+        "candidate": null,
+        "route": "app-only",
+        "basis": "AGENT309-DELIVERY-001: reserved for the app-only HiFi Rose Agent built from exact basis 77878c590e5602dcd6f6b39300c5b018b72477e0 (Merge OS #131 Home tray; includes App #127 renderer and #130 channel selection) plus only this delivery delta (manifest 309, this row and the host app-release disk reserve guard). The candidate is the tested merge of that delta, recorded by Infra at dispatch; no other route may use 309, and 308 stays the os-release binding for exact-byte app-reuse"
       }
     ]
   },
