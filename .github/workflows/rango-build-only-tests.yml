@@ -1,0 +1,45 @@
+name: Rango build-only tests
+
+# Source tests of the unsigned Rango build-only route (OS-RANGO-BUILD-001/002): scripts/rango-build-only.py and its
+# configs against a synthetic tree and a fake runner. No secrets, cloud identity, artifacts, builder or dispatch;
+# a pass says nothing about a real generation or compile.
+on:
+  pull_request:
+    paths:
+      - 'scripts/rango-build-only.py'
+      - 'scripts/tests/test_rango_build_only.py'
+      - 'scripts/release_receipts.py'
+      - 'os/build-only/**'
+      - 'os/devices/pixel10.json'
+      - 'os/release-pipeline/frankel.json'
+      - '.github/workflows/rango-build-only-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/rango-build-only.py'
+      - 'scripts/tests/test_rango_build_only.py'
+      - 'scripts/release_receipts.py'
+      - 'os/build-only/**'
+      - 'os/devices/pixel10.json'
+      - 'os/release-pipeline/frankel.json'
+      - '.github/workflows/rango-build-only-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rango-build-only-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rango-build-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Python version
+        run: python3 --version
+      - name: Rango build-only tests (synthetic tree, fake runner)
+        run: python3 scripts/tests/test_rango_build_only.py -v
