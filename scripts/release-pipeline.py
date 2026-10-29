@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
 import github_release_publisher  # noqa: E402
 import permission_apex  # noqa: E402
+import systemui_identity  # noqa: E402
 from release_receipts import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -620,10 +621,12 @@ def check_updater(path, config, aapt, apksigner=None):
 
 SYSTEMUI_TRAY_REQUIRED = ('apkPath', 'markers')
 
-def check_systemui_tray(path, config):
+def check_systemui_tray(path, config, identity=None):
     """(failures, receipt): the Agent tray code compiled into the SystemUI APK of the target-files itself. The overlay
     sources are only copied into frameworks/base; their dex names and literals in SystemUI (WindowManager-Shell is a
-    static library of it, and its proguard rules keep com.android.wm.shell.* class names and Log.w) show they built."""
+    static library of it, and its proguard rules keep com.android.wm.shell.* class names and Log.w) show they built.
+    identity, when given, is called with the APK bytes and path; its supplemental result is recorded under
+    receipt['identity'] and never adds a failure."""
     spec = config.get('systemUiTray') or {}
     missing = [f'systemUiTray.{key}' for key in SYSTEMUI_TRAY_REQUIRED if not spec.get(key)]
     if missing:
@@ -638,6 +641,8 @@ def check_systemui_tray(path, config):
     except zipfile.BadZipFile:
         return ['SystemUI APK is not a readable APK archive'], None
     receipt = {'apkPath': spec['apkPath'], 'sha256': hashlib.sha256(data).hexdigest(), 'dexFiles': len(dexes)}
+    if identity:
+        receipt['identity'] = identity(data, spec['apkPath'])
     if not dexes:
         return ['SystemUI APK carries no classes*.dex, so the tray code cannot be read from this artifact'], receipt
     absent = [m for m in spec['markers'] if not any(m.encode() in d for d in dexes)]
@@ -645,6 +650,35 @@ def check_systemui_tray(path, config):
     if absent:
         return [f'SystemUI dex lacks {absent}; the Agent tray lifecycle (AgentTrayLink, OS #85) is not compiled in'], receipt
     return [], receipt
+
+def systemui_identity_capture(data, apk_path, artifact, config, cand, used):
+    """Supplemental identity of the signed SystemUI APK (OS-COMPONENT-ID-002/003): xmltree and apksigner run on one
+    extracted copy whose sha256 is taken after each tool, so an output for other bytes is rejected by
+    systemui_identity.build_receipt. Returns {'status': 'observed', 'receipt'} or {'status': 'failed'|'unavailable',
+    'problems'}; it is never a release failure and never pins a certificate."""
+    try:
+        tools = {name: tool_receipt(config, name, used) for name in ('aapt', 'apksigner')}
+    except SetupMissing as error:
+        return {'status': 'unavailable', 'problems': [f'tool {name} is not configured' for name in error.missing]}
+    outputs = {}
+    with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as workdir:
+        apk = Path(workdir)/'SystemUI.apk'
+        apk.write_bytes(data)
+        for name, argv in (('xmltree', [tools['aapt'], 'dump', 'xmltree', str(apk), 'AndroidManifest.xml']),
+                ('apksigner', [tools['apksigner'], 'verify', '--print-certs', str(apk)])):
+            try:
+                result = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return {'status': 'unavailable', 'problems': [f'{name} could not run: {error.__class__.__name__}']}
+            outputs[name] = systemui_identity.ToolOutput(result.returncode, result.stdout, sha256_file(apk))
+    try:
+        receipt = systemui_identity.build_receipt(apk_path=apk_path, apk_sha256=hashlib.sha256(data).hexdigest(),
+            xmltree=outputs['xmltree'], apksigner=outputs['apksigner'], artifact=artifact,
+            source={'revision': cand['sha'], 'buildId': str(cand['build'])},
+            tools={name: used[name] for name in ('aapt', 'apksigner')})
+    except systemui_identity.IdentityError as error:
+        return {'status': 'failed', 'problems': error.problems}
+    return {'status': 'observed', 'receipt': receipt}
 
 def check_apps(path, policy, apksigner):
     result = subprocess.run([sys.executable, str(TARGET_FILES_VERIFIER), str(path), str(policy), '--apksigner', apksigner],
@@ -896,14 +930,17 @@ def verify_signed(a, config, cand, adapter):
     expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
     present = {p.name for p in public.iterdir()}
     failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
-    image_tools, verifier_tools = {}, {}
+    image_tools, verifier_tools, identity_tools = {}, {}, {}
+    signed_sha256 = sha256_file(signed) if signed.is_file() else None
+    artifact = {'kind': 'target-files', 'name': signed.name, 'sha256': signed_sha256}
     if not failures:
         failures += check_build_identity(signed, config, cand, 'release-keys')
         failures += check_apps(signed, release_dir/'background-policy.json', tool(config, 'apksigner'))
         failures += check_updater(signed, config, tool(config, 'aapt'), tool(config, 'apksigner'))
         apex_failures, apex = check_permission_apex(signed, config, verifier_tools, tool(config, 'apksigner'))
         failures += apex_failures
-        tray_failures, tray = check_systemui_tray(signed, config)
+        tray_failures, tray = check_systemui_tray(signed, config, lambda data, apk_path:
+            systemui_identity_capture(data, apk_path, artifact, config, cand, identity_tools))
         failures += tray_failures
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
@@ -915,7 +952,7 @@ def verify_signed(a, config, cand, adapter):
     if failures:
         raise CheckFailed('; '.join(failures))
     receipt = {'receiptType': 'candidate-verification', 'candidate': cand, 'simulated': adapter.simulated,
-        'signedTargetFilesSha256': sha256_file(signed), 'published': False,
+        'signedTargetFilesSha256': signed_sha256, 'published': False,
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
             'Updater presence/identity/config/signer',
             'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
