@@ -38,6 +38,15 @@ def script(path, body):
     path.chmod(0o755)
     return str(path)
 
+class Fs:
+    """A synthetic os.statvfs result: bytes available to this user (f_bavail), free to root (f_bfree) and total."""
+    def __init__(self, available, free=None, total=None, frsize=4096):
+        self.f_frsize, self.f_bavail = frsize, available // frsize if frsize > 0 else 0
+        self.f_bfree = (free if free is not None else available) // frsize if frsize > 0 else 0
+        self.f_blocks = (total if total is not None else 2 * (free or available)) // frsize if frsize > 0 else 0
+
+NEEDED = release.RESERVE_BYTES + release.APP_WORKSPACE_ALLOWANCE
+
 def jobs(text):
     body = text.split('\njobs:\n', 1)[1]
     return {m[1]: m[2] for m in re.finditer(r'^  ([\w-]+):\n((?:(?:    .*)?\n)*)', body, re.M)}
@@ -107,6 +116,9 @@ class AppReleaseTest(unittest.TestCase):
         self.config = self.root/'config.json'
         self.config.write_text(json.dumps(self.config_data))
         self.built, self.libs = 'dev.pixel.voice:306', ()
+        self.fs, self.statted = Fs(NEEDED + 4096), []
+        # The trusted checkout and the attempt directory sit on two separate synthetic filesystems.
+        self.device = lambda path: 2 if Path(path).is_relative_to(self.root) else 1
         self.calls = []
         self.head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
         self.work, self.artifact = self.root/'attempt/work', self.root/'attempt/artifact'
@@ -122,8 +134,16 @@ class AppReleaseTest(unittest.TestCase):
                 apk.writestr(lib, b'synthetic native library')
         return {}
 
+    def statvfs(self, path):
+        self.statted.append(Path(path))
+        fs = self.fs(path) if callable(self.fs) else self.fs
+        if isinstance(fs, BaseException):
+            raise fs
+        return fs
+
     def run_release(self):
-        return release.main(self.artifact, self.config, self.env, self.gcloud, build=self.build)
+        return release.main(self.artifact, self.config, self.env, self.gcloud, build=self.build, statvfs=self.statvfs,
+            stat=lambda path: type('Stat', (), {'st_dev': self.device(path)})())
 
     def fetched(self):
         return [json.loads(l) for l in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -219,6 +239,60 @@ class AppReleaseTest(unittest.TestCase):
         self.assertTrue(self.artifact.exists(), 'an existing directory is never removed')
         self.assertEqual(self.calls, [])
 
+    def test_disk_reserve_is_checked_on_available_bytes_before_any_work(self):
+        # Exactly the reserve plus the app workspace allowance, available to this user, is enough.
+        self.fs = Fs(NEEDED)
+        self.assertEqual(self.run_release()['versionCode'], 306)
+        self.assertEqual(self.statted, [ROOT, self.root], 'the trusted checkout, then the not-yet-created workspace and artifact '
+            'on their nearest existing ancestor; their shared filesystem is measured once')
+        self.assert_clean()
+        shutil.rmtree(self.root/'attempt', ignore_errors=True)
+        self.log.unlink()  # secret reads of the successful run above
+        lacking = (
+            (Fs(NEEDED - 4096), 'has %d bytes available; %d are required' % (NEEDED - 4096, NEEDED)),
+            # Free-to-root and total space are not headroom: only f_bavail counts.
+            (Fs(NEEDED - 4096, free=10 * NEEDED, total=100 * NEEDED), 'has %d bytes available' % (NEEDED - 4096)),
+            (Fs(release.RESERVE_BYTES), 'reserve plus %d app workspace' % release.APP_WORKSPACE_ALLOWANCE),
+            (Fs(0), 'has 0 bytes available'),
+            (Fs(NEEDED, frsize=0), 'could not be established: no fragment size'),
+            (FileNotFoundError(2, 'gone'), 'could not be established: FileNotFoundError'),
+            (PermissionError(13, 'denied'), 'could not be established: PermissionError'),
+        )
+        for fs, message in lacking:
+            self.fs, self.calls = fs, []
+            with self.assertRaisesRegex(release.AdapterFailed, message):
+                self.run_release()
+            self.assertEqual((self.calls, self.fetched()), ([], []), 'nothing was built and no secret was read')
+            self.assertFalse(self.artifact.exists())
+            self.assertFalse((self.root/'attempt').exists(), 'no workspace was created')
+            worktrees = subprocess.run(['git', '-C', str(ROOT), 'worktree', 'list'], capture_output=True, text=True).stdout
+            self.assertNotIn(str(self.work), worktrees)
+        # Any one short filesystem stops the run: here only the workspace's.
+        self.root.joinpath('attempt').mkdir()
+        self.fs = lambda path: Fs(NEEDED - 4096) if Path(path) == self.root/'attempt' else Fs(NEEDED)
+        with self.assertRaisesRegex(release.AdapterFailed, 'filesystem has %d bytes available' % (NEEDED - 4096)):
+            self.run_release()
+        self.assertTrue((self.root/'attempt').exists(), 'an existing directory is left in place, never deleted or resized')
+        self.assertEqual(self.calls, [])
+        # The guard does not run before the lock: a held lock is still reported as such.
+        self.fs = Fs(0)
+        with open(self.lock, 'a') as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with self.assertRaisesRegex(release.AdapterFailed, 'lock is held'):
+                self.run_release()
+
+    def test_disk_reserve_is_the_packet_value_and_counts_each_filesystem_once(self):
+        self.assertEqual(release.RESERVE_BYTES, 322122547200)
+        self.assertEqual(release.RESERVE_BYTES, 300 * 1024**3)
+        self.assertTrue(0 < release.APP_WORKSPACE_ALLOWANCE <= 64 * 1024**3, 'the app workspace allowance is bounded')
+        seen = []
+        same = lambda path: type('S', (), {'st_dev': 7})()
+        release.disk_preflight({'a': self.root, 'b': self.root/'missing/child'}, statvfs=lambda p: seen.append(p) or Fs(NEEDED), stat=same)
+        self.assertEqual(seen, [self.root], 'one filesystem, measured once')
+        with self.assertRaisesRegex(release.AdapterFailed, 'available space for the b'):
+            release.disk_preflight({'a': self.root, 'b': Path('/nonexistent-root-for-test')},
+                statvfs=lambda p: Fs(NEEDED), stat=lambda p: (_ for _ in ()).throw(OSError('no mount')) if str(p) == '/' else type('S', (), {'st_dev': 7})())
+
     def test_missing_configuration_fails_closed_by_name(self):
         del self.config_data['appRelease']
         del self.config_data['host']['integrate']['appSecrets']['keyPassword']
@@ -238,7 +312,7 @@ class CheckedInAppReleaseTest(unittest.TestCase):
     def test_checked_in_config_has_every_app_only_input(self):
         self.assertEqual(subprocess.run([PY, str(SCRIPTS/'host-app-release.py'), '--check']).returncode, 0)
 
-    def test_app_release_pins_302_the_delivered_303_304_306_and_307_and_the_reserved_305_and_308(self):
+    def test_app_release_pins_302_the_delivered_303_304_306_and_307_the_reserved_305_and_308_and_the_app_only_309(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         app = config['appRelease']
         self.assertEqual(app['published'], {'versionCode': 302, 'size': 1381533,
@@ -269,19 +343,21 @@ class CheckedInAppReleaseTest(unittest.TestCase):
              config['identities']['appSignerSha256'], 'd27dded6acac8567ebe0084d928145521da4d3bf', 40765131690, 427169403,
              {'route': 'public GitHub prerelease rose-agent-307', 'at': '2026-10-28T20:40Z', 'publicRelease': True}))
         self.assertEqual([(r['versionCode'], r['versionName'], r['route'], r['candidate']) for r in app['reserved']],
-            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (308, '308-home-tray-beta', 'os-release', '93ad1c2bd7094d6b65c695ba239d05d272b87c57')])
+            [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (308, '308-home-tray-beta', 'os-release', '93ad1c2bd7094d6b65c695ba239d05d272b87c57'),
+             (309, '309-hifi-beta', 'app-only', None)])
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
             {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
-        self.assertIn('package="dev.pixel.voice" android:versionCode="308" android:versionName="308-home-tray-beta"', manifest)
+        # AGENT309-DELIVERY-001: the source declares the reserved app-only 309; 308 stays the os-release binding.
+        self.assertIn('package="dev.pixel.voice" android:versionCode="309" android:versionName="309-hifi-beta"', manifest)
 
     def test_reserved_versions_belong_to_their_route_and_candidate(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         queued = 'a3d839e6805b514aa6cad6f86c15e5db622e10cc'
-        # 308 is the 2806 OS candidate's; the app-only route starts above it.
+        # 308 is the 2806 OS candidate's; 309 is reserved for the app-only route, with its candidate recorded at dispatch.
         self.assertEqual(release.requested_version(config, [['dev.pixel.voice', 309]], 'f' * 40), 309)
         appres = json.loads(json.dumps(config))
-        appres['appRelease']['reserved'].append({'versionCode': 309, 'versionName': '309-app-beta', 'candidate': queued, 'route': 'app-only', 'basis': 'test'})
+        next(r for r in appres['appRelease']['reserved'] if r['versionCode'] == 309)['candidate'] = queued
         self.assertEqual(release.requested_version(appres, [['dev.pixel.voice', 309]], queued), 309)
         for cfg, version, sha, message in ((appres, 309, 'f' * 40, 'reserved for the app-only route and candidate ' + queued),
                 (config, 308, queued, 'reserved for the os-release route'),

@@ -15,6 +15,10 @@ APPS (exactly [["dev.pixel.voice", N]]) set, and the job's short-lived signer id
 4. write to the artifact directory only the signed APK, a nonsecret receipt and SHA256SUMS;
 5. remove the candidate worktree and every temporary input under ROSE_RELEASE_DIR, on success or failure.
 It holds the builder's shared source/output lock (host.lockPath) for the whole run, so it never overlaps an OS stage.
+Before any worktree, build, signing or temporary input, it checks the space available to this user (statvfs f_bavail, not
+free or total) on each filesystem it writes to (the trusted checkout, ROSE_RELEASE_DIR and the artifact directory): each
+must keep RESERVE_BYTES (300 GiB) after APP_WORKSPACE_ALLOWANCE, or the run stops and changes nothing. A path whose
+filesystem cannot be established fails closed. Provider disk size is never taken as filesystem headroom.
 It never reconciles or builds the OS, never reads the OS signing secrets, and never builds or signs the controller or
 the Calculator. Missing configuration fails closed (exit 4) naming the key.
 """
@@ -38,6 +42,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 PACKAGE = 'dev.pixel.voice'
 SOURCE_MANIFEST = 'workspace/rose-agent/app/AndroidManifest.xml'
+RESERVE_BYTES = 322122547200  # 300 GiB that must stay available on the builder's filesystems
+APP_WORKSPACE_ALLOWANCE = 16 * 1024**3  # bound on one attempt's growth: candidate worktree, build, APKs and inputs
 
 def load(name):
     spec = importlib.util.spec_from_file_location(name.replace('-', '_'), ROOT/'scripts'/f'{name}.py')
@@ -104,7 +110,37 @@ def apk_facts(aapt, apk, candidate):
         raise AdapterFailed(f'native libraries {abis} do not match aapt native-code {declared and declared[1]}')
     return {'minSdk': int(built[1]), 'nativeAbis': abis}
 
-def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', build=None):
+def nearest_existing(path):
+    path = Path(path).absolute()
+    while not path.exists():
+        if path.parent == path:
+            raise FileNotFoundError(str(path))
+        path = path.parent
+    return path
+
+def disk_preflight(paths, statvfs=os.statvfs, stat=os.stat):
+    """Fail unless every filesystem behind paths ({label: path}) has RESERVE_BYTES + APP_WORKSPACE_ALLOWANCE available
+    to this user. A path not created yet is measured on its nearest existing ancestor; each filesystem is counted once."""
+    needed, seen = RESERVE_BYTES + APP_WORKSPACE_ALLOWANCE, set()
+    for label, path in paths.items():
+        try:
+            base = nearest_existing(path)
+            device = stat(base).st_dev
+            if device in seen:
+                continue
+            fs = statvfs(base)
+        except OSError as error:
+            raise AdapterFailed(f'available space for the {label} ({path}) could not be established: {error.__class__.__name__}')
+        seen.add(device)
+        if fs.f_frsize <= 0:
+            raise AdapterFailed(f'available space for the {label} ({path}) could not be established: no fragment size')
+        available = fs.f_bavail * fs.f_frsize
+        if available < needed:
+            raise AdapterFailed(f'the {label} filesystem has {available} bytes available; {needed} are required '
+                f'({RESERVE_BYTES} reserve plus {APP_WORKSPACE_ALLOWANCE} app workspace)')
+
+def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', build=None,
+        statvfs=os.statvfs, stat=os.stat):
     config = json.loads(Path(config_path).read_text())
     missing = missing_inputs(config)
     if missing:
@@ -124,6 +160,11 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
     except BlockingIOError:
         lock.close()
         raise AdapterFailed('the source/output lock is held by another job')
+    try:  # before any worktree, build, secret or temporary input; nothing to clean up yet
+        disk_preflight({'source checkout': ROOT, 'release workspace': work, 'artifact directory': artifact}, statvfs, stat)
+    except BaseException:
+        lock.close()
+        raise
     try:
         return release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, build)
     except BaseException:

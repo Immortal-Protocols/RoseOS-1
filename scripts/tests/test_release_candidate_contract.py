@@ -83,9 +83,10 @@ class CheckedInCandidateTest(unittest.TestCase):
 
     def test_source_manifests_match_the_allocated_versions(self):
         # 2805 bundled 305; 303 was delivered through the catalog and 304, 306 and 307 published on GitHub; the 2806
-        # candidate bundles 308, reserved for the OS route.
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 308, '308-home-tray-beta'))
+        # candidate bundled 308, reserved for the OS route. AGENT309-DELIVERY-001: the source now declares the app-only 309.
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 309, '309-hifi-beta'))
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
+        self.assertEqual((reserved[309]['route'], reserved[309]['versionName'], reserved[309]['candidate']), ('app-only', '309-hifi-beta', None))
         self.assertEqual((reserved[305]['route'], reserved[305]['versionName'], reserved[305]['candidate']),
             ('os-release', '305-home-beta', '7fb94ae6ed535066d50879a99b7c8e427da8e853'))
         self.assertEqual((reserved[308]['route'], reserved[308]['versionName'], reserved[308]['candidate'], reserved[308]['osBuild'],
@@ -190,15 +191,17 @@ class CheckedInCandidateTest(unittest.TestCase):
 
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
         # 2806/308 is now the delivered, retained baseline (FAM-02-INFRA-S001): dispatching it again is refused, and a
-        # synthetic next candidate (not an allocation) must move past it.
-        nxt, nxt_apps = {'build': '2026102901', 'timestamp': '1793300000'}, [['dev.pixel.voice', 309], *APPS[1:]]
+        # synthetic next candidate (not an allocation) must move past it and past the app-only reserved 309.
+        nxt, nxt_apps = {'build': '2026102901', 'timestamp': '1793300000'}, [['dev.pixel.voice', 310], *APPS[1:]]
         pipeline.check_version_baselines(CONFIG, nxt, nxt_apps)
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 309 must exceed 309, the newest app-only version published, built or reserved'):
+            pipeline.check_version_baselines(CONFIG, nxt, [['dev.pixel.voice', 309], *APPS[1:]])
         with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 308 must exceed retained 2026102806 versionCode 308.*'
                 'must exceed retained 2026102806 \\(1793220605\\)'):
             pipeline.check_version_baselines(CONFIG, DRAFT, APPS)
         for apps, cand, message in (
-                ([['dev.pixel.voice', 307], *APPS[1:]], DRAFT, 'versionCode 307 must exceed 307, the newest app-only version published, built or reserved'),
-                ([['dev.pixel.voice', 306], *APPS[1:]], DRAFT, 'versionCode 306 must exceed 307, the newest app-only version'),
+                ([['dev.pixel.voice', 307], *APPS[1:]], DRAFT, 'versionCode 307 must exceed 309, the newest app-only version published, built or reserved'),
+                ([['dev.pixel.voice', 306], *APPS[1:]], DRAFT, 'versionCode 306 must exceed 309, the newest app-only version'),
                 ([['dev.pixel.voice', 305], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 305 must exceed retained 2026102805 versionCode 305'),
                 ([['dev.pixel.voice', 302], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 302 must exceed retained 2026102804 versionCode 302'),
                 ([['dev.pixel.voice', 301], *APPS[1:]], DRAFT, 'dev.pixel.voice versionCode 301 must exceed retained 2026102803 versionCode 301'),
