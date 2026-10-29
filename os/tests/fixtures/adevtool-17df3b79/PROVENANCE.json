@@ -1,0 +1,240 @@
+{
+ "files": [
+  {
+   "fixture": "adevtool/LICENSE",
+   "gitBlob": "adb54865e788ac06f688ec40d6b830e1ec7c2341",
+   "kind": "full",
+   "path": "LICENSE",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/build-index/build-index-main.yml.excerpt.json",
+   "gitBlob": "520aa822b0c94ddf402e2861ef3d2c304531ad1f",
+   "kind": "excerpt",
+   "path": "config/build-index/build-index-main.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "upstreamGitBlob": "6cc722c761e0e4f5a1dd79a880591e44e45b759c"
+  },
+  {
+   "fixture": "adevtool/config/device/blazer.yml",
+   "gitBlob": "b1a297672ef31dab116e0ba0a0b08a38f086c3ef",
+   "kind": "full",
+   "path": "config/device/blazer.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/device/common/gen10pixel.yml",
+   "gitBlob": "a074efbecbc2915dd77b0639cd688f14347b2d13",
+   "kind": "full",
+   "path": "config/device/common/gen10pixel.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/device/frankel.yml",
+   "gitBlob": "f4ada95350428e7351f48059a16c65df928e105a",
+   "kind": "full",
+   "path": "config/device/frankel.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/device/pixel-gen10.yml",
+   "gitBlob": "3e1b747f33162d24263233e5bf05cfcb47f5f6f9",
+   "kind": "full",
+   "path": "config/device/pixel-gen10.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/device/rango.yml",
+   "gitBlob": "5668a38f6829212100b2f687766e30ab1a8f3dea",
+   "kind": "full",
+   "path": "config/device/rango.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/mk/google_devices/common/product-common.mk",
+   "gitBlob": "72b4a2196e1e9c8062c2d5f27ea5d2e7893bcecf",
+   "kind": "full",
+   "path": "config/mk/google_devices/common/product-common.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/mk/google_devices/device/blazer/device.mk",
+   "gitBlob": "bbff4d6178fbefde503470472a221fb02a3e752d",
+   "kind": "full",
+   "path": "config/mk/google_devices/device/blazer/device.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/mk/google_devices/device/frankel/device.mk",
+   "gitBlob": "bbff4d6178fbefde503470472a221fb02a3e752d",
+   "kind": "full",
+   "path": "config/mk/google_devices/device/frankel/device.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/mk/google_devices/device/rango/device.mk",
+   "gitBlob": "ac1aa1425eb4ca9d92da8ad3e9c42b7e8eb03c20",
+   "kind": "full",
+   "path": "config/mk/google_devices/device/rango/device.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/mk/google_devices/platform/laguna/product-common.mk",
+   "gitBlob": "53f5e2ecf2d033bc1cd9e3a7ab42cc77632158fe",
+   "kind": "full",
+   "path": "config/mk/google_devices/platform/laguna/product-common.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/blazer/AndroidProducts.mk",
+   "gitBlob": "f5129b47d33ba4c0fa24926df4d7b96f05543612",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/blazer/AndroidProducts.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/blazer/blazer.mk.excerpt.json",
+   "gitBlob": "490dc11b23b8eb0214e7da29e3d71eacd3d499a1",
+   "kind": "excerpt",
+   "path": "vendor-skels/google_devices/blazer/blazer.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "upstreamGitBlob": "dd99100fc58ba17961b6943bb4985698f4bd5c97"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/blazer/cmds-for-envsetup.sh",
+   "gitBlob": "1b5899985071aae3b45565438b78360398720dc1",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/blazer/cmds-for-envsetup.sh",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/blazer/firmware/android-info.txt",
+   "gitBlob": "deff6670e13c8506db1a7e4ae1e4134256223e06",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/blazer/firmware/android-info.txt",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
+   "gitBlob": "13545fa9229c5cb0f466a4e3f2a48a272c83b88c",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/frankel/AndroidProducts.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/frankel/cmds-for-envsetup.sh",
+   "gitBlob": "663f38a01ef26b90862480445df0df4b007c2ed0",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/frankel/cmds-for-envsetup.sh",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/frankel/firmware/android-info.txt",
+   "gitBlob": "cb71b3601df6bc62bf85ad5849136f25a693c674",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/frankel/firmware/android-info.txt",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/frankel/frankel.mk.excerpt.json",
+   "gitBlob": "cfa78b9d9682389fca6117d8b1bbabb5d88a5d3e",
+   "kind": "excerpt",
+   "path": "vendor-skels/google_devices/frankel/frankel.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "upstreamGitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/rango/AndroidProducts.mk",
+   "gitBlob": "578d92ff7eda70e2e31967ca7e431ad631c3c167",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/rango/AndroidProducts.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/rango/cmds-for-envsetup.sh",
+   "gitBlob": "8a5d5ba5d86f928582ae60b725267da012392eba",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/rango/cmds-for-envsetup.sh",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/rango/firmware/android-info.txt",
+   "gitBlob": "115360706abb740fa58df588250f2aa5ef0eabc5",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/rango/firmware/android-info.txt",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/rango/rango.mk.excerpt.json",
+   "gitBlob": "edc8b2e507302f3e453e05cf7e748d2ce135f995",
+   "kind": "excerpt",
+   "path": "vendor-skels/google_devices/rango/rango.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "upstreamGitBlob": "51ca1d1bc13ea26df7842ee348d75e29d632fdcd"
+  },
+  {
+   "fixture": "platform_build/target/product/aosp_product.mk",
+   "gitBlob": "c54d58ddf6aba8aa0d5b78edb9cb761d3169e4e2",
+   "kind": "full",
+   "path": "target/product/aosp_product.mk",
+   "repository": "https://github.com/GrapheneOS/platform_build",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+  },
+  {
+   "fixture": "platform_build/target/product/generic_system.mk",
+   "gitBlob": "7ee2abc7019c704fea1c471b89eed02cf525fcaa",
+   "kind": "full",
+   "path": "target/product/generic_system.mk",
+   "repository": "https://github.com/GrapheneOS/platform_build",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+  },
+  {
+   "fixture": "platform_build/target/product/handheld_system.mk",
+   "gitBlob": "029bdd6ef3c898e82a68dc8c5553458a4810ca33",
+   "kind": "full",
+   "path": "target/product/handheld_system.mk",
+   "repository": "https://github.com/GrapheneOS/platform_build",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+  },
+  {
+   "fixture": "platform_build/target/product/handheld_system_ext.mk",
+   "gitBlob": "529fa6f3331af8014867dcf7e5e5b79195eed680",
+   "kind": "full",
+   "path": "target/product/handheld_system_ext.mk",
+   "repository": "https://github.com/GrapheneOS/platform_build",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+  },
+  {
+   "fixture": "platform_build/target/product/media_system.mk",
+   "gitBlob": "424844a42998f5399d0573f1865309d1e7b59cc4",
+   "kind": "full",
+   "path": "target/product/media_system.mk",
+   "repository": "https://github.com/GrapheneOS/platform_build",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+  }
+ ]
+}

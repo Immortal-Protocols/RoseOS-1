@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-device-contract",
+  "family": "pixel10",
+  "basis": "FAM-03a-OS-M001, from the FAM-01-OS-M001 matrix. A source contract only: what the pinned public sources say about each hardware target and how Rose reaches it. It is not evidence that anything was downloaded, generated, compiled, signed, booted or installed, and it does not admit a device to delivery (os/release-pipeline and its workflow decide that; only frankel is admitted there). Checked by os/tests/test_device_contract.py against the pinned fixtures in os/tests/fixtures/adevtool-17df3b79.",
+  "source": {
+    "manifest": "os/pinned-manifest.xml",
+    "release": "2026100600",
+    "aospDefault": "refs/tags/android-17.0.0_r1",
+    "note": "The pinned manifest equals GrapheneOS platform_manifest 2026100600 default.xml. It has no per-device Pixel tree: adevtool generates vendor/google_devices/<device> from the stock factory image and supplies the device product makefiles.",
+    "projects": {
+      "vendor/adevtool": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "vendor/state": "1469180711293a5852bfda9a5f67b8f53d9828ad",
+      "device/google/laguna-kernels/6.6": "275dad3c1f144f6bdd6d2c1ec22eccbfbd467da9",
+      "build/make": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+    }
+  },
+  "shared": {
+    "adevtoolDeviceList": "config/device/pixel-gen10.yml",
+    "include": "common/gen10pixel.yml",
+    "platform": "laguna",
+    "vendorBuildId": "CP3A.261005.005",
+    "firmware": {
+      "bootloader": "deepspace-17.4-16119390",
+      "baseband": "g5400i-260604-260807-B-16035863",
+      "partitionExists": ["vendor_kernel_boot"]
+    },
+    "shippingApiLevel": 36,
+    "abis": ["arm64-v8a"],
+    "inheritance": [
+      "vendor/adevtool/config/mk/google_devices/device/<device>/device.mk",
+      "vendor/adevtool/config/mk/google_devices/platform/laguna/product-common.mk",
+      "vendor/adevtool/config/mk/google_devices/common/product-common.mk"
+    ]
+  },
+  "roseInclusion": {
+    "basis": "Every Rose product edit is made to shared build/make products that each device reaches through the inheritance above; no Rose patch or overlay names a Pixel device. Source path only: no compiled APK, APEX or image of blazer or rango exists.",
+    "products": {
+      "target/product/generic_system.mk": "agent tray property (agent-tray-build-make.patch) and VirtualDeviceManager (background-control-build-make.patch); inherited directly by common/product-common.mk",
+      "target/product/handheld_system_ext.mk": "PixelBackgroundControl controller and the computer-control extension (background-control-build-make.patch); inherited directly",
+      "target/product/media_system.mk": "the existing Updater (updater-product-build-make.patch); reached generic_system -> handheld_system -> media_system",
+      "target/product/handheld_product.mk": "Rose Agent, Calculator and the other preinstalls (apply-os-changes.py PRODUCT_MAKEFILE); reached aosp_product -> handheld_product"
+    },
+    "projects": {
+      "frameworks/base": "SystemUI tray, WM Shell and background-control framework patches",
+      "build/release": "release config cur (background-control-build-release.patch); the lunch release is cur on every device",
+      "packages/modules/Permission": "HOME role holder (rose-home-role-permission.patch)",
+      "packages/apps/Updater": "Rose channels (updater-rose-channels.patch); the Updater requests DEVICE-channel from Build.DEVICE"
+    }
+  },
+  "devices": {
+    "frankel": {
+      "model": "Pixel 10",
+      "product": "frankel",
+      "adevtoolConfig": "config/device/frankel.yml",
+      "lunch": {
+        "expected": "frankel-cur-user",
+        "probe": "inUse",
+        "evidence": "os/release-pipeline/frankel.json target.lunch; published Beta frankel-2026102806"
+      },
+      "kernelDir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
+      "vendorInputs": {
+        "factoryImage": {
+          "file": "frankel-cp3a.261005.005-factory-3721e6ac.zip",
+          "sha256": "3721e6accc2e87d851ee7966d794318078ec74c7cc32343daa10968264d6bb62",
+          "status": "indexed",
+          "note": "adevtool build index value; this repository never downloaded or verified the archive"
+        },
+        "generated": "priorRetainedBuilderEvidence",
+        "evidence": "os/release-pipeline/cuttlefish-alpha.json (INFRA-ALPHA-090: the retained tree's vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005); historical, not a current check of the builder"
+      },
+      "display": {
+        "source": {"width": 1080, "height": 2424, "densityDpi": 420},
+        "referenceDisplayAddress": null,
+        "referenceDisplayStatus": "notApplicable"
+      },
+      "forbiddenPatchSets": ["os/fold-port"]
+    },
+    "blazer": {
+      "model": "Pixel 10 Pro",
+      "product": "blazer",
+      "adevtoolConfig": "config/device/blazer.yml",
+      "lunch": {
+        "expected": "blazer-cur-user",
+        "probe": "notExecuted",
+        "evidence": null
+      },
+      "kernelDir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
+      "vendorInputs": {
+        "factoryImage": {
+          "file": "blazer-cp3a.261005.005-factory-cd7d12c2.zip",
+          "sha256": "cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3",
+          "status": "indexed",
+          "note": "adevtool build index value; this repository never downloaded or verified the archive"
+        },
+        "generated": "unknown",
+        "evidence": null
+      },
+      "display": {
+        "source": {"width": 1280, "height": 2856, "densityDpi": 480},
+        "referenceDisplayAddress": null,
+        "referenceDisplayStatus": "notApplicable"
+      },
+      "forbiddenPatchSets": ["os/fold-port"]
+    },
+    "rango": {
+      "model": "Pixel 10 Pro Fold",
+      "product": "rango",
+      "adevtoolConfig": "config/device/rango.yml",
+      "lunch": {
+        "expected": "rango-cur-user",
+        "probe": "notExecuted",
+        "evidence": null
+      },
+      "kernelDir": "device/google/laguna-kernels/6.6/grapheneos/rango",
+      "vendorInputs": {
+        "factoryImage": {
+          "file": "rango-cp3a.261005.005-factory-7110a4ac.zip",
+          "sha256": "7110a4ac2f939e028f102bd0f034552e19dc3c90a3bb5b9dcdaaede5ae049eb5",
+          "status": "indexed",
+          "note": "adevtool build index value; this repository never downloaded or verified the archive"
+        },
+        "generated": "unknown",
+        "evidence": null
+      },
+      "display": {
+        "source": {"width": 2076, "height": 2152, "densityDpi": 390, "stableDisplaySize": true,
+          "recoveryRotation": "ROTATION_RIGHT", "secondaryDisplayFragment": "pixel-display-secondary"},
+        "referenceDisplayAddress": null,
+        "referenceDisplayStatus": "unmeasured",
+        "note": "The controller's optional reference display (apply-os-changes.py --reference-display-address) needs the physical address measured on a rango build; none is known and none may be configured from source facts."
+      },
+      "sourceDifferences": {
+        "systemServerJar": "system_ext:rango-services",
+        "fileInclusions": ["system_ext/framework/rango-services.jar", "vendor/apex/com.google.rango.hardware.threadnetwork.apex"],
+        "systemUiUnfoldedOverlays": 29
+      },
+      "forbiddenPatchSets": ["os/fold-port"],
+      "forbiddenNote": "os/fold-port is the experimental original Pixel Fold (yogi) port: its allocator, stock-kernel-flag and product-tray patches never apply to rango, which uses the supported GrapheneOS rango kernel."
+    }
+  },
+  "excluded": {
+    "mustang": "Pixel 10 Pro XL: in adevtool pixel-gen10 but outside this plan",
+    "yogi": "original Pixel Fold: the os/fold-port experiment, not a supported target"
+  }
+}
