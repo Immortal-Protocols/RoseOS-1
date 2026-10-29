@@ -2,8 +2,9 @@ name: Models Android app
 
 # Rose Models (dev.pixel.models): the JNI adapter over Core's local-agent-v1 agent, JVM host tests
 # against that real agent, the arm64-v8a native library from the runner's preinstalled NDK, and an
-# UNSIGNED APK with packaging checks. No signing key, secrets, cloud, device or emulator; nothing
-# is uploaded.
+# UNSIGNED APK with packaging checks. The unsigned APK, its native library and a source/toolchain
+# receipt are kept as one private 7-day workflow artifact, then downloaded into a fresh directory
+# by a second job and verified file by file. No signing key, secrets, cloud, device or emulator.
 on:
   pull_request:
     paths:
@@ -35,6 +36,11 @@ jobs:
     timeout-minutes: 20
     env:
       CARGO_TERM_COLOR: never
+    outputs:
+      artifact-name: ${{ steps.stage.outputs.name }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-url: ${{ steps.upload.outputs.artifact-url }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -45,7 +51,7 @@ jobs:
           rustup default 1.97.0
           rustc --version
           java -version
-          echo "NDK: ${ANDROID_NDK_LATEST_HOME:-none}"
+          echo "NDK used by build-native.sh: ${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-none}} (latest installed: ${ANDROID_NDK_LATEST_HOME:-none})"
       - name: JNI adapter checks
         working-directory: workspace/models/rose-chat-android
         run: |
@@ -65,3 +71,62 @@ jobs:
           bash workspace/models/android/build.sh
       - name: APK policy check
         run: bash workspace/models/android/tests/check-apk-policy.sh out/rose-models.*/apk-metadata.txt --require-native
+      - name: Stage signing inputs (explicit file list only)
+        id: stage
+        run: |
+          builds=(out/rose-models.*)
+          if [[ ${#builds[@]} -ne 1 || ! -d "${builds[0]}" ]]; then
+            echo "expected exactly one build directory, found: ${builds[*]}"
+            exit 1
+          fi
+          ndk="${ANDROID_NDK_HOME:-$ANDROID_NDK_LATEST_HOME}"
+          stage="$RUNNER_TEMP/rose-models-artifact"
+          bash workspace/models/android/stage-artifact.sh "$stage" "${builds[0]}" "$ROSE_MODELS_NATIVE_LIB" \
+            "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "dir=$stage" >> "$GITHUB_OUTPUT"
+          echo "name=rose-models-unsigned-${GITHUB_SHA::12}-run${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload signing inputs (private, 7 days)
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ steps.stage.outputs.dir }}
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
+
+  verify-artifact:
+    needs: rose-models-apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ARTIFACT_NAME: ${{ needs.rose-models-apk.outputs.artifact-name }}
+      ARTIFACT_ID: ${{ needs.rose-models-apk.outputs.artifact-id }}
+      ARTIFACT_URL: ${{ needs.rose-models-apk.outputs.artifact-url }}
+      ARTIFACT_DIGEST: ${{ needs.rose-models-apk.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Fresh, empty download directory
+        run: test ! -e "$RUNNER_TEMP/fresh-artifact"
+      - name: Download the uploaded artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.rose-models-apk.outputs.artifact-name }}
+          path: ${{ runner.temp }}/fresh-artifact
+      - name: Verify every downloaded file (data only; nothing from the artifact is executed)
+        run: |
+          unset ANDROID_SDK_ROOT
+          bash scripts/setup-android-sdk.sh
+          args=(--source "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+                --aapt .tools/android-sdk/build-tools/android-15/aapt)
+          bash workspace/models/android/tests/verify-artifact.sh "$RUNNER_TEMP/fresh-artifact" "${args[@]}"
+          bash workspace/models/android/tests/artifact-negative.sh "$RUNNER_TEMP/fresh-artifact" "${args[@]}"
+          echo "artifact: $ARTIFACT_NAME"
+          echo "artifact_id: $ARTIFACT_ID"
+          echo "artifact_url: $ARTIFACT_URL"
+          echo "artifact_digest: $ARTIFACT_DIGEST"
+          cat "$RUNNER_TEMP/fresh-artifact/SHA256SUMS"
+          cat "$RUNNER_TEMP/fresh-artifact/artifact-receipt.txt"
