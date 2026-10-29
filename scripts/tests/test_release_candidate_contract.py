@@ -112,6 +112,20 @@ class CheckedInCandidateTest(unittest.TestCase):
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
 
+    def test_release_notes_describe_the_allocated_2026102901_candidate(self):
+        # FRANKEL310-ALLOC-001: host-sign reads os/release-notes/frankel-2026102901.md from the candidate commit.
+        path = CONFIG['host']['sign']['updateNotes'].format(device='frankel', build='2026102901')
+        flat = ' '.join((ROOT/path).read_text().split())
+        for expected in ('2026102901', 'frankel', 'user build', 'versionCode 310 (310-hifi-os-beta)', '28 (2.1.5-pip, unchanged)',
+                '4 (unchanged)', 'not promoted', 'Beta channel (pixel-ota Latest, 2026102806) is unchanged', 'not been accepted on a phone',
+                'locked sessions off', 'prototype agent list empty', 'not yet verified at runtime', 'Included since 2026102806',
+                'overview button is shown but not available yet', 'only Beta is configured'):
+            self.assertIn(expected, flat)
+        for claim in ('downgrade', 'available on Alpha', 'available on Prod', 'battery'):
+            self.assertNotIn(claim, flat)
+        reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
+        self.assertEqual(path, f"os/release-notes/frankel-{reserved[310]['osBuild']}.md")
+
     def test_watch_extras_match_between_producer_and_consumer(self):
         producer = (ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/TaskControl.java').read_text()
         consumer = (ROOT/'os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/WatchBinding.java').read_text()
