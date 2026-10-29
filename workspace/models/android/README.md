@@ -59,6 +59,24 @@ identity. `versionCode 1 / 0.1.0-dev-unsigned` is a placeholder. CI:
 The native library is stored uncompressed and the APK is zip-aligned for 16 KiB pages. Without
 `ROSE_MODELS_NATIVE_LIB` the APK has no native code and cannot start a chat.
 
+## Retained signing inputs (CI artifact)
+
+`models-android.yml` keeps one **private** workflow artifact per run for 7 days, named
+`rose-models-unsigned-<sha12>-run<run id>-<attempt>`. `stage-artifact.sh` copies exactly six files
+into a new directory: `rose-models-unsigned.apk`, `librose_chat_android.so`, `apk-metadata.txt`,
+`build-receipt.txt`, `artifact-receipt.txt` (source commit, event/ref/run, Models trees, both
+Cargo.lock hashes, rustc/cargo/JDK/NDK/SDK identities, badging, native check) and `SHA256SUMS`.
+It fails if the library inside the APK is not byte-identical to the staged one.
+
+A second job downloads that artifact into a fresh directory and runs `tests/verify-artifact.sh`
+(exact inventory, every hash, source/run binding, library-in-APK, unsigned `dev.pixel.models`,
+arm64-v8a, INTERNET only, badging re-read with aapt) and `tests/artifact-negative.sh` (a positive
+control plus six damaged copies that must be rejected). Downloaded files are data only.
+
+Only an artifact from a successful **main** run is a signing candidate; pull-request runs build
+merge-test commits and are kept separate by name and receipt. The artifact is unsigned and not
+installable; Infra signs a separately hashed output.
+
 ## Evidence levels
 
 The JVM tests run Core's real agent through the JNI adapter, built for the test machine (x86_64),
