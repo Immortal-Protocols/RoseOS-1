@@ -179,12 +179,22 @@
           "dev.pixel.voice": 305
         },
         "basis": "Published Beta frankel-2026102805 (pixel-ota Latest from 2026-10-28 18:34:04 UTC until the verified 2026102806 was promoted at 22:53:12 UTC; apps 305/4/28), preserved unchanged. A newer candidate needs a higher Rose Agent versionCode, build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 307 published). Controller 28 and Calculator 4 are unchanged in source and may stay equal"
+      },
+      {
+        "build": "2026102806",
+        "source": "93ad1c2bd7094d6b65c695ba239d05d272b87c57",
+        "buildTimestamp": 1793220605,
+        "mustExceed": {
+          "dev.pixel.voice": 308
+        },
+        "basis": "Published Beta frankel-2026102806 (FAM-02-INFRA-S001 from the lead's receipts: OS run 40778491188, public release 427275514, pixel-ota Latest since 2026-10-28 22:53:12 UTC; apps 308/4/28), preserved unchanged. A newer candidate needs a higher build number and BUILD_DATETIME; its bundled Rose Agent must exceed 308 unless it is the same signed 308 bytes, which only the bound app-reuse replay may republish. Controller 28 and Calculator 4 may stay equal"
       }
     ]
   },
   "appRelease": {
     "packageName": "dev.pixel.voice",
     "mustExceed": 307,
+    "mustExceedBasis": "FAM-02-INFRA-S001: the newest app-only built or published Rose Agent is 307. 308 is the delivered os-release version (reserved row 308 with its digest and runs) and must stay reachable for the bound exact-byte app-reuse replay, which the app publisher (outside this slice) checks against this floor first. Every other route already requires more than 308: app-only and the publisher refuse versions at or below the 308 row, and an OS candidate must exceed the retained 2806 baseline (308)",
     "published": {
       "versionCode": 302,
       "sha256": "01b184b4a634f0a7843b6fb5ce30dff08f7267ec4e20b5013860b9439dd3a8c6",
@@ -291,7 +301,18 @@
         "osBuild": "2026102806",
         "buildTimestamp": 1793220605,
         "route": "os-release",
-        "basis": "INFRA-CANDIDATE-115: bundled Rose Agent of the Frankel 2026102806 OS candidate 93ad1c2b (the INFRA-CANDIDATE-115 merge; base e5c3eaa3 with OS #81/App #89 trial removal, #83 Home reuse and #85 tray lifecycle), dispatched with BUILD_DATETIME 1793220605. The app-only route may not use 308; INFRA-APP-118 app-reuse may publish only these OS-bundled signed bytes, bound to that candidate, build and timestamp"
+        "sha256": "f4163ca86cd836861206139be74cc2cbe6a82f644bc8afd5533ab1dc6c6e7a41",
+        "size": 1393821,
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "osRun": 40778491188,
+        "run": 40787416518,
+        "release": 427306781,
+        "delivered": {
+          "route": "OS beta frankel-2026102806 (release 427275514) and public GitHub prerelease rose-agent-308, the same signed bytes (app-reuse)",
+          "at": "2026-10-28T23:38Z",
+          "publicRelease": true
+        },
+        "basis": "FAM-02-INFRA-S001: delivered. Rose Agent bundled and signed by OS run 40778491188 (candidate 93ad1c2b, BUILD_DATETIME 1793220605) and republished unchanged by app-reuse run 40787416518 attempt 2 (completed 23:38:36 UTC) as release 427306781; APK 1393821 bytes, identical to the APK extracted from 2806 (lead record). Not an app-only build, so it is not in built. The row stays as the os-release binding so app-reuse can replay exactly these bytes idempotently; no other bytes, route or candidate may carry 308. INFRA-CANDIDATE-115: bundled Rose Agent of the Frankel 2026102806 OS candidate 93ad1c2b (the INFRA-CANDIDATE-115 merge; base e5c3eaa3 with OS #81/App #89 trial removal, #83 Home reuse and #85 tray lifecycle), dispatched with BUILD_DATETIME 1793220605. The app-only route may not use 308; INFRA-APP-118 app-reuse may publish only these OS-bundled signed bytes, bound to that candidate, build and timestamp"
       }
     ]
   },

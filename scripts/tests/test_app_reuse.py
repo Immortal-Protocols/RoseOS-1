@@ -35,6 +35,7 @@ HEAD = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_out
 CERT = b'synthetic DER app certificate'
 SIGNER = hashlib.sha256(CERT).hexdigest()
 PREINSTALL = 'PRODUCT/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk'
+DELIVERED_308 = 'f4163ca86cd836861206139be74cc2cbe6a82f644bc8afd5533ab1dc6c6e7a41'
 
 def apk(identity='dev.pixel.voice:308:308-home-tray-beta', libs=(), certificate=CERT):
     """An APK-shaped ZIP (manifest entry read by the stand-in aapt) with a v2 signing block for `certificate`."""
@@ -101,10 +102,14 @@ class AppReuseTest(unittest.TestCase):
         row = next(r for r in config['appRelease']['reserved'] if r['versionCode'] == 308)
         self.assertEqual((row['candidate'], row['osBuild'], row['buildTimestamp']), ('93ad1c2bd7094d6b65c695ba239d05d272b87c57', BUILD, int(STAMP)))
         row['candidate'] = HEAD
+        # 308 is delivered: the reservation pins the delivered bytes. The synthetic APK's digest stands in for them here.
+        self.assertEqual((row['sha256'], row['delivered']['publicRelease']), (DELIVERED_308, True))
+        self.apk = apk()
+        row['sha256'] = sha(self.apk)
+        self.config_data = config
         self.config = self.root/'frankel.json'
         self.config.write_text(json.dumps(config))
         self.attempts = self.root/'rose-actions'
-        self.apk = apk()
         self.binding = self.make_attempt()
 
     def make_attempt(self, build=BUILD, candidate=None, stages=reuse.COMPLETED, retained=None, preinstall=None, policy=None,
@@ -189,14 +194,18 @@ class AppReuseTest(unittest.TestCase):
         self.refused('exactly', binding={k: v for k, v in self.binding.items() if k != 'sourceRun'})
         self.refused('positive run id', binding=dict(self.binding, sourceRun='40778491188'))
         self.refused('lowercase sha256', binding=dict(self.binding, apkSha256=self.binding['apkSha256'].upper()))
-        self.refused('differs from the dispatched apkSha256', binding=dict(self.binding, apkSha256='0' * 64))
+        self.refused('versionCode 308 was delivered as', binding=dict(self.binding, apkSha256='0' * 64))
         self.refused('unsignedTargetFilesSha256', binding=dict(self.binding, unsignedTargetFilesSha256='0' * 64))
         self.refused('signedTargetFilesSha256', binding=dict(self.binding, signedTargetFilesSha256='0' * 64))
 
     def fresh(self, **attempt):
-        """Replace the original attempt with one changed as given; returns its binding."""
+        """Replace the original attempt with one changed as given; returns its binding. Retained bytes other than the
+        fixture's are re-pinned as the delivered 308 digest, so the deeper checks (not the pin) are what refuse them."""
         import shutil
         shutil.rmtree(self.attempts)
+        config = json.loads(json.dumps(self.config_data))
+        next(r for r in config['appRelease']['reserved'] if r['versionCode'] == 308)['sha256'] = sha(attempt.get('retained', self.apk))
+        self.config.write_text(json.dumps(config))
         return self.make_attempt(**attempt)
 
     def test_incomplete_or_foreign_attempts_are_refused(self):
@@ -241,6 +250,29 @@ class AppReuseTest(unittest.TestCase):
         self.refused("expected dev.pixel.voice 308 '308-home-tray-beta'", binding=binding)
         binding = self.fresh(retained=apk(identity='dev.pixel.voice:309:308-home-tray-beta'))
         self.refused('the retained APK is dev.pixel.voice 309', binding=binding)
+
+    def test_the_delivered_308_digest_refuses_any_other_bytes_and_other_devices(self):
+        # The checked-in pin is the delivered 2806/rose-agent-308 APK: synthetic or rebuilt 308 bytes are refused before
+        # the original attempt is read, even with a fully consistent attempt and binding.
+        config = json.loads(json.dumps(self.config_data))
+        next(r for r in config['appRelease']['reserved'] if r['versionCode'] == 308)['sha256'] = DELIVERED_308
+        self.config.write_text(json.dumps(config))
+        self.refused(f'versionCode 308 was delivered as {DELIVERED_308}; no other bytes may carry it')
+        # Only the config's admitted device is reused; a dispatched device that differs, or a config for a device the
+        # delivery chain does not admit, is refused.
+        self.config.write_text(json.dumps(self.config_data))
+        env = dict(os.environ, CANDIDATE_SHA=HEAD, BUILD_NUMBER=BUILD, BUILD_TIMESTAMP=STAMP, APPS='[["dev.pixel.voice", 308]]',
+            REUSE_BINDING=json.dumps(self.binding), ROSE_ATTEMPTS=str(self.attempts))
+        with self.assertRaisesRegex(reuse.AdapterFailed, "dispatched device 'blazer' is not the config device frankel"):
+            reuse.main(self.root/'artifact', self.config, dict(env, ROSE_DEVICE='blazer'))
+        other = json.loads(json.dumps(self.config_data))
+        other['target']['device'] = 'blazer'
+        self.config.write_text(json.dumps(other))
+        with self.assertRaisesRegex(reuse.AdapterFailed, "device 'blazer' is not admitted for app reuse"):
+            reuse.main(self.root/'artifact', self.config, env)
+        self.assertFalse((self.root/'artifact').exists())
+        self.config.write_text(json.dumps(self.config_data))
+        self.assertEqual(reuse.main(self.root/'artifact', self.config, dict(env, ROSE_DEVICE='frankel'))['sha256'], sha(self.apk))
 
     def test_apksigner_runs_again_on_the_retained_bytes(self):
         self.verify_cert.write_text('e' * 64)

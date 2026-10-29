@@ -4,7 +4,7 @@
 Run on the builder by .github/workflows/os-release.yml (mode app-reuse) with CANDIDATE_SHA, BUILD_NUMBER, BUILD_TIMESTAMP,
 APPS (exactly [["dev.pixel.voice", N]]) and REUSE_BINDING set. Nothing is built or signed and no secret is read: the
 APK is the one host-integrate.py signed for the OS candidate and kept at
-$HOME/rose-actions/frankel-<build>/release/signed-apps/dev.pixel.voice.apk. Before copying it, under the builder's
+$HOME/rose-actions/<device>-<build>/release/signed-apps/dev.pixel.voice.apk (device: the config's, frankel only). Before copying it, under the builder's
 shared source/output lock (host.lockPath), this checks without writing anything in the original attempt:
 
 - N is the appRelease.reserved row for the os-release route with this exact candidate, osBuild and buildTimestamp,
@@ -46,6 +46,8 @@ TARGET_PREFIX = 'PRODUCT/app/RosePreinstall_dev_pixel_voice/'
 COMPLETED = ('build', 'bytes-verify', 'sign', 'ota-verify', 'transfer')
 BINDING_KEYS = ('sourceRun', 'apkSha256', 'unsignedTargetFilesSha256', 'signedTargetFilesSha256')
 HEX64 = re.compile(r'[0-9a-f]{64}')
+# Devices whose OS-bundled Rose Agent may be republished unchanged; a new device is admitted here only deliberately.
+REUSE_DEVICES = ('frankel',)
 
 def load(name):
     spec = importlib.util.spec_from_file_location(name.replace('-', '_'), ROOT/'scripts'/f'{name}.py')
@@ -103,7 +105,18 @@ def source_manifest(sha):
         raise AdapterFailed('the candidate commit is not in this checkout')
     return result.stdout
 
-def attempt_chain(base, sha, build):
+def bundling_device(config, env):
+    """The device whose original attempt is read: the validated config's target.device, admitted by the delivery chain
+    (the release pipeline's SUPPORTED_DEVICES) and by REUSE_DEVICES, and equal to the dispatched ROSE_DEVICE when set."""
+    device = (config.get('target') or {}).get('device')
+    supported = load('release-pipeline').SUPPORTED_DEVICES
+    if device not in supported or device not in REUSE_DEVICES:
+        raise AdapterFailed(f'device {device!r} is not admitted for app reuse')
+    if env.get('ROSE_DEVICE', device) != device:
+        raise AdapterFailed(f'the dispatched device {env.get("ROSE_DEVICE")!r} is not the config device {device}')
+    return device
+
+def attempt_chain(base, sha, build, device):
     """The original attempt's validated receipt chain: this candidate and build, every OS stage through transfer done."""
     stage = load('release-stage')
     try:
@@ -114,7 +127,7 @@ def attempt_chain(base, sha, build):
     candidate = chain[0]['candidate']
     if 'resumedFrom' in chain[0]:
         raise AdapterFailed('the attempt is a resumed attempt; only the original attempt keeps the signed apps')
-    if (candidate.get('sourceRevision'), candidate.get('device'), candidate.get('buildNumber')) != (sha, 'frankel', int(build)):
+    if (candidate.get('sourceRevision'), candidate.get('device'), candidate.get('buildNumber')) != (sha, device, int(build)):
         raise AdapterFailed('the attempt receipt chain belongs to another candidate or build')
     if done[:len(COMPLETED)] != list(COMPLETED) or phase in ('failed', 'abandoned', 'stage-failed', 'started'):
         raise AdapterFailed(f'the attempt has not completed {list(COMPLETED)} (completed {done}, phase {phase})')
@@ -142,8 +155,11 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
     if not re.fullmatch(r'[0-9a-f]{40}', sha) or not re.fullmatch(r'\d{10}', build) or not re.fullmatch(r'\d{10}', timestamp):
         raise AdapterFailed('a full candidate SHA, ten-digit build number and ten-digit BUILD_DATETIME are required')
     binding = parse_binding(env.get('REUSE_BINDING', ''))
+    device = bundling_device(config, env)
     version, row = reserved_row(config, sha, build, timestamp, json.loads(env.get('APPS', '[]')))
-    base = Path(env.get('ROSE_ATTEMPTS', Path.home()/'rose-actions'))/f'frankel-{build}'
+    if row.get('sha256') is not None and binding['apkSha256'] != row['sha256']:
+        raise AdapterFailed(f'{PACKAGE} versionCode {version} was delivered as {row["sha256"]}; no other bytes may carry it')
+    base = Path(env.get('ROSE_ATTEMPTS', Path.home()/'rose-actions'))/f'{device}-{build}'
     artifact = Path(artifact_dir)
     if artifact.exists():
         raise AdapterFailed(f'{artifact} already exists; use a new artifact directory')
@@ -159,17 +175,17 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
         lock.close()
         raise AdapterFailed('the source/output lock is held by another job')
     try:
-        return reuse(config, sha, build, timestamp, version, row, binding, base, artifact, aapt, apksigner)
+        return reuse(config, sha, build, timestamp, version, row, binding, base, artifact, aapt, apksigner, device)
     except BaseException:
         shutil.rmtree(artifact, ignore_errors=True)  # never leave a partial artifact to upload
         raise
     finally:
         lock.close()
 
-def reuse(config, sha, build, timestamp, version, row, binding, base, artifact, aapt, apksigner):
+def reuse(config, sha, build, timestamp, version, row, binding, base, artifact, aapt, apksigner, device):
     signer = config['identities']['appSignerSha256'].lower()
     release = base/'release'
-    attempt_chain(base, sha, build)
+    attempt_chain(base, sha, build, device)
     unsigned, signed = release/'unsigned-target_files.zip', release/'signed-target_files.zip'
     if sha256(unsigned) != binding['unsignedTargetFilesSha256']:
         raise AdapterFailed('unsigned-target_files.zip differs from the dispatched unsignedTargetFilesSha256')
