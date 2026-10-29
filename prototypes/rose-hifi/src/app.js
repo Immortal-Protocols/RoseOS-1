@@ -115,7 +115,6 @@
   // ---------- View transitions ----------
   let shownView = 'home';
   const viewEl = (v) => $('v-' + v);
-  function centerOf(el) { const r = el.getBoundingClientRect(), s = screen.getBoundingClientRect(), k = s.width / screen.offsetWidth; return { x: (r.left + r.width / 2 - s.left) / k, y: (r.top + r.height / 2 - s.top) / k }; }
   function flyRose(toSlot) {
     const canvas = $('rose-canvas');
     const from = canvas.isConnected && canvas.parentElement !== park ? canvas.getBoundingClientRect() : null;
@@ -136,7 +135,7 @@
     const anim = fly.animate([
       { transform: 'translate(' + (a.x - toW / 2) + 'px,' + (a.y - toW / 2) + 'px) scale(' + s + ')' },
       { transform: 'translate(' + (b.x - toW / 2) + 'px,' + (b.y - toW / 2) + 'px)' },
-    ], { duration: 560, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+    ], { duration: toSlot === $('slot-stage') ? OPEN_MS : toSlot === $('slot-tray') ? CLOSE_MS : 560, easing: toSlot === $('slot-tray') ? 'cubic-bezier(.3,0,.15,1)' : EASE, fill: 'forwards' });
     anim.finished.then(() => { if (token === flyToken) { renderer.attach(toSlot); anim.cancel(); } renderer.refresh(); }, () => {});
   }
   let transitionToken = 0;
@@ -150,7 +149,6 @@
       if (!keep.includes(v)) el.dataset.active = 'false';
     }
   }
-  function farCorner(c) { const W = screen.offsetWidth, H = screen.offsetHeight; return Math.ceil(Math.hypot(Math.max(c.x, W - c.x), Math.max(c.y, H - c.y))); }
   function showView(next, force) {
     const prev = shownView;
     if (prev === next && !force) return;
@@ -164,30 +162,47 @@
     pendingFocus = true;
     const done = () => { if (shownView !== prev) a.dataset.active = 'false'; };
     if (reduced() || prev === next) { done(); return; }
-    const ease = 'cubic-bezier(.2,.8,.2,1)';
-    if (next === 'rose' && prev === 'home') {
-      const c = centerOf($('tray-rose'));
-      const bg = b.querySelector('.ivory-bg');
+    if (next === 'rose' && prev === 'home') openRoseFromTray(a, b, done);
+    else if (prev === 'rose' && next === 'home') closeRoseToTray(a, b, done);
+    else {
       b.style.zIndex = 3;
-      const R = farCorner(c);
-      bg.animate([{ clipPath: 'circle(0px at ' + c.x + 'px ' + c.y + 'px)' }, { clipPath: 'circle(' + R + 'px at ' + c.x + 'px ' + c.y + 'px)' }], { duration: 620, easing: ease });
-      for (const el of b.querySelectorAll('.rose-head,.rose-caption,.rose-output')) el.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 420, delay: 180, easing: ease, fill: 'backwards' });
-      for (const el of b.querySelectorAll('.tray .well')) el.animate([{ opacity: 0, transform: 'scale(.86)' }, { opacity: 1, transform: 'none' }], { duration: 360, delay: 120, easing: ease, fill: 'backwards' });
-      after(() => { b.style.zIndex = ''; done(); }, 640);
-    } else if (prev === 'rose' && next === 'home') {
-      const c = centerOf($('tray-rose'));
-      a.style.zIndex = 3;
-      const bg = a.querySelector('.ivory-bg');
-      const R = farCorner(c);
-      bg.animate([{ clipPath: 'circle(' + R + 'px at ' + c.x + 'px ' + c.y + 'px)', opacity: 1 }, { clipPath: 'circle(60px at ' + c.x + 'px ' + c.y + 'px)', opacity: .9, offset: .7 }, { clipPath: 'circle(34px at ' + c.x + 'px ' + c.y + 'px)', opacity: 0 }], { duration: 520, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
-      // The Rose tray fades as a whole so Home's identical tray reads as continuous.
-      for (const el of a.querySelectorAll('.rose-head,.rose-caption,.rose-output,.tray')) el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'linear', fill: 'forwards' });
-      after(() => { a.style.zIndex = ''; done(); a.getAnimations({ subtree: true }).forEach((x) => x.cancel()); }, 580);
-    } else {
-      b.style.zIndex = 3;
-      b.animate([{ opacity: 0, transform: 'scale(.985)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: ease });
-      after(() => { b.style.zIndex = ''; done(); }, 310);
+      b.animate([{ opacity: 0, transform: 'scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: 360, easing: EASE });
+      after(() => { b.style.zIndex = ''; done(); }, 370);
     }
+  }
+
+  // Home ↔ Rose: the Rose glass well grows into the Rose surface (and shrinks back).
+  // One curve drives the sheet, Rose's flight, the tray crossfade and the content.
+  // Balanced in-out curve: motion is spread across the whole duration, not front-loaded.
+  const EASE = 'cubic-bezier(.45,0,.2,1)';
+  const OPEN_MS = 620, CLOSE_MS = 560;
+  function wellInset() {
+    const sr = screen.getBoundingClientRect(), k = sr.width / screen.offsetWidth, r = $('tray-rose').getBoundingClientRect();
+    const l = (r.left - sr.left) / k, t = (r.top - sr.top) / k, w = r.width / k, h = r.height / k;
+    const W = screen.offsetWidth, H = screen.offsetHeight;
+    return 'inset(' + t + 'px ' + (W - l - w) + 'px ' + (H - t - h) + 'px ' + l + 'px round ' + (h / 2) + 'px)';
+  }
+  const FULL = 'inset(0px 0px 0px 0px round 46px)';
+  function openRoseFromTray(home, rose, done) {
+    rose.style.zIndex = 3;
+    rose.querySelector('.ivory-bg').animate([{ clipPath: wellInset(), opacity: 0.75 }, { clipPath: FULL, opacity: 1 }], { duration: OPEN_MS, easing: EASE });
+    // Plates are identical and aligned: crossfading the tray swaps only the wells.
+    rose.querySelector('.tray').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 60, easing: 'ease-out', fill: 'backwards' });
+    rose.querySelectorAll('.tray .well').forEach((el, i) => el.animate([{ transform: 'scale(.9) translateY(3px)' }, { transform: 'none' }], { duration: 460, delay: 80 + i * 50, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' }));
+    // Content appears once the sheet has covered it; the header sits highest, so it comes last.
+    for (const el of rose.querySelectorAll('.rose-caption,.rose-output')) el.animate([{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }], { duration: 420, delay: 300, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+    rose.querySelector('.rose-head').animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: OPEN_MS - 160, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+    after(() => { rose.style.zIndex = ''; done(); home.getAnimations({ subtree: true }).forEach((x) => x.cancel()); }, OPEN_MS + 20);
+  }
+  function closeRoseToTray(rose, home, done) {
+    rose.style.zIndex = 3;
+    const ease = EASE;
+    for (const el of rose.querySelectorAll('.rose-head,.rose-caption,.rose-output')) el.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(8px)' }], { duration: 180, easing: 'ease-in', fill: 'forwards' });
+    rose.querySelector('.tray').animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, delay: 120, easing: 'ease-in-out', fill: 'forwards' });
+    const sheet = rose.querySelector('.ivory-bg');
+    sheet.animate([{ clipPath: FULL }, { clipPath: wellInset() }], { duration: CLOSE_MS, easing: 'cubic-bezier(.3,0,.15,1)', fill: 'forwards', composite: 'replace' });
+    sheet.animate([{ opacity: 1 }, { opacity: 1, offset: 0.6 }, { opacity: 0 }], { duration: CLOSE_MS, easing: 'linear', fill: 'forwards' });
+    after(() => { rose.style.zIndex = ''; done(); rose.getAnimations({ subtree: true }).forEach((x) => x.cancel()); home.getAnimations({ subtree: true }).forEach((x) => x.cancel()); }, CLOSE_MS + 20);
   }
 
   // ---------- Focus: move on view change; restore when returning ----------

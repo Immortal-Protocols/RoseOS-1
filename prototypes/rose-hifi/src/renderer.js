@@ -20,17 +20,26 @@ void hemi(vec3 ro,vec3 rd,float cy,float side,inout float best,inout vec3 normal
 float object(vec3 ro,vec3 rd,out vec3 normal,out float kind){float t=100.;normal=vec3(0.);kind=0.;hemi(ro,rd,gap,1.,t,normal,kind);hemi(ro,rd,0.,-1.,t,normal,kind);return t;}
 vec3 environment(vec3 d){
  vec3 col=mix(vec3(.10,.17,.23),vec3(.72,.82,.91),smoothstep(-.55,.65,d.y));
- float left=pow(max(0.,dot(d,normalize(vec3(-3.,3.,3.)))),20.);
- float right=pow(max(0.,dot(d,normalize(vec3(3.,2.,2.)))),38.);
- float strip=exp(-pow((d.x+.5)*7.,2.)-pow((d.y-.3)*1.6,2.))*smoothstep(-.2,.5,d.z);
- col+=vec3(2.6,2.7,2.8)*left+vec3(3.,3.1,3.3)*right+vec3(.65,.73,.82)*strip;
+ // One key light from the upper left (matching the tray and icons) plus a broad,
+ // dim fill from the right. Two equal point highlights read as a pair of eyes.
+ float key=pow(max(0.,dot(d,normalize(vec3(-2.6,3.2,3.)))),18.);
+ float keySoft=pow(max(0.,dot(d,normalize(vec3(-2.6,3.2,3.)))),4.);
+ float fill=pow(max(0.,dot(d,normalize(vec3(3.,1.,1.5)))),3.);
+ float glint=pow(max(0.,dot(d,normalize(vec3(-2.6,3.2,3.)))),160.);
+ col+=vec3(2.2,2.25,2.3)*key+vec3(9.,9.,9.)*glint+vec3(.35,.38,.42)*keySoft+vec3(.22,.24,.27)*fill;
  col+=vec3(.7,.8,.95)*pow(max(0.,dot(d,normalize(vec3(0.,3.,-3.)))),15.);return col;
 }
 vec3 metal(vec3 p,vec3 n,vec3 rd,float kind){
- vec3 base=mix(vec3(.65,.73,.81),vec3(.95,.48,.53),mic);
+ // Rose metal reads the environment's brightness, not its blue cast, so the
+ // pink stays vivid; silver (muted) keeps the cool reflection.
+ vec3 rose=vec3(1.,.36,.42);
+ vec3 base=mix(vec3(.65,.73,.81),rose,mic);
  vec3 r=reflect(rd,n);float f=pow(1.-max(0.,dot(n,-rd)),5.);
- vec3 col=environment(r)*mix(base,vec3(.96),f*.65);
- col+=base*.09*max(0.,dot(n,normalize(vec3(-2.,4.,3.))));
+ vec3 env=environment(r);float lum=dot(env,vec3(.3,.55,.15));
+ env=mix(env,vec3(pow(lum,1.45)*1.3)*vec3(1.05,1.,.98),mic*.85);
+ vec3 col=env*mix(base,mix(vec3(.96),vec3(1.,.82,.84),mic),f*.65);
+ col+=base*(.09+.10*mic)*max(0.,dot(n,normalize(vec3(-2.,4.,3.))));
+ col+=rose*mic*.16*pow(f,.6);
  if(kind>1.5){float edge=smoothstep(.87,.99,length(p.xz));col=mix(base*.16,col*.85,edge);}
  float seam=exp(-abs(p.y)*120.)+exp(-abs(p.y-gap)*120.);col*=1.-.26*min(seam,1.);
  return col;
@@ -54,7 +63,8 @@ vec4 sampleAt(vec2 frag){
  float luminance=.80+.20*sin(angle*2.-.5+time*.16*broad);
  float ring=(core*.9+glow)*active*luminance;
  vec3 light=vec3(.64,.77,1.0)*ring;
- if(alpha>0.){col+=light;col=col/(col+vec3(.55));col=pow(col,vec3(1./2.2));}
+ if(alpha>0.){col+=light;col=col/(col+vec3(.55));col=pow(col,vec3(1./2.2));
+  float l=dot(col,vec3(.299,.587,.114));col=clamp(mix(vec3(l),col,1.+.8*mic)*(1.+.06*mic),0.,1.);}
  else{col=vec3(.80,.89,1.0);alpha=clamp(ring,0.,1.);}
  return vec4(col*alpha,alpha);
 }

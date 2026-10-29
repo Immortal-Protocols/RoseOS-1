@@ -5,9 +5,10 @@
   'use strict';
   const ui = (body, w) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + (w || 1.8) + '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
   const UI = {
-    mic: ui('<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'),
-    micOff: ui('<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M4 4l16 16"/>'),
-    end: ui('<path d="M6 6l12 12M18 6L6 18"/>', 2.2),
+    // Tray glyphs are solid and dimensional, like the plan's reference tray.
+    mic: '<svg viewBox="0 0 24 24" aria-hidden="true" class="solid"><rect x="8.6" y="2.5" width="6.8" height="12.5" rx="3.4" fill="currentColor"/><path d="M5.6 10.8a6.4 6.4 0 0 0 12.8 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M12 17.4V20.6M8.8 20.8h6.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    micOff: '<svg viewBox="0 0 24 24" aria-hidden="true" class="solid"><rect x="8.6" y="2.5" width="6.8" height="12.5" rx="3.4" fill="currentColor" opacity=".55"/><path d="M5.6 10.8a6.4 6.4 0 0 0 12.8 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" opacity=".55"/><path d="M12 17.4V20.6M8.8 20.8h6.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" opacity=".55"/><path d="M4.5 3.5l15 17" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/><path d="M4.5 3.5l15 17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    end: ui('<path d="M6.2 6.2l11.6 11.6M17.8 6.2L6.2 17.8"/>', 2.6),
     grid: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="2.2"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="2.2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="2.2"/><rect x="13" y="13" width="7.5" height="7.5" rx="2.2"/></svg>',
     back: ui('<path d="M15 5l-7 7 7 7"/>', 2.2),
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2.4" fill="currentColor"/></svg>',
@@ -20,8 +21,8 @@
   // App artwork: 48×48, light from upper left to match the tray.
   const art = (body) => '<svg viewBox="0 0 48 48" aria-hidden="true">' + body + '</svg>';
   const ART = {
-    camera: art('<rect x="5" y="12" width="38" height="28" rx="8" fill="#e9edf2"/><rect x="5" y="12" width="38" height="28" rx="8" fill="none" stroke="#9aa6b5"/><rect x="15" y="8" width="12" height="6" rx="2" fill="#c9d1db"/><circle cx="24" cy="26" r="10" fill="#2a2f37"/><circle cx="24" cy="26" r="6.5" fill="#0d1117"/><circle cx="24" cy="26" r="4" fill="#24406a"/><circle cx="21.8" cy="23.6" r="1.8" fill="#fff" opacity=".85"/><circle cx="36" cy="18" r="1.6" fill="#ef6b5c"/>'),
-    settings: art('<g transform="translate(24 24)"><g fill="#a7b1bd">' + [0, 45, 90, 135, 180, 225, 270, 315].map((a) => '<rect x="-3.6" y="-19" width="7.2" height="9" rx="2" transform="rotate(' + a + ')"/>').join('') + '</g><circle r="13.5" fill="#c3cbd5"/><circle r="13.5" fill="none" stroke="#8994a3"/><circle r="6" fill="#eef2f6"/><circle r="6" fill="none" stroke="#7d8897"/></g>'),
+    camera: (n) => art('<defs><radialGradient id="cr' + n + '" cx=".35" cy=".3" r=".8"><stop offset="0" stop-color="#ffffff"/><stop offset=".45" stop-color="#cfd5dc"/><stop offset=".75" stop-color="#8d96a1"/><stop offset="1" stop-color="#e9edf1"/></radialGradient><radialGradient id="cl' + n + '" cx=".4" cy=".35" r=".7"><stop offset="0" stop-color="#3b4b66"/><stop offset=".6" stop-color="#0c1220"/><stop offset="1" stop-color="#05070c"/></radialGradient></defs><circle cx="24" cy="24.5" r="19" fill="#1a1f27" opacity=".25"/><circle cx="24" cy="24" r="18" fill="url(#cr' + n + ')"/><circle cx="24" cy="24" r="12.5" fill="#1b2230"/><circle cx="24" cy="24" r="11" fill="url(#cl' + n + ')"/><circle cx="24" cy="24" r="5" fill="#1f3c6e" opacity=".8"/><ellipse cx="19.6" cy="19.4" rx="3.6" ry="2.6" fill="#fff" opacity=".85" transform="rotate(-35 19.6 19.4)"/><circle cx="28" cy="28.5" r="1.2" fill="#9fc2ff" opacity=".7"/>'),
+    settings: (n) => art('<defs><linearGradient id="gs' + n + '" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".45" stop-color="#c9d0d8"/><stop offset="1" stop-color="#7f8996"/></linearGradient></defs><g transform="translate(24 24)"><g fill="url(#gs' + n + ')" stroke="#8a95a3" stroke-width=".6">' + [0, 45, 90, 135, 180, 225, 270, 315].map((a) => '<rect x="-4" y="-20" width="8" height="10" rx="2.2" transform="rotate(' + a + ')"/>').join('') + '<circle r="14.5"/></g><circle r="6.2" fill="#6c7684"/><circle r="5" fill="#eef2f6"/><path d="M-10.5-7a13 13 0 0 1 12-5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" opacity=".9"/></g>'),
     photos: art('<rect x="6" y="9" width="36" height="30" rx="7" fill="#fff"/><rect x="9" y="12" width="30" height="24" rx="4" fill="#8fc3f0"/><path d="M9 31l9-9 7 7 4-4 10 10v1a4 4 0 0 1-4 4H13a4 4 0 0 1-4-4z" fill="#58a364"/><path d="M9 33l9-7 8 7 4-3 9 6v1a4 4 0 0 1-4 4H13a4 4 0 0 1-4-4z" fill="#3f8a4f"/><circle cx="31" cy="18" r="3.2" fill="#ffe08a"/>'),
     maps: art('<path d="M7 13l11-4 12 4 11-4v26l-11 4-12-4-11 4z" fill="#eef3ea"/><path d="M18 9v26M30 13v26" stroke="#d2dccc"/><path d="M7 28c8-1 10-8 18-9s10 4 16 2" stroke="#7fb3ec" stroke-width="5" fill="none"/><path d="M12 34c5-4 9-3 13-7s7-8 11-9" stroke="#2f6be6" stroke-width="2" stroke-dasharray="3 2.4" fill="none"/><path d="M36 9.5a5 5 0 0 1 5 5c0 4-5 8.5-5 8.5s-5-4.5-5-8.5a5 5 0 0 1 5-5z" fill="#e5533e"/><circle cx="36" cy="14.5" r="1.8" fill="#fff"/>'),
     notes: art('<rect x="9" y="6" width="30" height="36" rx="6" fill="#fffdf4"/><rect x="9" y="6" width="30" height="9" rx="6" fill="#ffd25e"/><rect x="9" y="11" width="30" height="4" fill="#ffd25e"/><path d="M15 22h18M15 28h18M15 34h11" stroke="#c7c0a6" stroke-width="2" stroke-linecap="round"/>'),
@@ -38,9 +39,11 @@
   };
   const RASTER = { firefox: '%%ICON_FIREFOX%%', thunderbird: '%%ICON_THUNDERBIRD%%', vlc: '%%ICON_VLC%%' };
 
+  let uid = 0;
   function appArt(id) {
     if (RASTER[id]) return '<img alt="" draggable="false" src="' + RASTER[id] + '">';
-    return ART[id] || ART.files;
+    const a = ART[id] || ART.files;
+    return typeof a === 'function' ? a(++uid) : a;   // unique gradient ids per instance
   }
   window.RoseIcons = { UI, appArt };
 })();

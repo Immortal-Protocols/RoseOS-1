@@ -247,8 +247,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   const hAfter2 = await page.evaluate(() => document.getElementById('sw-human').scrollLeft);
   check('human carousel drags independently', hAfter2 !== hAfter && aAfter2 === aAfter, hAfter + '→' + hAfter2 + ' / agent ' + aAfter + '→' + aAfter2);
   await shot('29-switcher-scrolled');
-  const working = await page.evaluate(() => document.getElementById('v-switcher').classList.contains('working'));
-  check('connector animates while work runs', working);
+  const conn = await page.evaluate(() => ({ working: document.getElementById('v-switcher').classList.contains('working'), running: Object.values(window.__rose.getState().tasks).filter((t) => t.state === 'running').length, routes: document.querySelectorAll('#sw-routes .pulse').length }));
+  check('connector animates exactly while work runs', conn.working === conn.running > 0 && (conn.running === 0 || conn.routes > 0), JSON.stringify(conn));
   await page.locator('#sw-agent [data-open-window]').first().click();
   await settle(500);
   check('agent selection opens window detail', (await st()).view === 'window');
