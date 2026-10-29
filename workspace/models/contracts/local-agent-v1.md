@@ -43,7 +43,7 @@ Build the Android library with `--no-default-features`, which drops the desktop 
 | `start_turn` | `turn_id`, `text` | Send. `turn_id` is `[A-Za-z0-9_-]{1,64}` and is never reused |
 | `inference_response` | `turn_id`, `generation`, `status`, `retry_after?`, `body` | The raw HTTP status and body for a `need_inference` |
 | `inference_failed` | `turn_id`, `generation`, `kind` | No HTTP response. `kind` is one of `connect`, `timeout_connect`, `timeout_response`, `tls`, `response_too_large` |
-| `tool_result` | `turn_id`, `generation`, `action_id`, `status` | **Exactly one** per `need_tool`. `status` is one of `launch_requested`, `not_found`, `locked`, `not_allowed`, `cancelled`, `failed` |
+| `tool_result` | `turn_id`, `generation`, `action_id`, `status` | **Exactly one** per `need_tool`. `status` is one of `launch_requested`, `not_found`, `locked`, `not_allowed`, `cancelled`, `failed`. There is no `detail` field (unknown fields are rejected), so send any platform error text to the UI only. A platform exception or other platform error maps to `failed` |
 | `cancel` | `turn_id` | Stop |
 | `backgrounded` | — | The activity left the foreground |
 | `continue` | `turn_id` | The user continues a parked turn after returning |
@@ -63,6 +63,8 @@ Build the Android library with `--no-default-features`, which drops the desktop 
 
 - **One turn at a time.** `start_turn` while a turn is active is rejected with `turn_active`. A new `start_turn` while a turn is parked ends that turn as `superseded`; its tool record stays in the history.
 - **Limits:** at most **2 inferences** and **1 `open_app`** per turn. A second proposal fails the turn with `action_limit`.
+  - Every emitted `need_inference` counts toward the 2, **including one later cancelled** by Stop or background. Nothing refunds it.
+  - A host must dispatch only the `need_inference` outputs it receives. It must never re-send a stored request body itself, for example on Continue.
 - **Model answer:** the whole content must be exactly one JSON object.
   - Final text: `{"rose_action":"local-agent-v1","type":"final","text":"..."}`
   - Open an app: `{"rose_action":"local-agent-v1","type":"open_app","app_id":"..."}`
@@ -79,10 +81,10 @@ Build the Android library with `--no-default-features`, which drops the desktop 
   - during a tool dispatch: `turn_ended cancelled`. The one receipt for that dispatch is still accepted afterwards and rendered with `after_stop: true`. A launch may already have happened and cannot be undone.
   - when parked: the turn ends.
 - **Background:**
-  - during the first inference: `cancel_inference`, then `turn_ended cancelled`, with error `backgrounded`.
-  - during a tool dispatch: the result is recorded when it arrives, and the turn parks without a new request.
-  - during the post-tool inference: `cancel_inference`, then the turn parks. That cancelled request does not use up the turn's second inference.
-  - `continue` re-requests it. No automatic resume and no background work.
+  - during the first inference: `cancel_inference`, then `turn_ended cancelled`, with error `backgrounded`. Nothing is recorded.
+  - during a tool dispatch: the result is recorded when it arrives, and the turn parks without a new request (`render status parked`). `continue` then emits the turn's second and last request.
+  - during the post-tool inference: `cancel_inference`, then `turn_ended cancelled` with error `inference_limit`. That request has already used the second slot, so the turn cannot park. `continue` is rejected (`no_parked_turn`). The tool record stays in the history, and the next Send starts a new turn with a fresh budget that sees it.
+  - No automatic resume and no background work. Repeated background/Continue can never produce more than two `need_inference` outputs for one turn.
 - **History:** a completed turn commits its messages. A tool result commits the turn so far, because the action is a fact. A failed or cancelled turn leaves no other trace.
 - **Character budget:** `context_budget_chars` is checked before every request; exceeding it gives `context_limit`. `max_reply_chars` gives `reply_too_long`. Token limits are the server's (8,192 total, `max_tokens` 512).
 - **HTTP error kinds** match the CLI: `unauthorized`, `forbidden`, `not_found`, `rate_limited`, `bad_request`, `server_context_limit`, `server`, `unexpected_status`, `malformed_response`, `empty_completion`.

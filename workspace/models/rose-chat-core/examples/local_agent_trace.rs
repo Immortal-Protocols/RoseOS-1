@@ -64,13 +64,21 @@ pub fn traces() -> Value {
                 json!({"type": "cancel", "turn_id": "t1"}),
                 json!({"type": "inference_response", "turn_id": "t1", "generation": 1, "status": 200, "body": reply(open)}),
             ]),
-            run("background_then_continue", "The launched app backgrounds Rose Models: the continuation request is cancelled and the turn parks; Continue re-requests it.", vec![
+            run("background_then_continue", "The launched app backgrounds Rose Models while the launch is out: the receipt parks the turn without a request; Continue sends the second and last request.", vec![
+                json!({"type": "start_turn", "turn_id": "t1", "text": "Open the calculator"}),
+                json!({"type": "inference_response", "turn_id": "t1", "generation": 1, "status": 200, "body": reply(open)}),
+                json!({"type": "backgrounded"}),
+                json!({"type": "tool_result", "turn_id": "t1", "generation": 2, "action_id": "act-1", "status": "launch_requested"}),
+                json!({"type": "continue", "turn_id": "t1"}),
+                json!({"type": "inference_response", "turn_id": "t1", "generation": 3, "status": 200, "body": reply(done)}),
+            ]),
+            run("background_after_budget", "Backgrounded after the post-tool request was sent: that cancelled request still counts, so the turn ends with inference_limit and Continue is rejected. The tool record stays in the history for the next Send.", vec![
                 json!({"type": "start_turn", "turn_id": "t1", "text": "Open the calculator"}),
                 json!({"type": "inference_response", "turn_id": "t1", "generation": 1, "status": 200, "body": reply(open)}),
                 json!({"type": "tool_result", "turn_id": "t1", "generation": 2, "action_id": "act-1", "status": "launch_requested"}),
                 json!({"type": "backgrounded"}),
                 json!({"type": "continue", "turn_id": "t1"}),
-                json!({"type": "inference_response", "turn_id": "t1", "generation": 4, "status": 200, "body": reply(done)}),
+                json!({"type": "inference_response", "turn_id": "t1", "generation": 3, "status": 200, "body": reply(done)}),
             ]),
             run("rejected_actions", "A not-allowed app id and a prose reply each fail the turn with zero execution.", vec![
                 json!({"type": "start_turn", "turn_id": "t1", "text": "Open settings"}),

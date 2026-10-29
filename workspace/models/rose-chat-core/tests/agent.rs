@@ -414,26 +414,24 @@ fn background_parks_and_continue_or_stop_resolve_it() {
         Some((Outcome::Completed, None))
     );
 
-    // Backgrounded during the post-tool request: cancel it, park, and Continue may re-request.
+    // Backgrounded during the post-tool request: that request already used the second slot, so
+    // the turn ends visibly; the tool record stays and Continue cannot buy another request.
     let mut a = agent();
     let (tg, action) = to_tool(&mut a, "t1");
     let (g, _) =
         need_inference(&a.step(tool("t1", tg, &action, ToolStatus::LaunchRequested))).unwrap();
     let out = a.step(Input::Backgrounded);
     assert!(matches!(&out[0], Output::CancelInference { generation, .. } if *generation == g));
-    assert!(is_rejected(&a.step(respond("t1", g, DONE))));
-    let (g2, _) = need_inference(&a.step(Input::Continue {
-        turn_id: "t1".into(),
-    }))
-    .unwrap();
-    assert!(g2 > g);
     assert_eq!(
-        ended(&a.step(respond("t1", g2, DONE))),
-        Some((Outcome::Completed, None))
+        ended(&out),
+        Some((Outcome::Cancelled, Some("inference_limit".into())))
     );
+    assert!(is_rejected(&a.step(respond("t1", g, DONE))));
     assert!(is_rejected(&a.step(Input::Continue {
         turn_id: "t1".into()
     })));
+    assert_eq!(a.history().len(), 3, "user, proposal and the real receipt");
+    assert!(a.is_idle());
 
     // Parked, then Stop.
     let mut a = agent();
@@ -596,4 +594,50 @@ fn step_json_rejects_bad_input_without_state_change() {
         serde_json::from_str(&a.step_json(r#"{"type":"start_turn","turn_id":"t1","text":"hi"}"#))
             .unwrap();
     assert_eq!(out["outputs"][1]["type"], "need_inference");
+}
+
+fn count(dispatched: &mut usize, out: Vec<Output>) -> Vec<Output> {
+    *dispatched += out
+        .iter()
+        .filter(|o| matches!(o, Output::NeedInference { .. }))
+        .count();
+    out
+}
+
+/// Every emitted request counts, cancelled or not: no sequence of background/Continue/Stop
+/// inputs can make the agent emit more than two `need_inference` outputs for one turn.
+#[test]
+fn repeated_background_and_continue_never_exceed_two_dispatches() {
+    let mut a = agent();
+    let mut dispatched = 0;
+    let (g, _) = need_inference(&count(
+        &mut dispatched,
+        a.step(start("t1", "Open the calculator")),
+    ))
+    .unwrap();
+    let (tg, action, _) =
+        need_tool(&count(&mut dispatched, a.step(respond("t1", g, OPEN)))).unwrap();
+    // Leave while the launch is out; the receipt parks the turn without a request.
+    count(&mut dispatched, a.step(Input::Backgrounded));
+    count(
+        &mut dispatched,
+        a.step(tool("t1", tg, &action, ToolStatus::LaunchRequested)),
+    );
+    let continue_t1 = || Input::Continue {
+        turn_id: "t1".into(),
+    };
+    // Continue once (dispatch 2), then background, then keep trying to continue.
+    count(&mut dispatched, a.step(continue_t1()));
+    for _ in 0..5 {
+        count(&mut dispatched, a.step(Input::Backgrounded));
+        let out = count(&mut dispatched, a.step(continue_t1()));
+        assert!(is_rejected(&out));
+    }
+    assert_eq!(dispatched, 2);
+    assert!(a.is_idle());
+    // The recorded tool result survives; a new Send gets a fresh budget and sees it.
+    let (_, req) =
+        need_inference(&count(&mut dispatched, a.step(start("t2", "Did it open?")))).unwrap();
+    assert!(req.to_string().contains("launch_requested"));
+    assert_eq!(dispatched, 3);
 }
