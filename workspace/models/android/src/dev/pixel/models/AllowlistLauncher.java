@@ -37,7 +37,7 @@ public final class AllowlistLauncher implements AppLauncher {
         try {
             platform.startExplicit(r.target);
         } catch (RuntimeException e) {
-            return new LaunchResult(appId, LaunchResult.Status.PLATFORM_ERROR, e.getClass().getSimpleName());
+            return new LaunchResult(appId, LaunchResult.Status.FAILED, e.getClass().getSimpleName());
         }
         return new LaunchResult(appId, LaunchResult.Status.LAUNCH_REQUESTED, r.target.label);
     }

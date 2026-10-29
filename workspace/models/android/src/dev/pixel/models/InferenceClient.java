@@ -1,15 +1,20 @@
 package dev.pixel.models;
 
-/** Sends one inference request off the UI thread. Callbacks may arrive late or twice; the
- * controller fences them. */
+/**
+ * Carries one local-agent-v1 need_inference to the endpoint off the UI thread. It reports either
+ * the raw HTTP status and body or a transport failure kind (connect, timeout_connect,
+ * timeout_response, tls, response_too_large). Callbacks may arrive late; the host and Core fence them.
+ */
 public interface InferenceClient {
     interface Callback {
-        void onResult(String body, String error);
+        void onResponse(int status, String retryAfter, String body);
+
+        void onFailure(String kind);
     }
 
     interface Call {
         void cancel();
     }
 
-    Call send(String requestBody, Callback callback);
+    Call send(String requestBody, long timeoutMs, Callback callback);
 }

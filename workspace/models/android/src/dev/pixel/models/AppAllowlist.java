@@ -11,12 +11,13 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * The user's locally selected apps, keyed by opaque app_id. The model can only name an app_id;
+ * The user's locally selected apps, keyed by opaque app_id ([a-z][a-z0-9_]{0,31}, as local-agent-v1
+ * requires). The model can only name an app_id;
  * this class maps it to one launcher component that is actually installed. Package names,
  * components, Intent URIs or extras from model text are never accepted.
  */
 public final class AppAllowlist {
-    private static final Pattern APP_ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,47}");
+    private static final Pattern APP_ID = Pattern.compile("[a-z][a-z0-9_]{0,31}");
 
     /** One launcher activity on the device (MAIN/LAUNCHER). */
     public static final class Launchable {
@@ -134,18 +135,19 @@ public final class AppAllowlist {
     }
 
     static String slug(String label) {
-        String s = label == null ? "" : label.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
-        s = s.replaceAll("^-+|-+$", "");
-        if (s.isEmpty()) {
-            s = "app";
+        String s = label == null ? "" : label.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "_");
+        s = s.replaceAll("^_+|_+$", "");
+        if (s.isEmpty() || !Character.isLetter(s.charAt(0))) {
+            s = "app_" + s;
         }
-        return s.length() > 40 ? s.substring(0, 40) : s;
+        s = s.replaceAll("_+$", "");
+        return s.length() > 28 ? s.substring(0, 28) : s;
     }
 
     private static String uniqueId(String base, Set<String> taken) {
         String id = base;
         for (int n = 2; taken.contains(id); n++) {
-            id = base + "-" + n;
+            id = base + "_" + n;
         }
         return id;
     }
