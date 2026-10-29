@@ -89,6 +89,7 @@ import {appToolPolicy} from './app-tool-policy.mjs';
 import {macAccountAlternatives} from './device-preference.mjs';
 import {requestAppContext} from './phone-app-context.mjs';
 import {createEnvironmentTools,environmentToolDefinitions,environmentToolPolicy} from './environment-tools.mjs';
+import {createPhoneUiTools,phoneUiToolDefinitions} from './phone-ui-tools.mjs';
 import {voiceRequestContext,voiceRequestMessages} from './voice-request-context.mjs';
 import {roomService} from './room.mjs';
 import {musicService} from './music.mjs';
@@ -201,7 +202,7 @@ const appAdapters=artemisEnabled?[]:[createAppleMusicAdapter(fastPhone),createPl
 const instructions=baseVoiceInstructions+(artemisEnabled?'\n'+artemisPolicy:'')+'\nInstalled app context: '+appAdapters.map(a=>a.voiceContext).filter(Boolean).join(' ')+' Delegate requests concerning these app actions to the backend; the backend checks the current state and performs them.';
 // Tool definitions persist with their thread. A changed catalog needs a new
 // thread; retain the previous state files for rollback and recent context.
-const appCatalogKey=crypto.createHash('sha256').update(JSON.stringify([...(artemisEnabled?[['artemis',true]]:[]),...(appToolsConfig?Object.entries(appToolsConfig.catalogs).map(([pkg,catalog])=>[pkg,catalog.tools]):[]),...appAdapters.map(adapter=>[adapter.packageName,adapter.tools]),['task-model',modelToolDefinitions],['web-lookup',webLookupTool],['task-html',taskHtmlTool],['phone-environment',environmentToolDefinitions],['background-phone',backgroundEnabled]].sort(([a],[b])=>a.localeCompare(b)))).digest('hex').slice(0,12);
+const appCatalogKey=crypto.createHash('sha256').update(JSON.stringify([...(artemisEnabled?[['artemis',true]]:[]),...(appToolsConfig?Object.entries(appToolsConfig.catalogs).map(([pkg,catalog])=>[pkg,catalog.tools]):[]),...appAdapters.map(adapter=>[adapter.packageName,adapter.tools]),['task-model',modelToolDefinitions],['web-lookup',webLookupTool],['task-html',taskHtmlTool],['phone-environment',environmentToolDefinitions],['phone-ui',artemisEnabled?[]:phoneUiToolDefinitions({background:backgroundEnabled})],['background-phone',backgroundEnabled]].sort(([a],[b])=>a.localeCompare(b)))).digest('hex').slice(0,12);
 const codex=new Codex(root,evaluation?path.join(evaluation.directory,'state.json'):priv+'/codex-app-tools-'+appCatalogKey+'-state.json',codingApiKeyFile,appRuntime);
 const epoch=crypto.randomUUID();
 const mediaWorkerConfig=new MediaWorkerConfig(priv+'/media-worker.json');
@@ -324,13 +325,15 @@ const pending=finishAgentTurn(turn);visualReview=pending;pending.finally(()=>{if
 codex.on('failure',text=>{if(backgroundEnabled)void backgroundPhone.close(launcherTask.current?.id).catch(error=>logDecision({stage:'background_close_failed',reason:error.message}));launcherTask.finish('failed',text);for(const result of voiceTasks.finish(text))emit('voice_task_done',result);spokenProgress.finish();busy=false;speakProgress('The coding connection failed: '+text);ready=false;emit('task',{text});});
 const modelTools=createModelTools({available:model=>codex.modelAvailable(model),selection:modelSelection,config:()=>decisionsConfig.read(),running:()=>busy&&lastRoute?{model:lastRoute.model,effort:lastRoute.effort,serviceTier:lastRoute.serviceTier}:null,changed:()=>emit('task_model',{...taskModelState()}),log:logDecision});
 const environmentTools=createEnvironmentTools({phone:fastPhone});
+const phoneUiTools=createPhoneUiTools({phone:fastPhone,background:()=>backgroundEnabled});
 const htmlTools=createTaskHtmlTools({state:launcherTask,mode:()=>taskWidgets.mode(),record:data=>capture.record('task.html',data,captureContext())});
 const catalog=!artemisEnabled&&appToolsConfig?await phoneOrigin.run(NON_TASK,()=>loadAppToolCatalog({phone:fastPhone,packages:appToolsConfig.packages,catalogs:appToolsConfig.catalogs,adapters:appAdapters,requestContext:()=>({requestId:String(taskStarted)})})):null;
-Object.assign(appRuntime,{dynamicTools:[webLookupTool,...modelTools.definitions,...htmlTools.definitions,...(artemisEnabled?artemisToolDefinitions:environmentTools.definitions),...(catalog?.definitions||[])],appToolPolicy:artemisEnabled?artemisPolicy:catalog?appToolPolicy:undefined,handleToolCall:async request=>{
+Object.assign(appRuntime,{dynamicTools:[webLookupTool,...modelTools.definitions,...htmlTools.definitions,...(artemisEnabled?artemisToolDefinitions:[...environmentTools.definitions,...phoneUiTools.definitions()]),...(catalog?.definitions||[])],appToolPolicy:artemisEnabled?artemisPolicy:catalog?appToolPolicy:undefined,handleToolCall:async request=>{
  if(request.tool==='web_lookup'){const result=await webLookup(client,request.arguments);capture.record('model.web_lookup',{usage:result.usage},captureContext());return {success:true,contentItems:[{type:'inputText',text:JSON.stringify(result)}]};}
  if(modelToolDefinitions.some(t=>t.name===request.tool))return modelTools.handleToolCall(request);
  if(request.tool===taskHtmlTool.name)return htmlTools.handleToolCall(request);
  if(artemisEnabled)return artemisTrial.handleToolCall(request);
+ if(phoneUiTools.names.has(request.tool))return phoneUiTools.handleToolCall(request);
  if(environmentToolDefinitions.some(t=>t.name===request.tool))return environmentTools.handleToolCall(request);
  if(!catalog)throw Error('Unknown registered tool');
  const started=Date.now();

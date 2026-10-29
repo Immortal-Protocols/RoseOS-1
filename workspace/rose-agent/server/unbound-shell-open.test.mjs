@@ -13,6 +13,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {TaskStop} from './task-stop.mjs';
 import {LauncherTask} from './launcher-task.mjs';
 import {taskSetupPolicy} from './task-setup.mjs';
+import {phoneUiToolDefinitions} from './phone-ui-tools.mjs';
 
 const server=fs.readFileSync(new URL('./server.mjs',import.meta.url),'utf8');
 const between=(from,to)=>{const start=server.indexOf(from),end=server.indexOf(to,start);assert.ok(start>0&&end>start,from);return server.slice(start,end);};
@@ -114,7 +115,7 @@ test('the worker policy offers control.py only for observations the server runs'
  }
 });
 
-test('the policy states the refusal boundary for every refused control.py command and the missing launch capability',()=>{
+test('the policy states the refusal boundary and the registered equivalent of every refused control.py command',()=>{
  for(const {backgroundEnabled,appToolsEnabled,text} of policies){
   const label='background '+backgroundEnabled+', app tools '+appToolsEnabled;
   const boundary=text.match(/Phone control boundary: [^\n]*/)?.[0];
@@ -123,10 +124,16 @@ test('the policy states the refusal boundary for every refused control.py comman
   assert.deepEqual(named,refusedCli,'the boundary names exactly the refused CLI commands: '+label);
   assert.match(boundary,/supersedes every other instruction, README or capability text/);
   assert.match(boundary,/never claim it ran/);
-  assert.match(boundary,/no tool in this session opens an arbitrary installed app or operates the phone screen/);
-  assert.match(boundary,/not available here/);
+  // Each refused command has a registered request-bound equivalent, or is stated as unavailable.
+  const registered=new Set(phoneUiToolDefinitions({background:backgroundEnabled}).map(t=>t.name));
+  for(const name of refusedCli){
+   if(registered.has('phone_'+name))assert.match(boundary,new RegExp('\\bphone_'+name+'\\b'),name+': '+label);
+   else assert.match(boundary,new RegExp('no registered equivalent[^.]*'+({app_command:'app_command',clock_control:'clock',clock_timer_start:'clock',media_control:'media',apple_music_run:'music',voice_ducking:'ducking',setup_ui_control:'accessibility-setup'}[name]??name)),name+' is stated as unavailable: '+label);
+  }
+  assert.match(boundary,/run as the current request, honour Stop/);
  }
  const background=policies.find(p=>p.backgroundEnabled).text;
  assert.match(background,/with --display phone they read the physical phone screen instead/);
- assert.match(background,/The shell cannot open apps, tap, type, install, go home or act in any other way on either display/);
+ assert.match(background,/The shell cannot open apps, tap, type, go home or act in any other way on either display/);
+ assert.match(background,/set display to phone on any of them to operate the user's physical phone screen/);
 });
