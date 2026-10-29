@@ -1,0 +1,44 @@
+name: Models Android app
+
+# Rose Models (dev.pixel.models): JVM policy tests and an UNSIGNED APK build with a manifest
+# policy check. No signing key, secrets, cloud, device or emulator; the APK is not uploaded.
+on:
+  pull_request:
+    paths:
+      - 'workspace/models/android/**'
+      - 'workspace/models/rose-chat-android/**'
+      - '.github/workflows/models-android.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/models/android/**'
+      - 'workspace/models/rose-chat-android/**'
+      - '.github/workflows/models-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rose-models-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Tool versions
+        run: java -version
+      - name: JVM policy tests
+        run: bash workspace/models/android/tests/run.sh
+      - name: Unsigned APK build
+        run: |
+          unset ANDROID_SDK_ROOT
+          bash scripts/setup-android-sdk.sh
+          bash workspace/models/android/build.sh
+      - name: APK policy check
+        run: bash workspace/models/android/tests/check-apk-policy.sh out/rose-models.*/apk-metadata.txt
