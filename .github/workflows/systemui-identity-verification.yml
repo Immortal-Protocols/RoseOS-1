@@ -1,0 +1,44 @@
+name: SystemUI identity verification
+
+# Source verification of the SystemUI identity receipt (OS-COMPONENT-ID-002/003): the pure parser
+# (scripts/systemui_identity.py) and its release-pipeline integration, both against synthetic tool output.
+# No secrets, cloud identity, artifacts, self-hosted runner or dispatch; a pass is not evidence of any
+# shipped SystemUI identity.
+on:
+  pull_request:
+    paths:
+      - 'scripts/systemui_identity.py'
+      - 'scripts/tests/test_systemui_identity.py'
+      - 'scripts/tests/test_systemui_identity_integration.py'
+      - 'scripts/release-pipeline.py'
+      - '.github/workflows/systemui-identity-verification.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/systemui_identity.py'
+      - 'scripts/tests/test_systemui_identity.py'
+      - 'scripts/tests/test_systemui_identity_integration.py'
+      - 'scripts/release-pipeline.py'
+      - '.github/workflows/systemui-identity-verification.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: systemui-identity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Python version
+        run: python3 --version
+      - name: Identity parser tests (synthetic tool output)
+        run: python3 scripts/tests/test_systemui_identity.py -v
+      - name: Release-pipeline integration tests (synthetic tools and APK)
+        run: python3 scripts/tests/test_systemui_identity_integration.py -v
