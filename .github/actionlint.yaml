@@ -2,3 +2,5 @@ self-hosted-runner:
   # Proposed repository-scoped runner on immortal-os-builder (not registered yet).
   labels:
     - roseos-frankel-builder
+    # Proposed runtime runner on pixel-os-smoke-20261023-a, group roseos-alpha-runtime (INFRA-ALPHA-120; not registered).
+    - roseos-cuttlefish-runtime

@@ -178,7 +178,7 @@ class SourceTest(unittest.TestCase):
 class WorkflowTest(unittest.TestCase):
     def test_the_mode_is_explicit_read_only_and_cleaned_up(self):
         job = WORKFLOW[WORKFLOW.index('  alpha-verify-retained:'):WORKFLOW.index('  publisher:')]
-        self.assertIn('emulator-alpha-verify-retained, app-reuse]', WORKFLOW)
+        self.assertIn('emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]', WORKFLOW)
         self.assertIn("if: inputs.mode == 'emulator-alpha-verify-retained'", job)
         self.assertIn('    permissions:\n      contents: read\n    steps:', job)
         for forbidden in ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_SIGNER', 'os-release-stage', 'release-pipeline.py publish',
@@ -187,7 +187,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('python3 scripts/alpha-verify-retained.py run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" '
             '--run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --receipt-dir "$ROSE_BASE/receipt"', job)
         self.assertIn('if: always()\n        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"', job)
-        self.assertIn('alpha-verify-retained, app-reuse, publisher]', WORKFLOW)
+        self.assertIn('alpha-verify-retained, alpha-export, app-reuse, publisher]', WORKFLOW)
         guard = WORKFLOW[WORKFLOW.index('  guard:'):WORKFLOW.index('  controller:')]
         self.assertIn("if: inputs.mode == 'emulator-alpha-verify-retained'\n        run: python3 scripts/emulator-alpha.py preflight --job guard", guard)
 

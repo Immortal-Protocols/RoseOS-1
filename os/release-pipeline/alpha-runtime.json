@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "kind": "alpha-runtime",
+  "repository": "Immortal-Protocols/RoseOS-1",
+  "alphaConfig": "os/release-pipeline/cuttlefish-alpha.json",
+  "originalCompile": {
+    "runId": "40765631053",
+    "buildDatetime": "1793220134",
+    "emulatorBuildId": "rose-cf-alpha-40765631053",
+    "product": "ae9cfd4d9fafd2db4f2bc6aa76b7d025d6473fb9",
+    "apps": [["dev.pixel.voice", 302], ["dev.pixel.calculator.agent", 4], ["dev.pixel.backgroundcontrol", 28]],
+    "buildReceipt": null,
+    "basis": "INFRA-ALPHA-117: run 40765631053's make passed and its image gate failed; it wrote no build receipt, and none is ever invented. Its retained output was re-verified by run 40777816699"
+  },
+  "superImage": {
+    "size": 2410014072,
+    "sha256": "e543c1301c3f999db5d051bd85ff9cc3a006e47a8d2a8cfd1f484c339d909ed3",
+    "basis": "Measured on the retained output by the ALPHA-116 diagnostic (run 40771878744) and matched again by run 40777816699 before and after its full gate"
+  },
+  "retainedVerification": {
+    "runId": "40777816699",
+    "artifactId": 12854389864,
+    "artifactName": "emulator-alpha-verification-40777816699",
+    "receipt": "emulator-alpha-verification.json",
+    "workflowPath": ".github/workflows/os-release.yml",
+    "event": "workflow_dispatch",
+    "branch": "main",
+    "recipe": "e07d535ac1d8a0f151c57da2ea9a6256d9f21fc9",
+    "receiptSha256": null,
+    "basis": "INFRA-ALPHA-120: the full verification (os-release.yml emulator-alpha-verify-retained, recipe e07d535) passed in run 40777816699. Its attempt directory was removed after the private artifact 12854389864 was uploaded, so the only copy of its receipt is that artifact: it is fetched through the workflow's own actions/download-artifact with the job token (actions: read), never from an executor blob route or a host path. The receipt file's sha256 was not recorded at hand-off (null): the run, artifact identity and API digest are checked, and the measured receipt digest is carried forward in every later receipt. A non-null value here is enforced exactly"
+  },
+  "export": {
+    "mode": "emulator-alpha-export",
+    "artifactName": "emulator-alpha-export-{run_id}",
+    "originalReceiptArtifact": "alpha-retained-verification-{run_id}",
+    "receipt": "alpha-export.json",
+    "imagePattern": "^[a-z0-9_]+\\.img$",
+    "requiredImages": ["super.img", "boot.img", "vendor_boot.img", "vbmeta.img"],
+    "hostPackage": "cvd-host_package.tar.gz",
+    "retentionDays": 3,
+    "basis": "Exactly the top-level images and host package the original verification receipt measured, each re-hashed against it on the builder under the shared lock, plus that receipt and a sanitized export receipt. Files the receipt did not measure (for example android-info.txt) are not exported: they carry no verified hash"
+  },
+  "runtime": {
+    "workflow": ".github/workflows/alpha-runtime.yml",
+    "ref": "refs/heads/main",
+    "event": "workflow_dispatch",
+    "concurrency": "roseos-alpha-runtime",
+    "runnerGroup": "roseos-alpha-runtime",
+    "runnerLabel": "roseos-cuttlefish-runtime",
+    "host": {"project": "protocols-465723", "zone": "us-west2-a", "instance": "pixel-os-smoke-20261023-a"},
+    "variables": {
+      "ROSEOS_ALPHA_RUNTIME_READY": "'true' only after the runtime runner is registered in group roseos-alpha-runtime (restricted to this repository and this workflow) with label roseos-cuttlefish-runtime on pixel-os-smoke-20261023-a",
+      "ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER": "A NEW workload identity pool/provider whose attribute condition admits only this repository, workflow .github/workflows/alpha-runtime.yml, ref refs/heads/main and event workflow_dispatch; never the os-release provider",
+      "ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT": "A NEW identity limited to compute.instances.get/start/stop on pixel-os-smoke-20261023-a only; no project, zonal-operations, signer or builder grant"
+    },
+    "root": "rose-alpha-runtime",
+    "instanceNumber": 21,
+    "adbPortBase": 6520,
+    "bootTimeoutSeconds": 900,
+    "jobTimeoutMinutes": 30,
+    "minFreeGiB": 40,
+    "hostTools": ["bin/launch_cvd", "bin/stop_cvd", "bin/adb"],
+    "launchArgs": ["--daemon", "--report_anbox_ports=false", "--start_webrtc=false"],
+    "foreignProcesses": ["launch_cvd", "run_cvd", "assemble_cvd", "crosvm", "cvd_internal_start"],
+    "foreignLocks": ["/tmp/acloud_cvd_temp/local-instance-*.lock"],
+    "historicalPaths": ["cuttlefish_runtime", "cuttlefish", "cuttlefish_assembly"],
+    "evidence": "alpha-runtime-evidence-{run_id}",
+    "basis": "INFRA-ALPHA-120 proposal, not admitted infrastructure. Unverified host facts: launch_cvd/stop_cvd/adb come from the exported host package; adb listens on 0.0.0.0:(6520 + instance - 1); launch_cvd --daemon returns after boot or failure; the image directory needs no file the receipt did not measure. Each is checked at run time and reported, never assumed in a receipt"
+  }
+}

@@ -1,0 +1,127 @@
+name: Alpha runtime
+
+# INFRA-ALPHA-120 (proposed, not admitted): boot the exported, verified Cuttlefish alpha on the separate runtime host
+# pixel-os-smoke-20261023-a and capture rose-verify evidence. Never os-release.yml and never the roseos-frankel-builder
+# runner. Until ROSEOS_ALPHA_RUNTIME_READY is 'true' the guard fails before any controller step. The hosted controller
+# uses only the NEW runtime identity (ROSEOS_RUNTIME_*), never the os-release provider or its accounts.
+on:
+  workflow_dispatch:
+    inputs:
+      export_run:
+        description: Run id of the os-release.yml emulator-alpha-export run whose artifact is booted
+        required: true
+      export_artifact_digest:
+        description: sha256 (hex, no prefix) of that run's emulator-alpha-export-<run> artifact, as the Actions API reports it
+        required: true
+      export_receipt_sha256:
+        description: sha256 of alpha-export.json inside that artifact (SHA256SUMS line printed by the export job)
+        required: true
+
+permissions: {}
+
+concurrency:
+  # One runtime attempt at a time on the one runtime host; separate from os-release-frankel (the builder).
+  group: roseos-alpha-runtime
+  cancel-in-progress: false
+
+env:
+  EXPORT_RUN: ${{ inputs.export_run }}
+  EXPORT_ARTIFACT_DIGEST: ${{ inputs.export_artifact_digest }}
+  EXPORT_RECEIPT_SHA256: ${{ inputs.export_receipt_sha256 }}
+
+jobs:
+  guard:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Runtime admitted and dispatch well formed
+        env:
+          ROSEOS_ALPHA_RUNTIME_READY: ${{ vars.ROSEOS_ALPHA_RUNTIME_READY }}
+          ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER }}
+          ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT }}
+        run: python3 scripts/alpha-runtime.py guard --export-run "$EXPORT_RUN" --export-artifact-digest "$EXPORT_ARTIFACT_DIGEST" --export-receipt-sha256 "$EXPORT_RECEIPT_SHA256"
+      - name: The export run and artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/alpha-runtime.py source-check --export-run "$EXPORT_RUN" --export-artifact-digest "$EXPORT_ARTIFACT_DIGEST" --export-receipt-sha256 "$EXPORT_RECEIPT_SHA256"
+
+  controller-start:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      - run: python3 scripts/alpha-runtime.py start-host
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+
+  # The only self-hosted job: the runtime runner (group roseos-alpha-runtime, label roseos-cuttlefish-runtime). It reads
+  # repository contents and the export artifact; it holds no id-token, secret or publisher credential.
+  runtime:
+    needs: controller-start
+    runs-on: [self-hosted, roseos-cuttlefish-runtime]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: The export artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: emulator-alpha-export-${{ inputs.export_run }}
+          run-id: ${{ inputs.export_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/alpha-export
+      - name: Verify, boot, capture evidence and stop
+        run: python3 scripts/alpha-runtime.py run --artifact-dir "$RUNNER_TEMP/alpha-export" --evidence-dir "$RUNNER_TEMP/alpha-evidence" --export-run "$EXPORT_RUN" --export-artifact-digest "$EXPORT_ARTIFACT_DIGEST" --export-receipt-sha256 "$EXPORT_RECEIPT_SHA256" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha-runtime-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/alpha-evidence
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove the downloaded export
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/alpha-export" "$RUNNER_TEMP/alpha-evidence"
+
+  controller-stop:
+    needs: [controller-start, runtime]
+    if: always() && needs.controller-start.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.ROSEOS_RUNTIME_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.ROSEOS_RUNTIME_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      # The existing 2h automatic STOP on the runtime host remains the independent fallback.
+      - run: python3 scripts/alpha-runtime.py stop-host
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
