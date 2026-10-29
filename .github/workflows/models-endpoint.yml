@@ -50,6 +50,12 @@ jobs:
         env:
           ROSE_REQUIRE_NGINX: '1'
         run: python3 -I workspace/models/serving/https/tests/test_edge.py -v
+      - name: TLS front tests (real nginx, disposable synthetic CA; not real issuance)
+        env:
+          ROSE_REQUIRE_NGINX: '1'
+        run: |
+          openssl version
+          python3 -I workspace/models/serving/https/tests/test_tls.py -v
 
   conformance:
     runs-on: ubuntu-24.04

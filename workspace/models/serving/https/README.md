@@ -1,6 +1,7 @@
-# Rose Models HTTPS edge (MODELS-HTTPS-SOURCE-001)
+# Rose Models HTTPS edge (MODELS-HTTPS-SOURCE-001, MODELS-TLS-ALT-001)
 
-The route is `models.a-list.com`: **Caddy** (public TLS on :443) → **Nginx** (`127.0.0.1:8080`) → **vLLM** (`127.0.0.1:8000`, from `../render_local.py`).
+**Deployment mode (`--front tls`):** `models.a-list.com` → **Nginx** terminating TLS itself on `:443` → **vLLM** (`127.0.0.1:8000`, from `../render_local.py`).
+Caddy acquisition is held, so the Caddy front (`--front loopback`: Caddy :443 → Nginx `127.0.0.1:8080`) is kept only as unvalidated reference; its output is byte-identical to PR132.
 This directory holds source and local synthetic tests only.
 - No certificate was issued.
 - No DNS, GCP or live endpoint was contacted.
@@ -12,9 +13,11 @@ This directory holds source and local synthetic tests only.
 | --- | --- |
 | `render_proxy.py render` | Writes `nginx.conf`, `caddy.json` and `manifest.json` (input values plus sha256 of each file) from closed, validated inputs. It never takes arbitrary config text. |
 | `render_proxy.py token-map` | Reads a protected token file and writes the 0600 Nginx include that holds the bearer match. The token never reaches argv, stdout, the rendered configs or the manifest. |
-| `tests/test_edge.py` | Real Nginx against a loopback fixture backend with fake credentials, plus negative controls and renderer checks. |
+| `render_proxy.py check-tls` | Before start, refuses a certificate/key pair unless all hold: the key is 0600 and owned by the caller; the fullchain has the leaf plus an issuer; the leaf SAN names the hostname exactly; the leaf is not self-signed, not expired, and matches the key. It prints nonsecret facts only. |
+| `tests/test_edge.py` | Real Nginx against a loopback fixture backend with fake credentials, plus negative controls and renderer checks (loopback mode). |
+| `tests/test_tls.py` | Real Nginx in TLS mode with a **disposable synthetic** root → intermediate → leaf chain made by openssl per run, and a client that trusts only that root. Not real certificate issuance. |
 
-## Policy (enforced in Nginx; Caddy only terminates TLS)
+## Policy (enforced in Nginx in both modes)
 
 **Routes:** exactly `POST /v1/chat/completions` and `GET /v1/models`.
 - The raw request URI must equal the path exactly, so encoded, doubled-slash, dot and case variants get 404.
@@ -51,6 +54,47 @@ Only authenticated requests count toward the rate and in-flight limits.
 - one explicit Let's Encrypt ACME issuer with TLS-ALPN-01, the HTTP challenge disabled and automatic HTTP redirects disabled;
 - reverse proxy to `127.0.0.1:8080`;
 - no access log.
+
+## TLS front (`--front tls`)
+
+**Listeners:** one public listener, `<address>:443 ssl`, with no port 80 and no redirect. A plain-HTTP request to the TLS port gets 400.
+
+**Handshake:**
+- a default server with `ssl_reject_handshake on` fails the handshake for any SNI other than the hostname, or no SNI;
+- a request whose Host names another server gets 421;
+- TLS 1.2 and 1.3 only; session tickets off.
+
+**Certificate:** `ssl_certificate` is the fullchain and `ssl_certificate_key` the key, both explicit paths. Render never reads the key.
+- The public listener applies the same routes, auth, limits and privacy rules as the loopback mode. All 17 loopback tests still pass, and the TLS suite repeats the key ones over TLS.
+
+**What the synthetic TLS tests prove:** Nginx serves the configured chain and completes trusted handshakes for the hostname. It rejects wrong or missing SNI, TLS ≤ 1.1, untrusted clients and plain HTTP. A negative control shows that removing the rejecting default server lets a wrong name be served.
+
+**What they do not prove:** publicly trusted issuance, the Let's Encrypt chain, DNS-01, or the real hostname's reachability.
+
+**Certificate provisioning (not done here):** the selected candidate is Certbot manual DNS-01 for `models.a-list.com`. The operator adds and removes only the `_acme-challenge.models` TXT record. Its blockers are on the Infra page: no installed ACME client, and no existing account verified. Creating a task-scoped ACME account is a separate authority. The certificate key and ACME account stay in the approved protected location and are never relayed. Manual certificates do not auto-renew; that is acceptable for the 2-hour test.
+
+**Operator sequence for TLS mode** (on the admitted VM; not executed here):
+
+```bash
+R=/run/rose-edge
+install -d -m 700 $R $R/conf $R/client_body $R/proxy $R/fastcgi $R/uwsgi $R/scgi $R/tls
+# fullchain.pem and privkey.pem are placed in $R/tls by the approved provisioning route (0600 key).
+python3 workspace/models/serving/https/render_proxy.py check-tls --fullchain $R/tls/fullchain.pem --key $R/tls/privkey.pem
+python3 workspace/models/serving/https/render_proxy.py render --front tls --out-dir $R/conf --runtime-dir $R \
+  --fullchain $R/tls/fullchain.pem --key $R/tls/privkey.pem
+python3 workspace/models/serving/https/render_proxy.py token-map --token-file "$TOKEN_FILE" --out $R/token.map
+nginx -t -p $R -c $R/conf/nginx.conf
+nginx -p $R -c $R/conf/nginx.conf
+```
+
+Nginx binds :443, which needs root or `CAP_NET_BIND_SERVICE` for the master process.
+
+**Readiness:**
+- `curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}' -H @$R/auth.hdr https://models.a-list.com/v1/models` → `200 0`, using the system trust store and no `-k`;
+- the same without the header → 401;
+- `openssl s_client -connect <ip>:443 -servername other.example` → handshake failure.
+
+**Stop:** `nginx -s quit -p $R -c $R/conf/nginx.conf`. **Cleanup:** `rm -rf $R`, which removes the key, token map and temp files. It makes no physical-erasure claim.
 
 ## Pins and provenance
 
