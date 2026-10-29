@@ -28,6 +28,9 @@ public final class HostTest {
         backgroundDuringFirstRequestCancelsTurn();
         backgroundAfterLaunchParksThenContinueFinishes();
         lastMomentCheckRefusesLaunchWhenBackgroundedBeforeDispatch();
+        repeatedBackgroundContinueKeepsOneLaunchAndOneRequest();
+        stopBetweenProposalAndDispatchOpensNothing();
+        launcherExceptionIsReportedFailed();
         lockedPhoneIsReportedNotLaunched();
         httpAndTransportFailuresEndTurn();
         destroyReleasesAgentAndIgnoresLateReplies();
@@ -113,6 +116,7 @@ public final class HostTest {
         final List<AppAllowlist.Launchable> installed = new ArrayList<>();
         final List<String> started = new ArrayList<>();
         boolean locked;
+        RuntimeException startFailure;
 
         public List<AppAllowlist.Launchable> launcherActivities() {
             return installed;
@@ -123,6 +127,9 @@ public final class HostTest {
         }
 
         public void startExplicit(AppAllowlist.Launchable t) {
+            if (startFailure != null) {
+                throw startFailure;
+            }
             started.add(t.packageName + "/" + t.activityName);
         }
     }
@@ -286,6 +293,65 @@ public final class HostTest {
         check(r.platform.started.isEmpty(), "no Intent once the activity left the foreground");
         check(!r.view.results.isEmpty() && r.view.results.get(0).status == LaunchResult.Status.CANCELLED,
                 "reported cancelled: " + r.view.results);
+    }
+
+    /**
+     * Host duties across repeated background/Continue: each Continue cancels nothing it should not,
+     * at most one request is open, and the app is launched once. How many re-requests a turn may
+     * make is Core's rule (local-agent-v1); this test does not set it.
+     */
+    static void repeatedBackgroundContinueKeepsOneLaunchAndOneRequest() {
+        Rig r = new Rig();
+        r.host.send("open calculator");
+        r.client.reply(0, openApp("calculator"));
+        for (int i = 0; i < 3; i++) {
+            r.host.onBackground();
+            check(r.client.cancels == r.client.bodies.size() - 1, "background cancelled the open request, cycle " + i);
+            r.host.onForeground();
+            r.host.continueTurn();
+        }
+        check(r.platform.started.size() == 1, "one launch across background/Continue cycles");
+        int last = r.client.bodies.size() - 1;
+        r.client.reply(last, finalText("Opening was requested."));
+        check(!r.host.hasActiveTurn() && r.view.transcript.get(r.view.transcript.size() - 1)
+                .equals("rose: Opening was requested."), "latest request answers the turn");
+    }
+
+    static void stopBetweenProposalAndDispatchOpensNothing() {
+        final LocalAgentHost[] holder = new LocalAgentHost[1];
+        View v = new View() {
+            @Override
+            public void setStatus(String s) {
+                super.setStatus(s);
+                if (s.startsWith("The model asked to open")) {
+                    holder[0].stop(); // Stop between proposal and dispatch
+                }
+            }
+        };
+        Rig r = new Rig(v);
+        holder[0] = r.host;
+        r.host.send("open calculator");
+        r.client.reply(0, openApp("calculator"));
+        check(r.platform.started.isEmpty(), "no Intent after Stop");
+        check(r.view.results.size() == 1 && r.view.results.get(0).status == LaunchResult.Status.CANCELLED,
+                "one cancelled receipt: " + r.view.results);
+        check(r.host.rejectedCount() == 0, "agent accepted the after-Stop receipt");
+        check(!r.host.hasActiveTurn() && r.client.bodies.size() == 1, "turn ended, no further request");
+        int stopped = r.view.statuses.indexOf("Stopped. An app that was already opened stays open.");
+        check(stopped >= 0 && !r.view.statuses.subList(stopped, r.view.statuses.size()).contains("Opening the app…"),
+                "no 'Opening' status after Stop: " + r.view.statuses);
+        check(r.view.status().equals("Stopped. No app was opened (cancelled)."), "truthful after-Stop receipt: " + r.view.status());
+    }
+
+    static void launcherExceptionIsReportedFailed() {
+        Rig r = new Rig();
+        r.platform.startFailure = new SecurityException("denied");
+        r.host.send("open calculator");
+        r.client.reply(0, openApp("calculator"));
+        check(r.view.results.size() == 1 && r.view.results.get(0).status == LaunchResult.Status.FAILED,
+                "platform exception shown as failed: " + r.view.results);
+        List<String> sent = r.messages(1);
+        check(sent.get(sent.size() - 1).contains("\"status\":\"failed\""), "model told failed: " + sent);
     }
 
     static void lockedPhoneIsReportedNotLaunched() {

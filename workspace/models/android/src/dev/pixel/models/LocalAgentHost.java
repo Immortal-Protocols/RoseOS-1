@@ -144,7 +144,7 @@ public final class LocalAgentHost {
                             Json.string(out, "action_id"), Json.string(out, "app_id"));
                     break;
                 case "render":
-                    render(Json.object(out.get("event")));
+                    render(Json.string(out, "turn_id"), Json.object(out.get("event")));
                     break;
                 case "turn_ended":
                     ended(Json.string(out, "turn_id"), Json.string(out, "outcome"),
@@ -203,10 +203,15 @@ public final class LocalAgentHost {
                 + ",\"action_id\":" + Json.quote(actionId) + ",\"status\":" + Json.quote(result.status.wire) + "}");
     }
 
-    private void render(Map<String, Object> event) {
+    private void render(String turnId, Map<String, Object> event) {
         String kind = Json.string(event, "kind");
         switch (kind) {
             case "status": {
+                if (!turnId.equals(currentTurn)) {
+                    // Left over from a step whose turn has since ended (Stop pressed while its
+                    // outputs were being carried out); showing it would contradict "Stopped".
+                    break;
+                }
                 String state = Json.string(event, "state");
                 parked = "parked".equals(state);
                 if ("thinking".equals(state)) {
@@ -228,7 +233,10 @@ public final class LocalAgentHost {
                 break;
             case "tool_result":
                 if (Boolean.TRUE.equals(event.get("after_stop"))) {
-                    view.setStatus("Stopped. The app was requested before Stop and stays open.");
+                    String status = Json.string(event, "status");
+                    view.setStatus(LaunchResult.Status.LAUNCH_REQUESTED.wire.equals(status)
+                            ? "Stopped. The app was requested before Stop and stays open."
+                            : "Stopped. No app was opened (" + status + ").");
                 }
                 break;
             default:
