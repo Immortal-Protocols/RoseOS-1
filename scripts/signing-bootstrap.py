@@ -24,15 +24,20 @@ performed. Secret material never enters argv, logs, environment, the receipt, th
 Transient files live in an owner-only directory (RAM-backed when /dev/shm is writable) that is overwritten and removed;
 this is best effort, not guaranteed erasure.
 
-The production executor does not generate keys: generation needs the approved recipe and tool identities, which are
-not checked in, so readiness blocks first. Tests use a mock executor only.
+Generation (OCT29-INFRA-S006) runs a reviewed closed-vocabulary recipe (profile generation.recipe) through one mockable
+process boundary with fixed argv and a minimal environment, then packs exactly the inventory files as <device>/<file>
+into a deterministic keys.tar.gz. Private keys must be encrypted (PKCS#8 DER EncryptedPrivateKeyInfo, encrypted PEM
+avb.pem) as scripts/host-decrypt-keys.py expects. The checked-in fold recipe is null and its installed tool identities
+are unmeasured, so readiness blocks before any process starts. Tests use mock executors and runners only.
 """
 import argparse
 import base64
 import contextlib
 from datetime import datetime, timedelta, timezone
 import fcntl
+import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -112,14 +117,16 @@ def readiness(name, profiles, now):
         reasons.append(('profile-signer', 'signer must be a service-account email'))
     inventory = profile.get('keyInventory', {})
     if inventory.get('complete') is not True:
-        reasons.append(('inventory-incomplete', inventory.get('missing', 'key inventory not established')))
+        missing = inventory.get('missing') or ['key inventory not established']
+        reasons.append(('inventory-incomplete', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing)))
     for tool, identity in sorted(profile.get('tools', {}).items()):
-        path, digest = identity.get('path'), identity.get('sha256')
-        if not (isinstance(path, str) and path.startswith('/') and '..' not in PurePosixPath(path).parts
-                and isinstance(digest, str) and HEX64.fullmatch(digest)):
-            reasons.append(('tool-unapproved', f'{tool}: no approved path and sha256 ({identity.get("provenance")})'))
+        installed = identity.get('installed') or {}
+        if not approved_path(installed.get('path')) or not HEX64.fullmatch(str(installed.get('sha256'))):
+            reasons.append(('tool-unapproved', f'{tool}: no measured installed path and sha256 ({identity.get("requiredObservation")})'))
     if not profile.get('tools'):
         reasons.append(('tool-unapproved', 'no tool identities'))
+    reasons += [('recipe-missing' if code == 'missing' else 'recipe-invalid', detail)
+        for code, detail in recipe_problems(profile)]
     access = profile.get('access', {})
     margin = timedelta(seconds=access.get('minimumRemainingSeconds', 1800))
     for key in ('addVersionExpires', 'accessorExpires'):
@@ -129,6 +136,113 @@ def readiness(name, profiles, now):
         except (KeyError, TypeError, ValueError):
             reasons.append(('access-unknown', f'{key} is missing or malformed'))
     return reasons
+
+
+def approved_path(path):
+    return isinstance(path, str) and path.startswith('/') and '..' not in PurePosixPath(path).parts and '\0' not in path
+
+
+# Closed recipe vocabulary for generate_keys. A step names an approved tool and a list of arguments; each argument is
+# exactly one placeholder or a plain literal. Nothing else (no shell, path, environment or command text) is accepted.
+LITERAL = re.compile(r'[A-Za-z0-9_.,:=+@-][A-Za-z0-9_.,:=+@-]{0,127}')
+SUBJECT = re.compile(r'(/[A-Za-z]{1,3}=[A-Za-z0-9 ._-]{1,64}){1,8}')
+STEP_KEYS = {'tool', 'args', 'produces', 'stdin'}
+
+
+def recipe_problems(profile):
+    """Pure validation of profile.generation.recipe. Returns [(code, detail)]: ('missing', ...) or ('invalid', ...)."""
+    recipe = (profile.get('generation') or {}).get('recipe')
+    if recipe is None:
+        return [('missing', 'no reviewed generation recipe: ' + str((profile.get('generation') or {}).get('note', '')))]
+    inventory = profile.get('keyInventory', {})
+    allowed = set(inventory.get('requiredByConsumer', [])) | set(inventory.get('optionalByConsumer', []))
+    if not isinstance(recipe, list) or not recipe:
+        return [('invalid', 'recipe must be a non-empty list of steps')]
+    problems, produced = [], []
+    for index, step in enumerate(recipe):
+        if not isinstance(step, dict) or set(step) - STEP_KEYS or not {'tool', 'args', 'produces'} <= set(step):
+            problems.append(('invalid', f'step {index}: only tool, args, produces and stdin are accepted'))
+            continue
+        if step['tool'] not in profile.get('tools', {}):
+            problems.append(('invalid', f'step {index}: tool {step["tool"]!r} is not a profile tool'))
+        if step.get('stdin', 'none') not in ('none', 'passphrase'):
+            problems.append(('invalid', f'step {index}: stdin must be none or passphrase'))
+        for arg in step['args'] if isinstance(step['args'], list) else [None]:
+            if not (isinstance(arg, str) and (arg in ('{out}', '{passphrase_file}', '{subject}')
+                    or (arg.startswith('{out}/') and arg[6:] in allowed | {Path(f).stem for f in allowed})
+                    or (LITERAL.fullmatch(arg) and '..' not in arg))):
+                problems.append(('invalid', f'step {index}: argument {str(arg)[:40]!r} is not a placeholder or plain literal'))
+        if not isinstance(step['produces'], list) or not set(step['produces']) <= allowed:
+            problems.append(('invalid', f'step {index}: produces must name inventory files'))
+        else:
+            produced += step['produces']
+    if len(produced) != len(set(produced)):
+        problems.append(('invalid', 'a file is produced by more than one step'))
+    missing = sorted(set(inventory.get('requiredByConsumer', [])) - set(produced))
+    if missing:
+        problems.append(('invalid', f'recipe does not produce {missing}'))
+    if any('{subject}' in (step.get('args') or []) for step in recipe if isinstance(step, dict)) and \
+            not SUBJECT.fullmatch(str((profile.get('generation') or {}).get('subject'))):
+        problems.append(('invalid', 'generation.subject must be a plain /K=value certificate subject'))
+    return problems
+
+
+def generate_keys(workspace, profile, runner, token=None):
+    """Run the reviewed recipe inside the owner-only workspace and leave exactly keys.tar.gz and passphrase.
+
+    runner(tool_path, argv, cwd, stdin_path) returns an exit status; it is the only process boundary and is mocked in
+    tests. Tool output is never captured into logs or the receipt."""
+    problems = recipe_problems(profile)
+    if problems:
+        raise Blocked('recipe-missing' if problems[0][0] == 'missing' else 'recipe-invalid', problems[0][1])
+    workspace = Path(workspace)
+    passphrase = workspace/'passphrase'
+    fd = os.open(passphrase, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write((token or base64.urlsafe_b64encode(os.urandom(36)).decode()) + '\n')
+    out = workspace/'out'
+    out.mkdir(mode=0o700)
+    expected = []
+    values = {'{out}': str(out), '{passphrase_file}': str(passphrase), '{subject}': str((profile.get('generation') or {}).get('subject'))}
+    for index, step in enumerate(profile['generation']['recipe']):
+        tool = profile['tools'][step['tool']]['installed']['path']
+        argv = [values.get(a, str(out/a[6:]) if a.startswith('{out}/') else a) for a in step['args']]
+        status = runner(tool, argv, str(out), str(passphrase) if step.get('stdin') == 'passphrase' else None)
+        if status != 0:
+            raise Blocked('generator-failed', f'step {index} ({step["tool"]}) exited {status}')
+        expected += step['produces']
+    names = sorted(os.listdir(out))
+    if names != sorted(expected):
+        raise Blocked('unexpected-output', f'generator wrote {names[:16]}, expected {sorted(expected)}')
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode='wb', mtime=0) as gz, tarfile.open(fileobj=gz, mode='w', format=tarfile.PAX_FORMAT) as tar:
+        for name in names:
+            info = os.lstat(out/name)
+            if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+                raise Blocked('unexpected-output', f'{name} is not a non-empty regular file')
+            member = tarfile.TarInfo(f'{profile["device"]}/{name}')
+            member.size, member.mode, member.mtime = info.st_size, 0o600, 0
+            with open(out/name, 'rb') as f:
+                tar.addfile(member, f)
+    for name in names:
+        with contextlib.suppress(OSError):
+            (out/name).write_bytes(b'\0' * (out/name).stat().st_size)
+        (out/name).unlink()
+    out.rmdir()
+    fd = os.open(workspace/'keys.tar.gz', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(buffer.getvalue())
+
+
+def subprocess_runner(tool, argv, cwd, stdin_path, timeout=900):
+    """Production process boundary: fixed argv, minimal environment, no output captured into logs."""
+    env = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'HOME': cwd}
+    with (open(stdin_path, 'rb') if stdin_path else open(os.devnull, 'rb')) as stdin:
+        try:
+            return subprocess.run([tool, *argv], cwd=cwd, env=env, stdin=stdin, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=timeout).returncode
+        except subprocess.TimeoutExpired:
+            return 'timeout'
 
 
 def guard(env, profiles, now):
@@ -162,6 +276,16 @@ def certificate_sha256(pem):
     return hashlib.sha256(base64.b64decode(''.join(body.split()), validate=True)).hexdigest()
 
 
+def encrypted_pkcs8_der(data):
+    """EncryptedPrivateKeyInfo is SEQUENCE { SEQUENCE algorithm, OCTET STRING }; a plain PrivateKeyInfo starts with
+    INTEGER version. scripts/host-decrypt-keys.py requires the encrypted form (openssl pkcs8 -inform DER -passin)."""
+    if len(data) < 4 or data[0] != 0x30:
+        return False
+    length = data[1]
+    offset = 2 + (length & 0x7f if length & 0x80 else 0)
+    return len(data) > offset and data[offset] == 0x30
+
+
 def inspect_archive(path, profile):
     """Validate the archive without extracting it and return its public identity. Private members are never read."""
     inventory = profile['keyInventory']
@@ -186,6 +310,8 @@ def inspect_archive(path, profile):
             if len(dirs) != 1:
                 raise Blocked('archive-unsafe', 'key files must share one directory')
             base = PurePosixPath(dirs.pop())
+            if str(base) != profile.get('device'):
+                raise Blocked('archive-unsafe', f'key directory {str(base)[:40]!r} is not the profile device')
             present = {PurePosixPath(n).name for n in files}
             missing = sorted(set(inventory['requiredByConsumer']) - present)
             extra = sorted(present - allowed)
@@ -195,8 +321,15 @@ def inspect_archive(path, profile):
             def read(name):
                 with tar.extractfile(files[str(base/name)]) as f:
                     return f.read(1 << 20)
+            for name in sorted(present):
+                if name.endswith('.pk8') and not encrypted_pkcs8_der(read(name)):
+                    raise Blocked('archive-unencrypted', f'{name} is not an encrypted PKCS#8 DER key')
+            if b'-----BEGIN ENCRYPTED PRIVATE KEY-----' not in read('avb.pem'):
+                raise Blocked('archive-unencrypted', 'avb.pem is not an encrypted PEM private key')
             cert = certificate_sha256(read('releasekey.x509.pem').decode('ascii'))
             avb = hashlib.sha256(read('avb_pkmd.bin')).hexdigest()
+    except Blocked:
+        raise
     except (tarfile.TarError, OSError, EOFError, UnicodeDecodeError, ValueError, IndexError) as error:
         raise Blocked('archive-unsafe', f'archive cannot be validated ({type(error).__name__})')
     return {'otaCertificateSha256': cert, 'avbPublicKeySha256': avb, 'members': sorted(present)}
@@ -284,10 +417,11 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
 
 def _locked(name, profile, executor, journal, receipt, private, stop, workspace, frankel):
     for tool, identity in sorted(profile['tools'].items()):
-        observed = executor.tool_sha256(identity['path'])
-        if observed != identity['sha256']:
-            return stop('tool-identity', f'{tool} sha256 {observed} is not the approved {identity["sha256"]}')
-        receipt['tools'][tool] = {'sha256': observed, 'provenance': identity.get('provenance')}
+        installed = identity['installed']
+        observed = executor.tool_sha256(installed['path'])
+        if observed != installed['sha256']:
+            return stop('tool-identity', f'{tool} sha256 {observed} is not the measured {installed["sha256"]}')
+        receipt['tools'][tool] = {'installedSha256': observed, 'source': identity.get('source')}
     project = profile['project']
     for role, secret in sorted(profile['secrets'].items()):
         try:
@@ -391,7 +525,7 @@ def _recovery(receipt, journal, name, stop, detail):
 
 
 class GcloudExecutor:
-    """Production executor with the job's signer login. Metadata and add only; generation is not implemented."""
+    """Production executor with the job's signer login: tool measurement, metadata, the recipe and version adds."""
 
     def __init__(self, gcloud='gcloud', timeout=120):
         self.gcloud, self.timeout = gcloud, timeout
@@ -419,7 +553,7 @@ class GcloudExecutor:
         return {'exists': True, 'versions': [str(v.get('name', '')).rsplit('/', 1)[-1] for v in versions or []]}
 
     def generate(self, workspace, profile):
-        raise Blocked('generator-not-implemented', 'no approved generation recipe is bound in source')
+        generate_keys(workspace, profile, subprocess_runner)
 
     def add_version(self, project, secret, file):
         try:
@@ -445,7 +579,11 @@ def plan(name, profiles):
             for s in secrets.values() for op in METADATA_OPERATIONS],
         'add': [dict(ADD_OPERATION, operation=ADD_OPERATION['operation'].format(secret=s, project=profile.get('project'),
             file='<workspace file>')) for s in secrets.values()],
-        'readiness': [{'code': c, 'detail': d} for c, d in readiness(name, profiles, datetime.now(timezone.utc))]}
+        'readiness': [{'code': c, 'detail': d} for c, d in readiness(name, profiles, datetime.now(timezone.utc))],
+        # Installed identities are host facts: source identity is not an installed executable hash.
+        'laterHostPreflight': [{'tool': t, 'kind': i.get('kind'), 'source': i.get('source'), 'observe': i.get('requiredObservation')}
+            for t, i in sorted(profile.get('tools', {}).items()) if not (i.get('installed') or {}).get('sha256')],
+        'missingSources': (profile.get('keyInventory') or {}).get('missing')}
 
 
 def main(argv=None, env=None):

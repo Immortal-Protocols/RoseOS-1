@@ -25,38 +25,194 @@
           "scripts/host_secrets.py": "0fda56cc6f940ba89b892cd64ab76e7a36bb8d100d64102726069cb0142dfb03",
           "scripts/host-decrypt-keys.py": "a022b8255a0372429c7f51b6670a46c28e707061c490bdf57b364b5bacc1432c"
         },
-        "publicIdentityFiles": ["releasekey.x509.pem", "avb_pkmd.bin"]
+        "publicIdentityFiles": [
+          "releasekey.x509.pem",
+          "avb_pkmd.bin"
+        ]
       },
       "keyInventory": {
         "complete": false,
-        "requiredByConsumer": ["releasekey.pk8", "releasekey.x509.pem", "bluetooth.pk8", "bluetooth.x509.pem", "avb.pem", "avb_pkmd.bin"],
-        "optionalByConsumer": ["id_ed25519"],
-        "basis": "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): $KEY_DIR/releasekey, $KEY_DIR/bluetooth, avb.pem, avb_pkmd.bin, optional id_ed25519, AVB_ALGORITHM=SHA256_RSA4096 for rango",
-        "missing": "the default certificate set that sign_target_files_apks -d $KEY_DIR expects (build/make b0f697df8cc9519408ca0a404e918cd51bde0735 releasetools) and the key algorithm of each certificate are not established from checked-in source; nothing is guessed"
+        "requiredByConsumer": [
+          "releasekey.pk8",
+          "releasekey.x509.pem",
+          "platform.pk8",
+          "platform.x509.pem",
+          "bluetooth.pk8",
+          "bluetooth.x509.pem",
+          "avb.pem",
+          "avb_pkmd.bin"
+        ],
+        "optionalByConsumer": [
+          "id_ed25519"
+        ],
+        "roles": [
+          {
+            "role": "releasekey",
+            "files": [
+              "releasekey.pk8",
+              "releasekey.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, encrypted (decrypted by scripts/host-decrypt-keys.py: openssl pkcs8 -inform DER -passin file:)",
+              "X.509 PEM"
+            ],
+            "algorithm": null,
+            "evidence": [
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --extra_apks ...=$KEY_DIR/releasekey (APKs and APEX containers); host_secrets.check_public_pins pins releasekey.x509.pem as the OTA certificate",
+              "adevtool 17df3b79a73e67ad68387b35c7d41c85e1d8103c (supported read, OCT29-INFRA-S006): src/build/soong.ts RESIGN_WITH_RELEASEKEY_CERT -> default_dev_cert (git blob f05513022f715cf71ef5f8f11f7e49f6bb4e99ab)"
+            ]
+          },
+          {
+            "role": "platform",
+            "files": [
+              "platform.pk8",
+              "platform.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, encrypted",
+              "X.509 PEM"
+            ],
+            "algorithm": null,
+            "evidence": [
+              "adevtool 17df3b79a73e67ad68387b35c7d41c85e1d8103c (supported read, OCT29-INFRA-S006): src/build/soong.ts RESIGN_WITH_PLATFORM_CERT -> certificate: 'platform' for generated vendor APKs whose stock signer equals framework-res.apk (src/frontend/generate.ts updatePresigned, git blob 529ada1ed833310e22b97d22bea0eab23f3bf66e); resolved through sign_target_files_apks -d $KEY_DIR"
+            ]
+          },
+          {
+            "role": "bluetooth",
+            "files": [
+              "bluetooth.pk8",
+              "bluetooth.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, encrypted",
+              "X.509 PEM"
+            ],
+            "algorithm": null,
+            "evidence": [
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --extra_apks Bluetooth.apk=$KEY_DIR/bluetooth"
+            ]
+          },
+          {
+            "role": "avb",
+            "files": [
+              "avb.pem"
+            ],
+            "formats": [
+              "PEM private key, encrypted (rewritten unencrypted by scripts/host-decrypt-keys.py: openssl pkcs8 -topk8 -nocrypt)"
+            ],
+            "algorithm": "SHA256_RSA4096 (RSA-4096)",
+            "evidence": [
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --avb_vbmeta_key $KEY_DIR/avb.pem --avb_vbmeta_algorithm SHA256_RSA4096 and --extra_apex_payload_key ...=$KEY_DIR/avb.pem for rango"
+            ]
+          },
+          {
+            "role": "avb-public",
+            "files": [
+              "avb_pkmd.bin"
+            ],
+            "formats": [
+              "AVB public key metadata of avb.pem"
+            ],
+            "algorithm": "derived from avb.pem",
+            "evidence": [
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): AVB_PKMD=$KEY_DIR/avb_pkmd.bin; host_secrets.check_public_pins pins its sha256 as the AVB public key"
+            ]
+          },
+          {
+            "role": "factory-signing",
+            "files": [
+              "id_ed25519"
+            ],
+            "formats": [
+              "OpenSSH private key"
+            ],
+            "algorithm": "ed25519 (by file name and ssh-keygen -Y sign use only)",
+            "optional": true,
+            "evidence": [
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): if [[ -f $KEY_DIR/id_ed25519 ]]; then ssh-keygen -Y sign -n \"factory images\" ..."
+            ]
+          }
+        ],
+        "missing": [
+          {
+            "fact": "the complete default certificate set that sign_target_files_apks -d $KEY_DIR maps (beyond releasekey and platform) and each certificate's key algorithm",
+            "source": "build/make tools/releasetools/sign_target_files_apks.py",
+            "project": "platform_build (path build/make)",
+            "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+            "owner": "GrapheneOS (remote grapheneos)",
+            "admitted": false
+          },
+          {
+            "fact": "the key generation recipe (per-role generator, parameters, encryption and avb_pkmd.bin derivation)",
+            "source": "the generation recipe source (candidate, unverified: development/tools/make_key and a GrapheneOS key encryption helper in script/)",
+            "project": "platform_development (path development) 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b; script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+            "owner": "GrapheneOS (remote grapheneos)",
+            "admitted": false
+          }
+        ]
       },
-      "avbAlgorithm": "SHA256_RSA4096",
       "tools": {
         "generator": {
-          "path": null,
-          "sha256": null,
-          "provenance": "approved key generation recipe (owner-selected existing signing pattern); not checked in"
+          "kind": "source-script",
+          "source": {
+            "path": "development/tools/make_key",
+            "project": "platform_development",
+            "revision": "4089e8b6cfe6cc088006fcc7ad34ba1132356a1b",
+            "pathVerified": false
+          },
+          "sourceSha256": null,
+          "installed": {
+            "path": null,
+            "sha256": null
+          },
+          "requiredObservation": "source bytes not admitted; installed path and sha256 measured on the builder by a later host preflight"
         },
         "decrypt-keys": {
-          "path": null,
-          "sha256": null,
-          "provenance": "script/decrypt-keys at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (referenced by generate-release.sh); bytes not checked in"
+          "kind": "source-script",
+          "source": {
+            "path": "script/decrypt-keys",
+            "project": "script",
+            "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+            "pathVerified": true
+          },
+          "sourceSha256": null,
+          "installed": {
+            "path": null,
+            "sha256": null
+          },
+          "requiredObservation": "referenced by generate-release.sh; replaced at signing by scripts/host-decrypt-keys.py (sha256 a022b8255a0372429c7f51b6670a46c28e707061c490bdf57b364b5bacc1432c); installed path and sha256 measured on the builder"
         },
         "avbtool": {
-          "path": null,
-          "sha256": null,
-          "provenance": "external/avb/avbtool.py at ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee; bytes not checked in"
+          "kind": "source-script",
+          "source": {
+            "path": "external/avb/avbtool.py",
+            "project": "platform/external/avb",
+            "revision": "ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee",
+            "pathVerified": false
+          },
+          "sourceSha256": null,
+          "installed": {
+            "path": null,
+            "sha256": null
+          },
+          "requiredObservation": "source bytes not admitted; installed path and sha256 measured on the builder"
         },
         "openssl": {
-          "path": null,
-          "sha256": null,
-          "provenance": "builder host openssl used by scripts/host-decrypt-keys.py; identity not recorded"
+          "kind": "host-binary",
+          "source": null,
+          "sourceSha256": null,
+          "installed": {
+            "path": null,
+            "sha256": null
+          },
+          "requiredObservation": "builder host openssl used by scripts/host-decrypt-keys.py; installed path and sha256 measured on the builder"
         }
-      }
+      },
+      "generation": {
+        "recipe": null,
+        "note": "Closed-vocabulary steps run by scripts/signing-bootstrap.py generate_keys; null until the generation recipe source is admitted and reviewed. Nothing is guessed."
+      },
+      "avbAlgorithm": "SHA256_RSA4096"
     },
     "models-v0": {
       "status": "unbound",

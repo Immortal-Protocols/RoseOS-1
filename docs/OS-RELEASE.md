@@ -1199,10 +1199,17 @@ transient directory, checks the exact outputs and the archive's public identity,
 two adds are not atomic: committed version ids are journaled under `~/rose-signing-bootstrap`, and an uncertain or
 partial import is `recovery-needed`, never complete or retried. Only the public receipt is uploaded.
 
-Current state: `fold-rango-v1` is resource-bound but blocked. Its key inventory is incomplete (the `-d $KEY_DIR`
-default certificate set is not established from checked-in source), and its generator, decrypt-keys, avbtool and
-openssl identities are unapproved. The production executor implements no generation. `models-v0` is unbound until its
-own secret resources, signer access, algorithm and package identity are supplied. The collision check needs
-`secretmanager.secrets.get` and `secretmanager.versions.list` on both secrets. The add-only and accessor grants do not
-include them, so metadata stays unavailable and the run stops. `python3 scripts/signing-bootstrap.py plan --profile
-fold-rango-v1` prints the exact operations. A merged workflow is not an admitted key operation.
+Current state (OCT29-INFRA-S006): `fold-rango-v1` is resource-bound but blocked.
+- **Key inventory.** Its roles and evidence are recorded: releasekey, platform (pinned adevtool `17df3b79`
+  `soong.ts`), bluetooth, avb.pem with SHA256_RSA4096, avb_pkmd.bin and optional id_ed25519. The inventory stays
+  incomplete until the `-d $KEY_DIR` default set in build/make `b0f697df` releasetools is admitted.
+- **Generation.** The generator adapter runs a reviewed, closed-vocabulary `generation.recipe` through one process
+  boundary and packs exactly the inventory as `rango/<file>`. Private keys must be encrypted. The recipe is null
+  until its source is admitted.
+- **Tool identities.** Each tool records its source identity separately from its installed path and sha256. The
+  installed identity is a later builder preflight (`plan` lists it as `laterHostPreflight`). None is measured.
+
+`models-v0` is unbound until its own secret resources, signer access, algorithm and package identity are supplied.
+The collision check needs `secretmanager.secrets.get` and `secretmanager.versions.list` on both secrets. The add-only
+and accessor grants do not include them, so metadata stays unavailable and the run stops. `python3
+scripts/signing-bootstrap.py plan --profile fold-rango-v1` prints the exact operations. A merged workflow is not an admitted key operation.

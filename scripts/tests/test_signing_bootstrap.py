@@ -47,12 +47,35 @@ PASSPHRASE = b'correct horse battery staple synthetic\n'
 FRANKEL = {'otaCertificateSha256': 'f' * 64, 'avbPublicKeySha256': 'e' * 64}
 
 
+# A synthetic recipe in the closed vocabulary; its arguments are placeholders, not a claimed real generator interface.
+SYNTHETIC_RECIPE = [
+    {'tool': 'generator', 'args': ['{out}/releasekey', '{subject}'], 'stdin': 'passphrase', 'produces': ['releasekey.pk8', 'releasekey.x509.pem']},
+    {'tool': 'generator', 'args': ['{out}/platform', '{subject}'], 'stdin': 'passphrase', 'produces': ['platform.pk8', 'platform.x509.pem']},
+    {'tool': 'generator', 'args': ['{out}/bluetooth', '{subject}'], 'stdin': 'passphrase', 'produces': ['bluetooth.pk8', 'bluetooth.x509.pem']},
+    {'tool': 'openssl', 'args': ['synthetic-rsa4096', '{out}/avb.pem', '{passphrase_file}'], 'produces': ['avb.pem']},
+    {'tool': 'avbtool', 'args': ['synthetic-extract', '{out}/avb.pem', '{out}/avb_pkmd.bin'], 'produces': ['avb_pkmd.bin']},
+]
+ENCRYPTED_DER = bytes([0x30, 0x10, 0x30, 0x0e]) + b'synthetic-encrypted'
+ENCRYPTED_PEM = b'-----BEGIN ENCRYPTED PRIVATE KEY-----\nc3ludGhldGlj\n-----END ENCRYPTED PRIVATE KEY-----\n'
+
+
+def key_member(name, seed=b''):
+    if name.endswith('.pk8'):
+        return ENCRYPTED_DER + name.encode() + seed
+    if name == 'avb.pem':
+        return ENCRYPTED_PEM
+    if name.endswith('.x509.pem'):
+        return cert_pem(name.encode() + seed)
+    return b'synthetic ' + name.encode() + seed
+
+
 def ready_profiles():
     profiles = copy.deepcopy(PROFILES)
     fold = profiles['profiles']['fold-rango-v1']
     fold['keyInventory']['complete'] = True
     for name, tool in fold['tools'].items():
-        tool.update(path=f'/opt/synthetic/{name}', sha256=hashlib.sha256(name.encode()).hexdigest())
+        tool['installed'] = {'path': f'/opt/synthetic/{name}', 'sha256': hashlib.sha256(name.encode()).hexdigest()}
+    fold['generation'] = {'recipe': SYNTHETIC_RECIPE, 'subject': '/CN=Synthetic Test Only', 'note': 'synthetic test recipe'}
     fold['access'].update(addVersionExpires='2027-01-01T00:00:00Z', accessorExpires='2027-01-01T00:00:00Z')
     return profiles
 
@@ -68,8 +91,7 @@ def cert_pem(seed):
 
 def archive_bytes(members=None, prefix='rango/'):
     if members is None:
-        members = {name: b'synthetic ' + name.encode() for name in FOLD['keyInventory']['requiredByConsumer']}
-        members['releasekey.x509.pem'] = cert_pem(b'synthetic release')
+        members = {name: key_member(name) for name in FOLD['keyInventory']['requiredByConsumer']}
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
         for name, data in members.items():
@@ -199,7 +221,7 @@ class ZeroSideEffects(unittest.TestCase):
     def test_untrusted_tool_paths_are_not_approved(self):
         for path in ('relative/tool', '/opt/../tmp/tool', None):
             profiles = ready_profiles()
-            profiles['profiles']['fold-rango-v1']['tools']['generator']['path'] = path
+            profiles['profiles']['fold-rango-v1']['tools']['generator']['installed']['path'] = path
             self.assertIn('tool-unapproved', dict(sb.readiness('fold-rango-v1', profiles, NOW)), path)
 
     def test_tool_identity_mismatch_stops_before_metadata(self):
@@ -258,22 +280,25 @@ class Generation(unittest.TestCase):
             info = tarfile.TarInfo(name)
             info.type, info.linkname = kind, '/etc/passwd'
             return info
-        base = {n: b'x' for n in FOLD['keyInventory']['requiredByConsumer']}
-        base['releasekey.x509.pem'] = cert_pem(b'r')
+        base = {n: key_member(n) for n in FOLD['keyInventory']['requiredByConsumer']}
         cases = {
             'absolute': archive_bytes(base, prefix='/abs/'),
             'traversal': archive_bytes(base, prefix='../'),
             'symlink': archive_bytes(dict(base, **{'evil.pk8': link('rango/evil.pk8')})),
             'hardlink': archive_bytes(dict(base, **{'evil': link('rango/evil', tarfile.LNKTYPE)})),
             'missing bluetooth': archive_bytes({k: v for k, v in base.items() if not k.startswith('bluetooth')}),
-            'unexpected member': archive_bytes(dict(base, **{'platform.pk8': b'x'})),
+            'unexpected member': archive_bytes(dict(base, **{'shared.pk8': key_member('shared.pk8')})),
             'nested too deep': archive_bytes(base, prefix='a/b/'),
             'not gzip': b'plain bytes',
             'bad certificate': archive_bytes(dict(base, **{'releasekey.x509.pem': b'no pem'})),
+            'wrong device directory': archive_bytes(base, prefix='frankel/'),
+            'plain pk8': archive_bytes(dict(base, **{'platform.pk8': bytes([0x30, 0x10, 0x02, 0x01, 0x00]) + b'plain'})),
+            'plain avb.pem': archive_bytes(dict(base, **{'avb.pem': b'-----BEGIN PRIVATE KEY-----\nx\n'})),
         }
         for name, data in cases.items():
             with self.subTest(name):
-                code = 'archive-inventory' if name in ('missing bluetooth', 'unexpected member') else 'archive-unsafe'
+                code = {'missing bluetooth': 'archive-inventory', 'unexpected member': 'archive-inventory',
+                    'plain pk8': 'archive-unencrypted', 'plain avb.pem': 'archive-unencrypted'}.get(name, 'archive-unsafe')
                 self.failed(MockExecutor(archive=data), code)
 
     def test_output_projection_and_permissions(self):
@@ -380,8 +405,9 @@ class Production(unittest.TestCase):
         return str(path), tmp
 
     def test_generation_is_not_implemented_and_add_failures_are_uncertain(self):
-        with self.assertRaises(sb.Blocked):
-            sb.GcloudExecutor().generate(Path('/nonexistent'), FOLD)
+        with self.assertRaises(sb.Blocked) as blocked:
+            sb.GcloudExecutor().generate(Path('/nonexistent'), PROFILES['profiles']['fold-rango-v1'])
+        self.assertEqual(blocked.exception.code, 'recipe-missing')  # before any file or process
         gcloud, tmp = self.fake_gcloud('echo "$@" > "$(dirname "$0")/argv"; exit 1\n')
         data = tmp/'passphrase'
         data.write_bytes(PASSPHRASE)
@@ -537,7 +563,7 @@ class MutationControls(unittest.TestCase):
             ("    if inventory.get('complete') is not True:", "    if False:", PROFILES, MockExecutor, 'inventory-incomplete'),
             ("        if state['versions']:", "        if False:", READY,
              lambda: MockExecutor(states={'PIXEL_OS_SIGNING_KEYS_RANGO_V1': {'exists': True, 'versions': ['1']}}), None),
-            ("        if observed != identity['sha256']:", "        if False:", READY, lambda: MockExecutor(tools={'openssl': '0' * 64}), None),
+            ("        if observed != installed['sha256']:", "        if False:", READY, lambda: MockExecutor(tools={'openssl': '0' * 64}), None),
             ("        if len(value) >= 4 and", "        if False and", READY, None, None),
         ]
         # inventory: with the check removed the fold profile still stops on tools, so remove both to show the gate.
@@ -568,6 +594,147 @@ class MutationControls(unittest.TestCase):
         receipt = m.run('fold-rango-v1', READY, MockExecutor(archive=archive), f.state, f.lock, SHA, NOW, workspace=f.workspace,
             frankel=dict(FRANKEL, avbPublicKeySha256=avb))[0]
         self.assertEqual(receipt['status'], 'complete')
+
+
+    def test_encryption_and_recipe_guards_are_load_bearing(self):
+        base = {n: key_member(n) for n in FOLD['keyInventory']['requiredByConsumer']}
+        plain = archive_bytes(dict(base, **{'platform.pk8': bytes([0x30, 0x10, 0x02, 0x01, 0x00]) + b'plain'}))
+        self.assertEqual(self.run_with(sb, MockExecutor(archive=plain))['status'], 'failed')
+        m = self.mutated("                if name.endswith('.pk8') and not encrypted_pkcs8_der(read(name)):", "                if False:")
+        self.assertEqual(self.run_with(m, MockExecutor(archive=plain))['status'], 'complete')
+        profile = copy.deepcopy(FOLD)
+        profile['generation']['recipe'][0]['args'].append('/etc/passwd')
+        self.assertTrue(sb.recipe_problems(profile))
+        m = self.mutated("or (LITERAL.fullmatch(arg) and '..' not in arg)", "or True")
+        self.assertEqual(m.recipe_problems(profile), [])
+
+
+class MockRunner:
+    """Stands in for the process boundary: writes synthetic files for each step's produces list."""
+
+    def __init__(self, fail_step=None, extra=None, skip=None):
+        self.calls, self.fail_step, self.extra, self.skip = [], fail_step, extra, skip
+
+    def __call__(self, tool, argv, cwd, stdin_path):
+        index = len(self.calls)
+        self.calls.append((tool, list(argv), cwd, stdin_path))
+        if index == self.fail_step:
+            return 3
+        step = FOLD['generation']['recipe'][index]
+        for name in step['produces']:
+            if name != self.skip:
+                (Path(cwd)/name).write_bytes(key_member(name, b'gen'))
+        if self.extra and index == 0:
+            (Path(cwd)/self.extra).write_bytes(b'x')
+        return 0
+
+
+class Generator(unittest.TestCase):
+    def workspace(self):
+        path = Path(tempfile.mkdtemp(prefix='gen-'))
+        self.addCleanup(shutil.rmtree, path, True)
+        os.chmod(path, 0o700)
+        return path
+
+    def test_recipe_packs_exact_inventory_deterministically(self):
+        outputs = []
+        for _ in range(2):
+            ws, runner = self.workspace(), MockRunner()
+            sb.generate_keys(ws, FOLD, runner, token='synthetic-token')
+            self.assertEqual(sorted(os.listdir(ws)), ['keys.tar.gz', 'passphrase'])
+            self.assertEqual(oct(os.stat(ws/'keys.tar.gz').st_mode & 0o777), '0o600')
+            identity = sb.inspect_archive(ws/'keys.tar.gz', FOLD)
+            self.assertEqual(identity['members'], sorted(FOLD['keyInventory']['requiredByConsumer']))
+            outputs.append((ws/'keys.tar.gz').read_bytes())
+            # Fixed approved tool paths, the passphrase only as a file path or stdin, never its value in argv.
+            self.assertEqual({c[0] for c in runner.calls}, {FOLD['tools'][s['tool']]['installed']['path'] for s in SYNTHETIC_RECIPE})
+            self.assertTrue(all('synthetic-token' not in ' '.join(c[1]) for c in runner.calls))
+            self.assertEqual([c[3] is not None for c in runner.calls], [True, True, True, False, False])
+            self.assertIn('/CN=Synthetic Test Only', runner.calls[0][1])
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_failed_extra_or_missing_outputs_block(self):
+        for runner, code in ((MockRunner(fail_step=2), 'generator-failed'), (MockRunner(extra='debug.log'), 'unexpected-output'),
+                             (MockRunner(skip='avb_pkmd.bin'), 'unexpected-output')):
+            with self.assertRaises(sb.Blocked) as blocked:
+                sb.generate_keys(self.workspace(), FOLD, runner, token='t')
+            self.assertEqual(blocked.exception.code, code)
+
+    def test_checked_in_fold_recipe_is_missing_and_nothing_runs(self):
+        runner, ws = MockRunner(), self.workspace()
+        with self.assertRaises(sb.Blocked) as blocked:
+            sb.generate_keys(ws, PROFILES['profiles']['fold-rango-v1'], runner)
+        self.assertEqual((blocked.exception.code, runner.calls, os.listdir(ws)), ('recipe-missing', [], []))
+        self.assertIn('recipe-missing', dict(sb.readiness('fold-rango-v1', PROFILES, NOW)))
+
+    def test_recipe_rejects_injection_and_incomplete_steps(self):
+        def problems(change):
+            profile = copy.deepcopy(FOLD)
+            change(profile['generation'])
+            return sb.recipe_problems(profile)
+        self.assertEqual(problems(lambda g: None), [])
+        for name, change in {
+            'absolute path': lambda g: g['recipe'][0]['args'].append('/etc/passwd'),
+            'traversal': lambda g: g['recipe'][0]['args'].append('{out}/../keys'),
+            'shell': lambda g: g['recipe'][0]['args'].append('$(id)'),
+            'separator': lambda g: g['recipe'][0]['args'].append('a;b'),
+            'dotdot literal': lambda g: g['recipe'][0]['args'].append('a..b'),
+            'unknown tool': lambda g: g['recipe'][0].update(tool='bash'),
+            'stdin': lambda g: g['recipe'][0].update(stdin='/dev/tty'),
+            'extra key': lambda g: g['recipe'][0].update(env={'A': 'B'}),
+            'non-inventory output': lambda g: g['recipe'][0]['produces'].append('shared.pk8'),
+            'duplicate output': lambda g: g['recipe'][1]['produces'].append('releasekey.pk8'),
+            'omitted generator step': lambda g: g['recipe'].pop(0),
+            'bad subject': lambda g: g.update(subject='CN=x; rm'),
+            'empty': lambda g: g.update(recipe=[]),
+        }.items():
+            with self.subTest(name):
+                self.assertTrue(problems(change), name)
+        profile = copy.deepcopy(FOLD)
+        profile['generation']['recipe'] = None
+        self.assertEqual([c for c, _ in sb.recipe_problems(profile)], ['missing'])
+
+    def test_end_to_end_with_adapter_and_mock_provider(self):
+        class Provider(MockExecutor):
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                sb.generate_keys(workspace, profile, MockRunner(), token='synthetic-token')
+        f, ex = Fixture(self), Provider()
+        receipt, private = f.run(ex)
+        self.assertEqual(receipt['status'], 'complete', receipt['reasons'])
+        out = sb.public_receipt(receipt, private)
+        self.assertNotIn('synthetic-token', json.dumps(out))
+        self.assertEqual(set(out['tools']), set(FOLD['tools']))
+        self.assertTrue(all(set(v) == {'installedSha256', 'source'} for v in out['tools'].values()))
+
+
+class Inventory(unittest.TestCase):
+    def test_roles_reconcile_with_the_consumer_contract(self):
+        inventory = PROFILES['profiles']['fold-rango-v1']['keyInventory']
+        required = sorted(f for r in inventory['roles'] if not r.get('optional') for f in r['files'])
+        optional = sorted(f for r in inventory['roles'] if r.get('optional') for f in r['files'])
+        self.assertEqual(required, sorted(inventory['requiredByConsumer']))
+        self.assertEqual(optional, inventory['optionalByConsumer'])
+        self.assertTrue(set(PROFILES['profiles']['fold-rango-v1']['archive']['publicIdentityFiles']) <= set(required))
+        self.assertTrue(all(r['evidence'] for r in inventory['roles']))
+        self.assertIn('platform', {r['role'] for r in inventory['roles']})  # pinned adevtool 17df3b79 soong.ts
+        self.assertFalse(inventory['complete'])
+        self.assertEqual({m.get('revision', '')[:8] for m in inventory['missing']} & {'b0f697df'}, {'b0f697df'})
+        self.assertTrue(all(m['admitted'] is False for m in inventory['missing']))
+
+    def test_tool_source_identity_is_not_an_installed_identity(self):
+        for name, tool in PROFILES['profiles']['fold-rango-v1']['tools'].items():
+            self.assertEqual(tool['installed'], {'path': None, 'sha256': None}, name)
+            self.assertIsNone(tool['sourceSha256'], name)
+            self.assertIn(tool['kind'], ('source-script', 'host-binary'), name)
+        plan = sb.plan('fold-rango-v1', PROFILES)
+        self.assertEqual(sorted(t['tool'] for t in plan['laterHostPreflight']), ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
+        self.assertEqual(len(plan['missingSources']), 2)
+
+    def test_models_stays_unbound(self):
+        models = PROFILES['profiles']['models-v0']
+        self.assertEqual(models['status'], 'unbound')
+        self.assertFalse({'secrets', 'project', 'signer', 'tools'} & set(models))
 
 
 if __name__ == '__main__':
