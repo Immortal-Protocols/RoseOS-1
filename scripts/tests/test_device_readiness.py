@@ -362,7 +362,8 @@ class ProbeTest(unittest.TestCase):
             self.assertTrue(0 < fs['availableBytes'] <= fs['totalBytes'] and fs['type'])
             self.assertEqual({p: (r['observed'], r['matches']) for p, r in receipt['pins'].items()},
                 {p: (rev, True) for p, rev in readiness.EXPECTED_PINS.items()})
-            self.assertTrue(receipt['manifest']['equalsPinnedManifest'])
+            self.assertEqual((receipt['manifest']['comparison'], receipt['manifest']['pinnedSha256']),
+                ('match', readiness.sha256_file(ROOT/'os/pinned-manifest.xml')))
             # The pinned public fixture files are recognised by git blob; presence of generated files is not completeness.
             frankel = {r['path']: r for r in receipt['products']['frankel']['files']}
             self.assertTrue(frankel['vendor/adevtool/config/device/frankel.yml']['matchesPinnedFixture'])
@@ -905,6 +906,196 @@ class DeadlineTest(unittest.TestCase):
                 with self.costed({p: cost for p in paths}) as (state, clock):
                     result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
                 self.assertEqual((result['status'], result['entries'], state['now']), ('complete', 3, 3 * cost))
+
+class CapacityMetadataTest(unittest.TestCase):
+    """FAM-CAPACITY-METADATA-S003: fixed bounded metadata only - manifest three-state comparison, qualified physical
+    allocation of the Frankel unpack and generated vendor, strict fs_type markers, the adevtool dependency revision and
+    fixed tool entries, prerequisite directories and fixed Blazer paths. Every source-tree executable in these fixtures
+    is hostile; none may run, and no tool's bytes are read."""
+    HOSTILE = '#!/bin/sh\necho ran >> "{sentinel}"\n'
+
+    def deps(self, f, revision=None, tools=readiness.HOST_TOOLS):
+        bin_dir = f.source/readiness.ADEVTOOL_DEPS/'host/linux-x86/bin'
+        bin_dir.mkdir(parents=True)
+        if revision is not None:
+            (f.source/readiness.ADEVTOOL_DEPS/'adevtool_revision').write_bytes(revision)
+        for tool in tools:
+            (bin_dir/tool).write_text(self.HOSTILE.format(sentinel=f.sentinel))
+            os.chmod(bin_dir/tool, 0o755)
+        return bin_dir
+
+    def test_manifest_comparison_separates_unavailable_from_mismatch(self):
+        with fixture() as f:
+            pinned = readiness.sha256_file(ROOT/'os/pinned-manifest.xml')
+            check = lambda: readiness.manifest_comparison(readiness.file_record(f.source, '.repo/manifest.xml'), pinned)
+            self.assertEqual(check()['comparison'], 'match')
+            manifest = f.source/'.repo/manifest.xml'
+            manifest.write_text('<manifest><include name="default.xml" /></manifest>\n')
+            record = check()
+            self.assertEqual((record['comparison'], record['status'], record['pinnedSha256']), ('mismatch', 'present', pinned))
+            self.assertEqual(record['sha256'], hashlib.sha256(manifest.read_bytes()).hexdigest())
+            manifest.unlink()
+            self.assertEqual((check()['comparison'], check()['status']), ('unavailable', 'missing'))
+            (f.source/'.repo/manifests').mkdir()
+            shutil.copyfile(ROOT/'os/pinned-manifest.xml', f.source/'.repo/manifests/default.xml')
+            os.symlink('manifests/default.xml', manifest)  # a repo-style link to the pinned bytes: still never followed
+            record = check()
+            self.assertEqual((record['comparison'], record['status']), ('unavailable', 'symlink-refused'))
+            self.assertNotIn('sha256', record)
+
+    def unpack(self, f):
+        root = f.source/readiness.FRANKEL_UNPACK
+        (root/'vendor').mkdir(parents=True, exist_ok=True)
+        with open(root/'sparse.img', 'wb') as sparse:
+            sparse.truncate(8 << 20)
+            sparse.seek(4 << 20)
+            sparse.write(b'x')
+        (root/'blob.bin').write_bytes(b'b' * 65536)
+        os.link(root/'blob.bin', root/'vendor/blob-link.bin')
+        return root
+
+    def test_physical_allocation_is_qualified_for_sparse_files_and_hard_links(self):
+        with fixture() as f:
+            root = self.unpack(f)
+            device = os.stat(f.source).st_dev
+            result = readiness.usage(f.source, readiness.FRANKEL_UNPACK, readiness.Deadline(60), physical=True, root_device=device)
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual((result['hardLinkedEntries'], result['uniqueHardLinkedInodes']), (2, 1))
+            self.assertIn('counted once', result['hardLinks'])
+            blob = os.stat(root/'blob.bin').st_blocks * 512
+            sparse = os.stat(root/'sparse.img').st_blocks * 512
+            self.assertLess(sparse, 8 << 20)
+            self.assertGreaterEqual(result['sparseFiles'], 1)
+            self.assertGreater(result['apparentBytes'], result['allocatedBytes'], 'logical size is not physical allocation')
+            self.assertLess(result['allocatedBytes'], blob * 2 + sparse + 16 * 4096, 'the linked inode is counted once')
+            prop = len(f.nested['vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005/vendor/build.prop'])
+            self.assertEqual(result['apparentBytes'], (8 << 20) + 65536 + prop, 'each regular inode once')
+            self.assertEqual(result['mount'], {'device': f'{os.major(device)}:{os.minor(device)}', 'sameDeviceAsSourceRoot': True})
+            other = readiness.usage(f.source, readiness.FRANKEL_UNPACK, readiness.Deadline(60), physical=True, root_device=-1)
+            self.assertFalse(other['mount']['sameDeviceAsSourceRoot'])
+
+    def test_targeted_allocation_caps_skips_and_links_stay_unknown(self):
+        with fixture(usageEntries=3) as f:
+            self.unpack(f)
+            capped = readiness.usage(f.source, readiness.FRANKEL_UNPACK, readiness.Deadline(60), physical=True, root_device=0)
+            self.assertEqual((capped['status'], capped['reason']), ('incomplete', 'entry cap (3)'))
+            for total in ('allocatedBytes', 'apparentBytes', 'mount'):
+                self.assertNotIn(total, capped, 'an incomplete walk is unknown, not a bound')
+            readiness.LIMITS['usageEntries'] = 2_000_000
+            keys = f.source/readiness.FRANKEL_UNPACK/'keys'
+            keys.mkdir()
+            (keys/'releasekey.pk8').write_bytes(b'SYNTHETIC-SENTINEL-NOT-A-KEY\n' * 4096)
+            with watched() as log:
+                skipped = readiness.usage(f.source, readiness.FRANKEL_UNPACK, readiness.Deadline(60), physical=True, root_device=0)
+            self.assertEqual(skipped['skippedDirectories'], 1)
+            self.assertEqual(touched(log, keys), [])
+            shutil.rmtree(f.source/'vendor/google_devices/frankel')
+            os.symlink(f.source/readiness.FRANKEL_UNPACK, f.source/'vendor/google_devices/frankel')
+            self.assertEqual(readiness.usage(f.source, 'vendor/google_devices/frankel', readiness.Deadline(60), physical=True),
+                {'path': 'vendor/google_devices/frankel', 'status': 'refused', 'reason': 'symlink-refused'})
+
+    def test_fs_type_markers_are_bounded_strict_and_never_followed(self):
+        with fixture() as f:
+            root = self.unpack(f)
+            (root/'system.img.fs_type').write_bytes(b'erofs')
+            (root/'vendor.img.fs_type').write_bytes(b'ext4')
+            (root/'product.img.fs_type').write_bytes(b'ext4\n')
+            (root/'odm.img.fs_type').write_bytes(b'xfs')
+            (root/'system_ext.img.fs_type').write_bytes(b'e' * 129)
+            outside = f.tmp/'outside-marker'
+            outside.write_bytes(b'ext4')
+            os.symlink(outside, root/'odm_dlkm.img.fs_type')
+            with watched() as log:
+                markers = readiness.fs_type_markers(f.source)
+            self.assertEqual(markers['system'], {'status': 'present', 'fsType': 'erofs', 'sizeBytes': 5})
+            self.assertEqual(markers['vendor'], {'status': 'present', 'fsType': 'ext4', 'sizeBytes': 4})
+            self.assertEqual(markers['product']['fsType'], 'unknown', 'a newline is not the strict token')
+            self.assertEqual(markers['odm']['fsType'], 'unknown')
+            self.assertEqual(markers['system_ext'], {'status': 'too-large'})
+            self.assertEqual(markers['odm_dlkm'], {'status': 'symlink-refused'})
+            self.assertEqual(markers['system_dlkm'], {'status': 'absent'})
+            self.assertEqual(sorted(markers), sorted(readiness.FS_TYPE_PARTITIONS))
+            self.assertNotIn(os.path.realpath(root/'system_ext.img.fs_type'), log['read'], 'an oversized marker is not read')
+            self.assertEqual(touched(log, outside), [])
+
+    def test_adevtool_revision_compares_exactly_and_tools_are_only_lstat(self):
+        pin = readiness.EXPECTED_PINS['vendor/adevtool']
+        cases = [((pin + '\n').encode(), 'match', None), (pin.encode(), 'mismatch', 'different line ending'),
+                 (('0' * 40 + '\n').encode(), 'mismatch', None), ((pin + '\n\n').encode(), 'mismatch', 'different line ending')]
+        for content, comparison, reason in cases:
+            with fixture() as f:
+                bin_dir = self.deps(f, content)
+                with no_processes() as started, watched() as log:
+                    deps = readiness.adevtool_deps(f.source)
+                self.assertEqual(started, [])
+                self.assertEqual(deps['revision']['comparison'], comparison, content)
+                self.assertEqual(reason is None, 'reason' not in deps['revision'])
+                self.assertEqual(touched(log, bin_dir), [os.path.realpath(bin_dir)], 'only the directory, never a tool')
+                self.assertFalse(f.sentinel.exists())
+        with fixture() as f:
+            bin_dir = self.deps(f, None, tools=[t for t in readiness.HOST_TOOLS if t not in ('lpunpack', 'toybox', 'lz4')])
+            os.chmod(bin_dir/'aapt2', 0o644)
+            os.symlink('/bin/true', bin_dir/'toybox')
+            (bin_dir/'lz4').mkdir()
+            deps = readiness.adevtool_deps(f.source)
+            self.assertEqual(deps['revision'], {'status': 'absent', 'comparison': 'unavailable'})
+            tools = deps['tools']
+            self.assertEqual(sorted(tools), sorted(readiness.HOST_TOOLS))
+            self.assertEqual(tools['simg2img']['status'], 'present')
+            self.assertTrue(tools['simg2img']['executable'])
+            self.assertFalse(tools['aapt2']['executable'])
+            self.assertEqual((tools['lpunpack'], tools['toybox'], tools['lz4']),
+                ({'status': 'absent'}, {'status': 'symlink-not-followed'}, {'status': 'not-regular'}))
+            self.assertIn('usability is not shown', deps['note'])
+        with fixture() as f:
+            self.assertEqual(readiness.adevtool_deps(f.source)['tools']['aapt2']['status'], 'absent')
+
+    def test_prerequisites_and_blazer_paths_are_fixed_presence_only(self):
+        with fixture() as f:
+            node = f.source/'vendor/adevtool/node_modules/.bin'
+            node.mkdir(parents=True)
+            (node/'node').write_text(self.HOSTILE.format(sentinel=f.sentinel))
+            os.chmod(node/'node', 0o755)
+            (f.source/'prebuilts/jdk/jdk21/linux-x86/bin').mkdir(parents=True)
+            os.symlink(f.tmp, f.source/'prebuilts/build-tools')
+            archive = f.source/'vendor/adevtool/dl'/(CONTRACT['devices']['blazer']['vendorInputs']['factoryImage']['file'] + '.tmp')
+            archive.write_bytes(b'partial')
+            with no_processes() as started:
+                prereq = readiness.prerequisites(f.source)
+                paths = readiness.blazer_paths(f.source, readiness.contract_targets(CONTRACT)['blazer'])
+            self.assertEqual(started, [])
+            self.assertFalse(f.sentinel.exists())
+            self.assertEqual(prereq['directories'], {'vendor/adevtool/node_modules': 'present',
+                'prebuilts/build-tools/path/linux-x86': 'symlink-refused', 'prebuilts/jdk/jdk21/linux-x86/bin': 'present'})
+            self.assertEqual((prereq['node']['location'], prereq['node']['version']), ('unknown', 'unknown'))
+            self.assertIn('does not show Node >= 24', prereq['node']['reason'])
+            self.assertEqual({k: v['status'] for k, v in paths.items()}, {'vendorDestination': 'present', 'archive': 'present',
+                'archiveTmp': 'present', 'unpack': 'absent', 'unpackFinalTemp': 'unknown'})
+            shutil.rmtree(f.source/'vendor/google_devices/blazer')
+            os.symlink('../google_devices/frankel', f.source/'vendor/google_devices/blazer')
+            paths = readiness.blazer_paths(f.source, readiness.contract_targets(CONTRACT)['blazer'])
+            self.assertEqual(paths['vendorDestination']['status'], 'symlink-refused')
+            self.assertIsNone(paths['unpackFinalTemp']['path'])
+
+    def test_a_full_run_records_the_capacity_metadata_and_runs_nothing(self):
+        with fixture() as f:
+            self.unpack(f)
+            (f.source/readiness.FRANKEL_UNPACK/'vendor.img.fs_type').write_bytes(b'erofs')
+            self.deps(f, (readiness.EXPECTED_PINS['vendor/adevtool'] + '\n').encode())
+            before = snapshot(f.source)
+            with no_processes() as started:
+                receipt, _ = f.run()
+            self.assertEqual((started, f.sentinel.exists(), snapshot(f.source) == before), ([], False, True))
+            self.assertEqual(receipt['status'], 'partial')
+            capacity = receipt['capacity']
+            self.assertEqual(sorted(capacity['allocation']), ['frankelGeneratedVendor', 'frankelUnpack'])
+            self.assertEqual({v['status'] for v in capacity['allocation'].values()}, {'complete'})
+            self.assertEqual(capacity['fsTypeMarkers']['vendor']['fsType'], 'erofs')
+            self.assertEqual(capacity['reserveFloorBytes'], 322122547200)
+            self.assertIn('not a Blazer bound', capacity['note'])
+            self.assertEqual(receipt['adevtoolDeps']['revision']['comparison'], 'match')
+            self.assertEqual(receipt['manifest']['comparison'], 'match')
+            self.assertEqual(receipt['blazerPaths']['unpackFinalTemp']['status'], 'unknown')
 
 class ProcTest(unittest.TestCase):
     def test_foreign_processes_are_recognised_from_proc(self):

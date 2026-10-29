@@ -72,6 +72,20 @@ LIMITS = {'deadlineSeconds': 900, 'gitSeconds': 30, 'usageSeconds': 45, 'usageEn
 NOT_PROVEN = ['lunch, product configuration or any target variable (not executed)', 'source-tree integrity',
     'completeness of any generated vendor tree or factory download', 'that any target compiles, signs or boots',
     'artifact, signature, runtime or phone acceptance', 'release admission (frankel only, unchanged)']
+# FAM-CAPACITY-METADATA-S003: fixed metadata only, from the selected packet, the pinned device contract and pinned
+# adevtool 17df3b79 src/config/paths.ts (getHostBinPath); nothing here is searched for or executed.
+FRANKEL_UNPACK = 'vendor/adevtool/dl/unpacked/frankel-CP3A.261005.005'
+ALLOCATION = {'frankelUnpack': FRANKEL_UNPACK, 'frankelGeneratedVendor': 'vendor/google_devices/frankel'}
+FS_TYPE_PARTITIONS = ('system', 'system_dlkm', 'system_ext', 'product', 'vendor', 'vendor_dlkm', 'odm', 'odm_dlkm')
+FS_TYPES = {b'ext4': 'ext4', b'erofs': 'erofs'}  # strict exact tokens; any other content (a newline included) is unknown
+MARKER_BYTES = 128
+ADEVTOOL_DEPS = 'out_adevtool_deps'
+# getHostBinPath compares the file with raw `git rev-parse HEAD` stdout, so only the hash plus one newline matches.
+ADEVTOOL_REVISION = EXPECTED_PINS['vendor/adevtool'] + '\n'
+HOST_TOOLS = ('aapt2', 'apksigner', 'aprotoc', 'arsclib', 'debugfs', 'dispol', 'fsck.erofs', 'lpdump', 'lpunpack', 'lz4',
+    'ota_extractor', 'simg2img', 'sqlite3', 'toybox')
+PREREQUISITE_DIRS = ('vendor/adevtool/node_modules', 'prebuilts/build-tools/path/linux-x86', 'prebuilts/jdk/jdk21/linux-x86/bin')
+RESERVE_FLOOR_BYTES = 322122547200  # availableBytes - peakAdditionalAllocation must stay at or above this per filesystem
 SAFE_VALUE = re.compile(r'[A-Za-z0-9_.,:/+=@-]{0,256}')
 SECRETISH = re.compile(r'(?i)(token|secret|passw|private|credential|authoriz|bearer|api[_-]?key|BEGIN [A-Z ]*KEY)')
 
@@ -244,11 +258,13 @@ def walk_entries(fd, max_entries, end, clock):
         except StopIteration as stop:
             return entries, stop.value
 
-def usage(root, rel, deadline, clock=time.monotonic):
+def usage(root, rel, deadline, clock=time.monotonic, physical=False, root_device=None):
     """Bytes and entries under root/rel by lstat only. Every directory is opened through open_under (no symlink on its
     path is followed and no secret-named directory is entered), other filesystems are not entered, and the entry and
     time caps are checked before each entry: a cap or an unreadable directory yields incomplete with its reason and no
-    total, never a partial number or zero."""
+    total, never a partial number or zero. With physical, also apparent bytes, sparse and hard-linked entries and mount
+    identity; a hard-linked inode is counted once within this walk, and links to it from outside the walk are not
+    attributed. An incomplete result is unknown, never zero or an upper bound."""
     fd, status = open_under(root, rel, directory=True)
     if fd is None:
         return {'path': rel, 'status': 'absent' if status == 'missing' else 'refused', 'reason': status}
@@ -256,6 +272,7 @@ def usage(root, rel, deadline, clock=time.monotonic):
     os.close(fd)
     end = clock() + deadline.budget(LIMITS['usageSeconds'])
     total, entries, skipped, stack = 0, 0, 0, [rel]
+    apparent, sparse, linked, seen = 0, 0, 0, set()
     while stack:
         if clock() > end:  # before each queued directory: nothing more is opened after the deadline
             return {'path': rel, 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': entries}
@@ -269,12 +286,21 @@ def usage(root, rel, deadline, clock=time.monotonic):
                 try:
                     item = next(generator)
                 except StopIteration as stop:
-                    if stop.value:
-                        return {'path': rel, 'status': 'incomplete', 'reason': stop.value, 'entriesExamined': entries}
+                    if stop.value:  # name the configured cap, not what remained of it in this directory
+                        reason = f'entry cap ({LIMITS["usageEntries"]})' if stop.value.startswith('entry cap') else stop.value
+                        return {'path': rel, 'status': 'incomplete', 'reason': reason, 'entriesExamined': entries}
                     break
                 entries += 1
                 st = item.stat(follow_symlinks=False)
+                if not stat.S_ISDIR(st.st_mode) and st.st_nlink > 1:
+                    linked += 1
+                    if (st.st_dev, st.st_ino) in seen:
+                        continue
+                    seen.add((st.st_dev, st.st_ino))
                 total += st.st_blocks * 512
+                if stat.S_ISREG(st.st_mode):
+                    apparent += st.st_size
+                    sparse += st.st_blocks * 512 < st.st_size
                 if stat.S_ISDIR(st.st_mode):
                     if item.name in SECRET_NAMES or st.st_dev != device:
                         skipped += 1
@@ -287,7 +313,12 @@ def usage(root, rel, deadline, clock=time.monotonic):
             os.close(fd)
     if clock() > end:  # complete only within the budget
         return {'path': rel, 'status': 'incomplete', 'reason': 'time cap', 'entriesExamined': entries}
-    return {'path': rel, 'status': 'complete', 'allocatedBytes': total, 'entries': entries, 'skippedDirectories': skipped}
+    result = {'path': rel, 'status': 'complete', 'allocatedBytes': total, 'entries': entries, 'skippedDirectories': skipped}
+    if physical:
+        result.update(apparentBytes=apparent, sparseFiles=sparse, hardLinkedEntries=linked, uniqueHardLinkedInodes=len(seen),
+            hardLinks='each inode counted once within this walk; links from outside it are not attributed',
+            mount={'device': f'{os.major(device)}:{os.minor(device)}', 'sameDeviceAsSourceRoot': device == root_device})
+    return result
 
 def state_entries(root, devices, deadline, clock=time.monotonic):
     """vendor/state names mentioning each device, from one bounded listing: the directory is opened through open_under,
@@ -316,6 +347,93 @@ def state_entries(root, devices, deadline, clock=time.monotonic):
     if stopped or truncated:
         result['note'] = 'a bounded, unordered subset of the directory; not its first names'
     return result
+
+def presence(status):
+    return {'present': 'present', 'missing': 'absent'}.get(status, status if status in ('symlink-refused',
+        'secret-path-refused', 'unsafe-path', 'not-a-directory', 'not-regular') else 'unavailable')
+
+def entry_status(root, rel):
+    """lstat of one fixed path through its no-follow parent: type and mode only, never opened, read or executed."""
+    parent, name = os.path.split(rel)
+    fd, status = open_under(root, parent, directory=True)
+    if fd is None:
+        return {'status': presence(status), 'reason': status}
+    try:
+        st = os.lstat(name, dir_fd=fd)
+    except FileNotFoundError:
+        return {'status': 'absent'}
+    except OSError as error:
+        return {'status': 'unavailable', 'reason': errno.errorcode.get(error.errno, str(error.errno))}
+    finally:
+        os.close(fd)
+    if stat.S_ISLNK(st.st_mode):
+        return {'status': 'symlink-not-followed'}
+    if not stat.S_ISREG(st.st_mode):
+        return {'status': 'not-regular'}
+    return {'status': 'present', 'executable': bool(st.st_mode & 0o111), 'sizeBytes': st.st_size}
+
+def small_read(root, rel, limit=MARKER_BYTES):
+    """At most limit bytes of one fixed regular file reached without following a link; larger files are not read."""
+    fd, status = open_under(root, rel)
+    if fd is None:
+        return None, presence(status)
+    try:
+        if os.fstat(fd).st_size > limit:
+            return None, 'too-large'
+        return read_fd(fd, limit + 1), 'present'
+    finally:
+        os.close(fd)
+
+def manifest_comparison(record, pinned):
+    """match or mismatch only when an observed hash exists; a missing, refused or unread file is unavailable."""
+    observed = record.get('sha256')
+    return {**record, 'pinnedSha256': pinned,
+        'comparison': 'unavailable' if observed is None else 'match' if observed == pinned else 'mismatch'}
+
+def fs_type_markers(root):
+    markers = {}
+    for partition in FS_TYPE_PARTITIONS:
+        data, status = small_read(root, f'{FRANKEL_UNPACK}/{partition}.img.fs_type')
+        markers[partition] = {'status': status} if data is None else \
+            {'status': 'present', 'fsType': FS_TYPES.get(data, 'unknown'), 'sizeBytes': len(data)}
+    return markers
+
+def adevtool_deps(root):
+    data, status = small_read(root, f'{ADEVTOOL_DEPS}/adevtool_revision')
+    if data is None:
+        revision = {'status': status, 'comparison': 'unavailable'}
+    else:
+        text = data.decode('ascii', 'replace')
+        revision = {'status': 'present', 'sizeBytes': len(data), 'expected': ADEVTOOL_REVISION.strip(),
+            'observed': text.strip() if re.fullmatch(r'[0-9a-f]{40}', text.strip()) else '(withheld)',
+            'comparison': 'match' if text == ADEVTOOL_REVISION else 'mismatch'}
+        if text != ADEVTOOL_REVISION and text.strip() == ADEVTOOL_REVISION.strip():
+            revision['reason'] = 'same hash, different line ending: getHostBinPath compares exactly and would rebuild'
+    tools = {t: entry_status(root, f'{ADEVTOOL_DEPS}/host/linux-x86/bin/{t}') for t in HOST_TOOLS}
+    return {'revision': revision, 'tools': tools,
+        'note': 'presence and mode only; no tool is executed, so usability is not shown'}
+
+def prerequisites(root):
+    return {'directories': {rel: presence(dir_status(root, rel)) for rel in PREREQUISITE_DIRS},
+        'node': {'location': 'unknown', 'version': 'unknown',
+            'reason': 'no retained nonexecuting evidence; node is not searched for or run, and node_modules presence does not show Node >= 24'}}
+
+def blazer_paths(root, target):
+    archive = f'vendor/adevtool/dl/{target["factory"]}'
+    unpacked = f'vendor/adevtool/dl/unpacked/{target["unpacked"]}'
+    paths = {'vendorDestination': ('vendor/google_devices/blazer', True), 'archive': (archive, False),
+        'archiveTmp': (archive + '.tmp', False), 'unpack': (unpacked, True)}
+    result = {name: {'path': rel, 'status': presence(dir_status(root, rel)) if directory else presence(open_under_status(root, rel))}
+        for name, (rel, directory) in paths.items()}
+    result['unpackFinalTemp'] = {'path': None, 'status': 'unknown',
+        'reason': 'exact name not established from authorized inputs; not checked'}
+    return result
+
+def open_under_status(root, rel):
+    fd, status = open_under(root, rel)
+    if fd is not None:
+        os.close(fd)
+    return status
 
 def filesystem(root, mounts='/proc/mounts'):
     st = os.statvfs(root)
@@ -430,7 +548,7 @@ def inspect(host, receipt, deadline, targets):
         receipt['pins'][project] = head
     receipt['manifest'] = file_record(root, '.repo/manifest.xml')
     pinned = sha256_file(ROOT/'os/pinned-manifest.xml')
-    receipt['manifest']['equalsPinnedManifest'] = receipt['manifest'].get('sha256') == pinned
+    receipt['manifest'] = manifest_comparison(receipt['manifest'], pinned)
     blobs = {'vendor/adevtool/' + r['path']: r['gitBlob'] for r in json.loads(PROVENANCE.read_text())['files']
         if r['kind'] == 'full' and r['repository'].endswith('/adevtool')}
     blobs.update({'build/make/' + r['path']: r['gitBlob'] for r in json.loads(PROVENANCE.read_text())['files']
@@ -468,9 +586,16 @@ def inspect(host, receipt, deadline, targets):
             missing.append(f'vendor/google_devices/{device} {receipt["generatedVendor"][device]["status"]}')
         receipt['lunch']['devices'][device] = {'lunch': 'unknown', 'target': 'unknown', 'combo': target['lunch'],
             'missingInputs': missing}
+    receipt['adevtoolDeps'] = adevtool_deps(root)
+    receipt['prerequisites'] = prerequisites(root)
+    receipt['blazerPaths'] = blazer_paths(root, targets['blazer'])
     # Bounded usage last: an unavailable category is reported as such, never as zero.
     names = {**USAGE, 'retainedOutput': host.retained_out}
     receipt['usage'] = {name: usage(root, rel, deadline, host.clock) for name, rel in names.items()}
+    root_device = os.stat(os.path.realpath(root)).st_dev
+    receipt['capacity'] = {'allocation': {name: usage(root, rel, deadline, host.clock, physical=True, root_device=root_device)
+        for name, rel in ALLOCATION.items()}, 'fsTypeMarkers': fs_type_markers(root), 'reserveFloorBytes': RESERVE_FLOOR_BYTES,
+        'note': 'Frankel physical allocation is proxy evidence, not a Blazer bound; no capacity admission is made'}
     for device, record in receipt['factory'].items():
         if record['status'] == 'present':
             seconds = deadline.budget(LIMITS['hashSeconds'])
