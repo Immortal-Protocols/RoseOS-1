@@ -570,9 +570,9 @@ public class MainActivity extends Activity {
   * returns Home and HOME clears it; navigation only, never a voice or task command. */
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
  /** HOME shows Rose Home; the app icon also opens the Rose conversation over it (HomeEntry). Never changes the HOME choice or voice. */
- void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
  /** HOME returning from an app or the conversation keeps the page left (previous); HOME on Home, or the app icon, shows Home (HomePages). */
  void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
+ void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
  @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
  boolean macScreenEnabled(){return getPreferences(0).getBoolean("mac-screen-enabled",false);}
