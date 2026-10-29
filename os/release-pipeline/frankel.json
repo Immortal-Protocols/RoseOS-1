@@ -320,6 +320,15 @@
         "candidate": null,
         "route": "app-only",
         "basis": "AGENT309-DELIVERY-001: reserved for the app-only HiFi Rose Agent built from exact basis 77878c590e5602dcd6f6b39300c5b018b72477e0 (Merge OS #131 Home tray; includes App #127 renderer and #130 channel selection) plus only this delivery delta (manifest 309, this row and the host app-release disk reserve guard). The candidate is the tested merge of that delta, recorded by Infra at dispatch; no other route may use 309, and 308 stays the os-release binding for exact-byte app-reuse"
+      },
+      {
+        "versionCode": 310,
+        "versionName": "310-hifi-os-beta",
+        "candidate": null,
+        "osBuild": "2026102901",
+        "buildTimestamp": 1793311111,
+        "route": "os-release",
+        "basis": "OS-HIFI-FRANKEL-CANDIDATE-001 / FRANKEL310-ALLOC-001: bundled Rose Agent of the Frankel 2026102901 OS candidate (BUILD_DATETIME 1793311111), built from exact basis 60854d6f9629e9768162e23c3d04e83e1c7c7357 (the AGENT309-DELIVERY-001 head: HiFi Home #131, App #127 renderer, #130, the 309 delivery and capacity corrections) plus only this delta (manifest 310 and this row). The candidate is the tested merge of that delta, recorded by Infra at dispatch. The app-only route may not use 310; 309 stays reserved for the app-only route and 308 for exact-byte app-reuse; Calculator 4 and controller 28 are unchanged"
       }
     ]
   },
