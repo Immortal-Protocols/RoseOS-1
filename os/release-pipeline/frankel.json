@@ -10,9 +10,14 @@
     "outDir": "out-rose-first-update-2026102701",
     "lockPath": "/home/pixelbuild/frankel-build.lock",
     "capacity": {
+      "mode": "budgeted",
       "reserveBytes": 322122547200,
       "osBuildAllowanceBytes": null,
-      "basis": "OCT29-INFRA-S007: the build stage needs reserveBytes plus a measured incremental OS workspace bound on the source, OUT_DIR and release-workspace filesystems (statvfs f_bavail). No retained evidence bounds that workspace, so the allowance is null and the build fails closed until the Infra manager records a measured or retained bound here. The app-only 16 GiB allowance is not an OS estimate."
+      "stopBufferBytes": 68719476736,
+      "sampleIntervalSeconds": 1,
+      "termGraceSeconds": 2,
+      "killVerifySeconds": 2,
+      "basis": "OCT29-INFRA-S008: budgeted mode. Each build/sign/transfer stage starts only if every distinct write filesystem has strictly more than reserveBytes + stopBufferBytes available (statvfs f_bavail), then runs its children in an owned process group sampled at least every second and stops it (SIGTERM, KILL after termGraceSeconds, verified within killVerifySeconds) when any filesystem reaches that line. The 64 GiB stop buffer is an abort margin, not an OS peak estimate or a hard quota; a stage may abort safely and is never promised to fit. osBuildAllowanceBytes stays null: static mode would still refuse."
     },
     "installclean": true,
     "makeJobs": 48,
