@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rose — Three dimensions · Motion study 01</title>
+<style>
+:root{font-family:Inter,'Helvetica Neue',Arial,sans-serif;color:#203342;background:#e5edf3;font-synthesis:none}*{box-sizing:border-box}body{margin:0}button,select,input{font:inherit}button,select{color:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #8b5262;outline-offset:4px}main{max-width:1440px;margin:auto;padding:36px 48px 25px}header{display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{font-size:22px;letter-spacing:-1px}.brand span{color:#627482;font-size:13px;letter-spacing:.05em;margin-left:18px}.edition{font-size:11px;letter-spacing:.16em;color:#596d7c;text-transform:uppercase}.hero{position:relative;height:clamp(390px,52vw,620px);margin:16px -48px 0;overflow:hidden;background:radial-gradient(ellipse at 50% 30%,#ecf3f8,#c5d5e1)}canvas{width:100%;height:100%;display:block}.hero-top{position:absolute;top:28px;left:48px;pointer-events:none}h1{font-size:clamp(26px,3.2vw,46px);font-weight:400;letter-spacing:-1.6px;margin:0 0 9px}.hero-top p{font-size:13px;color:#536a79;margin:0}.live{position:absolute;bottom:25px;left:0;right:0;text-align:center;font-size:13px;letter-spacing:.05em}.live span{display:inline-block;background:#edf4f8bb;padding:10px 20px;border:1px solid #ffffff88;border-radius:40px;backdrop-filter:blur(15px)}.presets{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:23px 0;border-bottom:1px solid #b7c7d2}.preset{background:transparent;border:1px solid transparent;border-radius:12px;padding:15px 8px;text-align:left;transition:background .2s,border .2s;min-height:67px}.preset:hover{background:#f2f6f9}.preset[aria-pressed=true]{background:#f5f8fb;border-color:#bacbd6;box-shadow:0 4px 16px #71879814}.preset b{display:block;font-size:13px;font-weight:500;margin-bottom:6px}.preset small{font-size:11px;color:#536a79}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#9cabb8;margin-right:6px}.rose{background:#c97f8d}.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;padding:24px 0}.field{display:grid;gap:10px}.field label,.eyebrow{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:#536a79}.field select{appearance:auto;background:#f6f9fb;border:1px solid #b7c7d2;padding:11px 12px;border-radius:7px;width:100%;font-size:13px}.field small{font-size:12px;color:#536a79}.transport{display:flex;flex-wrap:wrap;align-items:center;gap:10px;border-top:1px solid #b7c7d2;padding:20px 0}.transport button{padding:10px 17px;border:1px solid #aebfcb;background:transparent;border-radius:50px;font-size:12px;min-height:40px}.transport button.primary{background:#243d50;color:#f5f8fa;border-color:#243d50}.transport button:hover{filter:brightness(.93)}.range{display:flex;align-items:center;gap:9px;margin-left:auto;font-size:12px}.range input{width:100px;accent-color:#8d5967}.reduce{font-size:12px;display:flex;align-items:center;gap:7px;margin-left:12px}.reduce input{accent-color:#8d5967}.footer{display:flex;justify-content:space-between;align-items:start;gap:20px;font-size:11px;color:#536a79;border-top:1px solid #b7c7d2;padding-top:15px}details{max-width:700px;line-height:1.7}summary{cursor:pointer}.stats{font-variant-numeric:tabular-nums}.fallback{position:absolute;inset:0;display:none;align-items:center;justify-content:center}.fallback .object{width:190px;height:190px;position:relative;filter:drop-shadow(0 30px 14px #28465b60)}.hemisphere{position:absolute;width:190px;height:95px;background:radial-gradient(ellipse at 28% 25%,#fff 0%,transparent 26%),linear-gradient(110deg,#788d9f,#dae3eb 40%,#6c8294 77%,#f0f5fc);border:1px solid #eaf2f8}.upper{border-radius:100px 100px 5px 5px;top:0}.lower{top:97px;border-radius:4px 4px 100px 100px;background:linear-gradient(110deg,#849aab,#d1dce7 40%,#506777)}.fallback.mic .hemisphere{background:radial-gradient(ellipse at 30% 20%,#fff,transparent 30%),linear-gradient(110deg,#a15d70,#efbec9 45%,#915061 80%,#f4ced6)}.fallback .halo{position:absolute;width:210px;height:210px;border:2px solid #f5fbff;border-radius:50%;left:-10px;top:-10px;box-shadow:0 0 13px #b6b5ff,0 0 25px #e7f7ff,inset 0 0 15px #c1e2ff}.fallback .halo.broad{width:295px;height:295px;left:-52px;top:-52px}.fallback .halo.quiet{display:none}#renderMode{white-space:nowrap} @media(max-width:700px){main{padding:22px 20px}.hero{margin-left:-20px;margin-right:-20px;height:480px}.hero-top{left:20px;top:25px}.brand span{display:none}.presets{grid-template-columns:repeat(3,1fr);gap:5px}.controls{gap:15px;grid-template-columns:1fr}.field{grid-template-columns:95px 1fr;align-items:center;gap:6px 12px}.field small{grid-column:2}.range{margin-left:0}.reduce{margin-left:0}.footer{flex-direction:column}.preset{padding:11px 7px}.edition{font-size:9px}.hero-top p{max-width:220px;line-height:1.5}}
+</style></head><body><main>
+<header><div class="brand">Rose<span>Motion studies</span></div><div class="edition">Three dimensions / 01</div></header>
+<section class="hero" aria-label="Interactive metallic Rose animation">
+<canvas id="scene" aria-label="A metallic sphere with independent microphone color, connection split, and voice light surround">Rose motion study. Use the labeled state controls below.</canvas>
+<div id="fallback" class="fallback" role="img" aria-label="Static Rose fallback"><div class="object"><div class="halo"></div><div class="hemisphere upper"></div><div class="hemisphere lower"></div></div></div>
+<div class="hero-top"><h1>A quieter kind of alive.</h1><p>One form. Three independent signals.</p></div><div class="live" aria-live="polite"><span id="stateLabel">Connected · Listening · Mic on</span></div></section>
+<nav class="presets" aria-label="Animation presets"></nav>
+<section class="controls" aria-label="Independent state controls">
+<div class="field"><label for="mic">01 / Color</label><select id="mic"><option value="1">Microphone on</option><option value="0">Microphone muted</option></select><small>Rose when on. Silver when muted.</small></div>
+<div class="field"><label for="connection">02 / Split</label><select id="connection"><option value="0">Connected</option><option value="1">Connecting</option><option value="2">Disconnected</option></select><small>Joined, a narrow gap, or a wide gap.</small></div>
+<div class="field"><label for="voice">03 / Surround</label><select id="voice"><option value="0">Quiet</option><option value="1" selected>Listening</option><option value="2">Speaking</option></select><small>No light, close light, or a broad surround.</small></div>
+</section><section class="transport" aria-label="Playback controls"><button id="tour" class="primary" aria-pressed="false">Play sequence</button><button id="pause" aria-pressed="false">Pause</button><button id="reset">Reset</button><label class="range" for="amplitude">Speech energy <input type="range" id="amplitude" min="0" max="1" step=".01" value=".6"></label><label class="reduce"><input type="checkbox" id="reduced">Reduced motion</label></section>
+<footer class="footer"><details><summary>About this motion study</summary><p>Original procedural WebGL interpretation of your six keyframes. Connection, microphone and voice remain independent, including speaking while muted. Speech is simulated; no microphone or network access is used.</p><p>The object stays still; connection changes move only its upper shell. Listening keeps light close. Speaking opens the surround with a softly varying simulated envelope. Muting changes the metal without interrupting speech. Reduced motion makes each selection immediate and static.</p><p>Pixel ratio is capped at 1.5. Animation stops when hidden. Context loss switches to a static fallback; restored contexts rebuild the renderer. These safeguards are implemented, but browser visual validation was unavailable in the authoring environment.</p><p id="diagnostics" class="stats">Waiting for renderer.</p><button id="fallbackToggle">Compare static fallback</button></details><span id="renderMode">Starting WebGL</span></footer>
+</main>
+<script id="vertex" type="x-shader/x-vertex">
+attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}
+</script>
+<script id="fragment" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 resolution;uniform float time,gap,mic,voice,energy;
+const vec3 eye=vec3(0.,1.8,7.4);
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+void hemi(vec3 ro,vec3 rd,float cy,float side,inout float best,inout vec3 normal,inout float kind){
+ vec3 oc=ro-vec3(0.,cy,0.);float b=dot(oc,rd),c=dot(oc,oc)-1.;float d=b*b-c;
+ if(d>0.){float s=sqrt(d);float t=-b-s;vec3 p=oc+t*rd;if(t>.001&&t<best&&side*p.y>=0.){best=t;normal=normalize(p);kind=1.;}t=-b+s;p=oc+t*rd;if(t>.001&&t<best&&side*p.y>=0.){best=t;normal=normalize(p);kind=1.;}}
+ if(abs(rd.y)>.0001){float t=-oc.y/rd.y;vec3 p=oc+t*rd;if(t>.001&&t<best&&dot(p.xz,p.xz)<1.){best=t;normal=vec3(0.,-side,0.);kind=2.;}}
+}
+float object(vec3 ro,vec3 rd,out vec3 normal,out float kind){float t=100.;normal=vec3(0.);kind=0.;hemi(ro,rd,gap,1.,t,normal,kind);hemi(ro,rd,0.,-1.,t,normal,kind);return t;}
+vec3 environment(vec3 d){
+ vec3 col=mix(vec3(.10,.17,.23),vec3(.72,.82,.91),smoothstep(-.55,.65,d.y));
+ float left=pow(max(0.,dot(d,normalize(vec3(-3.,3.,3.)))),20.);
+ float right=pow(max(0.,dot(d,normalize(vec3(3.,2.,2.)))),38.);
+ float strip=exp(-pow((d.x+.5)*7.,2.)-pow((d.y-.3)*1.6,2.))*smoothstep(-.2,.5,d.z);
+ col+=vec3(2.6,2.7,2.8)*left+vec3(3.,3.1,3.3)*right+vec3(.65,.73,.82)*strip;
+ col+=vec3(.7,.8,.95)*pow(max(0.,dot(d,normalize(vec3(0.,3.,-3.)))),15.);return col;
+}
+vec3 metal(vec3 p,vec3 n,vec3 rd,float kind){
+ vec3 base=mix(vec3(.65,.73,.81),vec3(.95,.48,.53),mic);
+ vec3 r=reflect(rd,n);float f=pow(1.-max(0.,dot(n,-rd)),5.);
+ vec3 col=environment(r)*mix(base,vec3(.96),f*.65);
+ col+=base*.09*max(0.,dot(n,normalize(vec3(-2.,4.,3.))));
+ float grain=hash(floor(p.xy*700.)+floor(p.z*520.));col*=.965+grain*.07;
+ if(kind>1.5){float edge=smoothstep(.87,.99,length(p.xz));col=mix(base*.16,col*.85,edge);}
+ float seam=exp(-abs(p.y)*120.)+exp(-abs(p.y-gap)*120.);col*=1.-.26*min(seam,1.);
+ return col;
+}
+void main(){
+ vec2 uv=(gl_FragCoord.xy-.5*resolution)/resolution.y;uv.y+=.055;
+ vec3 forward=normalize(vec3(0.,.15,0.)-eye),right=vec3(1.,0.,0.),up=cross(right,forward);
+ float lens=min(1.75,2.1*resolution.x/resolution.y);
+ vec3 rd=normalize(forward*lens+uv.x*right+uv.y*up);
+ vec3 n;float kind;float t=object(eye,rd,n,kind);vec3 p=eye+rd*t;
+ vec3 col=mix(vec3(.51,.63,.73),vec3(.79,.87,.94),smoothstep(-.6,.65,uv.y));
+ col+=.045*exp(-dot(uv,uv)*2.);
+ float floorT=(-1.03-eye.y)/rd.y;
+ if(floorT>0.){vec3 fp=eye+rd*floorT;float contact=exp(-dot(fp.xz,fp.xz)*3.5);float shadow=exp(-dot(fp.xz/vec2(1.5,1.),fp.xz/vec2(1.5,1.)));
+ col-=vec3(.22,.25,.27)*shadow+vec3(.12)*contact;
+ vec3 rn;float rk;vec3 reflected=reflect(rd,vec3(0.,1.,0.));float rt=object(fp+vec3(0.,.005,0.),reflected,rn,rk);
+ if(rt<99.){vec3 rp=fp+reflected*rt;col=mix(col,metal(rp,rn,reflected,rk),.12*exp(-length(fp.xz)*.5));}
+ }
+ if(t<99.){col=metal(p,n,rd,kind);}
+ // Light lives in a camera-facing surround; it never changes the sphere's scale.
+ float active=smoothstep(0.,.85,voice);float broad=smoothstep(1.,2.,voice);
+ float envelope=energy*(.48+.22*sin(time*3.1)+.17*sin(time*7.3+1.2)+.09*sin(time*11.7));
+ float radius=mix(1.075,1.55+.12*envelope,broad);
+ float planeT=dot(vec3(0.,.06,0.)-eye,forward)/dot(rd,forward);vec3 hp=eye+rd*planeT-vec3(0.,.06,0.);
+ vec2 q=vec2(dot(hp,right),dot(hp,up));float angle=atan(q.y,q.x);
+ float ripple=broad*energy*.008*sin(angle*5.+time*1.7)*sin(time*2.3);
+ float dist=abs(length(q)-radius-ripple);float aa=7.4/lens/resolution.y;
+ float core=1.-smoothstep(.003,.009+aa,dist);float glow=exp(-dist*34.)*.24+exp(-dist*10.)*.1;
+ float luminance=.80+.20*sin(angle*2.-.5+time*.16*broad);
+ vec3 light=vec3(.64,.77,1.0)*(core*.9+glow)*active*luminance;
+ col+=light;
+ col=col/(col+vec3(.55));col=pow(col,vec3(1./2.2));
+ col+=(hash(gl_FragCoord.xy)-.5)/255.;gl_FragColor=vec4(col,1.);
+}
+</script>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id),canvas=$('scene'),fallback=$('fallback');
+const presets=[['Disconnected','Muted',0,2,0],['Connecting','Muted',0,1,0],['Connected','Muted',0,0,0],['Listening','Mic on',1,0,1],['Speaking','Mic on',1,0,2],['Speaking','Muted',0,0,2]];
+let target={mic:1,gap:.012,voice:1},current={...target},gl,program,uniforms={},raf=0,last=0,time=0,paused=false,touring=false,tourTime=0,tourIndex=0,manualFallback=false,lost=false,frames=[],samples=0;
+const media=matchMedia('(prefers-reduced-motion: reduce)');$('reduced').checked=media.matches;
+const reduced=()=>$('reduced').checked;
+const gaps=[.012,.10,.38];
+for(let i=0;i<presets.length;i++){const p=presets[i],b=document.createElement('button');b.className='preset';b.innerHTML='<b>'+p[0]+'</b><small><span class="dot '+(p[2]?'rose':'')+'"></span>'+p[1]+'</small>';b.setAttribute('aria-pressed',String(i===3));b.onclick=()=>{stopTour();setPreset(i)};$('scene').parentElement.nextElementSibling.appendChild(b);}
+function stopTour(){touring=false;$('tour').textContent='Play sequence';$('tour').setAttribute('aria-pressed','false');}
+function setPreset(i){const p=presets[i];$('mic').value=p[2];$('connection').value=p[3];$('voice').value=p[4];select();}
+function select(){target={mic:+$('mic').value,gap:gaps[+$('connection').value],voice:+$('voice').value};if(reduced()||paused){current={...target};}const c=$('connection').selectedOptions[0].textContent,v=$('voice').selectedOptions[0].textContent,m=target.mic?'Mic on':'Muted';$('stateLabel').textContent=c+' · '+v+' · '+m;document.querySelectorAll('.preset').forEach((b,i)=>{const p=presets[i];b.setAttribute('aria-pressed',String(p[2]===target.mic&&p[3]===+$('connection').value&&p[4]===target.voice))});updateFallback();request();}
+function updateFallback(){fallback.classList.toggle('mic',!!target.mic);fallback.querySelector('.upper').style.transform='translateY('+(-target.gap*95)+'px)';fallback.querySelector('.halo').className='halo '+(target.voice===0?'quiet':target.voice===2?'broad':'');fallback.setAttribute('aria-label',$('stateLabel').textContent+'; static fallback');}
+function showFallback(reason){canvas.style.visibility='hidden';fallback.style.display='flex';$('renderMode').textContent='Static fallback';$('diagnostics').textContent=reason;updateFallback();}
+function compile(type,source){const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)){const error=gl.getShaderInfoLog(shader);gl.deleteShader(shader);throw Error(error)}return shader;}
+function initialize(){try{gl=canvas.getContext('webgl',{alpha:false,antialias:false,powerPreference:'low-power'});if(!gl)throw Error('WebGL is unavailable.');const vs=compile(gl.VERTEX_SHADER,$('vertex').textContent),fs=compile(gl.FRAGMENT_SHADER,$('fragment').textContent);program=gl.createProgram();gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));gl.deleteShader(vs);gl.deleteShader(fs);gl.useProgram(program);const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);const attr=gl.getAttribLocation(program,'a');gl.enableVertexAttribArray(attr);gl.vertexAttribPointer(attr,2,gl.FLOAT,false,0,0);for(const key of ['resolution','time','gap','mic','voice','energy'])uniforms[key]=gl.getUniformLocation(program,key);lost=false;canvas.style.visibility='visible';fallback.style.display='none';$('renderMode').textContent='WebGL · Live';$('diagnostics').textContent='Shader compilation and program linking succeeded in this browser. Collecting frame intervals.';request();}catch(e){program=null;showFallback('WebGL unavailable or shader initialization failed: '+e.message);}}
+function render(){if(!gl||!program||lost||manualFallback)return;const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,1.5);const w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h)}gl.uniform2f(uniforms.resolution,w,h);gl.uniform1f(uniforms.time,reduced()?0:time);gl.uniform1f(uniforms.gap,current.gap);gl.uniform1f(uniforms.mic,current.mic);gl.uniform1f(uniforms.voice,current.voice);gl.uniform1f(uniforms.energy,+$('amplitude').value);gl.drawArrays(gl.TRIANGLES,0,6);if(samples%180===0&&frames.length>60){const sorted=[...frames].sort((a,b)=>a-b);$('diagnostics').textContent=`WebGL ${gl.getParameter(gl.VERSION)} · ${w} × ${h} pixels · DPR ${dpr.toFixed(2)}. Last ${sorted.length} active frame intervals: median ${sorted[Math.floor(sorted.length*.5)].toFixed(1)} ms / p95 ${sorted[Math.floor(sorted.length*.95)].toFixed(1)} ms. Animation-frame timing, not GPU time or device acceptance. Shader compilation/linking succeeded.`;}}
+function request(){if(!raf&&!document.hidden)raf=requestAnimationFrame(tick);}
+function tick(now){raf=0;const dt=last?Math.min((now-last)/1000,.05):0;if(last&&!paused&&!reduced()&&!document.hidden&&!manualFallback&&program){frames.push(now-last);if(frames.length>600)frames.shift();samples++;}last=now;if(!paused&&!reduced()){time+=dt;if(touring){tourTime+=dt;if(tourTime>3.4){tourTime=0;tourIndex=(tourIndex+1)%6;setPreset(tourIndex)}}const ease=1-Math.exp(-dt*5.5);for(const key of Object.keys(current))current[key]+=(target[key]-current[key])*ease;}render();const moving=Object.keys(current).some(k=>Math.abs(target[k]-current[k])>.0001);if(!document.hidden&&!paused&&!reduced()&&!manualFallback&&program&&!lost&&(touring||current.voice>.001||moving))request();else last=0;}
+for(const id of ['mic','connection','voice'])$(id).onchange=()=>{stopTour();select()};$('amplitude').oninput=request;
+$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'Resume':'Pause';$('pause').setAttribute('aria-pressed',String(paused));last=0;request()};
+$('tour').onclick=()=>{if(touring){stopTour();return}if(reduced()){$('diagnostics').textContent='Reduced motion is on. Choose each pose directly, or turn it off to play transitions.';return}paused=false;$('pause').textContent='Pause';$('pause').setAttribute('aria-pressed','false');touring=true;tourTime=0;tourIndex=0;$('tour').textContent='Stop sequence';$('tour').setAttribute('aria-pressed','true');setPreset(0)};
+$('reset').onclick=()=>{stopTour();paused=false;time=0;frames=[];samples=0;$('pause').textContent='Pause';$('pause').setAttribute('aria-pressed','false');$('amplitude').value=.6;setPreset(3)};
+$('reduced').onchange=()=>{stopTour();current={...target};last=0;request()};media.addEventListener('change',e=>{$('reduced').checked=e.matches;$('reduced').onchange()});
+$('fallbackToggle').onclick=()=>{manualFallback=!manualFallback;$('fallbackToggle').textContent=manualFallback?'Return to WebGL':'Compare static fallback';if(manualFallback){showFallback('Static CSS fallback comparison. This is not WebGL rendering.')}else if(program&&!lost){canvas.style.visibility='visible';fallback.style.display='none';$('renderMode').textContent='WebGL · Live';request()}else{showFallback('WebGL remains unavailable.')}};
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();lost=true;cancelAnimationFrame(raf);raf=0;showFallback('WebGL context was lost. Static fallback is active.');});canvas.addEventListener('webglcontextrestored',()=>{initialize();if(manualFallback)showFallback('Static fallback comparison.');});
+document.addEventListener('visibilitychange',()=>{cancelAnimationFrame(raf);raf=0;last=0;if(!document.hidden)request()});new ResizeObserver(request).observe(canvas);select();initialize();
+})();
+</script></body></html>
