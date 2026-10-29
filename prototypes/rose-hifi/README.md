@@ -82,6 +82,10 @@ single key light at the upper left (with a crisp glint) and a dim, broad fill
 replace them, matching the light direction of the tray and icons. The signal
 mapping is unchanged.
 
+The rose metal reflects the environment's brightness rather than its blue
+cast, with extra saturation, so it reads as a vivid rose. Silver (muted) keeps
+the cool reflection.
+
 Safeguards:
 
 - The backing store is capped at DPR 2 and 360 px per side.

@@ -30,10 +30,16 @@ vec3 environment(vec3 d){
  col+=vec3(.7,.8,.95)*pow(max(0.,dot(d,normalize(vec3(0.,3.,-3.)))),15.);return col;
 }
 vec3 metal(vec3 p,vec3 n,vec3 rd,float kind){
- vec3 base=mix(vec3(.65,.73,.81),vec3(.95,.48,.53),mic);
+ // Rose metal reads the environment's brightness, not its blue cast, so the
+ // pink stays vivid; silver (muted) keeps the cool reflection.
+ vec3 rose=vec3(1.,.36,.42);
+ vec3 base=mix(vec3(.65,.73,.81),rose,mic);
  vec3 r=reflect(rd,n);float f=pow(1.-max(0.,dot(n,-rd)),5.);
- vec3 col=environment(r)*mix(base,vec3(.96),f*.65);
- col+=base*.09*max(0.,dot(n,normalize(vec3(-2.,4.,3.))));
+ vec3 env=environment(r);float lum=dot(env,vec3(.3,.55,.15));
+ env=mix(env,vec3(pow(lum,1.45)*1.3)*vec3(1.05,1.,.98),mic*.85);
+ vec3 col=env*mix(base,mix(vec3(.96),vec3(1.,.82,.84),mic),f*.65);
+ col+=base*(.09+.10*mic)*max(0.,dot(n,normalize(vec3(-2.,4.,3.))));
+ col+=rose*mic*.16*pow(f,.6);
  if(kind>1.5){float edge=smoothstep(.87,.99,length(p.xz));col=mix(base*.16,col*.85,edge);}
  float seam=exp(-abs(p.y)*120.)+exp(-abs(p.y-gap)*120.);col*=1.-.26*min(seam,1.);
  return col;
@@ -57,7 +63,8 @@ vec4 sampleAt(vec2 frag){
  float luminance=.80+.20*sin(angle*2.-.5+time*.16*broad);
  float ring=(core*.9+glow)*active*luminance;
  vec3 light=vec3(.64,.77,1.0)*ring;
- if(alpha>0.){col+=light;col=col/(col+vec3(.55));col=pow(col,vec3(1./2.2));}
+ if(alpha>0.){col+=light;col=col/(col+vec3(.55));col=pow(col,vec3(1./2.2));
+  float l=dot(col,vec3(.299,.587,.114));col=clamp(mix(vec3(l),col,1.+.8*mic)*(1.+.06*mic),0.,1.);}
  else{col=vec3(.80,.89,1.0);alpha=clamp(ring,0.,1.);}
  return vec4(col*alpha,alpha);
 }

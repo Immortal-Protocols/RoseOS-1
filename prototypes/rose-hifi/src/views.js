@@ -138,8 +138,8 @@
     $('v-switcher').innerHTML =
       '<div class="wall" aria-hidden="true"></div><div class="sw-veil" aria-hidden="true"></div>' +
       '<div class="sw-human" id="sw-human" role="list" aria-label="Your apps" tabindex="0"></div>' +
-      '<div class="sw-link" aria-hidden="false"><div class="sw-rose"><div class="rose-slot" id="slot-switcher"></div></div>' +
-      '<svg class="wire" viewBox="0 0 300 60" preserveAspectRatio="none" aria-hidden="true"><path id="wire-path" d="M0 30H210c30 0 40 4 50 30" pathLength="100"/></svg>' +
+      '<svg class="links" id="sw-links" aria-hidden="true"><defs><linearGradient id="link-grad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff8fa3"/><stop offset=".45" stop-color="#9fb8ff"/><stop offset="1" stop-color="#5d8dff"/></linearGradient></defs><g id="sw-routes"></g></svg>' +
+      '<div class="sw-link"><div class="sw-rose"><span class="sw-halo" aria-hidden="true"></span><div class="rose-slot" id="slot-switcher"></div></div>' +
       '<span class="sw-link-label" id="sw-link-label"></span></div>' +
       '<div class="sw-agent" id="sw-agent" role="list" aria-label="Rose’s background apps" tabindex="0"></div>';
     $('v-agents').innerHTML =
@@ -223,23 +223,42 @@
     }
   }
 
-  // The connector ends on the first visible card that is actually working.
+  // Connector: one route from Rose to every visible working card. Light packets flow
+  // along each route (CSS dash animation, no JS loop) and a ring pulses where it lands.
+  // Nothing moves unless a task is actually running.
+  let lastRouteKey = '';
   function routeWire() {
     const { $ } = ctx;
-    const wire = $('v-switcher').querySelector('.wire'), path = $('wire-path');
-    if (!wire || !wire.isConnected) return;
-    const wr = wire.getBoundingClientRect(), ar = $('sw-agent').getBoundingClientRect();
-    if (!wr.width) return;
-    const k = wr.width / wire.viewBox.baseVal.width;
-    const target = [...$('sw-agent').querySelectorAll('.wcard[data-state=running]')].map((c) => c.getBoundingClientRect())
-      .find((r) => r.left + r.width / 2 > ar.left && r.left + r.width / 2 < ar.right);
-    wire.classList.toggle('idle', !target);
-    if (!target) { path.setAttribute('d', 'M0 30H60'); return; }
-    const x = Math.max(40, Math.min(300, (target.left + target.width / 2 - wr.left) / k));
-    const yScale = wr.height / 60;
-    const y = Math.max(32, (target.top - wr.top) / yScale - 2);
-    path.setAttribute('d', 'M0 30H' + Math.max(0, x - 24).toFixed(1) + 'c14 0 24 6 24 ' + (y - 30).toFixed(1));
+    const view = $('v-switcher'), svg = $('sw-links'), g = $('sw-routes');
+    if (!svg || !view.isConnected || view.dataset.active !== 'true') return;
+    const vr = view.getBoundingClientRect();
+    if (!vr.width) return;
+    const k = vr.width / view.offsetWidth;
+    const W = view.offsetWidth, H = view.offsetHeight;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    const rr = view.querySelector('.sw-rose').getBoundingClientRect(), ar = $('sw-agent').getBoundingClientRect();
+    const ox = (rr.right - vr.left) / k - 10, oy = (rr.top + rr.height / 2 - vr.top) / k;
+    const cards = [...$('sw-agent').querySelectorAll('.wcard[data-state=running]')].map((c) => c.getBoundingClientRect())
+      .filter((r) => r.right > ar.left + 12 && r.left < ar.right - 12).slice(0, 3);
+    const pts = cards.map((r) => ({ x: (Math.max(ar.left + 20, Math.min(ar.right - 20, r.left + r.width / 2)) - vr.left) / k, y: (r.top - vr.top) / k + 1 }));
+    const key = pts.map((p) => p.x.toFixed(0) + ',' + p.y.toFixed(0)).join('|') + W;
+    if (key === lastRouteKey) return;
+    lastRouteKey = key;
+    const grad = $('link-grad'); grad.setAttribute('x1', ox); grad.setAttribute('x2', W - 20);
+    if (!pts.length) { g.innerHTML = '<path class="track idle" d="M' + ox + ' ' + oy + 'h48"/>'; return; }
+    g.innerHTML = pts.map((p, i) => {
+      // Horizontal run out of Rose, then a smooth bend down onto the card.
+      const bend = Math.max(ox + 30, p.x - 34);
+      const d = 'M' + ox.toFixed(1) + ' ' + oy.toFixed(1) + 'H' + bend.toFixed(1) + 'C' + (bend + 26).toFixed(1) + ' ' + oy.toFixed(1) + ' ' + p.x.toFixed(1) + ' ' + (oy + 8).toFixed(1) + ' ' + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
+      const delay = (-i * 0.37).toFixed(2) + 's';
+      return '<path class="track" d="' + d + '"/>' +
+        '<path class="glow" pathLength="100" style="animation-delay:' + delay + '" d="' + d + '"/>' +
+        '<path class="pulse" pathLength="100" style="animation-delay:' + delay + '" d="' + d + '"/>' +
+        '<path class="comet" pathLength="100" style="animation-delay:' + (-i * 0.6).toFixed(2) + 's" d="' + d + '"/>' +
+        '<circle class="land" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="5"/><circle class="land-ring" style="animation-delay:' + delay + '" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="5"/>';
+    }).join('');
   }
+  window.addEventListener('resize', () => { lastRouteKey = ''; });
 
   // ---------- Renderers ----------
   let lastStopWindow = null, lastViewSeen = 'home';
