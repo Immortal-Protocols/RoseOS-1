@@ -1,0 +1,2 @@
+export BUILD_ID_blazer="CP3A.261005.005"
+unset PLATFORM_SECURITY_PATCH_blazer

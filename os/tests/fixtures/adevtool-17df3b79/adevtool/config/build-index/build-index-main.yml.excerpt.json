@@ -1,0 +1,22 @@
+{
+ "lines": {
+  "221": "rango CP3A.261005.005:",
+  "222": "  desc: Oct 2026",
+  "223": "  factory: 7110a4ac2f939e028f102bd0f034552e19dc3c90a3bb5b9dcdaaede5ae049eb5 rango-cp3a.261005.005-factory-7110a4ac.zip",
+  "224": "  ota: 4d0f56f9f6a565f011fc330e2ff4a63929134ee672509a8e8e4f305178262d0c rango-ota-cp3a.261005.005-4d0f56f9.zip",
+  "517": "blazer CP3A.261005.005:",
+  "518": "  desc: Oct 2026",
+  "519": "  factory: cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3 blazer-cp3a.261005.005-factory-cd7d12c2.zip",
+  "520": "  ota: fe9fb9830ed1d579a09840b446607f5830ba47f24ab8a3b7015105583a83068e blazer-ota-cp3a.261005.005-fe9fb983.zip",
+  "665": "frankel CP3A.261005.005:",
+  "666": "  desc: Oct 2026",
+  "667": "  factory: 3721e6accc2e87d851ee7966d794318078ec74c7cc32343daa10968264d6bb62 frankel-cp3a.261005.005-factory-3721e6ac.zip",
+  "668": "  ota: fb1a83f79c226e30fe7a7b69d856b4348f2792f43a3d120432b64c16471007a5 frankel-ota-cp3a.261005.005-fb1a83f7.zip"
+ },
+ "path": "config/build-index/build-index-main.yml",
+ "repository": "https://github.com/GrapheneOS/adevtool",
+ "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+ "upstreamGitBlob": "6cc722c761e0e4f5a1dd79a880591e44e45b759c",
+ "upstreamLines": 5231,
+ "upstreamSha256": "a108c6dd08afe9ad5e3fe09f36ae513b2fac34c7d18a2a66d5a90ebb742933f4"
+}
