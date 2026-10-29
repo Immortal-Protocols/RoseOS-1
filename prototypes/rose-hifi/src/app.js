@@ -102,6 +102,7 @@
     pages.addEventListener('pointerup', end);
     pages.addEventListener('pointercancel', () => { if (drag) { drag = null; track.classList.remove('dragging'); track.style.transform = ''; render(); } });
     pages.addEventListener('click', (e) => { if (suppressClick) { e.stopPropagation(); e.preventDefault(); suppressClick = false; } }, true);
+    pages.addEventListener('dragstart', (e) => e.preventDefault());
     pages.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
       e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1) });
@@ -124,39 +125,89 @@
     const k = screen.getBoundingClientRect().width / screen.offsetWidth;
     const s = from.width / to.width, base = 'translate(-50%,-50%)';
     const frames = [{ transform: base + ' translate(' + dx / k + 'px,' + dy / k + 'px) scale(' + s + ')' }, { transform: base }];
-    for (const el of [canvas, $('rose-fallback')]) el.animate(frames, { duration: 560, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    let anim;
+    for (const el of [canvas, $('rose-fallback')]) anim = el.animate(frames, { duration: 560, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    anim.finished.then(() => renderer.refresh(), () => {});
   }
-  function showView(next) {
+  let transitionToken = 0;
+  const after = (fn, ms) => { const token = transitionToken; setTimeout(() => { if (token === transitionToken) fn(); }, ms); };
+  // Finish any interrupted transition: only the target view may stay active.
+  function settleViews(keep) {
+    for (const v of ['home', 'rose', 'switcher', 'agents', 'app', 'window']) {
+      const el = viewEl(v);
+      el.getAnimations({ subtree: true }).forEach((x) => x.cancel());
+      el.style.zIndex = '';
+      if (!keep.includes(v)) el.dataset.active = 'false';
+    }
+  }
+  function farCorner(c) { const W = screen.offsetWidth, H = screen.offsetHeight; return Math.ceil(Math.hypot(Math.max(c.x, W - c.x), Math.max(c.y, H - c.y))); }
+  function showView(next, force) {
     const prev = shownView;
-    if (prev === next) return;
+    if (prev === next && !force) return;
+    transitionToken++;
+    settleViews([prev, next]);
     shownView = next;
     const a = viewEl(prev), b = viewEl(next);
     b.dataset.active = 'true';
     screen.dataset.view = next;
     flyRose(roseSlotFor(next));
+    pendingFocus = true;
     const done = () => { if (shownView !== prev) a.dataset.active = 'false'; };
-    if (reduced()) { done(); return; }
+    if (reduced() || prev === next) { done(); return; }
     const ease = 'cubic-bezier(.2,.8,.2,1)';
     if (next === 'rose' && prev === 'home') {
       const c = centerOf($('tray-rose'));
       const bg = b.querySelector('.ivory-bg');
       b.style.zIndex = 3;
-      bg.animate([{ clipPath: 'circle(0px at ' + c.x + 'px ' + c.y + 'px)' }, { clipPath: 'circle(1100px at ' + c.x + 'px ' + c.y + 'px)' }], { duration: 620, easing: ease });
+      const R = farCorner(c);
+      bg.animate([{ clipPath: 'circle(0px at ' + c.x + 'px ' + c.y + 'px)' }, { clipPath: 'circle(' + R + 'px at ' + c.x + 'px ' + c.y + 'px)' }], { duration: 620, easing: ease });
       for (const el of b.querySelectorAll('.rose-head,.rose-caption,.rose-output')) el.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 420, delay: 180, easing: ease, fill: 'backwards' });
       for (const el of b.querySelectorAll('.tray .well')) el.animate([{ opacity: 0, transform: 'scale(.86)' }, { opacity: 1, transform: 'none' }], { duration: 360, delay: 120, easing: ease, fill: 'backwards' });
-      later(() => { b.style.zIndex = ''; done(); }, 640);
+      after(() => { b.style.zIndex = ''; done(); }, 640);
     } else if (prev === 'rose' && next === 'home') {
       const c = centerOf($('tray-rose'));
       a.style.zIndex = 3;
       const bg = a.querySelector('.ivory-bg');
-      bg.animate([{ clipPath: 'circle(1100px at ' + c.x + 'px ' + c.y + 'px)' }, { clipPath: 'circle(0px at ' + c.x + 'px ' + c.y + 'px)' }], { duration: 560, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
-      for (const el of a.querySelectorAll('.rose-head,.rose-caption,.rose-output,.tray .well')) el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, easing: 'linear', fill: 'forwards' });
-      later(() => { a.style.zIndex = ''; done(); for (const el of a.querySelectorAll('.ivory-bg,.rose-head,.rose-caption,.rose-output,.tray .well')) el.getAnimations().forEach((x) => x.cancel()); }, 580);
+      const R = farCorner(c);
+      bg.animate([{ clipPath: 'circle(' + R + 'px at ' + c.x + 'px ' + c.y + 'px)' }, { clipPath: 'circle(0px at ' + c.x + 'px ' + c.y + 'px)' }], { duration: 560, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+      // The Rose tray fades as a whole so Home's identical tray reads as continuous.
+      for (const el of a.querySelectorAll('.rose-head,.rose-caption,.rose-output,.tray')) el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'linear', fill: 'forwards' });
+      after(() => { a.style.zIndex = ''; done(); a.getAnimations({ subtree: true }).forEach((x) => x.cancel()); }, 580);
     } else {
       b.style.zIndex = 3;
       b.animate([{ opacity: 0, transform: 'scale(.985)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: ease });
-      later(() => { b.style.zIndex = ''; done(); }, 310);
+      after(() => { b.style.zIndex = ''; done(); }, 310);
     }
+  }
+
+  // ---------- Focus: move on view change; restore when returning ----------
+  let pendingFocus = false;
+  const focusMemory = {};
+  function describe(el) {
+    if (!el || el === document.body) return null;
+    if (el.id) return '#' + el.id;
+    for (const a of ['data-app', 'data-open-window', 'data-open-app', 'data-page']) if (el.hasAttribute(a)) return '[' + a + '="' + el.getAttribute(a) + '"]';
+    return null;
+  }
+  function rememberFocus(view) {
+    const el = document.activeElement;
+    if (viewEl(view).contains(el)) focusMemory[view] = describe(el);
+  }
+  function defaultFocus(view) {
+    if (view === 'home') return $('tray-rose');
+    if (view === 'rose') return !$('rose-mic').disabled ? $('rose-mic') : $('rose-end').disabled ? $('rose-agents') : $('rose-end');
+    if (view === 'switcher') return $('sw-human');
+    if (view === 'agents') return viewEl('agents').querySelector('[data-open-window]') || $('ag-back');
+    return viewEl(view).querySelector('.back-btn');
+  }
+  function applyFocus() {
+    if (!pendingFocus || state.locked || state.pendingStop) return;
+    pendingFocus = false;
+    // Never steal focus from the harness outside the phone.
+    if (document.activeElement && document.activeElement.closest('.harness')) return;
+    const mem = focusMemory[state.view];
+    const el = (mem && viewEl(state.view).querySelector(mem)) || defaultFocus(state.view);
+    if (el && !el.disabled) el.focus({ preventScroll: true });
   }
 
   // ---------- Rose output ----------
@@ -197,12 +248,14 @@
       if (n.kind === 'task') el.addEventListener('click', () => { dispatch({ type: 'dismissNotice', value: n.id }); dispatch({ type: 'agents' }); });
       host.appendChild(el); shownNotices.set(n.id, el);
       $('announcer').textContent = n.text;
-      later(() => dispatch({ type: 'dismissNotice', value: n.id }), n.kind === 'task' ? 4200 : 2200);
+      const dismiss = () => { if (el.matches(':hover,:focus-within')) later(dismiss, 1200); else dispatch({ type: 'dismissNotice', value: n.id }); };
+      later(dismiss, n.kind === 'task' ? (/needs/.test(n.text) ? 6000 : 4200) : 2200);
     }
   }
 
   // ---------- Render ----------
   function render() {
+    if (shownView !== state.view) rememberFocus(shownView);
     device.classList.toggle('unfolded', state.layout === 'unfolded');
     document.documentElement.style.setProperty('--screen-w', state.layout === 'unfolded' ? '748px' : '384px');
     screen.classList.toggle('static-motion', reduced());
@@ -220,7 +273,7 @@
     mic.innerHTML = state.muted ? I.UI.micOff : I.UI.mic;
     mic.dataset.muted = String(state.muted);
     mic.setAttribute('aria-pressed', String(state.muted));
-    mic.setAttribute('aria-label', state.muted ? 'Microphone muted. Unmute' : 'Microphone on. Mute');
+    mic.setAttribute('aria-label', 'Mute microphone');
     mic.disabled = state.connection !== 'connected';
     $('rose-end').innerHTML = '<span class="end">' + I.UI.end + '</span>';
     $('rose-end').disabled = !callLive;
@@ -232,6 +285,9 @@
 
     // Lock
     $('lock').hidden = !state.locked;
+    screen.classList.toggle('locked', state.locked);
+    $('home-bar').inert = state.locked || !!state.pendingStop;
+    $('notices').inert = state.locked || !!state.pendingStop;
     $('phone-views') && ($('phone-views').inert = state.locked);
     for (const v of ['home', 'rose', 'switcher', 'agents', 'app', 'window']) viewEl(v).inert = state.locked || !!state.pendingStop;
 
@@ -249,6 +305,7 @@
     $('h-tasklist').innerHTML = Object.entries(state.tasks).map(([id, t]) => '<div><span>' + M.TASKS[id].title + '</span><span>' + t.state + (t.state === 'running' ? ' · ' + t.step + '/' + M.MAX_STEP : '') + '</span></div>').join('');
     if (window.RoseViews) window.RoseViews.render(state, ctx);
     fit();
+    if (pendingFocus) requestAnimationFrame(applyFocus);
   }
 
   function updateRenderStatus() {
@@ -273,7 +330,14 @@
       if (fx.type === 'speech') { cancel(speechTimer); speechTimer = later(() => dispatch({ type: 'speechEnd' }), fx.ms); }
       if (fx.type === 'endVoice') { cancel(connectTimer); cancel(speechTimer); cancel(greetTimer); }
       if (fx.type === 'stopAck') later(() => dispatch({ type: 'stopAck', id: fx.id }), 1600);
-      if (fx.type === 'reset') { epoch++; for (const t of timers) clearTimeout(t); timers.clear(); startClock(); }
+      if (fx.type === 'reset') { epoch++; for (const t of timers) clearTimeout(t); timers.clear(); transitionToken++; settleViews(['home']); shownView = 'home'; viewEl('home').dataset.active = 'true'; screen.dataset.view = 'home'; flyRose($('slot-tray')); startClock(); }
+    }
+    // Task status announcements (not conversation cues).
+    for (const id of Object.keys(state.tasks)) {
+      const a = before.tasks[id].state, b = state.tasks[id].state;
+      if (a === b) continue;
+      const words = { stopping: 'stopping', stopped: 'stopped', running: a === 'attention' ? 'working again' : a === 'idle' ? 'started' : '' }[b];
+      if (words) $('announcer').textContent = M.TASKS[id].title + ': ' + words + '.';
     }
     // First connection with an empty output: Rose answers with a formatted result.
     if (before.connection === 'connecting' && state.connection === 'connected' && !state.result) {
@@ -330,8 +394,17 @@
   function fit() {
     const stage = $('stage'), w = state.layout === 'unfolded' ? 748 : 384;
     const dw = w + 24, dh = 832 + 24;
-    const k = Math.min(1, (stage.clientHeight - 32) / dh, (stage.clientWidth - 32) / dw);
-    $('fit').style.setProperty('--fit', Math.max(0.3, k).toFixed(4));
+    let k;
+    if (window.innerWidth <= 820) {
+      // Narrow screens: fit by width and let the page scroll to the controls below.
+      k = Math.min(1, (window.innerWidth - 16) / dw);
+      stage.style.height = Math.ceil(dh * k + 16) + 'px';
+    } else {
+      stage.style.height = '';
+      k = Math.min(1, (stage.clientHeight - 32) / dh, (stage.clientWidth - 32) / dw);
+    }
+    const kk = Math.max(0.3, k).toFixed(4);
+    if ($('fit').style.getPropertyValue('--fit') !== kk) { $('fit').style.setProperty('--fit', kk); renderer.refresh(); }
   }
   window.addEventListener('resize', fit);
 

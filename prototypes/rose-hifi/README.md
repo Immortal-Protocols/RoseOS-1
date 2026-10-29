@@ -109,8 +109,11 @@ only. It is not physical-device acceptance:
 - Headless Chromium 153.0.8010.12 rendered WebGL through ANGLE with SwiftShader,
   which is software Vulkan.
 - The rAF intervals measured there are not GPU timings or device performance.
-- Chromium logs "GPU stall due to ReadPixels" performance warnings in that
-  software path.
+- Chromium logs four "GPU stall due to ReadPixels" performance warnings, then
+  stops repeating them. The app makes no readPixels calls. An independent
+  reviewer reproduced the warning with a transparent WebGL canvas under
+  SwiftShader. Switching the canvas to straight alpha did not remove it in this
+  environment.
 - Physical-device rendering, touch feel and GPU performance remain unverified.
 
 ## Provenance

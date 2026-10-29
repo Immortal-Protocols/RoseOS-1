@@ -61,9 +61,13 @@ vec4 sampleAt(vec2 frag){
 void main(){
  vec4 c=sampleAt(gl_FragCoord.xy+vec2(-.25,-.125))+sampleAt(gl_FragCoord.xy+vec2(.25,.125))
        +sampleAt(gl_FragCoord.xy+vec2(.125,-.25))+sampleAt(gl_FragCoord.xy+vec2(-.125,.25));
- gl_FragColor=c*.25;
+ c*=.25;
+ // Straight alpha out: premultiplied canvases force a per-present readback in software ANGLE.
+ gl_FragColor=vec4(c.rgb/max(c.a,1e-4),c.a);
 }`;
 
+  // Lens leaves room for the broad speaking surround inside the canvas.
+  const LENS = 1.6;
   const GAPS = { connected: 0.012, connecting: 0.10, disconnected: 0.38 };
   const VOICES = { quiet: 0, listening: 1, speaking: 2 };
 
@@ -115,7 +119,7 @@ void main(){
     }
     function initialize() {
       try {
-        gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, powerPreference: 'low-power' });
+        gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, antialias: false, powerPreference: 'low-power' });
         if (!gl) throw new Error('WebGL is unavailable');
         const vs = compile(gl.VERTEX_SHADER, VERTEX), fs = compile(gl.FRAGMENT_SHADER, FRAGMENT);
         program = gl.createProgram();
@@ -139,10 +143,10 @@ void main(){
       if (!gl || !program || lost || forced) return;
       const r = canvas.getBoundingClientRect();
       if (!r.width || !r.height) return;
-      // Cap backing store: DPR ≤ 2 and ≤ 360 px per side keeps 4× supersampling affordable.
+      // Cap backing store: DPR ≤ 2 and ≤ 480 px per side keeps 4× supersampling affordable.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = Math.min(360, Math.max(1, Math.round(r.width * dpr)));
-      const h = Math.min(360, Math.max(1, Math.round(r.height * dpr)));
+      const w = Math.min(480, Math.max(1, Math.round(r.width * dpr)));
+      const h = Math.min(480, Math.max(1, Math.round(r.height * dpr)));
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       gl.viewport(0, 0, w, h);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -152,7 +156,7 @@ void main(){
       gl.uniform1f(uniforms.mic, current.mic);
       gl.uniform1f(uniforms.voice, current.voice);
       gl.uniform1f(uniforms.energy, energy);
-      gl.uniform1f(uniforms.lens, 2.05);
+      gl.uniform1f(uniforms.lens, LENS);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       draws++;
     }
@@ -170,27 +174,44 @@ void main(){
       } else current = Object.assign({}, target);
       draw();
       const shown = canvas.isConnected && canvas.offsetParent !== null;
-      const live = shown && !document.hidden && !reduced && !forced && !lost && program && (current.voice > 0.001 || moving());
+      const live = shown && !document.hidden && !reduced && !forced && !lost && program && (current.voice > 1.001 || moving());
       if (live) request(); else last = 0;
     }
 
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; cancelAnimationFrame(raf); raf = 0; last = 0; showFallback(true); });
     canvas.addEventListener('webglcontextrestored', () => { program = null; initialize(); });
-    document.addEventListener('visibilitychange', () => { cancelAnimationFrame(raf); raf = 0; last = 0; if (!document.hidden) request(); report(status()); });
-    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => request()).observe(canvas);
+    function onVisibility() { cancelAnimationFrame(raf); raf = 0; last = 0; if (!document.hidden) request(); report(status()); }
+    document.addEventListener('visibilitychange', onVisibility);
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(() => request()); ro.observe(canvas); }
     else window.addEventListener('resize', request);
 
     initialize();
 
     return {
       setSignals(sig) {
-        target = { mic: sig.mic ? 1 : 0, gap: GAPS[sig.connection] ?? GAPS.connected, voice: VOICES[sig.voice] ?? 0 };
+        const next = { mic: sig.mic ? 1 : 0, gap: GAPS[sig.connection] ?? GAPS.connected, voice: VOICES[sig.voice] ?? 0 };
+        const changed = Object.keys(next).some((k) => next[k] !== target[k]) || (typeof sig.energy === 'number' && sig.energy !== energy);
+        if (!changed) return;
+        target = next;
         if (typeof sig.energy === 'number') energy = sig.energy;
         if (reduced) current = Object.assign({}, target);
         updateFallback();
         request();
       },
-      setReduced(on) { reduced = !!on; current = Object.assign({}, target); last = 0; request(); report(status()); },
+      setReduced(on) {
+        if (!!on === reduced) return;
+        reduced = !!on; if (reduced) current = Object.assign({}, target);
+        last = 0; request(); report(status());
+      },
+      refresh() { request(); },
+      destroy() {
+        cancelAnimationFrame(raf); raf = 0;
+        if (ro) ro.disconnect();
+        document.removeEventListener('visibilitychange', onVisibility);
+        if (gl && program) { gl.deleteProgram(program); program = null; }
+        const ext = gl && gl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext();
+      },
       setForcedFallback(on) {
         forced = !!on;
         if (forced) { cancelAnimationFrame(raf); raf = 0; showFallback(true); }

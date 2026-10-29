@@ -172,6 +172,7 @@ function transition(previous, event) {
       if (APPS[event.value]) {
         go('app', { app: event.value, window: null });
         s.recentApps = [event.value].concat(s.recentApps.filter((a) => a !== event.value)).slice(0, 6);
+        s.humanCarousel = 0; // the opened app becomes the front card
       }
       break;
     case 'openWindow': if (WINDOWS[event.value]) go('window', { window: event.value, app: null }); break;

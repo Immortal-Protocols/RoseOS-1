@@ -92,11 +92,11 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 .overview-glyph i:last-child{background:linear-gradient(180deg,#6aa2ff,#2f6be6);box-shadow:0 0 0 1px rgba(30,80,200,.6),inset 0 2px 2px rgba(255,255,255,.45)}
 .rose-slot{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;z-index:1}
 .rose-slot canvas,.rose-slot .rose-fallback{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
-.well .rose-slot canvas,.well .rose-slot .rose-fallback{width:80px;height:80px}
+.well .rose-slot canvas,.well .rose-slot .rose-fallback{width:102px;height:102px}
 
 /* ---------- Rose renderer static fallback (mirrors the three signals) ---------- */
 .rose-fallback{display:grid;place-items:center}
-.rose-fallback .orb{position:relative;width:47%;height:47%}
+.rose-fallback .orb{position:relative;width:37%;height:37%}
 .rose-fallback .h{position:absolute;left:0;width:100%;height:50%;background:radial-gradient(ellipse at 30% 22%,#fff 0,rgba(255,255,255,0) 32%),linear-gradient(115deg,#7d91a3,#dfe7ee 42%,#6e8496 78%,#eef3f9);transition:transform var(--t-med) var(--ease)}
 .rose-fallback .h.up{top:0;border-radius:999px 999px 6% 6%/999px 999px 8% 8%}
 .rose-fallback .h.lo{bottom:0;border-radius:6% 6% 999px 999px/8% 8% 999px 999px;background:linear-gradient(115deg,#8aa0b1,#cfdae5 42%,#53697a)}
@@ -104,16 +104,16 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 .rose-fallback[data-mic=on] .h.lo{background:linear-gradient(115deg,#a86677,#e8b2bd 44%,#7e4152)}
 .rose-fallback[data-connection=connecting] .h.up{transform:translateY(-5%)}
 .rose-fallback[data-connection=disconnected] .h.up{transform:translateY(-19%)}
-.rose-fallback .ring{position:absolute;width:52%;height:52%;border-radius:50%;border:1.5px solid #f4faff;box-shadow:0 0 6px #b9c8ff,0 0 14px #e4f4ff,inset 0 0 8px #c4e2ff;opacity:0;transition:all var(--t-med) var(--ease)}
+.rose-fallback .ring{position:absolute;width:41%;height:41%;border-radius:50%;border:1.5px solid #f4faff;box-shadow:0 0 6px #b9c8ff,0 0 14px #e4f4ff,inset 0 0 8px #c4e2ff;opacity:0;transition:all var(--t-med) var(--ease)}
 .rose-fallback[data-voice=listening] .ring{opacity:1}
-.rose-fallback[data-voice=speaking] .ring{opacity:1;width:76%;height:76%}
+.rose-fallback[data-voice=speaking] .ring{opacity:1;width:62%;height:62%}
 
 /* ---------- Home ---------- */
 .home-pages{position:absolute;inset:0;overflow:hidden;touch-action:pan-y}
 .home-track{display:flex;height:100%;transition:transform var(--t-slow) var(--ease);will-change:transform}
 .home-track.dragging{transition:none}
 .home-page{flex:0 0 100%;height:100%;position:relative;padding:0 var(--margin)}
-.home-date{position:absolute;top:96px;left:0;right:0;text-align:center;color:#fff;font-size:22px;font-weight:400;letter-spacing:-.01em;text-shadow:0 1px 10px rgba(20,50,90,.45)}
+.home-date{position:absolute;top:132px;left:0;right:0;text-align:center;color:#fff;font-size:22px;font-weight:400;letter-spacing:-.01em;text-shadow:0 1px 10px rgba(20,50,90,.45)}
 .app-grid{position:absolute;left:var(--margin);right:var(--margin);display:grid;grid-template-columns:repeat(var(--cols,3),1fr);row-gap:22px;justify-items:center}
 .home-page.sparse .app-grid{bottom:210px;--cols:3;padding:0 6px}
 .home-page.full .app-grid{top:84px;--cols:4;row-gap:20px}
@@ -141,7 +141,7 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 .rose-head h2{margin:0;font-size:30px;font-weight:450;letter-spacing:-.03em}
 .rose-stage{position:absolute;width:220px;height:220px;left:50%;top:228px;margin-left:-110px;z-index:4;pointer-events:none;
   transform-origin:center;transition:transform var(--t-slow) var(--ease)}
-.rose-stage .rose-slot canvas,.rose-stage .rose-slot .rose-fallback{width:220px;height:220px}
+.rose-stage .rose-slot canvas,.rose-stage .rose-slot .rose-fallback{width:282px;height:282px}
 .rose-caption{position:absolute;left:0;right:0;top:470px;text-align:center;font-size:15px;color:var(--ink-2);z-index:4;transition:all var(--t-slow) var(--ease);min-height:20px}
 .screen[data-result=true] .rose-stage{transform:translate(-128px,-176px) scale(.4)}
 .screen[data-result=true] .rose-caption{text-align:left;left:calc(var(--margin) + 84px);top:151px}
@@ -164,6 +164,7 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 .screen[data-view=home] .home-bar{display:none}
 
 /* ---------- Notifications ---------- */
+.screen.locked #sheet-host{display:none}
 .notices{position:absolute;top:56px;left:var(--margin);right:var(--margin);z-index:50;display:grid;gap:8px;justify-items:center;pointer-events:none}
 .notice{pointer-events:auto;display:flex;align-items:center;gap:12px;min-height:48px;padding:10px 18px 10px 12px;border-radius:26px;max-width:100%;
   background:linear-gradient(180deg,rgba(255,255,255,.94),rgba(244,247,251,.9));backdrop-filter:blur(20px) saturate(1.4);
@@ -181,7 +182,7 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 @keyframes lift{to{transform:translateY(-140%);opacity:0}}
 
 /* ---------- Lock ---------- */
-.lock{position:absolute;inset:0;z-index:45;display:grid;align-content:start;justify-items:center;padding-top:150px;color:#fff;text-shadow:0 2px 14px rgba(10,30,60,.5)}
+.lock{position:absolute;inset:0;z-index:57;display:grid;align-content:start;justify-items:center;padding-top:150px;color:#fff;text-shadow:0 2px 14px rgba(10,30,60,.5)}
 .lock .wall{filter:brightness(.82)}
 .lock .time{position:relative;font-size:84px;font-weight:300;letter-spacing:-.04em;line-height:1}
 .lock .date{position:relative;font-size:18px;margin-top:8px}
@@ -219,7 +220,7 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 .hopen,.wopen{position:absolute;inset:0;z-index:2;border-radius:inherit}
 .sw-link{position:absolute;left:var(--margin);right:var(--margin);top:560px;height:56px}
 .sw-rose{position:absolute;left:-6px;top:-4px;width:64px;height:64px}
-.sw-rose .rose-slot canvas,.sw-rose .rose-slot .rose-fallback{width:64px;height:64px}
+.sw-rose .rose-slot canvas,.sw-rose .rose-slot .rose-fallback{width:82px;height:82px}
 .wire{position:absolute;left:52px;right:24px;top:28px;height:56px;width:calc(100% - 76px);overflow:visible}
 .wire path{fill:none;stroke:rgba(80,100,130,.35);stroke-width:1.6;stroke-dasharray:1.2 3.2;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .working .wire path{stroke:rgba(70,110,200,.75);stroke-width:2.2;animation:flow 1.4s linear infinite}
@@ -349,3 +350,53 @@ button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);out
 .hbody .c-browser,.hbody .c-list,.hbody .c-photos,.hbody .c-camera,.hbody .c-big,.hbody .c-msg,.hbody .c-music,.hbody .c-notes,.hbody .c-mail,.hbody .c-files,.hbody .c-editor,.hbody .c-cal,.hbody .c-maps{border-radius:14px}
 .hbody{position:relative}
 .static-motion .caret,.static-motion .pointer,.static-motion .working .wire path{animation:none!important}
+
+/* ---------- Review fixes (notices, legibility, materials, targets, focus) ---------- */
+.screen.locked .notices{top:300px;z-index:58}
+.screen[data-view=rose] .notices{left:132px;justify-items:end}
+.notice{text-align:left}
+.notice>span:last-child{min-width:0;flex:1}
+.app .label{text-shadow:0 0 2px rgba(8,22,45,.9),0 1px 3px rgba(8,22,45,.75),0 2px 12px rgba(8,22,45,.55)}
+.home-date{text-shadow:0 0 2px rgba(8,22,45,.6),0 1px 14px rgba(8,22,45,.55)}
+.home-page.full .app-grid{top:auto;bottom:196px}
+.device.unfolded .wall{background-position:center 12%}
+/* Brushed metal: visible horizontal grain plus one diagonal specular from the upper left. */
+.tray{background:linear-gradient(100deg,transparent 28%,rgba(255,255,255,.55) 44%,transparent 60%),var(--brush),linear-gradient(180deg,#f6f7f9 0%,#e3e7eb 38%,#cfd5db 62%,#e8ebee 100%);
+  background-size:100% 100%,180px 7px,100% 100%;background-blend-mode:normal,overlay,normal}
+/* Recessed pocket around each glass lens. */
+.well{box-shadow:inset 0 2px 1px rgba(255,255,255,.95),inset 0 -4px 8px rgba(70,92,125,.22),inset 0 0 0 1px rgba(255,255,255,.65),0 0 0 1px rgba(95,115,142,.42),0 0 0 4px rgba(198,206,215,.9),0 0 0 5px rgba(120,135,155,.35),0 1px 0 5px rgba(255,255,255,.75)}
+.well:active,.well.pressed{box-shadow:inset 0 3px 8px rgba(60,80,110,.3),inset 0 -1px 2px rgba(255,255,255,.6),0 0 0 1px rgba(95,115,142,.42),0 0 0 4px rgba(198,206,215,.9),0 0 0 5px rgba(120,135,155,.35)}
+.well.selected{box-shadow:inset 0 2px 1px rgba(255,255,255,.95),inset 0 -4px 8px rgba(70,92,125,.18),0 0 0 1px rgba(80,140,255,.7),0 0 0 4px rgba(198,206,215,.9),0 0 16px rgba(80,140,255,.55)}
+span.well{cursor:default}
+/* Switcher shadows have room; agent cards too. */
+.sw-human{top:48px;height:520px;padding-bottom:64px;padding-top:36px}
+.hcard{box-shadow:0 0 0 1px rgba(120,140,170,.16),0 12px 26px rgba(25,45,80,.18),0 2px 6px rgba(25,45,80,.1)}
+.sw-agent{padding-bottom:26px;height:196px}
+.wire.idle path{animation:none;stroke:rgba(80,100,130,.25)}
+/* Focus rings drawn inside clipped cards. */
+.hopen:focus-visible,.wopen:focus-visible{outline-offset:-4px;border-radius:22px}
+/* 44 px targets. */
+.page-dots{gap:0;bottom:134px}
+.page-dots button{width:44px;height:44px}
+.home-bar{height:44px;bottom:0}
+.hbtn{min-height:44px}
+.hcheck{min-height:44px}
+.screen img{-webkit-user-drag:none}
+/* Window cards: browser content fits small windows. */
+.wcard .c-browser .hero{height:34%}
+.wcard .c-browser p,.wcard .c-browser h4{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Attention choice in window detail. */
+.choice{margin-top:12px;padding:14px 16px;border-radius:20px;background:#fff8ec;box-shadow:inset 0 0 0 1px rgba(230,162,58,.35)}
+.choice p{margin:0 0 10px;font-size:15px;font-weight:550}
+.choice div{display:flex;gap:8px}
+.choice .sbtn{min-height:44px;font-size:14px;background:#fff}
+.detail-frame{height:400px}
+@media (max-width:820px){
+  body{overflow:auto}
+  .page{height:auto;display:block}
+  .stage{height:auto}
+  .harness{max-height:none}
+}
+/* Clip (not hidden) so focusing an off-screen control can never scroll the phone itself. */
+.screen,.home-pages,.stage{overflow:clip}
+.view{overflow:clip}

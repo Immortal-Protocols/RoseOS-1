@@ -39,7 +39,7 @@
   const RASTER = { firefox: '%%ICON_FIREFOX%%', thunderbird: '%%ICON_THUNDERBIRD%%', vlc: '%%ICON_VLC%%' };
 
   function appArt(id) {
-    if (RASTER[id]) return '<img alt="" src="' + RASTER[id] + '">';
+    if (RASTER[id]) return '<img alt="" draggable="false" src="' + RASTER[id] + '">';
     return ART[id] || ART.files;
   }
   window.RoseIcons = { UI, appArt };

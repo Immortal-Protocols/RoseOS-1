@@ -54,11 +54,12 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
 
   // Home → Rose
   await page.locator('#tray-rose').click();
+  const firstConn = (await st()).connection;
   await page.waitForTimeout(260);
   await shot('04-rose-opening-transition');
   await page.waitForTimeout(500);
   let s = await st();
-  check('Rose opens and connects', s.view === 'rose' && s.connection === 'connecting', s.connection);
+  check('Rose opens and starts connecting', s.view === 'rose' && firstConn === 'connecting', firstConn + ' → ' + s.connection);
   await shot('05-rose-connecting');
   await page.waitForTimeout(1500);
   s = await st();
@@ -272,6 +273,39 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await shot('31-home-task-notice');
   s = await st();
   check('completion notice is a task notice', s.tasks.saturday.state === 'done');
+
+  // ---------- Regression checks for review findings ----------
+  await page.locator('#h-folded').click();
+  await page.locator('#h-reset').click(); await settle(400);
+  await page.locator('#h-tasks').click();
+  await page.locator('#tray-overview').click(); await page.waitForTimeout(80);
+  await page.locator('#h-reset').click(); await settle(700);
+  const active = await page.evaluate(() => [...document.querySelectorAll('.view[data-active=true]')].map((v) => v.id));
+  const hit = await page.evaluate(() => { const r = document.getElementById('tray-rose').getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).closest('#tray-rose') !== null; });
+  check('reset mid-transition leaves only Home active and tappable', active.join() === 'v-home' && hit, active.join());
+  await page.locator('#h-tasks').click();
+  await page.locator('#tray-rose').click(); await page.waitForTimeout(1500);
+  await page.locator('#rose-agents').click(); await settle(500);
+  await page.locator('#agrid [data-window=w-research] [data-stop]').click(); await settle(300);
+  await page.locator('#h-lock').click(); await settle(300);
+  const unlockHit = await page.evaluate(() => { const r = document.getElementById('unlock').getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).id === 'unlock'; });
+  check('lock screen covers an open Stop sheet; Unlock reachable', unlockHit && !(await page.locator('.sheet').isVisible()));
+  await page.locator('#unlock').click(); await settle(300);
+  check('confirmation preserved through lock', (await st()).pendingStop === 'compare' && await page.locator('.sheet').isVisible());
+  await page.keyboard.press('Escape'); await settle(300);
+  const fid = await page.evaluate(() => { const a = document.activeElement; return a && a.closest('[data-window]') ? a.closest('[data-window]').dataset.window : a.tagName; });
+  check('focus returns to the Stop control’s card after the sheet closes', fid === 'w-research', fid);
+  await page.locator('#h-attn').click(); await settle(300);
+  await page.locator('#agrid [data-open-window=w-mail]').click(); await settle(500);
+  const choices = await page.locator('[data-choose]').count();
+  check('needs-choice window offers a choice', choices === 2, choices);
+  await shot('32-attention-choice');
+  await page.locator('[data-choose]').first().click(); await settle(300);
+  check('making the choice resumes the task', (await st()).tasks.reply.state === 'running');
+  const tooSmall = await page.evaluate(() => [...document.querySelectorAll('#screen button:not([disabled]), .harness button')].filter((b) => { const r = b.getBoundingClientRect(); const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const isPhone = b.closest('#screen'); const w = isPhone ? r.width / k : r.width, h = isPhone ? r.height / k : r.height; return r.width && (w < 43.5 || h < 43.5); }).map((b) => b.id || b.className || b.getAttribute('aria-label')));
+  check('visible controls are at least 44 CSS px', tooSmall.length === 0, tooSmall.join(', '));
+  const scrolled = await page.evaluate(() => document.getElementById('screen').scrollTop + document.getElementById('screen').scrollLeft);
+  check('phone surface never scrolls under focus', scrolled === 0);
 
   r = await rs();
   const f = r.frames.slice().sort((a, b) => a - b);
