@@ -50,7 +50,6 @@ public final class RosePresenceModelTest {
         expect(converging && m.gap < RosePresenceModel.GAP_WIDE && m.gap > RosePresenceModel.GAP_JOINED, "Gap eases from wide toward joined");
         for (int i = 0; i < 400; i++) m.step(.016f);
         expect(near(m.gap, RosePresenceModel.GAP_JOINED) && near(m.mic, 1f) && near(m.voice, 1f), "Then settles exactly on the target");
-        expect(m.step(.016f), "A lit surround keeps breathing while visible");
         m.set(RoseVisualState.from(ACTIVE, 0f, .9f, false, true));
         for (int i = 0; i < 400; i++) m.step(.016f);
         float lo = Float.MAX_VALUE, hi = 0f;
@@ -68,6 +67,21 @@ public final class RosePresenceModelTest {
         expect(RosePresenceModel.describe(RoseVisualState.from(CONNECTING, 0f, 0f, true, true)).equals("Rose: connecting, microphone off"), "Connecting described");
         expect(RosePresenceModel.mix(RosePresenceModel.SILVER, RosePresenceModel.ROSE, 0f) == RosePresenceModel.SILVER
                 && RosePresenceModel.mix(RosePresenceModel.SILVER, RosePresenceModel.ROSE, 1f) == RosePresenceModel.ROSE, "Metal mix endpoints");
+
+        // The quiet caption (HiFi .rose-caption), from the same state; never a notice.
+        expect(RosePresenceModel.caption(RoseVisualState.from(IDLE, Float.NaN, Float.NaN, true, true)).isEmpty(), "No caption when not in a call");
+        expect(RosePresenceModel.caption(RoseVisualState.from(CONNECTING, 0f, 0f, true, true)).equals("Connecting…"), "Connecting caption");
+        expect(RosePresenceModel.caption(RoseVisualState.from(ACTIVE, .2f, 0f, true, true)).equals("Listening"), "Listening caption");
+        expect(RosePresenceModel.caption(RoseVisualState.from(MUTED, 0f, 0f, true, true)).equals("Microphone muted"), "Muted caption");
+        expect(RosePresenceModel.caption(RoseVisualState.from(MUTED, 0f, .5f, true, true)).equals("Rose speaking"), "Muted while Rose speaks says Rose is speaking");
+        expect(RosePresenceModel.caption(RoseVisualState.from(ACTIVE, Float.NaN, Float.NaN, true, true)).equals("Listening"), "Unknown levels never claim speaking");
+        // HiFi frame policy: a settled listening ring holds still; only speaking keeps frames.
+        RosePresenceModel still = shown(ACTIVE, .2f, 0f, true);
+        for (int i = 0; i < 400; i++) still.step(.016f);
+        expect(!still.step(.016f), "Settled listening stops frames");
+        RosePresenceModel talking = shown(ACTIVE, 0f, .5f, true);
+        for (int i = 0; i < 400; i++) talking.step(.016f);
+        expect(talking.step(.016f), "Speaking keeps the surround moving");
 
         System.out.println("RosePresenceModelTest: " + checks + " checks passed");
     }

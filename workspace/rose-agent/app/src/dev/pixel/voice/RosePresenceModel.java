@@ -6,13 +6,14 @@ package dev.pixel.voice;
  * microphone axis is the metal (rose when on, silver when muted), and the voice axis is a camera-facing ring
  * (none when quiet, close at 1.075 radii while listening, broad at 1.55 radii plus speech energy while
  * speaking). Values ease toward their targets frame by frame; with animation off they snap and the ring holds
- * still. Pure logic (no Android types) so it is testable; it never creates session state. */
+ * still. Rendering choices follow the HiFi prototype's shared renderer (prototypes/rose-hifi/src/renderer.js at ce126f56):
+ * easing at 5.5 per second, and frames only while Rose speaks or a value is still settling. Pure logic (no Android types) so it is testable; it never creates session state. */
 final class RosePresenceModel {
  static final float GAP_JOINED=.012f,GAP_NARROW=.10f,GAP_WIDE=.38f;
  static final float RING_CLOSE=1.075f,RING_BROAD=1.55f,RING_ENERGY=.12f;
  static final int ROSE=0xfff27a87,SILVER=0xffa6bacf,LIGHT=0xffa3c4ff;
- /** Easing rate per second, as in the study's per-frame approach to its target. */
- static final float RATE=6f;
+ /** Easing rate per second (HiFi renderer). */
+ static final float RATE=5.5f;
 
  float gap=GAP_WIDE,mic=0f,voice=0f,energy=0f;
  private float targetGap=GAP_WIDE,targetMic=0f,targetVoice=0f,targetEnergy=0f;private boolean animate;
@@ -33,7 +34,7 @@ final class RosePresenceModel {
   gap+=(targetGap-gap)*k;mic+=(targetMic-mic)*k;voice+=(targetVoice-voice)*k;energy+=(targetEnergy-energy)*k;
   boolean settled=Math.abs(targetGap-gap)<.001f&&Math.abs(targetMic-mic)<.002f&&Math.abs(targetVoice-voice)<.002f&&Math.abs(targetEnergy-energy)<.002f;
   if(settled){gap=targetGap;mic=targetMic;voice=targetVoice;energy=targetEnergy;}
-  return !settled||voice>0f; // a lit ring keeps breathing while visible
+  return !settled||voice>1.001f; // only the speaking surround keeps moving once settled
  }
  /** Ring opacity: zero when quiet, full from listening on. */
  float ringAlpha(){return smooth(0f,.85f,voice);}
@@ -51,6 +52,13 @@ final class RosePresenceModel {
   t=Math.max(0f,Math.min(1f,t));
   int r=Math.round(((a>>16)&255)+(((b>>16)&255)-((a>>16)&255))*t),g=Math.round(((a>>8)&255)+(((b>>8)&255)-((a>>8)&255))*t),bl=Math.round((a&255)+((b&255)-(a&255))*t);
   return 0xff000000|(r<<16)|(g<<8)|bl;
+ }
+ /** The quiet caption under Rose (HiFi .rose-caption): connection and voice in words, from the same state. It is
+  * not a notice and is hidden from accessibility (the presence's description says the same). */
+ static String caption(RoseVisualState v){
+  if(v.connection==RoseVisualState.Connection.NARROW_GAP)return "Connecting…";
+  if(v.connection!=RoseVisualState.Connection.JOINED)return "";
+  return v.surround==RoseVisualState.Surround.SPEAKING?"Rose speaking":v.mic==RoseVisualState.Mic.SILVER?"Microphone muted":"Listening";
  }
  /** Spoken summary for accessibility; the visible notices stay the four conversation notices. */
  static String describe(RoseVisualState v){
