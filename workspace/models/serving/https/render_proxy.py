@@ -4,7 +4,14 @@
 Commands are offline. They write files and read the token file; nothing here contacts ACME, DNS,
 GCP or any endpoint, and nothing starts a service.
 
-  render     Write nginx.conf, caddy.json and manifest.json from closed, validated inputs.
+  render     Write nginx.conf (plus caddy.json in loopback mode) and manifest.json from closed,
+             validated inputs. Two front modes:
+               --front tls       Nginx terminates TLS itself on :443 with an explicit fullchain and key.
+                                 This is the deployment mode while Caddy acquisition is held.
+               --front loopback  Nginx on 127.0.0.1:8080 behind Caddy. caddy.json is unvalidated.
+  check-tls  Check a certificate/key pair before starting: the key is 0600 and owned by the caller,
+             the leaf's SAN names the hostname exactly, the leaf is unexpired, CA-issued and matches
+             the key, and the fullchain carries at least one issuer certificate.
   token-map  Turn a protected token file into the 0600 Nginx include that holds the bearer match.
              The token never appears in argv, stdout, the rendered configs or the manifest.
 
@@ -25,13 +32,16 @@ import json
 import os
 from pathlib import Path
 import re
+import ssl
 import stat
 import sys
+import time
 
 SCHEMA = 'rose-models-https-edge/1'
 HOST_RE = re.compile(r'^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
 # Paths are interpolated into config files, so they must be plain absolute paths.
 PATH_RE = re.compile(r'^/[A-Za-z0-9._/-]+$')
+IPV4_RE = re.compile(r'^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$')
 TOKEN_RE = re.compile(r'^([A-Za-z0-9_-]{43}|[0-9a-f]{64})$')  # 256 bits, base64url or hex
 ROUTES = {'/v1/chat/completions': 'POST', '/v1/models': 'GET'}
 BODY_LIMIT = '256k'
@@ -59,7 +69,7 @@ def check_inputs(hostname, runtime_dir, nginx_port, upstream_port, timeout_s):
         raise Invalid('timeout must be 1-120 seconds (120 for deployment)')
 
 
-def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s):
+def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls=None):
     locations = []
     for path, method in ROUTES.items():
         locations.append(f'''        location = {path} {{
@@ -73,6 +83,36 @@ def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s):
             proxy_pass http://127.0.0.1:{upstream_port};
         }}''')
     body = '\n'.join(locations)
+    if tls is None:
+        servers = f'''    server {{
+        listen 127.0.0.1:{nginx_port};
+        server_name _;
+        if ($args != "") {{ return 400; }}
+{body}
+        location / {{ return 404; }}
+    }}'''
+    else:
+        listen = f"{tls['address']}:{tls['port']} ssl"
+        servers = f'''    # Any SNI other than the one hostname (or none) fails the TLS handshake. A request whose
+    # Host names another server is routed here too and gets 421.
+    server {{
+        listen {listen} default_server;
+        server_name _;
+        ssl_reject_handshake on;
+        return 421;
+    }}
+
+    server {{
+        listen {listen};
+        server_name {tls['hostname']};
+        ssl_certificate {tls['fullchain']};
+        ssl_certificate_key {tls['key']};
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_tickets off;
+        if ($args != "") {{ return 400; }}
+{body}
+        location / {{ return 404; }}
+    }}'''
     return f'''# Rendered by workspace/models/serving/https/render_proxy.py ({SCHEMA}). Do not edit by hand.
 worker_processes 1;
 pid {runtime_dir}/nginx.pid;
@@ -117,13 +157,7 @@ http {{
         include {runtime_dir}/token.map;
     }}
 
-    server {{
-        listen 127.0.0.1:{nginx_port};
-        server_name _;
-        if ($args != "") {{ return 400; }}
-{body}
-        location / {{ return 404; }}
-    }}
+{servers}
 }}
 '''
 
@@ -163,24 +197,59 @@ def caddy_json(hostname, nginx_port):
     }
 
 
-def render(out_dir, hostname, runtime_dir, nginx_port, upstream_port, timeout_s):
+def check_tls_inputs(fullchain, key, address, port):
+    for name, path in (('fullchain', fullchain), ('key', key)):
+        if not path or not PATH_RE.match(path) or '/../' in path + '/':
+            raise Invalid(f'{name} path must be a plain absolute path')
+    if address not in ('0.0.0.0', '127.0.0.1') and not IPV4_RE.match(address):
+        raise Invalid('public address must be an IPv4 address')
+    if not (port == 443 or 1024 <= port <= 65535):
+        raise Invalid('public port must be 443 or 1024-65535')
+
+
+def render(out_dir, hostname, runtime_dir, nginx_port, upstream_port, timeout_s, front='loopback',
+           fullchain=None, key=None, public_address='0.0.0.0', public_port=443):
     check_inputs(hostname, runtime_dir, nginx_port, upstream_port, timeout_s)
+    if front not in ('loopback', 'tls'):
+        raise Invalid('front must be tls or loopback')
     out_dir.mkdir(parents=True, exist_ok=True)
-    files = {
-        'nginx.conf': nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s).encode(),
-        'caddy.json': (json.dumps(caddy_json(hostname, nginx_port), indent=2, sort_keys=True) + '\n').encode(),
-    }
+    if front == 'tls':
+        check_tls_inputs(fullchain, key, public_address, public_port)
+        if public_port == upstream_port:
+            raise Invalid('public and upstream ports must differ')
+        tls = {'address': public_address, 'port': public_port, 'hostname': hostname, 'fullchain': fullchain, 'key': key}
+        files = {'nginx.conf': nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls).encode()}
+    else:
+        files = {
+            'nginx.conf': nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s).encode(),
+            'caddy.json': (json.dumps(caddy_json(hostname, nginx_port), indent=2, sort_keys=True) + '\n').encode(),
+        }
+    for stale in ('nginx.conf', 'caddy.json'):
+        if stale not in files and (out_dir/stale).exists():
+            (out_dir/stale).unlink()
     for name, data in files.items():
         (out_dir/name).write_bytes(data)
+    if front == 'tls':
+        inputs = {'front': 'tls', 'hostname': hostname, 'runtime_dir': runtime_dir,
+                  'public_listen': f'{public_address}:{public_port}', 'fullchain': fullchain, 'key': key,
+                  'upstream': f'127.0.0.1:{upstream_port}', 'timeout_s': timeout_s}
+        tls_policy = {'terminator': 'nginx', 'protocols': ['TLSv1.2', 'TLSv1.3'], 'unknown_sni': 'handshake rejected',
+                      'certificate': 'provisioned separately; Certbot manual DNS-01 is the selected candidate'}
+    else:
+        inputs = {'hostname': hostname, 'runtime_dir': runtime_dir, 'nginx_listen': f'127.0.0.1:{nginx_port}',
+                  'upstream': f'127.0.0.1:{upstream_port}', 'timeout_s': timeout_s, 'public_listen': ':443'}
+        tls_policy = None
     manifest = {
         'schema': SCHEMA,
-        'inputs': {'hostname': hostname, 'runtime_dir': runtime_dir, 'nginx_listen': f'127.0.0.1:{nginx_port}',
-                   'upstream': f'127.0.0.1:{upstream_port}', 'timeout_s': timeout_s, 'public_listen': ':443'},
-        'policy': {'routes': ROUTES, 'body_limit': BODY_LIMIT, 'rate': RATE, 'burst': BURST, 'in_flight': 1,
-                   'acme': {'directory': LE_DIRECTORY, 'challenge': 'tls-alpn-01', 'http_challenge': 'disabled'}},
+        'inputs': inputs,
+        'policy': {'routes': ROUTES, 'body_limit': BODY_LIMIT, 'rate': RATE, 'burst': BURST, 'in_flight': 1},
         'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
         'token_map': f'{runtime_dir}/token.map',
     }
+    if tls_policy:
+        manifest['policy']['tls'] = tls_policy
+    else:
+        manifest['policy']['acme'] = {'directory': LE_DIRECTORY, 'challenge': 'tls-alpn-01', 'http_challenge': 'disabled'}
     (out_dir/'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
     return manifest
 
@@ -203,6 +272,40 @@ def token_map(token_file, out):
     os.chmod(out, 0o600)
 
 
+def check_tls(fullchain, key, hostname, now=None):
+    """Refuse a certificate/key pair that cannot serve `hostname` safely. Returns nonsecret facts."""
+    st = os.stat(key)
+    if not stat.S_ISREG(st.st_mode):
+        raise Invalid('key is not a regular file')
+    if st.st_mode & 0o077:
+        raise Invalid('key must not be readable by group or others (chmod 600)')
+    if st.st_uid != os.getuid():
+        raise Invalid('key must be owned by the user running this command')
+    chain = Path(fullchain).read_text()
+    count = chain.count('-----BEGIN CERTIFICATE-----')
+    if count < 2:
+        raise Invalid('fullchain must hold the leaf followed by its issuer certificate(s)')
+    try:
+        leaf = ssl._ssl._test_decode_cert(fullchain)
+    except Exception as e:
+        raise Invalid(f'fullchain leaf does not parse: {type(e).__name__}') from None
+    names = [v for k, v in leaf.get('subjectAltName', ()) if k == 'DNS']
+    if hostname not in names:
+        raise Invalid(f'leaf SAN {names} does not name {hostname} exactly')
+    if leaf.get('issuer') == leaf.get('subject'):
+        raise Invalid('leaf is self-signed')
+    not_after = ssl.cert_time_to_seconds(leaf['notAfter'])
+    if not_after <= (now if now is not None else time.time()):
+        raise Invalid('leaf has expired')
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    try:
+        ctx.load_cert_chain(fullchain, key)
+    except ssl.SSLError:
+        raise Invalid('key does not match the leaf certificate') from None
+    return {'hostname': hostname, 'san': names, 'chain_certificates': count, 'not_after': leaf['notAfter'],
+            'key_mode': oct(st.st_mode & 0o777)}
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
@@ -213,14 +316,26 @@ def main(argv=None):
     r.add_argument('--nginx-port', type=int, default=DEFAULTS['nginx_port'])
     r.add_argument('--upstream-port', type=int, default=DEFAULTS['upstream_port'])
     r.add_argument('--timeout-seconds', type=int, default=DEFAULTS['timeout_s'])
+    r.add_argument('--front', choices=('tls', 'loopback'), default='loopback')
+    r.add_argument('--fullchain', help='tls: publicly trusted leaf + issuer chain (PEM)')
+    r.add_argument('--key', help='tls: private key path (0600); never read by render')
+    r.add_argument('--public-address', default='0.0.0.0')
+    r.add_argument('--public-port', type=int, default=443)
+    c = sub.add_parser('check-tls')
+    c.add_argument('--fullchain', required=True)
+    c.add_argument('--key', required=True)
+    c.add_argument('--hostname', default=DEFAULTS['hostname'])
     t = sub.add_parser('token-map')
     t.add_argument('--token-file', required=True)
     t.add_argument('--out', required=True)
     a = p.parse_args(argv)
     try:
         if a.cmd == 'render':
-            manifest = render(a.out_dir, a.hostname, a.runtime_dir, a.nginx_port, a.upstream_port, a.timeout_seconds)
+            manifest = render(a.out_dir, a.hostname, a.runtime_dir, a.nginx_port, a.upstream_port, a.timeout_seconds,
+                              a.front, a.fullchain, a.key, a.public_address, a.public_port)
             print(json.dumps({'rendered': str(a.out_dir), 'files': manifest['files']}, sort_keys=True))
+        elif a.cmd == 'check-tls':
+            print(json.dumps(check_tls(a.fullchain, a.key, a.hostname), sort_keys=True))
         else:
             token_map(a.token_file, a.out)
             print(json.dumps({'token_map': a.out, 'mode': '0600'}))
