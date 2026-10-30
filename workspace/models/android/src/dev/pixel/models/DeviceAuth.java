@@ -14,8 +14,9 @@ import java.util.Map;
  * service-auth-v1 client: a hardware-attested device key enrolls once with an admin invite from a
  * scanned QR code, then each access token (at most 3600 s) is renewed by proof of possession over a
  * fresh server challenge. The bearer and the invite live in memory only; the store keeps just the
- * public key id and the enrollment state. A key is recorded as pending before its enrollment is sent,
- * so a lost reply is recovered by renewal rather than by spending another code.
+ * public key id and the enrollment state. A key is recorded as pending before its enrollment is sent;
+ * a timeout, 5xx or lost reply re-sends that enrollment with the same key and chain (the server
+ * recognizes the install without spending the code twice), and after a restart the key renews.
  *
  * 403 invite_required/invite_invalid waits for an explicit new scan. Any other 403 is terminal: the
  * bearer is cleared, the key and a revoked/refused state are kept, and nothing re-enrolls until
@@ -149,9 +150,11 @@ public final class DeviceAuth implements CredentialSource {
     }
 
     /**
-     * One attempt. A pending key (its enrollment was sent but the reply never arrived) first proves possession: if
-     * the server committed it, that renewal succeeds and no code is spent again. Only a 401 key_unknown proves it
-     * was never committed; only then may a new key enroll, and only with an invite.
+     * One attempt (service-auth-v1 enrollment sequence). A key whose enrollment outcome is unknown is never
+     * discarded: with an invite in memory its enrollment is re-sent with the same key and chain on a fresh signed
+     * challenge (the server returns the same install without spending the code again, or enrolls it now); without one
+     * (after a restart) it proves possession by renewal. Only a 401 challenge_mismatch on a never-enrolled key, during
+     * an explicit scan, allows a new key.
      */
     private EndpointCredential step(Cancel cancel) throws AuthFailure, Retry {
         State state = state();
@@ -161,24 +164,41 @@ public final class DeviceAuth implements CredentialSource {
         if (state == State.REFUSED) {
             throw AuthFailure.status(403, "auth_refused");
         }
-        if ((state == State.ENROLLED || state == State.PENDING) && keyPresent()) {
+        boolean present = keyPresent();
+        if (state == State.ENROLLED && present) {
             try {
-                EndpointCredential credential = renewOnce(cancel);
-                store.put(STATE, "enrolled");
-                invite.set(null);
-                return credential;
+                return renewOnce(cancel);
             } catch (KeyUnknown e) {
-                if (state == State.ENROLLED) {
-                    throw AuthFailure.status(401, "auth_rejected"); // the server forgot an enrolled key: no auto re-enroll
-                }
+                throw AuthFailure.status(401, "auth_rejected"); // the server forgot an enrolled key: no auto re-enroll
             }
         }
+        boolean pendingKey = present && (state == State.PENDING || state == State.INVITE_NEEDED);
         String code = invite.get();
         if (code == null) {
+            if (state == State.PENDING && pendingKey) {
+                try {
+                    EndpointCredential credential = renewOnce(cancel);
+                    store.put(STATE, "enrolled");
+                    return credential;
+                } catch (KeyUnknown e) {
+                    // never committed: the same key enrolls again after a scan
+                }
+            }
             store.put(STATE, "invite_needed");
             throw AuthFailure.status(403, "auth_invite_needed");
         }
-        return enrollOnce(cancel, code);
+        if (pendingKey) {
+            try {
+                return enrollOnce(cancel, code, true);
+            } catch (StaleKey e) {
+                // never enrolled and its attested challenge expired; this explicit scan may replace it
+            }
+        }
+        try {
+            return enrollOnce(cancel, code, false);
+        } catch (StaleKey e) {
+            throw AuthFailure.status(401, "auth_rejected"); // not thrown for a new key
+        }
     }
 
     /** Explicitly selected only: forget the key, state and any invite; the next scan enrolls again. */
@@ -198,12 +218,15 @@ public final class DeviceAuth implements CredentialSource {
         }
     }
 
-    private EndpointCredential enrollOnce(Cancel cancel, String code) throws AuthFailure, Retry {
+    private EndpointCredential enrollOnce(Cancel cancel, String code, boolean reuseKey)
+            throws AuthFailure, Retry, StaleKey {
         byte[] challenge = challenge(cancel);
         String body;
         String keyId;
         try {
-            key.create(challenge); // the attestation must carry this challenge, so each enrollment needs its own key
+            if (!reuseKey) {
+                key.create(challenge); // its attestation carries this first challenge for good
+            }
             keyId = key.keyId();
             StringBuilder chain = new StringBuilder("[");
             List<String> certs = key.attestation();
@@ -217,13 +240,16 @@ public final class DeviceAuth implements CredentialSource {
             throw AuthFailure.status(500, "auth_key_unavailable");
         }
         store.put(KEY_ID, keyId);
-        store.put(STATE, "pending"); // before sending: a lost reply is recovered by proof of possession
+        store.put(STATE, "pending"); // before sending: an unknown outcome is retried with this same key
         Reply reply = post(tokenUrl, body, cancel);
+        if (reuseKey && reply.status == 401 && "challenge_mismatch".equals(errorCode(reply))) {
+            throw new StaleKey();
+        }
         if (reply.status == 403) {
             String error = errorCode(reply);
             if ("invite_required".equals(error) || "invite_invalid".equals(error)) {
                 invite.set(null);
-                store.put(STATE, "invite_needed"); // waits for an explicit new scan
+                store.put(STATE, "invite_needed"); // waits for an explicit new scan; the key is kept
                 throw AuthFailure.status(403, "auth_invite_invalid");
             }
             store.put(STATE, "refused"); // enrollment_closed, attestation_revoked, ...: terminal, key kept
@@ -233,6 +259,10 @@ public final class DeviceAuth implements CredentialSource {
         store.put(STATE, "enrolled");
         invite.set(null);
         return credential;
+    }
+
+    /** A never-enrolled key whose attested challenge the server no longer accepts (401 challenge_mismatch). */
+    private static final class StaleKey extends Exception {
     }
 
     private EndpointCredential renewOnce(Cancel cancel) throws AuthFailure, Retry, KeyUnknown {
