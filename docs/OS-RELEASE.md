@@ -180,6 +180,19 @@ without Rose on-device discovery (13:32:59 UTC); Rose Updater integration follow
   Updater is there. The source expectation is absent: upstream `media_system.mk` adds it only with
   `OFFICIAL_BUILD=true`, and the patcher only with `--updater-url`.
 
+**Retained release notes pin.** The immutable product `02b21bc6` holds notes only for frankel builds, so
+`publication.notes` pins UPDATE.md separately: `{commit, path, sha256, build, device}` for exactly rango 2026103001
+(`os/release-notes/rango-2026103001.md`, manual installation only, no RoseOS on-device discovery). The bytes are read
+with `git show` from that commit, never the working tree. They are re-hashed before any login, again by host-sign
+(`release_notes`), at staging and by the hosted publisher, and recorded as `notesSource` in `rango-bindings.json`. The
+Rango builder checks out full history for that read. Frankel still reads `os/release-notes/{device}-{build}.md` from
+its candidate commit, unchanged.
+
+**Guard versus builder preflight.** The hosted guard (`preflight --job guard`) checks the complete static config,
+provenance selection, pinned notes and the declared `input.transport`, but never reads the builder-local input
+directory, which the hosted runner cannot see; `--input-dir` is refused there. `preflight --job builder` checks the
+exact five files, sizes and hashes before signer login, then `stage` and `recheck` revalidate the consumer copy.
+
 What the source already does:
 - **Input.** The input receipt schema is `roseos.rango-retained-input.v1`. It
   binds:

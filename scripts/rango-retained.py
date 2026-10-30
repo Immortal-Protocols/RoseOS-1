@@ -363,8 +363,10 @@ def bind_tool_proof(env, cfg):
     return rows, {k: summary[k] for k in ('proofSha256', 'helperBlob', 'helperRevision')}
 
 
-def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
-    """Every unbound binding of the route, before any controller, login or secret. Wrong values refuse instead."""
+def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True, local=True):
+    """Every unbound binding of the route, before any controller, login or secret. Wrong values refuse instead.
+    local=False is the hosted guard: the declared transport is validated, but the builder-local input directory, which
+    the hosted runner cannot read, is not; the builder preflight (local=True) checks its exact files and hashes."""
     cfg = check_config(cfg or config())
     missing = []
     transport = cfg['input'].get('transport')
@@ -375,7 +377,7 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
     elif not isinstance(transport, dict) or not str(transport.get('directory', '')).startswith('/') or not transport.get('kind'):
         raise Refused('config_invalid: input.transport must name its kind and an absolute builder directory')
     input_dir = input_dir or (transport or {}).get('directory')
-    if not inputs:
+    if not inputs or not local:
         pass
     elif input_dir:
         try:
@@ -399,9 +401,13 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
     for key in ('otatoolsProvenance', 'releaseScriptProvenance'):
         if cfg['signing'].get(key) is None:
             missing.append(f'signing.{key}')
-    for key in ('feedChannel', 'notes'):
-        if cfg['publication'].get(key) is None:
-            missing.append(f'publication.{key}')
+    if cfg['publication'].get('feedChannel') is None:
+        missing.append('publication.feedChannel')
+    notes = notes_binding(cfg)
+    if notes is None:
+        missing.append('publication.notes')
+    elif inputs:
+        notes_bytes(notes)  # read from the pinned commit and re-hashed before any login
     if cfg['verification'].get('expected') is None:
         missing.append('verification.expected')
     missing += ['verification.' + name for name in updater_contract(cfg, check=True)]
@@ -754,7 +760,7 @@ def sign_inputs(env):
         'host': {'sign': {'project': profile(cfg)['project'], 'keysSecret': secrets['keys'],
             'passphraseSecret': secrets['passphrase'], 'secretVersion': versions['keys'],
             'passphraseSecretVersion': versions['passphrase'], 'otatools': cfg['input']['otatools'],
-            'javaHome': jdk_home(), 'updateNotes': cfg['publication']['notes']}},
+            'javaHome': jdk_home(), 'updateNotes': notes_binding(cfg)}},
         'publication': {'channels': {'beta': {'feedChannel': cfg['publication']['feedChannel']}}}}
     if derive:
         bound['deriveIdentities'] = derive
@@ -779,6 +785,51 @@ def pipeline():
         spec.loader.exec_module(module)
         _PIPELINE.append(module)
     return _PIPELINE[0]
+
+
+NOTES_REPO = [ROOT]  # the repository holding the pinned notes commit (tests substitute a synthetic history)
+NOTES_PATH = re.compile(r'os/release-notes/[\w.-]+\.md')
+
+
+def notes_binding(cfg):
+    """publication.notes: UPDATE.md pinned separately from the immutable product commit (whose notes directory has no
+    entry for this build): the reviewed commit, the relative path, its sha256 and the exact build and device."""
+    notes = cfg['publication'].get('notes')
+    if notes is None:
+        return None
+    target = cfg['target']
+    if not isinstance(notes, dict) or sorted(notes) != ['build', 'commit', 'device', 'path', 'sha256'] \
+            or not re.fullmatch(r'[0-9a-f]{40}', str(notes['commit'])) or not NOTES_PATH.fullmatch(str(notes['path'])) \
+            or '..' in str(notes['path']).split('/') or not HEX64.fullmatch(str(notes['sha256'])):
+        raise Refused('notes_invalid: publication.notes must pin commit, os/release-notes/*.md path, sha256, build and device')
+    if (notes['device'], notes['build']) != (target['device'], target['build']):
+        raise Refused(f'notes_foreign: the pinned notes are for {notes["device"]} {notes["build"]}, not {target["device"]} {target["build"]}')
+    if notes['commit'] == target['product']:
+        raise Refused('notes_invalid: the notes are pinned separately from the product commit')
+    return notes
+
+
+def notes_bytes(notes):
+    """The pinned UPDATE.md bytes, read from the notes commit (never the working tree) and re-hashed."""
+    import subprocess
+    result = subprocess.run(['git', '-C', str(NOTES_REPO[0]), 'show', f'{notes["commit"]}:{notes["path"]}'], capture_output=True)
+    if result.returncode:
+        raise Refused(f'notes_unavailable: commit {notes["commit"][:12]} has no {notes["path"]}')
+    if hashlib.sha256(result.stdout).hexdigest() != notes['sha256']:
+        raise Refused(f'notes_drift: {notes["path"]} at {notes["commit"][:12]} differs from its pinned sha256')
+    if notes['build'].encode() not in result.stdout:
+        raise Refused(f'notes_foreign: {notes["path"]} does not name build {notes["build"]}')
+    return result.stdout
+
+
+def check_notes_asset(path, notes):
+    """The UPDATE.md that leaves the builder is exactly the pinned notes."""
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        raise Refused('notes_drift: no UPDATE.md to compare with the pinned notes') from None
+    if digest != notes['sha256']:
+        raise Refused('notes_drift: UPDATE.md is not the pinned release notes')
 
 
 def updater_contract(cfg, check=False):
@@ -892,6 +943,8 @@ def verify(env, consumer, release_dir, adapter=None):
 def stage_artifact(env, consumer, release_dir, artifact_dir, adapter=None):
     """release-pipeline stage_artifact plus the nonsecret bindings the hosted publisher revalidates."""
     cfg, input_receipt, binding, config, cand = bound(env, consumer)
+    notes = notes_binding(cfg)
+    check_notes_asset(Path(release_dir)/'public/UPDATE.md', notes)
     module = pipeline()
     apps = json.dumps(cfg['verification']['expected']['apps'])
     result = module.stage_artifact(Args(release_dir=str(release_dir), artifact_dir=str(artifact_dir), apps=apps), config, cand,
@@ -899,6 +952,7 @@ def stage_artifact(env, consumer, release_dir, artifact_dir, adapter=None):
     bindings = {'inputReceipt': input_receipt, 'bootstrapReceipt': bootstrap_receipt(env, cfg)}
     if binding.get('policy') == 'first-use-containers':
         bindings = {'inputReceipt': input_receipt, 'firstUseBinding': binding['record']}
+    bindings['notesSource'] = notes  # recorded separately from the product commit
     fd = os.open(Path(artifact_dir)/'rango-bindings.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, 'w') as f:
         json.dump(bindings, f, indent=2, sort_keys=True)
@@ -922,6 +976,9 @@ def publish(artifact_dir, promote=False, adapter=None, cfg=None, selected=False)
     missing += preflight(None, bindings.get('bootstrapReceipt'), cfg, inputs=False)
     if missing:
         raise SetupMissing(missing)
+    if bindings.get('notesSource') != notes_binding(cfg):
+        raise Refused('notes_foreign: the artifact names other release notes than the pinned ones')
+    check_notes_asset(Path(artifact_dir)/'assets/UPDATE.md', bindings['notesSource'])
     if identity_policy(cfg) == 'first-use-containers':
         record = bindings.get('firstUseBinding')
         if not isinstance(record, dict) or any(k not in record for k in IDENTITY_FIELDS):
@@ -980,7 +1037,9 @@ def main(argv=None):
     try:
         if args.command == 'preflight':
             receipt = json.loads(Path(args.bootstrap_receipt).read_text()) if args.bootstrap_receipt else None
-            missing = preflight(args.input_dir, receipt)
+            if args.job == 'guard' and args.input_dir:
+                raise Refused('config_invalid: the hosted guard checks the declared transport, never a local input directory')
+            missing = preflight(args.input_dir, receipt, local=args.job == 'builder')
             if missing:
                 raise SetupMissing(missing)
             result = {'preflight': 'ready'}
