@@ -107,7 +107,7 @@ class WorkflowTest(unittest.TestCase):
         # Frankel's tag, feed, Updater URL and Latest preservation are unchanged.
         self.assertEqual((FRANKEL['publication']['tag'], FRANKEL['publication']['channels']['beta']), ('frankel-{build}', {'promoteLatest': True, 'feedChannel': 'stable'}))
         self.assertIn('https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/', FRANKEL['host']['integrate']['reconcile']['applyArgs'])
-        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102806')
+        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
         self.assertEqual(pipeline.public_assets('frankel', '2026102901')[:2], ['frankel-ota_update-2026102901.zip', 'frankel-stable'])
         self.assertEqual(sorted(p.name for p in (ROOT/'os/release-pipeline').glob('*.json')), ['alpha-runtime.json', 'cuttlefish-alpha.json', 'frankel.json'],
             'no blazer or rango config is admitted in this slice')
