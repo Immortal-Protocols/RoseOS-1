@@ -74,6 +74,10 @@ jobs:
           sudo apt-get install -y -qq python3-cryptography
           /usr/bin/python3 -c 'import cryptography; print("cryptography", cryptography.__version__)'
           /usr/bin/python3 -I workspace/models/serving/https/tests/test_service_edge.py -v
+      - name: Production ACME-only start (bootstrap.Host, self-daemonizing real nginx, loopback port)
+        env:
+          ROSE_REQUIRE_NGINX: '1'
+        run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_acme_start.py -v
 
   service:
     runs-on: ubuntu-24.04

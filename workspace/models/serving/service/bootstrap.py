@@ -31,7 +31,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -69,6 +71,7 @@ STATE = '/var/lib/rose-models/bootstrap'
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
                'models-attestation-status.timer')
 METADATA = 'http://metadata.google.internal/computeMetadata/v1/instance/'
+CAPTURE_BYTES = 1 << 20  # stdout kept per command, enforced while reading
 NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -96,14 +99,60 @@ class Host:
         return self.prefix / p.lstrip('/')
 
     def run(self, argv, timeout=300, env=None):
+        """(exit code, stdout) of one bounded command. stdout is read while the command runs; past CAPTURE_BYTES it is
+        drained and discarded, never buffered. stderr goes to /dev/null, and reading stops once the command has exited,
+        so a daemon it leaves holding a pipe cannot hold the call (the 60 s ACME start failure). Deadline: killed, 124.
+        Not startable: 127."""
         try:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
-                               env=None if env is None else {**os.environ, **env})
-            return r.returncode, r.stdout
-        except subprocess.TimeoutExpired:
-            return 124, ''
+            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     env=None if env is None else {**os.environ, **env})
         except OSError:
             return 127, ''
+        out, deadline, code, exited = bytearray(), time.monotonic() + timeout, None, False
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    code = 124
+                    break
+                if select.select([child.stdout], [], [], 0 if exited else min(left, 0.2))[0]:
+                    chunk = os.read(child.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    out += chunk[:max(0, CAPTURE_BYTES - len(out))]
+                elif exited:
+                    break  # its output is drained; anything still holding stdout is not this command
+                else:
+                    exited = child.poll() is not None
+            if code is None:
+                code = child.wait(max(0.1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            code = 124
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            child.stdout.close()
+        return code, out.decode('utf-8', 'replace')
+
+    def start_daemon(self, argv, timeout=30):
+        """Start a self-daemonizing server with every stdio on /dev/null. The foreground parent must exit 0 within
+        `timeout`. Returns None, or 'exit', 'signal', 'deadline' or 'not_started'. No output is captured."""
+        try:
+            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return 'not_started'
+        try:
+            rc = child.wait(timeout)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+            return 'deadline'
+        return None if rc == 0 else 'signal' if rc < 0 else 'exit'
+
+    def kill(self, pid, sig):
+        os.kill(pid, sig)
 
     def metadata(self, path):
         req = urllib.request.Request(METADATA + path, headers={'Metadata-Flavor': 'Google'})
@@ -439,6 +488,7 @@ ACME_WEBROOT = '/var/lib/rose-models/acme'
 ACME_RUN = '/run/rose-acme'
 ACME_NGINX = ['/usr/sbin/nginx', '-p', ACME_RUN, '-c', f'{ROOT}/edge/acme-only.conf']
 ACME_404 = ('/', '/v1/models', '/v1/chat/completions', '/v1/auth/challenge', '/v1/auth/token')
+ACME_PORT, ACME_START_S = 80, 15
 ACK_KEY = 'attributes/rose-models-acme-ack'  # existing instance metadata; the operator sets it with add-metadata
 ACK_TIMEOUT_S, ACK_POLL_S = 1800, 10
 
@@ -453,18 +503,76 @@ def acme_identity(host):
     return accounts, lineages
 
 
+def running(host, pid):
+    """The process exists and has not exited (an exited daemon stays a zombie until its new parent reaps it)."""
+    try:
+        return host.path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+    except (OSError, IndexError):
+        return False
+
+
 def pid_of(host, run_dir):
+    """The running pid named by the task's pid file, or None (missing, malformed or exited)."""
     try:
         pid = int(host.path(f'{run_dir}/nginx.pid').read_text().strip())
-        cmdline = host.path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'replace')
     except (OSError, ValueError):
-        return None, ''
-    return pid, cmdline
+        return None
+    return pid if pid > 0 and running(host, pid) else None
+
+
+def listener_inodes(host, port):
+    """Socket inodes listening on TCP `port` (IPv4 or IPv6)."""
+    inodes = set()
+    for table in ('/proc/net/tcp', '/proc/net/tcp6'):
+        try:
+            lines = host.path(table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            f = line.split()
+            if len(f) > 9 and f[3] == '0A' and int(f[1].rsplit(':', 1)[1], 16) == port:
+                inodes.add(f[9])
+    return inodes
+
+
+def owned(host, pid, port=None):
+    """What ties `pid` to this task. exe: it runs the pinned nginx binary. config: its command line (the master keeps
+    its argv in the process title) loads ACME_NGINX's config. listener: it holds the socket listening on `port`."""
+    try:
+        exe = os.readlink(host.path(f'/proc/{pid}/exe')) == str(host.path(ACME_NGINX[0]).resolve())
+    except OSError:
+        exe = False
+    try:
+        args = host.path(f'/proc/{pid}/cmdline').read_bytes()[:4096].decode('utf-8', 'replace').replace('\0', ' ')
+    except OSError:
+        args = ''
+    config = f' -c {ACME_NGINX[-1]} ' in args + ' '
+    listener = False
+    if port is not None:
+        inodes = listener_inodes(host, port)
+        try:
+            fds = list(host.path(f'/proc/{pid}/fd').iterdir())
+        except OSError:
+            fds = []
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target.startswith('socket:[') and target[8:-1] in inodes:
+                listener = True
+                break
+    return {'exe': exe, 'config': config, 'listener': listener}
 
 
 def prepare_acme_http(host):
-    """Start the ACME-only Nginx and prove it: the config tests, the pid file names a live process loaded with that
-    config, a synthetic challenge returns 200 with its exact content, and every other path returns 404."""
+    """Start the ACME-only Nginx and prove it before anything else:
+    - `nginx -t` passes;
+    - the task pid file names a live process running the pinned nginx binary, loaded with that config, holding the
+      :ACME_PORT listener;
+    - a synthetic challenge returns 200 with its exact content, and every other path returns 404.
+    An ACME-only Nginx left by an earlier attempt is stopped and started afresh, so the loaded config is this file.
+    A stale pid file is removed; a live foreign pid or another listener on the port is refused, never killed."""
     for sub in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
         host.path(f'{ACME_RUN}/{sub}').mkdir(parents=True, exist_ok=True)
     challenges = host.path(f'{ACME_WEBROOT}/.well-known/acme-challenge')
@@ -472,35 +580,59 @@ def prepare_acme_http(host):
     for d in (host.path(ACME_WEBROOT), challenges.parent, challenges):
         os.chmod(d, 0o755)  # nginx workers read the webroot unprivileged
     must(host, [*ACME_NGINX, '-t'], 'acme_http_config_invalid', 60)
-    pid, cmdline = pid_of(host, ACME_RUN)
-    if pid is None:
-        must(host, ACME_NGINX, 'acme_http_start_failed', 60)
-        pid, cmdline = pid_of(host, ACME_RUN)
-    if pid is None or f'{ROOT}/edge/acme-only.conf' not in cmdline:
-        raise Failed('acme_http_pid_unverified')
+    pid = pid_of(host, ACME_RUN)
+    if pid is not None and not owned(host, pid)['exe']:
+        raise Failed('acme_http_pid_foreign', [{'reason': 'pid file names a live non-nginx process'}])
+    stop_acme_http(host)
+    pidfile = host.path(f'{ACME_RUN}/nginx.pid')
+    if pidfile.exists():
+        pidfile.unlink()  # stale: its process is gone
+    if listener_inodes(host, ACME_PORT):
+        raise Failed('acme_http_port_occupied', [{'port': ACME_PORT}])
+    reason = host.start_daemon(ACME_NGINX, ACME_START_S)
+    if reason:
+        raise Failed('acme_http_start_failed', [{'reason': reason}])
+    pid, check = None, {'exe': False, 'config': False, 'listener': False}
+    for _ in range(int(ACME_START_S / 0.2)):  # the daemon writes its pid file just after the parent exits
+        pid = pid_of(host, ACME_RUN)
+        if pid is not None:
+            check = owned(host, pid, ACME_PORT)
+            if all(check.values()):
+                break
+        host.sleep(0.2)
+    if not all(check.values()):
+        raise Failed('acme_http_pid_unverified', [{'pid': pid is not None, **check}])
     token, content = 'rose-probe-' + os.urandom(8).hex(), os.urandom(16).hex()
     probe = challenges / token
     probe.write_text(content)
     os.chmod(probe, 0o644)
+    base = f'http://127.0.0.1:{ACME_PORT}'
     try:
-        got = host.http_get(f'http://127.0.0.1/.well-known/acme-challenge/{token}', HOSTNAME)
-        codes = {'challenge': got[0], **{p: host.http_get(f'http://127.0.0.1{p}', HOSTNAME)[0] for p in ACME_404}}
+        got = host.http_get(f'{base}/.well-known/acme-challenge/{token}', HOSTNAME)
+        codes = {'challenge': got[0], **{p: host.http_get(f'{base}{p}', HOSTNAME)[0] for p in ACME_404}}
     finally:
         probe.unlink()
     if got != (200, content.encode()) or any(codes[p] != 404 for p in ACME_404):
         raise Failed('acme_http_not_ready', [codes])
-    return codes
+    return {'pid': check, 'acmeHttp': codes}
 
 
 def stop_acme_http(host):
-    pid, _ = pid_of(host, ACME_RUN)
-    if pid is None:
+    """Stop only the task's own ACME-only Nginx (pinned binary, task pid file). Bounded: quit, then TERM. Returns once
+    the process has exited: nginx removes its pid file before it closes its listener, and the edge takes :80 next."""
+    pid = pid_of(host, ACME_RUN)
+    if pid is None or not owned(host, pid)['exe']:
         return
-    host.run([*ACME_NGINX, '-s', 'quit'], 60)
-    for _ in range(20):  # the edge takes :80 next
-        if pid_of(host, ACME_RUN)[0] is None:
+    host.run([*ACME_NGINX, '-s', 'quit'], 30)
+    for attempt in range(40):
+        if not running(host, pid):
             return
-        host.sleep(0.5)
+        if attempt == 20:
+            try:
+                host.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass  # already gone
+        host.sleep(0.25)
     raise Failed('acme_http_stop_failed')
 
 
@@ -533,12 +665,13 @@ def stage_tls(host, ctx):
     if attempted.exists():  # at most one issuance per acknowledged boot; a retry needs a new reset and acknowledgement
         raise Failed('acme_issuance_already_attempted_this_boot', [identity])
     try:
-        codes = prepare_acme_http(host)
+        ready = prepare_acme_http(host)
+        codes = ready['acmeHttp']
         expected_ack = f"{ctx['payloadSha256']}:{boot}"
         conf = host.path(f'{ROOT}/edge/acme-only.conf')
         proof = {'schema': 'rose-models-acme-proof/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': boot,
                  'config': f'{ROOT}/edge/acme-only.conf', 'configSha256': hashlib.sha256(conf.read_bytes()).hexdigest(),
-                 'pidVerified': True, 'acmeHttp': codes, 'accounts': len(accounts), 'lineages': lineages,
+                 'pidVerified': ready['pid'], 'acmeHttp': codes, 'accounts': len(accounts), 'lineages': lineages,
                  'awaiting': 'metadata rose-models-acme-ack=' + expected_ack, 'timeoutSeconds': ACK_TIMEOUT_S}
         line = json.dumps(proof, sort_keys=True)
         host.put_guest_attribute('acme-proof', line)  # published BEFORE any issuance
