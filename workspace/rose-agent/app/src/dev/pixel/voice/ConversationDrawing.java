@@ -10,7 +10,8 @@ final class ConversationDrawing {
  private ConversationDrawing(){}
 
  /** HiFi .ivory-bg: a vertical ivory gradient (#f7f9fc → #eef3f9), a soft blue radial wash at the lower right, and
-  * the Home wallpaper (the existing rose_home_wallpaper resource, read only) at 16% fading in from that corner. */
+  * the Home wallpaper (rose_home_wallpaper) at 16% fading in from that corner, covering the -10% inset at
+  * background-position 80% 20% rather than stretched. */
  static final class IvoryBackground extends Drawable {
   private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);private final Bitmap wallpaper;
   IvoryBackground(Context c){
@@ -25,7 +26,7 @@ final class ConversationDrawing {
    paint.setShader(null);
    if(wallpaper!=null){
     int layer=c.saveLayer(0,0,w,h,null);
-    paint.setAlpha(41);Rect src=new Rect(0,0,wallpaper.getWidth(),wallpaper.getHeight());c.drawBitmap(wallpaper,src,new RectF(-w*.1f,-h*.1f,w*1.1f,h*1.1f),paint);paint.setAlpha(255);
+    paint.setAlpha(41);int[] crop=HomeAppLayout.cover(wallpaper.getWidth(),wallpaper.getHeight(),w*1.2f,h*1.2f,HomeAppLayout.IVORY_X,HomeAppLayout.IVORY_Y);c.drawBitmap(wallpaper,new Rect(crop[0],crop[1],crop[2],crop[3]),new RectF(-w*.1f,-h*.1f,w*1.1f,h*1.1f),paint);paint.setAlpha(255);
     paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_IN));
     paint.setShader(new RadialGradient(w,h,Math.max(w*.9f,h*.7f),new int[]{0xff000000,0xff000000,0x00000000},new float[]{0f,.1f,1f},Shader.TileMode.CLAMP));
     c.drawRect(0,0,w,h,paint);paint.setShader(null);paint.setXfermode(null);c.restoreToCount(layer);

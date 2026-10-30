@@ -465,13 +465,13 @@ public class MainActivity extends Activity {
   }
   return dots;
  }
- /** A real app's cell: its own icon in the 64dp tile and its label, opening it (WorkspaceLauncher). */
+ /** A real app's cell: its own icon in the 64dp HiFi glass tile (HomeGlassTile) and its label, opening it (WorkspaceLauncher). */
  View appTile(ResolveInfo app){
   LinearLayout tile=new LinearLayout(this);tile.setOrientation(1);tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);tile.setPadding(dp(2),dp(HomeAppLayout.CELL_PAD_DP),dp(2),dp(HomeAppLayout.CELL_PAD_DP));
   String originalLabel=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
   final String label=originalLabel;tile.setContentDescription(label);tile.setClickable(true);tile.setFocusable(true);
   tile.setOnClickListener(v->WorkspaceLauncher.open(this,app,label));
-  FrameLayout iconFrame=new FrameLayout(this);iconFrame.setBackground(raised(PixelAppearance.color(0xfffff7e5),PixelAppearance.color(0xff789ab5),18));
+  FrameLayout iconFrame=new FrameLayout(this);iconFrame.setBackground(new HomeGlassTile(getResources().getDisplayMetrics().density));iconFrame.setElevation(dp(4));
   int iconResource=AppLabels.icon(getPackageManager(),app.activityInfo.packageName);
   ImageView icon=new ImageView(this);icon.setImageDrawable(iconResource==0?app.loadIcon(getPackageManager()):getDrawable(iconResource));icon.setScaleType(ImageView.ScaleType.FIT_CENTER);icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
   iconFrame.addView(icon,new FrameLayout.LayoutParams(dp(HomeAppLayout.ICON_DP),dp(HomeAppLayout.ICON_DP),Gravity.CENTER));

@@ -103,6 +103,32 @@ public final class HomeAppLayoutTest {
             }
         }
 
+        // Wallpaper (APP-OS-VISUAL-1030): CSS background-size: cover at a background-position, as the HiFi .wall
+        // (62% 30%) and .ivory-bg::after (80% 20%) draw the 1024x1536 HiFi image.
+        for (float[] area : new float[][]{{1080, 2400}, {720, 1600}, {1440, 3120}, {2208, 1840}, {1080, 1080}, {2400, 1080}}) {
+            int[] crop = HomeAppLayout.cover(1024, 1536, area[0], area[1], HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y);
+            int w = crop[2] - crop[0], h = crop[3] - crop[1];
+            expect(crop[0] >= 0 && crop[1] >= 0 && crop[2] <= 1024 && crop[3] <= 1536 && w > 0 && h > 0,
+                "The crop stays inside the image at " + area[0] + "x" + area[1]);
+            expect(Math.abs(w / (float) h - area[0] / area[1]) < 0.01f, "The crop keeps the screen's aspect, no stretch: " + w + "x" + h);
+            expect(w == 1024 || h == 1536, "Cover fills one whole image dimension");
+        }
+        int[] phone = HomeAppLayout.cover(1024, 1536, 1080, 2400, .62f, .30f);
+        expect(phone[1] == 0 && phone[3] == 1536 && phone[2] - phone[0] == 691, "A portrait phone takes a full-height 691-wide band");
+        expect(phone[0] == Math.round((1024 - 691) * .62f), "positioned 62% across the spare width, as CSS does: " + phone[0]);
+        int[] centred = HomeAppLayout.cover(1024, 1536, 1080, 2400, .5f, .5f);
+        expect(Math.abs(centred[0] - (1024 - 691) / 2f) <= 0.5f, "50% 50% is a centred crop");
+        expect(phone[0] > centred[0], "62% shows more of the right of the image than centring");
+        int[] wideScreen = HomeAppLayout.cover(1024, 1536, 2400, 1080, .62f, .30f);
+        int bandH = wideScreen[3] - wideScreen[1];
+        expect(wideScreen[0] == 0 && wideScreen[2] == 1024 && wideScreen[1] == Math.round((1536 - bandH) * .30f),
+            "A wide screen takes a full-width band 30% down");
+        int[] square = HomeAppLayout.cover(1024, 1536, 1000, 1000, .80f, .20f);
+        expect(square[0] == 0 && square[2] == 1024 && square[1] == Math.round((1536 - 1024) * .20f), "The reading surface's 80% 20%");
+        int[] none = HomeAppLayout.cover(0, 0, 1080, 2400, .62f, .30f);
+        expect(none[2] == 0 && none[3] == 0, "No bitmap: an empty crop");
+        expect(HomeAppLayout.cover(1024, 1536, 0, 100, .62f, .30f)[2] == 0, "An empty area: an empty crop");
+
         System.out.println("HomeAppLayoutTest: " + checks + " checks passed");
     }
 }
