@@ -32,7 +32,7 @@ CATEGORIES = (
     'none', 'invocation_rejected', 'tool_missing', 'timeout', 'output_oversized',
     'keystore_password_incorrect', 'key_password_incorrect', 'alias_not_found', 'keystore_unreadable',
     'password_file_unreadable', 'java_runtime_error', 'apk_input_rejected', 'output_write_failed',
-    'signature_not_verified', 'certificate_pin_mismatch', 'unclassified',
+    'signature_not_verified', 'certificate_pin_mismatch', 'unclassified', 'password_file_exhausted',
 )
 FIELDS = ('schema', 'stage', 'outcome', 'childExit', 'childSignal', 'category', 'apksignerJarSha256')
 TIMEOUT_SECONDS = 300
@@ -45,14 +45,22 @@ RECORD_BYTES = 4096
 HEX64 = re.compile(r'[0-9a-f]{64}')
 
 # Fixed patterns, checked in order against bounded tool output inside the protected process only.
+# MODELS-SIGN-INVOKE-001: apksigner (build-tools r35) reads a password file named for several passwords one line per
+# password, keystore password first. A file that runs out of lines yields 'password_file_exhausted'; the wording of the
+# exhausted, missing-alias and unreadable-file messages below was observed from the pinned tool on synthetic fixtures.
 PATTERNS = (
+    ('password_file_exhausted', re.compile(r'password for signer #\d+ : end of file reached')),
     ('keystore_password_incorrect', re.compile(r'Keystore was tampered with, or password was incorrect|'
                                                r'keystore password was incorrect', re.I)),
+    # with no --key-pass the tool tries the keystore password for the key, then prompts; stdin is closed
     ('key_password_incorrect', re.compile(r'Cannot recover key|UnrecoverableKeyException|'
-                                          r'Failed to obtain key with alias', re.I)),
+                                          r'Failed to obtain key with alias|'
+                                          r'password for signer #\d+: standard input closed', re.I)),
     ('alias_not_found', re.compile(r'does not contain (a )?key (entry )?(with|named) alias|No key with alias|'
-                                   r'Alias .* does not exist', re.I)),
-    ('password_file_unreadable', re.compile(r'Failed to read password from file|NoSuchFileException', re.I)),
+                                   r'Alias .* does not exist|entry "[^"\n]*" does not contain a key', re.I)),
+    ('password_file_unreadable', re.compile(r'Failed to read password from file|NoSuchFileException|'
+                                            r'FileNotFoundException: [^\n]*\n(?:[ \t]+at [^\n]*\n){0,8}?'
+                                            r'[ \t]+at com\.android\.apksigner\.PasswordRetriever\.', re.I)),
     ('keystore_unreadable', re.compile(r'Failed to load keystore|Invalid keystore format|DerInputStream|'
                                        r'KeyStoreException', re.I)),
     ('java_runtime_error', re.compile(r'UnsupportedClassVersionError|Could not find or load main class|'

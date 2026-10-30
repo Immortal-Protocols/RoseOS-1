@@ -65,10 +65,20 @@ try:
     if diagnostic and (bt/'lib/apksigner.jar').is_file():
         apksigner_jar = diagnostic.sha256_file(bt/'lib/apksigner.jar')
     output.parent.mkdir(parents=True, exist_ok=True)
+    # apksigner reads a file named by both --ks-pass and --key-pass one line per password, keystore password first.
+    # One shared file holding a single line is therefore named once (the key is then opened with the keystore
+    # password); distinct files and a shared multi-line file keep both options. Only the line structure is read.
+    passwords = ['--ks-pass', 'file:'+str(store_pass), '--key-pass', 'file:'+str(key_pass)]
+    if key_pass == store_pass:
+        with open(store_pass, 'rb') as f:
+            head = f.read(65537)
+        if len(head) > 65536:
+            raise ValueError('Password file too large')
+        if head.find(b'\n') in (-1, len(head) - 1):
+            passwords = passwords[:2]
     commands = [
         [str(bt/'zipalign'), '-c', '4', str(apk)],
-        [str(bt/'apksigner'), 'sign', '--ks', str(keystore), '--ks-key-alias', alias,
-         '--ks-pass', 'file:'+str(store_pass), '--key-pass', 'file:'+str(key_pass),
+        [str(bt/'apksigner'), 'sign', '--ks', str(keystore), '--ks-key-alias', alias, *passwords,
          '--v4-signing-enabled', 'true', '--out', str(output), str(apk)],
         [str(bt/'apksigner'), 'verify', '--verbose', '--print-certs', str(output)],
     ]
