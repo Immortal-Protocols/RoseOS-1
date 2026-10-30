@@ -181,7 +181,7 @@ def stage_packages(host, ctx):
         return 'pinned'
     key = host.path('/etc/apt/keyrings/nvidia-container-toolkit.asc')
     key.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ctx['payload'] / 'keys' / 'nvidia-container-toolkit.asc', key)
+    shutil.copyfile(ctx['payload'] / 'apt' / 'nvidia-container-toolkit.asc', key)
     out = must(host, ['gpg', '--show-keys', '--with-colons', str(key)], 'nvidia_key_unreadable', 60)
     fprs = [line.split(':')[9] for line in out.splitlines() if line.startswith('fpr:')]
     if not fprs or fprs[0] != NVIDIA_KEY_FPR:

@@ -190,7 +190,7 @@ class Fixture(unittest.TestCase):
         self.payload = self.extract(self.tmp / 'build')
         self.host = FakeHost(self.vm / 'root')
         self.host.expected_key_sha1 = hashlib.sha1(
-            (self.payload / 'keys/nvidia-container-toolkit.asc').read_bytes()).hexdigest().upper()
+            (self.payload / 'apt/nvidia-container-toolkit.asc').read_bytes()).hexdigest().upper()
         B.NGINX_SHA256_SAVED = B.NGINX_SHA256
         B.NGINX_SHA256 = hashlib.sha256(NGINX_BYTES).hexdigest()
         self.addCleanup(setattr, B, 'NGINX_SHA256', B.NGINX_SHA256_SAVED)
@@ -323,7 +323,7 @@ class Refusals(Fixture):
         self.assertStopsAt('packages', 'nvidia_key_fingerprint_mismatch')
         self.assertEqual(self.host.count('apt-get', 'update'), 0)  # nothing installed from an unverified repository
         self.host.expected_key_sha1 = hashlib.sha1(
-            (self.payload / 'keys/nvidia-container-toolkit.asc').read_bytes()).hexdigest().upper()
+            (self.payload / 'apt/nvidia-container-toolkit.asc').read_bytes()).hexdigest().upper()
         self.host.pulled_id = 'sha256:' + '0' * 64
         self.assertStopsAt('image', 'image_id_mismatch')
         self.host.pulled_id = RUNTIME['image_id']
@@ -363,7 +363,7 @@ class Build(Fixture):
         self.assertEqual(again['payloadTarSha256'], self.build['payloadTarSha256'])
         self.assertLessEqual(self.build['metadataValueBytes'], BB.METADATA_VALUE_LIMIT)
         names = set(self.build['files'])
-        for required in ('bootstrap.py', 'keys/nvidia-container-toolkit.asc', 'etc-rose-models/bin/start-model',
+        for required in ('bootstrap.py', 'apt/nvidia-container-toolkit.asc', 'etc-rose-models/bin/start-model',
                          'etc-rose-models/systemd/muse-glimmer.service', 'etc-rose-models/edge/nginx.conf',
                          'etc-rose-models/lib/service/auth_service.py', 'etc-rose-models/lib/muse-glimmer-30b.json'):
             self.assertIn(required, names)
@@ -377,7 +377,7 @@ class Build(Fixture):
             BB.build(self.tmp / 'bad', attestation_roots=bad, source='test')
 
     def test_pinned_nvidia_key_is_the_vendored_file(self):
-        out = subprocess.run(['gpg', '--show-keys', '--with-colons', str(HERE.parent / 'service/keys/nvidia-container-toolkit.asc')],
+        out = subprocess.run(['gpg', '--show-keys', '--with-colons', str(HERE.parent / 'service/apt/nvidia-container-toolkit.asc')],
                              capture_output=True, text=True, env={**os.environ, 'GNUPGHOME': str(self.vm)})
         if out.returncode != 0:
             self.skipTest('gpg not available')

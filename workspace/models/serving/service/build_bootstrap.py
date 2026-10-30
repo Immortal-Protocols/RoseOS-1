@@ -94,7 +94,7 @@ def payload_files(attestation_roots=None):
             if p.is_file():
                 files['etc-rose-models/' + p.relative_to(Path(tmp) / 'tree').as_posix()] = p.read_bytes()
     files['bootstrap.py'] = (HERE / 'bootstrap.py').read_bytes()
-    files['keys/nvidia-container-toolkit.asc'] = (HERE / 'keys' / 'nvidia-container-toolkit.asc').read_bytes()
+    files['apt/nvidia-container-toolkit.asc'] = (HERE / 'apt' / 'nvidia-container-toolkit.asc').read_bytes()
     for p in sorted(Path(attestation_roots).iterdir()) if attestation_roots else []:
         if p.is_file():
             files['attestation-roots/' + p.name] = check_root(p)
