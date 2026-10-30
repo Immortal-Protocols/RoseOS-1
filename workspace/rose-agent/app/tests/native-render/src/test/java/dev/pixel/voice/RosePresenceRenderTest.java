@@ -118,8 +118,8 @@ public class RosePresenceRenderTest {
     @Test public void trayWellAndGlassTileRender() throws Exception {
         float density = RuntimeEnvironment.getApplication().getResources().getDisplayMetrics().density;
         int pocket = 2 * TrayMaterial.POCKET_DP;
-        Bitmap well = drawable(new TrayMaterial.Well(density), 104 + pocket, 66 + pocket, false);
-        Bitmap pressed = drawable(new TrayMaterial.Well(density), 104 + pocket, 66 + pocket, true);
+        Bitmap well = drawable(new TrayMaterial.Well(density), 112 + pocket, 80 + pocket, false);
+        Bitmap pressed = drawable(new TrayMaterial.Well(density), 112 + pocket, 80 + pocket, true);
         Bitmap tray = drawable(new TrayMaterial.Tray(density), 363, 92, false);
         Bitmap tile = drawable(new HomeGlassTile(density), 64, 64, false);
         String w = save(well, "home-well"), p = save(pressed, "home-well-pressed");
@@ -130,25 +130,29 @@ public class RosePresenceRenderTest {
         assertNotEquals(backdrop, tray.getPixel(tray.getWidth() / 2, tray.getHeight() / 2));
     }
 
-    /** The production Tray with both production Wells where HomeTray places them (glass 22dp in from the ends, the
-     * 92dp bar's height centred), on one canvas, so the translucent glass is seen over the real metal. */
+    /** The production Tray with both production Wells where HomeTray places them (#157: 112x80dp glass 33dp in from
+     * the ends of a 363dp bar, the 92dp bar's height centred) and the overview glyph in the right well, on one canvas,
+     * so the clear glass is seen over the real metal. The backdrop is the selected image's blue beside the tray. */
     @Test public void composedHomeTrayRenders() throws Exception {
         float density = RuntimeEnvironment.getApplication().getResources().getDisplayMetrics().density;
-        int w = Math.round(336 * density), h = Math.round(92 * density);
+        int w = Math.round(363 * density), h = Math.round(92 * density);
         Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(0xff6f8fb0);
+        bitmap.eraseColor(0xff325377);
         Canvas canvas = new Canvas(bitmap);
         TrayMaterial.Tray tray = new TrayMaterial.Tray(density);
         tray.setBounds(0, 0, w, h);
         tray.draw(canvas);
-        int pocket = TrayMaterial.POCKET_DP, ww = Math.round((104 + 2 * pocket) * density), wh = Math.round((66 + 2 * pocket) * density);
-        int top = (h - wh) / 2, left = Math.round((22 - pocket) * density);
+        int pocket = TrayMaterial.POCKET_DP, ww = Math.round((112 + 2 * pocket) * density), wh = Math.round((80 + 2 * pocket) * density);
+        int top = (h - wh) / 2, left = Math.round((33 - pocket) * density);
         for (int x : new int[]{left, w - left - ww}) {
             TrayMaterial.Well well = new TrayMaterial.Well(density);
             well.setBounds(x, top, x + ww, top + wh);
             well.draw(canvas);
         }
+        TrayMaterial.Overview glyph = new TrayMaterial.Overview(density);
+        glyph.setBounds(w - left - ww, top, w - left, top + wh);
+        glyph.draw(canvas);
         save(bitmap, "home-tray-composed");
-        assertNotEquals(0xff6f8fb0, bitmap.getPixel(w / 2, h / 2));
+        assertNotEquals(0xff325377, bitmap.getPixel(w / 2, h / 2));
     }
 }

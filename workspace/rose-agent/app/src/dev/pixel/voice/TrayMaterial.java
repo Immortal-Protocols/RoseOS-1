@@ -16,8 +16,10 @@ import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 
 /**
- * The one tray material of the selected HiFi (prototypes/rose-hifi at ce126f56, effective style.css .tray and .well
- * rules, review overrides included), shared by the Home tray and the conversation tray so both read as one system.
+ * The one tray material, shared by the Home tray and the conversation tray so both read as one system. #157: matched
+ * to Nathan's selected Home image (HiFi Prototype Plan, Screenshot_2026-10-29_at_10.57.17_AM.png, 790x1580, sha256
+ * 109faa230ca63744dc393a65d03ae525ca1e0d77bf98e0db5a423c670bccd1b4), measured from its pixels: a mid-silver brushed
+ * bar with small corners and two clear oval glass wells. Earlier values came from prototypes/rose-hifi at ce126f56.
  * Decorative drawables only: the views that carry them keep their clicks, names and state.
  */
 final class TrayMaterial {
@@ -34,14 +36,14 @@ final class TrayMaterial {
   * rim and a dark lower rim. The drop shadow is the view's elevation, cast from this outline.
   */
  static final class Tray extends Drawable {
-  /** The metal as the prototype renders it, not its raw CSS stops (#f6f7f9, #e3e7eb, #cfd5db, #e8ebee): its
-   * overlay-blended brush lightens the bar, so these are measured down the tray outside the specular band in the
-   * pinned prototype's own output (Chromium, 3x DPR) and checked against host-rendered native output. */
-  static final int[] METAL = {0xfff6f7f9, 0xffe7eaee, 0xffdbe0e5, 0xffe8ebee};
+  /** #157: the selected image's metal, averaged down the bar between the wells (top #c1c3c9, middle #c3c5ca,
+   * bottom #c6c8cd): a mid silver, much darker than the earlier near-white prototype output. Its corners are small
+   * (about 13% of the bar height), it has a bright top edge and a darker lower edge, and only a faint broad sheen. */
+  static final int[] METAL = {0xffc4c6cc, 0xffc1c3c9, 0xffc3c5ca, 0xffc6c8cd};
   static final float[] METAL_STOPS = {0f, .38f, .62f, 1f};
-  static final int[] SPECULAR = {0x00ffffff, 0x8cffffff, 0x00ffffff};
+  static final int[] SPECULAR = {0x00ffffff, 0x33ffffff, 0x00ffffff};
   static final float[] SPECULAR_STOPS = {.28f, .44f, .60f};
-  static final int TOP_RIM = 0xffffffff, LOWER_RIM = 0x473c4b5f, RADIUS_DP = 22;
+  static final int TOP_RIM = 0xffffffff, LOWER_RIM = 0x663c4b5f, RADIUS_DP = 12;
 
   /** Made once per display density: Home rebuilds its tray on every HOME press. */
   static Bitmap grainTile;
@@ -60,9 +62,8 @@ final class TrayMaterial {
    grain.setShader(new BitmapShader(grainTile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT));
   }
 
-  /** Grain alpha per shade step (shades -8..8): matched against the prototype's tray in host-rendered native output,
-   * where 3 drew the metal about 7 levels darker and twice as noisy as the reference. */
-  static final int GRAIN = 1;
+  /** Grain alpha per shade step (shades -8..8). The selected image shows a visible horizontal brush on the bar. */
+  static final int GRAIN = 2;
   /** A 180 x 7dp tile of horizontal hairlines, light and dark by a fixed seed (CSS background-size 180px 7px). */
   static Bitmap grain(float density) {
    int w = Math.max(1, Math.round(180 * density)), h = Math.max(1, Math.round(7 * density));
@@ -109,23 +110,20 @@ final class TrayMaterial {
  }
 
  /**
-  * .well: a glass pill lens recessed in the metal. Inside: radial-gradient(110% 80% at 32% 18%) from white .98
-  * through white .55 (34%) and rgba(214,226,240,.35) (68%) to rgba(190,206,224,.5); a white .65 inner edge, a
-  * lower inner shade rgba(70,92,125,.22) and the ::after sheen (16% in from each side, 5dp down, 34% tall, white
-  * .85 fading out). Around it, the pocket: a 1px rgba(95,115,142,.42) edge, a 4px rgba(198,206,215,.9) collar, a
-  * rgba(120,135,155,.35) outer line and a white .75 lower lip. Pressed (:active) drops the sheen and shades the
-  * glass from the top (inset 0 3px 8px rgba(60,80,110,.3)), as the reference does.
+  * #157: a clear oval glass lens set in the metal, as in the selected image. The glass is a light blue-grey tint over
+  * the metal (the image's well interior averages #abb3bd against #c3c5ca metal), lit from the upper left, with a
+  * soft sheen across its top, a thin bright rim and a soft shadow just outside its lower edge. Pressed drops the
+  * sheen and shades the glass from the top. A well view is its glass plus POCKET_DP on every side for that shadow,
+  * so nothing is drawn outside the view.
   */
  static final class Well extends Drawable {
-  static final int[] GLASS = {0xfaffffff, 0x8cffffff, 0x59d6e2f0, 0x80becee0};
-  static final float[] GLASS_STOPS = {0f, .34f, .68f, 1f};
-  static final int INNER_EDGE = 0xa6ffffff, LOWER_SHADE = 0x38465c7d, SHEEN = 0xd9ffffff, PRESSED_SHADE = 0x4d3c506e,
-    POCKET_EDGE = 0x6b5f738e, COLLAR = 0xe6c6ced7, COLLAR_LINE = 0x5978879b, LIP = 0xbfffffff;
+  static final int TINT = 0x2e2a3c5a, LIGHT = 0x59ffffff, RIM = 0xb3ffffff, RIM_SHADOW = 0x4d28374f,
+    LOWER_SHADE = 0x38465c7d, SHEEN = 0x4dffffff, PRESSED_SHADE = 0x4d3c506e, OUTER_SHADOW = 0x4028374f;
 
   final float density, pocket;
-  final Paint glass = new Paint(Paint.ANTI_ALIAS_FLAG), shade = new Paint(Paint.ANTI_ALIAS_FLAG),
-    sheen = new Paint(Paint.ANTI_ALIAS_FLAG), pressedShade = new Paint(Paint.ANTI_ALIAS_FLAG),
-    line = new Paint(Paint.ANTI_ALIAS_FLAG), fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+  final Paint tint = new Paint(Paint.ANTI_ALIAS_FLAG), light = new Paint(Paint.ANTI_ALIAS_FLAG),
+    shade = new Paint(Paint.ANTI_ALIAS_FLAG), sheen = new Paint(Paint.ANTI_ALIAS_FLAG),
+    pressedShade = new Paint(Paint.ANTI_ALIAS_FLAG), line = new Paint(Paint.ANTI_ALIAS_FLAG), fill = new Paint(Paint.ANTI_ALIAS_FLAG);
   final RectF lens = new RectF(), shine = new RectF(), ring = new RectF();
   final android.graphics.Path lensPath = new android.graphics.Path();
   boolean pressed;
@@ -134,6 +132,7 @@ final class TrayMaterial {
    this.density = density;
    pocket = POCKET_DP * density;
    line.setStyle(Paint.Style.STROKE);
+   tint.setColor(TINT);
   }
 
   @Override protected void onBoundsChange(Rect bounds) {
@@ -141,51 +140,47 @@ final class TrayMaterial {
    lens.inset(pocket, pocket);
    float w = lens.width(), h = lens.height();
    lensPath.reset();
-   lensPath.addRoundRect(lens, h / 2, h / 2, android.graphics.Path.Direction.CW);
-   RadialGradient light = new RadialGradient(0, 0, 1, GLASS, GLASS_STOPS, Shader.TileMode.CLAMP);
+   lensPath.addOval(lens, android.graphics.Path.Direction.CW);
+   // Light from the upper left: white fading out across the lens.
+   RadialGradient glow = new RadialGradient(0, 0, 1, new int[]{LIGHT, 0x00ffffff}, null, Shader.TileMode.CLAMP);
    Matrix ellipse = new Matrix();
-   ellipse.setScale(1.1f * w, .8f * h);
-   ellipse.postTranslate(lens.left + .32f * w, lens.top + .18f * h);
-   light.setLocalMatrix(ellipse);
-   glass.setShader(light);
-   shade.setShader(new LinearGradient(0, lens.bottom - 8 * density, 0, lens.bottom, 0x00465c7d, LOWER_SHADE, Shader.TileMode.CLAMP));
-   shine.set(lens.left + .16f * w, lens.top + 5 * density, lens.right - .16f * w, lens.top + 5 * density + .34f * h);
+   ellipse.setScale(.8f * w, .8f * h);
+   ellipse.postTranslate(lens.left + .32f * w, lens.top + .22f * h);
+   glow.setLocalMatrix(ellipse);
+   light.setShader(glow);
+   shade.setShader(new LinearGradient(0, lens.bottom - .3f * h, 0, lens.bottom, 0x00465c7d, LOWER_SHADE, Shader.TileMode.CLAMP));
+   shine.set(lens.left + .22f * w, lens.top + .07f * h, lens.right - .22f * w, lens.top + .36f * h);
    sheen.setShader(new LinearGradient(0, shine.top, 0, shine.bottom, SHEEN, 0x00ffffff, Shader.TileMode.CLAMP));
-   pressedShade.setShader(new LinearGradient(0, lens.top, 0, lens.top + 8 * density, PRESSED_SHADE, 0x003c506e, Shader.TileMode.CLAMP));
+   pressedShade.setShader(new LinearGradient(0, lens.top, 0, lens.top + .3f * h, PRESSED_SHADE, 0x003c506e, Shader.TileMode.CLAMP));
   }
 
   @Override public void draw(Canvas canvas) {
    if (lens.isEmpty()) return;
-   float r = lens.height() / 2, one = Math.max(1f, density);
-   // The pocket, outermost first: the lower lip, the outer line, the collar, then the lens edge. Like CSS box-shadow
-   // spreads, they paint only outside the lens, so the translucent glass shows the metal, not the pocket fills.
+   float one = Math.max(1f, density);
+   // The soft shadow just outside the lower edge, painted only outside the lens so the clear glass shows the metal.
    int save = canvas.save();
    canvas.clipOutPath(lensPath);
-   fill.setColor(LIP);
-   ring.set(lens.left - pocket, lens.top - pocket + one, lens.right + pocket, lens.bottom + pocket);
-   canvas.drawRoundRect(ring, r + pocket, r + pocket, fill);
-   fill.setColor(COLLAR_LINE);
-   ring.set(lens.left - pocket, lens.top - pocket, lens.right + pocket, lens.bottom + pocket - one);
-   canvas.drawRoundRect(ring, r + pocket, r + pocket, fill);
-   fill.setColor(COLLAR);
-   ring.set(lens);
-   ring.inset(-4 * density, -4 * density);
-   canvas.drawRoundRect(ring, r + 4 * density, r + 4 * density, fill);
-   fill.setColor(POCKET_EDGE);
-   ring.set(lens);
-   ring.inset(-one, -one);
-   canvas.drawRoundRect(ring, r + one, r + one, fill);
+   fill.setColor(OUTER_SHADOW);
+   ring.set(lens.left - one, lens.top, lens.right + one, lens.bottom + 2 * one);
+   canvas.drawOval(ring, fill);
    canvas.restoreToCount(save);
    // The glass.
-   canvas.drawRoundRect(lens, r, r, glass);
-   canvas.drawRoundRect(lens, r, r, shade);
-   if (pressed) canvas.drawRoundRect(lens, r, r, pressedShade);
-   else canvas.drawRoundRect(shine, shine.height() / 2, shine.height() / 2, sheen);
+   canvas.drawOval(lens, tint);
+   canvas.drawOval(lens, light);
+   canvas.drawOval(lens, shade);
+   if (pressed) canvas.drawOval(lens, pressedShade);
+   else canvas.drawOval(shine, sheen);
+   // The thin rim: a dark line just inside a bright one, so the edge reads as raised glass.
    line.setStrokeWidth(one);
-   line.setColor(INNER_EDGE);
+   line.setColor(RIM_SHADOW);
+   ring.set(lens);
+   ring.inset(1.5f * one, 1.5f * one);
+   canvas.drawOval(ring, line);
+   line.setStrokeWidth(one);
+   line.setColor(RIM);
    ring.set(lens);
    ring.inset(one / 2, one / 2);
-   canvas.drawRoundRect(ring, r - one / 2, r - one / 2, line);
+   canvas.drawOval(ring, line);
   }
 
   @Override public boolean isStateful() { return true; }
@@ -204,8 +199,8 @@ final class TrayMaterial {
   @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
  }
  /**
-  * The overview mark (.overview-glyph i at ce126f56): three 11dp bars 30dp tall (34 in the middle), 4dp apart, 5dp
-  * radius, centred in the well. White to #e2e8f0 bars ringed rgba(120,140,170,.55) with an inset lower shade
+  * The overview mark: three 11dp bars, 4dp apart, 5dp radius, centred in the well. #157: in the selected image the
+  * outer bars are about 70% of the middle one's height (24dp beside 34dp); ce126f56 had 30 beside 34. White to #e2e8f0 bars ringed rgba(120,140,170,.55) with an inset lower shade
   * rgba(80,100,130,.25); the last bar #6aa2ff to #2f6be6, ringed rgba(30,80,200,.6), with an inset top highlight
   * rgba(255,255,255,.45). Gradients are built per size, so drawing allocates nothing.
   */
@@ -229,7 +224,7 @@ final class TrayMaterial {
    float width = 11 * unit, gap = 4 * unit, total = 3 * width + 2 * gap;
    float left = bounds.left + (bounds.width() - total) / 2, middle = bounds.exactCenterY();
    for (int i = 0; i < 3; i++) {
-    float half = (i == 1 ? 17 : 15) * unit, x = left + i * (width + gap);
+    float half = (i == 1 ? 17 : 12) * unit, x = left + i * (width + gap);
     RectF bar = bars[i];
     bar.set(x, middle - half, x + width, middle + half);
     boolean accent = i == 2;
