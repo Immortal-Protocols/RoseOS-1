@@ -28,6 +28,28 @@ All endpoints take a JSON body (`Content-Type: application/json`), at most 64 Ki
 
 **Signature.** `signature` is base64 DER SHA256withECDSA by the device key over the UTF-8 bytes of `challenge`.
 
+**Attested vs signed challenge.** Android fixes a key's attestation challenge when the key is generated.
+- `challenge` (the signed one) must be fresh and is single-use.
+- The attestation's `attestationChallenge` may be that same challenge, or any challenge this server issued within
+  the last 24 h. This lets a retry reuse the same key and chain.
+
+**Enrollment sequence (first launch, timeout/5xx, process restart):**
+1. `POST /v1/auth/challenge` → `c1`. Generate the Keystore key with attestation challenge = UTF-8 of `c1`. Persist
+   only the key alias and `key_id`; the chain stays in the Keystore.
+2. `POST /v1/auth/token {challenge: c1, attestation, signature(c1), invite}`.
+3. **On a timeout or 5xx (commit unknown)**, keep the key, chain and `key_id`, then get a fresh challenge `cN` and send
+   `{challenge: cN, attestation: <same chain>, signature(cN), invite}`:
+   - **already committed:** the same install is recognized, a token is returned and the code is not spent again;
+   - **not committed:** it enrolls now.
+4. **After a process restart with the invite gone** (it is never persisted), renew with
+   `{challenge, key_id, signature}`:
+   - 200: done;
+   - 401 `key_unknown`: never committed. Ask the user to scan again, which may be the same unexpired QR, then do step 3
+     with the same key.
+5. **Attested challenge older than 24 h (401 `challenge_mismatch`) on a key the server reports as `key_unknown`:**
+   that key was never enrolled, so an explicit rescan may generate a new key. Never delete an enrolled key
+   automatically. 403s stay terminal.
+
 **Invite (Nathan, 17:38).** A new device needs an admin-issued code.
 - The admin runs `auth_service.py invite --label <who>` and shows the result as a QR code.
 - The QR holds `dev.pixel.models://enroll?invite=rgi1.<43 base64url chars>`. The app sends that code as `invite` with
@@ -60,7 +82,7 @@ The routes, limits and wire format are unchanged (`../serving/https/README.md`).
 2. **Key Description** (OID 1.3.6.1.4.1.11129.2.1.17): taken from the certificate *nearest the root* that carries
    it. The signature must come from the key that this certificate certifies.
    - attestation and KeyMint security level is TrustedEnvironment or StrongBox;
-   - the challenge matches;
+   - the attestation challenge is the signed challenge, or one this server issued within 24 h;
    - `attestationApplicationId` lists exactly package `dev.pixel.models` and signer SHA-256
      `066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da`;
    - `rootOfTrust.deviceLocked` is true;

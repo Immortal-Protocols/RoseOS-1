@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -190,8 +191,9 @@ class Protocol(Fixture):
                 self.refused(status, category, self.svc.token,
                              {'challenge': c, 'attestation': chain, 'signature': self.signature(c)})
         c2 = self.svc.challenge()['challenge']
+        foreign = self.chain('not-a-challenge-from-this-server')
         self.refused(401, 'challenge_mismatch', self.svc.token,
-                     {'challenge': c2, 'attestation': good, 'signature': self.signature(c2)})
+                     {'challenge': c2, 'attestation': foreign, 'signature': self.signature(c2)})
         self.refused(401, 'signature_invalid', self.svc.token,
                      {'challenge': c, 'attestation': good, 'signature': self.signature(c2)})
         self.now += 61
@@ -377,6 +379,78 @@ class InviteCli(unittest.TestCase):
         offer = store.registry()['invites'][A.hashlib.sha256(code.encode()).hexdigest()]
         self.assertLessEqual(offer['expiresAt'], 0)
         self.assertEqual(A.main(['revoke', 'nobody', *args]), 1)
+
+
+class FixedAttestationChallenge(Fixture):
+    """Android fixes the attestation challenge at key generation. The chain is built ONCE (as the Keystore would) and
+    every retry reuses it, signing a fresh challenge. Models Product's uncommitted 5xx, lost response and restart."""
+
+    def generate_key(self):
+        """The app's first enrollment step: challenge c1 baked into the key's attestation, once."""
+        c1 = self.svc.challenge()['challenge']
+        return c1, self.chain(c1)
+
+    def attempt(self, chain, invite=None, svc=None):
+        svc = svc or self.svc
+        c = svc.challenge()['challenge']  # fresh, signed: proof of possession now
+        body = {'challenge': c, 'attestation': chain, 'signature': self.signature(c)}
+        if invite:
+            body['invite'] = invite
+        return svc.token(body)
+
+    def renew(self, key_id, svc=None):
+        svc = svc or self.svc
+        c = svc.challenge()['challenge']
+        return svc.token({'challenge': c, 'key_id': key_id, 'signature': self.signature(c)})
+
+    def test_uncommitted_5xx_then_retry_with_the_same_key_and_chain(self):
+        code = self.invite()
+        c1, chain = self.generate_key()
+        key_id = A.hashlib.sha256(A.spki(self.device.public_key())).hexdigest()
+        with mock.patch.object(self.store, '_write', side_effect=OSError('disk')):  # server fails before committing
+            with self.assertRaises(OSError):
+                self.svc.token({'challenge': c1, 'attestation': chain, 'signature': self.signature(c1), 'invite': code})
+        self.refused(401, 'key_unknown', self.renew, key_id)  # not committed: the code is still unspent
+        t = self.attempt(chain, code)  # same key, same chain (c1 inside), fresh signed challenge
+        self.assertEqual(t['key_id'], key_id)
+        self.assertIsNotNone(next(iter(self.store.registry()['invites'].values()))['usedBy'])
+
+    def test_committed_but_response_lost_recovers_without_spending_again(self):
+        code = self.invite()
+        c1, chain = self.generate_key()
+        first = self.svc.token({'challenge': c1, 'attestation': chain, 'signature': self.signature(c1), 'invite': code})
+        # the response never arrives; the app kept its key and key_id
+        self.assertEqual(self.renew(first['key_id'])['key_id'], first['key_id'])            # (a) renewal
+        self.assertEqual(self.attempt(chain, code)['key_id'], first['key_id'])              # (b) same enrollment again
+        self.assertEqual(self.attempt(chain)['key_id'], first['key_id'])                    # ...even without the code
+        reg = self.store.registry()
+        self.assertEqual((len(reg['keys']), sum(reg['days'].values())), (1, 1))  # one key, one enrollment counted
+
+    def test_process_restart_keeps_working_with_the_stored_key_and_chain(self):
+        code = self.invite()
+        _, chain = self.generate_key()
+        restarted = A.Service(A.Store(self.tmp), self.policy, clock=lambda: self.now)
+        self.now += 1800  # half an hour later, after the app and server both restarted
+        t = self.attempt(chain, code, svc=restarted)
+        self.svc.validate('Bearer ' + t['access_token'])
+
+    def test_attested_challenge_must_be_ours_and_recent_and_terminal_states_hold(self):
+        code = self.invite()
+        _, chain = self.generate_key()
+        self.now += A.ATTESTED_CHALLENGE_MAX_AGE_S + 1
+        self.refused(401, 'challenge_mismatch', self.attempt, chain, code)  # older than 24 h: a new key is needed
+        self.now = NOW
+        forged = self.chain('rgc1.e30.' + 'A' * 43)  # not MAC'd by this server
+        self.refused(401, 'challenge_mismatch', self.attempt, forged, code)
+        _, chain = self.generate_key()
+        self.store.init_secret(rotate=True)
+        self.store.init_secret(rotate=True)  # the issuing secret is gone
+        self.refused(401, 'challenge_mismatch', self.attempt, chain, code)
+        _, chain = self.generate_key()
+        t = self.attempt(chain, code)
+        self.store.update_registry(lambda reg: reg['keys'][t['key_id']].update(revoked=True))
+        self.refused(403, 'key_revoked', self.attempt, chain, code)  # revoked stays terminal on retry
+        self.refused(403, 'key_revoked', self.renew, t['key_id'])
 
 
 class Http(Fixture):
