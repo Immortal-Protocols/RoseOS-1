@@ -12,11 +12,13 @@ import java.util.concurrent.Executors;
 
 /**
  * Platform HTTPS transport for one local-agent-v1 need_inference at a time, on a worker thread,
- * with the platform trust store and the app's network security config (no cleartext). POSTs the
- * agent's request body to the configured URL unchanged and reports the raw status and body, or a
- * transport failure kind. Redirects are not followed, so the bearer token is only ever sent to the
- * origin it was entered for. Cancel disconnects the socket; the agent also rejects any reply that
- * still arrives. Failures are reported as fixed kinds only, never exception text.
+ * with the platform trust store and the app's network security config (no cleartext). It first
+ * obtains the bearer from the CredentialSource (which may renew or enroll on the same worker), then
+ * POSTs the agent's request body unchanged and reports the raw status and body, or a transport
+ * failure kind. A credential it cannot obtain is reported as the auth server's status (401, 403,
+ * 429, 503) or transport kind, plus a fixed reason for the UI. Redirects are not followed, so the
+ * bearer is only ever sent to its own origin. Cancel stops credential work and disconnects the
+ * socket; the agent also rejects any reply that still arrives. No exception text is reported.
  */
 final class HttpsInferenceClient implements InferenceClient {
     static final int CONNECT_TIMEOUT_MS = 10_000;
@@ -28,7 +30,7 @@ final class HttpsInferenceClient implements InferenceClient {
     }
 
     private final String url;
-    private final EndpointCredential credential;
+    private final CredentialSource credentials;
     private final Opener opener;
     /** One daemon worker for the process: one request at a time, and no thread left per client. */
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> {
@@ -37,27 +39,79 @@ final class HttpsInferenceClient implements InferenceClient {
         return t;
     });
 
-    HttpsInferenceClient(String url, EndpointCredential credential) {
-        this(url, credential, u -> (javax.net.ssl.HttpsURLConnection) u.openConnection());
+    HttpsInferenceClient(String url, CredentialSource credentials) {
+        this(url, credentials, u -> (javax.net.ssl.HttpsURLConnection) u.openConnection());
     }
 
-    HttpsInferenceClient(String url, EndpointCredential credential, Opener opener) {
+    HttpsInferenceClient(String url, CredentialSource credentials, Opener opener) {
         if (EndpointPolicy.check(url) != null) {
             throw new IllegalArgumentException("endpoint rejected: " + EndpointPolicy.check(url));
         }
-        if (credential == null || !credential.matches(url)) {
-            throw new IllegalArgumentException("no access token for " + EndpointCredential.origin(url));
-        }
         this.url = url;
-        this.credential = credential;
+        this.credentials = credentials;
         this.opener = opener;
     }
 
+    /** Runs a task on the network worker (startup credential check). */
+    static void background(Runnable task) {
+        WORKER.execute(task);
+    }
+
     @Override
-    public Call send(final String requestBody, final long timeoutMs, final Callback callback) {
+    public boolean renews() {
+        return true;
+    }
+
+    @Override
+    public Call send(String requestBody, long timeoutMs, Callback callback) {
+        return dispatch(requestBody, timeoutMs, callback, false);
+    }
+
+    @Override
+    public Call resend(String requestBody, long timeoutMs, Callback callback) {
+        return dispatch(requestBody, timeoutMs, callback, true);
+    }
+
+    private Call dispatch(final String requestBody, final long timeoutMs, final Callback callback, final boolean renew) {
         final HttpURLConnection[] connection = {null};
         final boolean[] cancelled = {false};
+        final CredentialSource.Cancel cancel = new CredentialSource.Cancel() {
+            @Override
+            public boolean isCancelled() {
+                synchronized (connection) {
+                    return cancelled[0];
+                }
+            }
+
+            @Override
+            public void track(HttpURLConnection c) {
+                synchronized (connection) {
+                    connection[0] = c;
+                    if (cancelled[0] && c != null) {
+                        c.disconnect();
+                    }
+                }
+            }
+        };
         WORKER.execute(() -> {
+            EndpointCredential credential;
+            try {
+                credential = renew ? credentials.renew(cancel) : credentials.current(cancel);
+                if (!credential.matches(url)) {
+                    throw CredentialSource.AuthFailure.status(401, "auth_wrong_origin");
+                }
+            } catch (CredentialSource.AuthFailure f) {
+                if (f.isCancelled() || cancel.isCancelled()) {
+                    return;
+                }
+                callback.onAuthProblem(f.reason);
+                if (f.transportKind != null) {
+                    callback.onFailure(f.transportKind);
+                } else {
+                    callback.onResponse(f.status, null, "");
+                }
+                return;
+            }
             int status = -1;
             String retryAfter = null;
             String body = null;

@@ -9,7 +9,8 @@ trap 'rm -rf "$OUT"' EXIT
 (cd "$ADAPTER" && cargo build --locked -q)
 HOST_CLASSES=(Json AgentPort NativeAgent AgentConfigJson LocalAgentHost InferenceClient AppLauncher
               LaunchResult TurnView AppAllowlist EndpointPolicy AllowlistLauncher
-              EndpointCredential CredentialStore SetupCheck HttpsInferenceClient)
+              EndpointCredential HttpsInferenceClient ModelsService CredentialSource DeviceKey DeviceAuth
+              AuthMessages)
 SOURCES=()
 for c in "${HOST_CLASSES[@]}"; do SOURCES+=("$APP/src/dev/pixel/models/$c.java"); done
 # These classes must stay free of android.* so they run on a plain JVM.

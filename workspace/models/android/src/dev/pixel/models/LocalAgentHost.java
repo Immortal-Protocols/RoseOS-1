@@ -24,6 +24,8 @@ import java.util.concurrent.Executor;
  */
 public final class LocalAgentHost {
     static final long RECEIPT_SETTLE_MS = 1500;
+    /** Core's MAX_INFERENCES_PER_TURN: HTTP inference attempts per turn, renewed resends included. */
+    static final int MAX_DISPATCHES = 2;
 
     /** Runs a task later on the host thread (Handler.postDelayed on Android). */
     public interface Delay {
@@ -55,6 +57,9 @@ public final class LocalAgentHost {
     private long turnSeq;
     private int rejectedCount;
     private Receipt pendingReceipt;
+    private String dispatchTurn;
+    private int dispatches;
+    private String authProblem;
 
     LocalAgentHost(AgentPort agent, InferenceClient client, AppLauncher launcher, TurnView view,
                    Executor uiThread, Delay delay) {
@@ -88,6 +93,7 @@ public final class LocalAgentHost {
             return;
         }
         String turnId = turnPrefix + "-" + (++turnSeq);
+        authProblem = null;
         view.appendTranscript("you", text.trim());
         currentTurn = turnId;
         parked = false;
@@ -186,17 +192,40 @@ public final class LocalAgentHost {
         }
     }
 
-    private void dispatchInference(final String turnId, final long generation, String body, long timeoutMs) {
+    /**
+     * Sends one need_inference. Every HTTP attempt counts against the agent's per-turn limit
+     * (MAX_DISPATCHES): one 401 may renew the credential and resend once only while the turn still
+     * has an attempt left, and a request that would be a third attempt is never sent; the agent
+     * then receives the 401 it was answered with.
+     */
+    private void dispatchInference(final String turnId, final long generation, final String body, final long timeoutMs) {
+        if (!turnId.equals(dispatchTurn)) {
+            dispatchTurn = turnId;
+            dispatches = 0;
+        }
+        if (dispatches >= MAX_DISPATCHES) {
+            deliverResponse(turnId, generation, 401, null, "");
+            return;
+        }
+        dispatches++;
+        send(turnId, generation, body, timeoutMs, false);
+    }
+
+    private void send(final String turnId, final long generation, final String body, final long timeoutMs,
+                      final boolean renewed) {
         final String key = key(turnId, generation);
-        InferenceClient.Call call = client.send(body, timeoutMs, new InferenceClient.Callback() {
+        InferenceClient.Callback callback = new InferenceClient.Callback() {
             @Override
             public void onResponse(int status, String retryAfter, String responseBody) {
                 uiThread.execute(() -> {
-                    inflight.remove(key);
-                    step("{\"type\":\"inference_response\",\"turn_id\":" + Json.quote(turnId)
-                            + ",\"generation\":" + generation + ",\"status\":" + status
-                            + (retryAfter == null ? "" : ",\"retry_after\":" + Json.quote(retryAfter))
-                            + ",\"body\":" + Json.quote(responseBody == null ? "" : responseBody) + "}");
+                    boolean live = inflight.remove(key) != null; // a late reply still goes to the agent to fence
+                    if (live && status == 401 && !renewed && client.renews() && turnId.equals(dispatchTurn)
+                            && dispatches < MAX_DISPATCHES && !destroyed) {
+                        dispatches++;
+                        send(turnId, generation, body, timeoutMs, true);
+                        return;
+                    }
+                    deliverResponse(turnId, generation, status, retryAfter, responseBody);
                 });
             }
 
@@ -208,8 +237,24 @@ public final class LocalAgentHost {
                             + ",\"generation\":" + generation + ",\"kind\":" + Json.quote(kind) + "}");
                 });
             }
-        });
-        inflight.put(key, call);
+
+            @Override
+            public void onAuthProblem(String reason) {
+                uiThread.execute(() -> {
+                    if (inflight.containsKey(key) && !destroyed) {
+                        authProblem = reason;
+                    }
+                });
+            }
+        };
+        inflight.put(key, renewed ? client.resend(body, timeoutMs, callback) : client.send(body, timeoutMs, callback));
+    }
+
+    private void deliverResponse(String turnId, long generation, int status, String retryAfter, String responseBody) {
+        step("{\"type\":\"inference_response\",\"turn_id\":" + Json.quote(turnId)
+                + ",\"generation\":" + generation + ",\"status\":" + status
+                + (retryAfter == null ? "" : ",\"retry_after\":" + Json.quote(retryAfter))
+                + ",\"body\":" + Json.quote(responseBody == null ? "" : responseBody) + "}");
     }
 
     /**
@@ -316,7 +361,7 @@ public final class LocalAgentHost {
                 break;
             default:
                 view.appendTranscript("error", error == null ? outcome : error);
-                view.setStatus("Turn ended with an error.");
+                view.setStatus(authProblem != null ? AuthMessages.text(authProblem) : "Turn ended with an error.");
         }
     }
 

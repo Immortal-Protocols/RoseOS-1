@@ -7,7 +7,6 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -22,15 +21,15 @@ import java.util.List;
 /**
  * Rose Models text chat: transcript, input and Send, status, Stop, Continue and the last app
  * action. Conversation and agent state live in Core's local-agent-v1 agent on this phone
- * (NativeAgent); the configured HTTPS endpoint is used only for inference. There is no default
- * endpoint, model or token: until all three are set in Settings, Send stays disabled. The access
- * token is entered masked, bound to the endpoint's origin and kept in memory only (CredentialStore).
+ * (NativeAgent); inference goes only to the public Muse Glimmer service (ModelsService) with no
+ * settings. Its access token comes from service-auth-v1 (DeviceAuth: an attested Keystore key),
+ * stays in memory and is renewed automatically; nothing is typed and no secret ships in the APK.
  */
 public final class MainActivity extends Activity implements TurnView {
     private static final String PREFS = "rose-models";
     private static final String KEY_ALLOWLIST = "allowlist";
-    private static final String KEY_ENDPOINT = "endpoint";
-    private static final String KEY_MODEL = "model";
+    /** Settings of builds before 0.2: removed on start; chat and app data are untouched. */
+    private static final String[] STALE_KEYS = {"endpoint", "model"};
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private LocalAgentHost host;
@@ -44,35 +43,34 @@ public final class MainActivity extends Activity implements TurnView {
     private Button resume;
     private AppAllowlist allowlist = AppAllowlist.empty();
     private String setupProblem;
+    private DeviceAuth auth;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         SharedPreferences prefs = prefs();
-        allowlist = AppAllowlist.parse(prefs.getString(KEY_ALLOWLIST, ""));
-        String endpoint = prefs.getString(KEY_ENDPOINT, "");
-        String model = prefs.getString(KEY_MODEL, "").trim();
-        buildUi();
-        EndpointCredential credential = CredentialStore.forEndpoint(endpoint);
-        setupProblem = SetupCheck.problem(endpoint, model, credential);
-        if (setupProblem != null) {
-            setStatus("Setup needed: " + setupProblem + ". Use Settings.");
-            setControls(false, false, false);
-            return;
+        SharedPreferences.Editor stale = prefs.edit();
+        for (String key : STALE_KEYS) {
+            stale.remove(key);
         }
+        stale.apply();
+        allowlist = AppAllowlist.parse(prefs.getString(KEY_ALLOWLIST, ""));
+        buildUi();
+        auth = new DeviceAuth(new KeystoreDeviceKey(), store(prefs));
         NativeAgent agent;
         try {
-            agent = new NativeAgent(AgentConfigJson.build(model, AgentConfigJson.DEFAULT_SYSTEM_PROMPT, allowlist));
+            agent = new NativeAgent(AgentConfigJson.build(ModelsService.MODEL, AgentConfigJson.DEFAULT_SYSTEM_PROMPT,
+                    allowlist));
         } catch (IllegalArgumentException e) {
-            setupProblem = "the agent rejected the settings: " + e.getMessage();
-            setStatus("Setup needed: " + setupProblem);
+            setupProblem = "the agent rejected its configuration: " + e.getMessage();
+            setStatus(setupProblem);
             setControls(false, false, false);
             return;
         }
-        host = new LocalAgentHost(agent, new HttpsInferenceClient(endpoint, credential),
+        host = new LocalAgentHost(agent, new HttpsInferenceClient(ModelsService.CHAT_URL, auth),
                 new AllowlistLauncher(allowlist, new AndroidAppLauncher(this)), this, main::post,
                 (millis, task) -> main.postDelayed(task, millis));
-        showReadyStatus();
+        connect();
     }
 
     @Override
@@ -174,63 +172,92 @@ public final class MainActivity extends Activity implements TurnView {
     }
 
     /**
-     * HTTPS endpoint, exact served model id and access token. Nothing is pre-filled; the token
-     * field is masked, never shown back, not kept in saved instance state and never persisted.
+     * Service sign-in. The service and model are fixed; the only action is an explicitly selected
+     * reset, which deletes this install's device key so the next message enrolls a new one.
      */
     private void editSettings() {
         if (busy()) {
             return;
         }
-        final EditText endpoint = new EditText(this);
-        endpoint.setHint("https://… inference URL (POST)");
-        endpoint.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        endpoint.setText(prefs().getString(KEY_ENDPOINT, ""));
-        final EditText model = new EditText(this);
-        model.setHint("Exact model id served by the endpoint");
-        model.setText(prefs().getString(KEY_MODEL, ""));
-        final EditText token = new EditText(this);
-        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        token.setSaveEnabled(false);
-        token.setHint(CredentialStore.isSet()
-                ? "Access token set (memory only); type to replace"
-                : "Access token (memory only, cleared on exit)");
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        form.addView(endpoint);
-        form.addView(model);
-        form.addView(token);
         new AlertDialog.Builder(this)
-                .setTitle("Inference settings")
-                .setView(form)
-                .setPositiveButton("Save", (d, w) -> {
-                    String newEndpoint = endpoint.getText().toString().trim();
-                    String newToken = token.getText().toString();
-                    token.setText("");
-                    if (!newEndpoint.equals(prefs().getString(KEY_ENDPOINT, ""))) {
-                        CredentialStore.clear(); // a token never follows a changed endpoint
+                .setTitle("Muse Glimmer service")
+                .setMessage(ModelsService.ORIGIN + "\nModel: " + ModelsService.MODEL + "\nSign-in: " + signInText())
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Reset sign-in", (d, w) -> HttpsInferenceClient.background(() -> {
+                    try {
+                        auth.reset();
+                    } catch (Exception e) {
+                        main.post(() -> setStatus(AuthMessages.text("auth_key_unavailable")));
+                        return;
                     }
-                    prefs().edit()
-                            .putString(KEY_ENDPOINT, newEndpoint)
-                            .putString(KEY_MODEL, model.getText().toString().trim())
-                            .apply();
-                    if (!newToken.isEmpty()) {
-                        try {
-                            CredentialStore.set(EndpointCredential.bind(newEndpoint, newToken));
-                        } catch (IllegalArgumentException e) {
-                            CredentialStore.clear();
-                            setStatus("Token not saved: " + e.getMessage());
-                            return;
-                        }
-                    }
-                    recreate();
-                })
-                .setNeutralButton("Clear token", (d, w) -> {
-                    token.setText("");
-                    CredentialStore.clear();
-                    recreate();
-                })
-                .setNegativeButton("Cancel", (d, w) -> token.setText(""))
+                    main.post(this::connect);
+                }))
                 .show();
+    }
+
+    private String signInText() {
+        switch (auth.state()) {
+            case ENROLLED:
+                return "this phone is enrolled";
+            case REVOKED:
+                return "revoked";
+            case REFUSED:
+                return "refused";
+            default:
+                return "not yet enrolled";
+        }
+    }
+
+    /** Signs in in the background at start; a problem is shown but never blocks Send or Settings. */
+    private void connect() {
+        setStatus("Connecting to Muse Glimmer…");
+        final DeviceAuth current = auth;
+        HttpsInferenceClient.background(() -> {
+            String problem = null;
+            try {
+                current.current(new CredentialSource.Cancel() {
+                    @Override
+                    public boolean isCancelled() {
+                        return isFinishing() || isDestroyed();
+                    }
+
+                    @Override
+                    public void track(java.net.HttpURLConnection connection) {
+                    }
+                });
+            } catch (CredentialSource.AuthFailure f) {
+                problem = f.isCancelled() ? null : AuthMessages.text(f.reason);
+            }
+            final String shown = problem;
+            main.post(() -> {
+                if (host != null && !host.hasActiveTurn()) {
+                    if (shown == null) {
+                        showReadyStatus();
+                    } else {
+                        setStatus(shown);
+                    }
+                }
+            });
+        });
+    }
+
+    private static DeviceAuth.Store store(final SharedPreferences prefs) {
+        return new DeviceAuth.Store() {
+            @Override
+            public String get(String key) {
+                return prefs.getString(key, null);
+            }
+
+            @Override
+            public void put(String key, String value) {
+                prefs.edit().putString(key, value).commit();
+            }
+
+            @Override
+            public void remove(String key) {
+                prefs.edit().remove(key).commit();
+            }
+        };
     }
 
     /** Lets the user pick which launcher apps open_app may open. Only this list is allowed. */

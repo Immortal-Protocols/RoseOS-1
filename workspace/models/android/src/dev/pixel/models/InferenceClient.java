@@ -10,6 +10,10 @@ public interface InferenceClient {
         void onResponse(int status, String retryAfter, String body);
 
         void onFailure(String kind);
+
+        /** A credential could not be obtained; a fixed reason code, before onResponse/onFailure. */
+        default void onAuthProblem(String reason) {
+        }
     }
 
     interface Call {
@@ -17,4 +21,14 @@ public interface InferenceClient {
     }
 
     Call send(String requestBody, long timeoutMs, Callback callback);
+
+    /** Whether {@link #resend} renews the credential (so one 401 may be retried). */
+    default boolean renews() {
+        return false;
+    }
+
+    /** Renews the credential, then sends again. Only after a 401, within the turn's dispatch limit. */
+    default Call resend(String requestBody, long timeoutMs, Callback callback) {
+        return send(requestBody, timeoutMs, callback);
+    }
 }
