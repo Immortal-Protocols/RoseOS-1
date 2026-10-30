@@ -14,6 +14,10 @@ EXP006-F3: an explicit functional verdict leads the summary, from the required s
 setup is usable and every fixture stage (and, with SYSTEMUI true, every SystemUI stage, at least one) passed; fail
 when any of them failed; otherwise unavailable, naming the first stage that was missing, unavailable or not run. A
 green job or run step never makes it pass. Cleanup is reported separately and does not change it.
+
+EXP006-KVM-001: with KVM_ACL true it also reports EDIR/kvm-access.json, the grant (granted, not-needed or refused) and
+its restoration (restored, not-needed or restore-failed); a missing restore record is `not observed`, never restored.
+Without KVM_ACL the KVM access row says disabled.
 """
 import argparse
 import json
@@ -85,12 +89,24 @@ def build(evidence, work, env):
             stage = stage if isinstance(stage, dict) else {}
             rows.append((clean(name, 40), clean(stage.get('result'), 20), clean(stage.get('reason'))))
     functional, why = verdict(setup, stages, (env.get('SYSTEMUI') or 'false') == 'true')
+    if (env.get('KVM_ACL') or 'false') == 'true':
+        kvm, problem = read(Path(evidence)/'kvm-access.json')
+        kvm = kvm if isinstance(kvm, dict) else {}
+        for key, label in (('grant', 'kvm access'), ('restore', 'kvm restore')):
+            entry = kvm.get(key) if isinstance(kvm.get(key), dict) else None
+            if entry is None:
+                rows.append((label, 'missing' if key == 'grant' else 'not observed', problem or f'no {key} record'))
+            else:
+                rows.append((label, clean(entry.get('result'), 20), clean(entry.get('reason') or entry.get('result'))))
+    else:
+        rows.append(('kvm access', 'disabled', 'kvm_acl input false: no ACL change'))
     leftovers = [name for name in PRIVATE if os.path.lexists(Path(work)/name)]
     rows.append(('cleanup', clean(env.get('CLEANUP_OUTCOME') or 'unknown', 20),
         f'still present: {leftovers}' if leftovers else 'test key, AVD and emulator home absent'))
     notes.append(annotation('notice' if functional == 'pass' else 'warning', f'functional verdict: {functional}', why))
     for name, result, reason in rows:
-        level = 'notice' if result in ('pass', 'installed', 'pre-existing', 'success') and not (
+        level = 'notice' if result in ('pass', 'installed', 'pre-existing', 'success', 'granted', 'not-needed', 'restored',
+            'disabled') and not (
             name == 'cleanup' and leftovers) else 'warning'
         notes.append(annotation(level, f'{name}: {result}', reason or result))
     head = [f'## SystemUI persistent-app experiment', '', f'**Functional verdict: {functional}** ({clean(why)}). '

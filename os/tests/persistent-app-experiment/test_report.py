@@ -58,7 +58,7 @@ class ReportTest(unittest.TestCase):
         self.assertIn('| emulator setup | missing | missing |', summary)
         self.assertIn('| experiment | missing | unreadable (JSONDecodeError) |', summary)
         self.assertIn("still present: ['avd']", summary)
-        self.assertTrue(all(n.startswith('::warning') for n in notes), notes)
+        self.assertTrue(all(n.startswith('::warning') for n in notes if 'kvm access%3A disabled' not in n), notes)
         self.assertIn('SystemUI stages requested: false', summary, 'an absent input is the default, false')
 
     def test_reasons_are_bounded_and_cannot_inject_commands_or_table_cells(self):
@@ -109,6 +109,42 @@ class VerdictTest(unittest.TestCase):
             'Job and step success do not imply it.', lines)
         self.assertEqual(notes[0], '::warning title=functional verdict%3A unavailable::emulator setup is unavailable')
         self.assertTrue(any(n.startswith('::notice title=cleanup%3A success') for n in notes), 'cleanup stays separate')
+
+class KvmReportTest(unittest.TestCase):
+    """EXP006-KVM-001: the KVM grant and its restoration are reported, never inferred."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='kvm-report-'))
+        self.addCleanup(__import__('shutil').rmtree, self.tmp, True)
+        (self.tmp/'e').mkdir()
+
+    def rows(self, document=None, enabled=True):
+        if document is not None:
+            (self.tmp/'e/kvm-access.json').write_text(json.dumps(document))
+        lines, notes = report.build(self.tmp/'e', self.tmp, {'KVM_ACL': 'true' if enabled else 'false'})
+        return [l for l in lines if l.startswith('| kvm')], notes
+
+    def test_disabled_granted_refused_and_unobserved_restore(self):
+        self.assertEqual(self.rows(enabled=False)[0], ['| kvm access | disabled | kvm_acl input false: no ACL change |'])
+        rows, notes = self.rows({'grant': {'result': 'granted', 'uid': 1001}, 'restore': {'result': 'restored', 'reason': 'cleanup'}})
+        self.assertEqual(rows, ['| kvm access | granted | granted |', '| kvm restore | restored | cleanup |'])
+        self.assertTrue(any(n.startswith('::notice title=kvm restore%3A restored') for n in notes))
+        rows, notes = self.rows({'grant': {'result': 'granted'}})
+        self.assertEqual(rows[1], '| kvm restore | not observed | no restore record |', 'a missing restore is never restored')
+        self.assertTrue(any(n.startswith('::warning title=kvm restore%3A not observed') for n in notes))
+        rows, notes = self.rows({'grant': {'result': 'refused', 'reason': 'the mask rights r-- would not let a rw entry take effect'},
+            'restore': {'result': 'restore-failed', 'reason': '/dev/kvm was replaced; it is not touched'}})
+        self.assertEqual(rows[0], '| kvm access | refused | the mask rights r-- would not let a rw entry take effect |')
+        self.assertTrue(any(n.startswith('::warning title=kvm restore%3A restore-failed') for n in notes))
+        (self.tmp/'e/kvm-access.json').unlink()
+        rows, _ = self.rows()
+        self.assertEqual(rows[0], '| kvm access | missing | missing |')
+
+    def test_a_granted_kvm_never_makes_the_verdict_pass_by_itself(self):
+        (self.tmp/'e/emulator-setup.json').write_text(json.dumps({'result': 'installed'}))
+        (self.tmp/'e/results.json').write_text(json.dumps({'stages': {
+            n: {'result': 'not-run'} for n in report.FIXTURE}}))
+        lines, notes = report.build(self.tmp/'e', self.tmp, {'KVM_ACL': 'true', 'RUN_OUTCOME': 'success'})
+        self.assertTrue(notes[0].startswith('::warning title=functional verdict%3A unavailable'))
 
 class WorkflowTest(unittest.TestCase):
     def test_the_systemui_input_is_manual_boolean_default_false_and_forwarded_only_when_true(self):
