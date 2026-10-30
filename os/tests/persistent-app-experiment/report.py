@@ -9,6 +9,11 @@ workflow annotation per stage: result and reason, each reason cut to 300 charact
 It never prints logs, device output, file contents or paths beyond those names. A missing or unreadable record is
 reported as `missing`, never as a pass. The step outcomes of setup, run and cleanup come from the environment
 (SETUP_OUTCOME, RUN_OUTCOME, CLEANUP_OUTCOME, SYSTEMUI). Always exits 0: the summary reports, it does not decide.
+
+EXP006-F3: an explicit functional verdict leads the summary, from the required stages alone: pass only when emulator
+setup is usable and every fixture stage (and, with SYSTEMUI true, every SystemUI stage, at least one) passed; fail
+when any of them failed; otherwise unavailable, naming the first stage that was missing, unavailable or not run. A
+green job or run step never makes it pass. Cleanup is reported separately and does not change it.
 """
 import argparse
 import json
@@ -19,6 +24,8 @@ import sys
 
 LIMIT = 300
 PRIVATE = ('test-only.keystore', 'avd', 'emulator-home')
+FIXTURE = ('environment', 'image', 'device', 'seed', 'ordinary', 'staged', 'restore')
+USABLE = ('installed', 'pre-existing')
 
 def clean(text, limit=LIMIT):
     text = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(text if text is not None else '')).strip()
@@ -38,6 +45,28 @@ def read(path):
     except (OSError, ValueError) as error:
         return None, f'unreadable ({type(error).__name__})'
 
+def verdict(setup, stages, systemui):
+    """(pass|fail|unavailable, reason) over the required stages; never derived from a job or step outcome."""
+    if not isinstance(setup, dict) or setup.get('result') not in USABLE:
+        return 'unavailable', 'emulator setup is ' + (clean(setup.get('result'), 40) if isinstance(setup, dict) else 'missing')
+    if not isinstance(stages, dict):
+        return 'unavailable', 'no stage results'
+    required = list(FIXTURE)
+    if systemui:
+        names = [n for n in stages if str(n).startswith('systemui')]
+        if not names:
+            return 'unavailable', 'SystemUI stages were requested but none were recorded'
+        required += names
+    results = {name: (stages.get(name) or {}).get('result') if isinstance(stages.get(name), dict) else None
+        for name in required}
+    failed = [n for n, r in results.items() if r == 'fail']
+    if failed:
+        return 'fail', 'failed: ' + ', '.join(failed)
+    short = [n for n, r in results.items() if r != 'pass']
+    if short:
+        return 'unavailable', f'{short[0]} is {results[short[0]] or "missing"}'
+    return 'pass', 'every required stage passed'
+
 def build(evidence, work, env):
     """(markdown lines, annotation lines)."""
     rows, notes = [], []
@@ -55,14 +84,17 @@ def build(evidence, work, env):
         for name, stage in list(stages.items())[:20]:
             stage = stage if isinstance(stage, dict) else {}
             rows.append((clean(name, 40), clean(stage.get('result'), 20), clean(stage.get('reason'))))
+    functional, why = verdict(setup, stages, (env.get('SYSTEMUI') or 'false') == 'true')
     leftovers = [name for name in PRIVATE if os.path.lexists(Path(work)/name)]
     rows.append(('cleanup', clean(env.get('CLEANUP_OUTCOME') or 'unknown', 20),
         f'still present: {leftovers}' if leftovers else 'test key, AVD and emulator home absent'))
+    notes.append(annotation('notice' if functional == 'pass' else 'warning', f'functional verdict: {functional}', why))
     for name, result, reason in rows:
         level = 'notice' if result in ('pass', 'installed', 'pre-existing', 'success') and not (
             name == 'cleanup' and leftovers) else 'warning'
         notes.append(annotation(level, f'{name}: {result}', reason or result))
-    head = [f'## SystemUI persistent-app experiment', '',
+    head = [f'## SystemUI persistent-app experiment', '', f'**Functional verdict: {functional}** ({clean(why)}). '
+        'Job and step success do not imply it.', '',
         f'SystemUI stages requested: {clean(env.get("SYSTEMUI") or "false", 10)}. Step outcomes: setup '
         f'{clean(env.get("SETUP_OUTCOME") or "unknown", 20)}, run {clean(env.get("RUN_OUTCOME") or "unknown", 20)}.',
         '', '| Stage | Result | Reason |', '| --- | --- | --- |']

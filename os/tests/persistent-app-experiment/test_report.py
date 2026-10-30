@@ -1,4 +1,6 @@
 """report.py and the EXP006 workflow wiring, against synthetic evidence files; nothing is run or dispatched."""
+import contextlib
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -24,9 +26,13 @@ class ReportTest(unittest.TestCase):
         (self.evidence/name).write_text(json.dumps(document) if not isinstance(document, str) else document)
 
     def run_report(self, env=None):
+        """report.main with its stdout captured: these synthetic stages must never reach the job's annotations."""
         summary = self.tmp/'summary.md'
         lines, notes = report.build(self.evidence, self.work, env or {})
-        report.main(['--evidence', str(self.evidence), '--work', str(self.work), '--summary', str(summary)], env or {})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            report.main(['--evidence', str(self.evidence), '--work', str(self.work), '--summary', str(summary)], env or {})
+        self.assertEqual(out.getvalue().splitlines(), notes, 'main prints exactly the annotations build returns')
         return summary.read_text(), notes
 
     def test_stage_results_reasons_setup_and_cleanup_are_visible(self):
@@ -68,6 +74,41 @@ class ReportTest(unittest.TestCase):
         self.assertIn('%250A', note, 'percent signs are escaped in workflow commands')
         self.assertTrue(note.startswith('::warning title=seed%3A fail::line1 ::error::'),
             'one line: an injected command is mid-line data, which the runner does not parse')
+
+class VerdictTest(unittest.TestCase):
+    FIXTURE = {n: {'result': 'pass'} for n in report.FIXTURE}
+
+    def test_the_verdict_comes_from_required_stages_never_from_green_steps(self):
+        green = {'SETUP_OUTCOME': 'success', 'RUN_OUTCOME': 'success', 'CLEANUP_OUTCOME': 'success'}
+        installed = {'result': 'installed'}
+        # Run 41122307845: setup unavailable, every stage not run, all steps green.
+        stages = {n: {'result': 'not-run', 'reason': 'an earlier stage did not pass'} for n in report.FIXTURE}
+        self.assertEqual(report.verdict({'result': 'unavailable'}, stages, True)[0], 'unavailable')
+        self.assertEqual(report.verdict(installed, stages, False), ('unavailable', 'environment is not-run'))
+        self.assertEqual(report.verdict(installed, dict(self.FIXTURE), False), ('pass', 'every required stage passed'))
+        self.assertEqual(report.verdict(installed, {**self.FIXTURE, 'seed': {'result': 'fail'}}, False),
+            ('fail', 'failed: seed'))
+        missing = dict(self.FIXTURE)
+        del missing['restore']
+        self.assertEqual(report.verdict(installed, missing, False), ('unavailable', 'restore is missing'))
+        self.assertEqual(report.verdict(None, self.FIXTURE, False)[0], 'unavailable')
+        # SystemUI opt-in: requested stages must be recorded and pass; unrequested ones are not required.
+        self.assertEqual(report.verdict(installed, self.FIXTURE, True)[0], 'unavailable')
+        with_ui = {**self.FIXTURE, 'systemui-identity': {'result': 'pass'}, 'systemui-foreign': {'result': 'not-run'}}
+        self.assertEqual(report.verdict(installed, with_ui, True), ('unavailable', 'systemui-foreign is not-run'))
+        self.assertEqual(report.verdict(installed, with_ui, False)[0], 'pass')
+        self.assertTrue(green)
+
+    def test_the_verdict_leads_the_summary_and_is_annotated(self):
+        tmp = Path(tempfile.mkdtemp(prefix='verdict-'))
+        self.addCleanup(__import__('shutil').rmtree, tmp, True)
+        (tmp/'e').mkdir()
+        (tmp/'e/emulator-setup.json').write_text(json.dumps({'result': 'unavailable', 'reason': 'x'}))
+        lines, notes = report.build(tmp/'e', tmp, {'RUN_OUTCOME': 'success', 'CLEANUP_OUTCOME': 'success'})
+        self.assertIn('**Functional verdict: unavailable** (emulator setup is unavailable). '
+            'Job and step success do not imply it.', lines)
+        self.assertEqual(notes[0], '::warning title=functional verdict%3A unavailable::emulator setup is unavailable')
+        self.assertTrue(any(n.startswith('::notice title=cleanup%3A success') for n in notes), 'cleanup stays separate')
 
 class WorkflowTest(unittest.TestCase):
     def test_the_systemui_input_is_manual_boolean_default_false_and_forwarded_only_when_true(self):
