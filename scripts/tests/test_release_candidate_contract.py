@@ -108,7 +108,7 @@ class CheckedInCandidateTest(unittest.TestCase):
              427169403, 40765131690))
         self.assertEqual(CONFIG['appRelease']['mustExceed'], 307)
         self.assertEqual(pipeline.app_versions_consumed(CONFIG, dict(APPS)), ('dev.pixel.voice', 307))
-        self.assertEqual(CONFIG['appRelease']['publication']['preserveLatest'], 'frankel-2026102806')
+        self.assertEqual(CONFIG['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))

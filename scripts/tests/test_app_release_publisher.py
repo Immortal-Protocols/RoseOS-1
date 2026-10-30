@@ -63,7 +63,7 @@ def apk_bytes(certificate, content=b'rose agent 309', scheme=0x7109871A, block=T
 class FakeGitHub(http.server.ThreadingHTTPServer):
     def __init__(self):
         super().__init__(('127.0.0.1', 0), Handler)
-        self.releases, self.blobs, self.next_id, self.log, self.latest, self.fail = [], {}, 1, [], 'frankel-2026102806', None
+        self.releases, self.blobs, self.next_id, self.log, self.latest, self.fail = [], {}, 1, [], 'frankel-2026102901', None
         self.move_latest_on_publish = False
 
     def url(self):
@@ -200,7 +200,7 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual((release['tag_name'], release['draft'], release['prerelease'], release['make_latest']),
             ('rose-agent-309', False, True, 'false'))
         self.assertEqual(sorted(a['name'] for a in release['assets']), ['SHA256SUMS', 'dev.pixel.voice-309.apk', 'dev.pixel.voice-309.receipt.json'])
-        self.assertEqual(self.server.latest, 'frankel-2026102806', 'OTA Latest is untouched')
+        self.assertEqual(self.server.latest, 'frankel-2026102901', 'OTA Latest is untouched')
         self.assertEqual(release['make_latest'], 'false')
         apk = (self.artifact/'dev.pixel.voice-309.apk').read_bytes()
         published = {a['name']: self.server.blobs[a['id']] for a in release['assets']}
@@ -296,27 +296,27 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(self.server.log, [])
 
     def test_latest_must_stay_the_ota_release(self):
-        # The verified Beta 2806 is Latest (promoted 2026-10-28 22:53:12 UTC, release 427275514). The previous 2805, any older
-        # Beta, a newer build, an app prerelease or no Latest is refused: the guard is one exact tag, never newest-wins.
-        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102806')
-        for latest in ('frankel-2026102805', 'frankel-2026102804', 'frankel-2026102807', 'rose-agent-307', None):
+        # Beta 2901 is Latest (AGENT311-APP-ONLY: owner-confirmed 2026-10-30). The previous 2806 and 2805, any older Beta,
+        # a newer build, an app prerelease or no Latest is refused: the guard is one exact tag, never newest-wins.
+        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
+        for latest in ('frankel-2026102806', 'frankel-2026102805', 'frankel-2026102804', 'frankel-2026102902', 'rose-agent-307', None):
             self.server.latest = latest
             result = self.run_publisher(public=f'refused-{latest}')
             self.assertEqual(result.returncode, 1)
-            self.assertIn('Latest is not frankel-2026102806; nothing is published', result.stderr)
+            self.assertIn('Latest is not frankel-2026102901; nothing is published', result.stderr)
             self.assertEqual(self.api_writes(), [])
         # After publishing: Latest moved to the new prerelease, back to 2805, or to another build is refused too.
         for index, moved_to in enumerate((True, 'frankel-2026102805', 'frankel-2026102807')):
-            self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102806', moved_to
+            self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102901', moved_to
             self.server.releases.clear()
             moved = self.run_publisher(public=f'moved{index}')
             self.assertEqual(moved.returncode, 1, moved_to)
-            self.assertIn('Latest moved away from frankel-2026102806', moved.stderr)
+            self.assertIn('Latest moved away from frankel-2026102901', moved.stderr)
 
     def test_publishing_309_preserves_2806_and_promotes_nothing(self):
         result = self.run_publisher()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.server.latest, 'frankel-2026102806')
+        self.assertEqual(self.server.latest, 'frankel-2026102901')
         release, = self.server.releases
         self.assertEqual((release['tag_name'], release['prerelease'], release['make_latest']), ('rose-agent-309', True, 'false'))
         latest_reads = [e for e in self.server.log if e[:2] == ('GET', REPO + '/releases/latest')]
@@ -380,7 +380,7 @@ class PublisherReuseTest(PublisherTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         release, = self.server.releases
         self.assertEqual((release['tag_name'], release['draft'], release['prerelease'], release['make_latest']), ('rose-agent-308', False, True, 'false'))
-        self.assertEqual(self.server.latest, 'frankel-2026102806', 'OS Latest is untouched')
+        self.assertEqual(self.server.latest, 'frankel-2026102901', 'OS Latest is untouched')
         latest_reads = [e for e in self.server.log if e[:2] == ('GET', REPO + '/releases/latest')]
         self.assertEqual(len(latest_reads), 2, 'Latest is read before and after publishing')
         published = {a['name']: self.server.blobs[a['id']] for a in release['assets']}
@@ -469,12 +469,12 @@ class PublisherReuseTest(PublisherTest):
         for latest in ('frankel-2026102805', 'frankel-2026102807', None):
             self.server.latest = latest
             result = self.reuse_publisher(public=f'latest-{latest}')
-            self.assertIn('Latest is not frankel-2026102806; nothing is published', result.stderr)
+            self.assertIn('Latest is not frankel-2026102901; nothing is published', result.stderr)
             self.assertEqual(self.api_writes(), [])
-        self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102806', 'frankel-2026102805'
+        self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102901', 'frankel-2026102805'
         result = self.reuse_publisher(public='moved')
         self.assertEqual(result.returncode, 1)
-        self.assertIn('Latest moved away from frankel-2026102806', result.stderr)
+        self.assertIn('Latest moved away from frankel-2026102901', result.stderr)
 
 # Only the reuse tests run in PublisherReuseTest; the inherited app-only tests already run in PublisherTest.
 for _name in [n for n in vars(PublisherTest) if n.startswith('test_')]:
