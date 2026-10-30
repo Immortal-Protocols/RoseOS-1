@@ -14,20 +14,26 @@
     "receiptFile": "rango-retained-input.json",
     "targetFiles": "rango-target_files.zip",
     "otatools": "rango-otatools.zip",
+    "resolvedManifest": "rango-resolved-manifest.xml",
+    "policy": "rango-background-policy.json",
     "limits": {
       "targetFilesBytes": 21474836480,
-      "otatoolsBytes": 4294967296
+      "otatoolsBytes": 4294967296,
+      "metadataBytes": 16777216
     },
     "transport": null,
-    "transportBasis": "Unbound: no supported transport moves the Mac operator's retained outputs to the original builder. The validated local interface is a directory holding exactly the receipt, target-files and otatools; it is staged into a fresh task-owned consumer directory and revalidated before secrets."
+    "transportBasis": "Unbound: no supported transport moves the Mac operator's retained outputs to the original builder. When bound it is {\"kind\": ..., \"directory\": absolute builder path}: a directory holding exactly the receipt, target-files, otatools, resolved manifest and background policy, staged into a fresh task-owned consumer directory and revalidated before secrets."
   },
   "signing": {
     "bootstrapProfile": "fold-rango-v1",
     "bootstrapReceipt": null,
-    "bootstrapReceiptBasis": "Unbound: the public receipt of a genuine completed fold-rango-v1 bootstrap names the committed secret versions and the OTA certificate and AVB public key identities. No bootstrap has run.",
+    "bootstrapReceiptBasis": "Unbound: the public receipt (inline JSON) of a genuine completed fold-rango-v1 bootstrap names the committed secret versions and the OTA certificate and AVB public key identities. No bootstrap has run.",
     "otatoolsProvenance": null,
     "releaseScriptProvenance": null,
-    "provenanceBasis": "Unbound: executable otatools and the release script need an approved source binding (pinned revision and content hashes), not only the artifact's self-reported hashes."
+    "provenanceBasis": "Unbound: executable otatools and the release script need an approved source binding (pinned revision and content hashes), not only the artifact's self-reported hashes.",
+    "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
+    "lockPath": "/home/pixelbuild/frankel-build.lock",
+    "sourceBasis": "The original builder tree and the shared global lock of os/build-only/rango.json and os/release-pipeline/frankel.json."
   },
   "publication": {
     "repository": "Immortal-Protocols/pixel-ota",
@@ -42,6 +48,6 @@
   },
   "verification": {
     "expected": null,
-    "basis": "Unbound: Rango-specific expected APK/APEX/image/updater identities for the release-pipeline checks; Frankel's updater, framework and feed identities are never claimed for Rango."
+    "basis": "Unbound: the Rango-specific release-pipeline expectations - variant, apps ([[package, versionCode]]), identities.appSignerSha256, host.tools, updater, permissionApex, systemUiTray and the other sections verify_signed reads. Frankel's updater, framework and feed identities are never claimed for Rango; target, identities (OTA/AVB) and publication are never taken from here."
   }
 }

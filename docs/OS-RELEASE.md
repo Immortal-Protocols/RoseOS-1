@@ -103,16 +103,33 @@ pixel-ota. Drafts made outside this workflow must stay recorded as retained
 baselines in `frankel.json`. The publisher's authenticated tag check is the
 final guard.
 
-## Retained Rango signing and separate release (source only, not selected)
+## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
-has been bootstrapped, transferred, signed or published, and no runtime is
-selected for it. The mode `rango-retained` runs only on the hosted guard. It
-runs `python3 scripts/rango-retained.py preflight --job guard`, which exits 4
-and lists every unbound value in `os/retained-rango/release.json`. A later
-guard step then fails unconditionally because the runtime is not selected.
-No controller, builder, login, secret, signing or publication job exists for
-this mode. The `latest-beta` button and the Frankel modes are unchanged.
+has been bootstrapped, transferred, signed or published.
+
+The mode `rango-retained` connects these steps:
+
+1. The guard runs `python3 scripts/rango-retained.py preflight --job guard`.
+   It exits 4 and lists every unbound value in
+   `os/retained-rango/release.json`, before the controller starts.
+2. Only when every value is bound, the job `rango-builder` runs on the
+   original builder:
+   - `preflight --job builder`, then `stage --consumer`, both before login;
+   - signer login, then `sign`, which runs host-sign's retained route under
+     the shared lock;
+   - the logout step, which always runs;
+   - `verify`, which runs release-pipeline `verify_signed` with the Rango
+     expectations;
+   - `stage-artifact`, which runs release-pipeline `stage_artifact`.
+3. The job `rango-publisher` then runs `publish`:
+   - it revalidates the bindings;
+   - release-pipeline `publish` uploads the draft and download-checks it;
+   - the adapter's `finalize_public` makes it public with
+     `make_latest=false`, and Latest must be unchanged before and after.
+4. Cleanup always stops the builder.
+
+The `latest-beta` button and the Frankel modes are unchanged.
 `SUPPORTED_DEVICES` and `LATEST_DEVICES` stay `('frankel',)`.
 
 What the source already does:
@@ -128,8 +145,9 @@ What the source already does:
 
   A missing value stays explicitly unbound. Wrong devices, products, builds or
   producers are refused, as are traversal, links, extra or missing files, and
-  size or hash drift. The only input interface is a local directory holding
-  exactly the receipt, target-files and otatools.
+  size or hash drift. The only input interface is a local directory, named by
+  the bound `input.transport`, holding exactly the receipt, target-files,
+  otatools, resolved manifest and background policy.
   `rango-retained.py stage --input-dir D --consumer C` copies it into a fresh
   owner-only consumer directory. `recheck --consumer C` revalidates that
   copy, and host-sign runs the recheck again before any secret.

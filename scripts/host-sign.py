@@ -183,13 +183,14 @@ def prepare_release_dir(source_root, device, build, sha, archive=None):
         marker.write_text(json.dumps(owner, sort_keys=True) + '\n')
     return releases
 
-def retained_inputs(env):
+def retained_inputs(env, retained=None):
     """OCT30-INFRA-S015 retained Rango route (ROSE_RETAINED_INPUT): the config bound from a genuine bootstrap receipt and
     the staged consumer inputs, revalidated now, before any secret; scripts/rango-retained.py refuses anything unbound."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('rango_retained', ROOT/'scripts/rango-retained.py')
-    retained = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(retained)
+    if retained is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('rango_retained', ROOT/'scripts/rango-retained.py')
+        retained = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(retained)
     try:
         return retained.sign_inputs(env)
     except retained.SetupMissing as error:

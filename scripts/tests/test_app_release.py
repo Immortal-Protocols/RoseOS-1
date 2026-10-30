@@ -384,7 +384,7 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             block = self.jobs[name].replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: builder\n', self.jobs['publisher'])  # skipped whenever builder is skipped
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
         self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, rango-retained, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export\]\n        default: latest-beta\n")
 
