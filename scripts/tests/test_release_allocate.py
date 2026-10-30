@@ -505,7 +505,12 @@ class Workflow(unittest.TestCase):
             ({'RESUME_STAGE': 'sign', 'RESUME_UNSIGNED_SHA256': 'c' * 64}, False), ({'APP_PUBLISH': 'true'}, False),
             ({'MODE': 'os-release'}, False),
             ({'MODE': 'os-release', 'CANDIDATE_SHA': 'b' * 40, 'BUILD_NUMBER': '2026103001', 'BUILD_TIMESTAMP': str(NOW),
-              'APPS': '[["dev.pixel.voice", 311]]'}, True)]
+              'APPS': '[["dev.pixel.voice", 311]]'}, True),
+            # RELEASE020: a campaign chains latest-beta only and has a fixed shape.
+            ({'CAMPAIGN': 'start'}, True), ({'CAMPAIGN': f'7.{NOW}.2'}, True), ({'CAMPAIGN': 'forever'}, False),
+            ({'CAMPAIGN': f'7.{NOW}.1'}, False),
+            ({'MODE': 'os-release', 'CANDIDATE_SHA': 'b' * 40, 'BUILD_NUMBER': '2026103001', 'BUILD_TIMESTAMP': str(NOW),
+              'APPS': '[["dev.pixel.voice", 311]]', 'CAMPAIGN': 'start'}, False)]
         for change, ok in cases:
             result = subprocess.run(['bash', '-euo', 'pipefail', '-c', guard_script()], cwd=ROOT, env={**base, **change},
                 capture_output=True, text=True)

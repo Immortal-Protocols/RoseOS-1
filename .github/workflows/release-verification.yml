@@ -8,6 +8,7 @@ on:
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
+      - 'scripts/release-chain.py'
       - 'scripts/rango-retained.py'
       - 'os/retained-rango/**'
       - 'scripts/actions-gcp-login.py'
@@ -95,6 +96,7 @@ on:
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
+      - 'scripts/release-chain.py'
       - 'scripts/rango-retained.py'
       - 'os/retained-rango/**'
       - 'scripts/actions-gcp-login.py'
@@ -207,6 +209,7 @@ jobs:
           python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
+          python3 scripts/tests/test_release_chain.py
           python3 scripts/tests/test_rango_retained.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py
