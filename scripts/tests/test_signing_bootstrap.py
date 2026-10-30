@@ -48,13 +48,13 @@ FRANKEL = {'otaCertificateSha256': 'f' * 64, 'avbPublicKeySha256': 'e' * 64}
 
 
 # A synthetic recipe in the closed vocabulary; its arguments are placeholders, not a claimed real generator interface.
-SYNTHETIC_RECIPE = [
-    {'tool': 'generator', 'args': ['{out}/releasekey', '{subject}'], 'stdin': 'passphrase', 'produces': ['releasekey.pk8', 'releasekey.x509.pem']},
-    {'tool': 'generator', 'args': ['{out}/platform', '{subject}'], 'stdin': 'passphrase', 'produces': ['platform.pk8', 'platform.x509.pem']},
-    {'tool': 'generator', 'args': ['{out}/bluetooth', '{subject}'], 'stdin': 'passphrase', 'produces': ['bluetooth.pk8', 'bluetooth.x509.pem']},
+# The checked-in make_key steps (source-bound, S010) plus two SYNTHETIC avb steps standing in for the unread
+# generate-keys/encrypt-keys recipe; the avb arguments are placeholders, not a claimed real interface.
+SYNTHETIC_RECIPE = PROFILES['profiles']['fold-rango-v1']['generation']['recipe'] + [
     {'tool': 'openssl', 'args': ['synthetic-rsa4096', '{out}/avb.pem', '{passphrase_file}'], 'produces': ['avb.pem']},
     {'tool': 'avbtool', 'args': ['synthetic-extract', '{out}/avb.pem', '{out}/avb_pkmd.bin'], 'produces': ['avb_pkmd.bin']},
 ]
+CERT_STEPS = len(PROFILES['profiles']['fold-rango-v1']['generation']['recipe'])
 ENCRYPTED_DER = bytes([0x30, 0x10, 0x30, 0x0e]) + b'synthetic-encrypted'
 ENCRYPTED_PEM = b'-----BEGIN ENCRYPTED PRIVATE KEY-----\nc3ludGhldGlj\n-----END ENCRYPTED PRIVATE KEY-----\n'
 
@@ -182,7 +182,7 @@ def codes(receipt):
 
 class ZeroSideEffects(unittest.TestCase):
     def test_checked_in_profiles_stop_before_anything(self):
-        for name, expected in (('fold-rango-v1', {'inventory-incomplete', 'tool-unapproved'}), ('models-v0', {'profile-unbound'}),
+        for name, expected in (('fold-rango-v1', {'recipe-missing', 'tool-unapproved'}), ('models-v0', {'profile-unbound'}),
                                ('rango', {'profile-unknown'}), ('none', {'profile-unknown'})):
             f, ex = Fixture(self), MockExecutor()
             receipt, _ = f.run(ex, name, PROFILES)
@@ -287,7 +287,7 @@ class Generation(unittest.TestCase):
             'symlink': archive_bytes(dict(base, **{'evil.pk8': link('rango/evil.pk8')})),
             'hardlink': archive_bytes(dict(base, **{'evil': link('rango/evil', tarfile.LNKTYPE)})),
             'missing bluetooth': archive_bytes({k: v for k, v in base.items() if not k.startswith('bluetooth')}),
-            'unexpected member': archive_bytes(dict(base, **{'shared.pk8': key_member('shared.pk8')})),
+            'unexpected member': archive_bytes(dict(base, **{'other.pk8': key_member('other.pk8')})),
             'nested too deep': archive_bytes(base, prefix='a/b/'),
             'not gzip': b'plain bytes',
             'bad certificate': archive_bytes(dict(base, **{'releasekey.x509.pem': b'no pem'})),
@@ -463,7 +463,7 @@ class Guard(unittest.TestCase):
                 env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
             self.assertEqual(sb.main(['run', '--profile', 'fold-rango-v1', '--recipe-sha', SHA, '--state-dir', '/nonexistent/s',
                 '--receipt-dir', '/nonexistent/r'], env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
-        self.assertIn('inventory-incomplete', out.getvalue())
+        self.assertIn('recipe-missing', out.getvalue())
         self.assertIn('profile-unbound', out.getvalue())
         self.assertEqual(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW), [])
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}, SHA, NOW))
@@ -567,8 +567,11 @@ class MutationControls(unittest.TestCase):
             ("        if len(value) >= 4 and", "        if False and", READY, None, None),
         ]
         # inventory: with the check removed the fold profile still stops on tools, so remove both to show the gate.
+        incomplete = ready_profiles()
+        incomplete['profiles']['fold-rango-v1']['keyInventory']['complete'] = False
+        self.assertIn('inventory-incomplete', dict(sb.readiness('fold-rango-v1', incomplete, NOW)))
         m = self.mutated(cases[0][0], cases[0][1])
-        self.assertNotIn('inventory-incomplete', dict(m.readiness('fold-rango-v1', PROFILES, NOW)))
+        self.assertNotIn('inventory-incomplete', dict(m.readiness('fold-rango-v1', incomplete, NOW)))
         for needle, replacement, profiles, factory, _ in cases[1:3]:
             ex = factory()
             self.assertEqual(self.run_with(sb, ex, profiles)['status'], 'blocked')
@@ -626,7 +629,7 @@ class MockRunner:
                 (Path(cwd)/name).write_bytes(key_member(name, b'gen'))
         if self.extra and index == 0:
             (Path(cwd)/self.extra).write_bytes(b'x')
-        return 0
+        return step.get('exitStatus', 0)
 
 
 class Generator(unittest.TestCase):
@@ -649,7 +652,7 @@ class Generator(unittest.TestCase):
             # Fixed approved tool paths, the passphrase only as a file path or stdin, never its value in argv.
             self.assertEqual({c[0] for c in runner.calls}, {FOLD['tools'][s['tool']]['installed']['path'] for s in SYNTHETIC_RECIPE})
             self.assertTrue(all('synthetic-token' not in ' '.join(c[1]) for c in runner.calls))
-            self.assertEqual([c[3] is not None for c in runner.calls], [True, True, True, False, False])
+            self.assertEqual([c[3] is not None for c in runner.calls], [True] * CERT_STEPS + [False, False])
             self.assertIn('/CN=Synthetic Test Only', runner.calls[0][1])
         self.assertEqual(outputs[0], outputs[1])
 
@@ -717,16 +720,25 @@ class Inventory(unittest.TestCase):
         self.assertEqual(optional, inventory['optionalByConsumer'])
         self.assertTrue(set(PROFILES['profiles']['fold-rango-v1']['archive']['publicIdentityFiles']) <= set(required))
         self.assertTrue(all(r['evidence'] for r in inventory['roles']))
-        self.assertIn('platform', {r['role'] for r in inventory['roles']})  # pinned adevtool 17df3b79 soong.ts
-        self.assertFalse(inventory['complete'])
-        self.assertEqual({m.get('revision', '')[:8] for m in inventory['missing']} & {'b0f697df'}, {'b0f697df'})
-        self.assertTrue(all(m['admitted'] is False for m in inventory['missing']))
+        # S010: the -d default set of sign_target_files_apks.py @ b0f697df plus the generate-release.sh consumer files.
+        self.assertEqual({r['role'] for r in inventory['roles'] if not r.get('optional')}, {'releasekey', 'platform', 'shared',
+            'media', 'networkstack', 'sdk_sandbox', 'bluetooth', 'gmscompat_lib', 'nfc', 'avb', 'avb-public'})
+        self.assertTrue(inventory['complete'])
+        self.assertNotIn('missing', inventory)
+        for role in inventory['roles']:
+            if role['files'][0].endswith('.pk8'):
+                self.assertIn('scrypt-encrypted', role['formats'][0])  # make_key -passout env:password -scrypt
+                self.assertIn('-passin', role['formats'][0])  # decrypt-keys / host-decrypt-keys consumer
 
     def test_tool_source_identity_is_not_an_installed_identity(self):
         for name, tool in PROFILES['profiles']['fold-rango-v1']['tools'].items():
             self.assertEqual(tool['installed'], {'path': None, 'sha256': None}, name)
-            self.assertIsNone(tool['sourceSha256'], name)
             self.assertIn(tool['kind'], ('source-script', 'host-binary'), name)
+            if tool['kind'] == 'source-script':
+                self.assertRegex(tool['sourceSha256'], '^[0-9a-f]{64}$', name)
+                self.assertTrue(tool['source']['pathVerified'], name)
+            else:
+                self.assertIsNone(tool['source'], name)  # openssl: a host binary, no source identity claimed
         plan = sb.plan('fold-rango-v1', PROFILES)
         self.assertEqual(sorted(t['tool'] for t in plan['laterHostPreflight']), ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
         self.assertEqual(len(plan['missingSources']), 2)
@@ -735,6 +747,82 @@ class Inventory(unittest.TestCase):
         models = PROFILES['profiles']['models-v0']
         self.assertEqual(models['status'], 'unbound')
         self.assertFalse({'secrets', 'project', 'signer', 'tools'} & set(models))
+
+
+FIXTURES = SCRIPTS/'tests/fixtures/signing-bootstrap'
+
+
+class Sources(unittest.TestCase):
+    """S010 source bindings: the four owner-approved pinned reads (two copied as fixtures, two recorded)."""
+
+    def tools(self):
+        return PROFILES['profiles']['fold-rango-v1']['tools']
+
+    def test_fixtures_match_the_recorded_source_identities(self):
+        for tool, name in (('generator', 'make_key'), ('decrypt-keys', 'decrypt-keys')):
+            self.assertEqual(sb.verify_source(self.tools()[tool], (FIXTURES/name).read_bytes()), [], tool)
+        stfa = PROFILES['profiles']['fold-rango-v1']['sources']['signTargetFilesApks']
+        self.assertEqual((stfa['revision'], stfa['gitBlob']), ('b0f697df8cc9519408ca0a404e918cd51bde0735',
+            'b3bb318917f5e8744c4d5a505112373e58e141a5'))
+        avb = self.tools()['avbtool']['source']
+        self.assertEqual((avb['revision'], avb['gitBlob']), ('ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee',
+            'c0f3c7c62c4121edca58727ae60e17818d46155c'))
+
+    def test_pinned_source_mismatch_is_detected(self):
+        data = bytearray((FIXTURES/'make_key').read_bytes())
+        data[-2:-1] = b'X'
+        problems = sb.verify_source(self.tools()['generator'], bytes(data))
+        self.assertEqual(len(problems), 2)
+        profiles = ready_profiles()
+        profiles['profiles']['fold-rango-v1']['tools']['avbtool']['source']['gitBlob'] = None
+        self.assertIn('source-unpinned', dict(sb.readiness('fold-rango-v1', profiles, NOW)))
+        profiles = ready_profiles()
+        profiles['profiles']['fold-rango-v1']['tools']['generator']['sourceSha256'] = 'f' * 63
+        self.assertIn('source-unpinned', dict(sb.readiness('fold-rango-v1', profiles, NOW)))
+
+    def test_make_key_steps_match_the_source_and_the_consumer(self):
+        make_key = (FIXTURES/'make_key').read_text()
+        decrypt = (FIXTURES/'decrypt-keys').read_text()
+        # make_key: two arguments select RSA-4096; the password is read from stdin; the pk8 is scrypt-encrypted DER;
+        # its EXIT trap always exits 1. decrypt-keys consumes exactly that encrypted DER with -passin.
+        for fact in ('openssl genrsa -f4 4096', 'read -rp', '-outform DER -out $1.pk8', '-scrypt', "exit 1' EXIT"):
+            self.assertIn(fact, make_key)
+        self.assertIn('openssl pkcs8 -inform DER -in $key.pk8 -passin env:password', decrypt)
+        self.assertIn('openssl pkcs8 -topk8 -in avb.pem -passin env:password', decrypt)
+        recipe = PROFILES['profiles']['fold-rango-v1']['generation']['recipe']
+        cert_roles = [r['role'] for r in PROFILES['profiles']['fold-rango-v1']['keyInventory']['roles'] if r['files'][0].endswith('.pk8')]
+        self.assertEqual([s['args'] for s in recipe], [[f'{{out}}/{r}', '{subject}'] for r in cert_roles])
+        self.assertTrue(all(s['tool'] == 'generator' and s['stdin'] == 'passphrase' and s['exitStatus'] == 1 for s in recipe))
+
+    def test_unresolved_recipe_and_installed_identities_refuse_before_anything(self):
+        reasons = dict(sb.readiness('fold-rango-v1', PROFILES, NOW))
+        self.assertIn('generate-keys', PROFILES['profiles']['fold-rango-v1']['generation']['missing'][1]['source'])
+        self.assertIn('recipe-missing', reasons)
+        self.assertIn('tool-unapproved', reasons)
+        # Even with a valid recipe, an open generation.missing entry refuses generation.
+        profiles = ready_profiles()
+        profiles['profiles']['fold-rango-v1']['generation']['missing'] = [{'fact': 'synthetic open item'}]
+        self.assertIn('recipe-missing', dict(sb.readiness('fold-rango-v1', profiles, NOW)))
+        with self.assertRaises(sb.Blocked) as blocked:
+            sb.generate_keys(Path('/nonexistent'), profiles['profiles']['fold-rango-v1'], MockRunner())
+        self.assertEqual(blocked.exception.code, 'recipe-missing')
+
+    def test_exit_status_vocabulary(self):
+        profile = copy.deepcopy(FOLD)
+        profile['generation']['recipe'][0]['exitStatus'] = 2
+        self.assertTrue(sb.recipe_problems(profile))
+        profile['generation']['recipe'][0]['exitStatus'] = True
+        self.assertTrue(sb.recipe_problems(profile))
+
+        class ZeroRunner(MockRunner):
+            def __call__(self, tool, argv, cwd, stdin_path):
+                super().__call__(tool, argv, cwd, stdin_path)
+                return 0  # make_key always exits 1; a 0 is not its success
+        ws = Path(tempfile.mkdtemp(prefix='gen-'))
+        self.addCleanup(shutil.rmtree, ws, True)
+        with self.assertRaises(sb.Blocked) as blocked:
+            sb.generate_keys(ws, FOLD, ZeroRunner(), token='t')
+        self.assertEqual(blocked.exception.code, 'generator-failed')
 
 
 if __name__ == '__main__':
