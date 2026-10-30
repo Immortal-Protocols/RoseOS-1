@@ -92,12 +92,37 @@ unchanged.
 The app-only route also refuses a Rose Agent version at or below any
 latest-beta reservation on the builder (`scripts/host-app-release.py`).
 
-**Remaining real acceptance**, open until a genuine run:
-- the first real run's allocation, build, signing, verification, publication
-  and Latest promotion;
-- confirming that the builder step's `GITHUB_ENV` export reaches the existing
-  stages. If it does not, they fail closed on an empty candidate;
-- phone update acceptance.
+**Real acceptance so far:** runs 41095801733 (frankel-2026103002) and
+41103495650 (frankel-2026103003) completed allocation, build, signing,
+verification, publication, Latest promotion and cleanup with no
+intervention. Phone update acceptance is still open.
+
+### Back-to-back campaign (RELEASE020)
+
+Set `campaign` to `start` on a latest-beta run to begin a 24-hour campaign.
+The final job `next-release` (`scripts/release-chain.py next`) is the only
+job with `actions: write`, owner-approved. It uses the job's short-lived
+`GITHUB_TOKEN` to dispatch one successor latest-beta run on main. The
+successor pins fresh main and allocates fresh versions at its own start,
+unchanged main included.
+
+- **Successor input:** `<id>.<deadline>.<generation>`. The deadline is fixed
+  at the first run's start plus 24 hours and is carried unchanged, so a
+  campaign cannot extend itself. Run names carry the campaign.
+- **When it chains:** only if the builder, publisher and cleanup all
+  succeeded, on run attempt 1, before the deadline, and while the repository
+  variable `RELEASE_CAMPAIGN_STOP` is neither `all` nor the campaign id.
+- **Duplicates and uncertainty:** a run that already carries the next
+  generation is refused as a duplicate. If the dispatch outcome is
+  uncertain, the job looks for the successor once and otherwise fails
+  visibly; it never retries.
+- **Stopping:** set the variable, or cancel the running run.
+- **The plain button:** an empty `campaign` is a single run, as before.
+- **Not used:** no schedule, no new token and no WIF change.
+
+A queued successor waits in the same concurrency group and is not evidence
+that a build started. A manual click while a successor is pending replaces
+it; that ends the campaign, which is visible as a missing generation.
 
 Allocations are not written back to main; they live on the builder and in
 pixel-ota. Drafts made outside this workflow must stay recorded as retained

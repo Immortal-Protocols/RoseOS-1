@@ -1,4 +1,6 @@
 name: Build & publish latest Pixel 10
+# RELEASE020: a campaign run carries its campaign in the run name; scripts/release-chain.py finds successors by it.
+run-name: ${{ inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || 'Build & publish latest Pixel 10' }}
 
 # Build, sign, verify and publish one Frankel candidate on the existing builder. The default mode, latest-beta, is the
 # normal button (OCT30-INFRA-S014): it needs no input. Every other mode and input is advanced. Proposed setup is
@@ -91,6 +93,10 @@ on:
         description: rango-retained only, and only if os/retained-rango/release.json selects the first-use identity policy (not selected) - this run enrols the durable first-use identity record; false requires an existing matching record
         type: boolean
         default: false
+      campaign:
+        description: latest-beta only - empty (default) is one run; 'start' begins a 24h back-to-back campaign in which each healthy run (publish and cleanup succeeded) dispatches the next fresh latest-beta run from main; '<id>.<deadline>.<generation>' is set by the chain itself. Stop with repository variable RELEASE_CAMPAIGN_STOP (campaign id or 'all') or by cancelling
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -119,6 +125,7 @@ env:
   ROSE_RANGO_PUBLISH: ${{ inputs.rango_publish }}
   ROSE_FIRST_USE_ENROLL: ${{ inputs.rango_first_use_enroll }}
   ROSE_RECOVER_RUN: ${{ inputs.rango_recover_run }}
+  CAMPAIGN: ${{ inputs.campaign }}
 
 jobs:
   guard:
@@ -186,6 +193,9 @@ jobs:
           # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
           [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
           [[ "$MODE" != app-reuse ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); b = json.loads(os.environ["REUSE_BINDING"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice" and sorted(b) == ["apkSha256", "signedTargetFilesSha256", "sourceRun", "unsignedTargetFilesSha256"] and type(b["sourceRun"]) is int and b["sourceRun"] > 0 and all(isinstance(b[k], str) and re.fullmatch("[0-9a-f]{64}", b[k]) for k in b if k != "sourceRun")'
+          # RELEASE020: a campaign chains latest-beta runs only; its input shape is checked before any host starts.
+          python3 scripts/release-chain.py check --campaign "${CAMPAIGN:-}"
+          [[ -z "${CAMPAIGN:-}" || "$MODE" == latest-beta ]]
       # rango-retained (OCT30-INFRA-S015): every real binding is checked here, before the controller; unbound ones exit 4.
       - name: Retained Rango preflight
         if: inputs.mode == 'rango-retained'
@@ -1038,3 +1048,27 @@ jobs:
       - run: python3 scripts/release-pipeline.py stop-builder
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
+
+  # RELEASE020: the back-to-back campaign's only link. After a healthy latest-beta campaign run (builder, publisher and
+  # cleanup all succeeded, attempt 1, before the carried deadline, not stopped, no successor yet) it dispatches exactly
+  # one successor workflow_dispatch on main with the job's short-lived GITHUB_TOKEN; the successor pins fresh main and
+  # allocates fresh versions itself. Owner-approved permission (Nathan 18:09:54 UTC): actions:write on this job only.
+  next-release:
+    needs: [builder, publisher, cleanup]
+    if: always() && inputs.mode == 'latest-beta' && inputs.campaign != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT_BUILDER: ${{ needs.builder.result }}
+      RESULT_PUBLISHER: ${{ needs.publisher.result }}
+      RESULT_CLEANUP: ${{ needs.cleanup.result }}
+      CAMPAIGN_STOP: ${{ vars.RELEASE_CAMPAIGN_STOP }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-chain.py next
