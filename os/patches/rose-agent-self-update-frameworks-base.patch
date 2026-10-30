@@ -1,0 +1,45 @@
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerSession.java b/services/core/java/com/android/server/pm/PackageInstallerSession.java
+index 55450b0..bb8f5ca 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerSession.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerSession.java
+@@ -4460,6 +4460,30 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
+         return (params.installFlags & PackageManager.INSTALL_APEX) != 0;
+     }
+ 
++    /** RoseOS: the preinstalled Rose Agent, the one system app allowed to install a newer build of itself. */
++    private static final String ROSE_AGENT_PACKAGE = "dev.pixel.voice";
++
++    /**
++     * RoseOS (issue #202): true only when Rose Agent updates itself. The session is a full, non-staged, non-APEX
++     * install of {@link #ROSE_AGENT_PACKAGE}, its owner is the installed package's own app id (the authenticated
++     * session uid, not a claimed installer or initiating package name), the APK is signed exactly as the installed
++     * package and its version code is higher. Every other system-app update stays blocked.
++     */
++    @GuardedBy("mLock")
++    private boolean isRoseAgentSelfUpdateLocked(PackageStateInternal existing) {
++        return ROSE_AGENT_PACKAGE.equals(mPackageName)
++                && ROSE_AGENT_PACKAGE.equals(existing.getPackageName())
++                && params.mode == SessionParams.MODE_FULL_INSTALL
++                && !params.isStaged
++                && !isApexSession()
++                && !existing.hasSharedUser()
++                && UserHandle.getAppId(mInstallerUid) == existing.getAppId()
++                && mSigningDetails != SigningDetails.UNKNOWN
++                && existing.getSigningDetails() != SigningDetails.UNKNOWN
++                && mSigningDetails.signaturesMatchExactly(existing.getSigningDetails())
++                && mVersionCode > existing.getVersionCode();
++    }
++
+     boolean sessionContains(Predicate<PackageInstallerSession> filter) {
+         if (!isMultiPackage()) {
+             return filter.test(this);
+@@ -4715,7 +4739,8 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
+         if (existingPkgSetting != null && (existingPkgSetting.isSystem() || existingPkgSetting.isUpdatedSystemApp())) {
+             String firstPartyInstaller = android.util.PackageUtils.getFirstPartyAppSourcePackageName(mContext);
+             boolean isFirstPartyInstaller = firstPartyInstaller.equals(mInstallSource.mInitiatingPackageName);
+-            if (!isFirstPartyInstaller && mInstallerUid != Process.SHELL_UID) {
++            if (!isFirstPartyInstaller && mInstallerUid != Process.SHELL_UID
++                    && !isRoseAgentSelfUpdateLocked(existingPkgSetting)) {
+                 String debugSysprop = "persist.allow_unknown_system_app_updates";
+                 boolean allow = Build.IS_DEBUGGABLE
+                         && SystemProperties.getBoolean(debugSysprop, false);
