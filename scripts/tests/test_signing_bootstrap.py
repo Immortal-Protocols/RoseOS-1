@@ -2,7 +2,7 @@
 
 Only mock executors run here: no key is generated, no secret is read or written, no IAM call is made and nothing is
 dispatched. The checked-in fold-rango-v1 profile is resource-bound but not ready (incomplete inventory, unapproved
-tools), and models-v0 is unbound, so both stop before any side effect. A test-only READY copy of the fold profile (fake
+tools), and models-v0 (S012) has an unmeasured keytool, so both stop before any side effect. A test-only READY copy of the fold profile (fake
 tool paths and digests, complete inventory, future access) exercises the state machine with a fake archive whose
 certificate and AVB bytes are random. Fixture limits: the fake generator writes files the test chose; real
 generation, real gcloud responses and real permission outcomes are not exercised."""
@@ -177,7 +177,8 @@ def codes(receipt):
 
 class ZeroSideEffects(unittest.TestCase):
     def test_checked_in_profiles_stop_before_anything(self):
-        for name, expected in (('fold-rango-v1', {'tool-unapproved'}), ('models-v0', {'profile-unbound'}),
+        # models-v0 is source-ready (pinned-tree keytool); its host-side refusals are in test_models_signing_bootstrap.py.
+        for name, expected in (('fold-rango-v1', {'tool-unapproved'}),
                                ('rango', {'profile-unknown'}), ('none', {'profile-unknown'})):
             f, ex = Fixture(self), MockExecutor()
             receipt, _ = f.run(ex, name, PROFILES)
@@ -192,10 +193,7 @@ class ZeroSideEffects(unittest.TestCase):
         reasons = sb.readiness('fold-rango-v1', PROFILES, NOW)
         self.assertEqual(sorted(d.split(':')[0] for c, d in reasons if c == 'tool-unapproved'),
             ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
-        models = dict(sb.readiness('models-v0', PROFILES, NOW))['profile-unbound']
-        for word in ('Secret Manager resources', 'signer access', 'generation algorithm', 'package identity'):
-            self.assertIn(word, models)
-        self.assertNotIn('secrets', PROFILES['profiles']['models-v0'])
+        self.assertEqual(sb.readiness('models-v0', PROFILES, NOW), [])  # pinned-tree basis complete in source
         self.assertEqual(sb.readiness('fold-rango-v1', READY, NOW), [])
 
     def test_expiring_or_missing_access_stops_before_anything(self):
@@ -445,21 +443,22 @@ class Guard(unittest.TestCase):
         for change in ({'CANDIDATE_SHA': 'b' * 40}, {'GITHUB_REF': 'refs/heads/feature'}, {'GITHUB_EVENT_NAME': 'push'},
                        {'ROSE_DEVICE': 'rango'}, {'PROMOTE': 'true'}, {'APP_PUBLISH': 'true'}, {'ALPHA_RECOVER': 'true'},
                        {'RESUME_STAGE': 'sign'}, {'RESUME_SOURCE_RUN': '1'}, {'REUSE_BINDING': '{}'},
-                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'BOOTSTRAP_PROFILE': 'none'}, {'BOOTSTRAP_PROFILE': '../x'},
+                       {'BOOTSTRAP_PROFILE': 'none'}, {'BOOTSTRAP_PROFILE': '../x'},
                        {'MODE': 'os-release'}):
             self.assertTrue(sb.guard({**GUARD_ENV, **change}, READY, NOW), change)
         self.assertTrue(sb.guard(GUARD_ENV, PROFILES, NOW))  # the checked-in fold profile is not ready
+        self.assertEqual(sb.guard({**GUARD_ENV, 'BOOTSTRAP_PROFILE': 'models-v0'}, PROFILES, NOW), [])  # the host proves the tree
 
     def test_cli_guard_and_preflight_fail_closed_with_checked_in_profiles(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(sb.main(['guard'], env=GUARD_ENV), 4)
             self.assertEqual(sb.main(['preflight', '--profile', 'models-v0', '--recipe-sha', SHA],
-                env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
+                env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}), 4)
             self.assertEqual(sb.main(['run', '--profile', 'fold-rango-v1', '--recipe-sha', SHA, '--state-dir', '/nonexistent/s',
                 '--receipt-dir', '/nonexistent/r'], env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
         self.assertIn('tool-unapproved: generator', out.getvalue())
-        self.assertIn('profile-unbound', out.getvalue())
+        self.assertIn('GCP_SIGNER_SERVICE_ACCOUNT is not the profile signer', out.getvalue())
         self.assertEqual(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW), [])
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}, SHA, NOW))
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': 'b' * 40, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW))
@@ -470,7 +469,9 @@ class Guard(unittest.TestCase):
         self.assertEqual(perms, {'secretmanager.secrets.get', 'secretmanager.versions.list'})
         self.assertEqual({op['permission'] for op in p['add']}, {'secretmanager.versions.add'})
         self.assertIn('gcloud secrets versions list PIXEL_OS_SIGNING_KEYS_RANGO_V1 --project protocols-465723', p['metadata'][1]['operation'])
-        self.assertIsNone(sb.plan('models-v0', PROFILES)['metadata'] or None)
+        models = sb.plan('models-v0', PROFILES)
+        self.assertEqual({op['permission'] for op in models['metadata']}, {'secretmanager.secrets.get', 'secretmanager.versions.list'})
+        self.assertIn('PIXEL_MODELS_SIGNING_KEYSTORE_V1', models['add'][0]['operation'])
 
 
 def jobs(text):
@@ -739,10 +740,15 @@ class Inventory(unittest.TestCase):
         self.assertEqual(sorted(t['tool'] for t in plan['laterHostPreflight']), ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
         self.assertEqual(plan['missingSources'], [])  # S010: inventory and recipe sources are closed
 
-    def test_models_stays_unbound(self):
-        models = PROFILES['profiles']['models-v0']
-        self.assertEqual(models['status'], 'unbound')
-        self.assertFalse({'secrets', 'project', 'signer', 'tools'} & set(models))
+    def test_models_is_its_own_pkcs12_profile(self):
+        models, fold = PROFILES['profiles']['models-v0'], PROFILES['profiles']['fold-rango-v1']
+        self.assertEqual(models['status'], 'resource-bound')
+        self.assertEqual(models['secrets'], {'keys': 'PIXEL_MODELS_SIGNING_KEYSTORE_V1', 'passphrase': 'PIXEL_MODELS_SIGNING_PASSPHRASE_V1'})
+        self.assertFalse(set(models['secrets'].values()) & set(fold['secrets'].values()))
+        self.assertEqual(models['archive']['format'], 'pkcs12')
+        self.assertEqual(sb.profile_outputs(models), ('keystore.p12', 'passphrase'))
+        self.assertEqual(sb.profile_outputs(fold), ('keys.tar.gz', 'passphrase'))
+        self.assertEqual(models['tools']['keytool']['installed'], {'path': None, 'sha256': None})
 
 
 FIXTURES = SCRIPTS/'tests/fixtures/signing-bootstrap'

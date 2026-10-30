@@ -69,6 +69,7 @@ on:
       - 'scripts/tests/test_blazer_preparation_preflight.py'
       - 'scripts/signing-bootstrap.py'
       - 'scripts/tests/test_signing_bootstrap.py'
+      - 'scripts/tests/test_models_signing_bootstrap.py'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
@@ -143,6 +144,7 @@ on:
       - 'scripts/tests/test_blazer_preparation_preflight.py'
       - 'scripts/signing-bootstrap.py'
       - 'scripts/tests/test_signing_bootstrap.py'
+      - 'scripts/tests/test_models_signing_bootstrap.py'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
@@ -194,6 +196,7 @@ jobs:
           python3 scripts/tests/test_signing_tool_observation.py
           python3 scripts/tests/test_blazer_preparation_preflight.py
           python3 scripts/tests/test_signing_bootstrap.py
+          python3 scripts/tests/test_models_signing_bootstrap.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
 

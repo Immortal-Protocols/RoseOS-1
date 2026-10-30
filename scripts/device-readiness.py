@@ -24,9 +24,9 @@ check their entry and time caps before each entry and report a stop as incomplet
            receipt, an allowlisted signing-tools.json and SHA256SUMS to --evidence-dir, and the signing-tool table to
            the Actions job summary
   cleanup  --run-id, --run-attempt: removes only this attempt's task root, and only when its ownership marker matches
-Signing tools (OCT30-INFRA-S011): exactly four public executables are opened with the same no-follow and secret-path
+Signing tools (OCT30-INFRA-S011, S012): exactly six public files are opened with the same no-follow and secret-path
 refusal and hashed within a byte and time bound - make_key, script/decrypt-keys and jdk21 keytool under the source
-root, and /usr/bin/openssl. Only the presence of external/avb/avb_openssl beside avbtool is recorded (avbtool runs it
+root, /usr/bin/openssl, and the Models adapter's SDK build-tools/android-15 lib/apksigner.jar and aapt. Only the presence of external/avb/avb_openssl beside avbtool is recorded (avbtool runs it
 instead of PATH openssl when present). Nothing is executed, searched for on PATH or read from a key or secret location.
 The trusted runtime wrapper scripts/host-decrypt-keys.py is hashed from the checked-out recipe and kept separate from
 the source helper. These are receipt-time observations; a later run must revalidate them before use.
@@ -95,7 +95,11 @@ HOST_TOOLS = ('aapt2', 'apksigner', 'aprotoc', 'arsclib', 'debugfs', 'dispol', '
 PREREQUISITE_DIRS = ('vendor/adevtool/node_modules', 'prebuilts/build-tools/path/linux-x86', 'prebuilts/jdk/jdk21/linux-x86/bin')
 # OCT30-INFRA-S011: the fixed signing-tool readset. (root, relative path); nothing else is ever opened for it.
 SIGNING_TOOLS = {'make_key': ('source', 'development/tools/make_key'), 'decrypt-keys': ('source', 'script/decrypt-keys'),
-    'keytool': ('source', 'prebuilts/jdk/jdk21/linux-x86/bin/keytool'), 'openssl': ('system', 'usr/bin/openssl')}
+    'keytool': ('source', 'prebuilts/jdk/jdk21/linux-x86/bin/keytool'), 'openssl': ('system', 'usr/bin/openssl'),
+    # OCT30-INFRA-S012: the files the Models signing adapter (PR #149) validates - the SDK apksigner.jar (not the
+    # apksigner launcher) and the SDK-root aapt (not the source prebuilts aapt) - so neither is bound from another file.
+    'apksigner.jar': ('system', 'home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/lib/apksigner.jar'),
+    'sdk-aapt': ('system', 'home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/aapt')}
 AVB_OPENSSL = 'external/avb/avb_openssl'
 SIGNING_TOOL_BYTES = 64 << 20
 SIGNING_TOOL_SECONDS = 30
