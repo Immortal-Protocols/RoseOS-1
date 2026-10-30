@@ -239,7 +239,15 @@ class Prepare(Case):
 
     def test_wrong_owner_symlinked_ancestor_and_unsafe_parent(self):
         self.prepare()
-        self.assertRefused('sdk_cache_unexpected', self.prepare, uid=os.getuid() + 1)
+        other = os.getuid() + 1
+        # The cache owner check itself, then through prepare(): depending on who owns the parent (root locally, the
+        # runner user in CI) the parent or the cache check refuses first; either way nothing is reused or written.
+        self.assertRefused('sdk_cache_unsafe', prep.prove_cache, self.root, prep.settings(self.cfg, self.pins, str(self.shared))[1],
+                           other, self.pins)
+        transport = Transport(self.payload)
+        error = self.assertRefused('sdk_', self.prepare, transport, uid=other)
+        self.assertTrue(str(error).startswith(('sdk_parent_unsafe', 'sdk_cache_unexpected')), str(error))
+        self.assertEqual(transport.calls, [])
         shutil.rmtree(self.root)
         real = self.tmp/'real-tools'
         real.mkdir(0o755)
