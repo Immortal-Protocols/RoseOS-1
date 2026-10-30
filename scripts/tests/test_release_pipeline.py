@@ -46,8 +46,9 @@ FRAMEWORK_DUMP = '''\
 APPS = [['dev.pixel.voice', 312], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
 PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
-WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',
-    (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text(), re.M)
+# The existing route's builder stages (signed-builder, the default-off dedicated route, repeats the last three).
+BUILDER_JOB = WORKFLOW_TEXT.split('\n  builder:\n', 1)[1].split('\n  request-signing:\n', 1)[0]
+WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$', BUILDER_JOB, re.M)
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))

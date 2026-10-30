@@ -351,10 +351,19 @@ jobs:
     env:
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+      # RELEASE020 M2c (default-off): latest-beta signs on the dedicated signer only when ROSE_SIGNING_TRANSPORT=dedicated.
+      ROSE_DEDICATED_SIGNER: ${{ inputs.mode == 'latest-beta' && vars.ROSE_SIGNING_TRANSPORT == 'dedicated' }}
     outputs:
       candidate_sha: ${{ steps.candidate.outputs.candidate_sha }}
       build_number: ${{ steps.candidate.outputs.build_number }}
       build_timestamp: ${{ steps.candidate.outputs.build_timestamp }}
+      apps: ${{ steps.candidate.outputs.apps }}
+      channel: ${{ steps.candidate.outputs.channel }}
+      dedicated: ${{ env.ROSE_DEDICATED_SIGNER }}
+      manifest_sha256: ${{ steps.package.outputs.manifest_sha256 }}
+      signing_job: ${{ steps.package.outputs.job_dir }}
+      signing_artifact_id: ${{ steps.upload-job.outputs.artifact-id }}
+      signing_artifact_digest: ${{ steps.upload-job.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -428,7 +437,8 @@ jobs:
       # a hash-bound roseos.signing-job.v1 job for the dedicated signer (os-sign.yml) beside the attempt. Local only:
       # nothing is uploaded or sent and this run still signs on its existing route below.
       - name: Package the signing job for the dedicated signer (opt-in)
-        if: inputs.mode == 'latest-beta' && vars.ROSE_SIGNING_TRANSPORT == 'package'
+        id: package
+        if: inputs.mode == 'latest-beta' && (vars.ROSE_SIGNING_TRANSPORT == 'package' || vars.ROSE_SIGNING_TRANSPORT == 'dedicated')
         run: |
           set -euo pipefail
           read -r src otatools < <(python3 -c 'import json; h = json.load(open("os/release-pipeline/frankel.json"))["host"]; print(h["sourceRoot"], h["outDir"] + "/" + h["sign"]["otatools"])')
@@ -436,12 +446,34 @@ jobs:
           python3 scripts/release-transport.py package --release-dir "$ROSE_BASE/release" --otatools "$src/$otatools" \
             --device "$ROSE_DEVICE" --build "$BUILD_NUMBER" --timestamp "$BUILD_TIMESTAMP" --candidate "$CANDIDATE_SHA" \
             --notes "$RUNNER_TEMP/UPDATE.md" --config os/release-pipeline/frankel.json \
-            --job-id "$ROSE_DEVICE-$BUILD_NUMBER-$GITHUB_RUN_ID" --out "$ROSE_BASE/signing-jobs"
+            --job-id "$ROSE_DEVICE-$BUILD_NUMBER-$GITHUB_RUN_ID" --out "$ROSE_BASE/signing-jobs" | tee "$RUNNER_TEMP/signing-job.json"
+          job="$ROSE_BASE/signing-jobs/$ROSE_DEVICE-$BUILD_NUMBER-$GITHUB_RUN_ID"
+          mkdir "$RUNNER_TEMP/signing-manifest" && cp "$job/manifest.json" "$RUNNER_TEMP/signing-manifest/"
+          printf 'manifest_sha256=%s\njob_dir=%s\n' "$(python3 -c 'import json, os; print(json.load(open(os.environ["RUNNER_TEMP"] + "/signing-job.json"))["manifestSha256"])')" "$job" >> "$GITHUB_OUTPUT"
+      # Dedicated mode: the hash-bound job goes to os-sign through normal same-repository Actions artifacts, and this
+      # builder signs nothing (the dedicated route's signed outputs return through request-signing and signed-builder).
+      - name: Signing job artifact for the dedicated signer
+        id: upload-job
+        if: env.ROSE_DEDICATED_SIGNER == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-job-${{ env.ROSE_DEVICE }}-${{ steps.candidate.outputs.build_number }}-${{ github.run_id }}
+          path: ${{ steps.package.outputs.job_dir }}
+          retention-days: 1
+          if-no-files-found: error
+      - name: Signing job manifest for acceptance
+        if: env.ROSE_DEDICATED_SIGNER == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-manifest-${{ env.ROSE_DEVICE }}-${{ steps.candidate.outputs.build_number }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/signing-manifest
+          retention-days: 1
+          if-no-files-found: error
       - name: Signer access for OS signing
-        if: inputs.resume_failed_stage != 'ota-verify'
+        if: inputs.resume_failed_stage != 'ota-verify' && env.ROSE_DEDICATED_SIGNER != 'true'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Sign
-        if: inputs.resume_failed_stage != 'ota-verify'
+        if: inputs.resume_failed_stage != 'ota-verify' && env.ROSE_DEDICATED_SIGNER != 'true'
         env:
           # Only a sign resume may move a failed attempt's task-owned partial release output aside (never deleted).
           ROSE_SIGN_RESUME_ARCHIVE: ${{ inputs.resume_failed_stage == 'sign' && format('failed-sign-{0}', github.run_id) || '' }}
@@ -450,13 +482,122 @@ jobs:
         if: always()
         run: python3 scripts/actions-gcp-login.py logout
       - name: Verify the signed candidate
+        if: env.ROSE_DEDICATED_SIGNER != 'true'
+        run: bash scripts/os-release-stage.sh ota-verify verify-signed
+      - name: Stage only public files and receipts
+        if: env.ROSE_DEDICATED_SIGNER != 'true'
+        run: bash scripts/os-release-stage.sh transfer stage-artifact --artifact-dir "$ROSE_BASE/artifact"
+      - name: Transfer
+        if: env.ROSE_DEDICATED_SIGNER != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: os-release-${{ env.ROSE_DEVICE }}-${{ steps.candidate.outputs.build_number }}
+          path: ${{ env.ROSE_BASE }}/artifact
+          retention-days: 3
+          if-no-files-found: error
+
+  # RELEASE020 M2c: the dedicated signer (default-off). Secret-free and OIDC-free; actions:write is the owner-approved
+  # (19:41:06 UTC) permission to dispatch os-sign.yml@main once and read its outputs. Exactly the two canonical artifacts
+  # of the one matching run are accepted against this job's manifest before anything reaches the builder again.
+  request-signing:
+    needs: builder
+    if: inputs.mode == 'latest-beta' && needs.builder.outputs.dedicated == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      JOB_ID: ${{ inputs.device || 'frankel' }}-${{ needs.builder.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Dispatch os-sign and wait for the one matching run
+        id: sign
+        run: |
+          set -euo pipefail
+          python3 scripts/release-transport.py request --source-run "$GITHUB_RUN_ID" \
+            --artifact-id "${{ needs.builder.outputs.signing_artifact_id }}" \
+            --artifact-digest "sha256:${{ needs.builder.outputs.signing_artifact_digest }}" \
+            --manifest-sha256 "${{ needs.builder.outputs.manifest_sha256 }}" \
+            --request-id "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT.$JOB_ID" --job-id "$JOB_ID"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signing-manifest-${{ env.JOB_ID }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/job
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ steps.sign.outputs.public_artifact_id }}
+          run-id: ${{ steps.sign.outputs.sign_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/accepted/signed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ steps.sign.outputs.target_artifact_id }}
+          run-id: ${{ steps.sign.outputs.sign_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/accepted/target
+      - name: Accept both signer artifacts against this job
+        run: |
+          set -euo pipefail
+          python3 scripts/release-transport.py accept --job "$RUNNER_TEMP/job" --signed "$RUNNER_TEMP/accepted/signed" \
+            --target "$RUNNER_TEMP/accepted/target"
+          cp "$RUNNER_TEMP/job/manifest.json" "$RUNNER_TEMP/accepted/"
+      - name: Accepted signer outputs for the builder
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-accepted-${{ env.JOB_ID }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/accepted
+          retention-days: 1
+          if-no-files-found: error
+
+  # The dedicated route's remaining builder stages on the original builder: its sign stage installs the accepted bytes
+  # (release-transport.py place, re-accepted against the builder's own job manifest), then the unchanged signed-candidate
+  # verification, public staging and transfer run exactly as on the existing route. No credential or signer access.
+  signed-builder:
+    needs: [builder, request-signing]
+    if: inputs.mode == 'latest-beta' && needs.request-signing.result == 'success'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      CANDIDATE_SHA: ${{ needs.builder.outputs.candidate_sha }}
+      BUILD_NUMBER: ${{ needs.builder.outputs.build_number }}
+      BUILD_TIMESTAMP: ${{ needs.builder.outputs.build_timestamp }}
+      APPS: ${{ needs.builder.outputs.apps }}
+      CHANNEL: ${{ needs.builder.outputs.channel }}
+      SIGNING_JOB: ${{ needs.builder.outputs.signing_job }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No builder preflight: it requires the signer service-account binding this job deliberately lacks.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-accepted-${{ env.ROSE_DEVICE }}-${{ needs.builder.outputs.build_number }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/accepted
+      - name: Sign stage (install the accepted dedicated-signer outputs)
+        run: |
+          set -euo pipefail
+          base="$HOME/rose-actions/$ROSE_DEVICE-$BUILD_NUMBER"
+          test -d "$base/stages" && test -f "$SIGNING_JOB/manifest.json"
+          cmp "$SIGNING_JOB/manifest.json" "$RUNNER_TEMP/accepted/manifest.json"
+          echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+          python3 scripts/release-stage.py run --state "$base/stages" --source-revision "$CANDIDATE_SHA" sign -- \
+            python3 scripts/release-transport.py place --job "$SIGNING_JOB" --signed "$RUNNER_TEMP/accepted/signed" \
+            --target "$RUNNER_TEMP/accepted/target" --release-dir "$base/release"
+      - name: Verify the signed candidate
         run: bash scripts/os-release-stage.sh ota-verify verify-signed
       - name: Stage only public files and receipts
         run: bash scripts/os-release-stage.sh transfer stage-artifact --artifact-dir "$ROSE_BASE/artifact"
       - name: Transfer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: os-release-${{ env.ROSE_DEVICE }}-${{ steps.candidate.outputs.build_number }}
+          name: os-release-${{ env.ROSE_DEVICE }}-${{ needs.builder.outputs.build_number }}
           path: ${{ env.ROSE_BASE }}/artifact
           retention-days: 3
           if-no-files-found: error
@@ -759,7 +900,9 @@ jobs:
         run: python3 scripts/device-readiness.py cleanup --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
   publisher:
-    needs: builder
+    needs: [builder, signed-builder]
+    # The existing route (signed-builder skipped) or the dedicated route only after signed-builder succeeded.
+    if: always() && needs.builder.result == 'success' && (needs.signed-builder.result == 'success' || (needs.builder.outputs.dedicated != 'true' && needs.signed-builder.result == 'skipped'))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -1041,7 +1184,7 @@ jobs:
         run: python3 scripts/rango-retained.py publish --artifact-dir "$RUNNER_TEMP/rango-artifact"
 
   cleanup:
-    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]
+    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
