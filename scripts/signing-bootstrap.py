@@ -125,6 +125,10 @@ def readiness(name, profiles, now):
             reasons.append(('tool-unapproved', f'{tool}: no measured installed path and sha256 ({identity.get("requiredObservation")})'))
     if not profile.get('tools'):
         reasons.append(('tool-unapproved', 'no tool identities'))
+    reasons += [('source-unpinned', detail) for detail in source_problems(profile)]
+    missing = (profile.get('generation') or {}).get('missing') or []
+    if missing:
+        reasons.append(('recipe-missing', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing)))
     reasons += [('recipe-missing' if code == 'missing' else 'recipe-invalid', detail)
         for code, detail in recipe_problems(profile)]
     access = profile.get('access', {})
@@ -138,6 +142,36 @@ def readiness(name, profiles, now):
     return reasons
 
 
+SHA1 = re.compile(r'[0-9a-f]{40}')
+
+
+def source_problems(profile):
+    """Every source-script tool must carry its pinned source identity (repository, path, 40-hex revision and git blob,
+    sha256 of the bytes). A source identity never stands in for the installed identity."""
+    problems = []
+    for tool, identity in sorted(profile.get('tools', {}).items()):
+        if identity.get('kind') != 'source-script':
+            continue
+        source = identity.get('source') or {}
+        if not (source.get('path') and source.get('repository') and SHA1.fullmatch(str(source.get('revision')))
+                and SHA1.fullmatch(str(source.get('gitBlob'))) and HEX64.fullmatch(str(identity.get('sourceSha256')))):
+            problems.append(f'{tool}: source identity is not pinned (repository, path, revision, gitBlob, sourceSha256)')
+    return problems
+
+
+def verify_source(identity, data):
+    """Compare source bytes with a recorded identity ({gitBlob, sha256} or a tool's source/sourceSha256)."""
+    blob = identity.get('gitBlob') or (identity.get('source') or {}).get('gitBlob')
+    digest = identity.get('sha256') or identity.get('sourceSha256')
+    observed_blob = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+    problems = []
+    if observed_blob != blob:
+        problems.append(f'git blob {observed_blob} is not the pinned {blob}')
+    if hashlib.sha256(data).hexdigest() != digest:
+        problems.append(f'sha256 {hashlib.sha256(data).hexdigest()} is not the pinned {digest}')
+    return problems
+
+
 def approved_path(path):
     return isinstance(path, str) and path.startswith('/') and '..' not in PurePosixPath(path).parts and '\0' not in path
 
@@ -146,7 +180,7 @@ def approved_path(path):
 # exactly one placeholder or a plain literal. Nothing else (no shell, path, environment or command text) is accepted.
 LITERAL = re.compile(r'[A-Za-z0-9_.,:=+@-][A-Za-z0-9_.,:=+@-]{0,127}')
 SUBJECT = re.compile(r'(/[A-Za-z]{1,3}=[A-Za-z0-9 ._-]{1,64}){1,8}')
-STEP_KEYS = {'tool', 'args', 'produces', 'stdin'}
+STEP_KEYS = {'tool', 'args', 'produces', 'stdin', 'exitStatus'}
 
 
 def recipe_problems(profile):
@@ -161,10 +195,12 @@ def recipe_problems(profile):
     problems, produced = [], []
     for index, step in enumerate(recipe):
         if not isinstance(step, dict) or set(step) - STEP_KEYS or not {'tool', 'args', 'produces'} <= set(step):
-            problems.append(('invalid', f'step {index}: only tool, args, produces and stdin are accepted'))
+            problems.append(('invalid', f'step {index}: only tool, args, produces, stdin and exitStatus are accepted'))
             continue
         if step['tool'] not in profile.get('tools', {}):
             problems.append(('invalid', f'step {index}: tool {step["tool"]!r} is not a profile tool'))
+        if step.get('exitStatus', 0) not in (0, 1) or isinstance(step.get('exitStatus', 0), bool):
+            problems.append(('invalid', f'step {index}: exitStatus must be 0 or 1 (make_key exits 1 through its EXIT trap)'))
         if step.get('stdin', 'none') not in ('none', 'passphrase'):
             problems.append(('invalid', f'step {index}: stdin must be none or passphrase'))
         for arg in step['args'] if isinstance(step['args'], list) else [None]:
@@ -192,6 +228,9 @@ def generate_keys(workspace, profile, runner, token=None):
 
     runner(tool_path, argv, cwd, stdin_path) returns an exit status; it is the only process boundary and is mocked in
     tests. Tool output is never captured into logs or the receipt."""
+    missing = (profile.get('generation') or {}).get('missing') or []
+    if missing:
+        raise Blocked('recipe-missing', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing))
     problems = recipe_problems(profile)
     if problems:
         raise Blocked('recipe-missing' if problems[0][0] == 'missing' else 'recipe-invalid', problems[0][1])
@@ -208,7 +247,7 @@ def generate_keys(workspace, profile, runner, token=None):
         tool = profile['tools'][step['tool']]['installed']['path']
         argv = [values.get(a, str(out/a[6:]) if a.startswith('{out}/') else a) for a in step['args']]
         status = runner(tool, argv, str(out), str(passphrase) if step.get('stdin') == 'passphrase' else None)
-        if status != 0:
+        if status != step.get('exitStatus', 0):
             raise Blocked('generator-failed', f'step {index} ({step["tool"]}) exited {status}')
         expected += step['produces']
     names = sorted(os.listdir(out))
@@ -583,7 +622,8 @@ def plan(name, profiles):
         # Installed identities are host facts: source identity is not an installed executable hash.
         'laterHostPreflight': [{'tool': t, 'kind': i.get('kind'), 'source': i.get('source'), 'observe': i.get('requiredObservation')}
             for t, i in sorted(profile.get('tools', {}).items()) if not (i.get('installed') or {}).get('sha256')],
-        'missingSources': (profile.get('keyInventory') or {}).get('missing')}
+        'missingSources': ((profile.get('keyInventory') or {}).get('missing') or [])
+            + ((profile.get('generation') or {}).get('missing') or [])}
 
 
 def main(argv=None, env=None):
