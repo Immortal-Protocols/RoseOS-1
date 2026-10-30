@@ -203,10 +203,8 @@
         "build": "2026103012",
         "source": "920beee9453c48629e31f205e9b6d983478314fc",
         "buildTimestamp": 1793397918,
-        "mustExceed": {
-          "dev.pixel.voice": 320
-        },
-        "basis": "Published Beta frankel-2026103012: campaign 41132175338 gen 2, os-release run 41135606390 (source 920beee, candidate 449107c3, BUILD_DATETIME 1793397918, Rose Agent 320), the first build whose Rose Agent client (App PR253) reads app receipt schema 2; recorded as the delivered floor appRelease.compatibility.minOsBuild names (APP-IDSIG-1030-M005). Not an install or phone-acceptance claim"
+        "mustExceed": {},
+        "basis": "Published Beta frankel-2026103012: campaign 41132175338 gen 2, os-release run 41135606390 (source 920beee, candidate 449107c3, BUILD_DATETIME 1793397918, Rose Agent 320), the first build whose Rose Agent client (App PR253) reads app receipt schema 2; recorded as the delivered floor appRelease.compatibility.minOsBuild names (APP-IDSIG-1030-M005). Not an install or phone-acceptance claim. A newer candidate needs a higher build number and BUILD_DATETIME but no higher versionCode: Latest descends from 3012 and the allocator keeps an unchanged package's published version (Rose Agent 320 stayed 320 in 3014; demanding more refused campaign 41132175338 gen 5, run 41144465393). A changed Rose Agent still moves above every consumed version"
       }
     ]
   },
