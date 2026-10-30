@@ -446,6 +446,66 @@ class Route(unittest.TestCase):
         manifest = json.loads((self.artifact/'manifest.json').read_text())
         self.assertEqual((manifest['target']['device'], manifest['identities']['otaCertificateSha256']), ('rango', self.ota_cert))
 
+    def cli(self, *argv):
+        """The real CLI, as the workflow runs it (os-release.yml rango-guard/rango-builder steps)."""
+        return rr.main(list(argv))
+
+    def test_cli_guard_checks_declarations_and_builder_checks_the_actual_files(self):
+        """Consolidated audit defect 2: the hosted guard cannot read the builder's staging directory. --job guard checks
+        the complete static config and the declared transport only; --job builder keeps the exact local file checks."""
+        builder_path = self.t.root/'pixelbuild/rose-actions/rango-retained/2026103001-transfer007/input'  # never created
+        self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(builder_path)}
+        reads, saved = [], rr.check_directory
+        rr.check_directory = lambda *a, **k: reads.append(a) or (_ for _ in ()).throw(AssertionError('guard read the input'))
+        try:
+            self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
+            self.assertEqual(self.cli('preflight', '--job', 'guard', '--input-dir', str(self.src)), 1)
+        finally:
+            rr.check_directory = saved
+        self.assertEqual(reads, [])
+        self.assertFalse(builder_path.exists())
+        self.assertEqual(self.cli('preflight', '--job', 'builder'), 1)  # the same missing path refuses on the builder
+        for transport, code in ((None, 4), ({'kind': 'synthetic-local-directory', 'directory': 'relative/input'}, 1),
+                                ({'directory': str(builder_path)}, 1)):
+            self.cfg['input']['transport'] = transport
+            with self.subTest(transport=transport):
+                self.assertEqual(self.cli('preflight', '--job', 'guard'), code)
+                self.assertEqual(self.cli('preflight', '--job', 'builder'), code)
+        self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
+        self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
+        self.assertEqual(self.cli('preflight', '--job', 'builder'), 0)
+        for name, damage in (('tampered', lambda d: (d/'rango-background-policy.json').write_bytes(b'{"tampered": true}')),
+                             ('extra', lambda d: (d/'notes.txt').write_text('x')),
+                             ('partial', lambda d: (d/'rango-otatools.zip').unlink()),
+                             ('truncated', lambda d: (d/'rango-target_files.zip').write_bytes(b'short'))):
+            bad = self.t.root/f'input-{name}'
+            shutil.copytree(self.src, bad)
+            damage(bad)
+            self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(bad)}
+            with self.subTest(damage=name):
+                self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)  # declarations only; bytes are the builder's
+                self.assertEqual(self.cli('preflight', '--job', 'builder'), 1)
+        self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
+        consumer = self.t.root/'cli-consumer'
+        self.assertEqual(self.cli('stage', '--consumer', str(consumer)), 0)
+        self.assertEqual(self.cli('recheck', '--consumer', str(consumer)), 0)
+        (consumer/'input/rango-background-policy.json').write_bytes(b'{"tampered": true}')
+        self.assertEqual(self.cli('recheck', '--consumer', str(consumer)), 1)
+
+    def test_cli_guard_builder_then_sign_verify_stage_and_hosted_publish(self):
+        """The selected contract end to end on synthetic boundaries: CLI guard -> CLI builder preflight -> sign ->
+        verify (real upstream Updater check) -> stage (pinned notes) -> hosted publish, never Latest."""
+        self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
+        self.assertEqual(self.cli('preflight', '--job', 'builder'), 0)
+        self.sign()
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertEqual((self.artifact/'assets/UPDATE.md').read_bytes(), NOTES_FILE.read_bytes())
+        report = rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        self.assertEqual((report['promoted'], report.get('finalizedPublic')), (False, True))
+        receipt = json.loads((self.artifact/'assets/verification.json').read_text())
+        self.assertEqual((receipt['updater']['mode'], receipt['updater']['roseDiscovery']), ('upstream', False))
+
     def test_verification_failure_prevents_publication(self):
         self.sign()
         self.mock_check('check_ota', ['OTA package signature does not verify'])

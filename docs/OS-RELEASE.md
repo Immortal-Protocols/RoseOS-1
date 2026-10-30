@@ -188,6 +188,11 @@ with `git show` from that commit, never the working tree. They are re-hashed bef
 Rango builder checks out full history for that read. Frankel still reads `os/release-notes/{device}-{build}.md` from
 its candidate commit, unchanged.
 
+**Guard versus builder preflight.** The hosted guard (`preflight --job guard`) checks the complete static config,
+provenance selection, pinned notes and the declared `input.transport`, but never reads the builder-local input
+directory, which the hosted runner cannot see; `--input-dir` is refused there. `preflight --job builder` checks the
+exact five files, sizes and hashes before signer login, then `stage` and `recheck` revalidate the consumer copy.
+
 What the source already does:
 - **Input.** The input receipt schema is `roseos.rango-retained-input.v1`. It
   binds:

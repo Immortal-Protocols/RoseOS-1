@@ -363,8 +363,10 @@ def bind_tool_proof(env, cfg):
     return rows, {k: summary[k] for k in ('proofSha256', 'helperBlob', 'helperRevision')}
 
 
-def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
-    """Every unbound binding of the route, before any controller, login or secret. Wrong values refuse instead."""
+def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True, local=True):
+    """Every unbound binding of the route, before any controller, login or secret. Wrong values refuse instead.
+    local=False is the hosted guard: the declared transport is validated, but the builder-local input directory, which
+    the hosted runner cannot read, is not; the builder preflight (local=True) checks its exact files and hashes."""
     cfg = check_config(cfg or config())
     missing = []
     transport = cfg['input'].get('transport')
@@ -375,7 +377,7 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
     elif not isinstance(transport, dict) or not str(transport.get('directory', '')).startswith('/') or not transport.get('kind'):
         raise Refused('config_invalid: input.transport must name its kind and an absolute builder directory')
     input_dir = input_dir or (transport or {}).get('directory')
-    if not inputs:
+    if not inputs or not local:
         pass
     elif input_dir:
         try:
@@ -1035,7 +1037,9 @@ def main(argv=None):
     try:
         if args.command == 'preflight':
             receipt = json.loads(Path(args.bootstrap_receipt).read_text()) if args.bootstrap_receipt else None
-            missing = preflight(args.input_dir, receipt)
+            if args.job == 'guard' and args.input_dir:
+                raise Refused('config_invalid: the hosted guard checks the declared transport, never a local input directory')
+            missing = preflight(args.input_dir, receipt, local=args.job == 'builder')
             if missing:
                 raise SetupMissing(missing)
             result = {'preflight': 'ready'}
