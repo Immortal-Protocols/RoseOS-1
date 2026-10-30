@@ -7,145 +7,48 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
-import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.provider.MediaStore;
-import android.view.Gravity;
-import android.view.View;
 import android.view.WindowInsets;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
 /**
- * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): a light dock of real installed apps over the
- * prototype wallpaper. The wallpaper is one Wallpaper drawable behind the whole pager (OS-PAGING-158-M001), so it
- * stays continuous while Home and the app pages slide over it; this page draws none of its own. Rose lives in the
- * fixed HomeTray, drawn by App's RosePresenceView; this page owns no voice state.
+ * Launcher Home page of the selected HiFi (prototypes/rose-hifi at ce126f56, the sparse first page): the owner's
+ * default phone, messages, camera and browser apps as a plain grid on the wallpaper, in the same cells as the app
+ * pages, above the fixed page dots and HomeTray. There is no second shortcut bar: the tray is the one persistent
+ * control bar (#157), and every other installed app is a swipe or a page dot away. The wallpaper is one Wallpaper
+ * drawable behind the whole pager (OS-PAGING-158-M001), so it stays continuous while Home and the app pages slide
+ * over it; this page draws none of its own. Rose lives in the fixed HomeTray, drawn by App's RosePresenceView;
+ * this page owns no voice state.
  */
 final class RoseHomeView extends FrameLayout {
  static final int DOCK_SIZE = 4;
  /** Decoded once per process: MainActivity rebuilds its pages on every HOME press. */
  static Bitmap cachedWallpaper;
 
- RoseHomeView(MainActivity activity, List<ResolveInfo> dock, Runnable openApps, View pageDots) {
+ RoseHomeView(MainActivity activity, List<ResolveInfo> dock, int columns) {
   super(activity);
   setContentDescription("Home");
-  LinearLayout column = new LinearLayout(activity);
-  column.setOrientation(LinearLayout.VERTICAL);
-  column.setGravity(Gravity.CENTER_HORIZONTAL);
-  int side = activity.dp(18), top = activity.dp(20), bottom = activity.dp(4);
-  column.setPadding(side, top, side, bottom);
-  column.setOnApplyWindowInsetsListener((v, i) -> {
+  // The app pages' own grid and cells (MainActivity.appTile): same tile, label and launch path, bottom-aligned
+  // above the dots; Home only differs in its column count. No measurement report: Home never re-plans the pages.
+  HomeAppPage grid = new HomeAppPage(activity, columns, null);
+  for (ResolveInfo app : dock) grid.addView(activity.appTile(app));
+  int side = activity.dp(HomeAppLayout.MARGIN_DP), top = activity.dp(HomeAppLayout.TOP_DP);
+  grid.setPadding(side, top, side, 0);
+  grid.setOnApplyWindowInsetsListener((v, i) -> {
    v.setPadding(side + i.getSystemWindowInsetLeft(), top + i.getSystemWindowInsetTop(),
-     side + i.getSystemWindowInsetRight(), bottom + i.getSystemWindowInsetBottom());
+     side + i.getSystemWindowInsetRight(), i.getSystemWindowInsetBottom());
    return i;
   });
-  addView(column, new LayoutParams(-1, -1));
-
-  // Rose now sits in the fixed HomeTray (OS-HIFI-HOME-001); the wallpaper fills the space above the dock.
-  column.addView(new View(activity), new LinearLayout.LayoutParams(-1, 0, 1));
-
-  LinearLayout tray = new LinearLayout(activity);
-  tray.setGravity(Gravity.CENTER_VERTICAL);
-  tray.setPadding(activity.dp(8), activity.dp(12), activity.dp(8), activity.dp(12));
-  GradientDrawable trayBack = new GradientDrawable();
-  trayBack.setColor(0xd9fafcf4);
-  trayBack.setCornerRadius(activity.dp(24));
-  tray.setBackground(trayBack);
-  for (ResolveInfo app : dock) {
-   String label = AppLabels.label(activity.getPackageManager(), app.activityInfo.packageName,
-     app.loadLabel(activity.getPackageManager()).toString());
-   int iconResource = AppLabels.icon(activity.getPackageManager(), app.activityInfo.packageName);
-   ImageView icon = new ImageView(activity);
-   icon.setImageDrawable(iconResource == 0 ? app.loadIcon(activity.getPackageManager()) : activity.getDrawable(iconResource));
-   tray.addView(dockTile(activity, icon, label, () -> WorkspaceLauncher.open(activity, app, label)), new LinearLayout.LayoutParams(0, -1, 1));
-  }
-  TextView glyph = activity.text("▦", 30, 0xff3b5547);
-  glyph.setGravity(Gravity.CENTER);
-  tray.addView(dockTile(activity, glyph, "All apps", openApps), new LinearLayout.LayoutParams(0, -1, 1));
-  LinearLayout.LayoutParams trayParams = new LinearLayout.LayoutParams(-1, -2);
-  trayParams.bottomMargin = activity.dp(8);
-  column.addView(tray, trayParams);
-  column.addView(pageDots, new LinearLayout.LayoutParams(-1, activity.dp(30)));
+  addView(grid, new LayoutParams(-1, -1));
  }
-
- /** A plain icon over its label, as in the prototype dock; no tile background. */
- static View dockTile(MainActivity activity, View icon, String label, Runnable open) {
-  LinearLayout tile = new LinearLayout(activity);
-  tile.setOrientation(LinearLayout.VERTICAL);
-  // Top-aligned at the tray's tallest tile, so icons stay level when one label takes two lines.
-  tile.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-  tile.setPadding(activity.dp(4), activity.dp(8), activity.dp(4), activity.dp(6));
-  tile.setClickable(true);
-  tile.setFocusable(true);
-  tile.setContentDescription(label);
-  tile.setOnClickListener(v -> open.run());
-  icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-  if (icon instanceof ImageView) ((ImageView) icon).setScaleType(ImageView.ScaleType.FIT_CENTER);
-  tile.addView(icon, new LinearLayout.LayoutParams(activity.dp(46), activity.dp(46)));
-  DockLabelView name = new DockLabelView(activity, label);
-  name.setTextSize(12);
-  name.setTextColor(0xff22382e);
-  name.setGravity(Gravity.CENTER_HORIZONTAL);
-  name.setTypeface(activity.chatFont(800));
-  name.setIncludeFontPadding(false);
-  name.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-  LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(-1, -2);
-  nameParams.topMargin = activity.dp(10);
-  tile.addView(name, nameParams);
-  return tile;
- }
-
- /** A dock label fitted to its tile width by DockLabel: the whole name, never a one-line cut. */
- static final class DockLabelView extends TextView {
-  final String label;
-  float basePx;
-
-  DockLabelView(MainActivity activity, String label) {
-   super(activity);
-   this.label = label;
-   setText(label);
-  }
-
-  /** The dock size the owner's font scale gives; fitting may go down to 10/12 of it. */
-  @Override public void setTextSize(float sp) {
-   super.setTextSize(sp);
-   basePx = getTextSize();
-  }
-
-  @Override protected void onMeasure(int widthSpec, int heightSpec) {
-   float available = MeasureSpec.getSize(widthSpec) - getPaddingLeft() - getPaddingRight();
-   if (available > 0 && basePx > 0) {
-    android.text.TextPaint paint = new android.text.TextPaint(getPaint());
-    DockLabel fit = DockLabel.fit(label, basePx, basePx * 10 / 12, available, (text, size) -> {
-     paint.setTextSize(size);
-     float widest = 0;
-     for (String line : text.split("\n")) widest = Math.max(widest, paint.measureText(line));
-     return widest;
-    });
-    if (!fit.text.contentEquals(getText())) setText(fit.text);
-    if (getTextSize() != fit.sizePx) super.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fit.sizePx);
-    // Each setter runs only on a change, so a measure pass never requests another layout once settled.
-    if (getMaxLines() != fit.lines) setMaxLines(fit.lines);
-    android.text.TextUtils.TruncateAt end = fit.ellipsize ? android.text.TextUtils.TruncateAt.END : null;
-    if (getEllipsize() != end) setEllipsize(end);
-   }
-   super.onMeasure(widthSpec, heightSpec);
-  }
- }
-
 
  /**
   * The owner's default phone, messages, camera and browser apps, in that order, taken from the
