@@ -167,19 +167,24 @@ class PublisherTest(unittest.TestCase):
         self.config_path.write_text(json.dumps(config))
         self.make_artifact()
 
-    def make_artifact(self, apk=None, edit=lambda r: r, name='artifact', sums=None, extra=None):
+    def make_artifact(self, apk=None, edit=lambda r: r, name='artifact', sums=None, extra=None, idsig=None):
+        """idsig (bytes): the builder's APK M004 artifact, with dev.pixel.voice-309.apk.idsig named in its receipt."""
         directory = self.root/name
         directory.mkdir()
         data = apk if apk is not None else apk_bytes(self.certificate)
         (directory/'dev.pixel.voice-309.apk').write_bytes(data)
-        receipt = edit({'receiptType': 'app-release', 'simulated': False, 'candidate': CANDIDATE, 'packageName': 'dev.pixel.voice',
+        base = {'receiptType': 'app-release', 'simulated': False, 'candidate': CANDIDATE, 'packageName': 'dev.pixel.voice',
             'versionCode': 309, 'versionName': '309-app-beta', 'apk': 'dev.pixel.voice-309.apk', 'size': len(data),
             'sha256': hashlib.sha256(data).hexdigest(), 'signerSha256': self.signer, 'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'],
-            'apkFacts': {'minSdk': 29, 'nativeAbis': []}, 'checks': ['builder checks']})
+            'apkFacts': {'minSdk': 29, 'nativeAbis': []}, 'checks': ['builder checks']}
+        if idsig is not None:
+            (directory/'dev.pixel.voice-309.apk.idsig').write_bytes(idsig)
+            base['v4Signature'] = {'asset': 'dev.pixel.voice-309.apk.idsig', 'size': len(idsig), 'sha256': hashlib.sha256(idsig).hexdigest()}
+        receipt = edit(base)
         (directory/'app-release-receipt.json').write_text(json.dumps(receipt))
         if extra:
             (directory/extra).write_text('extra')
-        names = sums or ['app-release-receipt.json', 'dev.pixel.voice-309.apk']
+        names = sums or ['app-release-receipt.json', 'dev.pixel.voice-309.apk', *(['dev.pixel.voice-309.apk.idsig'] if idsig is not None else [])]
         (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n' for n in names))
         self.artifact = directory
         return directory
@@ -226,6 +231,68 @@ class PublisherTest(unittest.TestCase):
         for text in (result.stdout, result.stderr, *(p.read_text() for p in (self.root/'public').glob('*.json'))):
             self.assertNotIn(TOKEN, text)
             self.assertNotIn(str(self.root), text, 'no internal paths')
+
+    def set_schema(self, version):
+        self.config['appRelease']['compatibility']['schemaVersion'] = version
+        self.config_path.write_text(json.dumps(self.config))
+
+    def test_schema2_publishes_the_apk_its_v4_sidecar_the_receipt_and_checksums(self):
+        shutil.rmtree(self.artifact)
+        self.make_artifact(idsig=b'synthetic v4 signature')
+        self.set_schema(2)
+        result = self.run_publisher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release, = self.server.releases
+        published = {a['name']: self.server.blobs[a['id']] for a in release['assets']}
+        self.assertEqual(sorted(published), ['SHA256SUMS', 'dev.pixel.voice-309.apk', 'dev.pixel.voice-309.apk.idsig',
+            'dev.pixel.voice-309.receipt.json'])
+        self.assertEqual(published['dev.pixel.voice-309.apk.idsig'], b'synthetic v4 signature')
+        public = json.loads(published['dev.pixel.voice-309.receipt.json'])
+        self.assertEqual(public['schemaVersion'], 2)
+        self.assertEqual(public['v4Signature'], {'asset': 'dev.pixel.voice-309.apk.idsig', 'size': 22,
+            'sha256': hashlib.sha256(b'synthetic v4 signature').hexdigest()})
+        self.assertEqual(published['SHA256SUMS'].decode(), ''.join(f'{hashlib.sha256(published[n]).hexdigest()}  {n}\n'
+            for n in ('dev.pixel.voice-309.apk', 'dev.pixel.voice-309.apk.idsig', 'dev.pixel.voice-309.receipt.json')))
+        self.assertEqual(self.server.latest, 'frankel-2026102901', 'OTA Latest is untouched')
+        # every asset, the sidecar included, was downloaded back with authentication
+        for name in published:
+            self.assertTrue(any(e[0] == 'GET' and e[2] for e in self.server.log), name)
+
+    def test_schema1_never_publishes_the_sidecar_and_stays_byte_identical(self):
+        before = self.run_publisher(public='plain')
+        self.assertEqual(before.returncode, 0, before.stderr)
+        plain = json.loads((self.root/'plain/publication.json').read_text())
+        self.server.releases.clear()
+        shutil.rmtree(self.artifact)
+        self.make_artifact(idsig=b'synthetic v4 signature', name='with-idsig')
+        result = self.run_publisher(public='with')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release, = self.server.releases
+        self.assertEqual(sorted(a['name'] for a in release['assets']), ['SHA256SUMS', 'dev.pixel.voice-309.apk', 'dev.pixel.voice-309.receipt.json'])
+        public = json.loads((self.root/'with/publication.json').read_text())
+        self.assertEqual({k: v for k, v in public.items() if k != 'releaseId'}, {k: v for k, v in plain.items() if k != 'releaseId'})
+        self.assertNotIn('v4Signature', public)
+
+    def test_v4_sidecar_failures_stop_before_any_api_call(self):
+        good = hashlib.sha256(b'synthetic v4 signature').hexdigest()
+        cases = [
+            (dict(idsig=b'synthetic v4 signature', edit=lambda r: dict(r, v4Signature=dict(r['v4Signature'], sha256='0' * 64))), 'not the v4 signature'),
+            (dict(idsig=b'synthetic v4 signature', edit=lambda r: dict(r, v4Signature=dict(r['v4Signature'], size=5))), 'not the v4 signature'),
+            (dict(idsig=b'synthetic v4 signature', edit=lambda r: dict(r, v4Signature=dict(r['v4Signature'], asset='../x.idsig'))), 'must be exactly'),
+            (dict(idsig=b'synthetic v4 signature', edit=lambda r: dict(r, v4Signature=dict(r['v4Signature'], url='https://x'))), 'must be exactly'),
+            (dict(idsig=b'x' * (arp.V4_MAX_BYTES + 1)), 'must be exactly'),
+            (dict(idsig=b'synthetic v4 signature', edit=lambda r: {k: v for k, v in r.items() if k != 'v4Signature'}), 'not exactly'),
+            (dict(idsig=b'synthetic v4 signature', sums=['app-release-receipt.json', 'dev.pixel.voice-309.apk']), 'SHA256SUMS'),
+            (dict(edit=lambda r: dict(r, v4Signature={'asset': 'dev.pixel.voice-309.apk.idsig', 'size': 22, 'sha256': good})), 'not exactly'),
+        ]
+        self.set_schema(2)
+        for i, (kwargs, message) in enumerate(cases):
+            self.make_artifact(name=f'bad{i}', **kwargs)
+            result = self.run_publisher(public=f'out{i}')
+            with self.subTest(message=message, i=i):
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(message, json.loads(result.stderr)['error'])
+        self.assertEqual(self.api_writes(), [], 'nothing reached the API')
 
     def test_rerun_is_idempotent_and_a_different_published_release_is_never_modified(self):
         self.assertEqual(self.run_publisher().returncode, 0)
@@ -558,7 +625,8 @@ class DirectUpdateContractTest(unittest.TestCase):
 
     def test_malformed_policy_is_refused_before_anything_is_written(self):
         good = FRANKEL['appRelease']['compatibility']
-        for change, message in (({'schemaVersion': 2}, 'not schemaVersion 1'), ({'deviceCodenames': []}, 'deviceCodenames'),
+        for change, message in (({'schemaVersion': 3}, 'not schemaVersion 1 or 2'), ({'schemaVersion': '1'}, 'not schemaVersion 1 or 2'),
+                ({'schemaVersion': 2}, 'needs this APK\'s retained v4 signature'), ({'deviceCodenames': []}, 'deviceCodenames'),
                 ({'deviceCodenames': ['Frankel']}, 'deviceCodenames'), ({'deviceCodenames': ['frankel', 'frankel']}, 'deviceCodenames'),
                 ({'minOsBuild': '2804'}, 'ten-digit'), ({'minOsBuild': 2026102804}, 'ten-digit'),
                 ({'minControllerVersion': 0}, 'positive integer or null'), ({'minControllerVersion': '28'}, 'positive integer or null')):

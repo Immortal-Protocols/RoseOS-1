@@ -9,7 +9,10 @@ and a reserved N only for the app-only route and its candidate), the APK's size 
 the APK's own v2/v3 signing certificate read from its signing block, all equal to the pinned app signer.
 
 The public receipt is the app's direct-GitHub update manifest (APP-GITHUB-002-SCHEMA-001): schemaVersion 1 and a
-compatibility object. deviceCodenames, minOsBuild and minControllerVersion are the declared support policy in
+compatibility object. appRelease.compatibility.schemaVersion 2 (APP M004) also publishes the APK's v4 sidecar
+<apk>.idsig as a fourth asset, named in the receipt's v4Signature {asset, size, sha256}; the builder verified the pairing
+with apksigner, and this job checks the sidecar's size and digest against the receipt before and after upload. Schema 1
+releases are unchanged and never carry the sidecar, and a schema 2 artifact without one (any reuse artifact) refuses. deviceCodenames, minOsBuild and minControllerVersion are the declared support policy in
 appRelease.compatibility. minSdk is the builder's measurement of the signed APK (equal to the source), and abis come from
 the APK's own lib/<abi>/*.so entries, re-read here and equal to the builder's: ["universal"] only when there are none,
 otherwise exactly those ABIs, and an ABI the app does not know fails.
@@ -48,6 +51,8 @@ RECEIPT, SUMS = 'app-release-receipt.json', 'SHA256SUMS'
 SIGNATURE_SCHEMES = (0x7109871A, 0xF05368C0)  # APK Signature Scheme v2, v3
 PUBLIC_FIELDS = ('packageName', 'versionCode', 'versionName', 'size', 'sha256', 'signerSha256', 'candidate', 'minimumTestedOs')
 SCHEMA_VERSION = 1  # APP-GITHUB-002-SCHEMA-001, read by the app's DirectUpdate
+SCHEMA_VERSIONS = (1, 2)  # APP M004: 2 adds v4Signature {asset, size, sha256}, the same release's <apk>.idsig sidecar
+V4_MAX_BYTES = 1024**2  # the app's sidecar download bound (APP M004)
 KNOWN_ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86')
 UNIVERSAL = 'universal'
 REUSE_ROUTE = 'os-release-reuse'
@@ -162,17 +167,32 @@ def verify_artifact(directory, config, candidate, apps, reuse=None):
         raise CheckFailed(f'{package} versionCode {version} is not the reservation of OS candidate {candidate} build '
             f'{source["osBuild"]} ({source["buildTimestamp"]}); only that OS-bundled version is reused')
     _, asset, _ = names(config, version)
+    receipt = json.loads((directory/RECEIPT).read_text()) if (directory/RECEIPT).is_file() else {}
+    # The builder's v4 sidecar is part of the artifact exactly when its receipt names it (app-only builds since APP M004;
+    # never a reuse artifact or an older build).
+    sidecar = [f'{asset}.idsig'] if 'v4Signature' in receipt else []
     present = sorted(p.name for p in directory.iterdir())
-    if present != sorted([asset, RECEIPT, SUMS]):
-        raise CheckFailed(f'the app artifact holds {present}, not exactly {asset}, {RECEIPT} and {SUMS}')
+    if present != sorted([asset, RECEIPT, SUMS, *sidecar]):
+        raise CheckFailed(f'the app artifact holds {present}, not exactly {", ".join([asset, *sidecar, RECEIPT, SUMS])}')
     sums = {}
     for line in (directory/SUMS).read_text().splitlines():
         digest, _, name = line.partition('  ')
         sums[name] = digest
-    if sorted(sums) != sorted([asset, RECEIPT]) or any(sha256(directory/n) != d for n, d in sums.items()):
-        raise CheckFailed('SHA256SUMS does not cover exactly the APK and the receipt with matching digests')
-    receipt = json.loads((directory/RECEIPT).read_text())
+    if sorted(sums) != sorted([asset, RECEIPT, *sidecar]) or any(sha256(directory/n) != d for n, d in sums.items()):
+        raise CheckFailed('SHA256SUMS does not cover exactly the APK, its v4 signature when present and the receipt with matching digests')
     apk = directory/asset
+    if sidecar:
+        v4 = receipt['v4Signature']
+        idsig = directory/sidecar[0]
+        if not isinstance(v4, dict) or sorted(v4) != ['asset', 'sha256', 'size'] or v4['asset'] != sidecar[0] \
+                or type(v4['size']) is not int or not 0 < v4['size'] <= V4_MAX_BYTES \
+                or not isinstance(v4['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', v4['sha256']):
+            raise CheckFailed(f'the receipt v4Signature must be exactly {{asset: {sidecar[0]}, size 1..{V4_MAX_BYTES}, sha256}}')
+        if idsig.is_symlink() or not idsig.is_file() or idsig.stat().st_size != v4['size'] or sha256(idsig) != v4['sha256']:
+            raise CheckFailed(f'{sidecar[0]} is not the v4 signature the receipt names')
+    if schema_version(config) == 2 and not sidecar:
+        raise CheckFailed('schemaVersion 2 needs this APK\'s retained v4 signature (.idsig); this artifact has none and '
+            'one is never synthesized or re-signed')
     expected = {'receiptType': 'app-release', 'simulated': False, 'candidate': candidate, 'packageName': package,
         'versionCode': version, 'apk': asset, 'size': apk.stat().st_size, 'sha256': sha256(apk), 'signerSha256': signer,
         'minimumTestedOs': app['minimumTestedOs']}
@@ -200,11 +220,17 @@ def native_abis(apk):
     with zipfile.ZipFile(apk) as archive:
         return sorted({n.split('/')[1] for n in archive.namelist() if re.fullmatch(r'lib/[^/]+/.+\.so', n)})
 
+def schema_version(config):
+    """The public receipt schema selected by appRelease.compatibility.schemaVersion (1, or 2 with the v4 sidecar)."""
+    version = (config['appRelease'].get('compatibility') or {}).get('schemaVersion')
+    if type(version) is not int or version not in SCHEMA_VERSIONS:
+        raise CheckFailed(f'appRelease.compatibility is not schemaVersion {" or ".join(map(str, SCHEMA_VERSIONS))}')
+    return version
+
 def compatibility(receipt, apk, config):
     """The public compatibility object: declared policy plus the APK's measured minSdk and native-library ABIs."""
     policy = config['appRelease'].get('compatibility') or {}
-    if policy.get('schemaVersion') != SCHEMA_VERSION:
-        raise CheckFailed(f'appRelease.compatibility is not schemaVersion {SCHEMA_VERSION}')
+    schema_version(config)
     codenames, os_build, controller = policy.get('deviceCodenames'), policy.get('minOsBuild'), policy.get('minControllerVersion', 'absent')
     if not isinstance(codenames, list) or not codenames or len(set(codenames)) != len(codenames) \
             or not all(isinstance(c, str) and re.fullmatch(r'[a-z0-9_]{1,32}', c) for c in codenames):
@@ -233,13 +259,23 @@ def public_files(receipt, apk, config, out):
     out = Path(out)
     out.mkdir(parents=True)
     (out/asset).write_bytes(apk.read_bytes())
-    document = {'receiptType': 'app-publication', 'schemaVersion': SCHEMA_VERSION, **{k: receipt[k] for k in PUBLIC_FIELDS},
+    version = schema_version(config)
+    document = {'receiptType': 'app-publication', 'schemaVersion': version, **{k: receipt[k] for k in PUBLIC_FIELDS},
         'repository': publication['repository'], 'tag': tag, 'asset': asset, 'apkUrl': url, 'prerelease': True,
         'compatibility': compatibility(receipt, apk, config)}
+    published = [asset]
+    if version == 2:  # the same release's v4 sidecar, verified against the receipt by verify_artifact
+        v4 = receipt['v4Signature']
+        (out/v4['asset']).write_bytes((apk.parent/v4['asset']).read_bytes())
+        if sha256(out/v4['asset']) != v4['sha256'] or (out/v4['asset']).stat().st_size != v4['size']:
+            raise CheckFailed(f'{v4["asset"]} changed while it was staged')
+        document['v4Signature'] = {k: v4[k] for k in ('asset', 'size', 'sha256')}
+        published.append(v4['asset'])
     public_receipt = asset[:-len('.apk')] + '.receipt.json'
     (out/public_receipt).write_text(json.dumps(document, indent=2, sort_keys=True) + '\n')
-    (out/SUMS).write_text(''.join(f'{sha256(out/n)}  {n}\n' for n in sorted([asset, public_receipt])))
-    return document, {n: (sha256(out/n), (out/n).stat().st_size) for n in (asset, public_receipt, SUMS)}
+    published.append(public_receipt)
+    (out/SUMS).write_text(''.join(f'{sha256(out/n)}  {n}\n' for n in sorted(published)))
+    return document, {n: (sha256(out/n), (out/n).stat().st_size) for n in (*published, SUMS)}
 
 def matches(asset, expected):
     digest, size = expected

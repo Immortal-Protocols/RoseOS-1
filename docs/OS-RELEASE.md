@@ -1161,6 +1161,19 @@ original os-release run. The builder records no run id, so the run is bound thro
 
 The run's Actions artifact is not downloaded by this mode.
 
+**APK v4 sidecar (APP M004).** The app-only builder keeps the `<apk>.idsig` that
+`sign-apk.py` writes. It must be a regular file of at most 1 MiB that the pinned
+apksigner verifies as that APK's v4 signature. The receipt and SHA256SUMS bind it.
+
+`appRelease.compatibility.schemaVersion` selects the public receipt:
+- **1, the current value.** Unchanged; the sidecar is never published.
+- **2.** Publishes the APK, `<apk>.idsig`, the receipt and SHA256SUMS. The receipt
+  carries `v4Signature: {asset, size, sha256}`.
+
+A schema 2 artifact without a sidecar refuses. This includes every app-reuse
+artifact, because no sidecar is ever synthesized or re-signed. Switch to 2 only
+after the app's matching client is released.
+
 **The public receipt is the phone's update manifest** (INFRA-APP-102,
 APP-GITHUB-002-SCHEMA-001). Rose Agent from App #74 (`DirectUpdate`) reads it
 directly from GitHub, with no PixelVoice catalog. `compatibility` holds exactly:

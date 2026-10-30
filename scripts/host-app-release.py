@@ -12,7 +12,9 @@ APPS (exactly [["dev.pixel.voice", N]]) set, and the job's short-lived signer id
    appRelease.reserved is accepted only for the app-only route and its candidate (any candidate when none is recorded);
    any other must exceed every reservation. The receipt also records the signed APK's minSdk (equal to the source's)
    and native-library ABIs, from which the public receipt's compatibility is derived;
-4. write to the artifact directory only the signed APK, a nonsecret receipt and SHA256SUMS;
+4. write to the artifact directory only the signed APK, its APK Signature Scheme v4 sidecar (<apk>.idsig, which
+   sign-apk.py's apksigner writes beside it; captured before cleanup, at most V4_MAX_BYTES and verified as that APK's v4
+   signature by the independent apksigner), a nonsecret receipt naming both and SHA256SUMS over them;
 5. remove the candidate worktree and every temporary input under ROSE_RELEASE_DIR, on success or failure.
 It holds the builder's shared source/output lock (host.lockPath) for the whole run, so it never overlaps an OS stage.
 Before any worktree, build, signing or temporary input, it checks the space available to this user (statvfs f_bavail, not
@@ -43,6 +45,7 @@ SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 PACKAGE = 'dev.pixel.voice'
 SOURCE_MANIFEST = 'workspace/rose-agent/app/AndroidManifest.xml'
 RESERVE_BYTES = 322122547200  # 300 GiB that must stay available on the builder's filesystems
+V4_MAX_BYTES = 1024**2  # APP M004: the bound the app's sidecar download uses
 APP_WORKSPACE_ALLOWANCE = 16 * 1024**3  # bound on one attempt's growth: candidate worktree, build, APKs and inputs
 
 def load(name):
@@ -77,6 +80,19 @@ def signers(apksigner, apk):
     if result.returncode:
         raise AdapterFailed(f'{Path(apk).name} does not verify')
     return re.findall(r'certificate SHA-256 digest: ([0-9a-f]{64})', result.stdout)
+
+def v4_signature(apksigner, apk, idsig):
+    """The signed APK's v4 sidecar as {asset, size, sha256}: a regular, non-empty file of at most V4_MAX_BYTES that the
+    independent apksigner verifies as this APK's v4 signature (a hash alone does not prove the pairing)."""
+    idsig = Path(idsig)
+    if idsig.is_symlink() or not idsig.is_file():
+        raise AdapterFailed(f'{idsig.name} (the v4 signature) is missing or not a regular file')
+    size = idsig.stat().st_size
+    if not 0 < size <= V4_MAX_BYTES:
+        raise AdapterFailed(f'{idsig.name} is {size} bytes, outside 1..{V4_MAX_BYTES}')
+    if subprocess.run([apksigner, 'verify', '--v4-signature-file', str(idsig), str(apk)], capture_output=True).returncode:
+        raise AdapterFailed(f'{idsig.name} does not verify as the v4 signature of {Path(apk).name}')
+    return {'asset': idsig.name, 'size': size, 'sha256': sha256(idsig)}
 
 def requested_version(config, apps, sha=None):
     if len(apps) != 1 or apps[0][0] != PACKAGE or type(apps[0][1]) is not int:
@@ -225,16 +241,21 @@ def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, 
     if signers(apksigner, signed) != [config['identities']['appSignerSha256'].lower()]:
         raise AdapterFailed('signed APK is not signed by exactly the pinned app signer')
     facts = apk_facts(aapt, signed, candidate)
+    v4 = v4_signature(apksigner, signed, signed.with_name(signed.name + '.idsig'))
     artifact.mkdir(parents=True)
     shutil.copyfile(signed, artifact/signed.name)
+    shutil.copyfile(signed.with_name(v4['asset']), artifact/v4['asset'])
+    if sha256(artifact/v4['asset']) != v4['sha256'] or v4_signature(apksigner, artifact/signed.name, artifact/v4['asset']) != v4:
+        raise AdapterFailed('the copied v4 signature differs from the verified one')
     receipt = {'receiptType': 'app-release', 'simulated': False, 'candidate': sha, 'packageName': PACKAGE, 'versionCode': version,
         'versionName': version_name, 'apk': signed.name, 'size': (artifact/signed.name).stat().st_size,
         'sha256': sha256(artifact/signed.name), 'signerSha256': config['identities']['appSignerSha256'].lower(),
-        'minimumTestedOs': config['appRelease']['minimumTestedOs'], 'apkFacts': facts,
+        'minimumTestedOs': config['appRelease']['minimumTestedOs'], 'apkFacts': facts, 'v4Signature': v4,
         'checks': ['candidate worktree at the selected commit', 'Rose Agent built alone', 'unsigned package and versionCode',
             f'versionCode above {config["appRelease"]["mustExceed"]} (newest built or published)', 'signed with the pinned app signer (sign-apk.py)',
             'independent apksigner verification: exactly the pinned signer', 'signed package and versionCode',
-            'minSdk from the signed APK equal to the source', 'native-library ABIs from the signed APK']}
+            'minSdk from the signed APK equal to the source', 'native-library ABIs from the signed APK',
+            'v4 signature (.idsig) verified by the independent apksigner for this APK']}
     (artifact/'app-release-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     (artifact/'SHA256SUMS').write_text(''.join(f'{sha256(artifact/n)}  {n}\n' for n in sorted(p.name for p in artifact.iterdir())))
     return receipt
