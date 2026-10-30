@@ -102,6 +102,8 @@ if a.background_policy:
     projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
+    # #156: Rose Agent's work row in Launcher3's fallback overview (Rose holds HOME); needs the controller above.
+    projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch']
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
 projects.update(rose_home_projects(preinstalls))
 if a.installed_identities:

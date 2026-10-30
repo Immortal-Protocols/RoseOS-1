@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT/'os/tests/fixtures/rose-switcher'
 PATCH = ROOT/'os/patches/rose-switcher-launcher3.patch'
-OVERLAY = ROOT/'os/launcher3-switcher'  # staged: installs to quickstep/src/com/android/quickstep/fallback/ (README)
+OVERLAY = ROOT/'os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback'
 LAYOUT = 'quickstep/res/layout/fallback_recents_activity.xml'
 PINNED = {'fallback_recents_activity.xml': '8df1879fb83e2a9f5b11b657a498e6153504171cb702f859d136f37ab968a9f7',
     'OverviewComponentObserver.java': 'a94703d973e14ba8e1f43ab07d7eacaa0e32f8b5668d16bff1c6843dd4877893'}
@@ -50,6 +50,49 @@ class RoseSwitcherTest(unittest.TestCase):
             capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_the_view_compiles_against_the_sdk_plus_the_platform_members_it_uses(self):
+        """Launcher3 Quickstep builds with platform_apis: true. These stubs declare only the hidden or SystemApi
+        members RoseAgentStrip uses, with their pinned signatures; everything else comes from the public SDK."""
+        import os
+        sdk = os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk'
+        jars = sorted(Path(sdk).glob('platforms/android-*/android.jar'))
+        if not jars:
+            self.skipTest('no Android SDK platform')
+        stubs = {
+            'android/app/ActivityTaskManager.java': 'package android.app; public class ActivityTaskManager { '
+                'public static ActivityTaskManager getInstance(){return null;} '
+                'public java.util.List<ActivityManager.RunningTaskInfo> getTasks(int maxNum){return null;} }',
+            'android/app/ActivityManager.java': 'package android.app; public class ActivityManager { '
+                'public static int getCurrentUser(){return 0;} public static class RunningTaskInfo extends TaskInfo {} }',
+            'android/app/TaskInfo.java': 'package android.app; public class TaskInfo { public int userId, taskId, '
+                'displayId; public android.content.ComponentName topActivity; }',
+            'android/view/Display.java': 'package android.view; public final class Display { '
+                'public int getDisplayId(){return 0;} public int getOwnerUid(){return 0;} }',
+            'android/content/pm/PackageManager.java': 'package android.content.pm; public abstract class PackageManager { '
+                'public static class NameNotFoundException extends Exception {} '
+                'public abstract int getPackageUidAsUser(String p, int u) throws NameNotFoundException; '
+                'public abstract ApplicationInfo getApplicationInfoAsUser(String p, int f, int u) throws NameNotFoundException; '
+                'public abstract CharSequence getApplicationLabel(ApplicationInfo i); }',
+            'android/content/Context.java': 'package android.content; public abstract class Context { '
+                'public abstract android.content.pm.PackageManager getPackageManager(); '
+                'public abstract <T> T getSystemService(Class<T> c); '
+                'public void startActivityAsUser(Intent i, android.os.UserHandle u) {} '
+                'public abstract android.content.res.Resources getResources(); }',
+            'android/os/UserHandle.java': 'package android.os; public final class UserHandle { '
+                'public static UserHandle of(int u){return null;} }',
+            'com/android/launcher3/util/Executors.java': 'package com.android.launcher3.util; public class Executors { '
+                'public static final java.util.concurrent.Executor UI_HELPER_EXECUTOR = Runnable::run; }',
+        }
+        tmp = Path(tempfile.mkdtemp(prefix='rose-strip-compile-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for relative, code in stubs.items():
+            (tmp/'src'/relative).parent.mkdir(parents=True, exist_ok=True)
+            (tmp/'src'/relative).write_text(code)
+        result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
+            '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
+            str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java')], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_the_view_uses_only_existing_authority_and_opens_only_the_current_work(self):
         strip = (OVERLAY/'RoseAgentStrip.java').read_text()
         for banned in ('AgentProvider', 'getContentResolver', 'content://', 'requestPermissions', 'grantRuntimePermission',
@@ -62,12 +105,13 @@ class RoseSwitcherTest(unittest.TestCase):
         self.assertIn('if (notice != null) {', select)
         self.assertIn('UserHandle.of(task.userId)', select)
 
-    def test_the_layout_patch_is_not_registered_until_the_contract_change_is_coordinated(self):
-        # Registering it adds packages/apps/Launcher3 to the Pixel 10 contract's Rose projects, which rebinds the
-        # retained Blazer EXEC002 receipt (scripts/tests/test_blazer_preparation_preflight.py, Infra). Until Infra
-        # takes that change, the patch is ready but apply-os-changes.py does not apply it.
+    def test_apply_os_changes_registers_it_with_the_agent_controller_and_the_contract_declares_it(self):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
-        self.assertNotIn('rose-switcher-launcher3.patch', patcher)
+        block = patcher[patcher.index('if a.background_policy:'):patcher.index('preinstalls = preinstall_plan(')]
+        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch']", block)
+        import json
+        contract = json.loads((ROOT/'os/devices/pixel10.json').read_text())
+        self.assertIn('packages/apps/Launcher3', contract['roseInclusion']['projects'])
 
 if __name__ == '__main__':
     unittest.main()
