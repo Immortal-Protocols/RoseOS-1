@@ -93,6 +93,7 @@ class BoundaryTest(unittest.TestCase):
         self.assertLess(seed.index("sh('unroot'"), seed.index("observe('seed')"), 'installation trials start unrooted')
         self.assertIn('stdin=subprocess.DEVNULL', CODE)
         self.assertIn("'unroot'", CODE)
+        self.assertIn("'reason': v.get('reason')", CODE, 'stage reasons reach the job log, not only the artifact')
         manifest = (HERE/'fixture/AndroidManifest.xml').read_text()
         self.assertIn('android:persistent="true"', manifest)
         for banned in ('sharedUserId', 'uses-permission'):
