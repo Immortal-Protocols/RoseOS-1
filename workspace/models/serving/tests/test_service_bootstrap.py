@@ -34,9 +34,15 @@ class FakeHost(B.Host):
     def __init__(self, prefix):
         super().__init__(prefix)
         self.calls, self.fail, self.guest = [], {}, {}
+        self.install_versions = {}  # simulate the archive installing a different version than pinned
         self.disk = {'exists': True, 'sig': None, 'size': 500 * 10**9, 'wipefs': '', 'head': bytes(1 << 20)}
         self.mounted = False
-        self.packages = {}
+        self.packages = {}  # package -> (version, dpkg Status field); served by the REAL dpkg-query below
+        self.dpkg_admin = Path(prefix).parent / 'dpkg-admin'
+        for sub in ('info', 'updates'):
+            (self.dpkg_admin / sub).mkdir(parents=True, exist_ok=True)
+        self.query_override = None
+        self.candidates = {}
         self.driver_loaded_on_boot = 2  # the driver loads after this boot number
         self.boot = 1
         self.gpus, self.driver = 2, B.DRIVER_VERSION
@@ -74,12 +80,31 @@ class FakeHost(B.Host):
             self.mounted = True
             return 0, ''
         if cmd == 'dpkg-query':
-            return 0, ''.join(f'{p} {v} ii \n' for p, v in self.packages.items())
+            if self.query_override:
+                return self.query_override
+            (self.dpkg_admin / 'status').write_text(''.join(
+                f'Package: {p}\nStatus: {st}\nVersion: {v}\nArchitecture: amd64\nMaintainer: x\nDescription: x\n\n'
+                for p, (v, st) in self.packages.items()))
+            r = subprocess.run(['dpkg-query', f'--admindir={self.dpkg_admin}', *argv[1:]], capture_output=True,
+                               text=True, timeout=60)
+            return r.returncode, r.stdout
+        if cmd == 'apt-cache':
+            return 0, ''.join(f'{p}:\n  Installed: (none)\n  Candidate: {self.candidates.get(p, B.APT_PINS[p])}\n'
+                              for p in argv[2:])
         if cmd == 'gpg':
             fpr = hashlib.sha1(Path(argv[-1]).read_bytes()).hexdigest().upper()  # stand-in fingerprint
             return 0, f"pub:-:4096:1:X:::\nfpr:::::::::{self.key_fpr(fpr)}:\n"
         if cmd == 'apt-get' and argv[1] == 'install':
-            self.packages = dict(B.APT_PINS)
+            for pin in argv:
+                if '=' in pin:
+                    name, version = pin.split('=', 1)
+                    self.packages[name] = (self.install_versions.get(name, version), 'install ok installed')
+            return 0, ''
+        if cmd == 'apt-mark' and argv[1] == 'hold':
+            for name in argv[2:]:
+                if name in self.packages:
+                    v, st = self.packages[name]
+                    self.packages[name] = (v, st.replace('install ', 'hold ', 1))
             return 0, ''
         if cmd in ('apt-get', 'apt-mark'):
             return 0, ''
@@ -355,6 +380,83 @@ class Refusals(Fixture):
         self.addCleanup(os.close, fd)
         self.assertEqual(self.boot(), ({'result': 'already_running'}, 0))
         self.assertEqual(self.host.calls, [])
+
+
+class Packages(Fixture):
+    """MODELS-BOOTSTRAP-PACKAGES-FIX-001: the real dpkg-query over a fixture admindir, through install, hold and recheck."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.driver_loaded_on_boot = 1
+
+    def packages_stage(self):
+        status, code = self.boot()
+        return self.states(status)['packages'], status['stages']['packages'].get('observed'), code
+
+    def test_install_then_hold_then_recheck_passes_and_a_rerun_installs_nothing(self):
+        (state, detail), observed, _ = self.packages_stage()
+        self.assertEqual((state, detail, observed), ('ok', 'installed', None))
+        self.assertTrue(all(st == 'hold ok installed' for _, st in self.host.packages.values()))  # really 'hi'
+        installs = self.host.count('apt-get', 'install')
+        (state, detail), _, _ = self.packages_stage()
+        self.assertEqual((state, detail, self.host.count('apt-get', 'install')), ('ok', 'pinned', installs))
+
+    def test_held_package_reports_hi_and_the_old_ii_only_check_would_have_refused_it(self):
+        self.packages_stage()
+        rc, out = self.host.run(['dpkg-query', '-W', '-f', B.PKG_FORMAT, *B.APT_PINS], 60)
+        self.assertEqual({line.split('\t')[2] for line in out.splitlines()}, {'hi '})
+        old_check = {l.split()[0]: l.split()[1] for l in out.replace('\t', ' ').splitlines() if l.split()[2].startswith('ii')}
+        self.assertNotEqual(old_check, B.APT_PINS)  # the 8183dc55 defect, reproduced with the real dpkg-query
+
+    def test_rejects_wrong_or_incomplete_package_states_with_bounded_observed_facts(self):
+        pin = 'nvidia-utils-580-server'
+        for label, version, dpkg_status, abbrev in (
+                ('wrong version', '580.000.00-0ubuntu1', 'hold ok installed', 'hi '),
+                ('half-installed, reinstall required', B.APT_PINS[pin], 'install reinstreq half-installed', 'iHR'),
+                ('unpacked only', B.APT_PINS[pin], 'install ok unpacked', 'iU '),
+                ('removed, config files left', B.APT_PINS[pin], 'deinstall ok config-files', 'rc ')):
+            with self.subTest(label):
+                self.host.packages = {p: (v, 'hold ok installed') for p, v in B.APT_PINS.items()}
+                self.host.packages[pin] = (version, dpkg_status)
+                self.host.install_versions = {pin: version}
+                self.host.candidates = {pin: '580.999.99-0ubuntu0.24.04.1'}
+                if dpkg_status != 'hold ok installed':
+                    self.host.install_versions = {}
+                    self.host.fail = {('apt-get', 'install'): 100}  # the archive cannot repair it this run
+                (state, category), observed, code = self.packages_stage()
+                self.host.fail = {}
+                self.assertEqual((state, code), ('failed', 1))
+                self.assertIn(category, ('package_versions_differ', 'package_version_unavailable_or_install_failed'))
+                self.assertEqual(observed, [{'package': pin, 'expected': B.APT_PINS[pin], 'observed': version,
+                                             'status': abbrev, 'candidate': '580.999.99-0ubuntu0.24.04.1'}])
+
+    def test_missing_packages_and_failed_or_malformed_queries_refuse(self):
+        self.host.fail = {('apt-get', 'install'): 100}
+        (state, category), observed, _ = self.packages_stage()
+        self.assertEqual(category, 'package_version_unavailable_or_install_failed')
+        self.assertEqual(len(observed), len(B.APT_PINS))  # every pin reported missing
+        self.assertTrue(all(o['observed'] is None and o['status'] is None for o in observed))
+        self.host.fail = {}
+        for label, override, category in (
+                ('query failed', (2, ''), 'package_query_failed'),
+                ('malformed line', (0, 'docker.io 29.1.3 hi\n'), 'package_query_malformed'),
+                ('duplicate package', (0, 'nginx\t1.24.0-2ubuntu7.19\thi \nnginx\t1.24.0-2ubuntu7.19\thi \n'),
+                 'package_query_malformed'),
+                ('unexpected package', (0, 'evil\t1\thi \n'), 'package_query_malformed'),
+                ('bad status abbrev', (0, 'nginx\t1.24.0-2ubuntu7.19\th\n'), 'package_query_malformed')):
+            with self.subTest(label):
+                self.host.query_override = override
+                (state, got), _, code = self.packages_stage()
+                self.assertEqual((state, got, code), ('failed', category, 1))
+        self.host.query_override = None
+
+    def test_observed_facts_are_nonsecret_and_bounded(self):
+        self.host.install_versions = {'docker.io': '1:bad'}
+        status, _ = self.boot()
+        observed = status['stages']['packages']['observed']
+        self.assertEqual([o['package'] for o in observed], ['docker.io'])
+        self.assertLessEqual(len(json.dumps(status)), 8192)
+        self.assertEqual(json.loads(self.host.guest['bootstrap']), status)
 
 
 class Build(Fixture):

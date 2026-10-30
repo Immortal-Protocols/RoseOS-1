@@ -66,7 +66,9 @@ NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class Failed(Exception):
-    pass
+    def __init__(self, category, observed=None):
+        super().__init__(category)
+        self.observed = observed  # bounded, nonsecret facts for the status line (package versions only)
 
 
 class Waiting(Exception):
@@ -166,18 +168,52 @@ def stage_disk(host, ctx):
     return 'mounted'
 
 
+PKG_FORMAT = '${Package}\\t${Version}\\t${db:Status-Abbrev}\\n'
+
+
 def installed(host):
-    _, out = host.run(['dpkg-query', '-W', '-f', '${Package} ${Version} ${db:Status-Abbrev}\\n'] + list(APT_PINS), 60)
-    have = {}
+    """{package: (version, status abbrev)} for the pins, from one dpkg-query. Exit 1 only means some package is unknown
+    to dpkg; any other failure, an unknown or duplicate package, or a malformed line refuses."""
+    rc, out = host.run(['dpkg-query', '-W', '-f', PKG_FORMAT, *APT_PINS], 60)
+    if rc not in (0, 1):
+        raise Failed('package_query_failed')
+    seen = {}
     for line in out.splitlines():
-        parts = line.split()
-        if len(parts) >= 3 and parts[2].startswith('ii'):
-            have[parts[0]] = parts[1]
-    return have
+        fields = line.split('\t')
+        if len(fields) != 3 or fields[0] not in APT_PINS or fields[0] in seen or len(fields[2]) not in (2, 3):
+            raise Failed('package_query_malformed')
+        seen[fields[0]] = (fields[1], fields[2])
+    return seen
+
+
+def satisfied(entry, version):
+    """Exactly the pinned version, fully installed with no error flag; held (h) or plain install (i) selection."""
+    if entry is None:
+        return False
+    got, abbrev = entry
+    return got == version and abbrev[0] in 'ih' and abbrev[1] == 'i' and abbrev[2:].strip() == ''
+
+
+def package_report(host, seen, candidates=False):
+    """Bounded nonsecret expected/observed facts for every pin that is not satisfied."""
+    report = [{'package': p, 'expected': v, 'observed': (seen.get(p) or (None,))[0],
+               'status': (seen.get(p) or (None, None))[1]}
+              for p, v in APT_PINS.items() if not satisfied(seen.get(p), v)]
+    if candidates and report:
+        rc, out = host.run(['apt-cache', 'policy', *[r['package'] for r in report]], 60)
+        current = None
+        for line in out.splitlines() if rc == 0 else []:
+            if line and not line.startswith(' ') and line.endswith(':'):
+                current = line[:-1]
+            elif line.strip().startswith('Candidate:') and current:
+                for r in report:
+                    if r['package'] == current:
+                        r['candidate'] = line.split(':', 1)[1].strip()[:64]
+    return report[:len(APT_PINS)]
 
 
 def stage_packages(host, ctx):
-    if installed(host) == APT_PINS:
+    if not package_report(host, installed(host)):
         return 'pinned'
     key = host.path('/etc/apt/keyrings/nvidia-container-toolkit.asc')
     key.parent.mkdir(parents=True, exist_ok=True)
@@ -194,10 +230,11 @@ def stage_packages(host, ctx):
         raise Failed('apt_update_failed')
     pins = [f'{p}={v}' for p, v in APT_PINS.items()]
     if host.run(['apt-get', 'install', '-y', '--no-install-recommends', *pins, KERNEL_MODULES], 3600, env)[0] != 0:
-        raise Failed('package_version_unavailable_or_install_failed')
+        raise Failed('package_version_unavailable_or_install_failed', package_report(host, installed(host), True))
     must(host, ['apt-mark', 'hold', *APT_PINS], 'apt_hold_failed', 60)
-    if installed(host) != APT_PINS:
-        raise Failed('package_versions_differ')
+    mismatched = package_report(host, installed(host))  # after the hold: held packages report 'hi'
+    if mismatched:
+        raise Failed('package_versions_differ', package_report(host, installed(host), True))
     return 'installed'
 
 
@@ -371,6 +408,8 @@ def run(host, payload, payload_sha256, now=time.time):
                 stopped = 'reboot'
             except Failed as f:
                 ctx['results'][name] = ('failed', str(f))
+                if f.observed:
+                    ctx.setdefault('observed', {})[name] = f.observed
                 stopped = 'failed'
             except Exception as e:  # unexpected: category only, never a message that might hold paths or output
                 ctx['results'][name] = ('failed', f'internal_{type(e).__name__}')
@@ -380,7 +419,9 @@ def run(host, payload, payload_sha256, now=time.time):
         result = ('failed' if 'failed' in states else 'rebooting' if 'reboot' in states
                   else 'waiting' if states - {'ok'} else 'ready')
         status = {'schema': 'rose-models-bootstrap/1', 'payloadSha256': payload_sha256, 'result': result,
-                  'at': int(now()), 'stages': {k: {'state': v[0], 'detail': v[1], 'seconds': v[2]}
+                  'at': int(now()), 'stages': {k: {'state': v[0], 'detail': v[1], 'seconds': v[2],
+                                                   **({'observed': ctx['observed'][k]} if k in ctx.get('observed', {})
+                                                      else {})}
                                                for k, v in ctx['results'].items()}}
         line = json.dumps(status, sort_keys=True)
         (state / 'status.json').write_text(line + '\n')
