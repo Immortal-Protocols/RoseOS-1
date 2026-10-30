@@ -51,6 +51,25 @@ final class RosePresenceModel {
   float envelope=energy*(.48f+.22f*(float)Math.sin(time*3.1)+.17f*(float)Math.sin(time*7.3+1.2)+.09f*(float)Math.sin(time*11.7));
   return RING_CLOSE+(RING_BROAD+RING_ENERGY*envelope-RING_CLOSE)*broad;
  }
+ /** Rendered tones of the HiFi renderer's metal (renderer.js at ce126f56: environment reflection, Fresnel, tone map and
+  * gamma), measured top to bottom down the sphere in the pinned prototype's own output (Chromium, SwiftShader, 3x
+  * DPR; prototype pixels, not device output). The renderer's raw bases (ROSE, SILVER) never appear as such: rose
+  * metal reads as a muted mauve, silver as blue steel. Stops are fractions of the sphere's height. */
+ static final float[] TONE_STOPS={.05f,.15f,.45f,.5f,.6f,.7f,.95f};
+ static final int[] ROSE_TONES={0xffd7c6ce,0xffc8b0b9,0xffc2aab3,0xffaf97a2,0xff877683,0xff756b7a,0xff706979};
+ static final int[] SILVER_TONES={0xffcbd3da,0xffb8c2ca,0xffb2bcc4,0xff9daab5,0xff768997,0xff657c8d,0xff5c7689};
+ /** The two soft specular spots in the upper half, as (x, y, radius) in sphere radii from the centre. */
+ static final float[][] HIGHLIGHTS={{-.32f,-.2f,.26f},{.38f,-.2f,.2f}};
+ /** The renderer's camera (eye 0,1.8,7.4 looking at 0,.15,0) sits about 12.6 degrees above the equator, so the
+  * rims and the cut face appear as ellipses this flat (minor/major = sin of that elevation). */
+ static final float TILT=(float)Math.sin(Math.atan2(1.8-.15,7.4));
+ /** The cut face's colour: the renderer's base*.16, through its tone map c/(c+.55) and 1/2.2 gamma. */
+ static final int ROSE_FACE=face(.95f,.48f,.53f),SILVER_FACE=face(.65f,.73f,.81f);
+ static int face(float r,float g,float b){return 0xff000000|(channel(r)<<16)|(channel(g)<<8)|channel(b);}
+ private static int channel(float base){double c=base*.16;c=c/(c+.55);return (int)Math.round(Math.pow(c,1/2.2)*255);}
+ /** The rendered tones for the current microphone mix. */
+ int[] tones(){int[] t=new int[TONE_STOPS.length];for(int i=0;i<t.length;i++)t[i]=mix(SILVER_TONES[i],ROSE_TONES[i],mic);return t;}
+ int faceColor(){return mix(SILVER_FACE,ROSE_FACE,mic);}
  /** The metal's base color for the current microphone mix. */
  int metal(){return mix(SILVER,ROSE,mic);}
 
