@@ -12,19 +12,35 @@ EXCLUDED = {AGENT, VOICE, 'android', 'com.android.permissioncontroller', 'com.go
 PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+')
 DIGEST = re.compile(r'[A-F0-9]{64}')
 
+SIGNER_LINE = re.compile(r'Signer (?:#\d+|\(minSdkVersion=(\d+), maxSdkVersion=(\d+)\)) certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+# apksigner's SDK 37 output for a verification restricted to one SDK (OS-RANGO-SIGNER-004, observed 2026-10-30):
+# "V3.0 Signer: certificate SHA-256 digest: <64 hex>". Matched as the whole line only.
+V3_0_SIGNER_LINE = re.compile(r'V3\.0 Signer: certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+
+def verified_signers(output, sdk):
+    """Uppercase signer digests from `apksigner verify --print-certs --min-sdk-version S --max-sdk-version S` output
+    that apply to sdk: numbered signers, signers whose explicit SDK range contains sdk, and the V3.0 signer line."""
+    certs = set()
+    for line in output.splitlines():
+        found = SIGNER_LINE.match(line)
+        if found and (found[1] is None or int(found[1]) <= sdk <= int(found[2])):
+            certs.add(found[3].upper())
+            continue
+        found = V3_0_SIGNER_LINE.fullmatch(line.strip())
+        if found:
+            certs.add(found[1].upper())
+    return certs
+
 def identity(apk, aapt, apksigner, sdk):
     apk = Path(apk).resolve(strict=True)
     badging = subprocess.check_output([str(aapt), 'dump', 'badging', str(apk)], text=True)
     match = re.search(r"^package: name='([^']+)'", badging, re.M)
     if not match or not PACKAGE.fullmatch(match[1]):
         raise ValueError(f'No valid package identity in {apk.name}')
+    # check_output: a nonzero verifier exit raises, so no printed digest is trusted without a successful verification.
     output = subprocess.check_output([str(apksigner), 'verify', '--print-certs',
         '--min-sdk-version', str(sdk), '--max-sdk-version', str(sdk), str(apk)], text=True)
-    certs = set()
-    for line in output.splitlines():
-        found = re.match(r'Signer (?:#\d+|\(minSdkVersion=(\d+), maxSdkVersion=(\d+)\)) certificate SHA-256 digest: ([0-9a-fA-F]{64})', line)
-        if found and (found[1] is None or int(found[1]) <= sdk <= int(found[2])):
-            certs.add(found[3].upper())
+    certs = verified_signers(output, sdk)
     if not certs:
         raise ValueError(f'No verified signer for target SDK {sdk}: {apk.name}')
     version = re.search(r"^package: .*\bversionCode='(\d+)'", badging, re.M)
