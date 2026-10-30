@@ -337,6 +337,38 @@ class RunTest(Fixture):
         self.assertEqual(rb.main(['preflight', '--build-number', BUILD, '--download-dir', str(self.dl)]), 2)
         self.assertEqual(rb.main(['run', '--stage', 'compile', '--build-number', BUILD, '--download-dir', str(self.dl)]), 2)
 
+OLD_BOOT = '0b1d2c3e-4f50-4a6b-8c7d-9e0f1a2b3c4d'
+NEW_BOOT = '7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d'
+THIRD_BOOT = 'c0ffee00-1234-4abc-8def-0123456789ab'
+MANIFEST = ('<?xml version="1.0" encoding="UTF-8"?>\n<manifest>\n'
+    '  <project name="platform/build" path="build/make" revision="aaaa111" />\n'
+    '  <project name="platform/frameworks/base" path="frameworks/base" revision="cccc222" />\n</manifest>\n')
+
+class ProcGuard:
+    """Fails the test on any open, readlink or listing of a per-process /proc path (cmdline, environ, fd, cwd, ...)."""
+    ALLOWED = ('/proc/sys/kernel/random/boot_id', '/proc/stat')
+    def check(self, path):
+        path = os.fspath(path) if not isinstance(path, int) else ''
+        path = path.decode() if isinstance(path, bytes) else path
+        if path.startswith('/proc') and path not in self.ALLOWED:
+            raise AssertionError(f'process file read: {path}')
+    def start(self):
+        import builtins
+        from unittest import mock
+        def wrap(real):
+            def guarded(path, *a, **kw):
+                self.check(path)
+                return real(path, *a, **kw)
+            return guarded
+        self.patches = [mock.patch.object(builtins, 'open', wrap(builtins.open)),
+            mock.patch.object(os, 'readlink', wrap(os.readlink)), mock.patch.object(os, 'listdir', wrap(os.listdir)),
+            mock.patch.object(os, 'scandir', wrap(os.scandir))]
+        for patch in self.patches:
+            patch.start()
+    def stop(self):
+        for patch in self.patches:
+            patch.stop()
+
 class Killed(Exception):
     """The supervisor stopping the build: the parent dies before it can write completed.json."""
 
@@ -356,8 +388,9 @@ class CompilingRunner(Runner):
         return type('R', (), {'returncode': self.returncode})()
 
 class ResumeTest(Fixture):
-    """OS-RANGO-RESUME-005, all synthetic: a fake compile is killed after writing into OUT_DIR; the cutoff proof,
-    supplemental provenance, boot id, live-process scan and stop evidence are synthetic stand-ins for operator data."""
+    """OS-RANGO-RESUME-005(-F1), all synthetic: a fake compile is killed after writing into OUT_DIR; the cutoff proof,
+    supplemental provenance, boot witness, current boot and stop evidence are synthetic stand-ins for operator data.
+    Every test runs with process-file reads trapped (see ProcGuard): no /proc/<pid> path may be opened or listed."""
     def setUp(self):
         super().setUp()
         self.generated()
@@ -372,14 +405,27 @@ class ResumeTest(Fixture):
         (self.out/'soong').mkdir()
         (self.out/'soong/.cache-sentinel').write_bytes(b'\x00incremental cache\xff')
         (self.out/'soong/host-link').symlink_to('/usr/bin')  # build-internal links are not walked or refused
-        self.boot, self.writers = 'boot-after-vm-stop', []
+        self.boot = {'bootId': NEW_BOOT, 'bootTime': '2026-10-30T04:35:00Z'}
         self.evidence = self.tmp/'evidence/supervisor.log'
         self.evidence.parent.mkdir()
         self.evidence.write_text('02:49:07 compile started\n04:29:15 supervisor deadline reached; stopping build\n')
         self.cut = self.cutoff()
-        (self.tmp/'evidence/manifest-at-start.xml').write_text('<manifest revision="pinned"/>\n')
-        (self.tmp/'evidence/manifest-now.xml').write_text('<manifest revision="pinned"/>\n')
+        (self.tmp/'evidence/manifest-at-start.xml').write_text(MANIFEST)
+        (self.tmp/'evidence/manifest-now.xml').write_text(MANIFEST.replace('" />', '"/>'))  # other bytes, same pins
         self.prov = self.provenance()
+        self.witness = self.boot_witness()
+        guard = ProcGuard()
+        guard.start()
+        self.addCleanup(guard.stop)
+
+    def boot_witness(self, name='witness.json', **changes):
+        doc = {'receiptType': 'rango-compile-boot-witness', 'schemaVersion': 1,
+            'attempt': {'receiptDir': str(self.prior), 'startedSha256': rb.sha256_file(self.prior/'started.json')},
+            'buildNumber': BUILD, 'bootId': OLD_BOOT, 'observedAt': '2026-10-30T03:55:00Z',
+            'observedBy': 'synthetic operator', 'method': 'cat /proc/sys/kernel/random/boot_id while the compile ran'}
+        doc.update(changes)
+        (self.tmp/name).write_text(json.dumps(doc))
+        return self.tmp/name
 
     def cutoff(self, attempt=None, name='cut.json', **changes):
         attempt = attempt or self.prior
@@ -390,8 +436,7 @@ class ResumeTest(Fixture):
             'stoppedAt': '2026-10-30T04:29:15Z', 'observedAt': '2026-10-30T04:31:00Z',
             'evidence': [{'path': str(self.evidence), 'sha256': rb.sha256_file(self.evidence),
                 'line': '04:29:15 supervisor deadline reached; stopping build'}],
-            'writer': {'bootId': 'boot-of-the-compile', 'pid': 4242}, 'observedBy': 'synthetic operator',
-            'observedAt': '2026-10-30T04:31:00Z'}
+            'observedBy': 'synthetic operator'}
         proof.update(changes)
         (self.tmp/name).write_text(json.dumps(proof))
         return self.tmp/name
@@ -411,18 +456,20 @@ class ResumeTest(Fixture):
         (self.tmp/'prov.json').write_text(json.dumps(doc))
         return self.tmp/'prov.json'
 
+    def provenance_doc(self):
+        return json.loads(self.provenance().read_text())
+
     def probes(self):
-        return {'statvfs': lambda p: self.fs, 'writers': lambda src, out: self.writers,
-            'current_boot': lambda: self.boot, 'pid_alive': lambda pid: False}
+        return {'statvfs': lambda p: self.fs, 'boot': lambda: self.boot}
 
-    def admission(self, cut=None, prov=None, config=None, build=BUILD):
+    def admission(self, cut=None, prov=None, config=None, build=BUILD, witness=None):
         return rb.resume_admission(config or self.config, self.config_path, build, self.dl, self.prior,
-            cut or self.cut, prov or self.prov, self.inputs, **self.probes())
+            cut or self.cut, prov or self.prov, self.inputs, witness or self.witness, **self.probes())
 
-    def resume(self, runner=None, cut=None, config=None):
+    def resume(self, runner=None, cut=None, config=None, witness=None):
         runner = runner or CompilingRunner(self.src)
         code = rb.resume(config or self.config, self.config_path, BUILD, self.dl, self.prior, cut or self.cut, self.prov,
-            self.inputs, runner=runner, now=lambda: 1793336000, **self.probes())
+            self.inputs, witness or self.witness, runner=runner, now=lambda: 1793335200, **self.probes())
         return code, runner
 
     def snapshot(self):
@@ -465,9 +512,13 @@ class ResumeTest(Fixture):
             self.resume(runner=CompilingRunner(self.src, killed=True))
         first = Path(f'{self.prior}.resume-1')
         self.assertFalse((first/'completed.json').exists())
+        self.assertEqual(json.loads((first/'started.json').read_text())['boot'], self.boot, 'resume records its boot')
         self.assertIn('not bound to', ' '.join(self.admission()['problems']), 'the original proof is spent')
-        code, runner = self.resume(cut=self.cutoff(first, 'cut2.json', stoppedAt='2026-10-30T05:00:00Z',
-            observedAt='2026-10-30T05:01:00Z'))
+        cut2 = self.cutoff(first, 'cut2.json', stoppedAt='2026-10-30T05:00:00Z', observedAt='2026-10-30T05:01:00Z')
+        self.assertIn('same boot as the live attempt', ' '.join(self.admission(cut=cut2)['problems']),
+            "resume-1's own recorded boot is the witness, and this boot is that boot")
+        self.boot = {'bootId': THIRD_BOOT, 'bootTime': '2026-10-30T05:10:00Z'}
+        code, runner = self.resume(cut=cut2)
         self.assertEqual((code, len(runner.calls)), (0, 1))
         self.assertEqual(json.loads((Path(f'{self.prior}.resume-2')/'started.json').read_text())['resumeOf']['receiptDir'],
             str(first))
@@ -508,9 +559,15 @@ class ResumeTest(Fixture):
         self.refused("missing ['projects']", prov=self.provenance(projects=None))
         self.refused('without a recorded source', prov=self.provenance(sources={'configSha256': 'x'}))
         self.refused('config differs', prov=self.provenance(configSha256='0' * 64))
-        (self.tmp/'evidence/manifest-now.xml').write_text('<manifest revision="moved"/>\n')
-        self.refused('project pins now differ', prov=self.provenance())
-        (self.tmp/'evidence/manifest-now.xml').write_text('<manifest revision="pinned"/>\n')
+        (self.tmp/'evidence/manifest-now.xml').write_text(MANIFEST.replace('aaaa', 'bbbb'))
+        self.refused('pins differ from the retained map: 2 entries', prov=self.provenance())
+        (self.tmp/'evidence/manifest-now.xml').write_text(MANIFEST.replace('<project name="platform/build"', '<project'))
+        self.refused('has no pinned revision', prov=self.provenance())
+        (self.tmp/'evidence/manifest-now.xml').write_text(MANIFEST)
+        self.refused('not the retained project map', prov=self.provenance(projects={**self.provenance_doc()['projects'],
+            'recordedSha256': '0' * 64}))
+        self.provenance()
+        self.assertEqual(self.admission()['facts']['provenance']['projectPins'], 2)
         self.refused('not bound to', prov=self.provenance(prior={'startedSha256': '0' * 64}))
         self.refused('owned by uid', prov=self.provenance(output={'uid': os.geteuid() + 1}))
 
@@ -547,14 +604,47 @@ class ResumeTest(Fixture):
         inside = self.out/'receipts'
         self.assertIn('collides with', ' '.join(rb.check_output(self.src, 'out-rango-' + BUILD, os.geteuid(), [inside])[0]))
 
-    def test_a_live_writer_or_held_lock_stops_before_anything_runs(self):
-        self.writers = [(777, 'ninja in /srv/rose-rango/src')]
-        self.refused('may still write the build')
-        self.writers, self.boot = [], 'boot-of-the-compile'
+    def test_only_a_later_boot_than_the_witnessed_live_boot_proves_the_old_tree_gone(self):
+        self.boot = {'bootId': OLD_BOOT, 'bootTime': '2026-10-30T02:00:00Z'}
+        report = self.refused('same boot as the live attempt')
+        self.assertIn('a same-boot resume is unsupported', ' '.join(report['problems']))
+        self.boot = None
+        self.refused('unreadable; termination is unknown, not proven')
+        self.boot = {'bootId': NEW_BOOT, 'bootTime': '2026-10-30T04:20:00Z'}
+        self.refused('did not begin after the witnessed boot and the recorded stop')
+        self.boot = {'bootId': NEW_BOOT, 'bootTime': '2026-10-30T04:35:00Z'}
+        self.assertEqual(self.admission()['problems'], [])
+
+    def test_the_boot_witness_must_be_genuine_bound_and_contemporaneous(self):
         report = rb.resume_admission(self.config, self.config_path, BUILD, self.dl, self.prior, self.cut, self.prov,
-            self.inputs, **{**self.probes(), 'pid_alive': lambda pid: pid == 4242})
-        self.assertIn('not proven gone', ' '.join(report['problems']))
-        self.assertEqual(self.admission()['problems'], [], 'same boot is fine once the writer pid is gone')
+            self.inputs, None, **self.probes())
+        self.assertIn('was not recorded at launch', ' '.join(report['problems']))
+        self.refused('rango-compile-boot-witness', witness=self.boot_witness(name='w.json', schemaVersion=2))
+        self.refused('not bound to', witness=self.boot_witness(name='w.json', attempt={'receiptDir': str(self.prior),
+            'startedSha256': '0' * 64}))
+        self.refused('not bound to', witness=self.boot_witness(name='w.json', buildNumber='2026103002'))
+        self.refused('not observed between', witness=self.boot_witness(name='w.json', observedAt='2026-10-30T02:00:00Z'),
+            ) # backdated before the attempt started
+        self.refused('not observed between', witness=self.boot_witness(name='w.json', observedAt='2026-10-30T04:30:00Z'))
+        self.refused('not a kernel boot id', witness=self.boot_witness(name='w.json', bootId='boot-of-the-compile'))
+        self.refused('no observer', witness=self.boot_witness(name='w.json', method=''))
+        (self.tmp/'broken.json').write_text('{')
+        self.refused('rango-compile-boot-witness', witness=self.tmp/'broken.json')
+        self.refused('collides with', witness=self.boot_witness(name='w.json').rename(self.out/'w.json'))
+
+    def test_no_process_file_is_ever_read(self):
+        """Admission, resume and the boot reader touch no /proc/<pid> path; the guard fails any such access."""
+        self.assertEqual(self.resume()[0], 0)
+        code = (SCRIPTS/'rango-build-only.py').read_text()
+        for banned in ("'cmdline'", "'environ'", "'fd'", '/cmdline', '/environ', '/fd', 'live_writers', 'pid_alive', 'sudo'):
+            self.assertNotIn(banned, code, banned)
+        guard = ProcGuard()
+        with self.assertRaises(AssertionError):
+            guard.check('/proc/3056/cmdline')
+        for allowed in ('/proc/sys/kernel/random/boot_id', '/proc/stat'):
+            guard.check(allowed)
+
+    def test_held_lock_stops_before_anything_runs(self):
         import fcntl
         with open(self.config['host']['lockPath'], 'a') as held:
             fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -562,20 +652,19 @@ class ResumeTest(Fixture):
         self.assertEqual((code, runner.calls), (1, []))
         self.assertFalse(Path(f'{self.prior}.resume-1').exists())
 
-    def test_the_live_writer_scan_sees_cwd_build_tools_and_open_files(self):
-        proc = self.tmp/'proc'
-        def fake(pid, cwd, argv0=b'bash', fds=()):
-            (proc/str(pid)/'fd').mkdir(parents=True)
-            (proc/str(pid)/'cwd').symlink_to(cwd)
-            (proc/str(pid)/'cmdline').write_bytes(argv0 + b'\0-x\0')
-            for n, target in enumerate(fds):
-                (proc/str(pid)/'fd'/str(n)).symlink_to(target)
-        fake(11, self.out/'soong')
-        fake(12, self.src, b'/srv/rose-rango/src/prebuilts/build-tools/linux-x86/bin/ninja')
-        fake(13, self.tmp, fds=[self.out/'build.log'])
-        fake(14, self.src)  # an idle shell in SRC is not a writer
-        fake(15, self.tmp, fds=[self.tmp/'elsewhere.log'])
-        self.assertEqual(sorted(pid for pid, _ in rb.live_writers(self.src, self.out, proc)), [11, 12, 13])
+    def test_current_boot_reads_only_the_two_kernel_files(self):
+        reads = []
+        real = Path.read_text
+        def spy(path, *a, **kw):
+            reads.append(str(path))
+            return real(path, *a, **kw)
+        from unittest import mock
+        with mock.patch.object(Path, 'read_text', spy):
+            boot = rb.current_boot()
+        self.assertEqual(reads, ['/proc/sys/kernel/random/boot_id', '/proc/stat'][:len(reads)])
+        if boot is not None:
+            self.assertRegex(boot['bootId'], rb.BOOT_ID)
+            self.assertRegex(boot['bootTime'], rb.STAMP)
 
     def test_admission_is_redone_under_the_lock(self):
         self.assertTrue(self.admission()['admitted'])
@@ -592,6 +681,10 @@ class ResumeTest(Fixture):
         self.assertEqual(runner.calls, [])
 
     def test_cli_has_no_receipt_dir_force_or_non_compile_resume(self):
+        self.assertEqual(rb.main(['resume-check', '--config', str(self.config_path), '--build-number', BUILD,
+            '--download-dir', str(self.dl), '--prior-receipt-dir', str(self.prior), '--cutoff-proof', str(self.cut),
+            '--provenance', str(self.prov), '--inputs-receipt', str(self.inputs)]), 1,
+            'an old-format run without a --boot-witness is refused (the check itself runs nothing)')
         base = ['--config', str(self.config_path), '--build-number', BUILD, '--download-dir', str(self.dl),
             '--prior-receipt-dir', str(self.prior), '--cutoff-proof', str(self.cut), '--provenance', str(self.prov),
             '--inputs-receipt', str(self.inputs)]
