@@ -44,6 +44,7 @@ public final class HostTest {
         endpointPolicyRequiresHttps();
         jsonRoundTrip();
         AuthTest.all();
+        DeviceAuthTest.all();
         System.out.println("HostTest: " + passed + " checks passed");
     }
 
@@ -89,11 +90,22 @@ public final class HostTest {
         final List<String> bodies = new ArrayList<>();
         final List<Callback> callbacks = new ArrayList<>();
         int cancels;
+        boolean renewing;
+        int resends;
 
         public Call send(String body, long timeoutMs, Callback cb) {
             bodies.add(body);
             callbacks.add(cb);
             return () -> cancels++;
+        }
+
+        public boolean renews() {
+            return renewing;
+        }
+
+        public Call resend(String body, long timeoutMs, Callback cb) {
+            resends++;
+            return send(body, timeoutMs, cb);
         }
 
         void reply(int index, String envelope) {

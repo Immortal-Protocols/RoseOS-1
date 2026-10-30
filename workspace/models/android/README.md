@@ -20,9 +20,10 @@ The conversation, history, action validation, limits, fencing, Stop and backgrou
 | `AgentConfigJson` | The local-agent-v1 config: exact model id, `Reasoning strength: low` and the allowlist ids and labels |
 | `AppAllowlist`, `AllowlistLauncher` | `open_app {app_id}` policy: user-selected allowlist (`[a-z][a-z0-9_]{0,31}` ids), installed and unambiguous launcher component, keyguard check |
 | `AndroidAppLauncher` | Platform calls only: list launcher activities, read the keyguard, start one explicit component (adapted from the narrow launch path in Rose Agent's `PhoneControl` at 9664372b) |
-| `HttpsInferenceClient`, `EndpointPolicy` | HTTPS-only POST of the agent's request body, on a worker thread with platform trust. No redirects, a 4 MiB response cap, cancel by disconnect. Reports the raw status and body, or `connect` / `timeout_connect` / `timeout_response` / `tls` / `response_too_large` |
+| `HttpsInferenceClient`, `EndpointPolicy` | HTTPS-only POST of the agent's request body with the bearer from `CredentialSource`, on a worker thread with platform trust. No redirects, a 4 MiB response cap, cancel by disconnect. Reports the raw status and body, or `connect` / `timeout_connect` / `timeout_response` / `tls` / `response_too_large`; a credential it cannot get is reported as the auth server's status |
+| `DeviceAuth`, `KeystoreDeviceKey`, `ModelsService` | service-auth-v1 (`workspace/models/contracts/service-auth-v1.md`) against the fixed `https://models.a-list.com` / `muse-glimmer`: a hardware-attested Keystore P-256 key enrolls once, then each 1 h bearer is renewed by signing a fresh challenge. The bearer stays in memory; prefs keep only the key id and state |
 | `Json` | A small JSON codec with no Android dependency |
-| `MainActivity` | Programmatic UI, plus Settings (HTTPS endpoint and exact model id, no defaults) and the Apps picker |
+| `MainActivity` | Programmatic UI. No inference settings: Settings shows the fixed service and offers **Reset sign-in**; the Apps picker stays. Old endpoint/model prefs are removed on start; chat and app data are kept |
 
 ## Host duties (from the contract)
 
@@ -35,8 +36,12 @@ The conversation, history, action validation, limits, fencing, Stop and backgrou
   parked. **Continue** is offered only for a parked turn, back in the foreground.
 - **Stop** sends `cancel`. An app already opened stays open, and the UI says so.
 - No cleartext: `usesCleartextTraffic=false`, a network security config with system trust
-  anchors only, an `https://` endpoint with no embedded credentials, and no auth header.
-- There is no default endpoint or model. Send stays disabled until Settings has both.
+  anchors only. No secret ships in the APK; the bearer goes only to its own origin.
+- Sign-in is automatic and never blocks Send. Each turn has at most two HTTP inference attempts:
+  one 401 renews and resends once only while an attempt is left, so there is never a third.
+- A 403 is terminal: the bearer is cleared, the key and a revoked/refused state are kept, and
+  nothing re-enrolls until **Reset sign-in** is chosen. 429 (Retry-After) and 5xx retry at most
+  three times; 400/401 and TLS failures never retry. Stop cancels sign-in and inference.
 
 ## Build and test
 
@@ -53,7 +58,7 @@ stops with the exact missing piece (exit 3). It links with 16 KiB page alignment
 `tests/check-native-lib.sh` verifies the result (AArch64, LOAD alignment, the three JNI exports).
 
 The APK is **unsigned**: not installable, not published. Infra owns the version and signing
-identity. `versionCode 1 / 0.1.0-dev-unsigned` is a placeholder. CI:
+identity; `versionCode 2 / 0.2.0` upgrades signed v1 in place. CI:
 `.github/workflows/models-android.yml`.
 
 The native library is stored uncompressed and the APK is zip-aligned for 16 KiB pages. Without
@@ -81,5 +86,5 @@ installable; Infra signs a separately hashed output.
 
 The JVM tests run Core's real agent through the JNI adapter, built for the test machine (x86_64),
 not on Android. The arm64 library is checked as a file (ELF, alignment, exports), not loaded on a
-device. The unsigned build proves packaging only. No Android runtime, emulator, phone install or
-model has been exercised, and no phone-reachable inference endpoint exists yet.
+device. The unsigned build proves packaging only. Sign-in is tested against a scripted server and a
+software key; Keystore attestation, the live service and the model are not exercised by CI.

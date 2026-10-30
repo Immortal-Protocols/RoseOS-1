@@ -18,8 +18,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Endpoint-scoped bearer auth with a synthetic, obviously non-secret marker. No socket is opened:
- * the HTTPS client runs against an in-memory connection.
+ * Origin-bound bearer transport and the host's 401 renewal, with a synthetic, obviously non-secret
+ * marker. No socket is opened: the HTTPS client runs against in-memory connections.
  */
 final class AuthTest {
     static final String MARKER = "SYNTHETIC-NOT-A-SECRET-7f3a";
@@ -31,14 +31,17 @@ final class AuthTest {
     static void all() {
         credentialIsBoundToOneOrigin();
         credentialNeverPrintsTheToken();
-        storeDropsTokenOnOriginChangeAndClear();
-        sendNeedsTokenForThisEndpoint();
-        clientRefusesMissingOrForeignCredential();
+        defaultsArePublicHttps();
+        foreignOriginCredentialIsNeverSent();
         requestCarriesBearerOnlyToBoundOrigin();
         redirectIsNotFollowed();
         transportFailureIsRedacted();
+        authFailureReachesAgentAsStatusWithReason();
         unauthorizedAndForbiddenAreShownWithoutBody();
-        CredentialStore.clear();
+        one401RenewsAndResendsOnce();
+        second401EndsTheTurn();
+        renewalNeverCreatesAThirdDispatch();
+        stopDuringRenewedResendFencesIt();
     }
 
     static void credentialIsBoundToOneOrigin() {
@@ -58,59 +61,33 @@ final class AuthTest {
                 check(!e.getMessage().contains(bad.isEmpty() ? MARKER : bad), "rejection does not echo the token");
             }
         }
-        try {
-            EndpointCredential.bind("http://infer.example.test/v1", MARKER);
-            check(false, "cleartext endpoint accepted");
-        } catch (IllegalArgumentException e) {
-            check(!e.getMessage().contains(MARKER), "cleartext rejection redacted");
-        }
     }
 
     static void credentialNeverPrintsTheToken() {
         EndpointCredential c = EndpointCredential.bind(ENDPOINT, MARKER);
         check(!c.toString().contains(MARKER) && c.toString().contains("redacted"), "toString masked: " + c);
-        check(!String.valueOf(new Object[] {c}[0]).contains(MARKER), "string conversion masked");
     }
 
-    static void storeDropsTokenOnOriginChangeAndClear() {
-        CredentialStore.set(EndpointCredential.bind(ENDPOINT, MARKER));
-        check(CredentialStore.forEndpoint(ENDPOINT + "?v=2") != null, "same origin keeps the token");
-        check(CredentialStore.forEndpoint("https://other.example.test/v1") == null && !CredentialStore.isSet(),
-                "another origin drops the token");
-        check(CredentialStore.forEndpoint(ENDPOINT) == null, "dropped token does not come back");
-        CredentialStore.set(EndpointCredential.bind(ENDPOINT, MARKER));
-        CredentialStore.clear();
-        check(!CredentialStore.isSet() && CredentialStore.forEndpoint(ENDPOINT) == null, "clear removes it");
+    static void defaultsArePublicHttps() {
+        check(EndpointPolicy.check(ModelsService.CHAT_URL) == null, "chat URL is valid https");
+        check("https://models.a-list.com".equals(EndpointCredential.origin(ModelsService.CHAT_URL))
+                && EndpointCredential.origin(ModelsService.TOKEN_URL).equals(EndpointCredential.origin(ModelsService.CHAT_URL))
+                && EndpointCredential.origin(ModelsService.CHALLENGE_URL).equals(EndpointCredential.origin(ModelsService.CHAT_URL)),
+                "auth and chat share the public origin");
+        check("muse-glimmer".equals(ModelsService.MODEL), "default model");
     }
 
-    static void sendNeedsTokenForThisEndpoint() {
-        check(SetupCheck.problem(ENDPOINT, "muse-glimmer", null).startsWith("no access token"), "missing token blocks Send");
-        check(SetupCheck.problem(ENDPOINT, "muse-glimmer",
-                EndpointCredential.bind("https://other.example.test/v1", MARKER)).contains("another endpoint"),
-                "foreign token blocks Send");
-        check(SetupCheck.problem(ENDPOINT, "", EndpointCredential.bind(ENDPOINT, MARKER)).contains("model"),
-                "model still required");
-        check(SetupCheck.problem(ENDPOINT, "muse-glimmer", EndpointCredential.bind(ENDPOINT, MARKER)) == null,
-                "endpoint + model + matching token allows Send");
-    }
-
-    static void clientRefusesMissingOrForeignCredential() {
-        for (EndpointCredential c : new EndpointCredential[] {null,
-                EndpointCredential.bind("https://other.example.test/v1", MARKER)}) {
-            try {
-                new HttpsInferenceClient(ENDPOINT, c, u -> {
-                    throw new AssertionError("opened");
-                });
-                check(false, "client built without a matching token");
-            } catch (IllegalArgumentException e) {
-                check(!e.getMessage().contains(MARKER), "refusal redacted");
-            }
-        }
+    static void foreignOriginCredentialIsNeverSent() {
+        Fake fake = new Fake(200, "{}", null);
+        Result r = call(new HttpsInferenceClient(ENDPOINT,
+                fixed(EndpointCredential.bind("https://other.example.test/v1", MARKER)), fake::open));
+        check(fake.opened.isEmpty() && r.status == 401 && "auth_wrong_origin".equals(r.authProblem),
+                "foreign-origin credential: nothing opened, 401 auth_wrong_origin");
     }
 
     static void requestCarriesBearerOnlyToBoundOrigin() {
         Fake fake = new Fake(200, "{\"ok\":true}", null);
-        Result r = call(fake);
+        Result r = call(client(fake));
         check(fake.opened.size() == 1 && fake.opened.get(0).equals(ENDPOINT), "one connection to the bound URL");
         check(("Bearer " + MARKER).equals(fake.headers.get("Authorization")), "bearer header sent");
         check("POST".equals(fake.getRequestMethod()) && !fake.getInstanceFollowRedirects(), "POST, redirects off");
@@ -119,15 +96,32 @@ final class AuthTest {
 
     static void redirectIsNotFollowed() {
         Fake fake = new Fake(302, "", "https://other.example.test/steal");
-        Result r = call(fake);
+        Result r = call(client(fake));
         check(fake.opened.size() == 1 && r.status == 302, "302 reported raw, Location not followed");
     }
 
     static void transportFailureIsRedacted() {
         Fake fake = new Fake(0, "", null);
         fake.failure = new IOException("connect failed for Authorization: Bearer " + MARKER);
-        Result r = call(fake);
+        Result r = call(client(fake));
         check("connect".equals(r.failure), "failure kind only: " + r.failure);
+    }
+
+    static void authFailureReachesAgentAsStatusWithReason() {
+        Fake fake = new Fake(200, "{}", null);
+        CredentialSource refused = new CredentialSource() {
+            public EndpointCredential current(Cancel c) throws AuthFailure {
+                throw AuthFailure.status(403, "auth_revoked");
+            }
+
+            public EndpointCredential renew(Cancel c) throws AuthFailure {
+                throw AuthFailure.status(403, "auth_revoked");
+            }
+        };
+        Result r = call(new HttpsInferenceClient(ENDPOINT, refused, fake::open));
+        check(fake.opened.isEmpty() && r.status == 403 && "auth_revoked".equals(r.authProblem),
+                "revoked: no inference request, 403 with reason");
+        check(AuthMessages.text("auth_revoked").contains("Reset sign-in"), "revoked text names the reset");
     }
 
     /** 401/403 with a body that echoes the token: the user sees the status class, never the body. */
@@ -144,15 +138,77 @@ final class AuthTest {
         }
     }
 
+    static void one401RenewsAndResendsOnce() {
+        HostTest.Rig r = new HostTest.Rig();
+        r.client.renewing = true;
+        r.host.send("hi");
+        r.client.callbacks.get(0).onResponse(401, null, "");
+        check(r.client.resends == 1 && r.client.bodies.size() == 2 && r.client.bodies.get(1).equals(r.client.bodies.get(0)),
+                "401: renew and resend the same request once");
+        r.client.reply(1, HostTest.finalText("hello"));
+        check(!r.host.hasActiveTurn() && String.join(" ", r.view.transcript).contains("hello"), "resent request answers");
+    }
+
+    static void second401EndsTheTurn() {
+        HostTest.Rig r = new HostTest.Rig();
+        r.client.renewing = true;
+        r.host.send("hi");
+        r.client.callbacks.get(0).onResponse(401, null, "");
+        r.client.callbacks.get(1).onResponse(401, null, "");
+        check(r.client.bodies.size() == 2 && !r.host.hasActiveTurn()
+                && String.join(" ", r.view.transcript).contains("unauthorized"), "second 401 is shown, no third request");
+    }
+
+    /** A renewed resend uses the turn's second attempt; the agent's later request is never sent. */
+    static void renewalNeverCreatesAThirdDispatch() {
+        HostTest.Rig r = new HostTest.Rig();
+        r.client.renewing = true;
+        r.host.send("open the calculator");
+        r.client.callbacks.get(0).onResponse(401, null, "");
+        r.client.reply(1, HostTest.openApp("calculator"));
+        r.delay.runAll(); // the launch receipt settles; the agent wants its final request
+        check(r.client.bodies.size() == 2, "no third inference request: " + r.client.bodies.size());
+        check(!r.host.hasActiveTurn() && r.platform.started.size() == 1, "turn ended; the one launch stands");
+    }
+
+    static void stopDuringRenewedResendFencesIt() {
+        HostTest.Rig r = new HostTest.Rig();
+        r.client.renewing = true;
+        r.host.send("hi");
+        r.client.callbacks.get(0).onResponse(401, null, "");
+        r.host.stop();
+        check(r.client.cancels >= 1 && !r.host.hasActiveTurn(), "Stop cancels the renewed resend");
+        int rejectedBefore = r.host.rejectedCount();
+        r.client.reply(1, HostTest.finalText("late"));
+        check(!String.join(" ", r.view.transcript).contains("late") && r.host.rejectedCount() == rejectedBefore + 1,
+                "late reply after Stop is fenced");
+    }
+
     // ---- harness ----
+
+    static CredentialSource fixed(final EndpointCredential credential) {
+        return new CredentialSource() {
+            public EndpointCredential current(Cancel c) {
+                return credential;
+            }
+
+            public EndpointCredential renew(Cancel c) {
+                return credential;
+            }
+        };
+    }
+
+    static HttpsInferenceClient client(Fake fake) {
+        return new HttpsInferenceClient(ENDPOINT, fixed(EndpointCredential.bind(ENDPOINT, MARKER)), fake::open);
+    }
 
     static final class Result {
         int status = -1;
         String failure;
+        String authProblem;
     }
 
-    static Result call(Fake fake) {
-        HttpsInferenceClient client = new HttpsInferenceClient(ENDPOINT, EndpointCredential.bind(ENDPOINT, MARKER), fake::open);
+    static Result call(HttpsInferenceClient client) {
         final Result result = new Result();
         final CountDownLatch done = new CountDownLatch(1);
         client.send("{\"model\":\"m\"}", 5000, new InferenceClient.Callback() {
@@ -165,6 +221,10 @@ final class AuthTest {
                 result.failure = kind;
                 done.countDown();
             }
+
+            public void onAuthProblem(String reason) {
+                result.authProblem = reason;
+            }
         });
         try {
             check(done.await(10, TimeUnit.SECONDS), "client answered");
@@ -175,14 +235,16 @@ final class AuthTest {
     }
 
     /** An in-memory HTTP exchange; records what the client sent. */
-    static final class Fake extends HttpURLConnection {
+    static class Fake extends HttpURLConnection {
         final List<String> opened = new ArrayList<>();
         final Map<String, String> headers = new HashMap<>();
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         final int status;
         final String body;
         final String location;
+        String retryAfter;
         IOException failure;
+        boolean disconnected;
 
         Fake(int status, String body, String location) {
             super(null);
@@ -224,7 +286,10 @@ final class AuthTest {
 
         @Override
         public String getHeaderField(String name) {
-            return "Location".equalsIgnoreCase(name) ? location : null;
+            if ("Location".equalsIgnoreCase(name)) {
+                return location;
+            }
+            return "Retry-After".equalsIgnoreCase(name) ? retryAfter : null;
         }
 
         @Override
@@ -239,6 +304,7 @@ final class AuthTest {
 
         @Override
         public void disconnect() {
+            disconnected = true;
         }
 
         @Override
