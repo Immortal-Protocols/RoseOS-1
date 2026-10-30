@@ -233,7 +233,9 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     release_dir = Path(env['ROSE_RELEASE_DIR'])
     notes = release_notes(sign, sha, device, build)
     releases = prepare_release_dir(source_root, device, build, sha, env.get('ROSE_SIGN_RESUME_ARCHIVE') or None)
-    unsigned, otatools = retained[1:] if retained else (release_dir/'unsigned-target_files.zip', source_root/env['OUT_DIR']/sign['otatools'])
+    # SIGN-020: a dedicated signer host has no build OUT_DIR; signing-job.py hands over the hash-checked otatools path.
+    otatools_path = Path(env['ROSE_SIGN_OTATOOLS']) if env.get('ROSE_SIGN_OTATOOLS') else source_root/env.get('OUT_DIR', '')/sign['otatools']
+    unsigned, otatools = retained[1:] if retained else (release_dir/'unsigned-target_files.zip', otatools_path)
     copy_fresh(unsigned, releases/f'{device}-target_files.zip')
     copy_fresh(otatools, releases/f'{device}-otatools.zip')
     original = (source_root/'script/generate-release.sh').read_bytes()
@@ -285,6 +287,9 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     feed = config['publication']['channels']['beta']['feedChannel']
     (public/f'{device}-stable').write_text(f'{build} {stamp} {device} {feed}\n')
     (public/'UPDATE.md').write_bytes(notes)
+    # SIGN-020: the public outputs are also kept durably beside the signed marker, before any transient cleanup, so a
+    # completed signature is recovered byte-exactly (signing-job.py) instead of signed again.
+    shutil.copytree(public, releases/'public')
     receipt = {'receiptType': 'os-signing', 'candidate': sha, 'build': build, 'secretVersion': sign['secretVersion'],
         'keyDirectoryInArchive': key_location, 'releaseScriptSha256': sha256(original), 'derivedScriptSha256': sha256(derived.encode()),
         'outputs': {p.name: sha256(p.read_bytes()) for p in sorted(public.iterdir())},
