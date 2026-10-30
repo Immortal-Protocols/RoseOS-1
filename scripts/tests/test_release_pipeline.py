@@ -22,7 +22,7 @@ import apex_fixture
 SCRIPTS = Path(__file__).resolve().parents[1]
 PIPELINE, STAGE = SCRIPTS/'release-pipeline.py', SCRIPTS/'release-stage.py'
 PY = sys.executable
-SHA, BUILD, STAMP = '34fa48ff16d046e16c7d680731bf01058d794279', '2026102901', '1793300000'
+SHA, BUILD, STAMP = '34fa48ff16d046e16c7d680731bf01058d794279', '2026103001', '1793377800'
 SIGNER = 'A'*64
 # Exact nonsecret excerpt of the real dump of build 2026102802's framework-res.apk (sha256 88dc574b...89ef9aa),
 # including the spec rows before the values and the unrelated resources after them (ACTIONS068 evidence).
@@ -43,7 +43,7 @@ FRAMEWORK_DUMP = '''\
         resource 0x01110331 android:bool/config_useSystemWallpaperDuringUserSwitch: t=0x12 d=0x00000000 (s=0x0008 r=0x00)
           (boolean) false
 '''
-APPS = [['dev.pixel.voice', 309], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+APPS = [['dev.pixel.voice', 312], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
 WORKFLOW_TEXT = (SCRIPTS.parent/'.github/workflows/os-release.yml').read_text()
 PREPARE = re.search(r'- name: Prepare stage receipts\n\s+run: \|\n((?: {10}.*\n)+)', WORKFLOW_TEXT).group(1)
 WORKFLOW_STAGES = re.findall(r'^\s+run: (bash scripts/os-release-stage\.sh .+)$',

@@ -188,6 +188,15 @@
           "dev.pixel.voice": 308
         },
         "basis": "Published Beta frankel-2026102806 (FAM-02-INFRA-S001 from the lead's receipts: OS run 40778491188, public release 427275514, pixel-ota Latest since 2026-10-28 22:53:12 UTC; apps 308/4/28), preserved unchanged. A newer candidate needs a higher build number and BUILD_DATETIME; its bundled Rose Agent must exceed 308 unless it is the same signed 308 bytes, which only the bound app-reuse replay may republish. Controller 28 and Calculator 4 may stay equal"
+      },
+      {
+        "build": "2026102901",
+        "source": "02b21bc69f9afd281422d42e3dcf8a456e471de1",
+        "buildTimestamp": 1793311111,
+        "mustExceed": {
+          "dev.pixel.voice": 310
+        },
+        "basis": "Published Beta frankel-2026102901: os-release run 40974306111 (candidate 02b21bc6, BUILD_DATETIME 1793311111, apps 310/4/28) drafted it unpromoted; the owner confirmed it is pixel-ota Latest on 2026-10-30. Preserved unchanged. A newer candidate needs a higher build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 311 published). Controller 28 and Calculator 4 may stay equal"
       }
     ]
   },
@@ -324,11 +333,27 @@
       {
         "versionCode": 310,
         "versionName": "310-hifi-os-beta",
-        "candidate": null,
+        "candidate": "02b21bc69f9afd281422d42e3dcf8a456e471de1",
         "osBuild": "2026102901",
         "buildTimestamp": 1793311111,
         "route": "os-release",
         "basis": "OS-HIFI-FRANKEL-CANDIDATE-001 / FRANKEL310-ALLOC-001: bundled Rose Agent of the Frankel 2026102901 OS candidate (BUILD_DATETIME 1793311111), built from exact basis 60854d6f9629e9768162e23c3d04e83e1c7c7357 (the AGENT309-DELIVERY-001 head: HiFi Home #131, App #127 renderer, #130, the 309 delivery and capacity corrections) plus only this delta (manifest 310 and this row). The candidate is the tested merge of that delta, recorded by Infra at dispatch. The app-only route may not use 310; 309 stays reserved for the app-only route and 308 for exact-byte app-reuse; Calculator 4 and controller 28 are unchanged"
+      },
+      {
+        "versionCode": 311,
+        "versionName": "311-hifi-visual-beta",
+        "candidate": "d4bb0fd23741ef472689e3878e6d3aa4f6331d23",
+        "route": "app-only",
+        "sha256": "0e5e549f1707dd48880b8025e42c59ed896d7e45ab08628c425a785d529288cb",
+        "size": 1524893,
+        "signerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+        "run": 41081939395,
+        "delivered": {
+          "route": "public GitHub prerelease rose-agent-311",
+          "at": "2026-10-30T15:35Z",
+          "publicRelease": true
+        },
+        "basis": "AGENT311-APP-ONLY: owner-requested app-only candidate d4bb0fd (the APP-OS-VISUAL-1030 Home/Agent visuals, #198 and #201). Run 41081939395 built, signed and published it as prerelease rose-agent-311; the APK sha256, size and signer come from the publisher's public receipt. Immutable. GrapheneOS refuses it as a system-app update on 2026102901 (#202), so it is not installed on the phone. Recorded as a delivered app-only reservation rather than in built, so the 307 floor that keeps the exact-byte 308 replay reachable is unchanged; every OS candidate and the latest-beta allocator still count it as consumed"
       }
     ]
   },

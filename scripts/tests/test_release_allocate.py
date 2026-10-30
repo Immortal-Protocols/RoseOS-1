@@ -142,6 +142,10 @@ class Allocation(unittest.TestCase):
         self.assertEqual(allocate(repo, obs)['build'], '2026103002')
         obs['attempts']['items'] += ['frankel-2026103002', 'frankel-2026103003-resume-41']
         self.assertEqual(allocate(repo, obs)['build'], '2026103004')
+        # The earlier hand-dispatched -attemptN-<run> directories are consumed builds too.
+        legacy = copy.deepcopy(obs)
+        legacy['attempts']['items'] += ['frankel-2026102802-attempt1-40634711221', 'frankel-2026103004-attempt2-7']
+        self.assertEqual(allocate(repo, legacy)['build'], '2026103005')
         first = allocate(repo, obs)
         record = dict(first, candidateSha=ra.derive(first, repo.path))
         obs['reservations']['items'].append(record)
@@ -192,6 +196,7 @@ class Allocation(unittest.TestCase):
                                  (lambda o: o['attempts'].pop('items'), 'state_unavailable: incomplete attempts'),
                                  (lambda o: o['releases'].update(includesDrafts=False), 'does not include drafts'),
                                  (lambda o: o['attempts']['items'].append('scratch'), 'unrecognised attempt'),
+                                 (lambda o: o['attempts']['items'].append('frankel-2026103001-attempt1'), 'unrecognised attempt'),
                                  (lambda o: o.update(schema='other'), 'no release observation')):
             obs = observation()
             change(obs)
