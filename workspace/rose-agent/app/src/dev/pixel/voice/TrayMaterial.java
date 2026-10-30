@@ -203,4 +203,58 @@ final class TrayMaterial {
   @Override public void setColorFilter(ColorFilter filter) {}
   @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
  }
+ /**
+  * The overview mark (.overview-glyph i at ce126f56): three 11dp bars 30dp tall (34 in the middle), 4dp apart, 5dp
+  * radius, centred in the well. White to #e2e8f0 bars ringed rgba(120,140,170,.55) with an inset lower shade
+  * rgba(80,100,130,.25); the last bar #6aa2ff to #2f6be6, ringed rgba(30,80,200,.6), with an inset top highlight
+  * rgba(255,255,255,.45). Gradients are built per size, so drawing allocates nothing.
+  */
+ static final class Overview extends Drawable {
+  static final int[] BAR = {0xffffffff, 0xffe2e8f0}, ACCENT = {0xff6aa2ff, 0xff2f6be6};
+  static final int BAR_RING = 0x8c788caa, ACCENT_RING = 0x991e50c8, BAR_SHADE = 0x40506482, ACCENT_LIGHT = 0x73ffffff;
+
+  final float unit;
+  final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG),
+    inset = new Paint(Paint.ANTI_ALIAS_FLAG);
+  final RectF[] bars = {new RectF(), new RectF(), new RectF()};
+  final Shader[] fills = new Shader[3], insets = new Shader[3];
+
+  Overview(float density) {
+   unit = density;
+   edge.setStyle(Paint.Style.STROKE);
+   edge.setStrokeWidth(Math.max(1f, density));
+  }
+
+  @Override protected void onBoundsChange(Rect bounds) {
+   float width = 11 * unit, gap = 4 * unit, total = 3 * width + 2 * gap;
+   float left = bounds.left + (bounds.width() - total) / 2, middle = bounds.exactCenterY();
+   for (int i = 0; i < 3; i++) {
+    float half = (i == 1 ? 17 : 15) * unit, x = left + i * (width + gap);
+    RectF bar = bars[i];
+    bar.set(x, middle - half, x + width, middle + half);
+    boolean accent = i == 2;
+    fills[i] = new LinearGradient(0, bar.top, 0, bar.bottom, accent ? ACCENT : BAR, null, Shader.TileMode.CLAMP);
+    insets[i] = accent
+      ? new LinearGradient(0, bar.top, 0, bar.top + 3 * unit, ACCENT_LIGHT, 0x00ffffff, Shader.TileMode.CLAMP)
+      : new LinearGradient(0, bar.bottom - 4 * unit, 0, bar.bottom, 0x00506482, BAR_SHADE, Shader.TileMode.CLAMP);
+   }
+  }
+
+  @Override public void draw(Canvas canvas) {
+   float radius = 5 * unit;
+   for (int i = 0; i < 3; i++) {
+    if (fills[i] == null) return;
+    fill.setShader(fills[i]);
+    canvas.drawRoundRect(bars[i], radius, radius, fill);
+    inset.setShader(insets[i]);
+    canvas.drawRoundRect(bars[i], radius, radius, inset);
+    edge.setColor(i == 2 ? ACCENT_RING : BAR_RING);
+    canvas.drawRoundRect(bars[i], radius, radius, edge);
+   }
+  }
+
+  @Override public void setAlpha(int alpha) {}
+  @Override public void setColorFilter(ColorFilter filter) {}
+  @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+ }
 }

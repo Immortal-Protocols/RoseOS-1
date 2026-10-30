@@ -1,8 +1,5 @@
 package dev.pixel.voice;
 
-import android.graphics.Canvas;
-import android.graphics.Paint;
-import android.graphics.RectF;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -106,31 +103,13 @@ final class HomeTray extends LinearLayout {
   if (!spoken.contentEquals(presence.getContentDescription())) presence.setContentDescription(spoken);
  }
 
- /** The approved overview symbol: three separate rounded vertical rectangles, the last one accented blue. */
+ /** The approved overview symbol: three separate rounded vertical rectangles, the last one accented blue
+  * (TrayMaterial.Overview); decorative, the well speaks for it. */
  static final class OverviewGlyph extends View {
-  final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), edge = new Paint(Paint.ANTI_ALIAS_FLAG);
-  final RectF bar = new RectF();
-  final float unit;
-
   OverviewGlyph(MainActivity activity) {
    super(activity);
-   unit = activity.dp(1);
-   edge.setStyle(Paint.Style.STROKE);
-   edge.setStrokeWidth(unit);
+   setBackground(new TrayMaterial.Overview(activity.getResources().getDisplayMetrics().density));
    setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-  }
-
-  @Override protected void onDraw(Canvas canvas) {
-   float width = 11 * unit, gap = 4 * unit, total = 3 * width + 2 * gap;
-   float left = (getWidth() - total) / 2, middle = getHeight() / 2f;
-   for (int i = 0; i < 3; i++) {
-    float half = (i == 1 ? 17 : 15) * unit;
-    bar.set(left + i * (width + gap), middle - half, left + i * (width + gap) + width, middle + half);
-    fill.setColor(i == 2 ? 0xff2f6be6 : 0xfff2f5f9);
-    edge.setColor(i == 2 ? 0x992f6be6 : 0x8c788caa);
-    canvas.drawRoundRect(bar, 5 * unit, 5 * unit, fill);
-    canvas.drawRoundRect(bar, 5 * unit, 5 * unit, edge);
-   }
   }
  }
 }
