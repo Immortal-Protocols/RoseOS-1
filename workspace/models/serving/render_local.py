@@ -41,8 +41,8 @@ def check_local(config, option):
         raise render_upload.Rejected('the model cache must live on the scratch mount')
 
 
-def render(config, offline=False):
-    option = render_upload.profile(config, PROFILE)
+def render(config, offline=False, profile=PROFILE):
+    option = render_upload.profile(config, profile)
     check_local(config, option)
     launch, runtime = option['local_launch'], option['runtime']
     limits = render_upload.guard_limits(config, option)
@@ -56,7 +56,7 @@ def render(config, offline=False):
     tail = [json.dumps(limits, sort_keys=True), '--', 'vllm', 'serve', *option['container_spec']['args']]
     q = shlex.quote
     return f"""#!/usr/bin/env bash
-# Muse Glimmer {PROFILE}: {config['model']['repo']}@{config['model']['revision']} as {config['wire_contract']['model_field']}.
+# Muse Glimmer {profile}: {config['model']['repo']}@{config['model']['revision']} as {config['wire_contract']['model_field']}.
 # Rendered by workspace/models/serving/render_local.py. Loopback only: http://{launch['bind']}/v1
 set -euo pipefail
 IMAGE_ID={q(runtime['image_id'])}

@@ -12,15 +12,17 @@ run against a live resource.
 **Shape:** STANDARD (not Spot), BF16, TP=2, 8,192 context, 1 sequence. The model and image are pinned unchanged in
 `../muse-glimmer-30b.json` profile `a100x2-bf16-vllm-persistent`.
 - **Fit:** 3.44 GB headroom per GPU, derived and not measured. The startup guard checks the device-reported memory.
-- **Cost:** about US$7.35/h for the machine (about US$5.4k per 30 days), plus about US$50/month for disks. This is a
+- **Cost:** about US$7.35/h for the machine (about US$5.4k per 30 days), plus about US$100/month for disks. This is a
   public list price, **not read from billing**; Infra confirms it.
+- **Data disk:** 500 GB pd-ssd, about 240 MB/s, so a restart reloads 60 GB in about 4 minutes. 200 GB would take about
+  10 minutes.
 
 ## 1. Resources (Infra; each line needs its stated authority)
 
 ```bash
 P=protocols-465723; R=us-central1; Z=us-central1-a   # if capacity is refused: us-central1-c, -b, -f
 gcloud compute addresses create models-glimmer-ip --project=$P --region=$R
-gcloud compute disks create models-glimmer-data --project=$P --zone=$Z --type=pd-ssd --size=200GB
+gcloud compute disks create models-glimmer-data --project=$P --zone=$Z --type=pd-ssd --size=500GB
 gcloud compute instances create models-glimmer-01 --project=$P --zone=$Z --machine-type=a2-highgpu-2g \
   --provisioning-model=STANDARD --maintenance-policy=TERMINATE --restart-on-failure \
   --image-project=ubuntu-os-cloud --image-family=ubuntu-2404-lts-amd64 --boot-disk-size=150GB --boot-disk-type=pd-balanced \
@@ -41,6 +43,7 @@ gcloud compute firewall-rules create models-https --project=$P --network=default
 mkfs.ext4 -L models-data /dev/disk/by-id/google-models-data   # first boot only
 echo 'LABEL=models-data /mnt/models-data ext4 defaults,nofail 0 2' >> /etc/fstab && mkdir -p /mnt/models-data && mount -a
 apt-get update && apt-get install -y nvidia-driver-580-server docker.io nginx=1.24.0-2ubuntu7.19 certbot python3-cryptography
+systemctl disable --now nginx   # the distro unit would hold :80; models-edge runs the same binary
 # NVIDIA container toolkit from NVIDIA's apt repository, then:
 nvidia-ctk runtime configure --runtime=docker && systemctl restart docker && reboot
 docker pull vllm/vllm-openai@sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c
@@ -56,7 +59,8 @@ docker image inspect --format '{{.Id}}' vllm/vllm-openai@sha256:dbb04f5c0c0a6356
 ```bash
 python3 workspace/models/serving/service/render_service.py --out /etc/rose-models   # units, scripts, manifest with hashes
 install -m 644 /etc/rose-models/systemd/* /etc/systemd/system/ && systemctl daemon-reload
-systemctl enable --now muse-glimmer.service models-health.timer   # first start downloads the pinned revision once
+systemctl enable --now muse-glimmer.service models-health.timer models-verify-full.timer   # first start downloads once
+cat /run/rose-models/health.json   # "starting", then "ready"
 ```
 
 The first verified load writes a model receipt to `/mnt/models-data/receipt.json`. Every later start verifies the
@@ -71,7 +75,12 @@ list alone does not count.
 temporary 24 h account. Then:
 
 ```bash
-certbot certonly --webroot -w /var/lib/rose-models/acme -d models.a-list.com --deploy-hook /etc/rose-models/bin/tls-deploy
+install -d -m 755 /var/lib/rose-models/acme      # nginx workers read the webroot unprivileged
+install -d -m 700 /run/rose-edge                 # lets the hook's `nginx -t` run before the edge starts
+certbot certonly --standalone -d models.a-list.com --register-unsafely-without-email --agree-tos \
+  --deploy-hook /etc/rose-models/bin/tls-deploy   # edge not running yet: the hook checks and installs, no reload
+# ...start auth and the edge (below), then switch renewals to the edge's webroot:
+certbot reconfigure --cert-name models.a-list.com --webroot -w /var/lib/rose-models/acme
 ```
 
 - `certbot.timer` renews the certificate.
@@ -79,9 +88,12 @@ certbot certonly --webroot -w /var/lib/rose-models/acme -d models.a-list.com --d
   reloads. On any failure it rolls back to the previous chain.
 
 **Auth.** Follow `../../contracts/service-auth-v1.md`:
-- install the Google hardware-attestation root certificates (public files) and record their hashes;
-- `models-auth secret-init`;
+- install the Google hardware-attestation root certificates (public files) into `/etc/rose-models/attestation-roots/`
+  and record their hashes; optionally list revoked serials (lowercase hex) in `/etc/rose-models/attestation-revoked.txt`;
+- `python3 /etc/rose-models/lib/service/auth_service.py secret-init`;
 - `systemctl enable --now models-auth models-edge`.
+
+**Edge check:** with no token, `/v1/models` returns 401. With a token from the enrollment flow, it returns 200.
 
 ## 5. Operations
 
@@ -91,6 +103,7 @@ certbot certonly --webroot -w /var/lib/rose-models/acme -d models.a-list.com --d
 | Loaded but not answering | after 3 failed probes, the health timer restarts vLLM, at most 3 times per hour | `failed_needs_operator` in `/run/rose-models/health.json` |
 | VM or host event | GCE restarts the VM (`--restart-on-failure`); the units are enabled | Check health after boot |
 | Bad renewal | `tls-deploy` keeps the previous chain | Fix, then rerun the hook |
-| Credential abuse | `models-auth revoke KEY_ID`, `close-enrollment` or `rotate-secret` | — |
+| Credential abuse | `auth_service.py revoke KEY_ID`, `close-enrollment` or `rotate-secret` | Rotation keeps the previous secret, so live tokens survive one rotation |
+| Model files changed | `start-model` exits 4 and is not restarted; the daily full check fails | Restore the disk, or remove the receipt and cache to download again |
 
 **Rollback:** `systemctl stop models-edge` takes the endpoint offline. The disk and VM are kept.

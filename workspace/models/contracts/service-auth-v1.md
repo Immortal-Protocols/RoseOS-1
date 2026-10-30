@@ -57,12 +57,12 @@ The routes, limits and wire format are unchanged (`../serving/https/README.md`).
 
 **Renewal** needs a registered, unrevoked `key_id` and a valid signature over a fresh challenge.
 
-## Abuse limits (Nginx, per client IP plus global)
-- **Challenge:** 20/min.
-- **Token:** 10/min.
-- **New enrollments:** 5/hour per IP, 50/day globally, and at most 200 registered keys. Over the cap returns 403
+## Abuse limits
+- **Per client IP (Nginx):** challenge 20/min, token 10/min, each with a burst of 5.
+- **New enrollments (service):** 50/day globally, and at most 200 registered keys. Over the cap returns 403
   `enrollment_closed`.
-- **Inference:** limits are unchanged and global, and checked only after authentication.
+- **Inference:** limits are unchanged and global (6/min, burst 2, one in flight). Nginx counts only requests that
+  already passed authentication.
 
 **Operator controls:** revoke one key, close enrollment, or rotate the signing secret. Rotation keeps the previous
 secret for one TTL, so live tokens survive it.
