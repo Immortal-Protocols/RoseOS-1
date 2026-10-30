@@ -282,6 +282,9 @@ class Handler(BaseHTTPRequestHandler):
             self.record['first_byte_s'] = round(time.monotonic() - self.started, 4)
 
     def send_raw(self, status, data, content_type, headers=None):
+        record = getattr(self, 'record', None)
+        if record is not None:
+            record['response_status'] = status
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
@@ -294,6 +297,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def send_json(self, status, payload, headers=None):
+        record = getattr(self, 'record', None)
+        if record is not None:
+            record['response'] = payload  # synthetic fixture bodies only; used for direct history capture
         self.send_raw(status, json.dumps(payload).encode(), 'application/json', headers)
 
     def wait_for_disconnect(self, seconds):
