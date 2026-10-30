@@ -40,38 +40,41 @@ public final class RoseConversationActivity extends Activity {
 
  /** One call control: round icon above a short label, as in the prototype's .call-control. */
  final class Control extends LinearLayout {
-  final TextView icon,label;
+  final ConversationDrawing.TrayIcon icon;final TextView label;final int color;
   Control(int labelColor){super(RoseConversationActivity.this);setOrientation(VERTICAL);setGravity(Gravity.CENTER_HORIZONTAL);setClickable(true);setFocusable(true);
-   icon=new TextView(getContext());icon.setTextSize(22);icon.setGravity(Gravity.CENTER);icon.setTextColor(labelColor);
+   color=labelColor;icon=new ConversationDrawing.TrayIcon(getContext());
    // HiFi .well: a light glass well (radial highlight) with a fine edge, in the brushed-metal tray.
    GradientDrawable g=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xfaffffff,0x8cffffff,0x59d6e2f0,0x80becee0});
-   g.setCornerRadius(dp(33));g.setStroke(dp(1),0x526e829e);icon.setBackground(g);icon.setElevation(dp(2));
+   g.setCornerRadius(dp(33));g.setStroke(dp(1),0x806e829e);icon.setBackground(g);icon.setElevation(dp(3));
    icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);addView(icon,new LayoutParams(dp(92),dp(66)));
    // Icon-only like the HiFi wells; the words stay as the spoken name (content description).
    label=new TextView(getContext());label.setVisibility(GONE);
    setPadding(dp(4),0,dp(4),0);setMinimumHeight(dp(66));}
-  void show(String glyph,String text,String description){icon.setText(glyph);label.setText(text);setContentDescription(description);}
+  void show(ConversationPresentation.Glyph glyph,String text,String description){icon.set(glyph,color);label.setText(text);setContentDescription(description);}
   void available(boolean on){setEnabled(on);setAlpha(on?1f:.45f);}
  }
 
  @Override protected void onCreate(Bundle b){
   PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
-  getWindow().setStatusBarColor(paper());getWindow().setNavigationBarColor(paper());
-  FrameLayout root=new FrameLayout(this);root.setBackgroundColor(paper());
+  boolean ivory=!PixelAppearance.dark();
+  getWindow().setStatusBarColor(ivory?0xfff7f9fc:paper());getWindow().setNavigationBarColor(ivory?0xffeef3f9:paper());
+  FrameLayout root=new FrameLayout(this);
+  // HiFi .ivory-bg reading surface in light mode; dark mode keeps its existing paper color.
+  if(ivory)root.setBackground(new ConversationDrawing.IvoryBackground(this));else root.setBackgroundColor(paper());
   // Presence plus the presented output of the current task (Rose-Fold-v3 .presented): eyebrow, title, body.
   content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER);
   // HiFi Rose stage: Rose large and centred with its caption below; compact beside the caption once a result exists.
   stage=new LinearLayout(this);stage.setOrientation(LinearLayout.VERTICAL);stage.setGravity(Gravity.CENTER);
   presence=new RosePresenceView(this);stage.addView(presence,new LinearLayout.LayoutParams(dp(220),dp(220)));
-  caption=presentedText(15,ink2(),"sans-serif");caption.setGravity(Gravity.CENTER);caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  caption=presentedText(ConversationPresentation.CAPTION_SP,ink2(),"sans-serif");caption.setGravity(Gravity.CENTER);caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
   stage.addView(caption,new LinearLayout.LayoutParams(-2,dp(24)));content.addView(stage,new LinearLayout.LayoutParams(-1,-2));
   presentedScroll=new ScrollView(this);presentedScroll.setVisibility(View.GONE);
   LinearLayout presented=new LinearLayout(this);presented.setOrientation(LinearLayout.VERTICAL);presented.setPadding(dp(24),dp(8),dp(24),dp(16));
   taskEyebrow=presentedText(13,eyebrow(),"sans-serif-medium");presented.addView(taskEyebrow);
-  taskTitle=presentedText(40,ink(),"sans-serif");taskTitle.setLetterSpacing(-.03f);taskTitle.setLineSpacing(0,1.06f);taskTitle.setAccessibilityHeading(true);taskTitle.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+  taskTitle=presentedText(ConversationPresentation.TITLE_SP,ink(),"sans-serif");taskTitle.setLetterSpacing(-.03f);taskTitle.setLineSpacing(0,1.06f);taskTitle.setAccessibilityHeading(true);taskTitle.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
   LinearLayout.LayoutParams ttp=new LinearLayout.LayoutParams(-1,-2);ttp.topMargin=dp(10);presented.addView(taskTitle,ttp);
-  taskBody=presentedText(20,ink2(),"sans-serif");taskBody.setLineSpacing(0,1.38f);
+  taskBody=presentedText(ConversationPresentation.BODY_SP,ink2(),"sans-serif");taskBody.setLineSpacing(0,1.38f);
   LinearLayout.LayoutParams tbp=new LinearLayout.LayoutParams(-1,-2);tbp.topMargin=dp(14);presented.addView(taskBody,tbp);
   taskNote=presentedText(13,eyebrow(),"sans-serif");LinearLayout.LayoutParams tnp=new LinearLayout.LayoutParams(-1,-2);tnp.topMargin=dp(12);presented.addView(taskNote,tnp);
   stopNote=presentedText(14,ink(),"sans-serif");stopNote.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -82,10 +85,10 @@ public final class RoseConversationActivity extends Activity {
   LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.leftMargin=dp(12);taskActions.addView(stopTask,sp);
   LinearLayout.LayoutParams tap=new LinearLayout.LayoutParams(-1,-2);tap.topMargin=dp(16);presented.addView(taskActions,tap);
   presentedScroll.addView(presented);content.addView(presentedScroll,new LinearLayout.LayoutParams(-1,0,1f));
-  FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=statusInset()+dp(56);cp.bottomMargin=dp(190);root.addView(content,cp);
+  FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=statusInset()+dp(ConversationPresentation.reservedTop());cp.bottomMargin=dp(ConversationPresentation.reservedBottom());root.addView(content,cp);
 
-  TextView head=presentedText(22,ink(),"sans-serif-medium");head.setText("Rose");head.setAccessibilityHeading(true);
-  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,dp(48),Gravity.TOP|Gravity.START);hp.topMargin=statusInset()+dp(4);hp.leftMargin=dp(24);head.setGravity(Gravity.CENTER_VERTICAL);root.addView(head,hp);
+  TextView head=presentedText(ConversationPresentation.HEAD_SP,ink(),"sans-serif");head.setLetterSpacing(-.03f);head.setText("Rose");head.setAccessibilityHeading(true);
+  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,dp(ConversationPresentation.HEAD_HEIGHT),Gravity.TOP|Gravity.START);hp.topMargin=statusInset()+dp(4);hp.leftMargin=dp(24);head.setGravity(Gravity.CENTER_VERTICAL);root.addView(head,hp);
   notice=new LinearLayout(this);notice.setGravity(Gravity.CENTER_VERTICAL);notice.setPadding(dp(18),dp(12),dp(18),dp(12));notice.setMinimumHeight(dp(56));
   GradientDrawable nb=new GradientDrawable();nb.setColor(noticeBg());nb.setCornerRadius(dp(24));nb.setStroke(dp(1),line());notice.setBackground(nb);notice.setElevation(dp(6));
   noticeIcon=new TextView(this);noticeIcon.setTextSize(18);noticeIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);notice.addView(noticeIcon);
@@ -102,12 +105,12 @@ public final class RoseConversationActivity extends Activity {
   GradientDrawable tray=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xfff6f7f9,0xffe3e7eb,0xffcfd5db,0xffe8ebee});
   tray.setCornerRadius(dp(22));tray.setStroke(dp(1),0x47506070);row.setBackground(tray);row.setElevation(dp(10));
   primary=new Control(ink());primary.setOnClickListener(v->primary());row.addView(primary,new LinearLayout.LayoutParams(0,-2,1f));
-  end=new Control(endInk());end.show("📞","End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
+  end=new Control(endInk());end.show(ConversationPresentation.Glyph.END,"End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
   // Rose's apps: the existing bound workspace view of the shown task (openWorkspace); no simulated windows.
-  agents=new Control(ink());agents.show("▦","Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());agents.available(false);
+  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());agents.available(false);
   row.addView(agents,new LinearLayout.LayoutParams(0,-2,1f));
-  LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(92));rp.topMargin=dp(8);bottom.addView(row,rp);
-  FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(34);bp.leftMargin=bp.rightMargin=dp(20);root.addView(bottom,bp);
+  LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT));rp.topMargin=dp(8);bottom.addView(row,rp);
+  FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);bp.leftMargin=bp.rightMargin=dp(ConversationPresentation.MARGIN);root.addView(bottom,bp);
   TextView more=new TextView(this);more.setText("⋯");more.setTextSize(24);more.setTextColor(ink());more.setGravity(Gravity.CENTER);more.setContentDescription("More options");
   more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});m.show();});
   FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
@@ -131,9 +134,10 @@ public final class RoseConversationActivity extends Activity {
   String n=notices.observe(state);
   if(ConversationState.CLEAR.equals(n))clearNotice();else if(n!=null)showNotice(n);
   boolean active=state.active();
-  if(active)primary.show(state.muted?"🔇":"🎙",state.muted?"Unmute":"Mute",state.muted?"Microphone muted. Unmute":"Microphone on. Mute");
-  else if(state.phase==ConversationState.Phase.CONNECTING)primary.show("📞","Cancel","Cancel voice connection");
-  else primary.show("🎙","Speak","Start voice conversation");
+  ConversationPresentation.Glyph glyph=ConversationPresentation.primary(state);
+  if(active)primary.show(glyph,state.muted?"Unmute":"Mute",state.muted?"Microphone muted. Unmute":"Microphone on. Mute");
+  else if(state.phase==ConversationState.Phase.CONNECTING)primary.show(glyph,"Cancel","Cancel voice connection");
+  else primary.show(glyph,"Speak","Start voice conversation");
   end.available(state.canEnd());
   failure.setText(state.failureText());
   // Core's RoseVisualState maps the session and VoiceService's own measured levels (stale or absent levels are
@@ -158,7 +162,10 @@ public final class RoseConversationActivity extends Activity {
   // A pending Stop ends only on that task's own authoritative state, or when the task is gone/replaced.
   if(stopPendingFor!=null&&TaskControl.settled(stopPendingFor,t.visible?t.id:null,state)){stopPendingFor=null;stopMessage="";}
   if(!t.visible||!t.id.equals(shownTaskId))if(stopPendingFor==null&&!stopInFlight)stopMessage="";
-  LinearLayout.LayoutParams pp=(LinearLayout.LayoutParams)presence.getLayoutParams();int size=dp(t.visible?88:220);
+  android.content.res.Configuration cfg=getResources().getConfiguration();
+  ConversationPresentation lay=ConversationPresentation.of(cfg.screenHeightDp-Math.round(statusInset()/getResources().getDisplayMetrics().density),t.visible,cfg.fontScale);
+  taskTitle.setTextSize(lay.titleSp);taskBody.setTextSize(lay.bodySp);
+  LinearLayout.LayoutParams pp=(LinearLayout.LayoutParams)presence.getLayoutParams();int size=dp(lay.stage);
   if(pp.width!=size){pp.width=pp.height=size;presence.setLayoutParams(pp);
    stage.setOrientation(t.visible?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);stage.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);
    stage.setPadding(t.visible?dp(12):0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
