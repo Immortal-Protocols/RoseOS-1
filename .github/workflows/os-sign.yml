@@ -1,17 +1,25 @@
 name: OS signing (dedicated signer)
 
-# SIGN-021: one hash-bound signing job on the dedicated signer host (runner group roseos-signing). The caller (release
-# transport) stages a roseos.signing-job.v1 manifest and its inputs under $SIGNING_ROOT/inbox/<job>/ and dispatches this
-# workflow from main with the manifest's sha256. Everything is validated before any credential exists; signing runs in
-# scripts/signing-job.py (isolated workspace, signing-only lock, durable outputs and receipt). No publishing authority.
+# SIGN-021/022: one hash-bound signing job on the dedicated signer host (runner group roseos-signing). os-release
+# dispatches this workflow from main naming its own run, the immutable unsigned-build artifact (id and digest) and the
+# roseos.signing-job.v1 manifest's sha256. A secret-free hosted ingress job fetches and validates that artifact; the
+# signing job stages the same-run bundle into $SIGNING_ROOT/inbox/<job>/ and validates it again before any credential.
+# Signing runs in scripts/signing-job.py (isolated workspace, signing-only lock, durable outputs and receipt). No
+# publishing authority.
 on:
   workflow_dispatch:
     inputs:
-      manifest:
-        description: Absolute path of the staged manifest, $SIGNING_ROOT/inbox/<job>/manifest.json on the signer host
+      source_run:
+        description: The os-release run that built and uploaded the unsigned inputs
+        required: true
+      artifact_id:
+        description: Its unsigned-input artifact id
+        required: true
+      artifact_digest:
+        description: That artifact's digest (sha256:<hex>)
         required: true
       manifest_sha256:
-        description: sha256 of that manifest file as the caller wrote it
+        description: sha256 of the artifact's manifest.json
         required: true
 
 permissions:
@@ -23,14 +31,43 @@ concurrency:
 
 env:
   SIGNING_ROOT: /srv/rose-signing
-  MANIFEST: ${{ inputs.manifest }}
+  SOURCE_RUN: ${{ inputs.source_run }}
+  ARTIFACT_ID: ${{ inputs.artifact_id }}
+  ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
   MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
   # The approved federation for this exact workflow on main (OCT30 exact security decision); not repository variables.
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/roseos-signing/providers/github
   SIGNER_SERVICE_ACCOUNT: roseos-dedicated-signer@protocols-465723.iam.gserviceaccount.com
 
 jobs:
+  # Hosted and secret-free: only this job's short-lived token with read access to Actions (approved 19:41), no id-token.
+  ingress:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Fetch and validate the bound unsigned-build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/signing-job.py ingress --source-run "$SOURCE_RUN" --artifact-id "$ARTIFACT_ID" \
+            --artifact-digest "$ARTIFACT_DIGEST" --manifest-sha256 "$MANIFEST_SHA256" --out "$RUNNER_TEMP/ingress" --signing-root "$SIGNING_ROOT"
+      - name: Hand the validated bundle to the signing job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-ingress-${{ github.run_id }}
+          path: ${{ runner.temp }}/ingress
+          retention-days: 1
+          if-no-files-found: error
+
   sign:
+    needs: ingress
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on:
       group: roseos-signing
@@ -43,6 +80,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signing-ingress-${{ github.run_id }}
+          path: ${{ runner.temp }}/ingress
+      - name: Stage the same-run bundle into its inbox job directory
+        run: |
+          set -euo pipefail
+          manifest=$(python3 scripts/signing-job.py stage --bundle "$RUNNER_TEMP/ingress" --signing-root "$SIGNING_ROOT" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["manifest"])')
+          echo "MANIFEST=$manifest" >> "$GITHUB_ENV"
       - name: Validate the manifest, inputs and config (before any credential)
         run: |
           set -euo pipefail

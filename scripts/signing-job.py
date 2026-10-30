@@ -74,12 +74,16 @@ def load_manifest(path):
     if not config.get('path') or not HEX64.fullmatch(str(config.get('sha256'))):
         raise Refused('manifest_invalid: config needs a path and sha256')
     inputs = m.get('inputs') or {}
-    for key in ('targetFiles', 'otatools'):
+    if sorted(inputs) not in (['otatools', 'targetFiles'], ['notes', 'otatools', 'targetFiles']):
+        raise Refused('manifest_invalid: inputs are targetFiles, otatools and optionally notes')
+    for key in sorted(inputs):
         spec = inputs.get(key) or {}
         if not Path(str(spec.get('path'))).is_absolute() or not isinstance(spec.get('size'), int) or spec['size'] <= 0 \
                 or not HEX64.fullmatch(str(spec.get('sha256'))):
             raise Refused(f'manifest_invalid: inputs.{key} needs an absolute path, size and sha256')
     notes = m.get('notes')
+    if notes is not None and 'notes' in inputs:
+        raise Refused('manifest_invalid: notes are either a bound input file or a commit pin, not both')
     if notes is not None and (not re.fullmatch(r'[0-9a-f]{40}', str(notes.get('commit'))) or not HEX64.fullmatch(str(notes.get('sha256')))
                               or not re.fullmatch(r'os/release-notes/[\w.-]+\.md', str(notes.get('path')))):
         raise Refused('manifest_invalid: notes needs a full commit, an os/release-notes path and a sha256')
@@ -200,6 +204,8 @@ def recover(m, cfg, source_root, jobs_root, scratch):
     outputs = marker.get('outputs') or {}
     if sorted(outputs) != sorted(public_assets(device, build)):
         raise Refused('recovery_mismatch: the marker does not list the signed public outputs')
+    if 'notes' in m['inputs'] and outputs['UPDATE.md'] != m['inputs']['notes']['sha256']:
+        raise Refused("recovery_mismatch: the signed release was not made from this job's notes")
     earlier = [p/'release/public' for p in sorted(Path(jobs_root).glob(f'{device}-{build}.*')) if p.is_dir()]
     with zipfile.ZipFile(signed) as z:
         certs = zipfile.ZipFile(io.BytesIO(z.read('SYSTEM/etc/security/otacerts.zip')))
@@ -218,6 +224,136 @@ def recover(m, cfg, source_root, jobs_root, scratch):
             raise Refused(f'recovery_missing: no byte-exact source for {name}')
         files[f'public/{name}'] = found
     return files
+
+
+# ---------------------------------------------------------------- hosted ingress (SIGN-022)
+# os-sign.yml's secret-free hosted job fetches the os-release run's bound unsigned-build artifact (actions: read, the
+# job's own short-lived token), validates its provenance and exact members, and hands a same-run bundle to the signing
+# job on the dedicated host, which stages it into $SIGNING_ROOT/inbox/<job>/ and validates it again before any credential.
+
+SIGNING_ROOT = '/srv/rose-signing'
+SOURCE_WORKFLOW = '.github/workflows/os-release.yml'
+
+
+def github_get(env, path, follow=True):
+    import urllib.error
+    import urllib.request
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args):
+            return None
+
+    request = urllib.request.Request(f"{env.get('GITHUB_API_URL', 'https://api.github.com')}/repos/{env['GITHUB_REPOSITORY']}{path}",
+        headers={'Authorization': f"Bearer {env.get('GH_TOKEN', '')}", 'Accept': 'application/vnd.github+json',
+                 'X-GitHub-Api-Version': '2022-11-28'})
+    try:
+        if follow:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read(1 << 22))
+        try:
+            urllib.request.build_opener(NoRedirect).open(request, timeout=60)
+        except urllib.error.HTTPError as redirect:
+            if redirect.code in (301, 302, 303, 307, 308) and redirect.headers.get('Location'):
+                return redirect.headers['Location']
+            raise
+        raise Refused('ingress_refused: the artifact download did not redirect')
+    except Refused:
+        raise
+    except Exception:  # noqa: BLE001 - never echo a token-bearing error; an access denial stops here
+        raise Refused(f'ingress_refused: GitHub read of {path} failed') from None
+
+
+def download(url, destination):
+    """The artifact archive from GitHub's short-lived redirect; the token is never sent there."""
+    import urllib.request
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=600) as response, open(destination, 'wb') as out:
+        shutil.copyfileobj(response, out, 8 << 20)
+
+
+API = {'get': github_get, 'download': download}
+
+
+def ingress(env, source_run, artifact_id, artifact_digest, manifest_sha256, out, signing_root=SIGNING_ROOT):
+    """Validate the source run, the artifact and every archive member; write the bundle and provenance.json to out."""
+    for value, pattern, name in ((source_run, r'[1-9][0-9]{0,19}', 'source_run'), (artifact_id, r'[1-9][0-9]{0,19}', 'artifact_id'),
+                                 (artifact_digest, r'sha256:[0-9a-f]{64}', 'artifact_digest'),
+                                 (manifest_sha256, r'[0-9a-f]{64}', 'manifest_sha256')):
+        if not re.fullmatch(pattern, str(value)):
+            raise Refused(f'ingress_refused: {name} is not exact')
+    artifact = API['get'](env, f'/actions/artifacts/{artifact_id}')
+    run = API['get'](env, f'/actions/runs/{source_run}')
+    repository = env.get('GITHUB_REPOSITORY')
+    if str((artifact.get('workflow_run') or {}).get('id')) != str(source_run) or artifact.get('expired') is not False \
+            or artifact.get('digest') != artifact_digest:
+        raise Refused("ingress_refused: the artifact is not the named run's live artifact with this digest")
+    if run.get('path') != SOURCE_WORKFLOW or (run.get('repository') or {}).get('full_name') != repository \
+            or run.get('head_branch') != 'main' or run.get('status') not in ('in_progress', 'completed'):
+        raise Refused("ingress_refused: the source run is not this repository's os-release run on main")
+    out = Path(out)
+    out.mkdir(parents=True)
+    archive = out.parent/f'{out.name}.zip'
+    API['download'](API['get'](env, f'/actions/artifacts/{artifact_id}/zip', follow=False), archive)
+    if 'sha256:' + sha256_file(archive) != artifact_digest:
+        raise Refused('ingress_refused: the downloaded archive differs from the artifact digest')
+    with zipfile.ZipFile(archive) as z:
+        infos = z.infolist()
+        names = [i.filename for i in infos]
+        if len(set(names)) != len(names) or any('/' in n or '\\' in n or n in ('', '.', '..') or i.is_dir()
+                                                 or (i.external_attr >> 16) & 0o170000 == 0o120000 for n, i in zip(names, infos)):
+            raise Refused('ingress_refused: the archive holds directories, links, nested paths or duplicates')
+        if 'manifest.json' not in names:
+            raise Refused('ingress_refused: the archive has no manifest.json')
+        data = z.read('manifest.json')
+        if hashlib.sha256(data).hexdigest() != manifest_sha256:
+            raise Refused('ingress_refused: manifest.json differs from manifest_sha256')
+        (out/'manifest.json').write_bytes(data)
+        m = load_manifest(out/'manifest.json')
+        dirs = {str(Path(spec['path']).parent) for spec in m['inputs'].values()}
+        expected = sorted(['manifest.json'] + [Path(spec['path']).name for spec in m['inputs'].values()])
+        if len(dirs) != 1 or not re.fullmatch(re.escape(str(signing_root)) + r'/inbox/[A-Za-z0-9._-]+', next(iter(dirs))) \
+                or sorted(names) != expected:
+            raise Refused('ingress_refused: members must be exactly manifest.json and the inputs of one inbox job directory')
+        for key, spec in m['inputs'].items():
+            name = Path(spec['path']).name
+            with z.open(name) as source, open(out/name, 'wb') as target:
+                shutil.copyfileobj(source, target, 8 << 20)
+            if (out/name).stat().st_size != spec['size'] or sha256_file(out/name) != spec['sha256']:
+                raise Refused(f'ingress_refused: member {name} differs from inputs.{key}')
+    archive.unlink()
+    source = m.get('source')
+    if source is not None and (str(source.get('run')) != str(source_run) or source.get('headSha') != run.get('head_sha')):
+        raise Refused('ingress_refused: the manifest names another source run')
+    provenance = {'sourceRun': str(source_run), 'headSha': run.get('head_sha'), 'workflow': SOURCE_WORKFLOW, 'repository': repository,
+        'artifactId': str(artifact_id), 'artifactDigest': artifact_digest, 'manifestSha256': manifest_sha256,
+        'job': f'{m["device"]}-{m["build"]}', 'inbox': str(Path(m['inputs']['targetFiles']['path']).parent)}
+    (out/'provenance.json').write_text(json.dumps(provenance, indent=2, sort_keys=True) + '\n')
+    return provenance
+
+
+def stage(bundle, signing_root):
+    """Signer host: place a same-run ingress bundle into its inbox directory (new, or byte-identical on retry)."""
+    bundle, signing_root = Path(bundle), Path(signing_root)
+    provenance = json.loads((bundle/'provenance.json').read_text())
+    m = load_manifest(bundle/'manifest.json')
+    if hashlib.sha256((bundle/'manifest.json').read_bytes()).hexdigest() != provenance['manifestSha256']:
+        raise Refused('stage_refused: the bundle manifest differs from its provenance')
+    inbox = Path(provenance['inbox'])
+    if str(inbox) != f'{signing_root}/inbox/{inbox.name}' or {str(Path(s['path']).parent) for s in m['inputs'].values()} != {str(inbox)}:
+        raise Refused('stage_refused: the bundle names another inbox')
+    target = signing_root/'inbox'/inbox.name
+    members = ['manifest.json'] + [Path(spec['path']).name for spec in m['inputs'].values()]
+    if target.exists():
+        if sorted(p.name for p in target.iterdir()) != sorted(members) or any(
+                sha256_file(target/n) != sha256_file(bundle/n) for n in members):
+            raise Refused('stage_refused: the inbox job directory already holds other bytes')
+    else:
+        partial = signing_root/'inbox'/f'.{inbox.name}.partial'
+        shutil.rmtree(partial, ignore_errors=True)
+        partial.mkdir(mode=0o700)
+        for name in members:
+            shutil.copyfile(bundle/name, partial/name)
+        os.rename(partial, target)
+    return str(target/'manifest.json')
 
 
 def host_sign_signer(config_path, env):
@@ -272,13 +408,19 @@ def run(manifest_path, jobs_root, out_root, signer=None, source_root=None, lock=
             release.mkdir()
             shutil.copyfile(m['inputs']['targetFiles']['path'], release/'unsigned-target_files.zip')
             shutil.copyfile(m['inputs']['otatools']['path'], workspace/'otatools.zip')
-            check_inputs({'inputs': {'targetFiles': dict(m['inputs']['targetFiles'], path=str(release/'unsigned-target_files.zip')),
-                'otatools': dict(m['inputs']['otatools'], path=str(workspace/'otatools.zip'))}})
+            copies = {'targetFiles': release/'unsigned-target_files.zip', 'otatools': workspace/'otatools.zip'}
+            if 'notes' in m['inputs']:
+                shutil.copyfile(m['inputs']['notes']['path'], workspace/'UPDATE.md')
+                copies['notes'] = workspace/'UPDATE.md'
+            check_inputs({'inputs': {k: dict(m['inputs'][k], path=str(p)) for k, p in copies.items()}})  # after the copy
             config_path = Path(m['config']['path'])
             config_path = config_path if config_path.is_absolute() else ROOT/config_path
-            if m.get('notes'):
+            notes_pin = dict(m['notes'], build=m['build'], device=m['device']) if m.get('notes') else None
+            if 'notes' in m['inputs']:
+                notes_pin = {'file': str(copies['notes']), 'sha256': m['inputs']['notes']['sha256'], 'build': m['build'], 'device': m['device']}
+            if notes_pin:
                 job_cfg = json.loads(config_path.read_bytes())
-                job_cfg['host']['sign']['updateNotes'] = dict(m['notes'], build=m['build'], device=m['device'])
+                job_cfg['host']['sign']['updateNotes'] = notes_pin
                 config_path = workspace/'config.json'
                 config_path.write_text(json.dumps(job_cfg))
             env = dict(base_env if base_env is not None else os.environ, BUILD_NUMBER=m['build'], BUILD_DATETIME=m['buildTimestamp'],
@@ -306,9 +448,23 @@ def main(argv=None):
     r.add_argument('--jobs-root', required=True)
     r.add_argument('--out-root', required=True)
     sub.add_parser('check').add_argument('--output-dir', required=True)
+    g = sub.add_parser('ingress')
+    for name in ('--source-run', '--artifact-id', '--artifact-digest', '--manifest-sha256', '--out'):
+        g.add_argument(name, required=True)
+    g.add_argument('--signing-root', default=SIGNING_ROOT)
+    t = sub.add_parser('stage')
+    t.add_argument('--bundle', required=True)
+    t.add_argument('--signing-root', required=True)
     a = p.parse_args(argv)
     try:
-        result = run(a.manifest, a.jobs_root, a.out_root) if a.command == 'run' else {'verdict': 'ok', **check(a.output_dir)}
+        if a.command == 'run':
+            result = run(a.manifest, a.jobs_root, a.out_root)
+        elif a.command == 'ingress':
+            result = ingress(dict(os.environ), a.source_run, a.artifact_id, a.artifact_digest, a.manifest_sha256, a.out, a.signing_root)
+        elif a.command == 'stage':
+            result = {'manifest': stage(a.bundle, a.signing_root)}
+        else:
+            result = {'verdict': 'ok', **check(a.output_dir)}
     except SetupMissing as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
         return 4

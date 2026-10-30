@@ -208,5 +208,105 @@ class SigningJob(unittest.TestCase):
         self.assertEqual(job.main(['check', '--output-dir', str(self.out/f'frankel-{BUILD}')]), 1)
 
 
+sys.path.insert(0, str(SCRIPTS))
+hs_spec = importlib.util.spec_from_file_location('host_sign_for_notes', SCRIPTS/'host-sign.py')
+host_sign = importlib.util.module_from_spec(hs_spec)
+hs_spec.loader.exec_module(host_sign)
+NOTES = f'# RoseOS frankel {BUILD}\nSYNTHETIC notes of an unpushed derived candidate\n'.encode()
+
+
+class NotesInput(SigningJob):
+    """SIGN-022: the derived candidate is never pushed, so its notes are a third hash-bound input whose verified bytes
+    reach host-sign through the file mode (no git-show); the legacy commit pin is unchanged."""
+
+    def setUp(self):
+        super().setUp()
+        notes = self.root/'inputs/UPDATE.md'
+        notes.write_bytes(NOTES)
+        self.manifest['inputs']['notes'] = {'path': str(notes), 'size': len(NOTES), 'sha256': hashlib.sha256(NOTES).hexdigest()}
+
+    def signer(self, config_path, env):
+        sign = json.loads(Path(config_path).read_text())['host']['sign']
+        self.notes_mode = sign['updateNotes']
+        self.notes_bytes = host_sign.release_notes(sign, 'd' * 40, 'frankel', BUILD)  # host-sign's own byte branch
+        fail, self.fail = self.fail, (None if self.fail == 'after' else self.fail)
+        result = super().signer(config_path, env)
+        self.fail = fail
+        public = Path(env['ROSE_RELEASE_DIR'])/'public'
+        (public/'UPDATE.md').write_bytes(self.notes_bytes)
+        marker = self.source/'releases'/BUILD/'.rose-actions-signed.json'
+        data = json.loads(marker.read_text())
+        data['outputs']['UPDATE.md'] = job.sha256_file(public/'UPDATE.md')
+        marker.write_text(json.dumps(data))
+        shutil.copyfile(public/'UPDATE.md', self.source/'releases'/BUILD/'public/UPDATE.md')
+        if self.fail == 'after':
+            raise job.Refused('sign_failed: interrupted after signing')
+        return result
+
+    def test_unpushed_candidate_notes_reach_host_sign_as_verified_bytes(self):
+        result = self.run_job()
+        self.assertEqual(sorted(self.notes_mode), ['build', 'device', 'file', 'sha256'])
+        self.assertEqual(self.notes_bytes, NOTES)
+        receipt = job.check(result['outputDir'])
+        self.assertEqual(receipt['inputs']['notes'], self.manifest['inputs']['notes'])
+        self.assertEqual((Path(result['outputDir'])/'public/UPDATE.md').read_bytes(), NOTES)
+
+    def test_changed_notes_refuse_and_other_notes_conflict_on_retry(self):
+        Path(self.manifest['inputs']['notes']['path']).write_bytes(NOTES + b'edited\n')
+        with self.assertRaisesRegex(job.Refused, 'input_changed: inputs.notes'):
+            self.run_job()
+        Path(self.manifest['inputs']['notes']['path']).write_bytes(NOTES)
+        self.run_job()
+        other = dict(self.manifest['inputs'], notes=dict(self.manifest['inputs']['notes'], sha256='0' * 64))
+        with self.assertRaisesRegex(job.Refused, 'job_conflict'):
+            self.run_job(self.write_manifest(inputs=other))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_notes_modes_are_exclusive_and_inputs_are_closed(self):
+        for bad in ({'notes': {'commit': 'a' * 40, 'path': 'os/release-notes/frankel-x.md', 'sha256': '0' * 64}},
+                    {'inputs': dict(self.manifest['inputs'], extra=self.manifest['inputs']['notes'])},
+                    {'inputs': {'targetFiles': self.manifest['inputs']['targetFiles'], 'notes': self.manifest['inputs']['notes']}}):
+            with self.subTest(bad=sorted(bad)), self.assertRaisesRegex(job.Refused, 'manifest_invalid'):
+                self.run_job(self.write_manifest(**bad))
+        missing = dict(self.manifest['inputs'], notes=dict(self.manifest['inputs']['notes'], path=str(self.root/'absent.md')))
+        with self.assertRaisesRegex(job.Refused, 'input_missing: inputs.notes'):
+            self.run_job(self.write_manifest(inputs=missing))
+        self.assertEqual(self.calls, [])
+
+    def test_recovery_binds_the_notes_input(self):
+        self.fail = 'after'
+        with self.assertRaises(job.Refused):
+            self.run_job()
+        self.fail = None
+        marker = self.source/'releases'/BUILD/'.rose-actions-signed.json'
+        good = marker.read_text()
+        data = json.loads(good)
+        data['outputs']['UPDATE.md'] = '0' * 64
+        marker.write_text(json.dumps(data))
+        with self.assertRaisesRegex(job.Refused, "recovery_mismatch: the signed release was not made from this job's notes"):
+            self.run_job()
+        marker.write_text(good)
+        self.assertEqual(self.run_job()['verdict'], 'recovered')
+        self.assertEqual(len(self.calls), 1)
+
+    def test_host_sign_file_mode_refuses_other_bytes(self):
+        notes = self.root/'n.md'
+        notes.write_bytes(NOTES)
+        pin = {'file': str(notes), 'sha256': hashlib.sha256(NOTES).hexdigest(), 'build': BUILD, 'device': 'frankel'}
+        self.assertEqual(host_sign.release_notes({'updateNotes': pin}, 'd' * 40, 'frankel', BUILD), NOTES)
+        link = self.root/'link.md'
+        link.symlink_to(notes)
+        for changes, message in (({'sha256': '0' * 64}, 'differ from their sha256'), ({'build': '2026103102'}, 'not frankel'),
+                                 ({'file': str(link)}, 'regular file'), ({'file': 'relative.md'}, 'regular file'),
+                                 ({'extra': 1}, 'exactly file, sha256, build and device')):
+            with self.subTest(changes=changes), self.assertRaisesRegex(host_sign.AdapterFailed, message):
+                host_sign.release_notes({'updateNotes': dict(pin, **changes)}, 'd' * 40, 'frankel', BUILD)
+        other = self.root/'other.md'
+        other.write_bytes(b'notes without the build number\n')
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'do not name build'):
+            host_sign.release_notes({'updateNotes': dict(pin, file=str(other), sha256=hashlib.sha256(other.read_bytes()).hexdigest())},
+                'd' * 40, 'frankel', BUILD)
+
+
 if __name__ == '__main__':
     unittest.main()

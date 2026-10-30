@@ -160,6 +160,20 @@ def release_notes(sign, sha, device, build):
         return notes
     if (pinned.get('device'), pinned.get('build')) != (device, build):
         raise AdapterFailed(f'pinned release notes are for {pinned.get("device")} {pinned.get("build")}, not {device} {build}')
+    if 'file' in pinned:
+        # SIGN-022: a derived candidate is never pushed, so signing-job.py hands over the notes as verified bytes (a file
+        # in its own job workspace, re-hashed here) instead of a commit to git-show.
+        if set(pinned) != {'file', 'sha256', 'build', 'device'} or not re.fullmatch(r'[0-9a-f]{64}', str(pinned['sha256'])):
+            raise AdapterFailed('release notes bytes need exactly file, sha256, build and device')
+        path = Path(pinned['file'])
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise AdapterFailed('release notes bytes must be a regular file')
+        notes = path.read_bytes()
+        if hashlib.sha256(notes).hexdigest() != pinned['sha256']:
+            raise AdapterFailed('release notes bytes differ from their sha256')
+        if build.encode() not in notes:
+            raise AdapterFailed(f'release notes bytes do not name build {build}')
+        return notes
     if not re.fullmatch(r'[0-9a-f]{40}', str(pinned.get('commit'))) or not re.fullmatch(r'os/release-notes/[\w.-]+\.md', str(pinned.get('path'))) \
             or not re.fullmatch(r'[0-9a-f]{64}', str(pinned.get('sha256'))):
         raise AdapterFailed('pinned release notes need a full commit, an os/release-notes/*.md path and a sha256')

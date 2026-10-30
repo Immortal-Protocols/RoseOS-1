@@ -46,6 +46,28 @@ class TrustSurface(unittest.TestCase):
         self.assertIn('concurrency:\n  group: roseos-signing\n  cancel-in-progress: false\n', WORKFLOW)
         self.assertTrue((ROOT/'.github/workflows/os-sign.yml').is_file())  # workflow_ref ...os-sign.yml@refs/heads/main
 
+    def test_hosted_ingress_is_secret_free_with_only_actions_read(self):
+        ingress = WORKFLOW.split('\n  ingress:\n', 1)[1].split('\n  sign:\n', 1)[0]
+        self.assertIn("    runs-on: ubuntu-24.04\n", ingress)
+        self.assertIn('    permissions:\n      contents: read\n      actions: read\n    steps:\n', ingress)
+        self.assertEqual(WORKFLOW.count('id-token: write'), 1)
+        self.assertEqual(WORKFLOW.count('actions: read'), 1)
+        self.assertNotIn('id-token', ingress)
+        self.assertNotIn('actions-gcp-login', ingress)
+        self.assertEqual(WORKFLOW.count('${{ github.token }}'), 1)  # only the ingress fetch
+        self.assertIn('GH_TOKEN: ${{ github.token }}', ingress)
+        sign = WORKFLOW.split('\n  sign:\n', 1)[1]
+        self.assertTrue(sign.startswith('    needs: ingress\n'))
+        self.assertNotIn('github.token', sign)
+        self.assertNotIn('run-id:', WORKFLOW)  # same-run bundle only; the source artifact is read by id in ingress
+        order = [WORKFLOW.index(s) for s in ('signing-job.py ingress --source-run', 'name: signing-ingress-${{ github.run_id }}',
+            'needs: ingress', 'signing-job.py stage --bundle', 'name: Validate the manifest, inputs and config (before any credential)',
+            'actions-gcp-login.py login')]
+        self.assertEqual(order, sorted(order))
+        for name in ('source_run', 'artifact_id', 'artifact_digest', 'manifest_sha256'):
+            self.assertIn(f'      {name}:\n', WORKFLOW)
+        self.assertNotIn('      manifest:\n', WORKFLOW)
+
     def test_the_approved_federation_and_service_account(self):
         self.assertIn('  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/roseos-signing/providers/github\n',
             WORKFLOW)
@@ -155,7 +177,129 @@ class LiteralSteps(fixtures.SigningJob):
         self.assertEqual(len(self.calls), 1)
 
 
+class Ingress(LiteralSteps):
+    """SIGN-022: the hosted ingress against a SYNTHETIC GitHub API, then stage and the literal validation step."""
+
+    def setUp(self):
+        super().setUp()
+        import zipfile
+        self.zipfile = zipfile
+        self.job_dir = self.signing/'inbox/frankel-job'
+        self.members = {'unsigned.zip': (self.job_dir/'unsigned.zip').read_bytes(), 'otatools': (self.job_dir/'otatools').read_bytes()}
+        self.manifest_bytes = json.dumps(self.manifest).encode()
+        self.archive = self.root/'artifact.zip'
+        self.build_archive()
+        self.artifact = {'id': 77, 'workflow_run': {'id': 4242}, 'expired': False}
+        self.run_meta = {'path': '.github/workflows/os-release.yml', 'repository': {'full_name': 'Immortal-Protocols/RoseOS-1'},
+            'head_branch': 'main', 'status': 'in_progress', 'head_sha': 'e' * 40}
+        self.downloaded = []
+        saved = dict(job.API)
+        self.addCleanup(job.API.update, saved)
+        job.API['get'] = self.fake_get
+        self.download_source = self.archive
+        job.API['download'] = lambda url, destination: (self.downloaded.append(url), shutil.copyfile(self.download_source, destination))
+        self.env = {'GITHUB_REPOSITORY': 'Immortal-Protocols/RoseOS-1'}
+
+    def build_archive(self, extra=(), manifest=None, members=None):
+        with self.zipfile.ZipFile(self.archive, 'w') as z:
+            z.writestr('manifest.json', manifest if manifest is not None else self.manifest_bytes)
+            for name, data in (members or self.members).items():
+                z.writestr(name, data)
+            for info, data in extra:
+                z.writestr(info, data)
+
+    def fake_get(self, env, path, follow=True):
+        if path.endswith('/zip'):
+            self.assertFalse(follow)  # the token is never sent to the redirect target
+            return 'https://blob.example/short-lived'
+        if path.startswith('/actions/artifacts/'):
+            return dict(self.artifact, digest='sha256:' + job.sha256_file(self.archive))
+        return self.run_meta
+
+    def ingress(self, **changes):
+        args = dict(source_run='4242', artifact_id='77', artifact_digest='sha256:' + job.sha256_file(self.archive),
+            manifest_sha256=hashlib.sha256(self.manifest_bytes).hexdigest(), out=self.root/f'bundle-{len(self.downloaded)}',
+            signing_root=self.signing)
+        args.update(changes)
+        return job.ingress(self.env, **args)
+
+    def test_ingress_stage_and_validate_bind_the_artifact_end_to_end(self):
+        shutil.rmtree(self.job_dir)  # ingress, not the caller, puts bytes on the signer
+        provenance = self.ingress()
+        self.assertEqual((provenance['sourceRun'], provenance['artifactId'], provenance['headSha']), ('4242', '77', 'e' * 40))
+        bundle = self.root/'bundle-0'
+        self.assertEqual(sorted(p.name for p in bundle.iterdir()), ['manifest.json', 'otatools', 'provenance.json', 'unsigned.zip'])
+        manifest = job.stage(bundle, self.signing)
+        self.assertEqual(manifest, str(self.job_dir/'manifest.json'))
+        self.assertEqual(job.stage(bundle, self.signing), manifest)  # a retry with identical bytes
+        ok = self.validate(MANIFEST=manifest)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        (self.job_dir/'otatools').write_bytes(b'other bytes')
+        with self.assertRaisesRegex(job.Refused, 'stage_refused: the inbox job directory already holds other bytes'):
+            job.stage(bundle, self.signing)
+
+    def test_ingress_refuses_wrong_provenance_or_members(self):
+        cases = [
+            (lambda: self.artifact.update(workflow_run={'id': 1}), "named run's live artifact"),
+            (lambda: self.artifact.update(expired=True), "named run's live artifact"),
+            (lambda: self.run_meta.update(path='.github/workflows/os-sign.yml'), "os-release run on main"),
+            (lambda: self.run_meta.update(head_branch='feature'), "os-release run on main"),
+            (lambda: self.run_meta.update(repository={'full_name': 'fork/RoseOS-1'}), "os-release run on main"),
+            (lambda: self.build_archive(extra=[('notes.txt', b'x')]), 'members must be exactly'),
+            (lambda: self.build_archive(extra=[('sub/unsigned.zip', b'x')]), 'nested paths or duplicates'),
+            (lambda: self.build_archive(members={'unsigned.zip': self.members['unsigned.zip']}), 'members must be exactly'),
+            (lambda: self.build_archive(members=dict(self.members, otatools=b'changed')), 'member otatools differs'),
+        ]
+        for damage, message in cases:
+            with self.subTest(message=message):
+                self.setUp()
+                damage()
+                with self.assertRaisesRegex(job.Refused, message):
+                    self.ingress()
+        self.setUp()
+        with self.assertRaisesRegex(job.Refused, 'differs from manifest_sha256'):
+            self.ingress(manifest_sha256='0' * 64)
+        other = self.root/'other.zip'
+        shutil.copyfile(self.archive, other)
+        with self.zipfile.ZipFile(other, 'a') as z:
+            z.writestr('padding', b'x')
+        self.download_source = other  # the API names one digest, the redirect serves other bytes
+        with self.assertRaisesRegex(job.Refused, 'differs from the artifact digest'):
+            self.ingress()
+        self.download_source = self.archive
+        for bad in ({'source_run': 'main'}, {'artifact_id': '0'}, {'artifact_digest': 'deadbeef'}, {'manifest_sha256': 'x'}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(job.Refused, 'is not exact'):
+                self.ingress(**bad)
+        good_manifest = self.manifest_bytes  # of the current fixture root
+        two_dirs = json.loads(good_manifest)
+        two_dirs['inputs']['otatools']['path'] = str(self.signing/'inbox/other/otatools')
+        self.manifest_bytes = json.dumps(two_dirs).encode()
+        self.build_archive(manifest=self.manifest_bytes)
+        with self.assertRaisesRegex(job.Refused, 'one inbox job directory'):
+            self.ingress()
+        foreign = json.loads(good_manifest)
+        foreign['source'] = {'run': '9', 'headSha': 'e' * 40}
+        self.manifest_bytes = json.dumps(foreign).encode()
+        self.build_archive(manifest=self.manifest_bytes)
+        with self.assertRaisesRegex(job.Refused, 'names another source run'):
+            self.ingress()
+
+    def test_symlink_and_duplicate_members_refuse(self):
+        link = self.zipfile.ZipInfo('otatools')
+        link.external_attr = (0o120777 << 16)
+        self.build_archive(members={'unsigned.zip': self.members['unsigned.zip']}, extra=[(link, b'/etc/passwd')])
+        with self.assertRaisesRegex(job.Refused, 'links'):
+            self.ingress()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            self.build_archive(extra=[('otatools', self.members['otatools'])])
+        with self.assertRaisesRegex(job.Refused, 'duplicates'):
+            self.ingress()
+
+
 del fixtures.SigningJob  # its own tests run in test_signing_job.py
+del fixtures.NotesInput
 
 if __name__ == '__main__':
     unittest.main()
