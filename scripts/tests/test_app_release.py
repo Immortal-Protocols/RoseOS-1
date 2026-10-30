@@ -350,8 +350,9 @@ class CheckedInAppReleaseTest(unittest.TestCase):
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
             {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
-        # FRANKEL310-ALLOC-001: the source declares the reserved os-release 310; 309 stays app-only and 308 the app-reuse binding.
-        self.assertIn('package="dev.pixel.voice" android:versionCode="310" android:versionName="310-hifi-os-beta"', manifest)
+        # FRANKEL310-ALLOC-001 reserved 310 for the os-release route; 309 stays app-only and 308 the app-reuse binding.
+        # AGENT311-APP-ONLY: the source declares 311 for the owner-requested app-only build, above every reservation.
+        self.assertIn('package="dev.pixel.voice" android:versionCode="311" android:versionName="311-hifi-visual-beta"', manifest)
 
     def test_reserved_versions_belong_to_their_route_and_candidate(self):
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
