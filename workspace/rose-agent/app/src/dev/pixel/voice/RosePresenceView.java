@@ -29,13 +29,11 @@ final class RosePresenceView extends View {
    if(model.step(dt))postInvalidateOnAnimation();else running=false;}
   float cx=getWidth()/2f,cy=getHeight()/2f;
   float r=Math.min(getWidth(),getHeight())/(2f*RosePresenceModel.VIEW_RADII);
-  float lift=model.gap*r,flat=RosePresenceModel.TILT*r;int[] tones=model.tones();
-  // Soft contact shadow under the lower hemisphere.
-  paint.setShader(new RadialGradient(cx,cy+r*1.02f,r*1.1f,0x33283e39,0x00283e39,Shader.TileMode.CLAMP));
-  box.set(cx-r*1.1f,cy+r*.86f,cx+r*1.1f,cy+r*1.18f);c.drawOval(box,paint);
+  float lift=model.gap*r,flat=RosePresenceModel.TILT*r;
+  // No contact shadow: the reference renderer draws the shells alone on a transparent canvas.
   float lower=cy+lift*.5f,upper=cy-lift*.5f;
   // Lower shell: its bottom half and, seen from above, the whole rim with the dark cut face inside it.
-  paint.setShader(metal(cx,lower,r,tones));
+  paint.setShader(new LinearGradient(cx,lower,cx,lower+r,model.lowerTones(),RosePresenceModel.LOWER_STOPS,Shader.TileMode.CLAMP));
   box.set(cx-r,lower-r,cx+r,lower+r);c.drawArc(box,0f,180f,true,paint);
   box.set(cx-r,lower-flat,cx+r,lower+flat);c.drawOval(box,paint);
   paint.setShader(new RadialGradient(cx-r*.25f,lower+r*.45f,r*.32f,0x1fffffff,0x00ffffff,Shader.TileMode.CLAMP));
@@ -45,23 +43,19 @@ final class RosePresenceView extends View {
   // Upper shell: its top half and the near half of its rim, which hides the face while joined.
   half.reset();box.set(cx-r,upper-r,cx+r,upper+r);half.arcTo(box,180f,180f,false);
   box.set(cx-r,upper-flat,cx+r,upper+flat);half.arcTo(box,0f,180f,false);half.close();
-  paint.setShader(metal(cx,upper,r,tones));c.drawPath(half,paint);
+  paint.setShader(new LinearGradient(cx,upper-r,cx,upper+flat,model.upperTones(),RosePresenceModel.UPPER_STOPS,Shader.TileMode.CLAMP));c.drawPath(half,paint);
   c.save();c.clipPath(half);
   for(float[] h:RosePresenceModel.HIGHLIGHTS){
    paint.setShader(new RadialGradient(cx+h[0]*r,upper+h[1]*r,h[2]*r,0xb3ffffff,0x00ffffff,Shader.TileMode.CLAMP));
    c.drawCircle(cx+h[0]*r,upper+h[1]*r,h[2]*r,paint);}
   c.restore();paint.setShader(null);
   // The seam the renderer darkens by 26% where the shells meet.
-  ring.setStrokeWidth(Math.max(1f,r*.025f));ring.setColor(0x42000000);c.drawArc(box,0f,180f,false,ring);
+  ring.setStrokeWidth(Math.max(1f,r*.012f));ring.setColor(0x42000000);c.drawArc(box,0f,180f,false,ring);
   // Light surround, never changing the sphere's scale.
   float a=model.ringAlpha();
   if(a>0f){float rr=model.ringRadius(running?time:0f)*r;
    ring.setStrokeWidth(r*.05f);ring.setColor(withAlpha(RosePresenceModel.LIGHT,a*.35f));c.drawCircle(cx,cy,rr,ring);
    ring.setStrokeWidth(r*.018f);ring.setColor(withAlpha(RosePresenceModel.LIGHT,a*.95f));c.drawCircle(cx,cy,rr,ring);}
- }
- /** The rendered metal down one shell's full sphere height (RosePresenceModel tones for the current microphone mix). */
- private static Shader metal(float cx,float cy,float r,int[] tones){
-  return new LinearGradient(cx,cy-r,cx,cy+r,tones,RosePresenceModel.TONE_STOPS,Shader.TileMode.CLAMP);
  }
  private static int withAlpha(int color,float a){return (Math.round(Math.max(0f,Math.min(1f,a))*255)<<24)|(color&0xffffff);}
 }

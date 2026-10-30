@@ -73,8 +73,12 @@ test('#159: ivory reading surface, shared layout decisions and legible drawn tra
 
 test('APP-OS-VISUAL-1030: the shared Rose draws the HiFi renderer\'s rendered metal and camera geometry',()=>{
  // Tones come from the model for the eased microphone mix, never the raw #f27a87/#a6bacf base painted directly.
- assert.match(view,/int\[\] tones=model\.tones\(\);/);
- assert.match(view,/new LinearGradient\(cx,cy-r,cx,cy\+r,tones,RosePresenceModel\.TONE_STOPS,Shader\.TileMode\.CLAMP\)/);
+ // Each shell has its own run so the step to dark sits on the perspective seam (native render, M003).
+ assert.match(view,/new LinearGradient\(cx,upper-r,cx,upper\+flat,model\.upperTones\(\),RosePresenceModel\.UPPER_STOPS,Shader\.TileMode\.CLAMP\)/);
+ assert.match(view,/new LinearGradient\(cx,lower,cx,lower\+r,model\.lowerTones\(\),RosePresenceModel\.LOWER_STOPS,Shader\.TileMode\.CLAMP\)/);
+ // No contact shadow (the reference canvas has none) and the renderer's thin seam.
+ assert.ok(!/0x33283e39/.test(view),'no contact shadow');
+ assert.match(view,/ring\.setStrokeWidth\(Math\.max\(1f,r\*\.012f\)\);ring\.setColor\(0x42000000\);/);
  assert.ok(!/model\.metal\(\)/.test(view),'no raw base fill');
  // Rims and the cut face are ellipses flattened by the camera tilt; the face uses the shader-derived colour.
  assert.match(view,/flat=RosePresenceModel\.TILT\*r/);
