@@ -48,6 +48,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_secrets  # noqa: E402
@@ -128,8 +129,9 @@ def readiness(name, profiles, now):
         missing = inventory.get('missing') or ['key inventory not established']
         reasons.append(('inventory-incomplete', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing)))
     for tool, identity in sorted(profile.get('tools', {}).items()):
-        installed = identity.get('installed') or {}
-        if not approved_path(installed.get('path')) or not HEX64.fullmatch(str(installed.get('sha256'))):
+        if identity.get('kind') == 'pinned-tree':
+            reasons += [('tool-unapproved', f'{tool}: {problem}') for problem in pinned_tree_problems(identity.get('trust') or {})]
+        elif not tool_approved(identity):
             reasons.append(('tool-unapproved', f'{tool}: no measured installed path and sha256 ({identity.get("requiredObservation")})'))
     if not profile.get('tools'):
         reasons.append(('tool-unapproved', 'no tool identities'))
@@ -151,6 +153,105 @@ def readiness(name, profiles, now):
 
 
 SHA1 = re.compile(r'[0-9a-f]{40}')
+TREE_PART = re.compile(r'[A-Za-z0-9_.+-]{1,128}')
+MANIFEST_PATH = 'os/pinned-manifest.xml'
+
+
+def tool_approved(identity):
+    """A tool may run when its trust basis is complete: a measured installed (path, sha256) (legacy mode) or a pinned
+    git tree (OCT30-INFRA-S012) that is recomputed locally before use."""
+    if identity.get('kind') == 'pinned-tree':
+        return not pinned_tree_problems(identity.get('trust') or {})
+    installed = identity.get('installed') or {}
+    return approved_path(installed.get('path')) and bool(HEX64.fullmatch(str(installed.get('sha256'))))
+
+
+def tool_path(identity):
+    if identity.get('kind') == 'pinned-tree':
+        trust = identity['trust']
+        return str(Path(trust['root'])/trust['treePath']/trust['tool'])
+    return identity['installed']['path']
+
+
+def manifest_revision(path, root=ROOT):
+    match = re.search(rf'<project [^>]*path="{re.escape(path)}"[^>]*revision="([0-9a-f]{{40}})"', (root/MANIFEST_PATH).read_text())
+    return match[1] if match else None
+
+
+def pinned_tree_problems(trust):
+    """Static checks of a pinned-git-tree trust basis: full ids, safe relative paths, and the revision equal to the
+    checked-in pinned manifest's revision for that project path."""
+    problems = []
+    if trust.get('basis') != 'pinned-git-tree':
+        problems.append('trust basis is not pinned-git-tree')
+    for key in ('revision', 'treeId', 'toolBlob'):
+        if not SHA1.fullmatch(str(trust.get(key))):
+            problems.append(f'trust.{key} is not a full git object id')
+    if not approved_path(trust.get('root')):
+        problems.append('trust.root is not an absolute path')
+    for key in ('treePath', 'tool'):
+        parts = str(trust.get(key, '')).split('/')
+        if not all(TREE_PART.fullmatch(p) and p not in ('.', '..') for p in parts):
+            problems.append(f'trust.{key} is not a safe relative path')
+    if trust.get('projectPath') and manifest_revision(trust['projectPath']) != trust.get('revision'):
+        problems.append(f'trust.revision is not the pinned-manifest revision of {trust.get("projectPath")}')
+    if not trust.get('projectPath'):
+        problems.append('trust.projectPath is missing')
+    return problems
+
+
+def git_blob_id(path, end, clock):
+    size = os.lstat(path).st_size
+    digest = hashlib.sha1(b'blob %d\0' % size)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as f:
+        for block in iter(lambda: f.read(8 << 20), b''):
+            if clock() > end:
+                raise Blocked('tool-identity', 'tree verification exceeded its time bound')
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def git_tree_id(directory, seconds=600, max_entries=20000, clock=time.monotonic):
+    """The git tree object id of a local directory, computed the way git does (modes 100644/100755/120000/40000,
+    names sorted with trees as name + '/', empty directories omitted). No index, .git metadata or host checksum list is
+    read. A symlink anywhere above the directory, a symlink target that is absolute or leaves the tree, or any special
+    file refuses."""
+    base = Path(directory)
+    if os.path.realpath(base) != str(base) or not base.is_dir():
+        raise Blocked('tool-identity', f'{base} is not a plain directory (symlinked ancestor or missing)')
+    end, count = clock() + seconds, [0]
+
+    def tree(path):
+        entries = []
+        for entry in os.scandir(path):
+            count[0] += 1
+            if count[0] > max_entries or clock() > end:
+                raise Blocked('tool-identity', 'tree verification exceeded its entry or time bound')
+            if not TREE_PART.fullmatch(entry.name):
+                raise Blocked('tool-identity', f'unexpected name {entry.name[:40]!r}')
+            info = os.lstat(entry.path)
+            if stat.S_ISDIR(info.st_mode):
+                sub = tree(entry.path)
+                if sub is not None:
+                    entries.append((entry.name + '/', '40000', entry.name, sub))
+            elif stat.S_ISREG(info.st_mode):
+                mode = '100755' if info.st_mode & stat.S_IXUSR else '100644'
+                entries.append((entry.name, mode, entry.name, git_blob_id(entry.path, end, clock)))
+            elif stat.S_ISLNK(info.st_mode):
+                target = os.readlink(entry.path)
+                resolved = os.path.normpath(os.path.join(os.path.dirname(entry.path), target))
+                if os.path.isabs(target) or not (resolved + '/').startswith(str(base) + '/'):
+                    raise Blocked('tool-identity', f'symlink {entry.name} leaves the pinned tree')
+                data = target.encode()
+                entries.append((entry.name, '120000', entry.name, hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()))
+            else:
+                raise Blocked('tool-identity', f'special file {entry.name} in the pinned tree')
+        if not entries:
+            return None
+        body = b''.join(f'{mode} {name}'.encode() + b'\0' + bytes.fromhex(oid) for _, mode, name, oid in sorted(entries))
+        return hashlib.sha1(b'tree %d\0' % len(body) + body).hexdigest()
+    return tree(base) or hashlib.sha1(b'tree 0\0').hexdigest()
 
 
 def source_problems(profile):
@@ -268,9 +369,8 @@ def generate_keys(workspace, profile, runner, token=None):
     if problems:
         raise Blocked('recipe-missing' if problems[0][0] == 'missing' else 'recipe-invalid', problems[0][1])
     for step in profile['generation']['recipe']:
-        installed = profile['tools'][step['tool']].get('installed') or {}
-        if not approved_path(installed.get('path')) or not HEX64.fullmatch(str(installed.get('sha256'))):
-            raise Blocked('tool-unapproved', f'{step["tool"]}: no measured installed path and sha256; nothing is run')
+        if not tool_approved(profile['tools'][step['tool']]):
+            raise Blocked('tool-unapproved', f'{step["tool"]}: no complete trust basis; nothing is run')
     workspace = Path(workspace)
     passphrase = workspace/'passphrase'
     fd = os.open(passphrase, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -282,7 +382,7 @@ def generate_keys(workspace, profile, runner, token=None):
     values = {'{out}': str(out), '{passphrase_file}': str(passphrase), '{passphrase_file_arg}': 'file:' + str(passphrase),
         '{subject}': str((profile.get('generation') or {}).get('subject')), '{dname}': str((profile.get('generation') or {}).get('dname'))}
     for index, step in enumerate(profile['generation']['recipe']):
-        tool = profile['tools'][step['tool']]['installed']['path']
+        tool = tool_path(profile['tools'][step['tool']])
         argv = [values.get(a, str(out/a[6:]) if a.startswith('{out}/') else a) for a in step['args']]
         stdin = str(passphrase) if step.get('stdin') == 'passphrase' else None
         if step.get('stdout'):  # a public listing (keytool -list -v), never key material
@@ -650,6 +750,14 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
 
 def _locked(name, profile, executor, journal, receipt, private, stop, workspace, frankel):
     for tool, identity in sorted(profile['tools'].items()):
+        if identity.get('kind') == 'pinned-tree':
+            problem = pinned_tree_mismatch(executor, identity['trust'])
+            if problem:
+                return stop('tool-identity', f'{tool}: {problem}')
+            trust = identity['trust']
+            receipt['tools'][tool] = {'trustBasis': 'pinned-git-tree', 'repository': trust.get('repository'),
+                'revision': trust['revision'], 'treeId': trust['treeId'], 'toolBlob': trust['toolBlob']}
+            continue
         installed = identity['installed']
         observed = executor.tool_sha256(installed['path'])
         if observed != installed['sha256']:
@@ -692,10 +800,29 @@ def _locked(name, profile, executor, journal, receipt, private, stop, workspace,
     return outcome
 
 
+def pinned_tree_mismatch(executor, trust):
+    """Recompute the local tree and the tool blob; any difference from the pins is a refusal reason."""
+    observed = executor.tool_tree(trust)
+    if not isinstance(observed, dict):
+        return 'pinned tree could not be verified'
+    if observed.get('treeId') != trust['treeId']:
+        return f'local {trust["treePath"]} tree {observed.get("treeId")} is not the pinned {trust["treeId"]}'
+    if observed.get('toolBlob') != trust['toolBlob']:
+        return f'local {trust["tool"]} blob {observed.get("toolBlob")} is not the pinned {trust["toolBlob"]}'
+    return None
+
+
 def _inside(name, profile, executor, journal, receipt, private, stop, created, frankel):
     info = os.lstat(created)
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
         return stop('workspace-unprotected', 'workspace must be an owner-only directory')
+    # Runtime revalidation: pinned tool trees are recomputed again immediately before anything runs.
+    for tool in sorted({step['tool'] for step in profile['generation']['recipe']}):
+        identity = profile['tools'][tool]
+        if identity.get('kind') == 'pinned-tree':
+            problem = pinned_tree_mismatch(executor, identity['trust'])
+            if problem:
+                return stop('tool-identity', f'{tool} changed before generation: {problem}')
     write_journal(journal, {'profile': name, 'status': 'generating'})
     generated = executor.generate(created, profile)
     outputs = profile_outputs(profile)
@@ -797,6 +924,12 @@ class GcloudExecutor:
 
     def __init__(self, gcloud='gcloud', timeout=120):
         self.gcloud, self.timeout = gcloud, timeout
+
+    def tool_tree(self, trust):
+        root = Path(trust['root'])/trust['treePath']
+        tree = git_tree_id(root)
+        end = time.monotonic() + 120
+        return {'treeId': tree, 'toolBlob': git_blob_id(root/trust['tool'], end, time.monotonic)}
 
     def tool_sha256(self, path):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)

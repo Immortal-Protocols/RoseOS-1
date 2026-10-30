@@ -177,7 +177,8 @@ def codes(receipt):
 
 class ZeroSideEffects(unittest.TestCase):
     def test_checked_in_profiles_stop_before_anything(self):
-        for name, expected in (('fold-rango-v1', {'tool-unapproved'}), ('models-v0', {'tool-unapproved'}),
+        # models-v0 is source-ready (pinned-tree keytool); its host-side refusals are in test_models_signing_bootstrap.py.
+        for name, expected in (('fold-rango-v1', {'tool-unapproved'}),
                                ('rango', {'profile-unknown'}), ('none', {'profile-unknown'})):
             f, ex = Fixture(self), MockExecutor()
             receipt, _ = f.run(ex, name, PROFILES)
@@ -192,8 +193,7 @@ class ZeroSideEffects(unittest.TestCase):
         reasons = sb.readiness('fold-rango-v1', PROFILES, NOW)
         self.assertEqual(sorted(d.split(':')[0] for c, d in reasons if c == 'tool-unapproved'),
             ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
-        models = sb.readiness('models-v0', PROFILES, NOW)
-        self.assertEqual([(c, d.split(':')[0]) for c, d in models], [('tool-unapproved', 'keytool')])
+        self.assertEqual(sb.readiness('models-v0', PROFILES, NOW), [])  # pinned-tree basis complete in source
         self.assertEqual(sb.readiness('fold-rango-v1', READY, NOW), [])
 
     def test_expiring_or_missing_access_stops_before_anything(self):
@@ -443,21 +443,22 @@ class Guard(unittest.TestCase):
         for change in ({'CANDIDATE_SHA': 'b' * 40}, {'GITHUB_REF': 'refs/heads/feature'}, {'GITHUB_EVENT_NAME': 'push'},
                        {'ROSE_DEVICE': 'rango'}, {'PROMOTE': 'true'}, {'APP_PUBLISH': 'true'}, {'ALPHA_RECOVER': 'true'},
                        {'RESUME_STAGE': 'sign'}, {'RESUME_SOURCE_RUN': '1'}, {'REUSE_BINDING': '{}'},
-                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'BOOTSTRAP_PROFILE': 'none'}, {'BOOTSTRAP_PROFILE': '../x'},
+                       {'BOOTSTRAP_PROFILE': 'none'}, {'BOOTSTRAP_PROFILE': '../x'},
                        {'MODE': 'os-release'}):
             self.assertTrue(sb.guard({**GUARD_ENV, **change}, READY, NOW), change)
         self.assertTrue(sb.guard(GUARD_ENV, PROFILES, NOW))  # the checked-in fold profile is not ready
+        self.assertEqual(sb.guard({**GUARD_ENV, 'BOOTSTRAP_PROFILE': 'models-v0'}, PROFILES, NOW), [])  # the host proves the tree
 
     def test_cli_guard_and_preflight_fail_closed_with_checked_in_profiles(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(sb.main(['guard'], env=GUARD_ENV), 4)
             self.assertEqual(sb.main(['preflight', '--profile', 'models-v0', '--recipe-sha', SHA],
-                env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
+                env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}), 4)
             self.assertEqual(sb.main(['run', '--profile', 'fold-rango-v1', '--recipe-sha', SHA, '--state-dir', '/nonexistent/s',
                 '--receipt-dir', '/nonexistent/r'], env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
         self.assertIn('tool-unapproved: generator', out.getvalue())
-        self.assertIn('tool-unapproved: keytool', out.getvalue())
+        self.assertIn('GCP_SIGNER_SERVICE_ACCOUNT is not the profile signer', out.getvalue())
         self.assertEqual(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW), [])
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}, SHA, NOW))
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': 'b' * 40, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW))

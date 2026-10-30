@@ -12,8 +12,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
+import types
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -86,13 +88,14 @@ def listing(der, aliases=('rose-models',), entry='PrivateKeyEntry', store='PKCS1
 def ready_profiles():
     profiles = copy.deepcopy(PROFILES)
     models = profiles['profiles']['models-v0']
-    models['tools']['keytool']['installed'] = {'path': '/opt/synthetic/keytool', 'sha256': hashlib.sha256(b'keytool').hexdigest()}
     models['access'].update(addVersionExpires='2027-01-01T00:00:00Z', accessorExpires='2027-01-01T00:00:00Z')
     return profiles
 
 
 READY = ready_profiles()
 MODELS = READY['profiles']['models-v0']
+TRUST = MODELS['tools']['keytool']['trust']
+KEYTOOL = f'{TRUST["root"]}/linux-x86/bin/keytool'
 
 
 class KeytoolRunner:
@@ -119,9 +122,16 @@ class KeytoolRunner:
 
 
 class Executor:
-    def __init__(self, runner=None, states=None, adds=None, recheck=None):
+    def __init__(self, runner=None, states=None, adds=None, recheck=None, trees=None):
         self.runner, self.calls = runner or KeytoolRunner(), []
         self.states, self.adds, self.recheck = states or {}, list(adds or ['1', '1']), recheck
+        self.trees = list(trees or [])
+
+    def tool_tree(self, trust):
+        self.calls.append(('tree',))
+        if self.trees:
+            return self.trees.pop(0)
+        return {'treeId': trust['treeId'], 'toolBlob': trust['toolBlob']}
 
     def tool_sha256(self, path):
         self.calls.append(('tool', path))
@@ -239,7 +249,7 @@ class Generation(unittest.TestCase):
             ('rose-models', 4096, 10000, 'CN=Rose Models'))
         self.assertTrue(all('synthetic-models-token' not in ' '.join(c[1]) for c in runner.calls))
         self.assertEqual([c[3] is not None for c in runner.calls], [False, False, True])  # only the listing is captured
-        self.assertEqual({c[0] for c in runner.calls}, {'/opt/synthetic/keytool'})
+        self.assertEqual({c[0] for c in runner.calls}, {KEYTOOL})
 
     def test_identity_rejections(self):
         der, pem = synthetic_cert()
@@ -269,24 +279,55 @@ class Generation(unittest.TestCase):
         with self.assertRaises(sb.Blocked) as blocked:
             sb.generate_keys(self.ws(), MODELS, KeytoolRunner(fail_step=1), token='t')
         self.assertEqual(blocked.exception.code, 'generator-failed')
+        broken = copy.deepcopy(MODELS)
+        broken['tools']['keytool']['trust']['treeId'] = 'not-a-tree'
         runner = KeytoolRunner()
         with self.assertRaises(sb.Blocked) as blocked:
-            sb.generate_keys(self.ws(), PROFILES['profiles']['models-v0'], runner)
+            sb.generate_keys(self.ws(), broken, runner)
         self.assertEqual((blocked.exception.code, runner.calls), ('tool-unapproved', []))
 
 
 class Bootstrap(unittest.TestCase):
-    def test_checked_in_profile_refuses_before_any_keytool_or_login(self):
-        f, ex = Fixture(self), Executor()
-        receipt, _ = f.run(ex, PROFILES)
-        self.assertEqual((receipt['status'], codes(receipt), ex.calls), ('blocked', ['tool-unapproved'], []))
-        self.assertIsNone(f.journal())
+    def test_altered_local_jdk_refuses_before_metadata_or_keytool(self):
+        for observed in ({'treeId': '0' * 40, 'toolBlob': TRUST['toolBlob']}, {'treeId': TRUST['treeId'], 'toolBlob': '1' * 40}, None):
+            with self.subTest(observed=observed):
+                f, ex = Fixture(self), Executor(trees=[observed])
+                receipt, _ = f.run(ex)
+                self.assertEqual((receipt['status'], codes(receipt)), ('blocked', ['tool-identity']))
+                self.assertEqual(ex.kinds(), ['tree'])
+                self.assertEqual(ex.runner.calls, [])
+                self.assertIsNone(f.journal())
+
+    def test_jdk_changed_between_checks_refuses_before_generation(self):
+        f, ex = Fixture(self), Executor(trees=[None, {'treeId': '2' * 40, 'toolBlob': TRUST['toolBlob']}])
+        ex.trees[0] = {'treeId': TRUST['treeId'], 'toolBlob': TRUST['toolBlob']}
+        receipt, _ = f.run(ex)
+        self.assertEqual((receipt['status'], codes(receipt)), ('blocked', ['tool-identity']))
+        self.assertNotIn('generate', ex.kinds())
         self.assertEqual(ex.runner.calls, [])
+        self.assertIsNone(f.journal())
+
+    def test_checked_in_profile_binds_the_pinned_tree(self):
+        tool = PROFILES['profiles']['models-v0']['tools']['keytool']
+        self.assertEqual(tool['kind'], 'pinned-tree')
+        self.assertEqual((tool['trust']['revision'], tool['trust']['treeId'], tool['trust']['toolBlob']),
+            ('ef5bcc92586b839ae3dbacc154127092fa4002ec', '860b81e5dd00ffe239268d5a043ac97de4cb4b44',
+             'fe420a3f54ebd6dfaeef6d10a4bea7e2f72c28de'))
+        self.assertEqual(sb.manifest_revision('prebuilts/jdk/jdk21'), tool['trust']['revision'])
+        self.assertEqual(tool['installed'], {'path': None, 'sha256': None})  # no host hash is exported or trusted
+        self.assertEqual(set(PROFILES['profiles']['models-v0']['tools']), {'keytool'})  # no APK-signing tool gates the key
+        for change, word in ((('revision', 'f' * 40), 'pinned-manifest revision'), (('treeId', 'x'), 'treeId'),
+                             (('tool', '../bin/keytool'), 'trust.tool'), (('root', 'relative/jdk'), 'trust.root'),
+                             (('basis', 'installed-hash'), 'pinned-git-tree')):
+            trust = dict(tool['trust'], **{change[0]: change[1]})
+            self.assertTrue(any(word in p for p in sb.pinned_tree_problems(trust)), change)
 
     def test_complete_import_receipt_is_public_only(self):
         f, ex = Fixture(self), Executor()
         receipt, private = f.run(ex)
         self.assertEqual(receipt['status'], 'complete', receipt['reasons'])
+        self.assertEqual(receipt['tools']['keytool']['trustBasis'], 'pinned-git-tree')
+        self.assertEqual(ex.kinds().count('tree'), 2)  # before metadata and again immediately before generation
         self.assertEqual([c for c in ex.calls if c[0] == 'add'], [('add', 'PIXEL_MODELS_SIGNING_KEYSTORE_V1', 'keystore.p12'),
             ('add', 'PIXEL_MODELS_SIGNING_PASSPHRASE_V1', 'passphrase')])
         self.assertEqual(ex.kinds().count('metadata'), 4)  # preflight plus the pre-import empty recheck
@@ -358,6 +399,104 @@ class Bootstrap(unittest.TestCase):
         receipt, _ = f.run(Extra())
         self.assertEqual((receipt['status'], codes(receipt)), ('failed', ['unexpected-output']))
 
+
+
+class GitTree(unittest.TestCase):
+    """git_tree_id against the git CLI on synthetic directories (no JDK bytes)."""
+
+    def tree(self):
+        root = Path(tempfile.mkdtemp(prefix='tree-'))
+        self.addCleanup(shutil.rmtree, root, True)
+        base = root/'linux-x86'
+        (base/'bin').mkdir(parents=True)
+        (base/'lib/server').mkdir(parents=True)
+        (base/'legal/java.base').mkdir(parents=True)
+        (base/'legal/java.compiler').mkdir(parents=True)
+        (base/'bin/keytool').write_bytes(b'#!synthetic keytool launcher\n')
+        os.chmod(base/'bin/keytool', 0o755)
+        (base/'lib/libjli.so').write_bytes(b'synthetic libjli')
+        (base/'lib/server/libjvm.so').write_bytes(b'synthetic libjvm')
+        (base/'legal/java.base/LICENSE').write_text('synthetic license')
+        os.symlink('../java.base/LICENSE', base/'legal/java.compiler/LICENSE')
+        return root, base
+
+    def git_cli(self, root):
+        subprocess.run(['git', 'init', '-q', str(root)], check=True)
+        subprocess.run(['git', '-C', str(root), 'add', '-A', 'linux-x86'], check=True)
+        tree = subprocess.run(['git', '-C', str(root), 'write-tree'], check=True, capture_output=True, text=True).stdout.strip()
+        return subprocess.run(['git', '-C', str(root), 'rev-parse', f'{tree}:linux-x86'], check=True, capture_output=True,
+            text=True).stdout.strip()
+
+    def test_matches_git_and_detects_changes(self):
+        root, base = self.tree()
+        expected = self.git_cli(root)
+        self.assertEqual(sb.git_tree_id(base), expected)
+        (base/'lib/libjli.so').write_bytes(b'altered libjli')
+        self.assertNotEqual(sb.git_tree_id(base), expected)
+        (base/'lib/libjli.so').write_bytes(b'synthetic libjli')
+        self.assertEqual(sb.git_tree_id(base), expected)
+        (base/'bin/java').write_bytes(b'unexpected override')
+        self.assertNotEqual(sb.git_tree_id(base), expected)
+        (base/'bin/java').unlink()
+        os.chmod(base/'bin/keytool', 0o644)
+        self.assertNotEqual(sb.git_tree_id(base), expected)
+        os.chmod(base/'bin/keytool', 0o755)
+        (base/'lib/server/libjvm.so').unlink()
+        self.assertNotEqual(sb.git_tree_id(base), expected)
+
+    def test_forged_index_is_never_consulted(self):
+        root, base = self.tree()
+        expected = self.git_cli(root)
+        (base/'bin/keytool').write_bytes(b'tampered keytool')  # the git index still records the original
+        self.assertNotEqual(sb.git_tree_id(base), expected)
+        self.assertTrue((root/'.git/index').exists())
+
+    def test_escapes_and_special_files_refuse(self):
+        for label, change in {
+            'absolute symlink': lambda b: os.symlink('/etc/passwd', b/'lib/evil'),
+            'escaping symlink': lambda b: os.symlink('../../outside', b/'lib/evil'),
+            'fifo': lambda b: os.mkfifo(b/'lib/fifo'),
+            'odd name': lambda b: (b/'lib/bad name').write_text('x'),
+        }.items():
+            with self.subTest(label):
+                _, base = self.tree()
+                change(base)
+                with self.assertRaises(sb.Blocked):
+                    sb.git_tree_id(base)
+        root, base = self.tree()
+        os.symlink(base, root/'alias')
+        with self.assertRaises(sb.Blocked):
+            sb.git_tree_id(root/'alias')  # a symlinked ancestor
+
+    def test_production_executor_uses_the_pinned_paths(self):
+        root, base = self.tree()
+        trust = dict(TRUST, root=str(root), treePath='linux-x86', tool='bin/keytool')
+        observed = sb.GcloudExecutor().tool_tree(trust)
+        self.assertEqual(observed['treeId'], self.git_cli(root))
+        self.assertEqual(observed['toolBlob'], hashlib.sha1(b'blob %d\0' % len(b'#!synthetic keytool launcher\n')
+            + b'#!synthetic keytool launcher\n').hexdigest())
+
+
+class Environment(unittest.TestCase):
+    def test_keytool_gets_a_fresh_minimal_environment(self):
+        captured = {}
+
+        def fake_run(argv, **kw):
+            captured.update(kw)
+            return types.SimpleNamespace(returncode=0)
+        saved = sb.subprocess.run
+        sb.subprocess.run = fake_run
+        os.environ['JAVA_TOOL_OPTIONS'] = '-javaagent:/tmp/evil.jar'
+        try:
+            tmp = Path(tempfile.mkdtemp())
+            self.addCleanup(shutil.rmtree, tmp, True)
+            sb.subprocess_runner(KEYTOOL, ['-list'], str(tmp), None, stdout_path=str(tmp/'out.txt'))
+        finally:
+            sb.subprocess.run = saved
+            os.environ.pop('JAVA_TOOL_OPTIONS', None)
+        self.assertEqual(set(captured['env']), {'PATH', 'LC_ALL', 'HOME'})
+        for name in ('JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH'):
+            self.assertNotIn(name, captured['env'])
 
 
 class Wiring(unittest.TestCase):

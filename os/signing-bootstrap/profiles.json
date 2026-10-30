@@ -583,17 +583,26 @@
       },
       "tools": {
         "keytool": {
-          "kind": "prebuilt-binary",
-          "source": {
-            "path": "prebuilts/jdk/jdk21/linux-x86/bin/keytool",
-            "note": "observed by the device-readiness signing-tools receipt (S011); readback of run 40984487684 pending"
+          "kind": "pinned-tree",
+          "trust": {
+            "basis": "pinned-git-tree",
+            "repository": "AOSP platform/prebuilts/jdk/jdk21",
+            "projectPath": "prebuilts/jdk/jdk21",
+            "revision": "ef5bcc92586b839ae3dbacc154127092fa4002ec",
+            "commitTree": "9f42f0238c0a854b29ff3fe74e4a948bbde03790",
+            "treePath": "linux-x86",
+            "treeId": "860b81e5dd00ffe239268d5a043ac97de4cb4b44",
+            "tool": "bin/keytool",
+            "toolBlob": "fe420a3f54ebd6dfaeef6d10a4bea7e2f72c28de",
+            "root": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21",
+            "manifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+            "basisNote": "tree and blob ids read from the pinned commit through a supported blob-less fetch of the canonical manifest remote (OCT30-INFRA-S012 adjustment, 00:05 full-checkout approval); the whole local linux-x86 directory (425 entries: 189 files, 31 executables, 205 in-tree relative symlinks) is recomputed as a git tree before metadata and again before generation; no host checksum list, index or installed hash is trusted"
           },
-          "sourceSha256": null,
           "installed": {
             "path": null,
             "sha256": null
           },
-          "requiredObservation": "installed path and sha256 of the jdk21 keytool from a permitted readback of the device-readiness signing-tools receipt; never the public 2901 launcher or a source hash"
+          "requiredObservation": "none exported: the local tree recomputation is the identity check (S011 receipt values are not used)"
         }
       },
       "generation": {
@@ -679,7 +688,7 @@
           "subject": "CN=Rose Models",
           "validityDays": 10000
         },
-        "note": "keytool takes the store and key passwords from the passphrase file (-storepass:file / -keypass:file, the documented JDK keytool password-file form); nothing secret is in argv or the environment. The store is reloaded twice (exportcert, list -v) and its public listing and certificate are checked before import; the public files are then removed and only keystore.p12 and passphrase remain. Execution must revalidate the measured keytool bytes."
+        "note": "keytool takes the store and key passwords from the passphrase file (-storepass:file / -keypass:file, the documented JDK keytool password-file form); nothing secret is in argv or the environment. The store is reloaded twice (exportcert, list -v) and its public listing and certificate are checked before import; the public files are then removed and only keystore.p12 and passphrase remain. keytool runs by its explicit pinned-tree path with a fresh minimal environment (PATH, LC_ALL, HOME only: no JAVA_TOOL_OPTIONS, _JAVA_OPTIONS, JDK_JAVA_OPTIONS, CLASSPATH or LD_*). The Models key bootstrap needs keytool only; APK signing tools (SDK apksigner.jar, aapt) stay separately unbound."
       }
     }
   }
