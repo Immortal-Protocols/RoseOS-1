@@ -79,6 +79,10 @@ on:
         description: models-sign only - run id of the completed protected models-v0 bootstrap whose public receipt binds the signer
         required: false
         default: ''
+      rango_publish:
+        description: rango-retained only - also publish the verified signed build as a separate public rango-{build} release (never Latest); false signs and verifies only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -104,6 +108,7 @@ env:
   REUSE_BINDING: ${{ inputs.reuse_binding }}
   BOOTSTRAP_PROFILE: ${{ inputs.bootstrap_profile || 'none' }}
   MODELS_BOOTSTRAP_RUN: ${{ inputs.models_bootstrap_run }}
+  ROSE_RANGO_PUBLISH: ${{ inputs.rango_publish }}
 
 jobs:
   guard:
@@ -144,6 +149,8 @@ jobs:
           python3 -c 'import importlib.util, os; s = importlib.util.spec_from_file_location("p", "scripts/release-pipeline.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); m.resolve_device(os.environ["ROSE_DEVICE"])'
           # Every mode other than os-release (app, alpha, reuse) is bound to frankel's records.
           [[ "$MODE" == os-release || "$ROSE_DEVICE" == frankel ]]
+          # Rango publication is selectable only in its own mode.
+          [[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -904,10 +911,13 @@ jobs:
         run: python3 scripts/rango-retained.py preflight --job builder
       - name: Stage the retained input into a fresh consumer directory
         run: python3 scripts/rango-retained.py stage --consumer "$RUNNER_TEMP/rango-consumer"
+      # OCT30-INFRA-S017: the admitted S016 helper proves the four Fold tools under the shared lock, before any login.
+      - name: Local tool proof (before any login)
+        run: python3 scripts/rango-retained.py prove --proof-dir "$RUNNER_TEMP/rango-proof"
       - name: Signer access for Rango OS signing only
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Sign under the shared lock
-        run: python3 scripts/rango-retained.py sign --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RUNNER_TEMP/rango-release"
+        run: python3 scripts/rango-retained.py sign --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RUNNER_TEMP/rango-release" --proof-file "$RUNNER_TEMP/rango-proof/fold-tool-proof.json"
       - name: Drop signer access
         if: always()
         run: python3 scripts/actions-gcp-login.py logout
@@ -923,10 +933,12 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-  # Separate public rango-{build} release: draft, download check, then public with make_latest=false; Latest unchanged.
+  # Separate public rango-{build} release, only when rango_publish is explicitly true (default false; the command refuses
+  # too): draft, download check, then public with make_latest=false; Latest unchanged. Signing-only runs stop at the
+  # builder's private artifact and never mint the pixel-ota token.
   rango-publisher:
     needs: rango-builder
-    if: inputs.mode == 'rango-retained'
+    if: inputs.mode == 'rango-retained' && inputs.rango_publish
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:

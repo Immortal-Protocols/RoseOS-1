@@ -13,14 +13,17 @@ every real binding; a null one is unbound and the route refuses before any contr
                        validate the local input directory and copy it into a fresh task-owned consumer directory, then
                        revalidate the copy (the only input interface; no remote URL, credential or held route)
   recheck --consumer C revalidate a staged consumer directory (run again immediately before secret access)
-  sign --consumer C --release-dir R
-                       builder: host-sign.py's retained route under the shared lock (bound config, revalidated input)
+  prove --proof-dir P  builder, before login, under the shared lock: the admitted S016 helper proves the four Fold tools;
+                       a nonsecret proof bound to this recipe, run and attempt
+  sign --consumer C --release-dir R --proof-file P/fold-tool-proof.json
+                       builder: the same-run proof rechecked under the shared lock, then host-sign.py's retained route
+                       (bound config, revalidated input)
   verify --consumer C --release-dir R
                        builder: release-pipeline verify_signed with the bound Rango expectations and identities
   stage-artifact --consumer C --release-dir R --artifact-dir A
                        builder: release-pipeline stage_artifact plus the nonsecret bindings for the publisher
   publish --artifact-dir A
-                       hosted publisher: revalidate the bindings, release-pipeline publish (draft, download check), then
+                       hosted publisher, only with ROSE_RANGO_PUBLISH=true (workflow rango_publish): revalidate the bindings, release-pipeline publish (draft, download check), then
                        public with make_latest=false; Latest must be unchanged and promote is refused
 
 Exit status: 0 done, 1 refused (category on stderr), 2 invalid input, 4 setup missing.
@@ -283,12 +286,81 @@ def signer_binding(bootstrap_receipt, prof=None, frankel=None):
         'avbPublicKeySha256': identity['avbPublicKeySha256'], 'receiptSha256': hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()}
 
 
+_BOOTSTRAP = []
+
+
+def bootstrap_module():
+    """signing-bootstrap.py, loaded once: its admitted local-proof functions (OCT30-INFRA-S016) are reused, not copied."""
+    if not _BOOTSTRAP:
+        spec = importlib.util.spec_from_file_location('signing_bootstrap_for_rango', ROOT/'scripts/signing-bootstrap.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _BOOTSTRAP.append(module)
+    return _BOOTSTRAP[0]
+
+
 def tool_bindings(prof=None):
-    """The four installed signing tools stay unbound until genuinely observed (source hashes are not installed identities)."""
+    """OCT30-INFRA-S017: the four Fold tools are never trusted from checked-in installed hashes. They are proven per run
+    by the admitted S016 helper; this names what keeps that proof from being possible in source (helper admission and
+    spec), or nothing."""
     prof = prof or profile()
-    return [f'signing.tools.{name}.installed' for name in TOOLS
-        if not ((prof['tools'].get(name) or {}).get('installed') or {}).get('path')
-        or not HEX64.fullmatch(str(((prof['tools'].get(name) or {}).get('installed') or {}).get('sha256')))]
+    if not prof.get('localProof'):
+        return ['signing.localProof']
+    sb = bootstrap_module()
+    return [f'signing.localProof ({code})' for code, _ in sb.proof_spec_problems(prof)]
+
+
+PROOF_FILE = 'fold-tool-proof.json'
+
+
+def prove(env, proof_dir, cfg=None, lock=None):
+    """Builder, before signer login, under the shared lock: the admitted helper proves the four Fold tools on this host;
+    the bounded nonsecret proof is bound to this recipe, run and attempt (the bootstrap's own binding format)."""
+    cfg = check_config(cfg or config())
+    prof = profile(cfg)
+    missing = tool_bindings(prof)
+    if missing:
+        raise SetupMissing(missing)
+    sb = bootstrap_module()
+    try:
+        helper, blob = sb.load_proof_helper(prof)
+    except sb.Blocked as error:
+        raise Refused(f'tool_proof_unavailable: {error.code}') from None
+    with (lock or shared_lock)(cfg['signing']['lockPath']):
+        try:
+            proof = helper.verify_local(prof['localProof']['spec'], root=env.get('ROSE_PROOF_ROOT', '/'))
+        except helper.Refused as error:
+            raise Refused(f'tool_proof_refused: {sb._code(error)}') from None
+    problems = sb.proof_problems(cfg['signing']['bootstrapProfile'], prof, proof)
+    if problems:
+        raise Refused(f'tool_proof_refused: {problems[0]}')
+    binding = {'schema': sb.PROOF_BINDING_SCHEMA, 'profile': cfg['signing']['bootstrapProfile'], 'recipeSha': env.get('GITHUB_SHA'),
+        'runId': env.get('GITHUB_RUN_ID'), 'runAttempt': env.get('GITHUB_RUN_ATTEMPT'), 'helperBlob': blob,
+        'helperRevision': prof['localProof']['admittedRevision'],
+        'proofSha256': hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest(), 'proof': proof}
+    Path(proof_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(Path(proof_dir)/PROOF_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(binding, f, sort_keys=True)
+    return {'stage': 'prove', 'proofSha256': binding['proofSha256'], 'helperBlob': blob}
+
+
+def bind_tool_proof(env, cfg):
+    """Inside the signing lock: only this run's proof, rechecked by the helper now; refusal before any secret."""
+    sb = bootstrap_module()
+    path = env.get('ROSE_RETAINED_PROOF', '')
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd) as f:
+            binding = json.load(f)
+    except (OSError, ValueError):
+        binding = None
+    try:
+        _, rows, summary = sb.bind_proof(cfg['signing']['bootstrapProfile'], profile(cfg), binding, env.get('GITHUB_SHA'),
+            (env.get('GITHUB_RUN_ID'), env.get('GITHUB_RUN_ATTEMPT')), env.get('ROSE_PROOF_ROOT', '/'))
+    except sb.Blocked as error:
+        raise Refused(f'tool_proof_{error.code.replace("proof-", "")}: {error.detail}') from None
+    return rows, {k: summary[k] for k in ('proofSha256', 'helperBlob', 'helperRevision')}
 
 
 def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
@@ -314,7 +386,9 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
     else:
         missing.append('input.directory')
     receipt = bootstrap_receipt if bootstrap_receipt is not None else cfg['signing'].get('bootstrapReceipt')
-    if receipt is None:
+    if identity_policy(cfg) == 'first-use-containers':  # refuses unless explicitly selected
+        missing.append('signing.identityPolicy.firstUse (selected contract is not yet wired into signing)')
+    elif receipt is None:
         missing.append('signing.bootstrapReceipt')
     else:
         signer_binding(receipt)
@@ -328,6 +402,84 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
     if cfg['verification'].get('expected') is None:
         missing.append('verification.expected')
     return list(dict.fromkeys(missing))
+
+
+# ---------------------------------------------------------------- independent first-use identity (contract, disabled)
+# OCT30-INFRA-S017: a proposed alternative to the bootstrap receipt as the initial identity authority. It is a tested
+# contract only: release.json signing.identityPolicy.firstUse.selected is false and the route refuses while it is not
+# explicitly selected. Nothing here reads a secret; it judges version metadata and public identities handed to it.
+
+VERSION_NAME = re.compile(r'projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/secrets/([A-Za-z0-9_-]{1,255})/versions/([1-9][0-9]{0,9})')
+
+
+def identity_policy(cfg):
+    """The selected identity authority: 'bootstrap-receipt' (default) or an explicitly selected first-use contract."""
+    policy = (cfg['signing'].get('identityPolicy') or {})
+    mode = policy.get('mode', 'bootstrap-receipt')
+    if mode == 'bootstrap-receipt':
+        return mode
+    if mode == 'first-use-containers':
+        if (policy.get('firstUse') or {}).get('selected') is not True:
+            raise Refused('identity_policy_unselected: the first-use container policy is a proposal, not selected')
+        return mode
+    raise Refused(f'config_invalid: unknown identity policy {mode!r}')
+
+
+def _utc(value):
+    import datetime
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def first_use_admission(metadata, contract, prof=None):
+    """Exactly one ENABLED version in each fixed container, created inside the bootstrap window: returns the immutable
+    numeric version ids to pin before any payload access. Anything else refuses; no latest alias, no inferred version 1."""
+    prof = prof or profile()
+    if not isinstance(metadata, dict) or sorted(metadata) != sorted(prof['secrets']):
+        raise Refused('identity_metadata_incomplete: both fixed containers must be listed')
+    start, end = _utc(contract.get('windowStart')), _utc(contract.get('windowEnd'))
+    if not start or not end or end < start:
+        raise Refused('config_invalid: firstUse needs the bootstrap window')
+    pinned = {}
+    for role, secret in sorted(prof['secrets'].items()):
+        versions = metadata[role]
+        if not isinstance(versions, list) or len(versions) != 1:
+            raise Refused(f'identity_versions_ambiguous: {secret} must hold exactly one version')
+        version = versions[0] if isinstance(versions[0], dict) else {}
+        match = VERSION_NAME.fullmatch(str(version.get('name')))
+        if not match or match[1] != prof['project'] or match[2] != secret:
+            raise Refused(f'identity_versions_ambiguous: {secret} version is not a numeric version of the fixed container')
+        if version.get('state') != 'ENABLED':
+            raise Refused(f'identity_versions_partial: {secret} version is {version.get("state")!r}, not ENABLED')
+        created = _utc(version.get('createTime'))
+        if not created or not start <= created <= end:
+            raise Refused(f'identity_versions_untimely: {secret} version was not created in the bootstrap window')
+        pinned[role] = match[3]
+    return pinned
+
+
+def first_use_record(path, binding, frankel=None):
+    """The nonsecret first-use binding, written once (O_EXCL) before signing; a later run must equal it exactly. A missing
+    or conflicting record after enrolment needs explicit reconciliation, never automatic re-enrolment."""
+    frankel = frankel or frankel_identities()
+    for key in ('otaCertificateSha256', 'avbPublicKeySha256'):
+        if not HEX64.fullmatch(str(binding.get(key))):
+            raise Refused(f'identity_invalid: {key} is not a sha256')
+    if binding['otaCertificateSha256'] == frankel.get('otaCertificateSha256') or binding['avbPublicKeySha256'] == frankel.get('avbPublicKeySha256'):
+        raise Refused('signer_collision: the derived Rango identity equals the Frankel identity')
+    path = Path(path)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except FileExistsError:
+        existing = json.loads(path.read_text())
+        if existing != binding:
+            raise Refused('identity_conflict: the recorded first-use binding differs; explicit reconciliation is required') from None
+        return 'matched'
+    with os.fdopen(fd, 'w') as f:
+        json.dump(binding, f, indent=2, sort_keys=True)
+    return 'enrolled'
 
 
 def bootstrap_receipt(env, cfg):
@@ -447,13 +599,14 @@ def sign(env, consumer, release_dir, signer=None, lock=None):
         spec.loader.exec_module(host_sign)
         signer = host_sign.main
     with (lock or shared_lock)(cfg['signing']['lockPath']):
+        tools, proof = bind_tool_proof(env, cfg)  # rechecked under the same lock, immediately before any secret
         cwd = os.getcwd()
         os.chdir(env.get('ROSE_RETAINED_SOURCE_ROOT') or cfg['signing']['sourceRoot'])
         try:
             signer(env=sign_env)
         finally:
             os.chdir(cwd)
-    return {'stage': 'sign', 'candidate': cand}
+    return {'stage': 'sign', 'candidate': cand, 'tools': tools, 'toolProof': proof}
 
 
 def verify(env, consumer, release_dir, adapter=None):
@@ -477,10 +630,13 @@ def stage_artifact(env, consumer, release_dir, artifact_dir, adapter=None):
     return result
 
 
-def publish(artifact_dir, promote=False, adapter=None, cfg=None):
-    """Hosted publisher: revalidate the bindings, then release-pipeline publish (draft, download check) and the adapter's
-    never-Latest public finalization. promote refuses; Latest must not move."""
+def publish(artifact_dir, promote=False, adapter=None, cfg=None, selected=False):
+    """Hosted publisher, only on an explicit selection (OCT30-INFRA-S017: the workflow's rango_publish, default false):
+    revalidate the bindings, then release-pipeline publish (draft, download check) and the adapter's never-Latest public
+    finalization. promote refuses; Latest must not move. Signing-only runs never reach this."""
     cfg = check_config(cfg or config())
+    if selected is not True:
+        raise Refused('publication_unselected: a Rango release is published only when rango_publish is explicitly true')
     if promote:
         raise Refused('latest_refused: a Rango release is never promoted to Latest')
     try:
@@ -527,12 +683,15 @@ def main(argv=None):
     s.add_argument('--input-dir', help='default: the bound input.transport directory')
     s.add_argument('--consumer', required=True)
     sub.add_parser('recheck').add_argument('--consumer', required=True)
+    sub.add_parser('prove').add_argument('--proof-dir', required=True)
     for name in ('sign', 'verify', 'stage-artifact'):
         c = sub.add_parser(name)
         c.add_argument('--consumer', required=True)
         c.add_argument('--release-dir', required=True)
         if name == 'stage-artifact':
             c.add_argument('--artifact-dir', required=True)
+        if name == 'sign':
+            c.add_argument('--proof-file', required=True)
     sub.add_parser('publish').add_argument('--artifact-dir', required=True)
     args = p.parse_args(argv)
     env = dict(os.environ)
@@ -551,14 +710,16 @@ def main(argv=None):
         elif args.command == 'recheck':
             _, unbound, observed = recheck(args.consumer)
             result = dict(observed, unbound=unbound)
+        elif args.command == 'prove':
+            result = prove(env, args.proof_dir)
         elif args.command == 'sign':
-            result = sign(env, args.consumer, args.release_dir)
+            result = sign(dict(env, ROSE_RETAINED_PROOF=args.proof_file), args.consumer, args.release_dir)
         elif args.command == 'verify':
             result = verify(env, args.consumer, args.release_dir)
         elif args.command == 'stage-artifact':
             result = stage_artifact(env, args.consumer, args.release_dir, args.artifact_dir)
         else:
-            result = publish(args.artifact_dir)
+            result = publish(args.artifact_dir, selected=env.get('ROSE_RANGO_PUBLISH') == 'true')
     except SetupMissing as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
         return 4
