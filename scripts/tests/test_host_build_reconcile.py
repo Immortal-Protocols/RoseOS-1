@@ -333,7 +333,7 @@ class PermissionReconcileTest(unittest.TestCase):
 
     def test_checked_in_reconcile_inputs_include_the_permission_project(self):
         self.assertEqual(self.config['projects'], ['frameworks/base', 'build/make', 'build/release', 'packages/apps/Updater',
-            self.PROJECT])
+            self.PROJECT, 'packages/apps/Launcher3'])  # Launcher3: the #156 Rose Agent work-row patch
         self.assertEqual(self.config['sparsePaths'][self.PROJECT], [self.FILE])
         self.assertEqual(self.config['integrationOwnedRoots'], ['packages/apps/PixelBackgroundControl', 'packages/apps/RosePreinstall'])
         self.assertIn(self.FILE, reconcile.sparse_paths(SCRIPTS.parent, self.PROJECT, self.config['sparsePaths']))
