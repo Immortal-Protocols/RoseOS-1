@@ -3,12 +3,17 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 const read=path=>fs.readFileSync(new URL(path,import.meta.url),'utf8');
 const main=read('../app/src/dev/pixel/voice/MainActivity.java');
 const home=read('../app/src/dev/pixel/voice/RoseHomeView.java');
 const homeTray=read('../app/src/dev/pixel/voice/HomeTray.java');
 const homeFrame=read('../app/src/dev/pixel/voice/HomeFrame.java');
 const homeRose=read('../app/src/dev/pixel/voice/HomeRose.java');
+const homeOverview=read('../app/src/dev/pixel/voice/HomeOverview.java');
 const manifest=read('../app/AndroidManifest.xml');
 
 test('the HOME activity identity is unchanged',()=>{
@@ -54,7 +59,7 @@ test('Home comes first, the app pages follow it, and the legacy voice page is la
  // Only the conversation page runs the voice refresh and the swipe-up gesture.
  assert.match(pages,/drawer=index!=voicePage;/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
- assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation\);homeFrame=new HomeFrame\(this,launcherPager,homeTray\);\n  setContentView\(homeFrame\);/);
+ assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray\);\n  setContentView\(homeFrame\);/);
 });
 
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
@@ -121,10 +126,44 @@ test('the Home tray stays fixed over the swiping pages, above system insets (OS-
  assert.equal((homeTray.match(/new LayoutParams\(activity\.dp\(WELL_W_DP\), activity\.dp\(WELL_H_DP\)\)/g)||[]).length,2);
  assert.match(homeTray,/addView\(new View\(activity\), new LayoutParams\(0, 1, 1\)\);/);
  assert.ok(!home.includes('sessionMark')&&!home.includes('showSession')&&!home.includes('RoseMark'));
- // Overview: no permitted route yet, so the control is disabled and says so; no fake recents or app picker.
- assert.match(homeTray,/overviewWell\.setEnabled\(false\);/);
- assert.match(homeTray,/overviewWell\.setContentDescription\("Overview, not available yet"\);/);
- for(const fake of ['GLOBAL_ACTION_RECENTS','setOnClickListener','WorkspaceLauncher','apps'])assert.ok(!homeTray.slice(homeTray.indexOf('FrameLayout overviewWell = well(activity);'),homeTray.indexOf('overview = overviewWell;')).includes(fake),fake);
+});
+
+test('the overview well asks for the real system overview through the one permitted route (OS-OVERVIEW-156-M001)',()=>{
+ // The selected glyph stays; the well is one focusable, clickable action whose only click is the overview callback.
+ const well=homeTray.slice(homeTray.indexOf('FrameLayout overviewWell = well(activity);'),homeTray.indexOf('addView(overviewWell'));
+ assert.match(well,/overviewWell\.addView\(new OverviewGlyph\(activity\), new FrameLayout\.LayoutParams\(-1, -1\)\);/);
+ assert.match(well,/overviewWell\.setOnClickListener\(v -> openOverview\.run\(\)\);/);
+ assert.ok(!well.includes('setEnabled(false)')&&!homeTray.includes('not available yet'),'the obsolete disabled placeholder is gone');
+ for(const fake of ['GLOBAL_ACTION','startActivity','Intent','WorkspaceLauncher','apps'])assert.ok(!well.includes(fake),fake);
+ // Each refresh shows whether the route is available, dimmed with the reason when it is not.
+ assert.match(homeTray,/boolean available = overviewAvailable\.getAsBoolean\(\);\n  if \(available != shownOverviewAvailable\) applyOverview\(available\);/);
+ assert.match(homeTray,/overview\.setContentDescription\(HomeOverview\.describe\(available\)\);/);
+ // MainActivity: one HomeOverview per activity (tray rebuilds keep it), cleared when Home leaves the foreground.
+ assert.match(main,/final HomeOverview homeOverview=new HomeOverview\(\);/);
+ assert.match(main,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);/);
+ assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);homeOverview\.homeLeft\(\);/);
+ // The route: only the owner-enabled phone-controls service's GLOBAL_ACTION_RECENTS; null (unavailable) when it is off.
+ const open=main.slice(main.indexOf(' void openOverview(){'),main.indexOf('\n',main.indexOf(' void openOverview(){')));
+ assert.match(main,/static boolean overviewAvailable\(\)\{return PhoneAccessibility\.active!=null;\}/);
+ assert.match(open,/PhoneAccessibility a=PhoneAccessibility\.active;return a==null\?null:a\.performGlobalAction\(android\.accessibilityservice\.AccessibilityService\.GLOBAL_ACTION_RECENTS\);/);
+ // Never a new authority, a Settings detour or an invented recents intent.
+ for(const banned of ['startActivity','ACCESSIBILITY','Settings','SHOW_RECENTS','STATUS_BAR','toggleRecentApps','RecentsActivity','setResult','finish('])assert.ok(!open.includes(banned),banned);
+ assert.equal((main.match(/GLOBAL_ACTION_RECENTS/g)||[]).length,1);
+ assert.ok(!/SHOW_RECENTS|toggleRecentApps|android\.permission\.STATUS_BAR"/.test(main+manifest));
+ for(const page of ['launcherPager','home()','attachLauncherPages','VoiceService','conversation'])assert.ok(!open.includes(page),page);
+ assert.ok(!/import android\./.test(homeOverview),'HomeOverview is pure logic');
+});
+
+test('HomeOverview runs: one tap one request, repeats in flight, unavailable/refused, return and recreation',()=>{
+ // Executed, not matched: compile the production helper with its Java test and run it.
+ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+ const out=fs.mkdtempSync(path.join(os.tmpdir(),'home-overview-'));
+ try{
+  execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-source','8','-target','8','-Xlint:-options','-d',out,
+   path.join(root,'app/src/dev/pixel/voice/HomeOverview.java'),path.join(root,'app/tests/HomeOverviewTest.java')],{stdio:'pipe'});
+  const result=execFileSync('java',['-cp',out,'dev.pixel.voice.HomeOverviewTest'],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  assert.match(result,/HomeOverviewTest: \d+ checks passed/);
+ }finally{fs.rmSync(out,{recursive:true,force:true});}
 });
 
 test('the tray Rose reads real state once per tick and stops when Home is hidden, rebuilt or gone (M004)',()=>{
@@ -134,7 +173,7 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
  assert.equal((main.match(/refreshHomeRose\(/g)||[]).length,3,'defined, called by refresh and by onPause only');
  // Pause renders hidden first; a rebuilt tray and a destroyed activity release the old one, which then ignores frames.
  assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);/);
- assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseConversation\);/);
+ assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);/);
  assert.match(main,/protected void onDestroy\(\)\{if\(homeTray!=null\)homeTray\.release\(\);/);
  assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual\) \{\n  if \(released\) return;/);
  assert.match(homeTray,/applyVisual\(RoseVisualState\.from\(shownConversation, Float\.NaN, Float\.NaN, true, false\)\)/);

@@ -12,7 +12,7 @@ public class MainActivity extends Activity {
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
  LauncherPager launcherPager;LinearLayout homePageDots;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
- boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;
+ boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){packageGeneration++;if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
  /** Home visual card trial. false removes the card, its detail view and its Home options entry. */
@@ -421,7 +421,7 @@ public class MainActivity extends Activity {
    appPage.addView(makePageDots(titles),new LinearLayout.LayoutParams(-1,dp(30)));
    launcherPager.addView(appPage);
   }
-  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation);homeFrame=new HomeFrame(this,launcherPager,homeTray);
+  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray);
   setContentView(homeFrame);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
@@ -557,7 +557,7 @@ public class MainActivity extends Activity {
  @Override protected void onStop(){super.onStop();homeStopped=true;}
  /** The shown page survives recreation (HomePages.restore). */
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
- @Override protected void onPause(){refreshHomeRose(false);ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
+ @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
  @Override public void onNewIntent(Intent i){super.onNewIntent(i);int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);}
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
  String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
@@ -569,6 +569,9 @@ public class MainActivity extends Activity {
  /** Home's Rose entry: App's conversation surface (APP-P2-002-HOOK-001). Plain explicit Intent in this task, so Back
   * returns Home and HOME clears it; navigation only, never a voice or task command. */
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
+ // The tray's overview well: the system task overview through the owner-enabled phone-controls service only (HomeOverview).
+ static boolean overviewAvailable(){return PhoneAccessibility.active!=null;}
+ void openOverview(){String notice=HomeOverview.notice(homeOverview.request(SystemClock.elapsedRealtime(),()->{PhoneAccessibility a=PhoneAccessibility.active;return a==null?null:a.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS);}));if(notice!=null)Toast.makeText(this,notice,Toast.LENGTH_SHORT).show();}
  /** HOME shows Rose Home; the app icon also opens the Rose conversation over it (HomeEntry). Never changes the HOME choice or voice. */
  /** HOME returning from an app or the conversation keeps the page left (previous); HOME on Home, or the app icon, shows Home (HomePages). */
  void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
