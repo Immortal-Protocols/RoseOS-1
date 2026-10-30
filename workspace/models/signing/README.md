@@ -132,16 +132,40 @@ available locally.
   lines, and the tool run without `--key-pass` all sign and verify. A wrong alias also exited 2 with `unclassified`, so
   the production token alone does not prove which of these happened.
 
-The classifier now names these observed messages: `password_file_exhausted` (the key-password read hits end of file),
-the tool's `entry "…" does not contain a key` wording as `alias_not_found`, and a `FileNotFoundException` raised from
-apksigner's `PasswordRetriever` as `password_file_unreadable` (previously misread as `output_write_failed`).
-`RealPinnedTool` in `test_sign_diagnostic.py` replays these cases with the real tool when an installed tree equal to
-the pinned archive members is present, and skips with its reason otherwise.
+**Invocation fix** (`scripts/sign-apk.py`, under Infra's narrow release of its password-argument construction):
 
-The invocation itself is not changed here. The narrow fix lies in Infra-owned `scripts/sign-apk.py`: give
-`--key-pass` only when the key password file differs from the store password file. That fix is handed to Infra as an
-exact hunk. Until it lands, the adapter's single-passphrase signing is expected to refuse with
-`password_file_exhausted`.
+| Password files | Options passed |
+| --- | --- |
+| Store and key files differ | both `--ks-pass` and `--key-pass`, as before |
+| Same file, more than one line | both `--ks-pass` and `--key-pass`, as before (store password on line 1, key password on line 2) |
+| Same file, exactly one line | `--ks-pass` only |
+| Same file, larger than 64 KiB | refused before any tool starts (`invalid_or_missing_private_input`) |
+
+- With `--ks-pass` only, the tool opens the key with the keystore password. If that fails, it prompts. The diagnostic
+  path's stdin is `/dev/null`, so the prompt ends at once with `standard input closed`.
+- Only the shared file's line structure is read, in process. No password reaches argv, the environment or any output.
+- All other checks, the bounded capture and the receipts are unchanged.
+
+**Classifier** additions for the tool's own messages:
+
+| Category | Tool message |
+| --- | --- |
+| `password_file_exhausted` | `password for signer #N : end of file reached` |
+| `alias_not_found` | `entry "…" does not contain a key` |
+| `password_file_unreadable` | a `FileNotFoundException` raised from apksigner's `PasswordRetriever` (previously `output_write_failed`) |
+| `key_password_incorrect` | `password for signer #N: standard input closed` (the key did not open with the keystore password and there is no input) |
+
+**Real-tool tests:** `RealPinnedTool` in `test_sign_diagnostic.py` replays these cases with the real tool when an
+installed tree equal to the pinned archive members is present, and skips with its reason otherwise. It uses a PKCS12
+fixture shaped like the production store, plus a JKS fixture whose key password differs from the store password. The
+JKS fixture is needed because keytool cannot give a PKCS12 key its own password.
+
+**Evidence level:**
+
+- These runs used a non-pinned JDK. They do not establish equivalence with the pinned production JDK, and do not
+  prove the production cause.
+- Before any protected retry, the corrected invocation must be checked with the pinned JDK and SDK on the original
+  protected route.
 
 ## Ownership and cleanup
 

@@ -52,8 +52,10 @@ PATTERNS = (
     ('password_file_exhausted', re.compile(r'password for signer #\d+ : end of file reached')),
     ('keystore_password_incorrect', re.compile(r'Keystore was tampered with, or password was incorrect|'
                                                r'keystore password was incorrect', re.I)),
+    # with no --key-pass the tool tries the keystore password for the key, then prompts; stdin is closed
     ('key_password_incorrect', re.compile(r'Cannot recover key|UnrecoverableKeyException|'
-                                          r'Failed to obtain key with alias', re.I)),
+                                          r'Failed to obtain key with alias|'
+                                          r'password for signer #\d+: standard input closed', re.I)),
     ('alias_not_found', re.compile(r'does not contain (a )?key (entry )?(with|named) alias|No key with alias|'
                                    r'Alias .* does not exist|entry "[^"\n]*" does not contain a key', re.I)),
     ('password_file_unreadable', re.compile(r'Failed to read password from file|NoSuchFileException|'

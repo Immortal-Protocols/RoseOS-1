@@ -30,6 +30,7 @@ APKSIGNER = r'''#!/bin/sh
 d=$(dirname "$0")/..
 cmd=$1
 echo "$cmd" >> "$d/calls.log"
+[ "$cmd" = sign ] && { for a in "$@"; do case "$a" in --*) printf '%s ' "$a";; esac; done; echo; } >> "$d/options.log"
 mode=$(cat "$d/mode")
 pw=""; out=""; prev=""
 for arg in "$@"; do
@@ -182,6 +183,53 @@ class SignApkHook(SentinelCase):
                     pid = int((sdk / 'build-tools/apksigner.pid').read_text())
                     self.assertRaises(ProcessLookupError, os.kill, pid, 0)
 
+    def test_password_options_follow_the_shared_file_line_structure(self):
+        """sign-apk.py names a shared single-line password file once; distinct files and a shared multi-line file keep
+        --ks-pass and --key-pass (apksigner reads a file named twice one line per password). An oversized shared file
+        is refused before any tool. Only option names are logged by the fake tool."""
+        second = self.private / 'second-line'
+        second.write_text('SENTINEL_PASSWORD_7c1e\nSENTINEL_PASSWORD_7c1e\n')
+        key = self.private / 'key-password'
+        key.write_text('SENTINEL_PASSWORD_7c1e\n')
+        big = self.private / 'big'
+        big.write_text('SENTINEL_PASSWORD_7c1e' * 4000)
+        no_eol = self.private / 'no-eol'
+        no_eol.write_text('SENTINEL_PASSWORD_7c1e')
+        for f in (second, key, big, no_eol):
+            os.chmod(f, 0o600)
+        cases = {'shared one line': (self.password, self.password, False), 'shared, no newline': (no_eol, no_eol, False),
+                 'shared two lines': (second, second, True), 'distinct files': (self.password, key, True)}
+        for diagnostic in (True, False):
+            for name, (store, keyfile, key_pass) in cases.items():
+                with self.subTest(name, diagnostic=diagnostic):
+                    result, record, sdk = self.sign_with(f'{name}-{diagnostic}', store, keyfile, diagnostic)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    options = (sdk / 'build-tools/options.log').read_text().split()
+                    self.assertEqual(('--key-pass' in options, options.count('--ks-pass')), (key_pass, 1))
+                    self.assertNoSentinel(result.stdout, result.stderr, json.dumps(record))
+        result, record, sdk = self.sign_with('big', big, big, True)
+        self.assertEqual((result.returncode, result.stderr), (1, 'APK signing stopped: invalid_or_missing_private_input\n'))
+        self.assertEqual((record['stage'], record['category']), ('invocation', 'invocation_rejected'))
+        self.assertEqual(sign_calls(sdk), 0)
+
+    def sign_with(self, name, store, key, diagnostic):
+        tag = hashlib.sha256(name.encode()).hexdigest()[:8]
+        sdk = fake_sdk(self.tmp / f'sdk-{tag}', 'ok')
+        config = self.private / f'config-{tag}.json'
+        config.write_text(json.dumps({'keyAlias': 'rose-models', 'storePasswordFile': str(store), 'keyPasswordFile': str(key)}))
+        os.chmod(config, 0o600)
+        apk = self.tmp / 'in.apk'
+        apk.write_bytes(b'PK synthetic unsigned apk')
+        argv = [sys.executable, str(SIGN_APK), str(apk), '--keystore', str(self.keystore), '--config', str(config),
+                '--output', str(self.tmp / f'out-{tag}' / 'signed.apk'), '--expected-cert-sha256', PIN]
+        diag = self.tmp / f'diag-{tag}'
+        if diagnostic:
+            diag.mkdir(mode=0o700)
+            argv += ['--diagnostic-out', str(diag / 'r.json')]
+        result = subprocess.run(argv, env=dict(os.environ, ANDROID_SDK_ROOT=str(sdk)), capture_output=True, text=True)
+        record = json.loads((diag / 'r.json').read_text()) if diagnostic else None
+        return result, record, sdk
+
     def test_success_complete_record_and_pin_mismatch(self):
         result, record, sdk = self.run_sign_apk('ok')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -303,6 +351,10 @@ class Schema(unittest.TestCase):
                                         '\tat java.base/java.io.FileInputStream.<init>(FileInputStream.java:152)\n'
                                         '\tat com.android.apksigner.PasswordRetriever.getPasswords(PasswordRetriever.java:170)\n'
                                         + frames,
+            'key_password_incorrect': 'Failed to load signer "signer #1"\njava.io.IOException: Failed to read Key '
+                                      '"SENTINEL_TOKEN" password for signer #1: standard input closed\n'
+                                      '\tat com.android.apksigner.PasswordRetriever.getPasswords(PasswordRetriever.java:158)\n'
+                                      + frames,
             'keystore_password_incorrect': 'Failed to load signer "signer #1"\njava.io.IOException: keystore password was '
                                            'incorrect\n\tat java.base/sun.security.pkcs12.PKCS12KeyStore.engineLoad('
                                            'PKCS12KeyStore.java:2112)\n' + frames,
@@ -678,6 +730,19 @@ class RealPinnedTool(unittest.TestCase):
         pem = cls.tool([str(jdk_bin / 'keytool'), '-exportcert', '-alias', 'rose-models', '-keystore', str(cls.keystore),
                         '-storetype', 'PKCS12', '-storepass:file', str(cls.one_line)]).stdout
         cls.cert = hashlib.sha256(pem).hexdigest()
+        cls.wrong = cls.private('pass-wrong', 'SENTINEL_PASSWORD_7c1e-wrong-' + os.urandom(18).hex() + '\n')
+        cls.jks_phrase = 'SENTINEL_PASSWORD_7c1e-key-' + os.urandom(18).hex()
+        cls.jks_store = cls.one_line
+        cls.jks_key = cls.private('jks-key', cls.jks_phrase + '\n')
+        cls.jks_two_lines = cls.private('jks-two-lines', cls.phrase + '\n' + cls.jks_phrase + '\n')
+        cls.jks = cls.tmp / 'ks.jks'
+        cls.tool([str(jdk_bin / 'keytool'), '-genkeypair', '-keystore', str(cls.jks), '-storetype', 'JKS',
+                  '-alias', 'rose-models', '-keyalg', 'RSA', '-keysize', '2048', '-sigalg', 'SHA256withRSA',
+                  '-dname', 'CN=Synthetic Test Fixture Not Rose Models', '-validity', '1',
+                  '-storepass:file', str(cls.jks_store), '-keypass:file', str(cls.jks_key), '-noprompt'])
+        os.chmod(cls.jks, 0o600)
+        cls.jks_cert = hashlib.sha256(cls.tool([str(jdk_bin / 'keytool'), '-exportcert', '-alias', 'rose-models', '-keystore',
+                                                str(cls.jks), '-storepass:file', str(cls.jks_store)]).stdout).hexdigest()
         manifest = cls.private('AndroidManifest.xml', '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
                                'package="test.synthetic.invoke" android:versionCode="1" android:versionName="0"><uses-sdk '
                                'android:minSdkVersion="29"/><application android:hasCode="false"/></manifest>\n')
@@ -702,52 +767,76 @@ class RealPinnedTool(unittest.TestCase):
             raise AssertionError(f'fixture step failed: {Path(argv[0]).name}')
         return result
 
-    def sign(self, name, store, key, alias='rose-models'):
+    def sign(self, name, store, key, alias='rose-models', keystore=None, diagnostic=True):
         config = self.private(f'config-{name}.json', json.dumps({'keyAlias': alias, 'storePasswordFile': str(store),
                                                                  'keyPasswordFile': str(key)}))
-        diag = self.tmp / f'diag-{name}'
-        diag.mkdir(mode=0o700)
         out = self.tmp / f'out-{name}' / 'signed.apk'
-        result = subprocess.run([sys.executable, '-I', str(SIGN_APK), str(self.tmp / 'in.apk'), '--keystore', str(self.keystore),
-                                 '--config', str(config), '--output', str(out), '--diagnostic-out', str(diag / 'r.json')],
-                                env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
-        record = json.loads((diag / 'r.json').read_text())
-        self.assertIsNone(D.validate(record))
-        self.assertEqual(record['apksignerJarSha256'], PINNED_BUILD_TOOLS['lib/apksigner.jar'])
+        argv = [sys.executable, '-I', str(SIGN_APK), str(self.tmp / 'in.apk'), '--keystore', str(keystore or self.keystore),
+                '--config', str(config), '--output', str(out)]
+        diag = self.tmp / f'diag-{name}'
+        if diagnostic:
+            diag.mkdir(mode=0o700)
+            argv += ['--diagnostic-out', str(diag / 'r.json')]
+        result = subprocess.run(argv, env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+        record = json.loads((diag / 'r.json').read_text()) if diagnostic else None
+        if diagnostic:
+            self.assertIsNone(D.validate(record))
+            self.assertEqual(record['apksignerJarSha256'], PINNED_BUILD_TOOLS['lib/apksigner.jar'])
         for text in (result.stdout, result.stderr, json.dumps(record)):
-            for sentinel in SENTINELS + (self.phrase, str(self.tmp)):
+            for sentinel in SENTINELS + (self.phrase, self.jks_phrase, str(self.tmp)):
                 self.assertNotIn(sentinel, text)
         return result, record, out
 
-    def assertRefused(self, name, store, key, category, alias='rose-models'):
-        result, record, out = self.sign(name, store, key, alias)
+    def assertRefused(self, name, store, key, category, alias='rose-models', keystore=None):
+        result, record, out = self.sign(name, store, key, alias, keystore)
         self.assertEqual((result.returncode, result.stderr), (1, 'APK signing stopped: signing_failed\n'))
         self.assertEqual((record['stage'], record['outcome'], record['childExit'], record['category']),
                          ('sign', 'exit', 2, category))
         self.assertFalse(out.exists())
 
-    def test_production_shape_one_line_file_for_store_and_key_is_password_file_exhausted(self):
-        # apksigner reads a file named by both --ks-pass and --key-pass one line per password (its sign --help).
-        self.assertRefused('same-file', self.one_line, self.one_line, 'password_file_exhausted')
-
-    def test_separate_password_files_sign_and_verify(self):
-        result, record, out = self.sign('separate', self.one_line, self.key_line)
+    def assertSigned(self, name, store, key, keystore=None, diagnostic=True):
+        result, record, out = self.sign(name, store, key, keystore=keystore, diagnostic=diagnostic)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((record['stage'], record['outcome'], record['category']), ('complete', 'ok', 'none'))
-        self.assertEqual(json.loads(result.stdout)['certificateSha256'], [self.cert])
+        if diagnostic:
+            self.assertEqual((record['stage'], record['outcome'], record['category']), ('complete', 'ok', 'none'))
+        self.assertEqual(json.loads(result.stdout)['certificateSha256'], [self.jks_cert if keystore else self.cert])
         verify = subprocess.run([str(self.bt / 'apksigner'), 'verify', str(out)], env=self.env, stdin=subprocess.DEVNULL,
                                 capture_output=True, timeout=300)
         self.assertEqual(verify.returncode, 0)
 
-    def test_missing_alias_is_alias_not_found(self):
+    def test_production_shape_shared_one_line_file_signs_and_verifies(self):
+        # apksigner reads a file named by both --ks-pass and --key-pass one line per password (its sign --help); before
+        # MODELS-SIGN-INVOKE-001 this shape failed with exit 2 at the key-password read.
+        for diagnostic in (True, False):
+            with self.subTest(diagnostic=diagnostic):
+                self.assertSigned(f'same-file-{diagnostic}', self.one_line, self.one_line, diagnostic=diagnostic)
+
+    def test_separate_password_files_sign_and_verify(self):
+        self.assertSigned('separate', self.one_line, self.key_line)
+
+    def test_distinct_key_password_keeps_separate_and_multi_line_semantics(self):
+        # JKS (keytool cannot give a PKCS12 key its own password): store and key passwords differ.
+        self.assertSigned('jks-separate', self.jks_store, self.jks_key, keystore=self.jks)
+        self.assertSigned('jks-two-lines', self.jks_two_lines, self.jks_two_lines, keystore=self.jks)
+        # a shared single-line file holding only the store password cannot open this key: the tool tries the
+        # keystore password, then prompts on a closed stdin
+        self.assertRefused('jks-one-line', self.jks_store, self.jks_store, 'key_password_incorrect', keystore=self.jks)
+
+    def test_wrong_store_password_and_missing_alias(self):
+        self.assertRefused('wrong-store', self.wrong, self.wrong, 'keystore_password_incorrect')
         self.assertRefused('alias', self.one_line, self.key_line, 'alias_not_found', alias='SENTINEL_TOKEN')
 
-    def test_unreadable_password_file_is_password_file_unreadable(self):
+    def test_unreadable_password_file(self):
         if os.geteuid() == 0:
             self.skipTest('root reads a mode-000 file')
         unreadable = self.private('pass-unreadable', self.phrase + '\n', 0o000)
-        self.assertRefused('unreadable', unreadable, unreadable, 'password_file_unreadable')
-
+        self.assertRefused('unreadable', unreadable, self.key_line, 'password_file_unreadable')
+        # a shared file is read for its line structure first, so the wrapper refuses before any tool starts
+        result, record, out = self.sign('unreadable-shared', unreadable, unreadable)
+        self.assertEqual((result.returncode, result.stderr), (1, 'APK signing stopped: invalid_or_missing_private_input\n'))
+        self.assertEqual((record['stage'], record['outcome'], record['category']),
+                         ('invocation', 'rejected', 'invocation_rejected'))
+        self.assertFalse(out.exists())
 
 if __name__ == '__main__':
     unittest.main()
