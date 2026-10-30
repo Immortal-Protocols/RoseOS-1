@@ -337,5 +337,269 @@ class RunTest(Fixture):
         self.assertEqual(rb.main(['preflight', '--build-number', BUILD, '--download-dir', str(self.dl)]), 2)
         self.assertEqual(rb.main(['run', '--stage', 'compile', '--build-number', BUILD, '--download-dir', str(self.dl)]), 2)
 
+class Killed(Exception):
+    """The supervisor stopping the build: the parent dies before it can write completed.json."""
+
+class CompilingRunner(Runner):
+    """Records the call, writes into OUT_DIR like a build would, then either returns or is killed."""
+    def __init__(self, src, returncode=0, killed=False):
+        super().__init__(returncode)
+        self.src, self.killed = src, killed
+    def __call__(self, argv, cwd, env):
+        super().__call__(argv, cwd, env)
+        out = Path(cwd)/env['OUT_DIR']
+        out.mkdir(exist_ok=True)
+        with open(out/'build.log', 'a') as log:
+            log.write(f'call {len(self.calls)}\n')
+        if self.killed:
+            raise Killed()
+        return type('R', (), {'returncode': self.returncode})()
+
+class ResumeTest(Fixture):
+    """OS-RANGO-RESUME-005, all synthetic: a fake compile is killed after writing into OUT_DIR; the cutoff proof,
+    supplemental provenance, boot id, live-process scan and stop evidence are synthetic stand-ins for operator data."""
+    def setUp(self):
+        super().setUp()
+        self.generated()
+        self.inputs = self.integrated()
+        self.config_path = self.tmp/'rango-isolated.json'
+        self.config_path.write_text(json.dumps(self.config))
+        self.prior = self.tmp/'receipts'/(BUILD + '-compile')
+        with self.assertRaises(Killed):
+            rb.run(self.config, 'compile', BUILD, self.dl, self.prior, runner=CompilingRunner(self.src, killed=True),
+                statvfs=lambda p: self.fs, lock_probe=lambda p: True, inputs_receipt=self.inputs, now=lambda: 1793330947)
+        self.out = self.src/('out-rango-' + BUILD)
+        (self.out/'soong').mkdir()
+        (self.out/'soong/.cache-sentinel').write_bytes(b'\x00incremental cache\xff')
+        (self.out/'soong/host-link').symlink_to('/usr/bin')  # build-internal links are not walked or refused
+        self.boot, self.writers = 'boot-after-vm-stop', []
+        self.evidence = self.tmp/'evidence/supervisor.log'
+        self.evidence.parent.mkdir()
+        self.evidence.write_text('02:49:07 compile started\n04:29:15 supervisor deadline reached; stopping build\n')
+        self.cut = self.cutoff()
+        (self.tmp/'evidence/manifest-at-start.xml').write_text('<manifest revision="pinned"/>\n')
+        (self.tmp/'evidence/manifest-now.xml').write_text('<manifest revision="pinned"/>\n')
+        self.prov = self.provenance()
+
+    def cutoff(self, attempt=None, name='cut.json', **changes):
+        attempt = attempt or self.prior
+        proof = {'receiptType': 'rango-compile-cutoff', 'schemaVersion': 1,
+            'prior': {'receiptDir': str(attempt), 'startedSha256': rb.sha256_file(attempt/'started.json'),
+                'preflightSha256': rb.sha256_file(attempt/'preflight.json')},
+            'build': {'buildNumber': BUILD, 'outDir': 'out-rango-' + BUILD}, 'cause': 'supervisor-deadline',
+            'stoppedAt': '2026-10-30T04:29:15Z', 'observedAt': '2026-10-30T04:31:00Z',
+            'evidence': [{'path': str(self.evidence), 'sha256': rb.sha256_file(self.evidence),
+                'line': '04:29:15 supervisor deadline reached; stopping build'}],
+            'writer': {'bootId': 'boot-of-the-compile', 'pid': 4242}, 'observedBy': 'synthetic operator',
+            'observedAt': '2026-10-30T04:31:00Z'}
+        proof.update(changes)
+        (self.tmp/name).write_text(json.dumps(proof))
+        return self.tmp/name
+
+    def provenance(self, **changes):
+        doc = {'receiptType': 'rango-compile-provenance', 'schemaVersion': 1,
+            'prior': {'startedSha256': rb.sha256_file(self.prior/'started.json')},
+            'configSha256': rb.sha256_file(self.config_path),
+            'recipe': {'base': '1b4c8419a406ce2f0c402245f8f298c669e864bd',
+                'overlays': ['bc855f1a178d11f1615ebd538799b9e69ccd24e3', '3a780935458180e763738f71f608db1b78322156']},
+            'projects': {'recordedPath': str(self.tmp/'evidence/manifest-at-start.xml'),
+                'recordedSha256': rb.sha256_file(self.tmp/'evidence/manifest-at-start.xml'),
+                'currentPath': str(self.tmp/'evidence/manifest-now.xml')},
+            'output': {'uid': os.geteuid()},
+            'sources': {'configSha256': 'synthetic', 'projects': 'synthetic', 'output': 'synthetic'}}
+        doc.update(changes)
+        (self.tmp/'prov.json').write_text(json.dumps(doc))
+        return self.tmp/'prov.json'
+
+    def probes(self):
+        return {'statvfs': lambda p: self.fs, 'writers': lambda src, out: self.writers,
+            'current_boot': lambda: self.boot, 'pid_alive': lambda pid: False}
+
+    def admission(self, cut=None, prov=None, config=None, build=BUILD):
+        return rb.resume_admission(config or self.config, self.config_path, build, self.dl, self.prior,
+            cut or self.cut, prov or self.prov, self.inputs, **self.probes())
+
+    def resume(self, runner=None, cut=None, config=None):
+        runner = runner or CompilingRunner(self.src)
+        code = rb.resume(config or self.config, self.config_path, BUILD, self.dl, self.prior, cut or self.cut, self.prov,
+            self.inputs, runner=runner, now=lambda: 1793336000, **self.probes())
+        return code, runner
+
+    def snapshot(self):
+        return {str(p): rb.sha256_file(p) for p in sorted(self.prior.glob('*'))}
+
+    def refused(self, expect, **kw):
+        report = self.admission(**kw)
+        self.assertFalse(report['admitted'])
+        self.assertIn(expect, ' '.join(report['problems']))
+        return report
+
+    def test_a_proven_cutoff_resumes_the_same_out_dir_once_and_keeps_history(self):
+        before, sentinel = self.snapshot(), (self.out/'soong/.cache-sentinel').read_bytes()
+        original = json.loads((self.prior/'started.json').read_text())
+        self.assertEqual(self.admission()['problems'], [])
+        code, runner = self.resume()
+        self.assertEqual(code, 0)
+        self.assertEqual(runner.calls, [(original['command']['argv'], str(self.src),
+            {'OUT_DIR': 'out-rango-' + BUILD, 'BUILD_NUMBER': BUILD})], 'the same command, cwd, OUT_DIR and BUILD_NUMBER')
+        self.assertEqual(self.snapshot(), before, 'the original receipts are untouched')
+        self.assertEqual((self.out/'soong/.cache-sentinel').read_bytes(), sentinel, 'the cache is reused, not rebuilt')
+        self.assertEqual((self.out/'build.log').read_text(), 'call 1\ncall 1\n', 'the same OUT_DIR, appended to')
+        attempt = Path(f'{self.prior}.resume-1')
+        started = json.loads((attempt/'started.json').read_text())
+        completed = json.loads((attempt/'completed.json').read_text())
+        self.assertEqual(started['command'], original['command'])
+        self.assertEqual(started['resumeOf']['receipts'], {Path(p).name: h for p, h in before.items()})
+        self.assertEqual(started['resumeOf']['cutoffSha256'], rb.sha256_file(self.cut))
+        self.assertEqual((started['signed'], completed['returncode'], completed['incremental'], completed['releaseReady']),
+            (False, 0, True, False))
+        self.assertEqual(json.loads((attempt/'preflight.json').read_text())['resume']['output']['uid'], os.geteuid())
+        again = CompilingRunner(self.src)
+        self.assertEqual(self.resume(runner=again)[0], 0, 'a completed compile is a no-op')
+        self.assertEqual(again.calls, [])
+        self.assertFalse(Path(f'{self.prior}.resume-2').exists())
+        self.assertEqual(self.admission()['state'], 'completed')
+
+    def test_a_second_cutoff_needs_a_proof_bound_to_the_resume_attempt(self):
+        with self.assertRaises(Killed):
+            self.resume(runner=CompilingRunner(self.src, killed=True))
+        first = Path(f'{self.prior}.resume-1')
+        self.assertFalse((first/'completed.json').exists())
+        self.assertIn('not bound to', ' '.join(self.admission()['problems']), 'the original proof is spent')
+        code, runner = self.resume(cut=self.cutoff(first, 'cut2.json', stoppedAt='2026-10-30T05:00:00Z',
+            observedAt='2026-10-30T05:01:00Z'))
+        self.assertEqual((code, len(runner.calls)), (0, 1))
+        self.assertEqual(json.loads((Path(f'{self.prior}.resume-2')/'started.json').read_text())['resumeOf']['receiptDir'],
+            str(first))
+        Path(f'{self.prior}.resume-2').rename(Path(f'{self.prior}.resume-3'))
+        with self.assertRaises(rb.InvalidInput):
+            self.admission()
+
+    def test_ordinary_failure_missing_completion_and_never_started_are_not_cutoffs(self):
+        (self.prior/'completed.json').write_text(json.dumps({'stage': 'compile', 'returncode': 2, 'signed': False}))
+        self.assertEqual(self.refused('ordinary failure, returncode 2')['state'], 'failed')
+        for code in (-15, 143, 137):
+            (self.prior/'completed.json').write_text(json.dumps({'stage': 'compile', 'returncode': code}))
+            self.assertEqual(self.admission()['problems'], [], f'signal {code} with a bound proof')
+            self.assertEqual(self.refused('cutoff cause', cut=self.cutoff(cause='exit-143', name='bad.json'))['state'],
+                'interrupted-unproven', 'a signal alone is not proof')
+        (self.prior/'completed.json').unlink()
+        self.assertEqual(self.refused('rango-compile-cutoff', cut=self.tmp/'absent.json')['state'], 'interrupted-unproven')
+        (self.prior/'started.json').rename(self.tmp/'started.json')
+        self.assertEqual(self.refused('never ran')['state'], 'never-started')
+        (self.tmp/'started.json').rename(self.prior/'started.json')
+        (self.prior/'completed.json').write_text('{not json')
+        self.assertEqual(self.refused('unreadable')['state'], 'malformed')
+
+    def test_the_cutoff_proof_must_bind_this_attempt_build_and_a_real_stop(self):
+        self.refused('names another build', cut=self.cutoff(build={'buildNumber': '2026103001', 'outDir': 'out-rango-2026103001'}))
+        self.refused('not bound to', cut=self.cutoff(prior={'receiptDir': str(self.prior), 'startedSha256': '0' * 64,
+            'preflightSha256': rb.sha256_file(self.prior/'preflight.json')}))
+        self.refused('a failure is not a cutoff', cut=self.cutoff(cause='compiler-error'))
+        self.refused('after the attempt started', cut=self.cutoff(stoppedAt='2026-10-30T02:00:00Z'))
+        self.refused('no supervisor or VM stop evidence', cut=self.cutoff(evidence=[]))
+        self.refused('quoted line', cut=self.cutoff(evidence=[{'path': str(self.evidence),
+            'sha256': rb.sha256_file(self.evidence), 'line': 'build failed'}]))
+        good = self.cutoff(name='good.json')
+        self.evidence.write_text('edited after the fact\n')
+        self.refused('not the recorded bytes', cut=good)
+
+    def test_old_format_provenance_must_be_supplied_and_still_match(self):
+        self.refused("missing ['projects']", prov=self.provenance(projects=None))
+        self.refused('without a recorded source', prov=self.provenance(sources={'configSha256': 'x'}))
+        self.refused('config differs', prov=self.provenance(configSha256='0' * 64))
+        (self.tmp/'evidence/manifest-now.xml').write_text('<manifest revision="moved"/>\n')
+        self.refused('project pins now differ', prov=self.provenance())
+        (self.tmp/'evidence/manifest-now.xml').write_text('<manifest revision="pinned"/>\n')
+        self.refused('not bound to', prov=self.provenance(prior={'startedSha256': '0' * 64}))
+        self.refused('owned by uid', prov=self.provenance(output={'uid': os.geteuid() + 1}))
+
+    def test_a_different_target_command_or_input_is_refused(self):
+        other = copy.deepcopy(self.config)
+        other['host']['makeJobs'] = 16
+        self.refused('ran another command', config=other)
+        other = copy.deepcopy(self.config)
+        other['host']['makeGoals'] = ['droid']
+        self.refused('ran another command', config=other)
+        self.refused('names another build', build='2026103001')
+        self.integrated(label='rango-again')
+        self.refused('reconcile receipt receipt differs')
+        product = json.loads(self.inputs.read_text())
+        product['product'] = {'commit': 'other'}
+        self.inputs.write_text(json.dumps(product))
+        self.refused('local-inputs product differs')
+        (self.src/rb.INSTALLED['agent']).write_bytes(b'drifted')
+        self.refused('no longer matches')
+
+    def test_the_output_must_be_this_builds_own_directory(self):
+        moved = self.tmp/'elsewhere'
+        self.out.rename(moved)
+        self.refused('not an existing ordinary directory')
+        self.out.symlink_to(moved)
+        self.refused('not an existing ordinary directory')
+        self.out.unlink()
+        moved.rename(self.out)
+        linked = self.tmp/'linked-src'
+        linked.symlink_to(self.src)
+        config = copy.deepcopy(self.config)
+        config['host']['sourceRoot'] = str(linked)
+        self.refused('linked component', config=config)
+        inside = self.out/'receipts'
+        self.assertIn('collides with', ' '.join(rb.check_output(self.src, 'out-rango-' + BUILD, os.geteuid(), [inside])[0]))
+
+    def test_a_live_writer_or_held_lock_stops_before_anything_runs(self):
+        self.writers = [(777, 'ninja in /srv/rose-rango/src')]
+        self.refused('may still write the build')
+        self.writers, self.boot = [], 'boot-of-the-compile'
+        report = rb.resume_admission(self.config, self.config_path, BUILD, self.dl, self.prior, self.cut, self.prov,
+            self.inputs, **{**self.probes(), 'pid_alive': lambda pid: pid == 4242})
+        self.assertIn('not proven gone', ' '.join(report['problems']))
+        self.assertEqual(self.admission()['problems'], [], 'same boot is fine once the writer pid is gone')
+        import fcntl
+        with open(self.config['host']['lockPath'], 'a') as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code, runner = self.resume()
+        self.assertEqual((code, runner.calls), (1, []))
+        self.assertFalse(Path(f'{self.prior}.resume-1').exists())
+
+    def test_the_live_writer_scan_sees_cwd_build_tools_and_open_files(self):
+        proc = self.tmp/'proc'
+        def fake(pid, cwd, argv0=b'bash', fds=()):
+            (proc/str(pid)/'fd').mkdir(parents=True)
+            (proc/str(pid)/'cwd').symlink_to(cwd)
+            (proc/str(pid)/'cmdline').write_bytes(argv0 + b'\0-x\0')
+            for n, target in enumerate(fds):
+                (proc/str(pid)/'fd'/str(n)).symlink_to(target)
+        fake(11, self.out/'soong')
+        fake(12, self.src, b'/srv/rose-rango/src/prebuilts/build-tools/linux-x86/bin/ninja')
+        fake(13, self.tmp, fds=[self.out/'build.log'])
+        fake(14, self.src)  # an idle shell in SRC is not a writer
+        fake(15, self.tmp, fds=[self.tmp/'elsewhere.log'])
+        self.assertEqual(sorted(pid for pid, _ in rb.live_writers(self.src, self.out, proc)), [11, 12, 13])
+
+    def test_admission_is_redone_under_the_lock(self):
+        self.assertTrue(self.admission()['admitted'])
+        (self.tmp/'inputs/signed-apps/dev.pixel.voice.apk').write_bytes(b'changed after the check')
+        code, runner = self.resume()
+        self.assertEqual((code, runner.calls), (1, []))
+        self.assertFalse(Path(f'{self.prior}.resume-1').exists())
+
+    def test_fresh_runs_still_refuse_the_existing_out_dir(self):
+        self.assertIn('needs a new OUT_DIR', ' '.join(self.check('compile', inputs=self.inputs)['problems']))
+        runner = Runner()
+        self.assertEqual(rb.run(self.config, 'compile', BUILD, self.dl, self.tmp/'fresh', runner=runner,
+            statvfs=lambda p: self.fs, lock_probe=lambda p: True, inputs_receipt=self.inputs), 1)
+        self.assertEqual(runner.calls, [])
+
+    def test_cli_has_no_receipt_dir_force_or_non_compile_resume(self):
+        base = ['--config', str(self.config_path), '--build-number', BUILD, '--download-dir', str(self.dl),
+            '--prior-receipt-dir', str(self.prior), '--cutoff-proof', str(self.cut), '--provenance', str(self.prov),
+            '--inputs-receipt', str(self.inputs)]
+        self.assertEqual(rb.main(['resume', *base, '--receipt-dir', str(self.tmp/'r')]), 2)
+        self.assertEqual(rb.main(['resume', '--stage', 'generate', *base]), 2)
+        self.assertEqual(rb.main(['resume', *base[:-2]]), 2)
+        with self.assertRaises(SystemExit):
+            rb.main(['resume', *base, '--force'])
+
 if __name__ == '__main__':
     unittest.main()
