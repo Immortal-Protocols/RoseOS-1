@@ -1,0 +1,45 @@
+name: SystemUI persistent-app experiment
+
+# OS-COMPONENT-EXP-004: manual-only, disposable emulator experiment with a synthetic persistent fixture
+# (os/tests/persistent-app-experiment). It does not touch SystemUI, a phone, a builder or a release. The fixture is
+# signed with one job-local test key created in RUNNER_TEMP and removed at the end. No licence is accepted and no host
+# ACL, SELinux or verity setting is changed: unavailable prerequisites are recorded as such.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: systemui-persistent-experiment
+  cancel-in-progress: false
+
+jobs:
+  experiment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Static and unit checks
+        run: python3 os/tests/persistent-app-experiment/test_experiment.py -v
+      - name: Build v1 and v2 (job-local test key)
+        run: python3 os/tests/persistent-app-experiment/experiment.py build --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx"
+      - name: Run the experiment
+        run: python3 os/tests/persistent-app-experiment/experiment.py run --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx" --evidence "$RUNNER_TEMP/pfx-evidence"
+      - name: Evidence (allowlist only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: persistent-experiment-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/pfx-evidence/
+            ${{ runner.temp }}/pfx/apks.json
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove the test key and AVD
+        if: always()
+        run: |
+          "$ANDROID_HOME/platform-tools/adb" -s emulator-5580 emu kill 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/pfx/test-only.keystore" "$RUNNER_TEMP/pfx/avd" "$RUNNER_TEMP/pfx/emulator-home"
