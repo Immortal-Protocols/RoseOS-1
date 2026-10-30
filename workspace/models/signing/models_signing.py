@@ -17,6 +17,7 @@ operator's keystore or password file.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -29,6 +30,17 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 VERIFY_ARTIFACT = REPO / 'workspace/models/android/tests/verify-artifact.sh'
 SIGN_APK = REPO / 'scripts/sign-apk.py'
+SIGNER_TIMEOUT_SECONDS = 900
+
+
+def _load_sibling(name):
+    spec = importlib.util.spec_from_file_location(f'rose_models_{name}', Path(__file__).with_name(f'{name}.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+DIAG = _load_sibling('sign_diagnostic')
 
 PACKAGE = 'dev.pixel.models'
 ALIAS = 'rose-models'
@@ -252,8 +264,10 @@ def check_private_file(path):
 
 
 def run_sign_apk(argv, env):
-    """Default executor: scripts/sign-apk.py, unchanged. Its stderr carries only categories."""
-    return subprocess.run(argv, env=env, capture_output=True, text=True)
+    """Default executor: one run of scripts/sign-apk.py. Its stdout/stderr are discarded, never retained or echoed;
+    what happened is read only from the closed --diagnostic-out record and the exit status."""
+    return subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=SIGNER_TIMEOUT_SECONDS)
 
 
 def inspect_signed(apk, sdk_root):
@@ -300,6 +314,7 @@ def sign(profile, artifact_dir, output_dir, keystore, password_file, sdk_root, *
     work.mkdir(mode=0o700)
     stage = 'prepare'
     produced = {}
+    diagnostic = {'wrapperExit': None, 'record': None, 'problem': 'not_run'}
     try:
         unsigned = work / 'rose-models-unsigned.apk'
         shutil.copyfile(planned['artifact'] / 'rose-models-unsigned.apk', unsigned)
@@ -310,17 +325,30 @@ def sign(profile, artifact_dir, output_dir, keystore, password_file, sdk_root, *
         _write_json(config, {'keyAlias': ALIAS, 'storePasswordFile': str(password_file),
                              'keyPasswordFile': str(password_file)})
         signed = out / SIGNED_NAME
+        diag_path = work / 'sign-diagnostic.json'
         pin = profile['signer']['certificateSha256']
         argv = [sys.executable, str(SIGN_APK), str(unsigned), '--keystore', str(keystore),
-                '--config', str(config), '--output', str(signed), '--expected-cert-sha256', pin]
+                '--config', str(config), '--output', str(signed), '--expected-cert-sha256', pin,
+                '--diagnostic-out', str(diag_path)]
+        if DIAG.validate_invocation(argv, SIGN_APK):
+            raise Refused('invocation_invalid: the sign-apk.py call is not the fixed shape')
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'ANDROID_SDK_ROOT': str(sdk_root)}
         stage = 'sign'
-        result = executor(argv, env)
+        try:
+            result = executor(argv, env)  # the one and only signing invocation; never retried
+        except subprocess.TimeoutExpired:
+            raise Refused('signer_timeout: sign-apk.py exceeded its time bound') from None
+        wrapper_exit = result.returncode if type(result.returncode) is int else None
+        record, problem = DIAG.load(diag_path, profile['tool']['apksignerSha256'])
+        diagnostic.update(wrapperExit=wrapper_exit, record=record, problem=problem)
         for f in (signed, signed.with_suffix('.apk.idsig'), signed.with_suffix('.receipt.json')):
             if f.exists():
                 produced[f.name] = sha256(f)
-        if result.returncode != 0:
-            raise Refused('signer_failed: ' + (result.stderr.strip().splitlines() or ['?'])[-1][:120])
+        if wrapper_exit != 0:
+            raise Refused('signer_failed: ' + DIAG.summary(record, problem, wrapper_exit))
+        if record is None or record['stage'] != 'complete':
+            # Fail closed: a zero wrapper exit without a valid 'complete' record is not accepted.
+            raise Refused('signer_diagnostic_invalid: ' + DIAG.summary(record, problem, wrapper_exit))
 
         stage = 'inspect'
         for f in (planned['artifact'] / 'rose-models-unsigned.apk', unsigned):
@@ -362,6 +390,7 @@ def sign(profile, artifact_dir, output_dir, keystore, password_file, sdk_root, *
             'recipe': {'signApkSha256': sha256(SIGN_APK), 'adapterSha256': sha256(Path(__file__)),
                        'profileSha256': hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()},
             'tool': {k: profile['tool'][k] for k in ('apksignerSha256', 'aaptSha256')},
+            'signerDiagnostic': diagnostic['record'], 'signerWrapperExit': diagnostic['wrapperExit'],
             'installed': False, 'published': False,
         }
         _write_json(out / 'models-signing-receipt.json', receipt)
@@ -376,6 +405,8 @@ def sign(profile, artifact_dir, output_dir, keystore, password_file, sdk_root, *
         _write_json(out / 'models-signing-failure.json', {
             'schema': 'rose-models-signing-failure/1', 'evidenceTier': evidence_tier,
             'stage': stage, 'category': category, 'removedOutputSha256': produced,
+            'signerDiagnostic': diagnostic['record'], 'signerDiagnosticProblem': diagnostic['problem'],
+            'signerWrapperExit': diagnostic['wrapperExit'],
             'inputApkSha256': profile['expectedInput']['apkSha256'], 'installed': False, 'published': False})
         raise Refused(category) from None
 

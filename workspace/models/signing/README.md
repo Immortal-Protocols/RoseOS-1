@@ -70,6 +70,37 @@ in the adapter's owner-only `work/` and is deleted before any receipt is written
 - `expectedInput`: replaced only by another verified main-run artifact receipt (for example
   after expiry or a version allocation); PR merge-test artifacts are never acceptable.
 
+## Signing diagnostic (MODELS-SIGN-DIAG-001)
+
+`sign_diagnostic.py` defines one closed, nonsecret record, written by `scripts/sign-apk.py` only when the caller
+passes `--diagnostic-out <new owner-only file>` (Infra released this narrow opt-in hook; without the flag
+`sign-apk.py` behaves exactly as before for every other caller):
+
+```json
+{"schema": "rose-models-sign-diagnostic/1", "stage": "invocation|alignment|sign|verify|complete",
+ "outcome": "ok|exit|signal|timeout|oversized|not_started|rejected", "childExit": 0-255 or null,
+ "childSignal": 1-64 or null, "category": "<fixed enum>", "apksignerJarSha256": "<hex64>" or null}
+```
+
+- Each tool runs once with a 300 s bound; its stdout/stderr go to unnamed temporary files and at most 256 KiB of
+  each is read back for classification inside the signing process. Nothing raw is written anywhere.
+- `category` is one of a fixed list (`keystore_password_incorrect`, `key_password_incorrect`, `alias_not_found`,
+  `keystore_unreadable`, `password_file_unreadable`, `java_runtime_error`, `apk_input_rejected`,
+  `output_write_failed`, `signature_not_verified`, `certificate_pin_mismatch`, `tool_missing`, `timeout`,
+  `output_oversized`, `invocation_rejected`, `unclassified`, `none`). A match is an observation of the tool's message,
+  not proof of the underlying defect.
+- `childExit`/`childSignal` are the inner tool's; the wrapper's own exit (`sign-apk.py`, 1 on any failure) is
+  recorded separately by the adapter as `signerWrapperExit`.
+
+The adapter adds the flag, checks the fixed call shape (no inline password option), runs `sign-apk.py` once with
+its output discarded and a 900 s bound, and accepts only a valid record whose `apksignerJarSha256` equals the bound
+tool identity. On failure the refusal reads, for example,
+`signer_failed: stage=sign outcome=exit child_exit=1 category=keystore_password_incorrect wrapper_exit=1`, and
+`models-signing-failure.json` carries the record (or `signerDiagnosticProblem` such as `missing`, `fields`,
+`malformed`, `oversized`, `tool_identity_mismatch`). A zero wrapper exit without a valid `complete` record is
+refused (`signer_diagnostic_invalid`). The independent signer/scheme/identity/native checks are unchanged and still
+decide success. The record file lives in the adapter's `work/` and is removed with it.
+
 ## Ownership and cleanup
 
 The adapter owns only the new `--output` directory. It deletes its own `work/` (input copy and
