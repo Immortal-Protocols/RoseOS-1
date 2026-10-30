@@ -1,7 +1,7 @@
 name: SystemUI persistent-app experiment
 
 # OS-COMPONENT-EXP-004: manual-only, disposable emulator experiment with a synthetic persistent fixture
-# (os/tests/persistent-app-experiment). It does not touch SystemUI, a phone, a builder or a release. The fixture is
+# (os/tests/persistent-app-experiment); EXP005-F1 installs the SDK emulator package first when the image lacks it. It does not touch SystemUI, a phone, a builder or a release. The fixture is
 # signed with one job-local test key created in RUNNER_TEMP and removed at the end. No licence is accepted and no host
 # ACL, SELinux or verity setting is changed: unavailable prerequisites are recorded as such.
 on:
@@ -23,9 +23,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Static and unit checks
-        run: python3 os/tests/persistent-app-experiment/test_experiment.py -v
+        run: |
+          python3 os/tests/persistent-app-experiment/test_experiment.py -v
+          python3 os/tests/persistent-app-experiment/test_setup_emulator.py -v
       - name: Build v1 and v2 (job-local test key)
         run: python3 os/tests/persistent-app-experiment/experiment.py build --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx"
+      - name: SDK emulator package (installed sdkmanager, already accepted licences only)
+        # EXP005-F1: the runner image lacks emulator/emulator. stdin is closed, so no licence is answered; an
+        # unavailable result is recorded and the experiment's environment stage still reports it.
+        continue-on-error: true
+        run: python3 os/tests/persistent-app-experiment/setup_emulator.py --sdk "$ANDROID_HOME" --record "$RUNNER_TEMP/pfx-evidence/emulator-setup.json"
       - name: Run the experiment
         run: python3 os/tests/persistent-app-experiment/experiment.py run --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx" --evidence "$RUNNER_TEMP/pfx-evidence"
       - name: Evidence (allowlist only)
