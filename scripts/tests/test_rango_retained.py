@@ -277,7 +277,7 @@ class BoundSigning(unittest.TestCase):
         cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': '/synthetic/unused'}
         cfg['signing'].update(otatoolsProvenance={'revision': 'r'}, releaseScriptProvenance={'revision': 's'})
         self.product, notes = notes_history(self)
-        cfg['publication'].update(feedChannel='stable', notes=notes)
+        cfg['publication'].update(feedChannel='beta', notes=notes)  # as checked in
         cfg['verification']['expected'] = {'apps': []}
         cfg['verification']['updater']['included'] = False
         saved = (rr.config, rr.tool_bindings)
@@ -365,7 +365,7 @@ class Route(unittest.TestCase):
             'avbPublicKeySha256': self.avb, 'members': []}), otatoolsProvenance={'synthetic': True},
             releaseScriptProvenance={'synthetic': True})
         self.product, notes = notes_history(self)
-        cfg['publication'].update(feedChannel='stable', notes=notes)
+        cfg['publication'].update(feedChannel='beta', notes=notes)  # as checked in
         # OCT30-INFRA-S018: the complete SYNTHETIC upstream contract (absence); the real check_updater runs on the signed zip.
         cfg['verification']['updater']['included'] = False
         cfg['verification']['expected'] = {'variant': 'user', 'apps': [['dev.pixel.voice', 311]],
@@ -576,6 +576,23 @@ class Route(unittest.TestCase):
         with self.assertRaisesRegex(rr.Refused, 'notes_drift'):
             rr.publish(self.artifact, adapter=self.adapter, selected=True)
         self.assertFalse((self.t.root/'fake/releases').exists())
+
+    def test_staging_uses_the_bound_beta_feed_channel_and_refuses_another(self):
+        """Run 41082181100: stage_artifact called release-manifest create without --feed-channel (default stable), so
+        the verified beta rango-stable line was refused. The real manifest tool now gets the bound feed channel."""
+        self.sign()
+        rr.verify(self.env, self.consumer, self.release, self.adapter)
+        feed = self.release/'public/rango-stable'
+        self.assertEqual(feed.read_text(), '2026103001 1793330000 rango beta\n')
+        good = feed.read_text()
+        feed.write_text(good.replace(' beta', ' stable'))
+        with self.assertRaisesRegex(self.module.CheckFailed, 'rango-stable does not describe this build, device and feed channel'):
+            rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        feed.write_text(good)
+        shutil.rmtree(self.artifact, ignore_errors=True)
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertEqual(json.loads((self.artifact/'manifest.json').read_text())['feed']['feedChannel'], 'beta')
+        self.assertEqual((self.artifact/'assets/rango-stable').read_text(), good)
 
     def test_upstream_updater_is_verified_and_recorded_without_rose_discovery(self):
         """OCT30-INFRA-S018: the real check_updater runs on the signed target-files with the upstream contract."""
@@ -1058,7 +1075,7 @@ class FirstUseRoute(Route):
         public.mkdir()
         signed_target_files(out, target)
         (public/'rango-ota_update-2026103001.zip').write_bytes(b'SYNTHETIC rango OTA')
-        (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango stable\n")
+        (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango {config['publication']['channels']['beta']['feedChannel']}\n")
         for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):
             shutil.copyfile(self.ident/name, public/name)
         (public/'UPDATE.md').write_bytes(host_sign.release_notes(config['host']['sign'], CONFIG['target']['product'], 'rango',
