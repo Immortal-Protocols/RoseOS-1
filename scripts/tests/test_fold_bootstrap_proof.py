@@ -141,14 +141,18 @@ class Admission(unittest.TestCase):
         self.assertFalse(h.proof_dir.exists())
 
     def test_the_excluded_pr190_helper_bytes_refuse(self):
+        # History-independent (CI checks out one commit): any helper file whose git blob is the recorded PR #190 blob
+        # refuses, even when a profile names that same blob as admitted.
+        excluded = PROFILES['profiles']['fold-rango-v1']['localProof']['excluded'][0]
+        self.assertEqual((excluded['pr'], excluded['gitBlob']), (190, 'a42ec8a45d3e9758822dfd726536d42b0ff26fb4'))
         h = Harness(self)
-        local = h.profiles['profiles']['fold-rango-v1']['localProof']
-        pr190 = h.tmp/'pr190_fold_tool_proof.py'
-        pr190.write_bytes(__import__('subprocess').run(['git', '-C', str(ROOT), 'show',
-            '97b23c30b0898aacb563ed7567671adf340917c0:scripts/fold_tool_proof.py'], capture_output=True, check=True).stdout)
-        local.update(helper=str(pr190), admittedBlob=blob(pr190))
-        self.assertEqual(blob(pr190), PROFILES['profiles']['fold-rango-v1']['localProof']['excluded'][0]['gitBlob'])
+        h.profiles['profiles']['fold-rango-v1']['localProof']['admittedBlob'] = excluded['gitBlob']
+        saved = sb.git_blob_id
+        sb.git_blob_id = lambda path, end, clock: excluded['gitBlob']
+        self.addCleanup(setattr, sb, 'git_blob_id', saved)
         self.assertEqual([c for c, _ in sb.readiness('fold-rango-v1', h.profiles, NOW)], ['proof-helper-excluded'])
+        self.assertEqual(h.prove(), ('blocked', ['proof-helper-excluded']))
+        self.assertFalse(h.proof_dir.exists())
 
     def test_excluded_blob_refuses_even_if_admitted(self):
         h = Harness(self)
