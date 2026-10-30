@@ -20,6 +20,18 @@ Steps, each fail-closed and in order:
   7. NEW_DIR/local-inputs.json (write-once) records every hash, tool and path; rango-build-only.py compile binds the
      reconcile receipt to it.
 No network, credential, signer, device, publisher or cloud call. NEW_DIR must not exist; nothing else is written.
+
+  admit --bundle DIR --out NEW_DIR --aapt PATH --apksigner PATH [--config os/build-only/rango-reconcile-next.json]
+
+RANGO-CURRENT-M001: a fresh current-main candidate instead of the 2901 extraction above (which is unchanged). DIR is
+the release owner's newly signed bundle, exactly: signed-apps/<package>.apk and its sign-apk.py .receipt.json for the
+three Rose apps, background-policy.json and candidate.json (schema roseos.rango-candidate.v1: device, build, product
+C, recipe R, androidManifestBlob, apps as the allocator's [[package, versionCode], ...]). Admission requires this
+checkout to be R; C's and R's os/pinned-manifest.xml to be the pinned Android manifest blob; each receipt to match
+its bytes and apksigner/aapt (package, version, the pinned app signer); and the policy (SDK 37, prototypeControl as
+pinned, the three roles) to pin exactly those bytes. It copies the bytes unchanged into NEW_DIR and writes the same
+local-inputs.json shape, mode candidate, so rango-build-only.py compile binds the reconcile receipt to it and to C,
+R and build. No key is needed or read; a missing, extra, linked, duplicate or mismatched input refuses.
 Exit status: 0 ok, 1 an input or check failed, 2 invalid usage.
 """
 import argparse
@@ -28,6 +40,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -236,21 +250,165 @@ def prepare(ota, verification, out, tools, config_path=CONFIG, run=subprocess.ru
     release_receipts.write_once(out/'local-inputs.json', record)
     return record
 
+CANDIDATE_SCHEMA = 'roseos.rango-candidate.v1'
+NEXT_CONFIG = ROOT/'os/build-only/rango-reconcile-next.json'
+
+def git(*args):
+    """Read-only git in this checkout (the recipe); None when the object or repository is unavailable."""
+    result = subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+def bundle_files(bundle, packages):
+    """The bundle's exact inventory: regular files only, nothing missing, nothing extra, no links anywhere."""
+    bundle = Path(bundle)
+    if not bundle.is_absolute() or '..' in bundle.parts or bundle.is_symlink() or not bundle.is_dir():
+        raise Failed('--bundle must be an existing absolute directory, not a link')
+    expected = {'candidate.json', 'background-policy.json', 'signed-apps'}
+    expected |= {f'signed-apps/{p}.apk' for p in packages} | {f'signed-apps/{p}.receipt.json' for p in packages}
+    found = set()
+    for path in sorted(bundle.rglob('*')):
+        relative = path.relative_to(bundle).as_posix()
+        if path.is_symlink():
+            raise Failed(f'bundle entry {relative} is a link')
+        if not path.is_dir() and not path.is_file():
+            raise Failed(f'bundle entry {relative} is not a regular file')
+        found.add(relative)
+    if found != expected:
+        raise Failed(f'bundle inventory: missing {sorted(expected - found)}, unexpected {sorted(found - expected)}')
+    return bundle
+
+def candidate_binding(bundle, pins, git_read=git):
+    """candidate.json checked against the pins and the git objects of C and R."""
+    try:
+        candidate = json.loads((bundle/'candidate.json').read_text())
+    except ValueError:
+        raise Failed('candidate.json is not JSON')
+    keys = {'schema', 'device', 'build', 'product', 'recipe', 'androidManifestBlob', 'apps'}
+    if not isinstance(candidate, dict) or set(candidate) != keys or candidate['schema'] != CANDIDATE_SCHEMA:
+        raise Failed(f'candidate.json must be exactly {sorted(keys)} with schema {CANDIDATE_SCHEMA}')
+    if candidate['device'] != 'rango' or not re.fullmatch(r'[0-9]{10}', str(candidate['build'])):
+        raise Failed('candidate.json must name device rango and a ten-digit build')
+    for key in ('product', 'recipe'):
+        if not isinstance(candidate[key], str) or not re.fullmatch(r'[0-9a-f]{40}', candidate[key]):
+            raise Failed(f'candidate.json {key} must be a full commit SHA')
+    if candidate['androidManifestBlob'] != pins['androidManifestBlob']:
+        raise Failed('candidate.json names another Android manifest than the pinned Rango base')
+    apps = candidate['apps']
+    roles = {a['package'] for a in pins['apps']}
+    if (not isinstance(apps, list) or any(not isinstance(a, list) or len(a) != 2 or type(a[1]) is not int or a[1] < 1
+            for a in apps) or len({a[0] for a in apps}) != len(apps) or {a[0] for a in apps} != roles):
+        raise Failed(f'candidate.json apps must name each of {sorted(roles)} once with a positive versionCode')
+    if git_read('rev-parse', 'HEAD') != candidate['recipe']:
+        raise Failed('this checkout is not the candidate\'s recipe R')
+    for key in ('product', 'recipe'):
+        blob = git_read('rev-parse', f'{candidate[key]}:os/pinned-manifest.xml')
+        if blob != pins['androidManifestBlob']:
+            raise Failed(f'{key} {candidate[key][:12]} does not carry the pinned Android manifest (got {blob})')
+    return candidate
+
+def admit(bundle, out, tools, config_path=NEXT_CONFIG, git_read=git, now=time.time):
+    config = json.loads(Path(config_path).read_text())
+    pins = config['candidateInputs']
+    packages = sorted(a['package'] for a in pins['apps'])
+    out = Path(out)
+    if not out.is_absolute() or '..' in out.parts:
+        raise Failed('--out must be an absolute path without ..')
+    if os.path.lexists(out):
+        raise Failed(f'{out} exists; choose a new inputs directory')
+    if not out.parent.is_dir() or out.parent.is_symlink():
+        raise Failed(f'{out.parent} must be an existing directory, not a link')
+    tool_record = {}
+    for name in ('aapt', 'apksigner'):
+        path = regular(tools[name], f'--{name}')
+        if not os.access(path, os.X_OK):
+            raise Failed(f'{path} is not executable')
+        tool_record[name] = {'path': str(path), 'sha256': sha256_file(path)}
+    bundle = bundle_files(bundle, packages)
+    candidate = candidate_binding(bundle, pins, git_read)
+    versions = dict((a[0], a[1]) for a in candidate['apps'])
+    signer = pins['appSignerSha256']
+    apps = []
+    for pin in pins['apps']:
+        package = pin['package']
+        apk, receipt_path = bundle/'signed-apps'/f'{package}.apk', bundle/'signed-apps'/f'{package}.receipt.json'
+        digest, size = sha256_file(apk), apk.stat().st_size
+        try:
+            receipt = json.loads(receipt_path.read_text())
+        except ValueError:
+            raise Failed(f'{receipt_path.name} is not JSON')
+        if (receipt.get('schemaVersion') != 1 or receipt.get('apk') != apk.name or receipt.get('sha256') != digest
+                or receipt.get('certificateSha256') != [signer] or receipt.get('signatureVerified') is not True):
+            raise Failed(f'{receipt_path.name} does not match {apk.name} (bytes, signer or verification)')
+        verify_identity(apk, {'package': package, 'versionCode': versions[package]},
+            {'sdk': pins['sdk'], 'appSignerSha256': signer}, tool_record_paths(tool_record))
+        apps.append({'role': pin['role'], 'package': package, 'versionCode': versions[package], 'signerSha256': signer,
+            'sha256': digest, 'sizeBytes': size, 'receiptSha256': sha256_file(receipt_path)})
+    policy_path = bundle/'background-policy.json'
+    try:
+        written = json.loads(policy_path.read_text())
+        background_apks.validate_policy(written, bundle/'signed-apps'/'dev.pixel.backgroundcontrol.apk')
+    except (ValueError, KeyError, TypeError) as error:
+        raise Failed(f'background-policy.json is not a valid policy: {error}')
+    if written['sdk'] != pins['sdk'] or written.get('prototypeControl', False) != pins['prototypeControl'] \
+            or len(written['targets']) != 1:
+        raise Failed('the policy SDK, prototypeControl or target count differs from the pin')
+    rows = {'agent': written['agent'], 'voice': written['voice'], 'target': written['targets'][0]}
+    for app in apps:
+        row = rows[app['role']]
+        if (row['packageName'], row['versionCode'], row['apkSha256'], row['certificates']) != \
+                (app['package'], app['versionCode'], app['sha256'], [signer.upper()]):
+            raise Failed(f'the policy does not pin the admitted {app["package"]} bytes')
+    out.mkdir(mode=0o700)
+    signed = out/'signed-apps'
+    signed.mkdir()
+    for app in apps:
+        target = signed/f'{app["package"]}.apk'
+        shutil.copyfile(bundle/'signed-apps'/target.name, target)
+        target.chmod(0o444)
+        if sha256_file(target) != app['sha256']:
+            raise Failed(f'{target.name} changed while being copied')
+        app['signedPath'] = str(target)
+    policy = out/'background-policy.json'
+    shutil.copyfile(policy_path, policy)
+    policy.chmod(0o444)
+    record = {'receiptType': 'rango-local-inputs', 'schemaVersion': 1, 'mode': 'candidate',
+        'candidate': {k: candidate[k] for k in ('device', 'build', 'product', 'recipe', 'androidManifestBlob')},
+        'product': {'commit': candidate['product']}, 'release': None,
+        'config': {'path': str(config_path), 'sha256': sha256_file(config_path)},
+        'bundle': {'path': str(bundle), 'candidateSha256': sha256_file(bundle/'candidate.json')},
+        'tools': tool_record, 'apps': apps,
+        'policy': {'path': str(policy), 'sha256': sha256_file(policy), 'sdk': written['sdk'],
+            'prototypeControl': written.get('prototypeControl', False)},
+        'signedApps': str(signed), 'network': False, 'signed': False, 'published': False,
+        'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now()))}
+    if sha256_file(policy) != sha256_file(policy_path):
+        raise Failed('background-policy.json changed while being copied')
+    release_receipts.write_once(out/'local-inputs.json', record)
+    return record
+
 def tool_record_paths(record):
     return {name: entry['path'] for name, entry in record.items()}
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['prepare'])
-    p.add_argument('--config', type=Path, default=CONFIG)
-    p.add_argument('--ota', required=True)
-    p.add_argument('--verification', required=True)
+    p.add_argument('command', choices=['prepare', 'admit'])
+    p.add_argument('--config', type=Path)
+    p.add_argument('--ota')
+    p.add_argument('--verification')
+    p.add_argument('--bundle')
     p.add_argument('--out', required=True)
     for name in TOOLS:
-        p.add_argument('--' + name.replace('_', '-'), dest=name, required=True)
+        p.add_argument('--' + name.replace('_', '-'), dest=name)
     a = p.parse_args(argv)
+    need = ['bundle', 'aapt', 'apksigner'] if a.command == 'admit' else ['ota', 'verification', *TOOLS]
+    missing = [n for n in need if getattr(a, n) is None]
+    if missing:
+        p.error('missing ' + ', '.join('--' + n.replace('_', '-') for n in missing))
     try:
-        record = prepare(a.ota, a.verification, a.out, {name: getattr(a, name) for name in TOOLS}, a.config)
+        if a.command == 'admit':
+            record = admit(a.bundle, a.out, {n: getattr(a, n) for n in ('aapt', 'apksigner')}, a.config or NEXT_CONFIG)
+        else:
+            record = prepare(a.ota, a.verification, a.out, {name: getattr(a, name) for name in TOOLS}, a.config or CONFIG)
     except (Failed, rv.Fail, ValueError, OSError, subprocess.CalledProcessError, release_receipts.ReceiptExists) as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
         return 1

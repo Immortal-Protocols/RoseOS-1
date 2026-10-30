@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "rose-rango-reconcile-next",
-  "basis": "NEXT Rango build only (OS Product, October 30). Identical to rango-reconcile.json, which stays pinned to the retained bc855f1 recipe and its published 2026103001 image, except that the Rose Updater is included: --updater-url is the pixel-ota releases/download/ prefix and --updater-release-index its release list, so each check resolves one eligible rango-N release and reads rango-stable and rango-ota_update-N.zip from that same release (RoseReleases); never /releases/latest, which names Frankel. Only the stable wire channel (Beta) is published. Producer contract for that release: tag rango-N, assets rango-ota_update-N.zip and rango-stable whose line is 'N <build date utc> rango stable'. The 2026103001 line ends 'beta' and has no Updater to read it; it stays as published. The trusted patcher reads patches and overlays from the candidate's os/ bundle, so the NEXT product must be a commit that contains updater-rose-releases.patch and RoseReleases.java (Infra pins it); the product block below is the delivered 2901 app source, unchanged.",
+  "basis": "NEXT Rango build only (OS Product, October 30). Identical to rango-reconcile.json, which stays pinned to the retained bc855f1 recipe and its published 2026103001 image, except that the Rose Updater is included: --updater-url is the pixel-ota releases/download/ prefix and --updater-release-index its release list, so each check resolves one eligible rango-N release and reads rango-stable and rango-ota_update-N.zip from that same release (RoseReleases); never /releases/latest, which names Frankel. Only the stable wire channel (Beta) is published. Producer contract for that release: tag rango-N, assets rango-ota_update-N.zip and rango-stable whose line is 'N <build date utc> rango stable'. The 2026103001 line ends 'beta' and has no Updater to read it; it stays as published. The trusted patcher reads patches and overlays from the candidate's os/ bundle, so the NEXT product C must contain updater-rose-releases.patch and RoseReleases.java. RANGO-CURRENT-M001: no fixed product or app bytes are bound here. The release owner's newly signed bundle for each candidate is admitted by rango-local-inputs.py admit against candidateInputs; the 2901 extraction stays with rango-reconcile.json only.",
   "host": {
     "sourceRoot": "/srv/rose-rango/src",
     "lockPath": "/srv/rose-rango/rango-build.lock",
@@ -56,60 +56,29 @@
       }
     }
   },
-  "product": {
-    "commit": "02b21bc69f9afd281422d42e3dcf8a456e471de1",
-    "apps": {
-      "dev.pixel.voice": 310,
-      "dev.pixel.calculator.agent": 4,
-      "dev.pixel.backgroundcontrol": 28
-    },
-    "basis": "The delivered frankel 2026102901 product (PR #141 head). The recipe (this checkout's patcher) is recorded separately by hash in each reconcile receipt; product and recipe are not the same commit."
-  },
-  "inputs": {
-    "release": {
-      "id": 428513880,
-      "tag": "frankel-2026102901",
-      "build": "2026102901",
-      "baseUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/frankel-2026102901/"
-    },
-    "ota": {
-      "file": "frankel-ota_update-2026102901.zip",
-      "sizeBytes": 1678971619,
-      "sha256": "c97027f1b88d518a7f9b40d182c30795410be89df257b12c270cc6d7b3db5019",
-      "device": "frankel"
-    },
-    "verification": {
-      "file": "verification.json",
-      "sizeBytes": 4599,
-      "sha256": "0c65767734ae68bff03ccbfd32cbf49387146ae7a82150a01b07b8d36e124e32"
-    },
-    "signedTargetFilesSha256": "3c8f86fdd29919829e2abf801360e93442e6a72acce763a76434e34bcfd2cdf1",
-    "signedTargetFilesRole": "provenance only: recorded and compared with verification.json, never read or required",
+  "unresolved": [
+    "Fold reference display address: not measured; --reference-display-address is not passed."
+  ],
+  "candidateInputs": {
+    "schema": "roseos.rango-candidate.v1",
+    "androidManifestBlob": "b57648423ffb20af35d1c7058a3b7c58bb049770",
+    "androidManifestBasis": "os/pinned-manifest.xml blob shared by original product 02b21bc6 and reviewed main 8183dc55 (1057 projects, GrapheneOS 2026100600); C and R must both carry it.",
     "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
     "sdk": 37,
     "prototypeControl": false,
     "apps": [
       {
         "role": "agent",
-        "package": "dev.pixel.backgroundcontrol",
-        "versionCode": 28,
-        "imagePath": "system_ext/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk"
+        "package": "dev.pixel.backgroundcontrol"
       },
       {
         "role": "voice",
-        "package": "dev.pixel.voice",
-        "versionCode": 310,
-        "imagePath": "product/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk"
+        "package": "dev.pixel.voice"
       },
       {
         "role": "target",
-        "package": "dev.pixel.calculator.agent",
-        "versionCode": 4,
-        "imagePath": "product/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk"
+        "package": "dev.pixel.calculator.agent"
       }
     ]
-  },
-  "unresolved": [
-    "Fold reference display address: not measured; --reference-display-address is not passed."
-  ]
+  }
 }

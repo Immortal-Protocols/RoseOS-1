@@ -250,6 +250,50 @@ class PreflightTest(Fixture):
         self.assertIn('already exists; generate-all would rm -rf it', ' '.join(self.check(config=isolated)['problems']))
         self.assertIn('no Rose integration', ' '.join(self.check('compile', config=isolated)['problems']))
 
+class CandidateCompileTest(Fixture):
+    """RANGO-CURRENT-M001: inputs admitted for a current-main candidate bind compile to that build, its recipe R
+    (this checkout) and a reconcile receipt labelled for that build."""
+    R = 'a' * 40
+
+    def setUp(self):
+        super().setUp()
+        self.generated()
+        original = rb.recipe_head
+        rb.recipe_head = lambda: self.head
+        self.addCleanup(setattr, rb, 'recipe_head', original)
+        self.head = self.R
+
+    def candidate(self, build=BUILD, label=None):
+        inputs = self.integrated(label=label or 'rango-' + BUILD)
+        data = json.loads(inputs.read_text())
+        data.update(mode='candidate', candidate={'device': 'rango', 'build': build, 'product': 'c' * 40,
+            'recipe': self.R, 'androidManifestBlob': 'b57648423ffb20af35d1c7058a3b7c58bb049770'})
+        inputs.write_text(json.dumps(data))
+        return inputs
+
+    def problems(self, inputs):
+        return self.check('compile', inputs=inputs)['problems']
+
+    def test_matching_candidate_compiles_and_is_recorded(self):
+        report = self.check('compile', inputs=self.candidate())
+        self.assertEqual(report['problems'], [])
+        self.assertEqual(report['facts']['roseIntegration']['inputs']['candidate']['recipe'], self.R)
+
+    def test_other_build_recipe_or_receipt_label_is_refused(self):
+        self.assertIn(f'the inputs were admitted for build 2026103101, not {BUILD}',
+            self.problems(self.candidate(build='2026103101')))
+        self.assertIn(f"the reconcile receipt is labelled 'rango-2026102701', not rango-{BUILD}",
+            self.problems(self.candidate(label='rango-2026102701')))
+        inputs = self.candidate()
+        self.head = 'b' * 40
+        self.assertIn('this checkout is not the recipe R the inputs were admitted with', self.problems(inputs))
+        self.head = None
+        self.assertIn('this checkout is not the recipe R the inputs were admitted with', self.problems(inputs))
+
+    def test_legacy_inputs_need_no_candidate(self):
+        self.head = None
+        self.assertEqual(self.problems(self.integrated()), [], 'the 2901 extraction route is unchanged')
+
 class CompileIntegrationTest(Fixture):
     def setUp(self):
         super().setUp()

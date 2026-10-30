@@ -83,11 +83,17 @@ class NextRangoConfigTest(unittest.TestCase):
         expected = [a for a in retained['host']['integrate']['reconcile']['applyArgs'] if a != '--keep-upstream-updater']
         self.assertEqual([a for a in args if a not in ('--updater-url', DOWNLOAD, '--updater-release-index', INDEX,
             '--updater-published-channel', 'stable')], expected)
-        for key in ('host', 'product', 'inputs'):
-            a, b = json.loads(json.dumps(retained[key])), json.loads(json.dumps(nxt[key]))
-            if key == 'host':
-                a['integrate']['reconcile'].pop('applyArgs'); b['integrate']['reconcile'].pop('applyArgs')
-            self.assertEqual(a, b, key)
+        a, b = json.loads(json.dumps(retained['host'])), json.loads(json.dumps(nxt['host']))
+        a['integrate']['reconcile'].pop('applyArgs'); b['integrate']['reconcile'].pop('applyArgs')
+        self.assertEqual(a, b, 'host')
+        # RANGO-CURRENT-M001: the NEXT build binds no historical product or 2901 app bytes, only candidate pins.
+        self.assertNotIn('product', nxt)
+        self.assertNotIn('inputs', nxt)
+        pins = nxt['candidateInputs']
+        self.assertEqual(pins['appSignerSha256'], retained['inputs']['appSignerSha256'])
+        self.assertEqual((pins['sdk'], pins['prototypeControl']), (37, False))
+        self.assertEqual({a['package']: a['role'] for a in pins['apps']},
+            {a['package']: a['role'] for a in retained['inputs']['apps']})
         # The retained recipe the published 2026103001 is bound to is untouched.
         release = json.loads((ROOT/'os/retained-rango/release.json').read_text())['verification']['updater']['recipe']
         import hashlib
