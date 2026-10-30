@@ -1,8 +1,11 @@
 """Closed, nonsecret signing diagnostic for the Rose Models signing path (MODELS-SIGN-DIAG-001).
 
 Producer side (inside the protected signing process, scripts/sign-apk.py with --diagnostic-out):
-  run_bounded()  runs one tool with a time bound; stdout/stderr go to unnamed temporary files, at most CAPTURE_BYTES
-                 of each are read back, and nothing is retained after classification.
+  run_bounded()  starts one tool and drains its stdout/stderr pipes concurrently in fixed-size reads, holding at most
+                 CAPTURE_BYTES per stream in process memory. The cap is enforced while the tool runs: the read that
+                 would pass it ends collection, the excess is discarded unstored and the tool is stopped (TERM, then
+                 KILL) and reaped within a finite bound. Output is never written to disk; the buffers are only used
+                 for classification inside the signing process and are dropped with the Result.
   classify()     maps tool output to ONE fixed category by fixed patterns, else 'unclassified'. A match is an
                  observation of the tool's message, not proof of a key, password or certificate defect.
   write()        writes the closed record (owner-only, never overwrites).
@@ -18,9 +21,9 @@ import hashlib
 import json
 import os
 import re
-import signal
+import selectors
 import subprocess
-import tempfile
+import time
 
 SCHEMA = 'rose-models-sign-diagnostic/1'
 STAGES = ('invocation', 'alignment', 'sign', 'verify', 'complete')
@@ -33,7 +36,11 @@ CATEGORIES = (
 )
 FIELDS = ('schema', 'stage', 'outcome', 'childExit', 'childSignal', 'category', 'apksignerJarSha256')
 TIMEOUT_SECONDS = 300
-CAPTURE_BYTES = 256 * 1024
+CAPTURE_BYTES = 256 * 1024  # per stream; both streams together retain at most 2 * CAPTURE_BYTES
+CHUNK_BYTES = 64 * 1024  # largest single read; a read never asks for more than one byte past the cap
+POLL_SECONDS = 0.05  # how often a quiet, still-running tool is checked for exit
+TERM_GRACE_SECONDS = 1  # after SIGTERM, before SIGKILL
+REAP_SECONDS = 5  # after SIGKILL; total stop/reap bound is TERM_GRACE_SECONDS + REAP_SECONDS
 RECORD_BYTES = 4096
 HEX64 = re.compile(r'[0-9a-f]{64}')
 
@@ -66,30 +73,74 @@ class Result:
         self.stdout, self.stderr = stdout, stderr
 
 
-def _read_back(f):
-    f.seek(0, os.SEEK_END)
-    size = f.tell()
-    f.seek(0)
-    return f.read(CAPTURE_BYTES).decode('utf-8', 'replace'), size > CAPTURE_BYTES
+def _stop(child):
+    """Stop and reap the child within TERM_GRACE_SECONDS + REAP_SECONDS. True once reaped."""
+    for send, wait in ((child.terminate, TERM_GRACE_SECONDS), (child.kill, REAP_SECONDS)):
+        if child.poll() is not None:
+            return True
+        try:
+            send()
+        except OSError:
+            pass
+        try:
+            child.wait(timeout=wait)
+            return True
+        except subprocess.TimeoutExpired:
+            pass
+    return child.poll() is not None
 
 
 def run_bounded(command, timeout=TIMEOUT_SECONDS, popen=subprocess.Popen):
-    """Exactly one start of `command`; output to unnamed files (no pipe can grow without bound)."""
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        try:
-            child = popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
-        except OSError:
-            return Result('not_started')
-        try:
-            code = child.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait()
-            return Result('timeout')
-        stdout, big_out = _read_back(out)
-        stderr, big_err = _read_back(err)
-    if big_out or big_err:
-        return Result('oversized', code if code >= 0 else None, -code if code < 0 else None)
+    """Exactly one start of `command`. Its stdout and stderr are pipes drained together, CHUNK_BYTES at most per
+    read and never more than one byte past CAPTURE_BYTES, so each stream retains at most CAPTURE_BYTES and the
+    excess is never stored. A stream passing the cap ('oversized'), the deadline ('timeout') or any exception here
+    stops the tool and closes both pipes; a writer left holding them then gets EPIPE instead of filling anything."""
+    try:
+        child = popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError:
+        return Result('not_started')
+    deadline = time.monotonic() + timeout
+    buffers = {child.stdout: bytearray(), child.stderr: bytearray()}
+    outcome = None
+    try:
+        with selectors.DefaultSelector() as selector:
+            for pipe in buffers:
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ)
+            while outcome is None and selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    outcome = 'timeout'
+                    break
+                events = selector.select(min(remaining, POLL_SECONDS))
+                for key, _ in events:
+                    buffer = buffers[key.fileobj]
+                    try:
+                        data = os.read(key.fd, min(CHUNK_BYTES, CAPTURE_BYTES - len(buffer) + 1))
+                    except BlockingIOError:
+                        continue
+                    if not data:
+                        selector.unregister(key.fileobj)
+                    elif len(buffer) + len(data) > CAPTURE_BYTES:
+                        outcome = 'oversized'
+                        break
+                    else:
+                        buffer += data
+                if not events and child.poll() is not None:
+                    break  # the tool has exited and nothing it wrote is pending; another holder of the pipe is not it
+        if outcome is None:
+            try:
+                code = child.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                outcome = 'timeout'
+    finally:
+        for pipe in buffers:
+            pipe.close()
+        if child.returncode is None:
+            _stop(child)
+    if outcome is not None:
+        return Result(outcome)
+    stdout, stderr = (bytes(b).decode('utf-8', 'replace') for b in buffers.values())
     if code < 0:
         return Result('signal', None, -code)
     return Result('ok' if code == 0 else 'exit', code, None, stdout, stderr)

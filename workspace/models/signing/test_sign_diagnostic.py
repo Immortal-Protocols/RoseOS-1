@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -44,6 +45,7 @@ if [ "$cmd" = sign ]; then
     unknown) leak >&2; leak; exit 3;;
     signal) leak >&2; kill -9 $$;;
     big) leak >&2; head -c 400000 /dev/zero | tr '\0' 'A' >&2; exit 1;;
+    flood) echo $$ > "$d/apksigner.pid"; while :; do leak; leak >&2; done;;
   esac
 fi
 if [ "$cmd" = verify ]; then
@@ -151,7 +153,8 @@ class SignApkHook(SentinelCase):
             'badpass': ('sign', 'exit', 1, None, 'keystore_password_incorrect'),
             'unknown': ('sign', 'exit', 3, None, 'unclassified'),
             'signal': ('sign', 'signal', None, 9, 'unclassified'),
-            'big': ('sign', 'oversized', 1, None, 'output_oversized'),
+            'big': ('sign', 'oversized', None, None, 'output_oversized'),
+            'flood': ('sign', 'oversized', None, None, 'output_oversized'),
             'badalign': ('alignment', 'exit', 1, None, 'unclassified'),
         }
         for mode, (stage, outcome, child_exit, child_signal, category) in cases.items():
@@ -167,6 +170,9 @@ class SignApkHook(SentinelCase):
                 self.assertIsNone(D.validate(record))
                 self.assertEqual(sign_calls(sdk), 0 if mode == 'badalign' else 1)
                 self.assertNoSentinel(result.stdout, result.stderr, json.dumps(record))
+                if mode == 'flood':  # the endless writer was stopped and reaped, not left running
+                    pid = int((sdk / 'build-tools/apksigner.pid').read_text())
+                    self.assertRaises(ProcessLookupError, os.kill, pid, 0)
 
     def test_success_complete_record_and_pin_mismatch(self):
         result, record, sdk = self.run_sign_apk('ok')
@@ -401,6 +407,174 @@ class AdapterConsumption(SentinelCase, tms.Fixture):
                 ms.sign(p, self.artifact, self.out, self.keystore, self.password, self.sdk, executor=executor)
         private.assert_not_called()
         executor.assert_not_called()
+
+NOISY = r"""
+import os, signal, subprocess, sys, time
+mode, state = sys.argv[1], sys.argv[2]
+with open(os.path.join(state, 'starts'), 'a') as f:
+    f.write('%d\n' % os.getpid())
+line = b'SENTINEL_PASSWORD_7c1e https://SENTINEL-URL.invalid/?t=SENTINEL_TOKEN\n'
+if mode == 'flood':  # both streams, while alive, far past the cap; counts what the pipes accepted
+    chunk, total = (line * 1024)[:16384], 0
+    while total < 16 * 1024 * 1024:
+        for fd in (1, 2):
+            total += os.write(fd, chunk)
+        with open(os.path.join(state, 'written.tmp'), 'w') as f:
+            f.write(str(total))
+        os.replace(os.path.join(state, 'written.tmp'), os.path.join(state, 'written'))
+    time.sleep(30)
+elif mode == 'exact':  # all of stderr first, then stdout: only concurrent draining avoids a pipe deadlock
+    n_out, n_err, code = (int(v) for v in sys.argv[3:6])
+    for fd, n in ((2, n_err), (1, n_out)):
+        data = (line + b'A' * n)[:n]
+        while data:
+            data = data[os.write(fd, data):]
+    sys.exit(code)
+elif mode == 'quiet':
+    os.write(2, line)
+    time.sleep(30)
+elif mode == 'deaf':  # ignores SIGTERM, so the stop must escalate to SIGKILL
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    os.write(1, line)
+    time.sleep(30)
+elif mode == 'orphan':  # leaves a grandchild holding both pipes after the tool itself exits
+    subprocess.Popen(['sleep', '3'])
+    os.write(1, line)
+    sys.exit(3)
+"""
+
+
+def legacy_run_bounded(command, timeout=D.TIMEOUT_SECONDS, popen=subprocess.Popen):
+    """The PR178 wait-then-read implementation, kept only as the negative control for the capture regressions."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            child = popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+        except OSError:
+            return D.Result('not_started')
+        try:
+            code = child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+            return D.Result('timeout')
+        sizes = []
+        for f in (out, err):
+            f.seek(0, os.SEEK_END)
+            sizes.append(f.tell())
+    if max(sizes) > D.CAPTURE_BYTES:
+        return D.Result('oversized', code if code >= 0 else None, -code if code < 0 else None)
+    return D.Result('ok' if code == 0 else 'exit', code, None, '', '')
+
+
+class CaptureBounds(unittest.TestCase):
+    """run_bounded with real local synthetic children. The cap holds while the child is alive; nothing outlives it."""
+
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp(prefix='capture-SENTINEL-PATH-'))
+        self.addCleanup(shutil.rmtree, self.state, True)
+        self.script = self.state / 'noisy.py'
+        self.script.write_text(NOISY)
+
+    def fds(self):
+        return sorted(os.listdir('/proc/self/fd'))
+
+    def run_child(self, mode, *args, timeout=10, run=None):
+        """(result, elapsed, retained) with exactly one start, the child reaped and no descriptor left open."""
+        run = run or D.run_bounded
+        starts, reads, real_read = [], [], os.read
+        def counting_read(fd, n):
+            data = real_read(fd, n)
+            reads.append((n, len(data)))
+            return data
+        before = self.fds()
+        began = time.monotonic()
+        with mock.patch('os.read', counting_read):
+            result = run([sys.executable, '-I', str(self.script), mode, str(self.state), *map(str, args)],
+                         timeout=timeout, popen=lambda *a, **k: starts.append(subprocess.Popen(*a, **k)) or starts[-1])
+        elapsed = time.monotonic() - began
+        self.assertEqual(len(starts), 1)  # still referenced here, so its pipes are closed by run_bounded, not by GC
+        pids = (self.state / 'starts').read_text().split()
+        self.assertEqual(len(pids), 1)  # the tool itself started exactly once
+        self.assertRaises(ProcessLookupError, os.kill, int(pids[0]), 0)  # gone and reaped, not a zombie
+        self.assertEqual(self.fds(), before)
+        self.assertTrue(all(n <= D.CHUNK_BYTES for n, _ in reads))
+        self.assertNoLeak(result)
+        return result, elapsed, sum(got for _, got in reads)
+
+    def assertNoLeak(self, result):
+        """Record and summary carry fixed tokens only; a stopped child leaves no captured text in the Result."""
+        record = D.record('complete' if result.outcome == 'ok' else 'sign', result, apksigner_jar_sha256='a' * 64)
+        if result.outcome in ('oversized', 'timeout'):
+            self.assertEqual((result.stdout, result.stderr), ('', ''))
+        for sentinel in ('SENTINEL', 'https://'):
+            self.assertNotIn(sentinel, json.dumps(record) + D.summary(record, None, 1))
+
+    def check_flood(self, run=None):
+        result, elapsed, retained = self.run_child('flood', timeout=6, run=run)
+        self.assertEqual((result.outcome, D.classify(result)), ('oversized', 'output_oversized'))
+        self.assertEqual((result.returncode, result.signum), (None, None))
+        self.assertLess(elapsed, 3)  # detected during capture, not at exit or the deadline
+        self.assertLessEqual(retained, 2 * (D.CAPTURE_BYTES + 1))
+        written = int((self.state / 'written').read_text()) if (self.state / 'written').exists() else 0
+        # what the writer could push: our cap plus each pipe's kernel buffer (at most the 1 MiB unprivileged max)
+        self.assertLessEqual(written, 2 * (D.CAPTURE_BYTES + 1024 * 1024 + 16384))
+
+    def test_noisy_child_is_stopped_during_capture_on_both_streams(self):
+        self.check_flood()
+
+    def test_negative_control_wait_then_read_fails_the_regression(self):
+        with self.assertRaises(AssertionError):
+            self.check_flood(run=legacy_run_bounded)
+
+    def test_boundary_below_at_and_over_the_cap_per_stream(self):
+        cap = D.CAPTURE_BYTES
+        for n_out, n_err, outcome in ((cap - 1, cap - 1, 'exit'), (cap, cap, 'exit'),
+                                      (cap + 1, 0, 'oversized'), (0, cap + 1, 'oversized')):
+            with self.subTest(n_out=n_out, n_err=n_err):
+                (self.state / 'starts').unlink(missing_ok=True)
+                result, _, retained = self.run_child('exact', n_out, n_err, 4)
+                self.assertEqual(result.outcome, outcome)
+                self.assertLessEqual(retained, 2 * (cap + 1))
+                if outcome == 'exit':
+                    self.assertEqual((result.returncode, len(result.stdout), len(result.stderr)), (4, n_out, n_err))
+
+    def test_large_stderr_before_stdout_does_not_deadlock(self):
+        result, elapsed, _ = self.run_child('exact', 200000, 200000, 0)
+        self.assertEqual((result.outcome, len(result.stdout), len(result.stderr)), ('ok', 200000, 200000))
+        self.assertLess(elapsed, 5)
+
+    def test_timeout_stops_a_quiet_child(self):
+        result, elapsed, _ = self.run_child('quiet', timeout=1)
+        self.assertEqual((result.outcome, D.classify(result)), ('timeout', 'timeout'))
+        self.assertLess(elapsed, 1 + D.TERM_GRACE_SECONDS + 1)
+
+    def test_timeout_escalates_to_kill_when_sigterm_is_ignored(self):
+        result, elapsed, _ = self.run_child('deaf', timeout=1)
+        self.assertEqual(result.outcome, 'timeout')
+        self.assertGreaterEqual(elapsed, 1 + D.TERM_GRACE_SECONDS - 0.1)
+        self.assertLess(elapsed, 1 + D.TERM_GRACE_SECONDS + D.REAP_SECONDS)
+
+    def test_tool_exit_is_not_held_by_a_grandchild_on_the_pipes(self):
+        result, elapsed, _ = self.run_child('orphan')
+        self.assertEqual((result.outcome, result.returncode), ('exit', 3))
+        self.assertLess(elapsed, 2.5)
+
+    def test_exception_during_capture_stops_reaps_and_closes(self):
+        real = D.selectors.DefaultSelector
+        calls = []
+
+        class Failing(real):
+            def select(self, timeout=None):
+                calls.append(1)
+                if len(calls) == 3:
+                    raise KeyboardInterrupt('SENTINEL_TOKEN')
+                return super().select(timeout)
+
+        with mock.patch.object(D.selectors, 'DefaultSelector', Failing):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_child('flood')
+        pid = int((self.state / 'starts').read_text().split()[0])
+        self.assertRaises(ProcessLookupError, os.kill, pid, 0)
 
 
 if __name__ == '__main__':

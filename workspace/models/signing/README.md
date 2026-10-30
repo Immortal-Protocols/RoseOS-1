@@ -82,8 +82,20 @@ passes `--diagnostic-out <new owner-only file>` (Infra released this narrow opt-
  "childSignal": 1-64 or null, "category": "<fixed enum>", "apksignerJarSha256": "<hex64>" or null}
 ```
 
-- Each tool runs once with a 300 s bound; its stdout/stderr go to unnamed temporary files and at most 256 KiB of
-  each is read back for classification inside the signing process. Nothing raw is written anywhere.
+- Each tool starts exactly once with a 300 s bound. Its stdout and stderr are pipes drained together in reads of at
+  most 64 KiB, never asking for more than one byte past the cap, so at most 256 KiB **per stream** (512 KiB for both)
+  is held in the signing process's memory, only for classification. The cap is enforced while the tool runs: the read
+  that would pass it ends collection, its bytes are discarded unstored, and the tool is stopped. The tool is also
+  stopped at the deadline or on any exception in the collector: SIGTERM, SIGKILL after 1 s, and reaping within 5 s
+  more. Both pipes are then closed, so a leftover writer (for example a grandchild) gets EPIPE instead of filling
+  anything; until then it can only fill the kernel's own pipe buffer. A stopped tool reports `oversized` or `timeout`
+  with no exit or signal of its own. Captured output is not written to disk and is never part of a record,
+  refusal, receipt or log.
+- Correction (same primary, after review of PR178 head `9b24e81`): the first version sent output to unnamed temporary
+  files and only limited the read-back after the tool exited, so a noisy tool could grow those files until its
+  timeout. The earlier statement here that "nothing raw is written anywhere" was therefore inaccurate for that
+  version: raw bytes were written to temporary files, though never exported. The current collector replaces it, and
+  `test_sign_diagnostic.py` keeps that version as a negative control that must fail the capture regressions.
 - `category` is one of a fixed list (`keystore_password_incorrect`, `key_password_incorrect`, `alias_not_found`,
   `keystore_unreadable`, `password_file_unreadable`, `java_runtime_error`, `apk_input_rejected`,
   `output_write_failed`, `signature_not_verified`, `certificate_pin_mismatch`, `tool_missing`, `timeout`,
