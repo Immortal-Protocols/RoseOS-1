@@ -167,7 +167,9 @@ public final class RoseConversationActivity extends Activity {
   LinearLayout.LayoutParams pp=(LinearLayout.LayoutParams)presence.getLayoutParams();int size=dp(lay.stage);
   if(pp.width!=size){pp.width=pp.height=size;presence.setLayoutParams(pp);
    stage.setOrientation(t.visible?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);stage.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);
-   stage.setPadding(t.visible?dp(12):0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
+   // HiFi data-result: the 88dp Rose box starts at the margin and the caption follows it directly (.rose-caption left:
+   // margin+84), so no extra inset.
+   stage.setPadding(0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
   presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
   if(!t.visible){shownTaskId="";agents.available(false);return;}
   if(!t.id.equals(shownTaskId)){shownTaskId=t.id;presentedScroll.scrollTo(0,0);}

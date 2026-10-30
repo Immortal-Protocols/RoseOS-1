@@ -93,3 +93,10 @@ test('APP-OS-VISUAL-1030: the shared Rose draws the HiFi renderer\'s rendered me
  assert.match(view,/float lift=model\.gap\*r/);assert.match(view,/float a=model\.ringAlpha\(\);/);
  assert.match(view,/String d=RosePresenceModel\.describe\(v\)/);
 });
+
+test('APP-OS-VISUAL-1030: the compact result Rose and caption sit at the HiFi positions',()=>{
+ // .screen[data-result=true]: the 220 stage scaled .4 (88) ends where the caption starts (margin + 84); no extra inset.
+ assert.match(activity,/stage\.setPadding\(0,0,0,0\);caption\.setGravity\(t\.visible\?Gravity\.START\|Gravity\.CENTER_VERTICAL:Gravity\.CENTER\);/);
+ assert.ok(!/stage\.setPadding\(t\.visible\?dp\(12\)/.test(activity),'no 12dp inset before the compact Rose');
+});
+
