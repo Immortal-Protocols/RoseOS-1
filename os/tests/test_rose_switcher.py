@@ -101,9 +101,25 @@ class RoseSwitcherTest(unittest.TestCase):
         self.assertIn('ActivityTaskManager.getInstance().getTasks(64)', strip)
         self.assertIn('d.getOwnerUid()', strip)
         select = strip[strip.index('private void select('):strip.index('private TextView text(')]
-        self.assertLess(select.index('RoseAgentWork.open(task.taskId, work)'), select.index('startActivityAsUser'))
+        # #156 M004: the tap re-reads off the UI thread, the newest tap wins, the decision uses that fresh read, and
+        # only a selection request (display + package) is sent: never an unbound viewer, never a task id as a Rose id.
+        self.assertIn('int token = ++selection;', select)
+        self.assertIn('UI_HELPER_EXECUTOR.execute(() -> {\n            RoseAgentWork fresh = read(context);', select)
+        self.assertIn('if (token != selection) return;', select)
+        self.assertLess(select.index('RoseAgentWork.decide(card, fresh)'), select.index('startActivityAsUser'))
         self.assertIn('if (notice != null) {', select)
-        self.assertIn('UserHandle.of(task.userId)', select)
+        self.assertIn('.putExtra(RoseAgentWork.EXTRA_SELECT_DISPLAY, card.displayId)', select)
+        self.assertIn('.putExtra(RoseAgentWork.EXTRA_SELECT_PACKAGE, card.packageName)', select)
+        self.assertNotIn('WATCH_', select)
+        self.assertNotIn('taskId)', select.split('startActivityAsUser')[1])
+        self.assertIn('UserHandle.of(card.userId)', select)
+
+    def test_the_request_names_match_the_controller(self):
+        watch = (ROOT/'os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/WatchBinding.java').read_text()
+        work = (OVERLAY/'RoseAgentWork.java').read_text()
+        for name in ('EXTRA_SELECT_DISPLAY', 'EXTRA_SELECT_PACKAGE'):
+            line = [l.strip() for l in work.splitlines() if f'String {name} =' in l][0]
+            self.assertIn(line, watch, name)
 
     def test_apply_os_changes_registers_it_with_the_agent_controller_and_the_contract_declares_it(self):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()

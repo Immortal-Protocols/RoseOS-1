@@ -107,9 +107,14 @@ public final class AgentPipActivity extends Activity {
     private static final String KEY_MODE = "watchMode", KEY_TASK = "watchTask", KEY_SESSION = "watchSession";
     static WatchBinding fromIntent(Intent intent) {
         if (intent == null) return WatchBinding.UNBOUND;
-        // getStringExtra returns null for a non-String value, which makes the Watch invalid.
-        return WatchBinding.fromExtras(intent.hasExtra(WatchBinding.EXTRA_TASK), intent.getStringExtra(WatchBinding.EXTRA_TASK),
-            intent.hasExtra(WatchBinding.EXTRA_SESSION), intent.getStringExtra(WatchBinding.EXTRA_SESSION));
+        // getStringExtra returns null for a non-String value, which makes the Watch invalid. An overview selection
+        // (#156) is resolved by the controller against its own live session into that session's Watch pair.
+        Bundle extras = intent.getExtras();
+        return WatchBinding.fromEntry(intent.hasExtra(WatchBinding.EXTRA_TASK), intent.getStringExtra(WatchBinding.EXTRA_TASK),
+            intent.hasExtra(WatchBinding.EXTRA_SESSION), intent.getStringExtra(WatchBinding.EXTRA_SESSION),
+            intent.hasExtra(WatchBinding.EXTRA_SELECT_DISPLAY), extras == null ? null : extras.get(WatchBinding.EXTRA_SELECT_DISPLAY),
+            intent.hasExtra(WatchBinding.EXTRA_SELECT_PACKAGE), extras == null ? null : extras.get(WatchBinding.EXTRA_SELECT_PACKAGE),
+            Controller::resolveSelection);
     }
     private static WatchBinding restore(Bundle saved) {
         if (!WatchBinding.Mode.BOUND.name().equals(saved.getString(KEY_MODE))) return WatchBinding.UNBOUND;

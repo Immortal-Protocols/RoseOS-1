@@ -51,4 +51,22 @@ class WatchWiringTest(unittest.TestCase):
         # The viewer only reads controller state.
         self.assertNotRegex(SOURCE, r'Controller\.\w+\s*=[^=]')
 
+class SelectionWiringTest(unittest.TestCase):
+    """#156 M004: an overview selection is resolved by the controller against its own live session."""
+    def test_entries_go_through_the_selection_resolver(self):
+        entry = method('static WatchBinding fromIntent(Intent intent)')
+        self.assertIn('return WatchBinding.fromEntry(', entry)
+        self.assertIn('Controller::resolveSelection);', entry)
+        self.assertIn('extras.get(WatchBinding.EXTRA_SELECT_DISPLAY)', entry)
+        self.assertIn('extras.get(WatchBinding.EXTRA_SELECT_PACKAGE)', entry)
+
+    def test_the_controller_resolves_from_its_own_session_under_its_lock(self):
+        controller = (Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol/Controller.java').read_text()
+        line = [l for l in controller.splitlines() if 'WatchBinding resolveSelection(' in l][0]
+        self.assertIn('static synchronized WatchBinding resolveSelection(int display,String pkg)', line)
+        self.assertIn('getMethod("getAccessibilityWindows").invoke(session)', line)
+        self.assertIn('w.getDisplayId()', line)
+        self.assertIn('return WatchBinding.fromSelection(display,pkg,session!=null,status,own<0?-1:own,target,id,taskId);', line)
+        self.assertNotIn('AgentProvider', line)
+
 if __name__ == '__main__':unittest.main()

@@ -67,14 +67,27 @@ final class RoseAgentWork {
         return new RoseAgentWork(State.AVAILABLE, items, null);
     }
 
-    enum Open { WATCH, NOT_CURRENT, GONE }
+    enum Open { WATCH, NOT_CURRENT, CHANGED, GONE }
+
+    /** Selection-request extras for the controller's viewer (agent-pip WatchBinding): Android facts, never Rose IDs. */
+    static final String EXTRA_SELECT_DISPLAY = "dev.pixel.backgroundcontrol.extra.SELECT_DISPLAY_ID";
+    static final String EXTRA_SELECT_PACKAGE = "dev.pixel.backgroundcontrol.extra.SELECT_PACKAGE";
 
     /**
-     * What selecting a card may do. The viewer mirrors the agent display's current screen, so it opens only when the
-     * chosen task is still that screen; otherwise the card says so instead of showing a different task.
+     * What selecting a card may do, decided against a FRESH read taken after the tap, never the row's snapshot.
+     * The card's task must still be agent work on the same display, for the same user, with the same package, and
+     * be that display's current screen. Only then is a selection request sent; the controller then binds it to its
+     * own live session or refuses. Any other outcome says why and never shows a different task.
      */
-    static Open open(int taskId, RoseAgentWork now) {
-        for (Task t : now.items) if (t.taskId == taskId) return t.topOfDisplay ? Open.WATCH : Open.NOT_CURRENT;
+    static Open decide(Task card, RoseAgentWork fresh) {
+        if (fresh == null || fresh.state != State.AVAILABLE) return Open.GONE;
+        for (Task t : fresh.items) {
+            if (t.taskId != card.taskId) continue;
+            if (t.displayId != card.displayId || t.userId != card.userId || !t.packageName.equals(card.packageName)) {
+                return Open.CHANGED;
+            }
+            return t.topOfDisplay ? Open.WATCH : Open.NOT_CURRENT;
+        }
         return Open.GONE;
     }
 
@@ -82,6 +95,7 @@ final class RoseAgentWork {
         switch (result) {
             case WATCH: return null;
             case NOT_CURRENT: return label + " is not on Rose's screen right now";
+            case CHANGED: return label + " changed; pick it again";
             default: return label + " is no longer running";
         }
     }

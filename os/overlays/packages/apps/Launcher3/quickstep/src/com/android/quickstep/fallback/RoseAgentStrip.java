@@ -36,8 +36,7 @@ public final class RoseAgentStrip extends LinearLayout {
 
     private final TextView title, status;
     private final LinearLayout cards;
-    private RoseAgentWork work = RoseAgentWork.unavailable("Loading");
-    private int generation;
+    private int generation, selection;
 
     public RoseAgentStrip(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -112,7 +111,6 @@ public final class RoseAgentStrip extends LinearLayout {
     }
 
     private void show(RoseAgentWork next) {
-        work = next;
         cards.removeAllViews();
         status.setText(next.reason == null ? "" : next.reason);
         for (RoseAgentWork.Task task : next.items) {
@@ -133,21 +131,36 @@ public final class RoseAgentStrip extends LinearLayout {
         }
     }
 
-    private void select(RoseAgentWork.Task task) {
-        RoseAgentWork.Open result = RoseAgentWork.open(task.taskId, work);
-        String notice = RoseAgentWork.describe(result, task.label);
-        if (notice != null) {
-            status.setText(notice);
-            refresh();
-            return;
-        }
-        try {
-            getContext().startActivityAsUser(new Intent().setComponent(VIEWER)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), UserHandle.of(task.userId));
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Viewer unavailable", e);
-            status.setText("Rose's viewer could not be opened");
-        }
+    /**
+     * The tap re-reads the platform off the UI thread; only the newest tap acts. A valid selection sends the
+     * controller's viewer a selection request (display and package), which it binds to its own live session or
+     * refuses; it is never an unbound viewer, and never carries an Android task id as a Rose id.
+     */
+    private void select(RoseAgentWork.Task card) {
+        int token = ++selection;
+        Context context = getContext();
+        UI_HELPER_EXECUTOR.execute(() -> {
+            RoseAgentWork fresh = read(context);
+            post(() -> {
+                if (token != selection) return;
+                show(fresh);
+                RoseAgentWork.Open result = RoseAgentWork.decide(card, fresh);
+                String notice = RoseAgentWork.describe(result, card.label);
+                if (notice != null) {
+                    status.setText(notice);
+                    return;
+                }
+                try {
+                    context.startActivityAsUser(new Intent().setComponent(VIEWER)
+                            .putExtra(RoseAgentWork.EXTRA_SELECT_DISPLAY, card.displayId)
+                            .putExtra(RoseAgentWork.EXTRA_SELECT_PACKAGE, card.packageName)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), UserHandle.of(card.userId));
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Viewer unavailable", e);
+                    status.setText("Rose's viewer could not be opened");
+                }
+            });
+        });
     }
 
     private TextView text(CharSequence value, int sp) {
