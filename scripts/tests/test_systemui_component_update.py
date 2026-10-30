@@ -34,7 +34,7 @@ class FakeEmulator:
         self.qemu, self.stage_ok, self.activation = qemu, stage_ok, activation
         self.boot_after_update, self.recover_ok = boot_after_update, recover_ok
         self.code, self.version, self.updated, self.running, self.booted = '/system_ext/priv-app/SystemUI', 36, False, True, True
-        self.sessions, self.calls = [], []
+        self.sessions, self.calls, self.applied_version = [], [], 37
 
     def __call__(self, argv, capture_output, text, timeout):
         args = argv[3:]
@@ -66,10 +66,10 @@ class FakeEmulator:
                     self.booted = False
                     self.boot_after_update = True  # the recovery boot works
                 elif self.activation == 'applies':
-                    self.code, self.version, self.updated = '/data/app/~~x/com.android.systemui-y', 37, True
+                    self.code, self.version, self.updated = '/data/app/~~x/com.android.systemui-y', self.applied_version, True
                     pending[0]['applied'] = True
                 elif self.activation == 'crashes':
-                    self.code, self.version, self.updated, self.running = '/data/app/~~x/com.android.systemui-y', 37, True, False
+                    self.code, self.version, self.updated, self.running = '/data/app/~~x/com.android.systemui-y', self.applied_version, True, False
                     pending[0]['applied'] = True
             else:
                 self.booted = True

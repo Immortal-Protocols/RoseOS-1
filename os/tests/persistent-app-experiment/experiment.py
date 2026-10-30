@@ -102,7 +102,7 @@ def sdk_tools(sdk):
     platform = sdk/'platforms/android-35/android.jar'
     if not platform.is_file():
         raise Unavailable(f'{platform} is not installed')
-    return {'aapt2': build_tools/'aapt2', 'd8': build_tools/'d8', 'zipalign': build_tools/'zipalign',
+    return {'aapt': build_tools/'aapt', 'aapt2': build_tools/'aapt2', 'd8': build_tools/'d8', 'zipalign': build_tools/'zipalign',
         'apksigner': build_tools/'apksigner', 'androidJar': platform, 'buildTools': build_tools.name}
 
 def run_ok(argv, **kw):
@@ -188,7 +188,7 @@ class Device:
         self.save(f'{label}-logcat.txt', log)
         return {'package': package_state(dump), 'marker': latest_marker(log), 'pidof': pid or None}
 
-def run(sdk, work, evidence):
+def run(sdk, work, evidence, systemui=False):
     work, evidence = Path(work), Path(evidence)
     evidence.mkdir(parents=True, exist_ok=True)
     results = {'experiment': 'OS-COMPONENT-EXP-004', 'source': os.environ.get('GITHUB_SHA'),
@@ -199,8 +199,8 @@ def run(sdk, work, evidence):
     emulator_proc = None
     device = Device(sdk, evidence)
 
-    def stage(name, fn):
-        if any(s['result'] != 'pass' for s in stages.values()):
+    def stage(name, fn, needs=None):
+        if any(s['result'] != 'pass' for n, s in stages.items() if needs is None or n in needs):
             stages[name] = {'result': 'not-run', 'reason': 'an earlier stage did not pass'}
             return
         try:
@@ -342,6 +342,14 @@ def run(sdk, work, evidence):
         for name, fn in (('environment', environment), ('image', image), ('device', boot), ('seed', seed),
                 ('ordinary', ordinary), ('staged', staged), ('restore', restore)):
             stage(name, fn)
+        if systemui:
+            # Opt-in (OS-COMPONENT-UPDATES-001): the image's own SystemUI, after the fixture stages but not gated on
+            # their seeding (which may need verity disabled); each SystemUI stage needs the boot and its predecessors.
+            import systemui_stages
+            needs = ['environment', 'image', 'device']
+            for name, fn in systemui_stages.stages(device, sdk_tools(sdk), work, evidence, SERIAL, Failed):
+                stage(name, fn, needs)
+                needs = needs + [name]
     finally:
         if emulator_proc:
             subprocess.run([device.adb, '-s', SERIAL, 'emu', 'kill'], capture_output=True, timeout=60)
@@ -365,6 +373,7 @@ def main(argv=None):
     p.add_argument('--sdk', required=True)
     p.add_argument('--work', required=True)
     p.add_argument('--evidence')
+    p.add_argument('--systemui', action='store_true', help='run: also the SystemUI stages (systemui_stages.py)')
     a = p.parse_args(argv)
     try:
         if a.command == 'build':
@@ -372,7 +381,7 @@ def main(argv=None):
             return 0
         if not a.evidence:
             p.error('run needs --evidence')
-        results = run(a.sdk, a.work, a.evidence)
+        results = run(a.sdk, a.work, a.evidence, a.systemui)
         # Results and reasons in the job log too, so the outcome is readable without downloading the artifact.
         print(json.dumps({k: {'result': v['result'], 'reason': v.get('reason')} for k, v in results['stages'].items()},
             indent=2, sort_keys=True))
