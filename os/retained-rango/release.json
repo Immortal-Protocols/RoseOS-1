@@ -63,6 +63,22 @@
     "selectionBasis": "OCT30-INFRA-S017: signing never publishes. Publication runs only when the workflow input rango_publish is explicitly true (default false), enforced by the job condition and by rango-retained.py publish. feedChannel and notes stay signing prerequisites because they are signed public assets (rango-stable, UPDATE.md) checked by verify_signed; repository, tag and latest are publication-only."
   },
   "verification": {
+    "updater": {
+      "mode": "upstream",
+      "recipe": {
+        "path": "os/build-only/rango-reconcile.json",
+        "sha256": "70ae67efd0127cc10073cfd33cb9a4fd009aaeef2db2fb1f451743ea19fb8c59"
+      },
+      "included": null,
+      "apkPath": "SYSTEM/priv-app/Updater/Updater.apk",
+      "packageName": "app.seamlessupdate.client",
+      "requiredFiles": [
+        "SYSTEM/etc/permissions/app.seamlessupdate.client.xml",
+        "SYSTEM/etc/default-permissions/app.seamlessupdate.client.xml",
+        "SYSTEM/etc/sysconfig/app.seamlessupdate.client.xml"
+      ],
+      "basis": "OCT30-INFRA-S018: the retained build was compiled with --keep-upstream-updater (recipe = the pinned rango-reconcile.json, the bc855f1 bytes), so it carries no Rose channel and verification never claims Rose discovery (owner 13:32:59: first Fold Beta for manual installation). Source expectation: upstream build/make media_system.mk adds Updater only when OFFICIAL_BUILD=true and apply-os-changes.py adds it only with --updater-url, so this build should ship none; that is NOT yet proven on the actual ZIP. included stays null until the bounded index of target-files f73e7485 says: false = no Updater APK anywhere and none of the three supporting XML files; true = also bind signer (one exact digest from the actual signing mapping) and resources (kind/name -> compiled value, string/url required, from pinned upstream source plus the actual compiled APK). Paths and package are the standard Updater layout (docs/OS-INTEGRATION.md)."
+    },
     "expected": null,
     "basis": "Unbound: the Rango-specific release-pipeline expectations - variant, apps ([[package, versionCode]]), identities.appSignerSha256, host.tools, updater, permissionApex, systemUiTray and the other sections verify_signed reads. Frankel's updater, framework and feed identities are never claimed for Rango; target, identities (OTA/AVB) and publication are never taken from here."
   }

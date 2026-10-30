@@ -769,6 +769,120 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(self.check_updater(self.updater_zip(rose_channels=False)),
             ['Updater dex has no app.seamlessupdate.client.RoseChannels; the RoseOS channel code is not compiled in'])
 
+    # OCT30-INFRA-S018: a retained --keep-upstream-updater build is verified against its own evidenced upstream contract.
+    GRAPHENEOS_URL = 'https://releases.grapheneos.org/'
+
+    def upstream(self, **changes):
+        config = json.loads(self.config.read_text())
+        args = ['--agent-tray', '--keep-upstream-updater']
+        config['target']['device'] = 'rango'
+        config['host']['integrate']['reconcile']['applyArgs'] = args
+        rose = config['updater']
+        config['updater'] = {'mode': 'upstream', 'recipeApplyArgs': args, 'included': True, 'apkPath': rose['apkPath'],
+            'packageName': rose['packageName'], 'requiredFiles': rose['requiredFiles'], 'signer': rose['signer'],
+            'resources': {'string/url': self.GRAPHENEOS_URL, 'string/channel_default': 'prod'}}
+        for key, value in changes.items():
+            if value is None:
+                config['updater'].pop(key, None)
+            else:
+                config['updater'][key] = value
+        return config
+
+    def upstream_env(self, url=None):
+        os.environ['FAKE_UPDATER_URL'] = url or self.GRAPHENEOS_URL
+        self.addCleanup(os.environ.pop, 'FAKE_UPDATER_URL', None)
+
+    def test_upstream_updater_passes_with_its_evidenced_contract_and_no_rose_code(self):
+        self.upstream_env()
+        path = self.updater_zip(rose_channels=False)
+        self.assertEqual(self.check_updater(path, apksigner=False, config=self.upstream()), [])
+        self.assertEqual(self.check_updater(path, config=self.upstream()), [])
+        record = release_pipeline.updater_record(self.upstream())
+        self.assertEqual((record['mode'], record['roseDiscovery'], record['included']), ('upstream', False, True))
+        self.assertEqual(release_pipeline.updater_record(json.loads(self.config.read_text()))['roseDiscovery'], True)
+
+    def test_upstream_updater_refuses_wrong_url_package_path_xml_signer_or_rose_hybrid(self):
+        self.upstream_env()
+        upstream = self.upstream()
+        self.assertEqual(self.check_updater(self.updater_zip(rose_channels=True), config=upstream),
+            ['Updater dex has the Rose channel code in an upstream-mode build (Rose/upstream hybrid)'])
+        path = self.updater_zip(rose_channels=False)
+        os.environ['FAKE_UPDATER_URL'] = UPDATER_URL  # the Rose endpoint compiled into an upstream-mode build
+        self.assertEqual(self.check_updater(path, config=upstream),
+            [f"Updater compiled url is {UPDATER_URL!r}, expected {self.GRAPHENEOS_URL!r}"])
+        os.environ['FAKE_UPDATER_URL'] = self.GRAPHENEOS_URL
+        self.assertIn("Updater compiled channel_default is 'prod', expected 'beta'",
+            self.check_updater(path, config=self.upstream(resources={'string/url': self.GRAPHENEOS_URL, 'string/channel_default': 'beta'})))
+        self.assertIn('absent_setting has 0 default values', ' '.join(self.check_updater(path, config=self.upstream(
+            resources={'string/url': self.GRAPHENEOS_URL, 'string/absent_setting': 'x'}))))
+        os.environ['FAKE_UPDATER_PACKAGE'] = 'com.example.updater'
+        self.addCleanup(os.environ.pop, 'FAKE_UPDATER_PACKAGE', None)
+        self.assertIn('Updater package is com.example.updater, expected app.seamlessupdate.client', self.check_updater(path, config=upstream))
+        os.environ.pop('FAKE_UPDATER_PACKAGE')
+        moved = 'PRODUCT/priv-app/Updater/Updater.apk'
+        self.assertIn('more than one Updater APK', self.check_updater(self.updater_zip(apk_paths=(UPDATER_APK, moved), rose_channels=False),
+            config=upstream)[0])
+        self.assertEqual(self.check_updater(self.updater_zip(apk_paths=(moved,), rose_channels=False), config=upstream),
+            [f"Updater APK {UPDATER_APK} is absent from the target-files (found ['{moved}'])"])
+        self.assertEqual(self.check_updater(self.updater_zip(xml=UPDATER_XML[:2], rose_channels=False), config=upstream),
+            [f'Updater supporting file {UPDATER_XML[2]} is absent'])
+        self.assertIn(f'does not name app.seamlessupdate.client', ' '.join(self.check_updater(
+            self.updater_zip(package='com.example.other', rose_channels=False), config=upstream)))
+        self.assertEqual(self.check_updater(self.updater_zip(rose_channels=False), config=self.upstream(signer='0' * 64)),
+            ['Updater is not signed by the expected certificate'])
+
+    def test_upstream_absence_contract(self):
+        absent = self.upstream(included=False, signer=None, resources=None)
+        empty = self.root/'no-updater.zip'
+        with zipfile.ZipFile(empty, 'w') as z:
+            z.writestr('SYSTEM/build.prop', 'ro.build.type=user\n')
+        self.assertEqual(self.check_updater(empty, config=absent), [])
+        self.assertEqual(release_pipeline.updater_record(absent)['included'], False)
+        self.assertIn('upstream Updater expected absent', self.check_updater(self.updater_zip(rose_channels=False), config=absent)[0])
+        with zipfile.ZipFile(empty, 'a') as z:
+            z.writestr(UPDATER_XML[0], '<permissions/>')  # a leftover supporting file is not absence
+        self.assertIn(UPDATER_XML[0], self.check_updater(empty, config=absent)[0])
+
+    def test_upstream_mode_refuses_unknown_unbound_conflicting_or_misplaced_contracts(self):
+        path = self.updater_zip(rose_channels=False)
+        unbound = self.upstream(included=None)
+        with self.assertRaises(release_pipeline.SetupMissing) as caught:
+            self.check_updater(path, config=unbound)
+        self.assertEqual(caught.exception.missing, ['updater.included'])
+        with self.assertRaises(release_pipeline.SetupMissing) as caught:
+            self.check_updater(path, config=self.upstream(resources={'string/channel_default': 'prod'}))
+        self.assertEqual(caught.exception.missing, ['updater.resources.string/url'])
+        with self.assertRaises(release_pipeline.SetupMissing) as caught:
+            self.check_updater(path, config=self.upstream(signer=None))
+        self.assertEqual(caught.exception.missing, ['updater.signer'])
+        frankel = self.upstream()
+        frankel['target']['device'] = 'frankel'
+        rose_recipe = self.upstream()
+        rose_recipe['host']['integrate']['reconcile']['applyArgs'] = rose_recipe['updater']['recipeApplyArgs'] = ['--updater-url', UPDATER_URL]
+        differing = self.upstream()
+        differing['host']['integrate']['reconcile']['applyArgs'] = ['--keep-upstream-updater']
+        unknown = json.loads(self.config.read_text())
+        unknown['updater']['mode'] = 'skip'
+        for config, message in ((unknown, "updater.mode 'skip'"), (frankel, 'never frankel'),
+                                (self.upstream(recipeApplyArgs=None), 'needs the --keep-upstream-updater recipe'),
+                                (rose_recipe, 'needs the --keep-upstream-updater recipe'),
+                                (self.upstream(recipeApplyArgs=['--keep-upstream-updater', '--updater-published-channel', 'stable']),
+                                 'needs the --keep-upstream-updater recipe'),
+                                (differing, 'differ from the reconcile applyArgs'),
+                                (self.upstream(channelValues=['prod']), 'hybrid'),
+                                (self.upstream(included='yes'), 'must be true or false'),
+                                (self.upstream(included=False, resources=None), 'conflicting upstream contract'),
+                                (self.upstream(resources={'url': self.GRAPHENEOS_URL}), 'kind/name'),
+                                (self.upstream(resources=[self.GRAPHENEOS_URL]), 'kind/name')):
+            with self.subTest(message=message), self.assertRaisesRegex(release_pipeline.InvalidInput, re.escape(message)):
+                self.check_updater(path, config=config)
+
+    def test_rose_mode_without_its_channel_url_refuses_instead_of_crashing(self):
+        config = json.loads(self.config.read_text())
+        config['host']['integrate']['reconcile']['applyArgs'] = ['--agent-tray', '--keep-upstream-updater']
+        with self.assertRaisesRegex(release_pipeline.InvalidInput, 'updater.mode rose needs --updater-url'):
+            self.check_updater(self.updater_zip(), config=config)
+
     def test_updater_gate_fails_closed_without_the_os_layout(self):
         config = json.loads(self.config.read_text())
         for key in ('apkPath', 'signer', 'requiredFiles'):
