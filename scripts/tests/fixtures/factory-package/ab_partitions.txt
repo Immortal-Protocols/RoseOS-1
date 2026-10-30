@@ -1,0 +1,13 @@
+boot
+init_boot
+vendor_boot
+vendor_kernel_boot
+dtbo
+pvmfw
+vbmeta
+vbmeta_system
+abl
+system
+system_ext
+product
+vendor
