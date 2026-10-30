@@ -2,13 +2,17 @@ name: Models signing verification
 
 # Source tests for the Rose Models (dev.pixel.models) signing adapter: closed profile, input
 # binding, refusal order, signer/output inspection and receipts, with synthetic fixtures and a
-# mocked signer. No keys, secrets, signing, SDK download or artifact access.
+# mocked signer; and the isolated build-tools r35 preparation in the models-sign preflight (MODELS-SDK-PREP-001) with
+# synthetic archives and mocked transport. No keys, secrets, signing, SDK download, network or artifact access.
 on:
   pull_request:
     paths:
       - 'workspace/models/signing/**'
       - 'workspace/models/android/tests/verify-artifact.sh'
       - 'scripts/sign-apk.py'
+      - 'scripts/models-sdk-prepare.py'
+      - 'scripts/host-models-sign.py'
+      - 'os/models-signing/models-sign.json'
       - '.github/workflows/models-signing-verification.yml'
   push:
     branches: [main]
@@ -16,6 +20,9 @@ on:
       - 'workspace/models/signing/**'
       - 'workspace/models/android/tests/verify-artifact.sh'
       - 'scripts/sign-apk.py'
+      - 'scripts/models-sdk-prepare.py'
+      - 'scripts/host-models-sign.py'
+      - 'os/models-signing/models-sign.json'
       - '.github/workflows/models-signing-verification.yml'
 
 permissions:
@@ -38,6 +45,10 @@ jobs:
         run: |
           python3 --version
           python3 -m unittest -v test_models_signing
+      - name: SDK preparation and models-sign preflight ordering (synthetic archives, mocked transport)
+        run: python3 workspace/models/signing/test_models_sdk_prepare.py -v
+      - name: Existing host-models-sign suite with the preparation hook
+        run: python3 scripts/tests/test_models_apk_signing.py
       - name: Committed profile is valid and refuses while unbound
         run: |
           set +e

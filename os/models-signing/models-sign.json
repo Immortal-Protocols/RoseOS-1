@@ -14,13 +14,21 @@
     "basis": "S013 selected ingress: only the original unsigned input the PR #149 profile pins (source, push/main, run, attempt), read by the hosted guard with its existing actions: read job token, validated by scripts/models-input-ingress.py before the controller starts, handed to the signing job as a same-run artifact and rechecked there before any secret access. No other run, artifact, URL, credential or permission is accepted."
   },
   "sdk": {
-    "root": "/home/pixelbuild/rose-actions/tools/android-sdk",
-    "archive": "/home/pixelbuild/rose-actions/tools/android-sdk/downloads/build-tools_r35_linux.zip",
+    "root": "/home/pixelbuild/rose-actions/tools/models-sdk-r35",
+    "archive": "/home/pixelbuild/rose-actions/tools/models-sdk-r35/downloads/build-tools_r35_linux.zip",
     "archiveSha256": "bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88",
     "archivePrefix": "android-15",
     "installedDirectory": "build-tools/android-15",
     "members": ["lib/apksigner.jar", "aapt"],
-    "basis": "scripts/setup-android-sdk.sh pins Google's build-tools_r35_linux.zip; the retained archive is rehashed and its android-15 subtree must equal the installed build-tools/android-15 tree file by file"
+    "prepare": {
+      "url": "https://dl.google.com/android/repository/build-tools_r35_linux.zip",
+      "deadlineSeconds": 120,
+      "archiveBytes": 268435456,
+      "archiveMembers": 4000,
+      "memberBytes": 134217728,
+      "expandedBytes": 536870912
+    },
+    "basis": "MODELS-SDK-PREP-001: an isolated cache, never the shared android-sdk. scripts/setup-android-sdk.sh pins Google's build-tools_r35_linux.zip; the models-sign preflight (before login, under the shared lock) prepares or reuses it with scripts/models-sdk-prepare.py, verifying the digest before extraction and the whole extracted tree after, and the signed run only revalidates it: the retained archive is rehashed and its android-15 subtree must equal the installed build-tools/android-15 tree file by file"
   },
   "bootstrap": {
     "profile": "models-v0",
