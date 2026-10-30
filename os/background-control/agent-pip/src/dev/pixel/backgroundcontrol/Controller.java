@@ -36,7 +36,8 @@ public final class Controller {
  // Tells Rose Agent at once, so it can end the task even if the agent makes no further phone call.
  // Shared sender identity lets the receiver check this package and its signing certificate.
  static void announceOwnerStop(Context c,String session,String task){try{Intent i=new Intent("dev.pixel.backgroundcontrol.action.OWNER_STOP").setPackage("dev.pixel.voice").putExtra("sessionId",session).putExtra("taskId",task).putExtra("stoppedAt",System.currentTimeMillis());BroadcastOptions o=BroadcastOptions.makeBasic();o.setShareIdentityEnabled(true);c.sendBroadcast(i,null,o.toBundle());}catch(RuntimeException e){Log.w("BackgroundControl","Owner stop notice not delivered",e);}}
- static void requestConsent(Activity a)throws Exception{IntentSender pending; synchronized(Controller.class){pending=consent;}if(pending!=null)a.startIntentSenderForResult(pending,3,null,0,0,0);}
+ /** Launches Android's pending consent; false when none is pending (the owner sees that, #225). */
+ static boolean requestConsent(Activity a)throws Exception{IntentSender pending; synchronized(Controller.class){pending=consent;}if(pending==null)return false;a.startIntentSenderForResult(pending,3,null,0,0,0);return true;}
  // The refused task is named on its own; the running workspace, if any, is only under "current".
  static JSONObject refusal(String task,JSONObject current)throws Exception{return refusal(stops.refusal(task),current);}
  static JSONObject refusal(Map<String,Object> fields,JSONObject current)throws Exception{JSONObject r=new JSONObject();for(Map.Entry<String,Object> f:fields.entrySet())r.put(f.getKey(),f.getValue());return r.put("current",current);}
