@@ -271,6 +271,21 @@ class Storage(unittest.TestCase):
         cfg.write_text(json.dumps({'model': self.model}))
         return V.main([*args, '--config', str(cfg), '--cache', str(self.tmp / 'hf'), '--receipt', str(self.receipt)])
 
+    def test_result_file_is_written_and_its_failure_never_changes_the_exit_code(self):
+        fake_cache(self.tmp / 'hf', self.model)
+        result = self.tmp / 'run/verify.json'
+        self.assertEqual(self.main('check', '--result', str(result)), V.EXIT_NO_RECEIPT)
+        self.assertEqual(json.loads(result.read_text())['result'], 'no_receipt')
+        self.assertEqual(self.main('record', '--result', str(result)), 0)
+        self.assertEqual({k: v for k, v in json.loads(result.read_text()).items() if k != 'at'},
+                         {'result': 'verified', 'full': True})
+        blocked = self.tmp / 'not-a-dir'
+        blocked.write_text('')
+        for args, code in ((('check',), 0), (('check', '--full'), 0)):
+            self.assertEqual(self.main(*args, '--result', str(blocked / 'verify.json')), code)  # unwritable: same code
+        os.unlink(self.receipt)
+        self.assertEqual(self.main('check', '--result', str(blocked / 'verify.json')), V.EXIT_NO_RECEIPT)
+
     def test_first_start_record_then_quick_and_full_checks(self):
         self.assertEqual(self.main('check'), V.EXIT_NO_RECEIPT)  # first start may download
         fake_cache(self.tmp / 'hf', self.model)

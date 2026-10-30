@@ -95,13 +95,17 @@ def check(cache, model, receipt_path, full=False):
 
 
 def write_result(path, out):
-    """The outcome as a small nonsecret file the health receipt publishes: result, full, at (no paths or reasons)."""
+    """The outcome as a small nonsecret file the health receipt publishes: result, full, at (no paths or reasons).
+    Telemetry only: a write failure never changes the exit code, so it can never block or allow a model start."""
     if path is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = Path(str(path) + '.tmp')
-    tmp.write_text(json.dumps({'result': out['result'], 'full': bool(out.get('full')), 'at': int(time.time())}) + '\n')
-    os.replace(tmp, path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(path) + '.tmp')
+        tmp.write_text(json.dumps({'result': out['result'], 'full': bool(out.get('full')), 'at': int(time.time())}) + '\n')
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def main(argv=None):
