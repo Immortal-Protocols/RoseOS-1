@@ -99,7 +99,7 @@ writes nothing. Resolve it with the owner, never with a blanket `adopt`.
 The generate stage never regenerates an existing vendor directory. Neither stage erases
 outputs or caches.
 
-## Resuming a compile after a natural cutoff (OS-RANGO-RESUME-005)
+## Resuming a compile after a natural cutoff (OS-RANGO-RESUME-005, corrected by -F1)
 
 A compile stopped by the supervisor deadline or a VM stop can continue in its own `OUT_DIR`.
 The incremental cache is reused, and nothing is renamed, deleted, cleaned, regenerated or
@@ -131,14 +131,14 @@ same nonblocking isolated lock, before it runs anything.
    - `stoppedAt` falls after the start, and `observedAt` falls after the stop.
    - At least one evidence file is listed. The helper re-hashes each one and requires the
      quoted line to appear exactly.
-   - `writer` gives the boot id of the host during the compile, and the writer pid.
 
 3. **`PROV.json` (`rango-compile-provenance`), bound to the original `started.json`.** It
    supplies what an old-format start never recorded, each with a recorded source:
    - the config sha256, which must equal the `--config` file now;
    - the recipe (base and overlays);
-   - the Android project pins: a snapshot recorded before the start, and a read-only snapshot
-     taken now. The two must be byte-identical;
+   - the Android project pins: the retained resolved project map (`repo manifest -r` XML)
+     with its sha256, and one resolved now. They are compared as exact (name, path, revision)
+     pins, not as bytes, and every project must carry a pinned revision;
    - the `OUT_DIR` owner uid.
 
    A missing field is reported and refused. Nothing is invented.
@@ -157,18 +157,31 @@ same nonblocking isolated lock, before it runs anything.
    - It is owned by the recorded uid, and no receipt or proof path lies inside it.
    - Links inside the build are neither walked nor refused.
 
-6. **No writer.**
-   - The cutoff's boot id differs from the current one, or the recorded pid is gone.
-   - No process has its cwd or an open file in `OUT_DIR`, and no ninja, soong or kati process
-     runs in `SRC`.
+6. **The old process tree is gone: a boot change, not a process scan.**
+   - The witnessed boot is the boot id observed while the latest attempt existed:
+     - a resume attempt records its own boot in `started.json`;
+     - an old-format attempt (no recorded boot) needs `--boot-witness`
+       (`rango-compile-boot-witness`), a genuine observation of the live attempt, bound to its
+       `started.json` sha256 and build. It carries `observedBy`, `method` and its actual
+       `observedAt`, which must lie between the start and `stoppedAt`. A witness is never
+       backdated or presented as a launch receipt.
+   - The current boot id must differ from the witnessed one. The current boot time must be
+     after that observation and at or after `stoppedAt`.
+   - The helper reads only `/proc/sys/kernel/random/boot_id` and the `btime` line of
+     `/proc/stat`. It never reads any process's command line, environment, file descriptors or
+     working directory, and needs no root or extra privilege.
+   - It fails closed. A same-boot stop is refused, because proving termination there would need
+     process inspection. A missing or unbound witness, or an unreadable boot identity, is also
+     refused.
 
 ### What `resume` writes
 
 `resume` creates the next `R.resume-N` (write-once):
 
 - `preflight.json` holds the admission report.
-- `started.json` holds the unchanged command and `resumeOf`: the prior receipts' hashes, the
-  cutoff and provenance hashes, and the helper's hash.
+- `started.json` holds the unchanged command, `boot` (this boot's id and time) and `resumeOf`:
+  the prior receipts' hashes, the cutoff, provenance and witness hashes, the boot comparison,
+  and the helper's hash.
 - `completed.json` holds the returncode, with `incremental: true`, `signed: false` and
   `releaseReady: false`.
 
@@ -180,11 +193,28 @@ Earlier receipts are never modified. A later cutoff needs a new proof bound to t
 ```bash
 python3 $R/scripts/rango-build-only.py resume-check --config $R/os/build-only/rango-isolated.json \
   --build-number $B --download-dir /srv/rose-rango/dl-$B --inputs-receipt $IN/local-inputs.json \
-  --prior-receipt-dir /srv/rose-rango/receipts/$B-compile --cutoff-proof CUT.json --provenance PROV.json
+  --prior-receipt-dir /srv/rose-rango/receipts/$B-compile --cutoff-proof CUT.json --provenance PROV.json \
+  --boot-witness WITNESS.json
 python3 $R/scripts/rango-build-only.py resume --config $R/os/build-only/rango-isolated.json \
   --build-number $B --download-dir /srv/rose-rango/dl-$B --inputs-receipt $IN/local-inputs.json \
-  --prior-receipt-dir /srv/rose-rango/receipts/$B-compile --cutoff-proof CUT.json --provenance PROV.json
+  --prior-receipt-dir /srv/rose-rango/receipts/$B-compile --cutoff-proof CUT.json --provenance PROV.json \
+  --boot-witness WITNESS.json
 ```
+
+Run both as the ordinary build owner. No root, sudo or other privilege is used or needed.
+
+### Limitations
+
+- **New writers.** A boot change proves only that the attempt's own process tree, including
+  new-session descendants, is gone. A writer started in the new boot is excluded only if it
+  takes the isolated lock, which `resume` holds throughout.
+- **Old-format runs.** These were never recorded, so the helper binds only what was:
+  - The environment binding covers only the recorded command, cwd, `OUT_DIR` and
+    `BUILD_NUMBER`. The full post-lunch or inherited environment is not covered.
+  - The config hash and project map come from the operator's retained files, as attributed
+    in `sources`. They are not launch-time hash records unless those records exist.
+- **PR173's version.** The first version of this helper scanned every process and is withdrawn.
+  Do not run it, including its `resume-check`.
 
 A successful incremental compile is only a compile. It is not signing, verification or
 device acceptance.

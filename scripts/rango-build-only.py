@@ -46,6 +46,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from xml.etree import ElementTree
 import sys
 import time
 
@@ -285,7 +286,8 @@ def run(config, stage, build, download_dir, receipt_dir, runner=subprocess.run, 
 
 CUTOFF_CAUSES = ('supervisor-deadline', 'vm-stop')
 SIGNALLED = (-15, -9, 143, 137)
-BUILD_PROCESSES = ('ninja', 'soong_ui', 'soong_build', 'ckati', 'kati', 'make')
+BOOT_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+STAMP = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ')
 
 def read_json(path):
     try:
@@ -381,14 +383,43 @@ def check_provenance(provenance, original, config_path):
         problems.append('the config differs from the one recorded at the original start')
     projects = provenance['projects']
     paths = [Path(str(projects.get(k))) for k in ('recordedPath', 'currentPath')]
+    pins = None
     if any(not p.is_absolute() or p.is_symlink() or not p.is_file() for p in paths) or paths[0] == paths[1]:
-        problems.append('the Android project pin snapshots (recorded at start, taken now) must be two existing files')
-    elif not sha256_file(paths[0]) == projects.get('recordedSha256') == sha256_file(paths[1]):
-        problems.append('the Android project pins now differ from those recorded at the original start')
+        problems.append('the Android project maps (the retained one and one resolved now) must be two existing files')
+    elif sha256_file(paths[0]) != projects.get('recordedSha256'):
+        problems.append(f'{paths[0]} is not the retained project map with the recorded sha256')
+    else:
+        recorded, current = project_pins(paths[0]), project_pins(paths[1])
+        if isinstance(recorded, str) or isinstance(current, str):
+            problems.append(f'project map unusable: {recorded if isinstance(recorded, str) else current}')
+        elif recorded != current:
+            changed = sorted(set(recorded) ^ set(current))
+            problems.append(f'the Android project pins differ from the retained map: {len(changed)} entries, e.g. {changed[:3]}')
+        else:
+            pins = len(recorded)
     uid = provenance['output'].get('uid')
     if not isinstance(uid, int) or isinstance(uid, bool):
         problems.append('provenance output.uid is not a recorded owner uid')
-    return problems, {'uid': uid, 'projectsSha256': projects.get('recordedSha256'), 'recipe': provenance['recipe']}
+    return problems, {'uid': uid, 'projectsSha256': projects.get('recordedSha256'), 'projectPins': pins,
+        'recipe': provenance['recipe'], 'sources': provenance['sources']}
+
+def project_pins(path):
+    """{(name, path, revision)} of a resolved manifest (repo manifest -r), compared as pins rather than as bytes;
+    a reason string when a project has no pinned revision or appears twice."""
+    try:
+        root = ElementTree.parse(path).getroot()
+    except (ElementTree.ParseError, OSError) as error:
+        return f'{path}: {error}'
+    pins = set()
+    for project in root.iter('project'):
+        name, revision = project.get('name'), project.get('revision')
+        if not name or not revision:
+            return f'{path}: project {name!r} has no pinned revision'
+        pin = (name, project.get('path') or name, revision)
+        if pin in pins:
+            return f'{path}: project {name!r} appears twice'
+        pins.add(pin)
+    return pins or f'{path}: no projects'
 
 def check_output(src, out_name, uid, receipt_paths):
     """The existing OUT_DIR must be this build's own ordinary directory directly in SRC; its insides are not walked."""
@@ -409,38 +440,59 @@ def check_output(src, out_name, uid, receipt_paths):
             problems.append(f'receipt path {path} collides with {out}')
     return problems, {'path': str(out), 'uid': stat.st_uid, 'device': stat.st_dev, 'inode': stat.st_ino}
 
-def live_writers(src, out_dir, proc='/proc'):
-    """[(pid, why)] for processes that may still write the build: cwd or an open file in OUT_DIR, or a build tool with
-    its cwd in SRC. A parent that disappeared without completion.json can leave these behind."""
-    found, src, out_dir = [], os.path.realpath(src), os.path.realpath(out_dir)
-    def inside(path, root):
-        return path == root or path.startswith(root + '/')
-    for entry in Path(proc).glob('[0-9]*'):
-        if int(entry.name) == os.getpid():
-            continue
-        try:
-            cwd = os.readlink(entry/'cwd')
-            if inside(cwd, out_dir):
-                found.append((int(entry.name), f'cwd {cwd}'))
-                continue
-            argv0 = os.path.basename((entry/'cmdline').read_bytes().split(b'\0')[0].decode(errors='replace'))
-            if argv0 in BUILD_PROCESSES and inside(cwd, src):
-                found.append((int(entry.name), f'{argv0} in {cwd}'))
-                continue
-            for fd in (entry/'fd').iterdir():
-                target = os.readlink(fd)
-                if inside(target, out_dir):
-                    found.append((int(entry.name), f'open {target}'))
-                    break
-        except (OSError, ValueError):
-            continue
-    return found
+def current_boot():
+    """{'bootId', 'bootTime'} of this host from two host-wide kernel files, or None when either is unreadable or
+    malformed (then nothing is admitted). No process, command line, environment or file descriptor is read."""
+    try:
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        btime = [int(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines() if line.startswith('btime ')]
+    except (OSError, ValueError, IndexError):
+        return None
+    if not BOOT_ID.fullmatch(boot) or len(btime) != 1:
+        return None
+    return {'bootId': boot, 'bootTime': stamp(lambda: btime[0])}
 
-def boot_id():
-    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+def check_boot_change(witness, latest, started, stopped_at, build, now_boot):
+    """Problems proving the latest attempt's whole process tree is gone: a boot id observed while that attempt existed
+    (its own started.json boot for a resume attempt, else the operator's contemporaneous witness) differs from the
+    current boot, and the current boot began after that observation and after the recorded stop. Nothing survives a
+    reboot, so no process needs to be looked at. A same-boot stop is refused: proving termination there would need
+    process inspection. This says nothing about writers started in the new boot that bypass the isolated lock."""
+    if isinstance(started.get('boot'), dict):
+        seen = {'bootId': started['boot'].get('bootId'), 'observedAt': started.get('at'), 'source': 'started.json'}
+    elif witness is None:
+        return ['the original boot id was not recorded at launch; a contemporaneous --boot-witness of this attempt is '
+            'required (never a backdated one)'], {}
+    elif not isinstance(witness, dict) or witness.get('receiptType') != 'rango-compile-boot-witness' \
+            or witness.get('schemaVersion') != 1:
+        return ['the boot witness is not a rango-compile-boot-witness schemaVersion 1 document'], {}
+    else:
+        attempt = witness.get('attempt') if isinstance(witness.get('attempt'), dict) else {}
+        if Path(str(attempt.get('receiptDir'))) != Path(latest) \
+                or attempt.get('startedSha256') != sha256_file(Path(latest)/'started.json') \
+                or witness.get('buildNumber') != str(build):
+            return [f'the boot witness is not bound to {latest} and build {build}'], {}
+        if not witness.get('observedBy') or not witness.get('method'):
+            return ['the boot witness names no observer or observation method'], {}
+        seen = {'bootId': witness.get('bootId'), 'observedAt': witness.get('observedAt'), 'source': 'witness'}
+    problems, start = [], str(started.get('at'))
+    if not BOOT_ID.fullmatch(str(seen['bootId'])):
+        problems.append('the witnessed boot id is not a kernel boot id')
+    if not STAMP.fullmatch(str(seen['observedAt'])) or not start <= seen['observedAt'] or \
+            (stopped_at and not seen['observedAt'] <= stopped_at):
+        problems.append('the boot was not observed between the attempt start and the recorded stop')
+    if now_boot is None:
+        problems.append('the current boot id or boot time is unreadable; termination is unknown, not proven')
+    elif not problems:
+        if now_boot['bootId'] == seen['bootId']:
+            problems.append('same boot as the live attempt: its process tree is not proven gone, and no process is '
+                'inspected to prove it; a same-boot resume is unsupported')
+        elif not (now_boot['bootTime'] > seen['observedAt'] and (not stopped_at or now_boot['bootTime'] >= stopped_at)):
+            problems.append('the current boot did not begin after the witnessed boot and the recorded stop')
+    return problems, {'witnessed': seen, 'current': now_boot}
 
 def resume_admission(config, config_path, build, download_dir, prior, cutoff, provenance, inputs_receipt,
-        writers=live_writers, current_boot=boot_id, pid_alive=lambda pid: Path(f'/proc/{pid}').exists(), **probes):
+        boot_witness=None, boot=current_boot, **probes):
     """{'state', 'admitted', 'problems', 'facts'}: reads only. The caller holds the lock when it acts on the result."""
     out_name = out_dir_name(config, build)
     chain = attempt_chain(prior)
@@ -481,20 +533,17 @@ def resume_admission(config, config_path, build, download_dir, prior, cutoff, pr
         if (then.get('inputs') or {}).get(key) != (now.get('inputs') or {}).get(key):
             problems.append(f'the local-inputs {key} differs from the original start')
     out_problems, facts['output'] = check_output(config['host']['sourceRoot'], out_name, prov.get('uid'),
-        [prior, f'{prior}.resume-{len(chain)}', cutoff, provenance])
+        [prior, f'{prior}.resume-{len(chain)}', cutoff, provenance] + ([boot_witness] if boot_witness else []))
     problems += out_problems
-    writer = (read_json(cutoff) or {}).get('writer')
-    writer = writer if isinstance(writer, dict) else {}
-    same_boot = writer.get('bootId') == current_boot()
-    pid = writer.get('pid')
-    if not writer.get('bootId') or (same_boot and (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
-            or pid_alive(pid))):
-        problems.append('the prior writer is not proven gone (same boot and its pid is alive or unrecorded)')
-    if 'path' in facts['output']:
-        active = writers(config['host']['sourceRoot'], facts['output']['path'])
-        if active:
-            problems.append(f'a process may still write the build: {active[:3]}')
-    facts.update(sameBoot=same_boot, preflight=ready, provenance=prov,
+    proof = read_json(cutoff) or {}
+    stopped_at = proof.get('stoppedAt') if STAMP.fullmatch(str(proof.get('stoppedAt'))) else None
+    witness = read_json(boot_witness) if boot_witness else None
+    if boot_witness and witness is None:
+        witness = {}
+    boot_problems, facts['boot'] = check_boot_change(witness, latest, started, stopped_at, build, boot())
+    problems += boot_problems
+    facts.update(preflight=ready, provenance=prov,
+        bootWitnessSha256=sha256_file(boot_witness) if boot_witness and Path(boot_witness).is_file() else None,
         cutoffSha256=sha256_file(cutoff) if Path(cutoff).is_file() else None,
         provenanceSha256=sha256_file(provenance) if Path(provenance).is_file() else None,
         helperSha256=sha256_file(Path(__file__).resolve()))
@@ -503,8 +552,8 @@ def resume_admission(config, config_path, build, download_dir, prior, cutoff, pr
         report['state'], report['admitted'] = 'resumable', True
     return report
 
-def resume(config, config_path, build, download_dir, prior, cutoff, provenance, inputs_receipt,
-        runner=subprocess.run, now=time.time, **probes):
+def resume(config, config_path, build, download_dir, prior, cutoff, provenance, inputs_receipt, boot_witness=None,
+        runner=subprocess.run, now=time.time, boot=current_boot, **probes):
     """Under the same nonblocking lock: re-admit, write PRIOR.resume-N, run the unchanged compile in the same OUT_DIR."""
     with open(config['host']['lockPath'], 'a') as lock:
         try:
@@ -513,7 +562,7 @@ def resume(config, config_path, build, download_dir, prior, cutoff, provenance, 
             print(json.dumps({'verdict': 'NOT-ADMITTED', 'problems': ['the isolated builder lock is held']}), file=sys.stderr)
             return 1
         report = resume_admission(config, config_path, build, download_dir, prior, cutoff, provenance,
-            inputs_receipt, **probes)
+            inputs_receipt, boot_witness, boot=boot, **probes)
         if report['state'] == 'completed':
             print(json.dumps({'verdict': 'ALREADY-COMPLETED', 'latest': report['facts']['latest'], 'executed': False}))
             return 0
@@ -527,13 +576,14 @@ def resume(config, config_path, build, download_dir, prior, cutoff, provenance, 
         resume_of = {'receiptDir': str(latest), 'original': str(prior),
             'receipts': {p.name: sha256_file(p) for p in sorted(latest.glob('*.json'))},
             'cutoffSha256': report['facts']['cutoffSha256'], 'provenanceSha256': report['facts']['provenanceSha256'],
+            'bootWitnessSha256': report['facts']['bootWitnessSha256'], 'boot': report['facts']['boot'],
             'helperSha256': report['facts']['helperSha256']}
         release_receipts.write_once(attempt/'preflight.json', {**report['facts']['preflight'], 'ready': True,
-            'resume': {k: report['facts'][k] for k in ('attempts', 'output', 'provenance', 'sameBoot')},
+            'resume': {k: report['facts'][k] for k in ('attempts', 'output', 'provenance', 'boot')},
             'at': stamp(now)})
         command = commands(config, build, download_dir)['compile']
         release_receipts.write_once(attempt/'started.json', {'stage': 'compile', 'device': DEVICE, 'command': command,
-            'signed': False, 'resumeOf': resume_of, 'at': stamp(now)})
+            'signed': False, 'resumeOf': resume_of, 'boot': report['facts']['boot']['current'], 'at': stamp(now)})
         result = runner(command['argv'], cwd=command['cwd'], env={**os.environ, **command['env']})
         release_receipts.write_once(attempt/'completed.json', {'stage': 'compile', 'returncode': result.returncode,
             'incremental': True, 'signed': False, 'releaseReady': False, 'at': stamp(now)})
@@ -554,6 +604,7 @@ def main(argv=None):
     p.add_argument('--prior-receipt-dir', help='resume: the original compile --receipt-dir')
     p.add_argument('--cutoff-proof', help='resume: the operator rango-compile-cutoff document')
     p.add_argument('--provenance', help='resume: the operator rango-compile-provenance document')
+    p.add_argument('--boot-witness', help='resume: the operator rango-compile-boot-witness of a run that recorded no boot')
     a = p.parse_args(argv)
     try:
         config = load(a.config)
@@ -563,7 +614,7 @@ def main(argv=None):
                 raise InvalidInput(f'{a.command} is compile-only and needs an absolute --prior-receipt-dir, '
                     '--cutoff-proof, --provenance and --inputs-receipt (its attempt directory is derived, never given)')
             args = (config, a.config, a.build_number, a.download_dir, Path(a.prior_receipt_dir), a.cutoff_proof,
-                a.provenance, a.inputs_receipt)
+                a.provenance, a.inputs_receipt, a.boot_witness)
             if a.command == 'resume':
                 return resume(*args)
             report = resume_admission(*args)
