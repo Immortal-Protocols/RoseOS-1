@@ -10,11 +10,16 @@
    - after that, report `failed_needs_operator` and stop acting.
 3. On the first ready result with no model receipt, record the receipt.
 4. Write the status JSON for operators and monitoring: categories only, no prompt or reply text.
+5. Publish an allowlisted receipt to the existing guest attribute rose-models/health: boot id, probe time, the
+   completion's HTTP status, token count and latency (never its text), readiness, restarts, and the model receipt's
+   start and full verification results, each qualified. Publication runs after the decision and its failure only
+   marks the status file: telemetry never restarts the model.
 """
 import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -27,6 +32,12 @@ STARTUP_GRACE_S = 3600  # the first start downloads about 60 GB; later starts lo
 PROBE_TIMEOUT_S = 60
 UNIT = 'muse-glimmer.service'
 LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never route loopback probes via a proxy
+GUEST = 'http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/rose-models/'
+RECEIPT_SCHEMA, RECEIPT_MAX = 'rose-models-health/1', 2048
+CATEGORY = re.compile(r'^[a-z][a-z0-9_]{0,39}$')
+BOOT = re.compile(r'^[0-9a-f-]{36}$')
+STATUSES = ('ready', 'starting', 'recovering', 'degraded', 'down', 'failed_needs_operator', 'unknown')
+VERIFY_RESULTS = ('verified', 'no_receipt', 'mismatch')
 
 
 def _json(url, body=None, timeout=PROBE_TIMEOUT_S):
@@ -36,15 +47,29 @@ def _json(url, body=None, timeout=PROBE_TIMEOUT_S):
         return r.status, json.loads(r.read(1 << 20))
 
 
-def probe(base, model, opener=_json):
-    """(True, 'ready') or (False, category). Categories are fixed strings."""
+def probe(base, model, opener=_json, facts=None):
+    """(True, 'ready') or (False, category). Categories are fixed strings. `facts` receives listed, completionHttp,
+    completionTokens and latencyMs: numbers and booleans only, never text."""
+    facts = {} if facts is None else facts
+    facts.update(listed=False, completionHttp=None, completionTokens=None, latencyMs=None)
     try:
         status, listing = opener(base + '/v1/models')
         if status != 200 or model not in [m.get('id') for m in listing.get('data', [])]:
             return False, 'model_not_listed'
-        status, reply = opener(base + '/v1/chat/completions', {
-            'model': model, 'max_tokens': 16,
-            'messages': [{'role': 'user', 'content': 'Readiness check. Reply with one word.'}]})
+        facts['listed'] = True
+        started = time.monotonic()
+        try:
+            status, reply = opener(base + '/v1/chat/completions', {
+                'model': model, 'max_tokens': 16,
+                'messages': [{'role': 'user', 'content': 'Readiness check. Reply with one word.'}]})
+        except urllib.error.HTTPError as e:
+            facts['completionHttp'] = e.code
+            raise
+        finally:
+            facts['latencyMs'] = int((time.monotonic() - started) * 1000)
+        facts['completionHttp'] = status
+        tokens = reply.get('usage', {}).get('completion_tokens') if isinstance(reply, dict) else None
+        facts['completionTokens'] = tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else None
         if status != 200 or reply.get('model') != model or not reply.get('choices'):
             return False, 'completion_invalid'
         if not isinstance(reply.get('usage', {}).get('completion_tokens'), int) or reply['usage']['completion_tokens'] < 1:
@@ -104,19 +129,95 @@ def _write(path, data):
     os.replace(tmp, path)
 
 
-def run_once(a, now=None, prober=probe, since=active_since, run=subprocess.run):
+def boot_id(path='/proc/sys/kernel/random/boot_id'):
+    try:
+        value = Path(path).read_text().strip()
+    except OSError:
+        return 'unknown'
+    return value if BOOT.match(value) else 'unknown'
+
+
+def _verify_fact(path):
+    """The last verify_model result written to `path`: {result, full, at}, or None when it has not run."""
+    try:
+        raw = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {'result': 'unreadable'}
+    if not isinstance(raw, dict):
+        return {'result': 'unreadable'}
+    at = raw.get('at')
+    return {'result': raw.get('result') if raw.get('result') in VERIFY_RESULTS else 'unknown',
+            'full': raw.get('full') is True, 'at': at if isinstance(at, int) and not isinstance(at, bool) else None}
+
+
+def _recorded_at(path):
+    """When the receipt was recorded (every file content-hashed at first load), or None."""
+    try:
+        value = json.loads(Path(path).read_text()).get('recordedAt')
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and re.match(r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$', value) else None
+
+
+def _int(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def receipt(boot, now, ok, category, state, action, facts, receipt_present, start_check, full_check, recorded_at=None):
+    """The published health receipt, built field by field from an allowlist. Model receipt facts are qualified:
+    `present` is only the file and `recordedAt` when it hashed every file at first load; `startCheck` (this boot,
+    blob ids and sizes; None until a start under this payload) and `fullCheck` (last content rehash) are separate
+    verify_model results with their own times."""
+    last_ok = state.get('lastOk') if state.get('lastOkBoot') == boot else None
+    out = {'schema': RECEIPT_SCHEMA, 'bootId': boot if BOOT.match(boot) else 'unknown', 'checkedAt': int(now),
+           'ready': ok is True, 'status': state['status'] if state['status'] in STATUSES else 'unknown',
+           'category': category if CATEGORY.match(category) else 'other',
+           'completion': {'listed': facts.get('listed') is True, 'http': _int(facts.get('completionHttp')),
+                          'tokens': _int(facts.get('completionTokens')), 'latencyMs': _int(facts.get('latencyMs'))},
+           'lastOkThisBoot': int(last_ok) if isinstance(last_ok, (int, float)) else None,
+           'consecutiveFailures': int(state['failures']), 'restartsLastHour': len(state['restarts']),
+           'restartLimitPerHour': RESTARTS_PER_HOUR, 'action': action if action in ('restart',) else None,
+           'modelReceipt': {'present': receipt_present is True, 'recordedAt': recorded_at,
+                            'startCheck': start_check, 'fullCheck': full_check}}
+    line = json.dumps(out, sort_keys=True)
+    if len(line) > RECEIPT_MAX:
+        raise ValueError('receipt_too_large')
+    return line
+
+
+def publish(key, line, timeout=5):
+    """PUT one value under the existing guest attributes namespace rose-models/ (enable-guest-attributes=TRUE)."""
+    req = urllib.request.Request(GUEST + key, data=line.encode(), headers={'Metadata-Flavor': 'Google'}, method='PUT')
+    LOOPBACK.open(req, timeout=timeout).close()
+
+
+def run_once(a, now=None, prober=probe, since=active_since, run=subprocess.run, publisher=publish, boot=None):
     now = time.time() if now is None else now
+    boot = boot_id() if boot is None else boot
     state = json.loads(a.state.read_text()) if a.state.exists() else {}
-    ok, category = prober(a.base, a.model)
+    facts = {}
+    ok, category = prober(a.base, a.model, facts=facts)
     state, action = decide(state, ok, category, now, since())
+    if ok:
+        state['lastOkBoot'] = boot
     if action == 'restart':
         run(['systemctl', 'restart', UNIT], timeout=120)
     if ok and a.record and not a.receipt.exists():
         run(a.record, timeout=3600)  # verify_model.py record (hashes the cache once)
     _write(a.state, state)
-    _write(a.status, {'status': state['status'], 'category': category, 'checkedAt': now, 'lastOk': state['lastOk'],
-                      'consecutiveFailures': state['failures'], 'restartsLastHour': len(state['restarts']),
-                      'modelReceipt': a.receipt.exists(), 'action': action})
+    status = {'status': state['status'], 'category': category, 'checkedAt': now, 'lastOk': state['lastOk'],
+              'consecutiveFailures': state['failures'], 'restartsLastHour': len(state['restarts']),
+              'modelReceipt': a.receipt.exists(), 'action': action}
+    try:  # telemetry: after the decision, and its failure never changes it
+        line = receipt(boot, now, ok, category, state, action, facts, a.receipt.exists(),
+                       _verify_fact(a.verify_start), _verify_fact(a.verify_full), _recorded_at(a.receipt))
+        publisher('health', line)
+        status['published'] = True
+    except Exception as e:  # noqa: BLE001 - any publication failure is reported, never raised
+        status.update(published=False, publishError=type(e).__name__)
+    _write(a.status, status)
     return state, action
 
 
@@ -128,6 +229,8 @@ def main(argv=None):
     p.add_argument('--state', type=Path, default=Path('/var/lib/rose-models/health-state.json'))
     p.add_argument('--status', type=Path, default=Path('/run/rose-models/health.json'))
     p.add_argument('--receipt', type=Path, default=Path('/mnt/models-data/receipt.json'))
+    p.add_argument('--verify-start', type=Path, default=Path('/run/rose-models/verify-start.json'))
+    p.add_argument('--verify-full', type=Path, default=Path('/var/lib/rose-models/verify-full.json'))
     p.add_argument('--record', nargs=argparse.REMAINDER, help='command that records the model receipt (last option)')
     a = p.parse_args(argv)
     if a.command == 'probe':

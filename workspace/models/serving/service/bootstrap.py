@@ -20,7 +20,8 @@ run in order and are rerun-safe: each first checks whether its result is already
              that proof is published, then the stage waits (bounded) for metadata rose-models-acme-ack equal to
              <payload sha256>:<boot id>. Only then does certbot issue once via its webroot, reusing the single existing
              account (ambiguity fails). A timeout issues nothing. The ACME-only Nginx is stopped either way
-  edge       the Nginx edge once TLS and auth are up; a standalone-issued lineage is switched to the webroot
+  edge       the Nginx edge once TLS and auth are up; a standalone-issued lineage is switched to the webroot;
+             certbot.timer and the renewal-evidence timer are enabled and the evidence is published once
 
 Every command has a time bound. Output: one nonsecret JSON line (stdout, so it reaches the serial console), the status
 file, and the guest attribute rose-models/bootstrap. Exit 0 when ready, waiting or rebooting; exit 1 when a stage failed.
@@ -68,6 +69,7 @@ HOSTNAME = 'models.a-list.com'
 ACME_FLAG = 'agree-tos-no-email'  # metadata rose-models-acme: the operator's explicit ACME authorization
 ROOT = '/etc/rose-models'
 STATE = '/var/lib/rose-models/bootstrap'
+RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and its published evidence
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
                'models-attestation-status.timer')
 METADATA = 'http://metadata.google.internal/computeMetadata/v1/instance/'
@@ -730,6 +732,8 @@ def stage_edge(host, ctx):
         # A lineage issued standalone cannot renew while the edge holds :80; renew through the edge's webroot.
         must(host, ['certbot', 'reconfigure', '-n', '--cert-name', HOSTNAME, '--webroot', '-w', ACME_WEBROOT],
              'renewal_reconfigure_failed', 300)
+    must(host, ['systemctl', 'enable', '--now', *RENEWAL_UNITS], 'renewal_timer_enable_failed', 120)
+    host.run(['systemctl', 'start', '--no-block', 'models-renewal-status.service'], 30)  # evidence now, not in 5 min
     return 'active'
 
 
@@ -737,6 +741,13 @@ STAGES = (('disk', stage_disk), ('packages', stage_packages), ('driver', stage_d
           ('container', stage_container), ('image', stage_image), ('nginx', stage_nginx),
           ('service', stage_service), ('auth', stage_auth), ('tls', stage_tls), ('edge', stage_edge))
 INDEPENDENT = {'tls'}  # may still run while auth waits
+
+
+def boot_id_or_unknown(host):
+    try:
+        return host.boot_id()
+    except OSError:
+        return 'unknown'
 
 
 def run(host, payload, payload_sha256, now=time.time):
@@ -779,7 +790,7 @@ def run(host, payload, payload_sha256, now=time.time):
         result = ('failed' if 'failed' in states else 'rebooting' if 'reboot' in states
                   else 'waiting' if states - {'ok'} else 'ready')
         status = {'schema': 'rose-models-bootstrap/1', 'payloadSha256': payload_sha256, 'result': result,
-                  'at': int(now()), 'stages': {k: {'state': v[0], 'detail': v[1], 'seconds': v[2],
+                  'bootId': boot_id_or_unknown(host), 'at': int(now()), 'stages': {k: {'state': v[0], 'detail': v[1], 'seconds': v[2],
                                                    **({'observed': ctx['observed'][k]} if k in ctx.get('observed', {})
                                                       else {})}
                                                for k, v in ctx['results'].items()}}

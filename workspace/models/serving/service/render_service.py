@@ -9,7 +9,8 @@ Output, all self-contained (no repository needed on the VM afterwards):
   lib/            the pinned config and the service scripts
   edge/           nginx.conf: TLS, service-auth-v1, and the ACME webroot on :80; acme-only.conf: challenges
                   only on :80, used before the first certificate exists
-  systemd/        muse-glimmer, models-health(.timer), models-verify-full(.timer), models-auth, models-edge
+  systemd/        muse-glimmer, models-health(.timer), models-verify-full(.timer), models-auth, models-edge,
+                  models-renewal-status(.timer)
   manifest.json   sha256 of every rendered file
 """
 import argparse
@@ -36,10 +37,12 @@ DATA = '/mnt/models-data'
 RUN_EDGE = '/run/rose-edge'
 ACME_WEBROOT = '/var/lib/rose-models/acme'
 RUN_ACME = '/run/rose-acme'  # the ACME-only Nginx, before the first certificate exists
+VERIFY_START = '/run/rose-models/verify-start.json'  # this boot's start check (published by health.py)
+VERIFY_FULL = '/var/lib/rose-models/verify-full.json'  # the last full rehash or first record
 LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/https/render_proxy.py': SERVING / 'https' / 'render_proxy.py',
              **{f'lib/service/{n}': SERVING / 'service' / n
-                for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py')}}
+                for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py', 'renewal_status.py')}}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
 
@@ -64,7 +67,7 @@ def files(config, root=ROOT, data=DATA):
     out['bin/start-model'] = f'''#!/usr/bin/env bash
 # Verify model storage, then start vLLM: offline from the verified cache, or online for the one first download.
 set -uo pipefail
-{verify} check {model_args}
+{verify} check {model_args} --result {VERIFY_START}
 case $? in
   0) exec {root}/bin/launch-offline ;;
   3) exec {root}/bin/launch-online ;;
@@ -93,7 +96,7 @@ RestartPreventExitStatus=4
 TimeoutStopSec=120''',
         f'After=docker.service network-online.target\nRequires=docker.service\nWants=network-online.target\n'
         f'RequiresMountsFor={data}\nStartLimitIntervalSec=3600\nStartLimitBurst=5')
-    health = (f'{PY} {root}/lib/service/health.py run --record {verify} record {model_args}')
+    health = (f'{PY} {root}/lib/service/health.py run --record {verify} record {model_args} --result {VERIFY_FULL}')
     out['systemd/models-health.service'] = unit(
         'Muse Glimmer loaded-model readiness and bounded recovery',
         f'Type=oneshot\nExecStart={health}\nTimeoutStartSec=3700', install=None)
@@ -102,7 +105,7 @@ TimeoutStopSec=120''',
         '[Service]\n\n', '[Timer]\nOnBootSec=2min\nOnUnitInactiveSec=60s\nAccuracySec=5s\n')
     out['systemd/models-verify-full.service'] = unit(
         'Rehash the Muse Glimmer model cache against its receipt',
-        f'Type=oneshot\nExecStart={verify} check --full {model_args}\nNice=10\nIOSchedulingClass=idle', install=None)
+        f'Type=oneshot\nExecStart={verify} check --full {model_args} --result {VERIFY_FULL}\nNice=10\nIOSchedulingClass=idle', install=None)
     out['systemd/models-verify-full.timer'] = unit(
         'Daily full model verification', '', install='WantedBy=timers.target').replace(
         '[Service]\n\n', '[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=yes\n')
@@ -129,6 +132,13 @@ mv "$dst.tmp" "$dst"
     out['systemd/models-attestation-status.timer'] = unit(
         'Refresh the attestation status list every 6 hours', '', install='WantedBy=timers.target').replace(
         '[Service]\n\n', '[Timer]\nOnBootSec=1min\nOnUnitActiveSec=6h\nRandomizedDelaySec=10min\nPersistent=yes\n')
+    out['systemd/models-renewal-status.service'] = unit(
+        'Publish certificate renewal evidence (certbot.timer, renewal config, expiry, live edge ACME proof)',
+        f'Type=oneshot\nExecStart={PY} {root}/lib/service/renewal_status.py publish\nTimeoutStartSec=300',
+        'After=models-edge.service', install=None)
+    out['systemd/models-renewal-status.timer'] = unit(
+        'Refresh the renewal evidence every 6 hours', '', install='WantedBy=timers.target').replace(
+        '[Service]\n\n', '[Timer]\nOnBootSec=5min\nOnUnitActiveSec=6h\nPersistent=yes\n')
     out['systemd/models-edge.service'] = unit(
         'Models Nginx TLS edge for models.a-list.com',
         f'''RuntimeDirectory=rose-edge

@@ -79,7 +79,17 @@ gcloud compute instances get-guest-attributes models-glimmer-01 --project=$P --z
 ```
 
 - `result` is `ready`, `waiting` (it names the missing operator input), `rebooting` or `failed` (it names the stage
-  and category).
+  and category). `bootId` names the boot it describes.
+- **`rose-models/health`** (every minute, `health.py`): `bootId`, `checkedAt`, `ready`, `status`, `category`, the
+  completion's HTTP status, token count and latency (never its text), `lastOkThisBoot`, restarts against the limit, and
+  `modelReceipt`. In `modelReceipt`, `present` is only the file and `recordedAt` its first-load hashing;
+  `startCheck` (blob ids and sizes, this boot; null until a model start under this payload) and `fullCheck` (last
+  content rehash, daily) are separate results with their own times. Fresh means this boot's `bootId` and
+  `checkedAt` within 3 minutes. A publication failure never changes recovery.
+- **`rose-models/renewal`** (after the edge starts, then every 6 h, `renewal_status.py`): `certbotTimer` (enabled,
+  active, `nextRun`), `renewalConfig` (webroot, deploy hook, single account), `certificate` (`notAfter`, `daysLeft`,
+  installed chain equals the lineage) and `edgeAcme`, a fresh challenge through the RUNNING edge's :80 (200, all else
+  404) from its verified pid. `renewalReady` requires all of them.
 - **Rerun** (for example after supplying an input) by resetting the VM or with `gcloud compute instances add-metadata`
   followed by a reboot. Completed stages are skipped after verification.
 
@@ -149,6 +159,9 @@ secret, device registry, image and packages are kept and verified, not regenerat
 - The attestation-status timer refreshes Google's revocation list; enrollment refuses while it is missing or stale.
 
 **Edge check:** with no token, `/v1/models` returns 401. With a token from the enrollment flow, it returns 200.
+
+**Renewal:** restore the approved :80 ingress only when the current `rose-models/renewal` shows `renewalReady: true`
+for the current `bootId`. Nothing is issued until certbot renews within 30 days of `notAfter`.
 
 **Add a phone (admin, on the VM through Infra's administrative route; `qrencode` is preinstalled):**
 

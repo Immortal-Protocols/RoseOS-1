@@ -40,9 +40,15 @@ def fake_vllm(behavior):
             mode = behavior['mode']
             if mode == 'http_500':
                 return self.send(500, {'error': 'x'})
+            if mode == 'malformed':
+                data = b'<html>SECRET-REPLY-TEXT not json'
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
             tokens = 0 if mode == 'no_tokens' else 3
             model = 'other' if mode == 'wrong_model' else 'muse-glimmer'
-            self.send(200, {'model': model, 'choices': [{'message': {'content': 'ready'}}],
+            self.send(200, {'model': model, 'choices': [{'message': {'content': 'SECRET-REPLY-TEXT ready'}}],
                             'usage': {'completion_tokens': tokens}})
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -58,12 +64,12 @@ class Probe(unittest.TestCase):
         base = f'http://127.0.0.1:{server.server_address[1]}'
         expected = {'ok': (True, 'ready'), 'not_listed': (False, 'model_not_listed'),
                     'wrong_model': (False, 'completion_invalid'), 'no_tokens': (False, 'no_tokens_generated'),
-                    'http_500': (False, 'http_500')}
+                    'http_500': (False, 'http_500'), 'malformed': (False, 'malformed_reply')}
         for mode, result in expected.items():
             with self.subTest(mode):
                 behavior['mode'] = mode
                 self.assertEqual(H.probe(base, 'muse-glimmer'), result)
-        self.assertEqual(behavior['completions'], 4)  # a real completion every time the model is listed
+        self.assertEqual(behavior['completions'], 5)  # a real completion every time the model is listed
         self.assertEqual(H.probe('http://127.0.0.1:9', 'muse-glimmer'), (False, 'unreachable'))
 
 
@@ -100,17 +106,140 @@ class Decide(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         calls = []
         a = types.SimpleNamespace(base='x', model='muse-glimmer', state=tmp / 's.json', status=tmp / 'run/h.json',
-                                  receipt=tmp / 'receipt.json', record=['record-cmd'])
+                                  receipt=tmp / 'receipt.json', record=['record-cmd'], verify_start=tmp / 'vs.json',
+                                  verify_full=tmp / 'vf.json')
         for i in range(3):
-            H.run_once(a, now=10_000 + i, prober=lambda b, m: (False, 'unreachable'), since=lambda: 0,
-                       run=lambda cmd, timeout: calls.append(cmd))
+            H.run_once(a, now=10_000 + i, prober=lambda b, m, facts: (False, 'unreachable'), since=lambda: 0,
+                       run=lambda cmd, timeout: calls.append(cmd), publisher=lambda k, v: None, boot=BOOT)
         self.assertEqual(calls, [['systemctl', 'restart', 'muse-glimmer.service']])
-        H.run_once(a, now=10_100, prober=lambda b, m: (True, 'ready'), since=lambda: 10_050,
-                   run=lambda cmd, timeout: calls.append(cmd))
+        H.run_once(a, now=10_100, prober=lambda b, m, facts: (True, 'ready'), since=lambda: 10_050,
+                   run=lambda cmd, timeout: calls.append(cmd), publisher=lambda k, v: None, boot=BOOT)
         self.assertEqual(calls[-1], ['record-cmd'])
         status = json.loads(a.status.read_text())
         self.assertEqual((status['status'], status['restartsLastHour'], status['modelReceipt']), ('ready', 1, False))
         self.assertNotIn('Readiness', a.status.read_text())
+
+
+BOOT, OLD_BOOT = '2f1c3a9e-0d4b-4c62-9a51-7e8f00c1d2e3', '11111111-2222-3333-4444-555555555555'
+RECEIPT_KEYS = {'schema', 'bootId', 'checkedAt', 'ready', 'status', 'category', 'completion', 'lastOkThisBoot',
+                'consecutiveFailures', 'restartsLastHour', 'restartLimitPerHour', 'action', 'modelReceipt'}
+
+
+class HealthReceipt(unittest.TestCase):
+    """MODEL-STATUS-RENEWAL-001: the allowlisted receipt published to guest attribute rose-models/health."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='health-receipt-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.behavior = {'mode': 'ok', 'completions': 0}
+        server = fake_vllm(self.behavior)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.a = types.SimpleNamespace(
+            base=f'http://127.0.0.1:{server.server_address[1]}', model='muse-glimmer', state=self.tmp / 's.json',
+            status=self.tmp / 'run/h.json', receipt=self.tmp / 'receipt.json', record=None,
+            verify_start=self.tmp / 'run/verify-start.json', verify_full=self.tmp / 'verify-full.json')
+        self.published, self.calls = [], []
+
+    def once(self, now, since=0, publisher=None, boot=BOOT, prober=H.probe):
+        state, action = H.run_once(self.a, now=now, prober=prober, since=lambda: since, boot=boot,
+                                   run=lambda cmd, timeout: self.calls.append(cmd),
+                                   publisher=publisher or (lambda k, v: self.published.append((k, v))))
+        return state, action, json.loads(self.a.status.read_text())
+
+    def last(self):
+        key, value = self.published[-1]
+        self.assertEqual(key, 'health')
+        self.assertLessEqual(len(value), H.RECEIPT_MAX)
+        return json.loads(value)
+
+    def test_ready_receipt_has_only_allowlisted_nonsecret_facts(self):
+        self.a.receipt.write_text(json.dumps({'recordedAt': '2026-10-30T22:10:00Z', 'files': {'x': {'sha256': 'f' * 64}}}))
+        self.a.verify_start.parent.mkdir(parents=True)
+        self.a.verify_start.write_text(json.dumps({'result': 'verified', 'full': False, 'at': 9_000,
+                                                   'reason': 'blob_changed: x.safetensors'}))
+        self.a.verify_full.write_text(json.dumps({'result': 'verified', 'full': True, 'at': 5_000}))
+        _, _, status = self.once(10_000)
+        r = self.last()
+        self.assertEqual(set(r), RECEIPT_KEYS)
+        self.assertEqual((r['bootId'], r['checkedAt'], r['ready'], r['status'], r['category']),
+                         (BOOT, 10_000, True, 'ready', 'ready'))
+        self.assertEqual({k: v for k, v in r['completion'].items() if k != 'latencyMs'},
+                         {'listed': True, 'http': 200, 'tokens': 3})
+        self.assertIsInstance(r['completion']['latencyMs'], int)
+        self.assertEqual((r['lastOkThisBoot'], r['restartsLastHour'], r['restartLimitPerHour']), (10_000, 0, 3))
+        self.assertEqual(r['modelReceipt'], {'present': True, 'recordedAt': '2026-10-30T22:10:00Z',
+                                             'startCheck': {'result': 'verified', 'full': False, 'at': 9_000},
+                                             'fullCheck': {'result': 'verified', 'full': True, 'at': 5_000}})
+        raw = self.published[-1][1]
+        for secret in ('SECRET-REPLY-TEXT', 'Readiness', 'content', 'messages', 'safetensors', 'Bearer', 'f' * 64):
+            self.assertNotIn(secret, raw)
+        self.assertTrue(status['published'])
+
+    def test_previous_boot_success_is_never_reported_as_this_boot(self):
+        self.a.state.write_text(json.dumps({'status': 'ready', 'lastOk': 9_000, 'lastOkBoot': OLD_BOOT,
+                                            'failures': 0, 'restarts': []}))
+        self.behavior['mode'] = 'not_listed'  # just booted, model still loading
+        state, action, _ = self.once(10_000, since=9_990)
+        r = self.last()
+        self.assertEqual((r['bootId'], r['ready'], r['status'], r['lastOkThisBoot'], action),
+                         (BOOT, False, 'starting', None, None))
+        self.behavior['mode'] = 'ok'
+        self.once(10_060, since=9_990)
+        self.assertEqual((self.last()['lastOkThisBoot'], self.last()['ready']), (10_060, True))
+
+    def test_unavailable_model_and_malformed_reply_are_categories_without_content(self):
+        for mode, category, http in (('http_500', 'http_500', 500), ('malformed', 'malformed_reply', None),
+                                     ('no_tokens', 'no_tokens_generated', 200), ('not_listed', 'model_not_listed', None)):
+            with self.subTest(mode):
+                self.behavior['mode'] = mode
+                self.once(20_000, since=0)
+                r = self.last()
+                self.assertEqual((r['ready'], r['category'], r['completion']['http']), (False, category, http))
+                self.assertNotIn('SECRET-REPLY-TEXT', self.published[-1][1])
+        self.once(20_000, since=0, prober=lambda b, m, facts: H.probe('http://127.0.0.1:9', m, facts=facts))
+        self.assertEqual((self.last()['category'], self.last()['completion']['listed']), ('unreachable', False))
+        self.assertEqual(self.last()['modelReceipt'], {'present': False, 'recordedAt': None, 'startCheck': None,
+                                                       'fullCheck': None})
+
+    def test_publication_failure_never_changes_the_decision_or_restarts(self):
+        def broken(key, value):
+            raise OSError('metadata server unreachable')
+        self.behavior['mode'] = 'http_500'
+        decisions = {}
+        for label, publisher in (('published', None), ('broken', broken)):
+            self.a.state.unlink(missing_ok=True)
+            self.calls.clear()
+            seq = [self.once(30_000 + 60 * i, since=0, publisher=publisher)[:2] for i in range(4)]
+            decisions[label] = ([(s['status'], a) for s, a in seq], list(self.calls))
+        self.assertEqual(decisions['published'], decisions['broken'])
+        self.assertEqual(decisions['broken'][1], [['systemctl', 'restart', 'muse-glimmer.service']])  # only the limit
+        status = json.loads(self.a.status.read_text())
+        self.assertEqual((status['published'], status['publishError']), (False, 'OSError'))
+        self.behavior['mode'] = 'ok'
+        self.calls.clear()
+        _, action, status = self.once(40_000, since=0, publisher=broken)
+        self.assertEqual((action, self.calls, status['status']), (None, [], 'ready'))  # telemetry never restarts
+
+    def test_stale_or_unreadable_verify_results_are_qualified_not_trusted(self):
+        self.a.verify_full.write_text('not json')
+        self.a.verify_start.parent.mkdir(parents=True)
+        self.a.verify_start.write_text(json.dumps({'result': 'surprise', 'full': 'yes', 'at': True}))
+        self.once(50_000)
+        self.a.receipt.write_text(json.dumps({'recordedAt': 'yesterday <script>'}))
+        self.once(50_060)
+        self.assertEqual(self.last()['modelReceipt'], {'present': True, 'recordedAt': None,
+                                                       'fullCheck': {'result': 'unreadable'},
+                                                       'startCheck': {'result': 'unknown', 'full': False, 'at': None}})
+
+    def test_unknown_boot_id_and_oversize_receipts(self):
+        self.assertEqual(H.boot_id(self.tmp / 'missing'), 'unknown')
+        (self.tmp / 'bid').write_text('../../etc/passwd\n')
+        self.assertEqual(H.boot_id(self.tmp / 'bid'), 'unknown')
+        state = {'status': 'ready', 'failures': 0, 'restarts': list(range(500)), 'lastOk': None}
+        with self.assertRaises(ValueError):
+            H.receipt(BOOT, 1, True, 'ready', state, None, {}, True, None,
+                      {'result': 'verified', 'full': True, 'at': 1, 'pad': 'x' * 3000})
 
 
 def fake_cache(root, model, extra=None, corrupt=None):
