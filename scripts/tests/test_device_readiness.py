@@ -77,7 +77,7 @@ def wiring_failures(text):
         conditions = re.findall(r"inputs\.mode == '([\w-]+)'", re.search(r'    if: (.*)\n', jobs_.get(name, '    if: none\n'))[1])
         if not conditions or 'device-readiness' in conditions:
             failures.append(f'{name} could run in device-readiness mode')
-    if '    needs: builder\n' not in jobs_.get('publisher', '') or not re.search(r"inputs\.mode == 'app-only'", jobs_.get('app-publisher', '')):
+    if '    needs: [builder, signed-builder]\n' not in jobs_.get('publisher', '') or not re.search(r"inputs\.mode == 'app-only'", jobs_.get('app-publisher', '')):
         failures.append('a publisher is not bound to a build mode')
     if not re.search(r'\[\[ "\$MODE" != device-readiness \|\| "\$CANDIDATE_SHA" == "\$GITHUB_SHA" \]\]', text):
         failures.append('the guard does not bind the candidate to the workflow recipe')

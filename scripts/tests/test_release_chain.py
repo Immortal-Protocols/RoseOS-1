@@ -181,7 +181,12 @@ class Workflow(unittest.TestCase):
         jobs = self.jobs()
         job = jobs['next-release']
         self.assertIn('    permissions:\n      actions: write\n      contents: read\n    env:', job)
-        self.assertEqual([n for n, b in jobs.items() if 'actions: write' in b], ['next-release'])
+        # Owner-approved: the final campaign link and (19:41:06 UTC) the default-off mid-run os-sign dispatch/wait.
+        self.assertEqual([n for n, b in jobs.items() if 'actions: write' in b], ['request-signing', 'next-release'])
+        for name in ('request-signing', 'next-release'):
+            self.assertIn('    permissions:\n      actions: write\n      contents: read\n    env:', jobs[name])
+            self.assertNotIn('secrets.', jobs[name])
+            self.assertNotIn('id-token', jobs[name])
         self.assertIn('\npermissions:\n  contents: read\n', WORKFLOW)
         self.assertNotIn('secrets.', job)
         self.assertNotIn('id-token', job)

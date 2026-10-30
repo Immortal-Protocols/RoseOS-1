@@ -343,7 +343,7 @@ class WorkflowAppReuseTest(unittest.TestCase):
             self.assertNotIn(absent, job)
         self.assertIn('          name: app-release-dev.pixel.voice-${{ github.run_id }}\n          path: ${{ env.ROSE_BASE }}/artifact\n', job)
         self.assertIn('      - name: Remove the reuse attempt from the builder (the original attempt is untouched)\n        if: always()\n', job)
-        self.assertIn('alpha-verify-retained, alpha-export, app-reuse, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
         self.assertIn('emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]\n', WORKFLOW)
         self.assertIn('  REUSE_BINDING: ${{ inputs.reuse_binding }}\n', WORKFLOW)
         self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])

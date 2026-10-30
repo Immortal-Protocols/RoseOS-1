@@ -313,7 +313,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('python3 scripts/alpha-apk-diagnostic.py run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" '
             '--run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --evidence-dir "$ROSE_BASE/evidence"', job)
         self.assertIn('if: always()\n        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"', job)
-        self.assertIn('alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]', WORKFLOW)  # the builder is always stopped afterwards
+        self.assertIn('alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]', WORKFLOW)  # the builder is always stopped afterwards
         guard = WORKFLOW[WORKFLOW.index('  guard:'):WORKFLOW.index('  controller:')]
         self.assertIn("if: inputs.mode == 'emulator-alpha-apk-diagnostic'\n        run: python3 scripts/emulator-alpha.py preflight --job guard", guard)
         # Promotion, resume, app publication and alpha recovery stay outside this mode (existing guard rules).

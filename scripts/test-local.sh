@@ -155,6 +155,12 @@ java -cp "$JAVA_TESTS/HomeReuse" dev.pixel.voice.HomeReuseTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePages" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomePages.java workspace/rose-agent/app/tests/HomePagesTest.java
 java -cp "$JAVA_TESTS/HomePages" dev.pixel.voice.HomePagesTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeOverview" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java workspace/rose-agent/app/tests/HomeOverviewTest.java
+java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppLayout" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/tests/HomeAppLayoutTest.java
+java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DockLabel" \
  workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java workspace/rose-agent/app/tests/DockLabelTest.java
 java -Djava.awt.headless=true -cp "$JAVA_TESTS/DockLabel" dev.pixel.voice.DockLabelTest workspace/rose-agent/app/assets/fonts/nunito.ttf

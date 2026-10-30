@@ -1447,9 +1447,9 @@ class WorkflowAlphaTest(unittest.TestCase):
             "        run: python3 scripts/emulator-alpha.py preflight --job guard\n", guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
-        self.assertIn('    needs: builder\n', self.jobs['publisher'])
+        self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
 
     def test_successor_mode_is_isolated_and_runs_exactly_the_bound_sequence(self):
         guard = self.jobs['guard']

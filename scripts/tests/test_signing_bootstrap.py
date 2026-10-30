@@ -499,7 +499,8 @@ class Workflow(unittest.TestCase):
                 continue
             condition = re.search(r'    if: ([^\n]*(?:\n      [^\n]*)*)\n', body)
             if name == 'publisher':
-                self.assertIn('    needs: builder\n', body)  # skipped whenever builder is skipped
+                self.assertIn('    needs: [builder, signed-builder]\n', body)
+                self.assertIn("needs.builder.result == 'success'", condition[1])  # skipped whenever builder is skipped
                 continue
             self.assertTrue(condition and "inputs.mode == '" in condition[1], name)
             self.assertNotIn('signing-bootstrap', condition[1], name)
