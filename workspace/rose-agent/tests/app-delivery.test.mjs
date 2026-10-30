@@ -66,7 +66,10 @@ test('APP-UPDATER-002: explicit self-update is admitted by the service and verif
  assert.match(receiver,/getLongExtra\(SELF_TARGET,-1\)/,'installer outcomes are recorded for the targeted version');
  assert.match(activity,/install\.setOnClickListener\(v->startSelfUpdate\(dialog,install,r\.offer\)\)/,'Install runs only from the owner tapping it');
  assert.ok(!/startSelfUpdate\(/.test(activity.slice(0,activity.indexOf('void checkForUpdate('))),'nothing starts an install on its own');
- assert.match(activity,/p\.getLong\("target",-1\)==offered\?SelfUpdate\.attemptText/,'only an attempt for the offered version is shown');
+ // PR217: attempts are recorded and read through UpdateAttempts (timestamped, recovery-aware); still only the offered version's.
+ assert.match(activity,/String selfUpdateText\(long offered,long installed\)\{\n  return UpdateAttempts\.text\(this,offered,installed\);/);
+ assert.match(src('UpdateAttempts.java'),/if \(p\.getLong\("target", -1\) != offered\) return "";/,'only an attempt for the offered version is shown');
+ assert.match(receiver,/UpdateAttempts\.record\(c,target,/,'installer outcomes go through the same timestamped record');
 });
 
 test('APP-GITHUB-002: self-update discovery and download use public GitHub only, with no PixelVoice dependency',()=>{
@@ -81,7 +84,8 @@ test('APP-GITHUB-002: self-update discovery and download use public GitHub only,
  assert.ok(at('DirectUpdate.incompatibility(offer,localDevice(a))')<at('session.commit('),'compatibility is rechecked right before commit');
  assert.ok(at('SelfUpdate.beforeCommit(version,a.selfVersion(),a.voiceBusy())')<at('session.commit('),'voice and version are rechecked right before commit');
  const check=activity.slice(activity.indexOf('void runUpdateCheck('),activity.indexOf('void startSelfUpdate('));
- assert.match(check,/DirectUpdate\.check\(new Delivery\.PublicHttp\(\),device\)/,'the check reads GitHub directly');
+ assert.match(check,/DirectUpdate\.check\(new Delivery\.PublicHttp\(\),device,channel\)/,'the check reads GitHub directly, on the owner\'s channel');
+ assert.match(check,/UpdateAttempts\.recover\(this,device\.installed\);/,'an interrupted attempt is recovered before checking');
  assert.ok(!/VoiceService|endpoint|\.ssl|\/apps/.test(check),'the check does not need the voice service, PixelVoice or its catalog');
  const http=delivery.slice(delivery.indexOf('static final class PublicHttp'),delivery.indexOf('static boolean sameSigners('));
  assert.match(http,/context\.init\(null,null,null\)/);assert.match(http,/setInstanceFollowRedirects\(false\)/);

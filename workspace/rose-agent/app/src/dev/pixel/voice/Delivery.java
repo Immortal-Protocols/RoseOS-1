@@ -30,6 +30,7 @@ public class Delivery {
  static void installSelf(VoiceService a,DirectUpdate.Offer offer){
   int sessionId=-1;File file=new File(a.getCacheDir(),"self-update.apk");
   String self=a.getPackageName();long version=offer.versionCode;
+  UpdateAttempts.record(a,version,"downloading"); // timestamped (UpdateRecovery: interrupted vs in progress)
   try{
    long size;try(OutputStream out=new FileOutputStream(file)){size=PublicApkDownload.fetch(new PublicHttp(),offer.apkUrl,out,offer.sha256,offer.size,DirectUpdate.MAX_APK);} // throws unless SHA-256 and size match
    android.content.pm.PackageManager pm=a.getPackageManager();
@@ -44,8 +45,8 @@ public class Delivery {
    if(late==null)late=DirectUpdate.incompatibility(offer,localDevice(a));
    if(late!=null)throw new IOException(late);
    Intent callback=new Intent(a,InstallReceiver.class).putExtra(InstallReceiver.SELF_TARGET,version);PendingIntent result=PendingIntent.getBroadcast(a,sessionId,callback,PendingIntent.FLAG_UPDATE_CURRENT|(android.os.Build.VERSION.SDK_INT>=31?PendingIntent.FLAG_MUTABLE:0));
-   a.recordSelfUpdate(version,"committed");try(PackageInstaller.Session session=pi.openSession(sessionId)){session.commit(result.getIntentSender());}sessionId=-1;
-  }catch(Exception e){a.recordSelfUpdate(version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();}
+   UpdateAttempts.record(a,version,"committed");try(PackageInstaller.Session session=pi.openSession(sessionId)){session.commit(result.getIntentSender());}sessionId=-1;
+  }catch(Exception e){UpdateAttempts.record(a,version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();}
  }
  /** This phone as DirectUpdate needs it, read locally. osBuild is Build.VERSION.INCREMENTAL only when it has the
   * ten-digit Rose build shape (proposed observation, APP-GITHUB-002-IFACE-001); otherwise unknown. */

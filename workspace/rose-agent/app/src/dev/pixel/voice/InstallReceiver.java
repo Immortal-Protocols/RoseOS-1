@@ -7,7 +7,7 @@ public class InstallReceiver extends BroadcastReceiver {
  else if(status==PackageInstaller.STATUS_SUCCESS)message="Installation complete.";
  else message="Installation not completed: "+i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
  long target=i.getLongExtra(SELF_TARGET,-1);
- if(target>0){SelfUpdate.Outcome o=SelfUpdate.outcome(status);c.getSharedPreferences("self-update",0).edit().putLong("target",target).putString("state",o==SelfUpdate.Outcome.FAILED?String.valueOf(i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)):o.name()).apply();}
+ if(target>0){SelfUpdate.Outcome o=SelfUpdate.outcome(status);UpdateAttempts.record(c,target,o==SelfUpdate.Outcome.FAILED?String.valueOf(i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)):o.name());}
  c.getSharedPreferences("delivery",0).edit().putString("status",message).apply();Toast.makeText(c,message,Toast.LENGTH_LONG).show();
  }
 }
