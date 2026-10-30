@@ -40,9 +40,10 @@ The conversation, history, action validation, limits, fencing, Stop and backgrou
   anchors only. No secret ships in the APK; the bearer goes only to its own origin.
 - Sign-in is automatic and never blocks Send. Each turn has at most two HTTP inference attempts:
   one 401 renews and resends once only while an attempt is left, so there is never a third.
-- The invite goes only with the first enrollment. A key is recorded as pending before that request,
-  so a lost reply is recovered by renewal (no new key, no second code); only a 401 `key_unknown`
-  allows a new key, with the same code. 403 `invite_required`/`invite_invalid` waits for a new scan;
+- The invite goes only with the first enrollment. A key is recorded as pending before that request;
+  a timeout, 5xx or lost reply re-sends it with the same key and chain on a fresh challenge (no
+  second code), and after a restart the key renews or, if never committed, waits for a rescan. Only a
+  401 `challenge_mismatch` during a rescan allows a new key. 403 `invite_required`/`invite_invalid` waits for a new scan;
   any other 403 is terminal (key and state kept) until **Reset sign-in** is chosen. 429 (Retry-After) and 5xx retry at most
   three times; 400/401 and TLS failures never retry. Stop cancels sign-in and inference.
 

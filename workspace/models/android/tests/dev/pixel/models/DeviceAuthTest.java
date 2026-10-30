@@ -62,6 +62,7 @@ final class DeviceAuthTest {
         invalidInviteWaitsForAnExplicitNewScan();
         lostEnrollmentReplyIsRecoveredWithoutANewKeyOrCode();
         uncommittedEnrollmentRetriesWithTheSameInvite();
+        expiredAttestationOnAPendingKeyIsReplacedOnRescan();
         restartWhilePendingRenewsOrAsksForAScan();
         otherRefusalsAreTerminalAndTtlIsBounded();
         stopWhilePendingKeepsTheKey();
@@ -104,8 +105,9 @@ final class DeviceAuthTest {
         check(a.offerInvite(INVITE2), "an explicit new scan is accepted");
         s.challenge("c-2").token(200, tokenReply(key));
         a.current(NEVER);
-        check(a.state() == DeviceAuth.State.ENROLLED && key.created == 2
-                && INVITE2.equals(Json.string(Json.object(Json.parse(s.bodies.get(3))), "invite")), "new code enrolls");
+        check(a.state() == DeviceAuth.State.ENROLLED && key.created == 1
+                && INVITE2.equals(Json.string(Json.object(Json.parse(s.bodies.get(3))), "invite")),
+                "new code enrolls the same never-enrolled key");
         s.challenge("c-3").token(403, "{\"error\":\"invite_required\"}");
         MemStore fresh = new MemStore();
         expect(auth(s, new SoftKey(), fresh), 403, "auth_invite_invalid");
@@ -123,21 +125,36 @@ final class DeviceAuthTest {
         EndpointCredential c = auth(s, key, store).current(NEVER);
         Map<String, Object> second = Json.object(Json.parse(s.bodies.get(3)));
         check(c != null && key.created == 1 && "enrolled".equals(store.get(DeviceAuth.STATE)), "recovered, same key");
-        check(!second.containsKey("invite") && !second.containsKey("attestation")
-                && key.keyIdHex().equals(Json.string(second, "key_id")), "recovery is a renewal: no code spent again");
+        check("c-2".equals(Json.string(second, "challenge")) && key.verify("c-2", Json.string(second, "signature"))
+                && second.get("attestation") instanceof List && INVITE.equals(Json.string(second, "invite")),
+                "re-sent with the same key and chain on a fresh signed challenge (server dedupes; no second code)");
     }
 
-    /** The enrollment never committed (503): renewal answers key_unknown, then a new key uses the same code. */
+    /** Commit unknown (503): the same key re-sends; never a renewal race or a new key. */
     static void uncommittedEnrollmentRetriesWithTheSameInvite() throws Exception {
         Server s = new Server();
         SoftKey key = new SoftKey();
         MemStore store = new MemStore();
         s.challenge("c-1").token(503, "{}");
-        s.challenge("c-2").token(401, "{\"error\":\"key_unknown\"}");
-        s.challenge("c-3").token(200, tokenReply(key));
+        s.challenge("c-2").token(200, tokenReply(key));
         auth(s, key, store).current(NEVER);
-        check(key.created == 2 && INVITE.equals(Json.string(Json.object(Json.parse(s.bodies.get(5))), "invite")),
-                "only after key_unknown: a new key, the same unspent code");
+        check(key.created == 1 && INVITE.equals(Json.string(Json.object(Json.parse(s.bodies.get(3))), "invite")),
+                "503: same key, same code, fresh challenge");
+    }
+
+    /** A never-enrolled key whose attested challenge expired: only during an explicit scan, a new key. */
+    static void expiredAttestationOnAPendingKeyIsReplacedOnRescan() throws Exception {
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        MemStore store = new MemStore();
+        s.challenge("c-1").token(403, "{\"error\":\"invite_invalid\"}");
+        expect(auth(s, key, store), 403, "auth_invite_invalid");
+        DeviceAuth later = bare(s, key, store);
+        check(later.offerInvite(INVITE2), "rescan accepted");
+        s.challenge("c-2").token(401, "{\"error\":\"challenge_mismatch\"}");
+        s.challenge("c-3").token(200, tokenReply(key));
+        later.current(NEVER);
+        check(key.created == 2 && "enrolled".equals(store.get(DeviceAuth.STATE)), "challenge_mismatch: replaced, enrolled");
     }
 
     static void restartWhilePendingRenewsOrAsksForAScan() throws Exception {
@@ -164,7 +181,12 @@ final class DeviceAuthTest {
         expect(auth(s, k2, other), 503, "auth_unavailable");
         s.challenge("d-4").token(401, "{\"error\":\"key_unknown\"}");
         expect(bare(s, k2, other), 403, "auth_invite_needed");
-        check(k2.created == 1, "never committed and no code after restart: scan again, no new key yet");
+        check(k2.created == 1, "never committed and no code after restart: scan again, no new key");
+        DeviceAuth rescanned = bare(s, k2, other);
+        check(rescanned.offerInvite(INVITE), "the same unexpired QR may be scanned again");
+        s.challenge("d-5").token(200, tokenReply(k2));
+        rescanned.current(NEVER);
+        check(k2.created == 1 && "enrolled".equals(other.get(DeviceAuth.STATE)), "rescan enrolls the same key");
     }
 
     static void otherRefusalsAreTerminalAndTtlIsBounded() throws Exception {
