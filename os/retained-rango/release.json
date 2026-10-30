@@ -21,25 +21,44 @@
       "otatoolsBytes": 4294967296,
       "metadataBytes": 16777216
     },
-    "transport": null,
-    "transportBasis": "Unbound: no supported transport moves the Mac operator's retained outputs to the original builder. When bound it is {\"kind\": ..., \"directory\": absolute builder path}: a directory holding exactly the receipt, target-files, otatools, resolved manifest and background policy, staged into a fresh task-owned consumer directory and revalidated before secrets."
+    "transport": {
+      "kind": "existing-mac-verified-sftp",
+      "directory": "/home/pixelbuild/rose-actions/rango-retained/2026103001-transfer007/input",
+      "receiptSha256": "54d4cf665e9bc47d584abda8ab6c130687cc748b7752d156e81e94462bd2173e",
+      "transportReceiptSha256": "bb7b1a270509181ea7af2787de983848444148a8224b76179393a2c01a2b9460"
+    },
+    "transportBasis": "Bound (FINAL static data handoff, 14:37 UTC): TRANSFER007 completed 14:15:42 by the same Mac operator over its existing verified SSH/SFTP route; all 13 files size/hash verified; exactly the five consumer files (corrected input receipt 54d4cf66..., transport receipt bb7b1a27...) are in this fresh directory on the original builder, where pinned consumer 77bba1d8 validated the real bytes with nothing unbound. Operator evidence relayed by Chief, not an Infra re-hash: the builder preflight checks the exact files, sizes and hashes before any login, then stage and recheck revalidate the consumer copy. The hosted guard checks this declaration only."
   },
   "signing": {
     "bootstrapProfile": "fold-rango-v1",
     "bootstrapReceipt": null,
-    "bootstrapReceiptBasis": "Unbound: the public receipt (inline JSON) of a genuine completed fold-rango-v1 bootstrap names the committed secret versions and the OTA certificate and AVB public key identities. No bootstrap has run.",
-    "otatoolsProvenance": null,
-    "releaseScriptProvenance": null,
-    "provenanceBasis": "Unbound: executable otatools and the release script need an approved source binding (pinned revision and content hashes), not only the artifact's self-reported hashes.",
+    "bootstrapReceiptBasis": "Not used under the selected first-use policy. The fold-rango-v1 bootstrap did complete (run 41019390144, recipe 99357a10); its public receipt artifact 12961047183 is held and is never retrieved by another route, so this stays null. Never regenerate or import.",
+    "otatoolsProvenance": {
+      "product": "02b21bc69f9afd281422d42e3dcf8a456e471de1",
+      "resolvedManifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+      "compileReceiptSha256": "bcfa9e907fd75844e9618b4d2b07374fc49490803678d59867a0f5df481f9109",
+      "collectionReceiptSha256": "b9be3398a711ed5b68d7a68c2449a2384b87f12c610274e08f280cac3caec3db",
+      "bytes": 536798181,
+      "sha256": "22d62464ff3fa74fe3fa2b4c118bba116bc3a3aa504feddcdcf38fc3f3cbb664"
+    },
+    "releaseScriptProvenance": {
+      "repository": "GrapheneOS/script",
+      "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+      "files": {
+        "generate-release.sh": "01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311",
+        "common.sh": "d6ff8cd70b065af7e129a95d026ff5ddd8564a6e12fa340cd02fd93deba76262"
+      }
+    },
+    "provenanceBasis": "Bound: otatools is the authorized pinned-source build chain (product 02b21bc6, the 1057-project resolved manifest 32d30e70, compile receipt bcfa9e90, collection receipt b9be3398) plus the transported archive bytes; not an independent reproducible-build attestation. The release script is GrapheneOS/script 09d65184: generate-release.sh 01f7847e (the authorized fixture scripts/tests/fixtures/permission-apex/script/generate-release.sh) and common.sh d6ff8cd7 (4979 bytes, git blob dd0e6e66, independently read and re-hashed from the pinned upstream revision). These are descriptive pins; equality of the host executables is the normal pre-use runtime comparison, not proven by this object.",
     "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
     "lockPath": "/home/pixelbuild/frankel-build.lock",
     "sourceBasis": "The original builder tree and the shared global lock of os/build-only/rango.json and os/release-pipeline/frankel.json.",
     "identityPolicy": {
-      "mode": "bootstrap-receipt",
-      "modeBasis": "OCT30-INFRA-S017: the selected initial identity authority is the genuine fold-rango-v1 bootstrap public receipt (signing.bootstrapReceipt, still unbound: artifact 12961047183 is held and is never retrieved by another route).",
+      "mode": "first-use-containers",
+      "modeBasis": "Owner selected 13:07 UTC (first-use containers for the Fold). The public OTA/AVB identity and the numeric secret versions are runtime outputs of the protected signing operation (exactly one ENABLED version per fixed container inside the bootstrap window, key pairs, Frankel collision, durable record), never prefilled. The first admitted run enrols (rango_first_use_enroll=true); every later run must match the record.",
       "firstUse": {
-        "selected": false,
-        "basis": "PROPOSED ONLY, not selected or enabled: the two fixed Rango containers as trust anchors; exactly one ENABLED version in each, created inside the bootstrap window, pinned by numeric id before access; identity derived in the signing operation, Frankel collision refused, written once and equal on every later run. Consistency with the completed bootstrap, not cryptographic proof that no other writer acted.",
+        "selected": true,
+        "basis": "SELECTED (owner 13:07 UTC): the two fixed Rango containers as trust anchors; exactly one ENABLED version in each, created inside the bootstrap window, pinned by numeric id before access; identity derived in the signing operation, Frankel collision refused, written once and equal on every later run. Consistency with the completed bootstrap, not cryptographic proof that no other writer acted.",
         "bootstrapRun": "41019390144",
         "bootstrapRecipe": "99357a10a2e63021d5df76b962c5aee9e76216d1",
         "windowStart": "2026-10-30T07:20:15Z",
@@ -53,8 +72,8 @@
   "publication": {
     "repository": "Immortal-Protocols/pixel-ota",
     "tag": "rango-{build}",
-    "feedChannel": null,
-    "feedBasis": "Unbound: automatic Rango OTA discovery is not established by a GitHub tag and no Rango channel routing is configured; the feed line asset needs a selected channel.",
+    "feedChannel": "beta",
+    "feedBasis": "beta: a publication classification for the owner-selected separate manual Beta, not discovery. host-sign writes the rango-stable line '2026103001 1793328547 rango beta'; nothing on the phone reads it (the Updater keeps its upstream configuration, no RoseOS discovery). The rango-stable asset name and latest=false stay.",
     "latest": false,
     "api": "https://api.github.com",
     "uploads": "https://uploads.github.com",
@@ -75,7 +94,7 @@
         "path": "os/build-only/rango-reconcile.json",
         "sha256": "70ae67efd0127cc10073cfd33cb9a4fd009aaeef2db2fb1f451743ea19fb8c59"
       },
-      "included": null,
+      "included": false,
       "apkPath": "SYSTEM/priv-app/Updater/Updater.apk",
       "packageName": "app.seamlessupdate.client",
       "requiredFiles": [
@@ -83,9 +102,75 @@
         "SYSTEM/etc/default-permissions/app.seamlessupdate.client.xml",
         "SYSTEM/etc/sysconfig/app.seamlessupdate.client.xml"
       ],
-      "basis": "OCT30-INFRA-S018: the retained build was compiled with --keep-upstream-updater (recipe = the pinned rango-reconcile.json, the bc855f1 bytes), so it carries no Rose channel and verification never claims Rose discovery (owner 13:32:59: first Fold Beta for manual installation). Source expectation: upstream build/make media_system.mk adds Updater only when OFFICIAL_BUILD=true and apply-os-changes.py adds it only with --updater-url, so this build should ship none; that is NOT yet proven on the actual ZIP. included stays null until the bounded index of target-files f73e7485 says: false = no Updater APK anywhere and none of the three supporting XML files; true = also bind signer (one exact digest from the actual signing mapping) and resources (kind/name -> compiled value, string/url required, from pinned upstream source plus the actual compiled APK). Paths and package are the standard Updater layout (docs/OS-INTEGRATION.md)."
+      "basis": "OCT30-INFRA-S018: the retained build was compiled with --keep-upstream-updater (recipe = the pinned rango-reconcile.json, the bc855f1 bytes), so it carries no Rose channel and verification never claims Rose discovery (owner 13:32:59: first Fold Beta for manual installation). Source expectation: upstream build/make media_system.mk adds Updater only when OFFICIAL_BUILD=true and apply-os-changes.py adds it only with --updater-url, so this build should ship none; that is NOT yet proven on the actual ZIP. included=false (FINAL static data handoff, 14:37 UTC): the Mac's local inspection of the retained target-files decoded all 217 APK identities with SDK37 aapt2 without error and app.seamlessupdate.client is absent irrespective of filename (receipt 9a134b49...), and the full 10221-member index (7cce414e...) has zero occurrences of each of the three supporting XML paths. Coverage is target-files APK members and the configured XML, not nested containers or runtime; the signed target-files is rechecked by the unchanged absence contract. Paths and package are the standard Updater layout (docs/OS-INTEGRATION.md)."
     },
-    "expected": null,
-    "basis": "Unbound: the Rango-specific release-pipeline expectations - variant, apps ([[package, versionCode]]), identities.appSignerSha256, host.tools, updater, permissionApex, systemUiTray and the other sections verify_signed reads. Frankel's updater, framework and feed identities are never claimed for Rango; target, identities (OTA/AVB) and publication are never taken from here."
+    "expected": {
+      "variant": "user",
+      "apps": [
+        [
+          "dev.pixel.voice",
+          310
+        ],
+        [
+          "dev.pixel.calculator.agent",
+          4
+        ],
+        [
+          "dev.pixel.backgroundcontrol",
+          28
+        ]
+      ],
+      "identities": {
+        "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb"
+      },
+      "host": {
+        "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
+        "tools": {
+          "checkOtaSignature": "build/make/tools/releasetools/check_ota_package_signature.py",
+          "avbtool": "external/avb/avbtool.py",
+          "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
+          "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+          "simg2img": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/simg2img",
+          "debugfs": "/usr/sbin/debugfs",
+          "otatoolsBin": "releases/{build}/release-{device}-{build}/bin",
+          "fsckErofs": "/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs"
+        }
+      },
+      "framework": {
+        "computerControlTargets": [
+          "dev.pixel.calculator.agent"
+        ],
+        "prototypeAgentsEmpty": true,
+        "lockedSessions": false
+      },
+      "permissionApex": {
+        "module": "com.android.permission",
+        "paths": [
+          "SYSTEM/apex/com.android.permission.apex",
+          "SYSTEM/apex/com.android.permission.capex"
+        ],
+        "version": 370399999,
+        "payloadJar": "javalib/service-permission.jar",
+        "markers": [
+          "rose_home_role_selected",
+          "dev.pixel.voice"
+        ],
+        "sourcePayloadKeySha256": "1ab7920a9fcfc8611cbb8fdee454ff6d4b4d6d09d70ee0a90aaf05cd4b84e3ab",
+        "containerSigner": "otaCertificate",
+        "payloadKey": "avbPublicKey",
+        "basis": "INFRA-HOME-098: OS #70 patches packages/modules/Permission 4d6005db RoleService (os/patches/rose-home-role-permission.patch) and ships in the com.android.permission APEX. The gate reads the target-files: exactly this module (no Google prebuilt), apex_manifest version from the pinned RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION (cur -> cp2a), the patch's setting and package constants in service-permission.jar, the payload AVB signature, and the payload key: the module's own key unsigned, avb.pem (avbPublicKeySha256) signed, with the container signed by releasekey (otaCertificateSha256), as generate-release.sh maps it. Derivations: scripts/tests/fixtures/permission-apex/README.md. Artifact inclusion only; selected HOME, boot and migration are runtime evidence"
+      },
+      "systemUiTray": {
+        "apkPath": "SYSTEM_EXT/priv-app/SystemUI/SystemUI.apk",
+        "markers": [
+          "Lcom/android/wm/shell/AgentTrayPrototype;",
+          "dev.pixel.voice.AgentTrayService",
+          "Lcom/android/wm/shell/AgentTrayLink;",
+          "Voice binding already released"
+        ],
+        "basis": "INFRA-CANDIDATE-115: the Agent tray overlays (os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell, OS #85 adds AgentTrayLink and changes AgentTrayPrototype) are only copied into frameworks/base; the gate reads the SystemUI APK's dex in the target-files and the system_ext image bytes. Pinned frameworks/base 84183aff: wm_shell-sources globs src/**/*.java into WindowManager-Shell, a static library of SystemUI (system_ext_specific, privileged); SystemUI's proguard keeps com.android.wm.shell.* class names and strips only verbose logs, so the class descriptors and the new Log.w literal survive. The last two markers exist only with OS #85; a 2805-shaped SystemUI has only the first two. Derivations: scripts/tests/fixtures/systemui-84183aff/README.md. Code inclusion only; screen-off/resume behavior is runtime evidence"
+      }
+    },
+    "basis": "Bound (FINAL static data handoff): shared-source expectations from the same retained recipe, patches and Android pins (Permission 4d6005db with build/release 0d3e510c cur->cp2a gives 370399999; frameworks/base 84183aff with the retained --agent-tray patches gives the SystemUI markers; derivations in the fixture READMEs), the retained app versions and signer, and the protected builder's established tool paths. They are not Frankel certificate pins and not claims about the final signed images: target, OTA/AVB identities (first-use runtime outputs) and publication are never taken from here, and every check runs on the actual signed bytes."
   }
 }
