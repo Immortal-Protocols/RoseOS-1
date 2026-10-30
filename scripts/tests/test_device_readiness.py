@@ -360,7 +360,8 @@ class ProbeTest(unittest.TestCase):
             signing = json.loads((evidence/'signing-tools.json').read_text())
             self.assertEqual(signing['status'], 'observed')
             self.assertEqual({t: r['status'] for t, r in signing['tools'].items()},
-                {'make_key': 'missing', 'decrypt-keys': 'missing', 'keytool': 'missing', 'openssl': 'missing'})
+                {'make_key': 'missing', 'decrypt-keys': 'missing', 'keytool': 'missing', 'openssl': 'missing',
+                 'apksigner.jar': 'missing', 'sdk-aapt': 'missing'})
             self.assertEqual((receipt['recipeSha'], receipt['attempt'], receipt['lock']['acquired'], receipt['executedMake']),
                 (f.recipe, '4081-1', True, False))
             self.assertEqual(receipt['contract']['sha256'], readiness.sha256_file(ROOT/'os/devices/pixel10.json'))

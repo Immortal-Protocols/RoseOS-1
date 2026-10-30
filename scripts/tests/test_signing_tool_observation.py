@@ -32,7 +32,8 @@ def load(name, file):
 readiness = load('device_readiness_signing', 'device-readiness.py')
 bootstrap = load('signing_bootstrap_observation', 'signing-bootstrap.py')
 TOOLS = {'make_key': b'#!/bin/bash\n# synthetic make_key\n', 'decrypt-keys': b'#!/bin/bash\n# synthetic decrypt-keys\n',
-    'keytool': b'\x7fELF synthetic keytool', 'openssl': b'\x7fELF synthetic openssl'}
+    'keytool': b'\x7fELF synthetic keytool', 'openssl': b'\x7fELF synthetic openssl',
+    'apksigner.jar': b'PK\x03\x04 synthetic apksigner.jar', 'sdk-aapt': b'\x7fELF synthetic sdk aapt'}
 
 
 class Deadline:
@@ -83,7 +84,13 @@ class Observation(unittest.TestCase):
             self.assertEqual((record['status'], record['sha256'], record['sizeBytes'], record['executable']),
                 ('present', hashlib.sha256(data).hexdigest(), len(data), True), name)
             self.assertEqual(record['path'], str(t.path(name)))
-        self.assertEqual(set(observed['tools']), {'make_key', 'decrypt-keys', 'keytool', 'openssl'})
+        self.assertEqual(set(observed['tools']), {'make_key', 'decrypt-keys', 'keytool', 'openssl', 'apksigner.jar', 'sdk-aapt'})
+        # S012: the Models adapter's files, not the public 2901 launcher or source prebuilts aapt.
+        self.assertTrue(readiness.SIGNING_TOOLS['apksigner.jar'][1].endswith('build-tools/android-15/lib/apksigner.jar'))
+        self.assertTrue(readiness.SIGNING_TOOLS['sdk-aapt'][1].endswith('android-sdk/build-tools/android-15/aapt'))
+        public = readiness.PUBLIC_2901['tools']
+        self.assertNotEqual('/' + readiness.SIGNING_TOOLS['apksigner.jar'][1], public['apksigner']['path'])
+        self.assertNotEqual('/' + readiness.SIGNING_TOOLS['sdk-aapt'][1], public['aapt']['path'])
         self.assertEqual(readiness.SIGNING_TOOLS['openssl'], ('system', 'usr/bin/openssl'))
         self.assertEqual(readiness.SIGNING_TOOLS['keytool'], ('source', 'prebuilts/jdk/jdk21/linux-x86/bin/keytool'))
 
@@ -190,7 +197,7 @@ class ReceiptAndSummary(unittest.TestCase):
         observed = Tree(self).observe()
         summary = readiness.signing_summary(readiness.signing_receipt(self.receipt(observed)))
         self.assertIn('| tool | path | status | bytes | executable | sha256 |', summary)
-        for name in ('make_key', 'decrypt-keys', 'keytool', 'openssl'):
+        for name in ('make_key', 'decrypt-keys', 'keytool', 'openssl', 'apksigner.jar', 'sdk-aapt'):
             self.assertIn(f'| {name} |', summary)
         self.assertIn('avb_openssl: absent', summary)
         self.assertNotIn('availableBytes', summary)

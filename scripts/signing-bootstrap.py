@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Guarded OS signing-key bootstrap adapter (OCT29-INFRA-S005).
 
-One reviewed profile from os/signing-bootstrap/profiles.json selects what may be bootstrapped. fold-rango-v1 is the only
-resource-bound profile; models-v0 is a separate interface that fails closed until its own resources exist. A profile is
-not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
+One reviewed profile from os/signing-bootstrap/profiles.json selects what may be bootstrapped: fold-rango-v1 (a tar of
+the Fold key files) or models-v0 (OCT30-INFRA-S012: one PKCS12 store, alias rose-models, made with the measured
+keytool through its password-file options, its reloaded public listing and certificate checked before import, and the
+two secrets rechecked empty immediately before the first add). Both are resource-bound and both refuse until their
+installed tool identities are measured. A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
 
 guard      on the hosted guard job, before the controller starts: the mode, profile and options must be exactly a
            bootstrap of a ready profile, bound to this workflow commit on main from a manual dispatch.
@@ -56,6 +58,12 @@ PIPELINE_PATH = 'os/release-pipeline/frankel.json'
 MODE = 'signing-bootstrap'
 RECEIPT_SCHEMA = 'roseos.signing-bootstrap-receipt.v1'
 OUTPUTS = ('keys.tar.gz', 'passphrase')
+PKCS12_OUTPUTS = ('keystore.p12', 'passphrase')
+
+
+def profile_outputs(profile):
+    """The exact workspace projection a generator must leave: a tar of key files (Fold) or one PKCS12 store (Models)."""
+    return PKCS12_OUTPUTS if (profile.get('archive') or {}).get('format') == 'pkcs12' else OUTPUTS
 MEMBER = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}')
 SECRET_NAME = re.compile(r'[A-Za-z0-9_-]{1,255}')
 HEX64 = re.compile(r'[0-9a-f]{64}')
@@ -180,9 +188,10 @@ def approved_path(path):
 # exactly one placeholder or a plain literal. Nothing else (no shell, path, environment or command text) is accepted.
 LITERAL = re.compile(r'[A-Za-z0-9_.,:=+@-][A-Za-z0-9_.,:=+@-]{0,127}')
 SUBJECT = re.compile(r'(/[A-Za-z]{1,3}=[A-Za-z0-9 ._-]{1,64}){1,8}/?')
-STEP_KEYS = {'tool', 'args', 'produces', 'stdin', 'exitStatus', 'removes'}
-PLACEHOLDERS = ('{out}', '{passphrase_file}', '{passphrase_file_arg}', '{subject}')
-INTERMEDIATE = re.compile(r'[a-z0-9_]+(\.[a-z0-9_]+){1,3}')
+STEP_KEYS = {'tool', 'args', 'produces', 'stdin', 'exitStatus', 'removes', 'stdout'}
+PLACEHOLDERS = ('{out}', '{passphrase_file}', '{passphrase_file_arg}', '{subject}', '{dname}')
+DNAME = re.compile(r'[A-Z]{1,2}=[A-Za-z0-9 ._-]{1,64}(, ?[A-Z]{1,2}=[A-Za-z0-9 ._-]{1,64}){0,7}')
+INTERMEDIATE = re.compile(r'[a-z0-9_][a-z0-9_-]*(\.[a-z0-9_]+){1,3}')
 
 
 def recipe_problems(profile):
@@ -193,14 +202,17 @@ def recipe_problems(profile):
     inventory = profile.get('keyInventory', {})
     allowed = set(inventory.get('requiredByConsumer', [])) | set(inventory.get('optionalByConsumer', []))
     intermediates = set((profile.get('generation') or {}).get('intermediates') or [])
+    public = set((profile.get('generation') or {}).get('publicOutputs') or [])
     if not isinstance(recipe, list) or not recipe:
         return [('invalid', 'recipe must be a non-empty list of steps')]
     problems, produced, live = [], [], set()
     if intermediates & allowed or not all(INTERMEDIATE.fullmatch(str(n)) for n in intermediates):
         problems.append(('invalid', 'generation.intermediates must be plain file names outside the inventory'))
+    if public & (allowed | intermediates) or not all(INTERMEDIATE.fullmatch(str(n)) for n in public):
+        problems.append(('invalid', 'generation.publicOutputs must be plain file names outside the inventory and intermediates'))
     for index, step in enumerate(recipe):
         if not isinstance(step, dict) or set(step) - STEP_KEYS or not {'tool', 'args', 'produces'} <= set(step):
-            problems.append(('invalid', f'step {index}: only tool, args, produces, stdin, exitStatus and removes are accepted'))
+            problems.append(('invalid', f'step {index}: only tool, args, produces, stdin, stdout, exitStatus and removes are accepted'))
             continue
         if step['tool'] not in profile.get('tools', {}):
             problems.append(('invalid', f'step {index}: tool {step["tool"]!r} is not a profile tool'))
@@ -210,11 +222,13 @@ def recipe_problems(profile):
             problems.append(('invalid', f'step {index}: stdin must be none or passphrase'))
         for arg in step['args'] if isinstance(step['args'], list) else [None]:
             if not (isinstance(arg, str) and (arg in PLACEHOLDERS
-                    or (arg.startswith('{out}/') and arg[6:] in allowed | intermediates | {Path(f).stem for f in allowed})
+                    or (arg.startswith('{out}/') and arg[6:] in allowed | intermediates | public | {Path(f).stem for f in allowed})
                     or (LITERAL.fullmatch(arg) and '..' not in arg))):
                 problems.append(('invalid', f'step {index}: argument {str(arg)[:40]!r} is not a placeholder or plain literal'))
-        if not isinstance(step['produces'], list) or not set(step['produces']) <= allowed | intermediates:
+        if not isinstance(step['produces'], list) or not set(step['produces']) <= allowed | intermediates | public:
             problems.append(('invalid', f'step {index}: produces must name inventory files or declared intermediates'))
+        elif 'stdout' in step and step['stdout'] not in set(step['produces']) & public:
+            problems.append(('invalid', f'step {index}: stdout may only be captured into a public output this step produces'))
         else:
             produced += step['produces']
             live |= set(step['produces']) & intermediates
@@ -230,6 +244,12 @@ def recipe_problems(profile):
     missing = sorted(set(inventory.get('requiredByConsumer', [])) - set(produced))
     if missing:
         problems.append(('invalid', f'recipe does not produce {missing}'))
+    if any('{dname}' in (step.get('args') or []) for step in recipe if isinstance(step, dict)) and \
+            not DNAME.fullmatch(str((profile.get('generation') or {}).get('dname'))):
+        problems.append(('invalid', 'generation.dname must be a plain K=value distinguished name'))
+    missing_public = sorted(public - set(produced))
+    if missing_public:
+        problems.append(('invalid', f'public outputs {missing_public} are never produced'))
     if any('{subject}' in (step.get('args') or []) for step in recipe if isinstance(step, dict)) and \
             not SUBJECT.fullmatch(str((profile.get('generation') or {}).get('subject'))):
         problems.append(('invalid', 'generation.subject must be a plain /K=value certificate subject'))
@@ -260,11 +280,15 @@ def generate_keys(workspace, profile, runner, token=None):
     out.mkdir(mode=0o700)
     expected = []
     values = {'{out}': str(out), '{passphrase_file}': str(passphrase), '{passphrase_file_arg}': 'file:' + str(passphrase),
-        '{subject}': str((profile.get('generation') or {}).get('subject'))}
+        '{subject}': str((profile.get('generation') or {}).get('subject')), '{dname}': str((profile.get('generation') or {}).get('dname'))}
     for index, step in enumerate(profile['generation']['recipe']):
         tool = profile['tools'][step['tool']]['installed']['path']
         argv = [values.get(a, str(out/a[6:]) if a.startswith('{out}/') else a) for a in step['args']]
-        status = runner(tool, argv, str(out), str(passphrase) if step.get('stdin') == 'passphrase' else None)
+        stdin = str(passphrase) if step.get('stdin') == 'passphrase' else None
+        if step.get('stdout'):  # a public listing (keytool -list -v), never key material
+            status = runner(tool, argv, str(out), stdin, stdout_path=str(out/step['stdout']))
+        else:
+            status = runner(tool, argv, str(out), stdin)
         if status != step.get('exitStatus', 0):
             raise Blocked('generator-failed', f'step {index} ({step["tool"]}) exited {status}')
         expected += step['produces']
@@ -278,6 +302,8 @@ def generate_keys(workspace, profile, runner, token=None):
     names = sorted(os.listdir(out))
     if names != sorted(expected):
         raise Blocked('unexpected-output', f'generator wrote {names[:16]}, expected {sorted(expected)}')
+    if (profile.get('archive') or {}).get('format') == 'pkcs12':
+        return _project_pkcs12(workspace, out, names, profile)
     buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=buffer, mode='wb', mtime=0) as gz, tarfile.open(fileobj=gz, mode='w', format=tarfile.PAX_FORMAT) as tar:
         for name in names:
@@ -298,12 +324,155 @@ def generate_keys(workspace, profile, runner, token=None):
         f.write(buffer.getvalue())
 
 
-def subprocess_runner(tool, argv, cwd, stdin_path, timeout=900):
-    """Production process boundary: fixed argv, minimal environment, no output captured into logs."""
+def _project_pkcs12(workspace, out, names, profile):
+    """Verify the reloaded store's public identity from the recipe's public outputs, then leave exactly keystore.p12
+    and passphrase in the workspace. Returns the public identity (never key, passphrase or store bytes)."""
+    generation = profile['generation']
+    cert_name, listing_name = generation['publicOutputs']
+    store = out/'keystore.p12'
+    for name in names:
+        info = os.lstat(out/name)
+        if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+            raise Blocked('unexpected-output', f'{name} is not a non-empty regular file')
+    if store.read_bytes()[:1] != b'\x30':
+        raise Blocked('pkcs12-invalid', 'keystore.p12 is not a DER PKCS12 structure')
+    identity = pkcs12_identity((out/cert_name).read_bytes(), (out/listing_name).read_text(errors='replace'), generation)
+    for name in generation['publicOutputs']:
+        (out/name).unlink()
+    fd = os.open(workspace/'keystore.p12', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(store.read_bytes())
+    store.write_bytes(b'\0' * store.stat().st_size)
+    store.unlink()
+    out.rmdir()
+    return identity
+
+
+def _der(data, offset):
+    """(tag, value start, value end) of the DER element at offset."""
+    tag, length, offset = data[offset], data[offset + 1], offset + 2
+    if length & 0x80:
+        count = length & 0x7f
+        if not 0 < count <= 4:
+            raise ValueError('unsupported DER length')
+        length, offset = int.from_bytes(data[offset:offset + count], 'big'), offset + count
+    if offset + length > len(data):
+        raise ValueError('truncated DER')
+    return tag, offset, offset + length
+
+
+def _children(data, start, end):
+    items = []
+    while start < end:
+        tag, vs, ve = _der(data, start)
+        items.append((tag, vs, ve))
+        start = ve
+    return items
+
+
+def _oid(raw):
+    first, rest = divmod(raw[0], 40) if raw[0] < 80 else (2, raw[0] - 80)
+    parts, value = [first, rest], 0
+    for byte in raw[1:]:
+        value = (value << 7) | (byte & 0x7f)
+        if not byte & 0x80:
+            parts.append(value)
+            value = 0
+    return '.'.join(map(str, parts))
+
+
+def _time(data, tag, vs, ve):
+    text = data[vs:ve].decode('ascii')
+    if tag == 0x17:  # UTCTime YYMMDDHHMMSSZ
+        year = int(text[:2])
+        text = ('19' if year >= 50 else '20') + text
+    return datetime.strptime(text, '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc)
+
+
+def _name(data, vs, ve):
+    parts = []
+    for _, rs, re_ in _children(data, vs, ve):  # RDN sets
+        for _, as_, ae in _children(data, rs, re_):
+            (_, os_, oe), (_, ss, se) = _children(data, as_, ae)
+            label = {'2.5.4.3': 'CN', '2.5.4.10': 'O', '2.5.4.11': 'OU', '2.5.4.6': 'C'}.get(_oid(data[os_:oe]), _oid(data[os_:oe]))
+            parts.append(f'{label}={data[ss:se].decode("utf-8", "replace")}')
+    return ', '.join(parts)
+
+
+SIGNATURE_OIDS = {'1.2.840.113549.1.1.11': 'SHA256withRSA', '1.2.840.113549.1.1.12': 'SHA384withRSA',
+    '1.2.840.113549.1.1.5': 'SHA1withRSA'}
+
+
+def certificate_facts(der):
+    """Public facts of an X.509 certificate by minimal DER reading (no signature verification is claimed)."""
+    _, cs, ce = _der(der, 0)
+    tbs, sig_alg = _children(der, cs, ce)[:2]
+    fields = _children(der, tbs[1], tbs[2])
+    if fields[0][0] == 0xa0:
+        fields = fields[1:]
+    _, sig_oid_s, sig_oid_e = _children(der, sig_alg[1], sig_alg[2])[0]
+    not_before, not_after = [(_time(der, t, s, e)) for t, s, e in _children(der, fields[3][1], fields[3][2])]
+    spki = _children(der, fields[5][1], fields[5][2])
+    _, alg_s, alg_e = _children(der, spki[0][1], spki[0][2])[0]
+    bits = None
+    if _oid(der[alg_s:alg_e]) == '1.2.840.113549.1.1.1':
+        _, ks, ke = spki[1]
+        _, rs, re_ = _der(der, ks + 1)  # skip the BIT STRING unused-bits byte
+        _, ms, me = _children(der, rs, re_)[0]
+        modulus = der[ms:me].lstrip(b'\0')
+        bits = len(modulus) * 8 - (8 - modulus[0].bit_length())
+    return {'signatureAlgorithm': SIGNATURE_OIDS.get(_oid(der[sig_oid_s:sig_oid_e]), _oid(der[sig_oid_s:sig_oid_e])),
+        'issuer': _name(der, fields[2][1], fields[2][2]), 'subject': _name(der, fields[4][1], fields[4][2]),
+        'keyAlgorithm': 'RSA' if bits else _oid(der[alg_s:alg_e]), 'keySize': bits,
+        'validityDays': (not_after - not_before).days, 'notBefore': not_before.strftime('%Y-%m-%dT%H:%M:%SZ')}
+
+
+def pkcs12_identity(cert_pem, listing, generation):
+    """Check the reloaded store: exactly one alias, a PrivateKeyEntry, keystore type PKCS12, the listed SHA-256
+    fingerprint equal to the exported certificate, and the certificate's alias/algorithm/subject/validity contract."""
+    expected = generation['identity']
+    try:
+        pem = cert_pem.decode('ascii')
+        der = base64.b64decode(''.join(pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0].split()),
+            validate=True)
+        facts = certificate_facts(der)
+    except (ValueError, IndexError, UnicodeDecodeError) as error:
+        raise Blocked('pkcs12-invalid', f'exported certificate cannot be read ({type(error).__name__})')
+    fingerprint = hashlib.sha256(der).hexdigest()
+    aliases = re.findall(r'^Alias name: (.+)$', listing, re.M)
+    listed = [re.sub(r'[^0-9a-f]', '', m.lower()) for m in re.findall(r'^\s*SHA256: ([0-9A-Fa-f:]+)\s*$', listing, re.M)]
+    problems = []
+    if not re.search(r'^Keystore type: PKCS12$', listing, re.M):
+        problems.append('keystore type is not PKCS12')
+    if aliases != [expected['alias']] or not re.search(r'^Your keystore contains 1 entry$', listing, re.M):
+        problems.append(f'aliases {aliases} are not exactly [{expected["alias"]}]')
+    if not re.search(r'^Entry type: PrivateKeyEntry$', listing, re.M):
+        problems.append('the entry is not a PrivateKeyEntry')
+    if listed != [fingerprint]:
+        problems.append('the listed SHA-256 fingerprint is not the exported certificate')
+    for key in ('keyAlgorithm', 'keySize', 'signatureAlgorithm', 'subject', 'validityDays'):
+        if facts[key] != expected[key]:
+            problems.append(f'{key} {facts[key]!r} is not {expected[key]!r}')
+    if facts['issuer'] != facts['subject']:
+        problems.append('the certificate is not self-issued')
+    if problems:
+        raise Blocked('pkcs12-identity', '; '.join(problems))
+    return {'certificateSha256': fingerprint, 'alias': expected['alias'], **{k: facts[k] for k in
+        ('keyAlgorithm', 'keySize', 'signatureAlgorithm', 'subject', 'validityDays', 'notBefore')}}
+
+
+def subprocess_runner(tool, argv, cwd, stdin_path, timeout=900, stdout_path=None):
+    """Production process boundary: fixed argv, minimal environment, nothing captured into logs. stdout goes to an
+    owner-only file only for a declared public listing."""
     env = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'HOME': cwd}
-    with (open(stdin_path, 'rb') if stdin_path else open(os.devnull, 'rb')) as stdin:
+    with contextlib.ExitStack() as stack:
+        stdin = stack.enter_context(open(stdin_path, 'rb') if stdin_path else open(os.devnull, 'rb'))
+        stdout = subprocess.DEVNULL
+        if stdout_path:
+            stdout = stack.enter_context(os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600), 'wb'))
         try:
-            return subprocess.run([tool, *argv], cwd=cwd, env=env, stdin=stdin, stdout=subprocess.DEVNULL,
+            return subprocess.run([tool, *argv], cwd=cwd, env=env, stdin=stdin, stdout=stdout,
                 stderr=subprocess.DEVNULL, timeout=timeout).returncode
         except subprocess.TimeoutExpired:
             return 'timeout'
@@ -528,11 +697,12 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
         return stop('workspace-unprotected', 'workspace must be an owner-only directory')
     write_journal(journal, {'profile': name, 'status': 'generating'})
-    executor.generate(created, profile)
+    generated = executor.generate(created, profile)
+    outputs = profile_outputs(profile)
     names = sorted(os.listdir(created))
-    if names != sorted(OUTPUTS):
-        return stop('unexpected-output', f'generator outputs {names[:16]} are not exactly {list(OUTPUTS)}', 'failed')
-    for output in OUTPUTS:
+    if names != sorted(outputs):
+        return stop('unexpected-output', f'generator outputs {names[:16]} are not exactly {list(outputs)}', 'failed')
+    for output in outputs:
         info = os.lstat(created/output)
         if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
             return stop('unexpected-output', f'{output} is not an owner-only regular file', 'failed')
@@ -540,19 +710,39 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     private.extend([passphrase, passphrase.strip()])
     if not passphrase.strip():
         return stop('passphrase-empty', 'passphrase output is empty', 'failed')
-    try:
-        identity = inspect_archive(created/'keys.tar.gz', profile)
-    except Blocked as error:
-        return stop(error.code, error.detail, 'failed')
-    if identity['otaCertificateSha256'] == frankel.get('otaCertificateSha256') or \
-            identity['avbPublicKeySha256'] == frankel.get('avbPublicKeySha256'):
-        return stop('identity-collision', 'public identity equals the Frankel identity; keys are never copied', 'failed')
+    if outputs == PKCS12_OUTPUTS:
+        try:
+            identity = verified_pkcs12(generated, created/'keystore.p12', profile)
+        except Blocked as error:
+            return stop(error.code, error.detail, 'failed')
+        existing = {frankel.get('otaCertificateSha256'), frankel.get('appSignerSha256')} | {
+            app.get('signerSha256') for app in frankel.get('apps', []) if isinstance(app, dict)}
+        if identity['certificateSha256'] in existing - {None}:
+            return stop('identity-collision', 'certificate equals an existing Frankel/Agent identity; keys are never copied', 'failed')
+    else:
+        try:
+            identity = inspect_archive(created/'keys.tar.gz', profile)
+        except Blocked as error:
+            return stop(error.code, error.detail, 'failed')
+        if identity['otaCertificateSha256'] == frankel.get('otaCertificateSha256') or \
+                identity['avbPublicKeySha256'] == frankel.get('avbPublicKeySha256'):
+            return stop('identity-collision', 'public identity equals the Frankel identity; keys are never copied', 'failed')
     receipt['publicIdentity'] = identity
+    if profile.get('recheckEmptyBeforeImport'):
+        for role, secret in sorted(profile['secrets'].items()):
+            try:
+                state = executor.secret_state(profile['project'], secret)
+            except Unavailable as error:
+                write_journal(journal, {'profile': name, 'status': 'failed-before-commit', 'publicIdentity': identity})
+                return stop('metadata-unavailable', f'{secret}: {error} at the pre-import recheck; nothing added', 'failed')
+            if not isinstance(state, dict) or state.get('exists') is not True or state.get('versions') != []:
+                write_journal(journal, {'profile': name, 'status': 'failed-before-commit', 'publicIdentity': identity})
+                return stop('secret-occupied', f'{secret} is no longer an existing empty secret at the pre-import recheck; nothing added', 'failed')
     write_journal(journal, {'profile': name, 'status': 'importing', 'publicIdentity': identity})
     for role in ('keys', 'passphrase'):
         secret = profile['secrets'][role]
         entry = receipt['secrets'][role]
-        file = created/('keys.tar.gz' if role == 'keys' else 'passphrase')
+        file = created/(outputs[0] if role == 'keys' else 'passphrase')
         receipt['operations'].append(ADD_OPERATION['operation'].format(secret=secret, project=profile['project'],
             file=f'<workspace>/{file.name}'))
         try:
@@ -579,6 +769,20 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     write_journal(journal, {'profile': name, 'status': 'complete', 'publicIdentity': identity,
         'committed': {r: e['committedVersion'] for r, e in receipt['secrets'].items()}})
     return receipt, private
+
+
+def verified_pkcs12(generated, store, profile):
+    """The generator's verified public identity, rechecked against the profile contract and the stored file."""
+    if not isinstance(generated, dict) or not HEX64.fullmatch(str(generated.get('certificateSha256'))):
+        raise Blocked('pkcs12-identity', 'the generator returned no verified public identity')
+    expected = profile['generation']['identity']
+    for key in ('alias', 'keyAlgorithm', 'keySize', 'signatureAlgorithm', 'subject', 'validityDays'):
+        if generated.get(key) != expected[key]:
+            raise Blocked('pkcs12-identity', f'{key} {generated.get(key)!r} is not {expected[key]!r}')
+    if store.read_bytes()[:1] != b'\x30':
+        raise Blocked('pkcs12-invalid', 'keystore.p12 is not a DER PKCS12 structure')
+    return {k: generated[k] for k in ('certificateSha256', 'alias', 'keyAlgorithm', 'keySize', 'signatureAlgorithm',
+        'subject', 'validityDays', 'notBefore') if k in generated}
 
 
 def _recovery(receipt, journal, name, stop, detail):
@@ -617,7 +821,7 @@ class GcloudExecutor:
         return {'exists': True, 'versions': [str(v.get('name', '')).rsplit('/', 1)[-1] for v in versions or []]}
 
     def generate(self, workspace, profile):
-        generate_keys(workspace, profile, subprocess_runner)
+        return generate_keys(workspace, profile, subprocess_runner)
 
     def add_version(self, project, secret, file):
         try:

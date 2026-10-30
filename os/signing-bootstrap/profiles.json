@@ -537,15 +537,150 @@
       }
     },
     "models-v0": {
-      "status": "unbound",
-      "purpose": "Models package signing bootstrap interface; fails closed until its own resources are supplied",
-      "missing": [
-        "exact Secret Manager resources (project, secret names)",
-        "approved signer access for those resources",
-        "generation algorithm and key inventory",
-        "package identity"
-      ],
-      "note": "Rango authority and app-only Rose Agent signing do not cover Models."
+      "status": "resource-bound",
+      "purpose": "Models (dev.pixel.models) permanent signing identity: generate one PKCS12 store on the GCP builder and add version 1 of each existing empty secret (MODELS-LIVE-EXEC-003 contract)",
+      "device": null,
+      "project": "protocols-465723",
+      "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "secrets": {
+        "keys": "PIXEL_MODELS_SIGNING_KEYSTORE_V1",
+        "passphrase": "PIXEL_MODELS_SIGNING_PASSPHRASE_V1"
+      },
+      "access": {
+        "addVersionExpires": "2026-10-31T00:00:00Z",
+        "accessorExpires": "2026-11-27T23:59:59Z",
+        "minimumRemainingSeconds": 1800,
+        "basis": "Mac readback relayed 01:19:00Z: custom role projects/protocols-465723/roles/roseosModelsBootstrapV1 (secretmanager.secrets.get, versions.list, versions.add) until 2026-10-31T00:00:00Z and secretAccessor until 2026-11-27T23:59:59Z for the signer; both secrets created empty. Recorded only; execution must reread metadata and these are never reapplied by this adapter."
+      },
+      "recheckEmptyBeforeImport": true,
+      "archive": {
+        "format": "pkcs12",
+        "consumer": "workspace/models/signing (PR #149 adapter) opens the PKCS12 store with alias rose-models using the passphrase secret",
+        "publicIdentityFiles": []
+      },
+      "keyInventory": {
+        "complete": true,
+        "requiredByConsumer": [
+          "keystore.p12"
+        ],
+        "optionalByConsumer": [],
+        "roles": [
+          {
+            "role": "rose-models",
+            "files": [
+              "keystore.p12"
+            ],
+            "formats": [
+              "PKCS12 store; one PrivateKeyEntry alias rose-models; store and key protected by one random passphrase"
+            ],
+            "algorithm": "RSA-4096, SHA256withRSA self-signed certificate, CN=Rose Models, 10000 days",
+            "evidence": [
+              "MODELS-LIVE-EXEC-003 approved generation contract (Nathan approval 00:31:41Z, MODELS-LIVE-DECISION-002)"
+            ]
+          }
+        ],
+        "basis": "A single dedicated Models identity; no Fold or Agent key is reused."
+      },
+      "tools": {
+        "keytool": {
+          "kind": "prebuilt-binary",
+          "source": {
+            "path": "prebuilts/jdk/jdk21/linux-x86/bin/keytool",
+            "note": "observed by the device-readiness signing-tools receipt (S011); readback of run 40984487684 pending"
+          },
+          "sourceSha256": null,
+          "installed": {
+            "path": null,
+            "sha256": null
+          },
+          "requiredObservation": "installed path and sha256 of the jdk21 keytool from a permitted readback of the device-readiness signing-tools receipt; never the public 2901 launcher or a source hash"
+        }
+      },
+      "generation": {
+        "recipe": [
+          {
+            "tool": "keytool",
+            "args": [
+              "-genkeypair",
+              "-keystore",
+              "{out}/keystore.p12",
+              "-storetype",
+              "PKCS12",
+              "-alias",
+              "rose-models",
+              "-keyalg",
+              "RSA",
+              "-keysize",
+              "4096",
+              "-sigalg",
+              "SHA256withRSA",
+              "-dname",
+              "{dname}",
+              "-validity",
+              "10000",
+              "-storepass:file",
+              "{passphrase_file}",
+              "-keypass:file",
+              "{passphrase_file}",
+              "-noprompt"
+            ],
+            "produces": [
+              "keystore.p12"
+            ]
+          },
+          {
+            "tool": "keytool",
+            "args": [
+              "-exportcert",
+              "-rfc",
+              "-alias",
+              "rose-models",
+              "-keystore",
+              "{out}/keystore.p12",
+              "-storetype",
+              "PKCS12",
+              "-storepass:file",
+              "{passphrase_file}",
+              "-file",
+              "{out}/rose-models.x509.pem"
+            ],
+            "produces": [
+              "rose-models.x509.pem"
+            ]
+          },
+          {
+            "tool": "keytool",
+            "args": [
+              "-list",
+              "-v",
+              "-keystore",
+              "{out}/keystore.p12",
+              "-storetype",
+              "PKCS12",
+              "-storepass:file",
+              "{passphrase_file}"
+            ],
+            "stdout": "keytool-list.txt",
+            "produces": [
+              "keytool-list.txt"
+            ]
+          }
+        ],
+        "publicOutputs": [
+          "rose-models.x509.pem",
+          "keytool-list.txt"
+        ],
+        "dname": "CN=Rose Models",
+        "identity": {
+          "alias": "rose-models",
+          "keyAlgorithm": "RSA",
+          "keySize": 4096,
+          "signatureAlgorithm": "SHA256withRSA",
+          "subject": "CN=Rose Models",
+          "validityDays": 10000
+        },
+        "note": "keytool takes the store and key passwords from the passphrase file (-storepass:file / -keypass:file, the documented JDK keytool password-file form); nothing secret is in argv or the environment. The store is reloaded twice (exportcert, list -v) and its public listing and certificate are checked before import; the public files are then removed and only keystore.p12 and passphrase remain. Execution must revalidate the measured keytool bytes."
+      }
     }
   }
 }
