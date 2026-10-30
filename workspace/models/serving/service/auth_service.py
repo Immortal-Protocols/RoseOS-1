@@ -43,6 +43,10 @@ SIGNER_SHA256 = '066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108d
 BOOT_STATES = {0: 'Verified', 1: 'SelfSigned', 2: 'Unverified', 3: 'Failed'}
 TEE_LEVELS = {1, 2}  # TrustedEnvironment, StrongBox
 TOKEN_TTL_S, CHALLENGE_TTL_S = 3600, 60
+# Android fixes a key's attestation challenge when the key is generated, so a retry with the same key keeps it. The
+# attested challenge may therefore be any challenge this server issued within this age; the SIGNED challenge stays
+# fresh and single-use (proof of possession now).
+ATTESTED_CHALLENGE_MAX_AGE_S = 24 * 3600
 INVITE_TTL_S = 24 * 3600
 INVITE_URI = 'dev.pixel.models://enroll?invite='  # the app keeps its built-in origin; a QR never changes it
 MAX_BODY = 64 * 1024
@@ -163,7 +167,7 @@ def validity(cert, edge):
     return value.timestamp()
 
 
-def verify_attestation(chain_b64, challenge, policy, now):
+def verify_attestation(chain_b64, challenge, policy, now, attested_challenge_ok=None):
     """The leaf public key of an acceptable attestation chain, else Refused(401|403)."""
     try:
         chain = [x509.load_der_x509_certificate(base64.b64decode(c, validate=True)) for c in chain_b64]
@@ -198,7 +202,8 @@ def verify_attestation(chain_b64, challenge, policy, now):
         raise Refused(401, 'key_description_invalid') from None
     if desc['attestationSecurityLevel'] not in TEE_LEVELS or desc['keyMintSecurityLevel'] not in TEE_LEVELS:
         raise Refused(401, 'security_level')
-    if not hmac.compare_digest(desc['challenge'], challenge.encode()):
+    if not hmac.compare_digest(desc['challenge'], challenge.encode()) and not (
+            attested_challenge_ok and attested_challenge_ok(desc['challenge'])):
         raise Refused(401, 'challenge_mismatch')
     if desc['packages'] != {PACKAGE} or desc['signers'] != {SIGNER_SHA256}:
         raise Refused(401, 'application_mismatch')
@@ -285,8 +290,9 @@ def sign(secret, kind, payload):
     return f'{kind}.{body}.' + b64u(hmac.new(secret, f'{kind}.{body}'.encode(), hashlib.sha256).digest())
 
 
-def opened(secrets_, kind, text, now):
-    """The payload of a token/challenge MAC'd by any accepted secret and not expired, else None."""
+def opened(secrets_, kind, text, now, grace=0):
+    """The payload of a token/challenge MAC'd by any accepted secret and not expired (allowing `grace` seconds past
+    its expiry), else None."""
     parts = text.split('.') if isinstance(text, str) else []
     if len(parts) != 3 or parts[0] != kind or len(text) > 2048:
         return None
@@ -297,7 +303,7 @@ def opened(secrets_, kind, text, now):
                 payload = json.loads(unb64u(parts[1]))
             except ValueError:
                 return None
-            return payload if isinstance(payload, dict) and payload.get('e', 0) > now else None
+            return payload if isinstance(payload, dict) and payload.get('e', 0) + grace > now else None
     return None
 
 
@@ -326,7 +332,8 @@ class Service:
         if 'attestation' in body:
             if not isinstance(body['attestation'], list) or not (invite is None or isinstance(invite, str)):
                 raise Refused(400, 'malformed')
-            public_key, serials = verify_attestation(body['attestation'], challenge, self.policy, now)
+            public_key, serials = verify_attestation(body['attestation'], challenge, self.policy, now,
+                                                     lambda attested: self._issued_recently(attested, now))
             der = spki(public_key)
             key_id = hashlib.sha256(der).hexdigest()
         elif isinstance(body.get('key_id'), str):
@@ -348,6 +355,16 @@ class Service:
                                                             invite))
         token = sign(self.store.secrets()[0], 'rgm1', {'k': key_id, 'e': int(now) + TOKEN_TTL_S})
         return {'access_token': token, 'token_type': 'Bearer', 'expires_in': TOKEN_TTL_S, 'key_id': key_id}
+
+    def _issued_recently(self, attested, now):
+        """A retry's attestation carries the challenge from key generation: one we issued, at most
+        ATTESTED_CHALLENGE_MAX_AGE_S ago. Not single-use: the chain proves only its own key, and the signed challenge
+        is the fresh, single-use proof of possession."""
+        try:
+            text = attested.decode('ascii')
+        except UnicodeDecodeError:
+            return False
+        return opened(self.store.secrets(), 'rgc1', text, now, ATTESTED_CHALLENGE_MAX_AGE_S - CHALLENGE_TTL_S) is not None
 
     def _commit(self, reg, challenge, key_id, der, serials, revoked, now, invite=None):
         """Under the registry lock: consume the challenge once (persisted, so a restart cannot replay it), then
