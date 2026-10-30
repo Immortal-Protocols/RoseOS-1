@@ -3,7 +3,6 @@ package dev.pixel.voice;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -35,25 +34,26 @@ final class HomeTray extends LinearLayout {
   super(activity);
   setOrientation(HORIZONTAL);
   setGravity(Gravity.CENTER_VERTICAL);
-  setPadding(activity.dp(22), 0, activity.dp(22), 0);
-  GradientDrawable metal = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-    new int[]{0xfff6f7f9, 0xffe3e7eb, 0xffcfd5db, 0xffe8ebee});
-  metal.setCornerRadius(activity.dp(22));
-  metal.setStroke(Math.max(1, activity.dp(1)), 0x80ffffff);
-  setBackground(metal);
+  // The wells' glass sits 22dp in from the ends (.tray.two padding); each well view adds its pocket around it.
+  setPadding(activity.dp(22 - TrayMaterial.POCKET_DP), 0, activity.dp(22 - TrayMaterial.POCKET_DP), 0);
+  setBackground(new TrayMaterial.Tray(activity.getResources().getDisplayMetrics().density));
   setElevation(activity.dp(12));
+  // Rose at the reference size overhangs its well, as the HiFi canvas does; nothing here clips it.
+  setClipChildren(false);
 
   FrameLayout rose = well(activity);
   // App's renderer draws the state; the well is the one focusable "Open Rose" action and speaks that state.
   roseView = new RosePresenceView(activity);
   roseView.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-  rose.addView(roseView, new FrameLayout.LayoutParams(activity.dp(64), activity.dp(64), Gravity.CENTER));
+  int roseSize = activity.dp(RosePresenceModel.viewSizeFor(RosePresenceModel.TRAY_SPHERE_DP));
+  rose.setClipChildren(false);
+  rose.addView(roseView, new FrameLayout.LayoutParams(roseSize, roseSize, Gravity.CENTER));
   rose.setClickable(true);
   rose.setFocusable(true);
   rose.setContentDescription("Open Rose");
   rose.setOnClickListener(v -> openRose.run());
   presence = rose;
-  addView(rose, new LayoutParams(activity.dp(WELL_W_DP), activity.dp(WELL_H_DP)));
+  addView(rose, new LayoutParams(activity.dp(WELL_W_DP + 2 * TrayMaterial.POCKET_DP), activity.dp(WELL_H_DP + 2 * TrayMaterial.POCKET_DP)));
 
   addView(new View(activity), new LayoutParams(0, 1, 1));
 
@@ -65,18 +65,13 @@ final class HomeTray extends LinearLayout {
   overview = overviewWell;
   this.overviewAvailable = overviewAvailable;
   applyOverview(overviewAvailable.getAsBoolean());
-  addView(overviewWell, new LayoutParams(activity.dp(WELL_W_DP), activity.dp(WELL_H_DP)));
+  addView(overviewWell, new LayoutParams(activity.dp(WELL_W_DP + 2 * TrayMaterial.POCKET_DP), activity.dp(WELL_H_DP + 2 * TrayMaterial.POCKET_DP)));
  }
 
- /** A recessed pill well: white highlight falling to cool silver, a fine edge and a soft drop. */
+ /** A recessed glass well in its pocket (TrayMaterial.Well): the WELL_W x WELL_H glass plus the pocket margin. */
  static FrameLayout well(MainActivity activity) {
   FrameLayout well = new FrameLayout(activity);
-  GradientDrawable face = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-    new int[]{0xfffdfeff, 0xeaf0f5fb, 0xd9d6e2f0, 0xe6bccde0});
-  face.setCornerRadius(activity.dp(WELL_H_DP) / 2f);
-  face.setStroke(Math.max(1, activity.dp(1)), 0x526e829e);
-  well.setBackground(face);
-  well.setElevation(activity.dp(3));
+  well.setBackground(new TrayMaterial.Well(activity.getResources().getDisplayMetrics().density));
   return well;
  }
 

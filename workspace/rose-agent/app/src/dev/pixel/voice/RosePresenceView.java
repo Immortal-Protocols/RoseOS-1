@@ -28,7 +28,7 @@ final class RosePresenceView extends View {
   if(running){long now=SystemClock.uptimeMillis();float dt=last==0?0f:(now-last)/1000f;last=now;time+=dt;
    if(model.step(dt))postInvalidateOnAnimation();else running=false;}
   float cx=getWidth()/2f,cy=getHeight()/2f;
-  float r=Math.min(getWidth(),getHeight())/(2f*(RosePresenceModel.RING_BROAD+RosePresenceModel.RING_ENERGY+.12f));
+  float r=Math.min(getWidth(),getHeight())/(2f*RosePresenceModel.VIEW_RADII);
   float lift=model.gap*r;int base=model.metal();
   // Soft contact shadow under the lower hemisphere.
   paint.setShader(new RadialGradient(cx,cy+r*1.02f,r*1.1f,0x33283e39,0x00283e39,Shader.TileMode.CLAMP));
