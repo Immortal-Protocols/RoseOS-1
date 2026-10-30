@@ -45,7 +45,8 @@
       "frameworks/base": "SystemUI tray, WM Shell and background-control framework patches",
       "build/release": "release config cur (background-control-build-release.patch); the lunch release is cur on every device",
       "packages/modules/Permission": "HOME role holder (rose-home-role-permission.patch)",
-      "packages/apps/Updater": "Rose channels (updater-rose-channels.patch); the Updater requests DEVICE-channel from Build.DEVICE"
+      "packages/apps/Updater": "Rose channels (updater-rose-channels.patch); the Updater requests DEVICE-channel from Build.DEVICE",
+      "packages/apps/Launcher3": "Rose Agent work row in the fallback overview (rose-switcher-launcher3.patch); device-independent quickstep layout"
     }
   },
   "devices": {

@@ -333,6 +333,8 @@ class NegativeControlTest(unittest.TestCase):
     def test_rose_inclusion_must_match_the_patches_and_inheritance(self):
         self.failing(lambda c: c['roseInclusion']['products'].pop('target/product/media_system.mk'), 'Rose edits products')
         self.failing(lambda c: c['roseInclusion']['projects'].pop('packages/modules/Permission'), 'Rose patches projects')
+        # #156: the Launcher3 fallback-overview patch is registered, so its declaration is required.
+        self.failing(lambda c: c['roseInclusion']['projects'].pop('packages/apps/Launcher3'), 'Rose patches projects')
         self.failing(lambda c: c['devices']['rango']['sourceDifferences'].update(systemUiUnfoldedOverlays=28), 'overlay count differs')
 
     def mutated_fixtures(self, rel, old, new):
