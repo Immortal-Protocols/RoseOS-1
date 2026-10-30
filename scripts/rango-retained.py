@@ -31,6 +31,7 @@ Exit status: 0 done, 1 refused (category on stderr), 2 invalid input, 4 setup mi
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -951,6 +952,161 @@ def sign(env, consumer, release_dir, signer=None, lock=None):
     return {'stage': 'sign', 'candidate': cand, 'tools': tools, 'toolProof': proof}
 
 
+# ---------------------------------------------------------------- packaging-only recovery (run 41082181100)
+# The run signed and verified the Fold build, then failed at stage-artifact (missing --feed-channel, fixed). Its signed
+# outputs are durable under the original source root; its RUNNER_TEMP receipts may not be. Recovery repackages exactly
+# those signed bytes: no signer login, no signing, no enrolment, no verify_signed. Every byte is matched to the durable
+# signed marker and the durable first-use identity; the receipt is the original verification.json when it survived,
+# otherwise an explicitly labelled recovery receipt citing the hosted guard's authenticated check of the source run.
+
+RECOVERY_STEPS = {'Sign under the shared lock': 'success', 'Verify the signed candidate': 'success'}
+
+
+def github_jobs(env, run_id):
+    import urllib.request
+    request = urllib.request.Request(f"{env.get('GITHUB_API_URL', 'https://api.github.com')}/repos/{env['GITHUB_REPOSITORY']}"
+        f"/actions/runs/{int(run_id)}/jobs?per_page=100", headers={'Authorization': f"Bearer {env.get('GH_TOKEN', '')}",
+        'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read(1 << 22))
+    except Exception:  # noqa: BLE001 - never echo a token-bearing error
+        raise Refused('recovery_evidence: the source run jobs could not be read') from None
+
+
+JOBS_READER = [github_jobs]
+
+
+def check_recovery_run(env, run_id):
+    """Hosted guard: the source run is this repository's os-release rango-retained run whose rango-builder job
+    succeeded at signing and at verifying the signed candidate."""
+    if not re.fullmatch(r'[1-9][0-9]{0,19}', str(run_id)):
+        raise Refused('recovery_evidence: the source run id must be numeric')
+    run = RUN_READER[0](env, run_id)
+    if (run or {}).get('path') != '.github/workflows/os-release.yml' or ((run or {}).get('repository') or {}).get('full_name') \
+            != env.get('GITHUB_REPOSITORY') or (run or {}).get('status') != 'completed':
+        raise Refused('recovery_evidence: the source run is not a completed os-release run of this repository')
+    builders = [j for j in (JOBS_READER[0](env, run_id) or {}).get('jobs', []) if j.get('name') == 'rango-builder']
+    steps = {s.get('name'): s.get('conclusion') for s in (builders[0].get('steps') or [])} if len(builders) == 1 else {}
+    if any(steps.get(name) != want for name, want in RECOVERY_STEPS.items()):
+        raise Refused('recovery_evidence: the source run did not sign and verify the signed candidate')
+    return {'sourceRun': str(run_id), 'headSha': run.get('head_sha'), 'builderJob': builders[0].get('id'),
+        'steps': {name: steps[name] for name in RECOVERY_STEPS}, 'consumerRunId': env.get('GITHUB_RUN_ID'), 'checked': True}
+
+
+def avb_public_key(vbmeta):
+    """The AVB public key blob embedded in a vbmeta image (what avbtool extract_public_key writes as avb_pkmd.bin)."""
+    import struct
+    if vbmeta[:4] != b'AVB0' or len(vbmeta) < 256:
+        raise Refused('recovery_mismatch: the signed vbmeta image is not an AVB image')
+    auth_size, = struct.unpack('>Q', vbmeta[12:20])
+    pk_offset, pk_size = struct.unpack('>QQ', vbmeta[64:80])
+    start = 256 + auth_size + pk_offset
+    return vbmeta[start:start + pk_size]
+
+
+def recover(env, consumer, release_dir, source_root=None, temp_root=None, simulated=False):
+    """Packaging-only recovery of the already signed and verified build into release_dir/public (see above)."""
+    import zipfile
+    cfg = check_config(config())
+    evidence_path = env.get('ROSE_RECOVERY_EVIDENCE', '')
+    try:
+        evidence = json.loads(Path(evidence_path).read_text())
+    except (OSError, ValueError):
+        raise Refused('recovery_evidence: no same-run check of the source run') from None
+    if evidence.get('checked') is not True or evidence.get('consumerRunId') != env.get('GITHUB_RUN_ID') \
+            or evidence.get('sourceRun') != env.get('ROSE_RECOVER_RUN'):
+        raise Refused('recovery_evidence: the evidence is not this run\'s check of the named source run')
+    _, input_receipt, binding, config_, cand = bound(env, consumer)
+    module = pipeline()
+    device, build = 'rango', cfg['target']['build']
+    releases = Path(source_root or cfg['signing']['sourceRoot'])/'releases'/build
+    try:
+        marker = json.loads((releases/'.rose-actions-signed.json').read_text())
+    except (OSError, ValueError):
+        raise Refused(f'recovery_missing: {releases}/.rose-actions-signed.json') from None
+    if marker.get('candidate') != cfg['target']['product'] or marker.get('build') != build:
+        raise Refused('recovery_mismatch: the signed marker is not this product and build')
+    outputs = marker.get('outputs') or {}
+    names = [f'{device}-ota_update-{build}.zip', f'{device}-stable', 'releasekey.x509.pem', 'avb_pkmd.bin', 'UPDATE.md']
+    if sorted(outputs) != sorted(names):
+        raise Refused('recovery_mismatch: the signed marker does not list exactly the five signed public outputs')
+    release_dir = Path(release_dir)
+    release_dir.mkdir(parents=True, exist_ok=False)
+    public = release_dir/'public'
+    public.mkdir()
+    data = Path(consumer)/'input'
+    shutil.copyfile(data/cfg['input']['policy'], release_dir/'background-policy.json')
+    shutil.copyfile(data/cfg['input']['resolvedManifest'], release_dir/'resolved-manifest.xml')
+    output = releases/f'release-{device}-{build}'
+    signed = (output/f'{device}-target_files.zip').read_bytes() if (output/f'{device}-target_files.zip').is_file() else None
+    if signed is None or hashlib.sha256(signed).hexdigest() != marker.get('signedTargetFilesSha256'):
+        raise Refused(f'recovery_mismatch: {output}/{device}-target_files.zip is missing or not the signed target-files')
+    (release_dir/'signed-target_files.zip').write_bytes(signed)
+    temp = Path(temp_root or env.get('RUNNER_TEMP', '/nonexistent'))
+    earlier = [temp/'rango-release/public', temp/'rango-artifact/assets']
+    sources = {}
+    with zipfile.ZipFile(io.BytesIO(signed)) as z:
+        certs = zipfile.ZipFile(io.BytesIO(z.read('SYSTEM/etc/security/otacerts.zip')))
+        pem = [certs.read(n) for n in certs.namelist() if n.endswith('releasekey.x509.pem')]
+        derived = {'releasekey.x509.pem': pem[0] if len(pem) == 1 else b'',
+            'avb_pkmd.bin': avb_public_key(z.read('IMAGES/vbmeta.img'))}
+    for name in names:
+        candidates = [p/name for p in earlier if (p/name).is_file() and not (p/name).is_symlink()]
+        if name == f'{device}-ota_update-{build}.zip':
+            candidates.insert(0, output/name)
+        elif name == f'{device}-stable':
+            candidates.append(None)
+        elif name == 'UPDATE.md':
+            candidates.append('notes')
+        else:
+            candidates.append(name)
+        for source in candidates:
+            if source is None:
+                content, origin = f'{build} {cand["timestamp"]} {device} {cfg["publication"]["feedChannel"]}\n'.encode(), 'feed line'
+            elif source == 'notes':
+                content, origin = notes_bytes(notes_binding(cfg)), 'pinned notes commit'
+            elif isinstance(source, str):
+                content, origin = derived[source], 'signed target-files'
+            else:
+                content, origin = source.read_bytes(), str(source)
+            if hashlib.sha256(content).hexdigest() == outputs[name]:
+                (public/name).write_bytes(content)
+                sources[name] = origin
+                break
+        else:
+            raise Refused(f'recovery_missing: no byte-exact source for {name}')
+    if module.cert_sha256((public/'releasekey.x509.pem').read_text()) != binding['otaCertificateSha256'] \
+            or hashlib.sha256((public/'avb_pkmd.bin').read_bytes()).hexdigest() != binding['avbPublicKeySha256']:
+        raise Refused('recovery_mismatch: the signed public identity differs from the durable first-use identity')
+    original = [p/'verification.json' for p in earlier if (p/'verification.json').is_file()]
+    receipt = None
+    for path in original:
+        candidate_receipt = json.loads(path.read_text())
+        if candidate_receipt.get('candidate') == cand and candidate_receipt.get('simulated') == simulated \
+                and candidate_receipt.get('signedTargetFilesSha256') == marker['signedTargetFilesSha256']:
+            receipt, sources['verification.json'] = path.read_bytes(), str(path)
+            break
+    if receipt is None:
+        receipt = (json.dumps({'receiptType': 'candidate-verification-recovery', 'candidate': cand, 'simulated': simulated,
+            'published': False, 'signedTargetFilesSha256': marker['signedTargetFilesSha256'],
+            'recovery': {'sourceRun': evidence['sourceRun'], 'sourceRunEvidence': evidence,
+                'originalReceipt': 'unavailable (RUNNER_TEMP of the source run)', 'candidateVerificationRerun': False,
+                'basis': 'The source run signed and verified this build (hosted guard check of its rango-builder steps); '
+                         'these are its durable signed bytes, matched to the signed marker and the first-use identity. '
+                         'No signing, enrolment or verification was repeated.'},
+            'signedMarkerSha256': hashlib.sha256((releases/'.rose-actions-signed.json').read_bytes()).hexdigest(),
+            'outputs': outputs, 'identities': {k: binding[k] for k in ('otaCertificateSha256', 'avbPublicKeySha256')},
+            'updater': module.updater_record(config_), 'notesSource': notes_binding(cfg)}, indent=2, sort_keys=True) + '\n').encode()
+        sources['verification.json'] = 'recovery receipt (original unavailable)'
+    (public/'verification.json').write_bytes(receipt)
+    module.write_checksums(public)
+    old = temp/'rango-artifact'
+    if old.exists():  # an earlier attempt's partial artifact is preserved aside, never removed
+        os.rename(old, temp/f'rango-artifact.preserved-{evidence["sourceRun"]}')
+    return {'stage': 'recover', 'sourceRun': evidence['sourceRun'], 'sources': sources, 'candidate': cand}
+
+
 def verify(env, consumer, release_dir, adapter=None):
     """release-pipeline verify_signed with the Rango expectations; its allowlist, feed and receipt logic are unchanged."""
     _, _, _, config, cand = bound(env, consumer)
@@ -1050,6 +1206,12 @@ def main(argv=None):
             c.add_argument('--proof-file', required=True)
     sub.add_parser('publish').add_argument('--artifact-dir', required=True)
     sub.add_parser('check-bootstrap-run').add_argument('--out', required=True)
+    r = sub.add_parser('check-recovery-run')
+    r.add_argument('--run-id', required=True)
+    r.add_argument('--out', required=True)
+    r = sub.add_parser('recover')
+    r.add_argument('--consumer', required=True)
+    r.add_argument('--release-dir', required=True)
     args = p.parse_args(argv)
     env = dict(os.environ)
     try:
@@ -1080,6 +1242,13 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
             with os.fdopen(fd, 'w') as f:
                 json.dump(result, f, sort_keys=True)
+        elif args.command == 'check-recovery-run':
+            result = check_recovery_run(env, args.run_id)
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, 'w') as f:
+                json.dump(result, f, sort_keys=True)
+        elif args.command == 'recover':
+            result = recover(env, args.consumer, args.release_dir)
         elif args.command == 'stage-artifact':
             result = stage_artifact(env, args.consumer, args.release_dir, args.artifact_dir)
         else:

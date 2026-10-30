@@ -5,6 +5,7 @@ import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -593,6 +594,106 @@ class Route(unittest.TestCase):
         rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
         self.assertEqual(json.loads((self.artifact/'manifest.json').read_text())['feed']['feedChannel'], 'beta')
         self.assertEqual((self.artifact/'assets/rango-stable').read_text(), good)
+
+    def recovery_fixture(self):
+        """SYNTHETIC durable outputs of an earlier run that signed and verified (run 41082181100's shape): the signed
+        target-files (otacerts.zip, vbmeta with the AVB key), the OTA and the signed marker under the source root."""
+        import struct
+        root = self.t.root/'source-root'
+        output = root/'releases/2026103001/release-rango-2026103001'
+        output.mkdir(parents=True)
+        cert, pkmd = (self.ident/'releasekey.x509.pem').read_bytes(), (self.ident/'avb_pkmd.bin').read_bytes()
+        certs = io.BytesIO()
+        with zipfile.ZipFile(certs, 'w') as z:
+            z.writestr('keys/releasekey.x509.pem', cert)
+        header = b'AVB0' + struct.pack('>II', 1, 0) + struct.pack('>QQ', 0, len(pkmd)) + struct.pack('>I', 0) \
+            + struct.pack('>QQQQQQ', 0, 0, 0, 0, 0, len(pkmd))
+        signed = io.BytesIO()
+        with zipfile.ZipFile(signed, 'w') as z:
+            z.writestr('SYSTEM/etc/security/otacerts.zip', certs.getvalue())
+            z.writestr('IMAGES/vbmeta.img', header.ljust(256, b'\0') + pkmd)
+        (output/'rango-target_files.zip').write_bytes(signed.getvalue())
+        (output/'rango-ota_update-2026103001.zip').write_bytes(b'SYNTHETIC signed rango OTA')
+        public = {'rango-ota_update-2026103001.zip': b'SYNTHETIC signed rango OTA', 'releasekey.x509.pem': cert,
+            'avb_pkmd.bin': pkmd, 'rango-stable': b'2026103001 1793330000 rango beta\n', 'UPDATE.md': NOTES_FILE.read_bytes()}
+        marker = {'candidate': CONFIG['target']['product'], 'build': '2026103001',
+            'outputs': {n: hashlib.sha256(b).hexdigest() for n, b in public.items()},
+            'signedTargetFilesSha256': hashlib.sha256(signed.getvalue()).hexdigest()}
+        (root/'releases/2026103001/.rose-actions-signed.json').write_text(json.dumps(marker))
+        if rr.identity_policy(self.cfg) == 'first-use-containers':  # the source run enrolled this identity
+            contract = self.cfg['signing']['identityPolicy']['firstUse']
+            rr.first_use_record(contract['recordDir'], {'policy': 'first-use-containers', 'bootstrapRun': contract['bootstrapRun'],
+                'bootstrapRecipe': contract['bootstrapRecipe'], 'versions': {'keys': '1', 'passphrase': '1'},
+                'otaCertificateSha256': self.ota_cert, 'avbPublicKeySha256': self.avb}, enroll=True)
+        evidence = self.t.root/'recovery-evidence.json'
+        evidence.write_text(json.dumps({'checked': True, 'consumerRunId': self.env['GITHUB_RUN_ID'], 'sourceRun': '41082181100',
+            'steps': dict(rr.RECOVERY_STEPS)}))
+        self.env.update(ROSE_RECOVER_RUN='41082181100', ROSE_RECOVERY_EVIDENCE=str(evidence))
+        temp = self.t.root/'runner-temp'
+        temp.mkdir()
+        return root, temp, marker
+
+    def test_packaging_only_recovery_publishes_the_same_signed_bytes_without_signing_or_verifying(self):
+        root, temp, marker = self.recovery_fixture()
+        called = []
+        saved = self.module.verify_signed
+        self.module.verify_signed = lambda *a, **k: called.append('verify_signed')
+        self.addCleanup(setattr, self.module, 'verify_signed', saved)
+        result = rr.recover(self.env, self.consumer, self.release, source_root=root, temp_root=temp, simulated=self.adapter.simulated)
+        self.assertEqual(result['sources']['avb_pkmd.bin'], 'signed target-files')
+        self.assertEqual(result['sources']['verification.json'], 'recovery receipt (original unavailable)')
+        receipt = json.loads((self.release/'public/verification.json').read_text())
+        self.assertEqual((receipt['receiptType'], receipt['recovery']['candidateVerificationRerun'], receipt['recovery']['sourceRun']),
+            ('candidate-verification-recovery', False, '41082181100'))
+        self.assertEqual((self.release/'signed-target_files.zip').read_bytes(),
+            (root/'releases/2026103001/release-rango-2026103001/rango-target_files.zip').read_bytes())
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        report = rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        self.assertEqual((report['promoted'], report.get('finalizedPublic')), (False, True))
+        for name, digest in marker['outputs'].items():
+            self.assertEqual(hashlib.sha256((self.artifact/'assets'/name).read_bytes()).hexdigest(), digest)
+        self.assertEqual(called, [])  # no verification repeated; no signer was ever invoked
+
+    def test_recovery_reuses_a_surviving_original_receipt_and_refuses_mismatches(self):
+        root, temp, marker = self.recovery_fixture()
+        original = temp/'rango-release/public'
+        original.mkdir(parents=True)
+        cand = rr.candidate(self.cfg, json.loads((self.consumer/'input/rango-retained-input.json').read_text()))
+        (original/'verification.json').write_text(json.dumps({'receiptType': 'candidate-verification', 'candidate': cand,
+            'simulated': self.adapter.simulated, 'signedTargetFilesSha256': marker['signedTargetFilesSha256']}))
+        result = rr.recover(self.env, self.consumer, self.release, source_root=root, temp_root=temp, simulated=self.adapter.simulated)
+        self.assertEqual(result['sources']['verification.json'], str(original/'verification.json'))
+        ota = root/'releases/2026103001/release-rango-2026103001/rango-ota_update-2026103001.zip'
+        for damage, category in ((lambda: ota.write_bytes(b'other OTA'), 'recovery_missing: no byte-exact source for rango-ota'),
+                                 (lambda: (root/'releases/2026103001/.rose-actions-signed.json').write_text(
+                                     json.dumps(dict(marker, candidate='e' * 40))), 'recovery_mismatch'),
+                                 (lambda: self.env.update(ROSE_RECOVER_RUN='41082181101'), 'recovery_evidence')):
+            shutil.rmtree(self.release, ignore_errors=True)
+            damage()
+            with self.subTest(category=category), self.assertRaisesRegex(rr.Refused, category):
+                rr.recover(self.env, self.consumer, self.release, source_root=root, temp_root=temp, simulated=self.adapter.simulated)
+
+    def test_guard_checks_the_source_run_signed_and_verified(self):
+        run = {'path': '.github/workflows/os-release.yml', 'repository': {'full_name': 'Immortal-Protocols/RoseOS-1'},
+            'status': 'completed', 'head_sha': 'd' * 40}
+        steps = [{'name': 'Sign under the shared lock', 'conclusion': 'success'},
+                 {'name': 'Verify the signed candidate', 'conclusion': 'success'},
+                 {'name': 'Stage only public files and receipts', 'conclusion': 'failure'}]
+        saved = (rr.RUN_READER[0], rr.JOBS_READER[0])
+        self.addCleanup(rr.RUN_READER.__setitem__, 0, saved[0])
+        self.addCleanup(rr.JOBS_READER.__setitem__, 0, saved[1])
+        env = {'GITHUB_REPOSITORY': 'Immortal-Protocols/RoseOS-1', 'GITHUB_RUN_ID': '7'}
+        for run_change, step_change, ok in (({}, None, True), ({'path': '.github/workflows/other.yml'}, None, False),
+                                            ({'status': 'in_progress'}, None, False),
+                                            ({}, {'name': 'Verify the signed candidate', 'conclusion': 'skipped'}, False)):
+            rr.RUN_READER[0] = lambda e, i, c=run_change: dict(run, **c)
+            current = [step_change if step_change and x['name'] == step_change['name'] else x for x in steps]
+            rr.JOBS_READER[0] = lambda e, i, c=current: {'jobs': [{'name': 'rango-builder', 'id': 1, 'steps': c}]}
+            if ok:
+                self.assertEqual(rr.check_recovery_run(env, '41082181100')['steps'], dict(rr.RECOVERY_STEPS))
+            else:
+                with self.assertRaisesRegex(rr.Refused, 'recovery_evidence'):
+                    rr.check_recovery_run(env, '41082181100')
 
     def test_upstream_updater_is_verified_and_recorded_without_rose_discovery(self):
         """OCT30-INFRA-S018: the real check_updater runs on the signed target-files with the upstream contract."""
