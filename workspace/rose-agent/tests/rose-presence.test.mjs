@@ -70,3 +70,22 @@ test('#159: ivory reading surface, shared layout decisions and legible drawn tra
  assert.match(drawing,/setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\)/,'icons are decorative; wells keep their spoken names');
  assert.match(presentation,/HEAD_SP=30,TITLE_SP=44,BODY_SP=21,CAPTION_SP=15/);
 });
+
+test('APP-OS-VISUAL-1030: the shared Rose draws the HiFi renderer\'s rendered metal and camera geometry',()=>{
+ // Tones come from the model for the eased microphone mix, never the raw #f27a87/#a6bacf base painted directly.
+ assert.match(view,/int\[\] tones=model\.tones\(\);/);
+ assert.match(view,/new LinearGradient\(cx,cy-r,cx,cy\+r,tones,RosePresenceModel\.TONE_STOPS,Shader\.TileMode\.CLAMP\)/);
+ assert.ok(!/model\.metal\(\)/.test(view),'no raw base fill');
+ // Rims and the cut face are ellipses flattened by the camera tilt; the face uses the shader-derived colour.
+ assert.match(view,/flat=RosePresenceModel\.TILT\*r/);
+ assert.match(view,/paint\.setShader\(null\);paint\.setColor\(model\.faceColor\(\)\);/);
+ assert.match(view,/half\.arcTo\(box,180f,180f,false\);\s*box\.set\(cx-r,upper-flat,cx\+r,upper\+flat\);half\.arcTo\(box,0f,180f,false\);half\.close\(\);/);
+ // Highlights stay inside the upper shell; the seam is the renderer's 26% darkening.
+ assert.match(view,/c\.save\(\);c\.clipPath\(half\);\s*for\(float\[\] h:RosePresenceModel\.HIGHLIGHTS\)/);
+ assert.match(view,/ring\.setColor\(0x42000000\)/);
+ // Regression: no statement hides behind a line comment (the cut face once lost its colour this way).
+ for(const line of view.split('\n')){const i=line.indexOf('//');if(i>=0)assert.ok(!/;\s*\S/.test(line.slice(i))||!/paint\.|ring\.|c\.draw/.test(line.slice(i)),'code after a comment: '+line.trim());}
+ // State meaning is unchanged: gap, ring and accessibility still come from the same model and description.
+ assert.match(view,/float lift=model\.gap\*r/);assert.match(view,/float a=model\.ringAlpha\(\);/);
+ assert.match(view,/String d=RosePresenceModel\.describe\(v\)/);
+});

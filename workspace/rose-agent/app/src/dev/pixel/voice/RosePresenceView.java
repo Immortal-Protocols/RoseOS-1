@@ -5,9 +5,9 @@ import android.graphics.*;
 import android.os.SystemClock;
 import android.view.View;
 
-/** The Rose presence on the conversation screen: two metal hemispheres and a light surround drawn with Canvas
- * from RosePresenceModel. Canvas needs no GL context, so there is no context loss to recover from; the static
- * presentation (reduced motion, or the activity not visible) is the same drawing without frame updates. Frames
+/** The Rose presence (conversation and Home tray): two metal hemispheres and a light surround drawn with Canvas
+ * from RosePresenceModel, in the HiFi renderer's rendered tones and its camera's elliptical rims. Canvas needs no GL
+ * context, so there is no context loss to recover from; the static presentation (reduced motion, or the activity not visible) is the same drawing without frame updates. Frames
  * run only while attached, visible and still changing. Visual only: it sends nothing and never creates state. */
 final class RosePresenceView extends View {
  final RosePresenceModel model=new RosePresenceModel();
@@ -29,28 +29,39 @@ final class RosePresenceView extends View {
    if(model.step(dt))postInvalidateOnAnimation();else running=false;}
   float cx=getWidth()/2f,cy=getHeight()/2f;
   float r=Math.min(getWidth(),getHeight())/(2f*RosePresenceModel.VIEW_RADII);
-  float lift=model.gap*r;int base=model.metal();
+  float lift=model.gap*r,flat=RosePresenceModel.TILT*r;int[] tones=model.tones();
   // Soft contact shadow under the lower hemisphere.
   paint.setShader(new RadialGradient(cx,cy+r*1.02f,r*1.1f,0x33283e39,0x00283e39,Shader.TileMode.CLAMP));
   box.set(cx-r*1.1f,cy+r*.86f,cx+r*1.1f,cy+r*1.18f);c.drawOval(box,paint);
-  hemisphere(c,cx,cy+lift*.5f,r,base,false);
-  hemisphere(c,cx,cy-lift*.5f,r,base,true);
+  float lower=cy+lift*.5f,upper=cy-lift*.5f;
+  // Lower shell: its bottom half and, seen from above, the whole rim with the dark cut face inside it.
+  paint.setShader(metal(cx,lower,r,tones));
+  box.set(cx-r,lower-r,cx+r,lower+r);c.drawArc(box,0f,180f,true,paint);
+  box.set(cx-r,lower-flat,cx+r,lower+flat);c.drawOval(box,paint);
+  paint.setShader(new RadialGradient(cx-r*.25f,lower+r*.45f,r*.32f,0x1fffffff,0x00ffffff,Shader.TileMode.CLAMP));
+  box.set(cx-r,lower-r,cx+r,lower+r);c.drawArc(box,0f,180f,true,paint);
+  paint.setShader(null);paint.setColor(model.faceColor());
+  box.set(cx-r,lower-flat,cx+r,lower+flat);box.inset(r*.04f,flat*.04f);c.drawOval(box,paint);
+  // Upper shell: its top half and the near half of its rim, which hides the face while joined.
+  half.reset();box.set(cx-r,upper-r,cx+r,upper+r);half.arcTo(box,180f,180f,false);
+  box.set(cx-r,upper-flat,cx+r,upper+flat);half.arcTo(box,0f,180f,false);half.close();
+  paint.setShader(metal(cx,upper,r,tones));c.drawPath(half,paint);
+  c.save();c.clipPath(half);
+  for(float[] h:RosePresenceModel.HIGHLIGHTS){
+   paint.setShader(new RadialGradient(cx+h[0]*r,upper+h[1]*r,h[2]*r,0xb3ffffff,0x00ffffff,Shader.TileMode.CLAMP));
+   c.drawCircle(cx+h[0]*r,upper+h[1]*r,h[2]*r,paint);}
+  c.restore();paint.setShader(null);
+  // The seam the renderer darkens by 26% where the shells meet.
+  ring.setStrokeWidth(Math.max(1f,r*.025f));ring.setColor(0x42000000);c.drawArc(box,0f,180f,false,ring);
   // Light surround, never changing the sphere's scale.
   float a=model.ringAlpha();
   if(a>0f){float rr=model.ringRadius(running?time:0f)*r;
    ring.setStrokeWidth(r*.05f);ring.setColor(withAlpha(RosePresenceModel.LIGHT,a*.35f));c.drawCircle(cx,cy,rr,ring);
    ring.setStrokeWidth(r*.018f);ring.setColor(withAlpha(RosePresenceModel.LIGHT,a*.95f));c.drawCircle(cx,cy,rr,ring);}
  }
- /** One half-sphere with a metallic vertical sheen; the lower one shows its flat cut face when split. */
- private void hemisphere(Canvas c,float cx,float cy,float r,int base,boolean upper){
-  box.set(cx-r,cy-r,cx+r,cy+r);half.reset();half.arcTo(box,upper?180f:0f,180f,false);half.close();
-  int light=RosePresenceModel.mix(base,0xffffffff,.55f),dark=RosePresenceModel.mix(base,0xff1a2a36,.45f);
-  paint.setShader(new LinearGradient(cx-r*.6f,cy-r,cx+r*.5f,cy+r,new int[]{light,base,dark,base},new float[]{0f,.38f,.72f,1f},Shader.TileMode.CLAMP));
-  c.drawPath(half,paint);
-  paint.setShader(new RadialGradient(cx-r*.38f,cy-r*(upper?.45f:-.25f),r*.42f,0x88ffffff,0x00ffffff,Shader.TileMode.CLAMP));c.drawPath(half,paint);
-  if(!upper&&model.gap>RosePresenceModel.GAP_JOINED*1.5f){ // the camera sits above: only the lower half's cut face showspaint.setShader(null);paint.setColor(RosePresenceModel.mix(base,0xff1a2a36,.7f));
-   box.set(cx-r,cy-r*.12f,cx+r,cy+r*.12f);c.drawOval(box,paint);}
-  paint.setShader(null);
+ /** The rendered metal down one shell's full sphere height (RosePresenceModel tones for the current microphone mix). */
+ private static Shader metal(float cx,float cy,float r,int[] tones){
+  return new LinearGradient(cx,cy-r,cx,cy+r,tones,RosePresenceModel.TONE_STOPS,Shader.TileMode.CLAMP);
  }
  private static int withAlpha(int color,float a){return (Math.round(Math.max(0f,Math.min(1f,a))*255)<<24)|(color&0xffffff);}
 }
