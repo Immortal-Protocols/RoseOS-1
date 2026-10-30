@@ -69,6 +69,9 @@ def ready_profiles():
     profiles = copy.deepcopy(PROFILES)
     fold = profiles['profiles']['fold-rango-v1']
     fold['keyInventory']['complete'] = True
+    # These suites exercise the measured-installed tool mode; the same-run local-proof mode (OCT30-INFRA-S016) that the
+    # checked-in Fold profile uses is covered by scripts/tests/test_fold_bootstrap_proof.py.
+    fold.pop('localProof')
     for name, tool in fold['tools'].items():
         tool['installed'] = {'path': f'/opt/synthetic/{name}', 'sha256': hashlib.sha256(name.encode()).hexdigest()}
     fold['access'].update(addVersionExpires='2027-01-01T00:00:00Z', accessorExpires='2027-01-01T00:00:00Z')
@@ -178,7 +181,7 @@ def codes(receipt):
 class ZeroSideEffects(unittest.TestCase):
     def test_checked_in_profiles_stop_before_anything(self):
         # models-v0 is source-ready (pinned-tree keytool); its host-side refusals are in test_models_signing_bootstrap.py.
-        for name, expected in (('fold-rango-v1', {'tool-unapproved'}),
+        for name, expected in (('fold-rango-v1', {'proof-missing'}),
                                ('rango', {'profile-unknown'}), ('none', {'profile-unknown'})):
             f, ex = Fixture(self), MockExecutor()
             receipt, _ = f.run(ex, name, PROFILES)
@@ -191,8 +194,8 @@ class ZeroSideEffects(unittest.TestCase):
 
     def test_fold_tools_are_each_unapproved_and_models_names_its_missing_resources(self):
         reasons = sb.readiness('fold-rango-v1', PROFILES, NOW)
-        self.assertEqual(sorted(d.split(':')[0] for c, d in reasons if c == 'tool-unapproved'),
-            ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
+        self.assertEqual(reasons, [])  # the four tools are proven per run (scripts/tests/test_fold_bootstrap_proof.py)
+        self.assertEqual([c for c, d in sb.readiness('fold-rango-v1', ready_profiles(), NOW)], [])
         self.assertEqual(sb.readiness('models-v0', PROFILES, NOW), [])  # pinned-tree basis complete in source
         self.assertEqual(sb.readiness('fold-rango-v1', READY, NOW), [])
 
@@ -446,18 +449,22 @@ class Guard(unittest.TestCase):
                        {'BOOTSTRAP_PROFILE': 'none'}, {'BOOTSTRAP_PROFILE': '../x'},
                        {'MODE': 'os-release'}):
             self.assertTrue(sb.guard({**GUARD_ENV, **change}, READY, NOW), change)
-        self.assertTrue(sb.guard(GUARD_ENV, PROFILES, NOW))  # the checked-in fold profile is not ready
+        # OCT30-INFRA-S016: the checked-in fold profile is source-ready (tools proven per run on the host); the guard admits
+        # the dispatch only before its add-only access margin and never after it.
+        self.assertEqual(sb.guard(GUARD_ENV, PROFILES, NOW), [])
+        self.assertTrue(sb.guard(GUARD_ENV, PROFILES, datetime(2026, 10, 30, 19, 20, tzinfo=timezone.utc)))
         self.assertEqual(sb.guard({**GUARD_ENV, 'BOOTSTRAP_PROFILE': 'models-v0'}, PROFILES, NOW), [])  # the host proves the tree
 
     def test_cli_guard_and_preflight_fail_closed_with_checked_in_profiles(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(sb.main(['guard'], env=GUARD_ENV), 4)
+            self.assertEqual(sb.main(['guard'], env=dict(GUARD_ENV, CANDIDATE_SHA='b' * 40)), 4)
             self.assertEqual(sb.main(['preflight', '--profile', 'models-v0', '--recipe-sha', SHA],
                 env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}), 4)
-            self.assertEqual(sb.main(['run', '--profile', 'fold-rango-v1', '--recipe-sha', SHA, '--state-dir', '/nonexistent/s',
+            self.assertEqual(sb.main(['run', '--profile', 'rango', '--recipe-sha', SHA, '--state-dir', '/nonexistent/s',
                 '--receipt-dir', '/nonexistent/r'], env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
-        self.assertIn('tool-unapproved: generator', out.getvalue())
+        self.assertIn('candidate must be this workflow commit', out.getvalue())
+        self.assertIn('profile-unknown', out.getvalue())
         self.assertIn('GCP_SIGNER_SERVICE_ACCOUNT is not the profile signer', out.getvalue())
         self.assertEqual(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW), [])
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}, SHA, NOW))
@@ -665,7 +672,9 @@ class Generator(unittest.TestCase):
         with self.assertRaises(sb.Blocked) as blocked:
             sb.generate_keys(ws, PROFILES['profiles']['fold-rango-v1'], runner)
         self.assertEqual((blocked.exception.code, runner.calls, os.listdir(ws)), ('tool-unapproved', [], []))
-        self.assertIn('tool-unapproved', dict(sb.readiness('fold-rango-v1', PROFILES, NOW)))
+        # OCT30-INFRA-S016: the checked-in Fold tools are proven per run by the admitted helper, so source readiness is
+        # complete, while generation itself still refuses a profile without proof-bound tools.
+        self.assertEqual(sb.readiness('fold-rango-v1', PROFILES, NOW), [])
 
     def test_recipe_rejects_injection_and_incomplete_steps(self):
         def problems(change):
@@ -798,7 +807,10 @@ class Sources(unittest.TestCase):
 
     def test_only_installed_identities_remain_and_they_refuse_before_anything(self):
         reasons = sb.readiness('fold-rango-v1', PROFILES, NOW)
-        self.assertEqual({code for code, _ in reasons}, {'tool-unapproved'})
+        # OCT30-INFRA-S016: installed identities come only from the same-run local proof of the admitted helper, so
+        # nothing is open in source; every installed identity stays null in the profile.
+        self.assertEqual(reasons, [])
+        self.assertTrue(all(t['installed']['sha256'] is None for t in PROFILES['profiles']['fold-rango-v1']['tools'].values()))
         self.assertEqual(sb.recipe_problems(PROFILES['profiles']['fold-rango-v1']), [])
         self.assertNotIn('missing', PROFILES['profiles']['fold-rango-v1']['generation'])
         # Even with a valid recipe, an open generation.missing entry refuses generation.

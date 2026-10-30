@@ -204,8 +204,14 @@ class ReceiptAndSummary(unittest.TestCase):
 
     def test_unknown_identity_still_refuses_bootstrap(self):
         from datetime import datetime, timezone
-        reasons = dict(bootstrap.readiness('fold-rango-v1', bootstrap.load_profiles(), datetime.now(timezone.utc)))
-        self.assertIn('tool-unapproved', reasons)  # an observation receipt alone binds nothing
+        profiles = bootstrap.load_profiles()
+        # An observation receipt alone binds nothing: no installed identity is recorded, and the Fold tools are usable
+        # only through the same-run local proof (OCT30-INFRA-S016), which no observation provides.
+        fold = profiles['profiles']['fold-rango-v1']
+        self.assertTrue(all(t['installed']['sha256'] is None for t in fold['tools'].values()))
+        receipt, _ = bootstrap.run('fold-rango-v1', profiles, None, '/nonexistent-state', '/nonexistent.lock', 'a' * 40,
+            datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual([r['code'] for r in receipt['reasons']], ['proof-missing'])
 
 
 class Wiring(unittest.TestCase):

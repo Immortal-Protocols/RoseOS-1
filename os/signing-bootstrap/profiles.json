@@ -534,6 +534,42 @@
           "gitBlob": "b3bb318917f5e8744c4d5a505112373e58e141a5",
           "sha256": "066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d"
         }
+      },
+      "localProof": {
+        "helper": "scripts/fold_tool_proof.py",
+        "admittedRevision": "b4e317ad6af4a719ffa41f9deffe70f3e1d298af",
+        "admittedBlob": "66f52b19408e50aa8520fc9b6ae1b9f72c7bfb46",
+        "admissionBasis": "OCT30-INFRA-S016: Fold #191 (FOLD-TOOL-PROOF-001 correction), the Models Product's minimal managed-host helper (pinned script bytes, fixed PATH resolution, host package manager identity and integrity; no custom cryptography), merged as b4e317ad. Its test suite runs in Release verification from this change; any other helper bytes refuse.",
+        "excluded": [
+          {
+            "pr": 190,
+            "revision": "97b23c30b0898aacb563ed7567671adf340917c0",
+            "gitBlob": "a42ec8a45d3e9758822dfd726536d42b0ff26fb4",
+            "basis": "Chief scope correction: the custom-crypto (pure-Python OpenPGP/RSA, ELF closure) helper is not an admitted Fold proof regardless of main ancestry or green CI"
+          }
+        ],
+        "spec": {
+          "schema": "roseos.fold-tool-proof-spec.v2",
+          "profile": "fold-rango-v1",
+          "scripts": {
+            "generator": {
+              "root": "/home/pixelbuild/grapheneos-2026100600/development"
+            },
+            "decrypt-keys": {
+              "root": "/home/pixelbuild/grapheneos-2026100600/script"
+            },
+            "avbtool": {
+              "root": "/home/pixelbuild/grapheneos-2026100600/external/avb"
+            }
+          }
+        },
+        "specBasis": "The original builder source tree (os/release-pipeline/frankel.json host.sourceRoot) at each script's pinned project path (development, script, external/avb); verify_local checks the bytes there against the pinned git blob and sha256 above, so a wrong root refuses.",
+        "hostImage": {
+          "family": "debian-12-bookworm",
+          "image": "debian-cloud/debian-12-bookworm-v20261014",
+          "sourceImageId": "3188631002576736407",
+          "basis": "Known lineage of the original protected builder image; the actual guest OS and package metadata are observed by the proof, never inferred from this label"
+        }
       }
     },
     "models-v0": {

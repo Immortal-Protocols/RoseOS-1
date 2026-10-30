@@ -128,14 +128,19 @@ def readiness(name, profiles, now):
     if inventory.get('complete') is not True:
         missing = inventory.get('missing') or ['key inventory not established']
         reasons.append(('inventory-incomplete', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing)))
+    proven = set(PROOF_TOOLS) if profile.get('localProof') else set()
     for tool, identity in sorted(profile.get('tools', {}).items()):
         if identity.get('kind') == 'pinned-tree':
             reasons += [('tool-unapproved', f'{tool}: {problem}') for problem in pinned_tree_problems(identity.get('trust') or {})]
+        elif tool in proven:
+            continue  # its installed identity comes from the same-run local proof (OCT30-INFRA-S016), never a checked-in hash
         elif not tool_approved(identity):
             reasons.append(('tool-unapproved', f'{tool}: no measured installed path and sha256 ({identity.get("requiredObservation")})'))
     if not profile.get('tools'):
         reasons.append(('tool-unapproved', 'no tool identities'))
     reasons += [('source-unpinned', detail) for detail in source_problems(profile)]
+    if profile.get('localProof'):
+        reasons += proof_spec_problems(profile)
     missing = (profile.get('generation') or {}).get('missing') or []
     if missing:
         reasons.append(('recipe-missing', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing)))
@@ -150,6 +155,155 @@ def readiness(name, profiles, now):
         except (KeyError, TypeError, ValueError):
             reasons.append(('access-unknown', f'{key} is missing or malformed'))
     return reasons
+
+
+# ---------------------------------------------------------------- local tool proof (OCT30-INFRA-S016)
+# The Fold tools have no checked-in installed identity. The Models Product helper named by profile.localProof proves them
+# locally: validate_spec(spec) -> problem codes (pure guard), verify_local(spec, root) -> closed proof or Refused(code),
+# recheck(proof, root) -> Refused on drift. Only the exact admitted helper blob is loaded; the excluded custom-crypto
+# helper (PR #190) is refused even when present on main.
+
+PROOF_TOOLS = ('generator', 'decrypt-keys', 'avbtool', 'openssl')
+PROOF_FILE = 'fold-tool-proof.json'
+PROOF_BINDING_SCHEMA = 'roseos.fold-tool-proof-binding.v1'
+RUNNER_ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}  # subprocess_runner's fixed environment
+CODE = re.compile(r'[a-z][a-z0-9_-]{0,59}')
+
+
+def _helper_module(path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('fold_tool_proof_admitted', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_proof_helper(profile, root=ROOT):
+    """The admitted helper module, or Blocked with a fixed code. Admission is the exact git blob of a reviewed merge."""
+    local = profile.get('localProof') or {}
+    path = root/str(local.get('helper', ''))
+    try:
+        blob = git_blob_id(path, time.monotonic() + 60, time.monotonic)
+    except OSError:
+        raise Blocked('proof-helper-missing', f'{local.get("helper")} is not present') from None
+    if blob in {str(e.get('gitBlob')) for e in local.get('excluded', [])}:
+        raise Blocked('proof-helper-excluded', f'{local.get("helper")} is an excluded helper revision (blob {blob[:12]})')
+    if not SHA1.fullmatch(str(local.get('admittedRevision'))) or not SHA1.fullmatch(str(local.get('admittedBlob'))):
+        raise Blocked('proof-helper-unadmitted', 'no exact tested helper merge is admitted')
+    if blob != local['admittedBlob']:
+        raise Blocked('proof-helper-mismatch', f'{local.get("helper")} blob {blob[:12]} is not the admitted {local["admittedBlob"][:12]}')
+    return _helper_module(path), blob
+
+
+def proof_spec_problems(profile):
+    """Static guard: an admitted helper and a spec it accepts (no observation-only installed fields needed)."""
+    local = profile['localProof']
+    try:
+        helper, _ = load_proof_helper(profile)
+    except Blocked as error:
+        return [(error.code, error.detail)]
+    if not isinstance(local.get('spec'), dict):
+        return [('proof-spec-missing', 'profile.localProof.spec is not set')]
+    try:
+        codes = helper.validate_spec(local['spec'])
+    except Exception as error:  # noqa: BLE001 - a helper fault is a refusal, never a pass
+        return [('proof-spec-invalid', f'validate_spec failed ({type(error).__name__})')]
+    return [('proof-spec-invalid', str(c) if CODE.fullmatch(str(c)) else 'unrecognised-code') for c in codes or []]
+
+
+def proof_problems(name, profile, proof):
+    """The closed proof fields this integration consumes: every fixed tool with an absolute path and sha256, this
+    profile, and exactly the runner's fixed minimal environment."""
+    if not isinstance(proof, dict) or not proof.get('schema') or not isinstance(proof.get('tools'), dict):
+        return ['proof-malformed']
+    problems = []
+    if proof.get('profile') != name:
+        problems.append('proof-foreign')
+    if sorted(proof['tools']) != sorted(PROOF_TOOLS):
+        problems.append('proof-tools')
+    for tool in PROOF_TOOLS:
+        entry = proof['tools'].get(tool) or {}
+        if not approved_path(entry.get('path')) or not HEX64.fullmatch(str(entry.get('sha256'))):
+            problems.append('proof-tools')
+    if proof.get('environment') != RUNNER_ENVIRONMENT:
+        problems.append('proof-environment')
+    return list(dict.fromkeys(problems))
+
+
+def _code(error):
+    code = str(getattr(error, 'code', '') or error)
+    return code if CODE.fullmatch(code) else 'proof-refused'
+
+
+def prove(name, profiles, env, recipe_sha, proof_dir, lock_path, root='/', now=None):
+    """Before any login, under the shared lock: the admitted helper proves the four tools on this host; the bounded,
+    nonsecret proof is bound to this profile, recipe, run and attempt. Returns (status, codes)."""
+    profile = profiles['profiles'].get(name, {})
+    if not profile.get('localProof'):
+        return 'not-required', []
+    failures = preflight(name, profiles, env, recipe_sha, now or datetime.now(timezone.utc))
+    if failures:
+        return 'blocked', [f.split(':', 1)[0] for f in failures]
+    try:
+        helper, blob = load_proof_helper(profile)
+    except Blocked as error:
+        return 'blocked', [error.code]
+    lock = shared_lock(lock_path)
+    try:
+        lock.__enter__()
+    except Blocked as error:
+        return 'blocked', [error.code]
+    except OSError:
+        return 'blocked', ['lock-unavailable']
+    try:
+        proof = helper.verify_local(profile['localProof']['spec'], root=root)
+    except helper.Refused as error:
+        return 'refused', [_code(error)]
+    except Exception:  # noqa: BLE001 - a helper fault is a refusal, never a proof
+        return 'refused', ['proof-helper-fault']
+    finally:
+        lock.__exit__(None, None, None)
+    problems = proof_problems(name, profile, proof)
+    if problems:
+        return 'refused', problems
+    binding = {'schema': PROOF_BINDING_SCHEMA, 'profile': name, 'recipeSha': recipe_sha, 'runId': env.get('GITHUB_RUN_ID'),
+        'runAttempt': env.get('GITHUB_RUN_ATTEMPT'), 'helperBlob': blob,
+        'helperRevision': profile['localProof']['admittedRevision'],
+        'proofSha256': hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest(), 'proof': proof}
+    Path(proof_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(Path(proof_dir)/PROOF_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(binding, f, sort_keys=True)
+    return 'proven', []
+
+
+def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/'):
+    """Inside the lock, before any secret metadata: only this run's own proof, rechecked by the helper now. Returns a
+    run-scoped profile whose tools use the proven paths (the checked-in profile is never rewritten) and receipt rows."""
+    if not isinstance(binding, dict):
+        raise Blocked('proof-missing', 'no same-run local tool proof')
+    helper, blob = load_proof_helper(profile)
+    proof = binding.get('proof')
+    expected = {'schema': PROOF_BINDING_SCHEMA, 'profile': name, 'recipeSha': recipe_sha, 'runId': run_identity[0],
+        'runAttempt': run_identity[1], 'helperBlob': blob}
+    if any(binding.get(k) != v for k, v in expected.items()) or \
+            binding.get('proofSha256') != hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest():
+        raise Blocked('proof-binding', 'the proof is not this run\'s, this recipe\'s and this helper\'s')
+    problems = proof_problems(name, profile, proof)
+    if problems:
+        raise Blocked(problems[0], 'the bound proof does not name the fixed tools and environment')
+    try:
+        helper.recheck(proof, root=root)
+    except helper.Refused as error:
+        raise Blocked('proof-drift', _code(error)) from None
+    bound = json.loads(json.dumps(profile))
+    rows = {}
+    for tool in PROOF_TOOLS:
+        entry = proof['tools'][tool]
+        bound['tools'][tool] = dict(bound['tools'][tool], kind='proof-bound', installed={'path': entry['path'], 'sha256': entry['sha256']})
+        rows[tool] = {'trustBasis': 'local-proof', 'path': entry['path'], 'sha256': entry['sha256']}
+    return bound, rows, {'proofSha256': binding['proofSha256'], 'helperBlob': blob, 'helperRevision': binding.get('helperRevision'),
+        'proof': proof}
 
 
 SHA1 = re.compile(r'[0-9a-f]{40}')
@@ -697,7 +851,7 @@ def write_journal(path, record):
 
 
 RECEIPT_KEYS = {'schema', 'profile', 'device', 'project', 'recipeSha', 'status', 'reasons', 'secrets', 'publicIdentity',
-    'tools', 'cleanup', 'payloadReadback', 'recoveryNeeded', 'operations'}
+    'tools', 'cleanup', 'payloadReadback', 'recoveryNeeded', 'operations', 'localProof'}
 
 
 def public_receipt(receipt, private_values=()):
@@ -711,7 +865,8 @@ def public_receipt(receipt, private_values=()):
     return out
 
 
-def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspace=None, frankel=None):
+def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspace=None, frankel=None, proof=None,
+        run_identity=(None, None), proof_root='/'):
     """The bootstrap state machine. Returns (receipt, private_values_for_redaction_check)."""
     profile = profiles['profiles'].get(name, {})
     receipt = {'schema': RECEIPT_SCHEMA, 'profile': name, 'device': profile.get('device'), 'project': profile.get('project'),
@@ -732,6 +887,8 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
         for code, detail in reasons:
             receipt['reasons'].append({'code': code, 'detail': detail})
         return receipt, private
+    if profile.get('localProof') and not isinstance(proof, dict):
+        return stop('proof-missing', 'no same-run local tool proof; nothing is locked, read or created')
     journal = Path(state_dir)/f'{name}.json'
     if journal.exists() or journal.is_symlink():
         try:
@@ -742,6 +899,9 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
         return stop('previous-attempt', f'journal {journal.name} records {previous}; no regeneration or duplicate add')
     try:
         with shared_lock(lock_path):
+            if profile.get('localProof'):
+                profile, receipt['tools'], receipt['localProof'] = bind_proof(name, profile, proof, recipe_sha, run_identity,
+                    proof_root)
             return _locked(name, profile, executor, journal, receipt, private, stop, workspace,
                 frankel or frankel_identities())
     except Blocked as error:
@@ -762,6 +922,8 @@ def _locked(name, profile, executor, journal, receipt, private, stop, workspace,
         observed = executor.tool_sha256(installed['path'])
         if observed != installed['sha256']:
             return stop('tool-identity', f'{tool} sha256 {observed} is not the measured {installed["sha256"]}')
+        if identity.get('kind') == 'proof-bound':
+            continue  # the receipt row is the proof's; the executor re-hash above must agree with it
         receipt['tools'][tool] = {'installedSha256': observed, 'source': identity.get('source')}
     project = profile['project']
     for role, secret in sorted(profile['secrets'].items()):
@@ -993,14 +1155,17 @@ def main(argv=None, env=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('guard')
-    for command in ('preflight', 'run', 'plan'):
+    for command in ('preflight', 'prove', 'run', 'plan'):
         p = sub.add_parser(command)
         p.add_argument('--profile', required=True)
         if command != 'plan':
             p.add_argument('--recipe-sha', required=True)
+        if command == 'prove':
+            p.add_argument('--proof-dir', required=True, type=Path)
         if command == 'run':
             p.add_argument('--state-dir', required=True, type=Path)
             p.add_argument('--receipt-dir', required=True, type=Path)
+            p.add_argument('--proof-file', type=Path)
     args = parser.parse_args(argv)
     profiles = load_profiles()
     now = datetime.now(timezone.utc)
@@ -1013,14 +1178,30 @@ def main(argv=None, env=None):
         for failure in failures:
             print(f'::error::signing-bootstrap {args.command}: {failure}')
         return 4 if failures else 0
+    lock = json.loads((ROOT/PIPELINE_PATH).read_text())['host']['lockPath']
+    if args.command == 'prove':
+        # Fixed summary only: a status word and fixed codes; never helper output, paths or file content.
+        status, codes = prove(args.profile, profiles, env, args.recipe_sha, args.proof_dir, lock, now=now)
+        for code in codes:
+            print(f'::error::signing-bootstrap prove: {code}')
+        print(json.dumps({'status': status, 'codes': codes}))
+        return 0 if status in ('proven', 'not-required') else 4
     failures = preflight(args.profile, profiles, env, args.recipe_sha, now)
     if failures:
         for failure in failures:
             print(f'::error::signing-bootstrap run: {failure}')
         return 4
-    lock = json.loads((ROOT/PIPELINE_PATH).read_text())['host']['lockPath']
+    binding = None
+    if args.proof_file and profiles['profiles'].get(args.profile, {}).get('localProof'):
+        try:
+            fd = os.open(args.proof_file, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                binding = json.load(f)
+        except (OSError, ValueError):
+            binding = None
     args.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    receipt, private = run(args.profile, profiles, GcloudExecutor(), args.state_dir, lock, args.recipe_sha, now)
+    receipt, private = run(args.profile, profiles, GcloudExecutor(), args.state_dir, lock, args.recipe_sha, now, proof=binding,
+        run_identity=(env.get('GITHUB_RUN_ID'), env.get('GITHUB_RUN_ATTEMPT')))
     out = public_receipt(receipt, private)
     args.receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     (args.receipt_dir/'signing-bootstrap-receipt.json').write_text(json.dumps(out, indent=2, sort_keys=True) + '\n')

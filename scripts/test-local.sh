@@ -62,6 +62,8 @@ python3 scripts/tests/test_device_readiness.py
 python3 scripts/tests/test_signing_tool_observation.py
 python3 scripts/tests/test_blazer_preparation_preflight.py
 python3 scripts/tests/test_signing_bootstrap.py
+python3 scripts/tests/test_fold_bootstrap_proof.py
+python3 scripts/tests/test_fold_tool_proof.py
 python3 scripts/tests/test_models_signing_bootstrap.py
 python3 scripts/tests/test_models_apk_signing.py
 python3 scripts/tests/test_alpha_runtime.py

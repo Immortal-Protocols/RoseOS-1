@@ -1365,6 +1365,40 @@ performed by this procedure.
 
 ## Signing-key bootstrap (guarded, not a release)
 
+**Fold same-run local tool proof (OCT30-INFRA-S016, source only).** `fold-rango-v1` has no checked-in installed tool
+identities. Its four tools (`generator`, `decrypt-keys`, `avbtool`, `openssl`) are proven on the original protected
+builder in each run:
+
+1. `signing-bootstrap.py prove --profile P --recipe-sha S --proof-dir D` runs after `preflight` and before signer
+   login, under the shared lock. It calls the admitted helper's `verify_local(spec, root='/')`.
+2. It writes `D/fold-tool-proof.json`, bound to the profile, recipe, run id, run attempt and helper blob. The job log
+   prints only a status word and fixed codes.
+3. `run ... --proof-file D/fold-tool-proof.json` loads only that same-run binding. Inside the lock it calls
+   `recheck`, and uses the proven paths for that run only; the committed profile is not rewritten. Then the existing
+   journal, tool re-hash and both-containers-empty checks run before generation and import.
+
+The helper interface is `validate_spec`, `verify_local`, `recheck` and `Refused(code)`. This route consumes, from the
+proof:
+- `schema`;
+- `profile`;
+- `tools.<name>.path` and `tools.<name>.sha256` for each of the four tools;
+- `environment`, which must equal `{"PATH": "/usr/bin:/bin", "LC_ALL": "C"}`.
+
+The helper is loaded only when its git blob equals `localProof.admittedBlob`, which is pinned to an exact tested
+merge (`admittedRevision`). The custom-crypto PR #190 blob is listed in `localProof.excluded` and refused even if
+admitted. The admitted helper is Fold #191, the Product's minimal managed-host helper, merged as `b4e317ad` with blob
+`66f52b19`. Its suite (`scripts/tests/test_fold_tool_proof.py`) runs in Release verification. Any other helper bytes
+refuse with `proof-helper-mismatch`. `localProof.spec` (`roseos.fold-tool-proof-spec.v2`) names each script's root in
+the original builder tree; the helper checks the bytes there against the pinned blobs.
+
+The OpenSSL trust basis is the managed host's own package manager identity and integrity (`managed-host-package`). It
+is not an independent signed-package attestation; the proof says so and names the inputs such an attestation would
+need.
+
+The builder image lineage (`debian-cloud/debian-12-bookworm-v20261014`, source image `3188631002576736407`) is
+recorded as context only. The proof observes the actual guest OS and packages.
+
+
 `os-release.yml` mode `signing-bootstrap` with `bootstrap_profile` runs `scripts/signing-bootstrap.py` for one reviewed
 profile in `os/signing-bootstrap/profiles.json`. It admits no device and runs no build, OS signing or publisher job.
 The hosted guard requires `candidate_sha` = the workflow commit on main, a manual dispatch, and default
