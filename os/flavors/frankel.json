@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "roseos.os-flavor",
   "flavor": "frankel",
-  "basis": "FLAVOR001: install-artifact contract for one device flavor. Values marked 'from' are cross-checked by scripts/factory-package.py against the named source on every load; nothing here is evidence that an artifact was built, signed, installed or accepted on a phone.",
+  "basis": "FLAVOR001/FLAVOR002: install-artifact contract for one device flavor. Values marked 'from' are cross-checked by scripts/factory-package.py against the named source on every load; nothing here is evidence that an artifact was built, signed, installed or accepted on a phone.",
   "device": {
     "codename": "frankel",
     "model": "Pixel 10",
@@ -69,10 +69,23 @@
     "miscInfo": "META/misc_info.txt (ab_update, dynamic_partition_list, virtual_ab)",
     "androidInfo": "OTA/android-info.txt",
     "images": "IMAGES/{partition}.img: every A/B partition outside dynamic_partition_list that has one must appear byte-equal as {partition}.img",
-    "firmware": "RADIO/bootloader.img and RADIO/radio.img must equal the factory bootloader-/radio- images; A/B partitions without an IMAGES/ entry are counted as firmware-carried only then",
-    "dynamic": "dynamic_partition_list partitions must be covered by contiguous sparse super_1.img..super_N.img; their contents need otatools lpunpack and are not decomposed offline",
+    "firmware": "RADIO/bootloader.img and RADIO/radio.img must equal the factory bootloader-/radio- images. An A/B partition without an IMAGES/ entry counts as firmware-carried only when a roseos.factory-firmware-observation.v1 bound to those two image digests lists it; absence alone never qualifies",
+    "dynamic": "dynamic_partition_list partitions: super_1..N.img rebuilt with simg2img and unpacked with lpunpack from the hash-pinned otatools archive (as the historical verify-factory-mustang.py did), the unpacked set and each logical image byte-equal to target-files IMAGES/{partition}.img (flattened with simg2img when sparse); _b outputs must be empty",
     "layoutStatus": "unobserved",
-    "layoutBasis": "The RADIO/ and IMAGES/ layout is AOSP releasetools convention; no Frankel or Rango target-files listing is in this repository. A missing entry refuses, it never passes."
+    "layoutBasis": "The RADIO/ and IMAGES/ layout is AOSP releasetools convention; no Frankel or Rango target-files listing is in this repository. A missing entry refuses, it never passes.",
+    "observation": "roseos.target-files-observation.v1 from `factory-package.py observe`: target-files sha256 and the names of META/ IMAGES/ RADIO/ OTA/ members, delivered by release through its normal receipt path",
+    "observed": [],
+    "observedBasis": "No real signed target-files observation has been delivered yet; synthetic test observations are never listed here.",
+    "generatorFixture": {
+      "project": "device/common",
+      "revision": "1f5ba2671e4b04e3bd8899b3df2c5e30a894b35c",
+      "files": [
+        "generate-factory-images-common.sh",
+        "clear-factory-images-variables.sh"
+      ],
+      "status": "not in this repository",
+      "basis": "os/pinned-manifest.xml device_common; generate-release.sh sources both. The install-archive member names here follow the historical mustang layout until these are reviewed fixtures"
+    }
   },
   "installSemantics": {
     "abUpdate": true,
@@ -105,14 +118,38 @@
       "next": "add an opt-in mode that keeps the script tail through optimize-factory-image and maps {device}-install-{build}.zip (+ .sig) into the release dir"
     },
     {
-      "input": "observed target-files META/ and RADIO/ listing for frankel",
-      "owner": "release (builder receipts)",
-      "next": "record `unzip -l` of META/ab_partitions.txt, META/misc_info.txt, RADIO/ and IMAGES/ names of one signed frankel target-files"
+      "input": "factory-signing identity (principal + ssh-ed25519 public key, namespace \"factory images\")",
+      "owner": "signing, Chief decision",
+      "next": "decide whether RoseOS signs install archives; if so, provision the key in the signing route and pin its public half in factorySigning"
+    },
+    {
+      "input": "names-only observation of a signed frankel target-files",
+      "owner": "release (normal receipt path)",
+      "next": "run `factory-package.py observe` in the next already-needed admitted signed-output operation; list the receipt in inventory.observed"
+    },
+    {
+      "input": "firmware observation of bootloader/radio carried partitions",
+      "owner": "signing (factory generator output mapping)",
+      "next": "emit roseos.factory-firmware-observation.v1 from the generator's own inputs alongside the install archive"
+    },
+    {
+      "input": "device/common generator fixtures at 1f5ba267",
+      "owner": "Chief (upstream fixture scope)",
+      "next": "admit generate-factory-images-common.sh and clear-factory-images-variables.sh as reviewed fixtures to confirm member naming"
     },
     {
       "input": "physical first-install acceptance",
       "owner": "QA with an explicit device handback",
       "next": "only after a classifier-ready archive exists"
     }
-  ]
+  ],
+  "factorySigning": {
+    "namespace": "factory images",
+    "principal": null,
+    "publicKey": null,
+    "status": "missing",
+    "owner": "signing (Chief approval for any new identity)",
+    "basis": "generate-release.sh signs {device}-install-{build}.zip with ssh-keygen -Y sign -n \"factory images\" -f $KEY_DIR/id_ed25519 only when that key exists; os/signing-bootstrap/profiles.json: id_ed25519 is optional and not produced by generate-keys. No RoseOS factory-signing public key exists in approved inventory, so signatureVerified cannot pass. Never generated here and never derived from OTA/AVB keys.",
+    "verifier": "ssh-keygen -Y verify -f <allowed_signers from this pin only> -I principal -n \"factory images\" -s ARCHIVE.sig"
+  }
 }

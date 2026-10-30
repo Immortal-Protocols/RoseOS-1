@@ -1,11 +1,21 @@
-"""factory-package.py (FLAVOR001) against synthetic Frankel/Rango archives built in memory from
-scripts/tests/fixtures/factory-package. No real image, key, OTA, host, phone or tool execution."""
+"""factory-package.py (FLAVOR001/FLAVOR002) against synthetic Frankel/Rango archives built in memory from
+scripts/tests/fixtures/factory-package.
+
+Real tools where the runner has them: OpenSSH ssh-keygen (fresh throwaway test keys only) and AOSP simg2img. The
+lpunpack inside the synthetic otatools archive is a test double for a synthetic super container (SYNTHLP1), because no
+real lpunpack is available offline; a simg2img double decoding the real Android sparse format replaces simg2img only
+when the runner has none. No real image, production key, OTA, host, phone or network is used."""
 import hashlib
 import importlib.util
 import io
+import itertools
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
+import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,15 +35,107 @@ DYNAMIC = ['system', 'system_ext', 'product', 'vendor']
 BUILD = '2026103101'
 BOOTLOADER = 'deepspace-17.4-16119390'
 BASEBAND = 'g5400i-260604-260807-B-16035863'
-PKMD = b'synthetic avb public key metadata'
+PKMD = {'frankel': b'synthetic frankel avb public key metadata', 'rango': b'synthetic rango avb public key metadata'}
 SPARSE = b'\x3a\xff\x26\xed'
-# Inputs whose bytes these tests must leave unchanged (published/retained metadata).
+BLOCK = 4096
+SSH = shutil.which('ssh-keygen')
+REAL_SIMG2IMG = shutil.which('simg2img')
 RETAINED = ['os/retained-rango/release.json', 'os/release-notes/rango-2026103001.md', 'os/devices/pixel10.json',
-            'os/release-pipeline/frankel.json']
+            'os/release-pipeline/frankel.json', 'os/flavors/frankel.json', 'os/flavors/rango.json']
 
 def image(part):
     magic = {'boot': b'ANDROID!', 'init_boot': b'ANDROID!', 'vendor_boot': b'VNDRBOOT', 'vendor_kernel_boot': b'VNDRBOOT'}
     return magic.get(part, b'AVB0' if part.startswith('vbmeta') else b'') + f'synthetic {part}'.encode() * 8
+
+def dynamic_image(part):
+    # Logical partition images are whole blocks, as a sparse image of one always flattens to whole blocks.
+    return (f'synthetic logical {part} '.encode() * 900)[:BLOCK * (2 + len(part) % 3)]
+
+def sparse_image(raw, start_block=0, count=None, total=None):
+    """Real Android sparse format v1.0: DONT_CARE before/after one RAW run of whole blocks."""
+    raw = raw + b'\0' * (-len(raw) % BLOCK)
+    total = total if total is not None else len(raw) // BLOCK
+    count = count if count is not None else total - start_block
+    chunks = []
+    if start_block:
+        chunks.append(struct.pack('<HHII', 0xCAC3, 0, start_block, 12))
+    data = raw[start_block * BLOCK:(start_block + count) * BLOCK]
+    chunks.append(struct.pack('<HHII', 0xCAC1, 0, count, 12 + len(data)) + data)
+    if start_block + count < total:
+        chunks.append(struct.pack('<HHII', 0xCAC3, 0, total - start_block - count, 12))
+    header = struct.pack('<IHHHHIIII', 0xED26FF3A, 1, 0, 28, 12, BLOCK, total, len(chunks), 0)
+    return header + b''.join(chunks)
+
+def lp_container(partitions):
+    """SYNTHLP1: a synthetic super layout read only by the lpunpack test double."""
+    table, body, offset = [], b'', 0
+    for name, data in partitions:
+        table.append([name, offset, len(data)])
+        body += data
+        offset += len(data)
+    header = json.dumps(table).encode()
+    return b'SYNTHLP1' + struct.pack('<I', len(header)) + header + body
+
+def super_segments(partitions):
+    raw = lp_container(partitions)
+    raw += b'\0' * (-len(raw) % BLOCK)
+    total, half = len(raw) // BLOCK, len(raw) // BLOCK // 2
+    return [sparse_image(raw, 0, half, total), sparse_image(raw, half, total - half, total)]
+
+def super_partitions(drop=(), extra=(), b_data=b'', replace=None):
+    parts = []
+    for part in DYNAMIC:
+        if part not in drop:
+            parts += [(f'{part}_a', (replace or {}).get(part, dynamic_image(part))), (f'{part}_b', b_data if part == 'system' else b'')]
+    return parts + list(extra)
+
+LPUNPACK_DOUBLE = '''import json, struct, sys
+from pathlib import Path
+data = Path(sys.argv[1]).read_bytes()
+if data[:8] != b'SYNTHLP1':
+    sys.exit('lpunpack double: not a SYNTHLP1 container')
+size = struct.unpack('<I', data[8:12])[0]
+table, base = json.loads(data[12:12 + size]), 12 + size
+for name, offset, length in table:
+    chunk = data[base + offset:base + offset + length]
+    if len(chunk) != length:
+        sys.exit('lpunpack double: truncated')
+    (Path(sys.argv[2]) / (name + '.img')).write_bytes(chunk)
+'''
+
+SIMG2IMG_DOUBLE = '''import struct, sys
+out = open(sys.argv[-1], 'wb')
+for path in sys.argv[1:-1]:
+    data = open(path, 'rb').read()
+    magic, major, minor, hsz, csz, blk, total, chunks, _ = struct.unpack('<IHHHHIIII', data[:28])
+    if magic != 0xED26FF3A:
+        sys.exit('not sparse')
+    pos, block = hsz, 0
+    for _ in range(chunks):
+        if len(data) < pos + csz:
+            sys.exit('truncated')
+        kind, _, count, size = struct.unpack('<HHII', data[pos:pos + 12])
+        body = data[pos + csz:pos + size]
+        if len(body) != size - csz:
+            sys.exit('truncated')
+        if kind == 0xCAC1:
+            out.seek(block * blk); out.write(body)
+        elif kind == 0xCAC2:
+            out.seek(block * blk); out.write(body * (count * blk // 4))
+        elif kind not in (0xCAC3, 0xCAC4):
+            sys.exit('bad chunk')
+        block += count if kind != 0xCAC4 else 0
+        pos += size
+    out.truncate(max(out.seek(0, 2), total * blk))
+'''
+
+def script(source):
+    return f'#!{sys.executable}\n'.encode() + source.encode()
+
+def otatools_zip(drop=(), lpunpack=LPUNPACK_DOUBLE):
+    entries = {'bin/lpunpack': script(lpunpack), 'lib64/README': b'synthetic'}
+    entries['bin/simg2img'] = Path(REAL_SIMG2IMG).read_bytes() if REAL_SIMG2IMG else script(SIMG2IMG_DOUBLE)
+    return zip_bytes([(k, v) for k, v in entries.items() if k not in drop])
 
 def android_info(device, bootloader=BOOTLOADER, baseband=BASEBAND):
     return (f'require board={device}\n\nrequire version-bootloader={bootloader}\n'
@@ -46,24 +148,29 @@ def zip_bytes(entries):
             archive.writestr(name, data)
     return buffer.getvalue()
 
-def target_files(device, build=BUILD, ab=None, misc=MISC, drop=()):
+def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
     entries = {'META/ab_partitions.txt': '\n'.join(ab or AB).encode(), 'META/misc_info.txt': misc.encode(),
                'OTA/android-info.txt': android_info(device), 'SYSTEM/build.prop': f'ro.build.version.incremental={build}\n'.encode(),
                'RADIO/bootloader.img': b'synthetic bootloader', 'RADIO/radio.img': b'synthetic radio'}
     for part in AB:
         if part not in DYNAMIC and part != 'abl':
             entries[f'IMAGES/{part}.img'] = image(part)
+    for part in DYNAMIC:
+        # product is stored sparse, as target-files may store it; the checker must flatten it with simg2img.
+        entries[f'IMAGES/{part}.img'] = sparse_image(dynamic_image(part)) if part == 'product' else dynamic_image(part)
+    entries.update(images or {})
     return zip_bytes([(k, v) for k, v in entries.items() if k not in drop])
 
-def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), extra=()):
+def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), extra=(), segments=None):
     top = top or f'{device}-install-{build}'
     files = {'android-info.txt': info or android_info(device),
              'flash-all.sh': b'# synthetic stand-in, not a flasher\n# erase userdata\n',
              'script.txt': b'# synthetic stand-in\n# erase userdata\n',
-             'avb_pkmd.bin': PKMD,
+             'avb_pkmd.bin': PKMD[device],
              f'bootloader-{device}-{BOOTLOADER}.img': b'synthetic bootloader',
-             f'radio-{device}-{BASEBAND}.img': b'synthetic radio',
-             'super_1.img': SPARSE + b'synthetic super 1', 'super_2.img': SPARSE + b'synthetic super 2'}
+             f'radio-{device}-{BASEBAND}.img': b'synthetic radio'}
+    for index, segment in enumerate(segments or super_segments(super_partitions()), 1):
+        files[f'super_{index}.img'] = segment
     for part in AB:
         if part not in DYNAMIC and part != 'abl':
             files[f'{part}.img'] = image(part)
@@ -80,7 +187,10 @@ class Fixture(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='factory-package-test-'))
         self.addCleanup(shutil.rmtree, self.tmp)
         self.before = {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in RETAINED}
-        # A repository copy whose frankel pin is the synthetic key, so the pinned-identity path runs for real.
+        self.work = self.tmp/'work'
+        self.serial = itertools.count()
+        self.work.mkdir()
+        # A repository copy pinned to synthetic AVB keys and (when ssh-keygen exists) a throwaway factory-signing key.
         self.root = self.tmp/'repo'
         for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/devices/pixel10.json',
                     'os/release-pipeline/frankel.json', 'scripts/tests/fixtures/permission-apex/script/generate-release.sh') + tuple(
@@ -88,20 +198,67 @@ class Fixture(unittest.TestCase):
                     for d in ('frankel', 'rango')):
             (self.root/rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT/rel, self.root/rel)
-        pipeline = json.loads((self.root/'os/release-pipeline/frankel.json').read_text())
-        pipeline['identities']['avbPublicKeySha256'] = hashlib.sha256(PKMD).hexdigest()
-        (self.root/'os/release-pipeline/frankel.json').write_text(json.dumps(pipeline))
+        self.edit_json('os/release-pipeline/frankel.json', lambda d: d['identities'].update(
+            avbPublicKeySha256=hashlib.sha256(PKMD['frankel']).hexdigest()))
+        self.edit_json('os/flavors/rango.json', lambda d: d['identity'].update(
+            avbPublicKeySha256=hashlib.sha256(PKMD['rango']).hexdigest()))
+        self.key = None
+        if SSH:
+            self.key = self.keypair('factory')
+            for device in ('frankel', 'rango'):
+                self.edit_json(f'os/flavors/{device}.json', lambda d: d['factorySigning'].update(
+                    principal='synthetic-factory@test', publicKey=' '.join(self.key.with_suffix('.pub').read_text().split()[:2])))
+        self.otatools = self.write('otatools.zip', otatools_zip())
 
     def tearDown(self):
         self.assertEqual(self.before, {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in RETAINED})
+        self.assertEqual(list(self.work.iterdir()), [], 'job-owned verification files must be removed')
+
+    def edit_json(self, rel, change):
+        path = self.root/rel
+        data = json.loads(path.read_text())
+        change(data)
+        path.write_text(json.dumps(data))
+
+    def keypair(self, name):
+        key = self.tmp/f'{name}-key'
+        subprocess.run([SSH, '-q', '-t', 'ed25519', '-N', '', '-C', 'synthetic', '-f', str(key)], check=True)
+        return key
+
+    def sign(self, path, key=None, namespace='factory images'):
+        Path(str(path) + '.sig').unlink(missing_ok=True)
+        subprocess.run([SSH, '-q', '-Y', 'sign', '-n', namespace, '-f', str(key or self.key), str(path)], check=True,
+                       capture_output=True)
 
     def write(self, name, data):
         path = self.tmp/name
         path.write_bytes(data)
         return path
 
-    def classify(self, archive, flavor, tf=None, build=BUILD, key=None, root=None):
-        return fp.classify(archive, flavor, tf, build, key, root or self.root)
+    def observation(self, tf, device, **change):
+        document = fp.observe(tf, device, BUILD, 'synthetic test', self.root)
+        document.update(synthetic=True, **change)
+        return self.write(f'{device}-observation-{next(self.serial)}.json', json.dumps(document).encode())
+
+    def firmware(self, device, partitions=('abl',), **change):
+        document = {'schema': fp.FIRMWARE, 'device': device, 'build': BUILD, 'source': 'synthetic test', 'synthetic': True,
+                    'bootloader': {'sha256': hashlib.sha256(b'synthetic bootloader').hexdigest(), 'partitions': list(partitions)},
+                    'radio': {'sha256': hashlib.sha256(b'synthetic radio').hexdigest(), 'partitions': []}}
+        document.update(change)
+        return self.write(f'{device}-firmware-{next(self.serial)}.json', json.dumps(document).encode())
+
+    def evidence(self, device, tf, **change):
+        evidence = dict(target_files_observation=self.observation(tf, device), firmware_observation=self.firmware(device),
+                        otatools=self.otatools, otatools_sha256=hashlib.sha256(self.otatools.read_bytes()).hexdigest(),
+                        work_dir=self.work, allow_synthetic=True)
+        evidence.update(change)
+        return evidence
+
+    def classify(self, archive, flavor, tf=None, build=BUILD, key=None, root=None, sign=True, **change):
+        if sign and SSH and archive.is_file():
+            self.sign(archive)
+        evidence = self.evidence(flavor, tf, **change) if tf else dict(work_dir=self.work, **change)
+        return fp.classify(archive, flavor, tf, build, key, root or self.root, **evidence)
 
     def complete(self, device):
         return (self.write(f'{device}-install-{BUILD}.zip', install(device)), self.write(f'{device}-target_files.zip', target_files(device)))
@@ -120,6 +277,8 @@ class Contracts(Fixture):
             self.assertTrue(flavor['artifacts']['factory']['dataWipe'] and flavor['artifacts']['factory']['requiresUnlockedBootloader'])
             self.assertFalse(flavor['artifacts']['ota']['dataWipe'] or flavor['artifacts']['factory']['currentlyProduced'])
             self.assertTrue(flavor['missingForFactory'] and all({'input', 'owner', 'next'} <= set(m) for m in flavor['missingForFactory']))
+            self.assertEqual((flavor['factorySigning']['namespace'], flavor['factorySigning']['publicKey']), ('factory images', None))
+            self.assertEqual(flavor['inventory']['observed'], [])
 
     def test_drift_from_device_contract_or_pinned_firmware_refuses_the_contract(self):
         path = self.root/'os/flavors/rango.json'
@@ -131,67 +290,205 @@ class Contracts(Fixture):
         with self.assertRaises(fp.ContractError):
             fp.load_flavor('../rango', self.root)
 
+    def test_signing_pin_must_be_complete_and_namespace_from_the_generator(self):
+        self.edit_json('os/flavors/frankel.json', lambda d: d['factorySigning'].update(namespace='images'))
+        with self.assertRaisesRegex(fp.ContractError, 'factorySigning.namespace'):
+            fp.load_flavor('frankel', self.root)
+        self.edit_json('os/flavors/frankel.json', lambda d: d['factorySigning'].update(namespace='factory images', principal=None,
+                                                                                       publicKey='ssh-ed25519 AAAA'))
+        with self.assertRaisesRegex(fp.ContractError, 'principal'):
+            fp.load_flavor('frankel', self.root)
+
     def test_retained_rango_2026103001_is_ota_only_and_never_factory_ready(self):
         retained = fp.load_flavor('rango')['retained']
         self.assertEqual([(r['build'], r['artifactRoles'], r['factoryReady'], r['phoneValidated']) for r in retained],
                          [('2026103001', ['ota-update'], False, False)])
         self.assertEqual(json.loads((ROOT/'os/retained-rango/release.json').read_text())['target']['build'], '2026103001')
 
-    def test_rango_identity_is_runtime_only_and_frankel_pin_is_read_from_the_pipeline(self):
-        self.assertIsNone(fp.pinned_avb_key(fp.load_flavor('rango')))
+    def test_rango_published_avb_digest_is_pinned_with_provenance_and_conflicts_refuse(self):
+        rango = fp.load_flavor('rango')
+        self.assertEqual(fp.pinned_avb_key(rango), 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27')
+        self.assertIn('429262439', rango['identity']['avbPublicKeySha256From'])
+        self.assertIn('not an independently reread bootstrap journal', rango['identity']['avbProvenance'])
         self.assertEqual(fp.pinned_avb_key(fp.load_flavor('frankel')),
                          json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['identities']['avbPublicKeySha256'])
+        binding = self.write('first-use.json', json.dumps({'avbPublicKeySha256': '1' * 64}).encode())
+        archive, tf = self.complete('rango')
+        with self.assertRaisesRegex(fp.ContractError, 'identity_conflict'):
+            fp.classify(archive, 'rango', tf, BUILD, None, ROOT, first_use_binding=binding)
+        with self.assertRaisesRegex(fp.ContractError, 'differs from the pinned'):
+            fp.classify(archive, 'rango', tf, BUILD, '1' * 64, ROOT)
+        self.edit_json('os/flavors/rango.json', lambda d: d['identity'].update(
+            avbPublicKeySha256=json.loads((self.root/'os/release-pipeline/frankel.json').read_text())['identities']['avbPublicKeySha256']))
+        with self.assertRaisesRegex(fp.ContractError, 'signer_collision'):
+            fp.load_flavor('rango', self.root)
 
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
 class Positive(Fixture):
-    def test_complete_frankel_package_is_factory_ready_and_packaged_with_receipt(self):
+    def test_complete_frankel_package_is_structurally_content_and_signature_verified(self):
         archive, tf = self.complete('frankel')
-        self.write(archive.name + '.sig', b'synthetic signature')
-        receipt = fp.package(archive, 'frankel', tf, self.tmp/'out', BUILD, None, self.root)
+        self.sign(archive)
+        receipt = fp.package(archive, 'frankel', tf, self.tmp/'out', BUILD, None, self.root, **self.evidence('frankel', tf))
         self.assertTrue(receipt['factoryReady'])
+        self.assertTrue(receipt['structurallyComplete'] and receipt['contentVerified'] and receipt['signatureVerified'])
         self.assertEqual((receipt['role'], receipt['missing'], receipt['problems']), ('factory-install', [], []))
-        self.assertEqual(receipt['inventory']['firmwareCarried'], ['abl'])
-        self.assertEqual(receipt['inventory']['dynamic'], sorted(DYNAMIC))
-        self.assertEqual(receipt['inventory']['superSegments'], 2)
-        self.assertTrue(receipt['installMode']['dataWipe'])
+        self.assertEqual(receipt['inventory']['firmwareCarried'], {'abl': 'bootloader'})
+        self.assertEqual(sorted(receipt['content']['dynamic']), sorted(DYNAMIC))
+        self.assertEqual(receipt['content']['dynamic']['system']['sha256'], hashlib.sha256(dynamic_image('system')).hexdigest())
+        self.assertEqual(receipt['content']['dynamic']['product']['sha256'], hashlib.sha256(dynamic_image('product')).hexdigest())
+        self.assertEqual(receipt['content']['tools']['otatools']['sha256'], hashlib.sha256(self.otatools.read_bytes()).hexdigest())
+        self.assertEqual(receipt['inventory']['targetFilesSha256'], hashlib.sha256(tf.read_bytes()).hexdigest())
+        self.assertTrue(receipt['evidence']['targetFilesObservation']['synthetic'])
+        self.assertEqual(receipt['signature']['principal'], 'synthetic-factory@test')
         self.assertEqual(receipt['limits']['phoneValidated'], False)
         written = json.loads((self.tmp/'out/factory-package.json').read_text())
         self.assertEqual(written['files'][archive.name], hashlib.sha256(archive.read_bytes()).hexdigest())
-        self.assertTrue(written['signaturePresent'])
-        self.assertEqual((self.tmp/'out'/archive.name).read_bytes(), archive.read_bytes())
+        self.assertEqual((self.tmp/'out'/(archive.name + '.sig')).read_bytes(), Path(str(archive) + '.sig').read_bytes())
 
-    def test_complete_rango_package_needs_its_runtime_identity(self):
+    def test_complete_rango_package_with_its_pinned_published_identity(self):
         archive, tf = self.complete('rango')
-        self.refused(self.classify(archive, 'rango', tf), 'identity:rango avbPublicKeySha256')
-        result = self.classify(archive, 'rango', tf, key=hashlib.sha256(PKMD).hexdigest())
+        result = self.classify(archive, 'rango', tf)
         self.assertTrue(result['factoryReady'], result)
-        receipt = fp.package(archive, 'rango', tf, self.tmp/'out', BUILD, hashlib.sha256(PKMD).hexdigest(), self.root)
-        self.assertFalse(receipt['signaturePresent'])
+        binding = self.write('first-use.json', json.dumps({'avbPublicKeySha256': hashlib.sha256(PKMD['rango']).hexdigest()}).encode())
+        self.assertTrue(self.classify(archive, 'rango', tf, first_use_binding=binding)['factoryReady'])
 
-    def test_cli_exit_codes(self):
+    def test_structure_alone_is_not_ready(self):
+        archive, tf = self.complete('frankel')
+        result = self.classify(archive, 'frankel', tf, otatools=None, otatools_sha256=None)
+        self.assertTrue(result['structurallyComplete'] and result['signatureVerified'])
+        self.assertFalse(result['contentVerified'] or result['factoryReady'])
+        self.refused(result, 'otatools (--otatools ZIP')
+
+    def test_cli_exit_codes_and_names_only_observation(self):
         archive, tf = self.complete('rango')
-        key = hashlib.sha256(PKMD).hexdigest()
-        with mock.patch.object(fp, 'ROOT', self.root), mock.patch('sys.stdout', io.StringIO()) as out:
-            self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango', '--target-files', str(tf),
-                                      '--avb-public-key-sha256', key]), 0)
-            self.assertTrue(json.loads(out.getvalue())['factoryReady'])
-        with mock.patch.object(fp, 'ROOT', self.root), mock.patch('sys.stdout', io.StringIO()), mock.patch('sys.stderr', io.StringIO()):
-            self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango']), 3)
-            self.assertEqual(fp.main(['package', str(archive), '--flavor', 'rango', '--target-files', str(tf),
-                                      '--out', str(self.tmp)]), 2)
+        with mock.patch.object(fp, 'ROOT', self.root), mock.patch('sys.stdout', io.StringIO()):
+            self.assertEqual(fp.main(['observe', str(tf), '--flavor', 'rango', '--build', BUILD, '--source', 'synthetic',
+                                      '--out', str(self.tmp/'obs.json')]), 0)
+        obs = json.loads((self.tmp/'obs.json').read_text())
+        self.assertFalse(obs['synthetic'])
+        self.assertIn('IMAGES/boot.img', obs['members'])
+        self.assertNotIn('SYSTEM/build.prop', obs['members'])
+        self.assertNotIn('synthetic boot', json.dumps(obs))
+        self.sign(archive)
+        common = ['--flavor', 'rango', '--target-files', str(tf), '--target-files-observation', str(self.tmp/'obs.json'),
+                  '--otatools', str(self.otatools), '--otatools-sha256', hashlib.sha256(self.otatools.read_bytes()).hexdigest(),
+                  '--work-dir', str(self.work), '--build', BUILD]
+        with mock.patch.object(fp, 'ROOT', self.root), mock.patch('sys.stdout', io.StringIO()) as out, mock.patch('sys.stderr', io.StringIO()):
+            # The CLI never accepts a synthetic firmware observation, so the positive path runs through the API above.
+            self.assertEqual(fp.main(['classify', str(archive), *common, '--firmware-observation', str(self.firmware('rango'))]), 3)
+            self.assertIn('firmware-observation-synthetic', out.getvalue())
             self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango', '--build', '1']), 2)
-            self.assertEqual(fp.main(['package', str(self.write('o.zip', ota('rango'))), '--flavor', 'rango',
-                                      '--target-files', str(tf), '--out', str(self.tmp/'new')]), 3)
+            self.assertEqual(fp.main(['package', str(archive), *common, '--out', str(self.tmp)]), 2)
+            self.assertEqual(fp.main(['package', str(self.write('o.zip', ota('rango'))), *common, '--out', str(self.tmp/'new')]), 3)
+            self.assertEqual(fp.main(['observe', str(tf), '--flavor', 'rango', '--build', BUILD, '--source', 's',
+                                      '--out', str(self.tmp/'obs.json')]), 2)
         self.assertFalse((self.tmp/'new').exists())
 
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class Signature(Fixture):
+    def test_production_contract_has_no_factory_signing_identity(self):
+        archive, tf = self.complete('frankel')
+        self.sign(archive)
+        result = fp.classify(archive, 'frankel', tf, BUILD, None, ROOT, **self.evidence('frankel', tf))
+        self.refused(result, 'factory-signing identity: pinned principal and ssh-ed25519 public key for frankel')
+        self.assertFalse(result['signatureVerified'])
+
+    def test_missing_wrong_namespace_wrong_key_tampered_and_adjacent_signers(self):
+        archive, tf = self.complete('frankel')
+        self.refused(self.classify(archive, 'frankel', tf, sign=False), 'factory:frankel-install-2026103101.zip.sig')
+        self.sign(archive, namespace='file')
+        self.refused(self.classify(archive, 'frankel', tf, sign=False), 'signature-invalid')
+        other = self.keypair('other')
+        self.sign(archive, key=other)
+        # An attacker-supplied allowed_signers beside the archive is never read.
+        (self.tmp/'allowed_signers').write_text('synthetic-factory@test namespaces="factory images" '
+                                                + ' '.join(other.with_suffix('.pub').read_text().split()[:2]) + '\n')
+        self.refused(self.classify(archive, 'frankel', tf, sign=False), 'signature-invalid')
+        self.sign(archive)
+        signature = Path(str(archive) + '.sig').read_bytes()
+        tampered = self.write(archive.name, install('frankel', replace={'script.txt': b'# erase userdata\n# changed\n'}))
+        Path(str(tampered) + '.sig').write_bytes(signature)
+        self.refused(self.classify(tampered, 'frankel', tf, sign=False), 'signature-invalid')
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class Content(Fixture):
+    def segments(self, **change):
+        return super_segments(super_partitions(**change))
+
+    def test_real_simg2img_reads_the_test_sparse_encoding(self):
+        if not REAL_SIMG2IMG:
+            self.skipTest('no AOSP simg2img on this runner')
+        parts = super_partitions()
+        segments = [self.write(f's{i}.img', s) for i, s in enumerate(super_segments(parts))]
+        subprocess.run([REAL_SIMG2IMG, *map(str, segments), str(self.tmp/'raw')], check=True, capture_output=True)
+        expected = lp_container(parts)
+        self.assertEqual((self.tmp/'raw').read_bytes()[:len(expected)], expected)
+
+    def test_missing_extra_corrupt_truncated_and_mixed_dynamic_partitions(self):
+        _, tf = self.complete('frankel')
+        truncated = self.segments()
+        truncated[1] = truncated[1][:-2000]
+        for segments, code in ((self.segments(drop=('vendor',)), 'dynamic-missing:vendor'),
+                               (self.segments(extra=[('odm_a', b'odm')]), 'dynamic-extra:odm'),
+                               (self.segments(replace={'system': dynamic_image('system')[:-1] + b'X'}), 'image-mismatch:dynamic system'),
+                               (self.segments(replace={'vendor': dynamic_image('vendor')[:-1]}), 'image-mismatch:dynamic vendor'),
+                               (self.segments(b_data=b'stale'), 'mixed-partition:system_b.img'),
+                               (truncated, 'content-tool-failed:simg2img super')):
+            result = self.classify(self.write('a.zip', install('frankel', segments=segments)), 'frankel', tf)
+            self.refused(result, code)
+            self.assertTrue(result['structurallyComplete'] and not result['contentVerified'])
+        not_lp = [sparse_image(b'not a super image' * 500)]
+        self.refused(self.classify(self.write('a.zip', install('frankel', segments=not_lp)), 'frankel', tf), 'content-tool-failed:lpunpack')
+
+    def test_tool_identity_and_bounded_work(self):
+        archive, tf = self.complete('frankel')
+        self.refused(self.classify(archive, 'frankel', tf, otatools_sha256='0' * 64), 'tool-identity-mismatch:otatools')
+        bare = self.write('bare.zip', otatools_zip(drop=('bin/lpunpack',)))
+        self.refused(self.classify(archive, 'frankel', tf, otatools=bare, otatools_sha256=hashlib.sha256(bare.read_bytes()).hexdigest()),
+                     'otatools:bin/lpunpack')
+        self.refused(self.classify(archive, 'frankel', tf, max_work_bytes=4096), 'work-space:')
+        tf = self.write('tf.zip', target_files('frankel', drop=('IMAGES/vendor.img',)))
+        self.refused(self.classify(archive, 'frankel', tf), 'target-files:IMAGES/vendor.img (dynamic)')
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class Evidence(Fixture):
+    def test_firmware_carried_needs_bound_observation_never_absence(self):
+        archive, tf = self.complete('frankel')
+        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=None), 'firmware-observation for A/B partitions without an IMAGES/ image: abl')
+        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=self.firmware('frankel', partitions=())),
+                     'firmware-carried evidence for abl')
+        wrong = self.firmware('frankel', bootloader={'sha256': '0' * 64, 'partitions': ['abl']})
+        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=wrong), 'firmware-observation-mismatch:bootloader')
+        both = self.firmware('frankel', radio={'sha256': hashlib.sha256(b'synthetic radio').hexdigest(), 'partitions': ['abl']})
+        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=both), 'partition in both images abl')
+        unsynthetic = json.loads(self.firmware('frankel').read_text())
+        unsynthetic['synthetic'] = False
+        fw = self.write('fw-real-shape.json', json.dumps(unsynthetic).encode())
+        result = self.classify(archive, 'frankel', tf, allow_synthetic=False, firmware_observation=fw)
+        self.refused(result, 'target-files-observation-synthetic')
+        self.assertNotIn('firmware-observation-synthetic', ' '.join(result['problems']))
+        self.refused(self.classify(archive, 'frankel', tf, allow_synthetic=False), 'firmware-observation-synthetic')
+
+    def test_target_files_observation_binds_hash_and_member_names(self):
+        archive, tf = self.complete('frankel')
+        self.refused(self.classify(archive, 'frankel', tf, target_files_observation=None), 'target-files-observation (release:')
+        other = self.write('other-tf.zip', target_files('frankel', images={'RADIO/extra.img': b'x'}))
+        self.refused(self.classify(archive, 'frankel', tf, target_files_observation=self.observation(other, 'frankel')),
+                     'observation-mismatch:target-files sha256', 'observation-mismatch:member names')
+        self.refused(self.classify(archive, 'frankel', tf, target_files_observation=self.observation(tf, 'frankel', build='2026103102')),
+                     'observation-mismatch:build')
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
 class Negative(Fixture):
     def test_ota_only_is_applicable_in_place_but_never_factory(self):
         for device in ('frankel', 'rango'):
             result = self.classify(self.write('o.zip', ota(device)), device, self.complete(device)[1])
             self.refused(result, 'not-factory:ota-update')
             self.assertTrue(result['otaApplicable'])
-            self.assertFalse(result['installMode']['dataWipe'])
+            self.assertFalse(result['installMode']['dataWipe'] or result['structurallyComplete'])
             with self.assertRaises(fp.Refused):
-                fp.package(self.tmp/'o.zip', device, self.complete(device)[1], self.tmp/'out', BUILD, None, self.root)
+                fp.package(self.tmp/'o.zip', device, self.complete(device)[1], self.tmp/'out', BUILD, None, self.root,
+                           **self.evidence(device, self.complete(device)[1]))
         wrong = self.classify(self.write('o.zip', ota('frankel')), 'rango')
         self.refused(wrong, 'wrong-device:ota pre-device frankel')
         self.assertFalse(wrong['otaApplicable'])
@@ -207,17 +504,17 @@ class Negative(Fixture):
     def test_without_target_files_inventory_completeness_is_refused(self):
         archive, _ = self.complete('frankel')
         self.refused(self.classify(archive, 'frankel'), 'target-files inventory')
-        tf = self.write('tf.zip', target_files('frankel', drop=('META/ab_partitions.txt', 'RADIO/radio.img')))
-        self.refused(self.classify(archive, 'frankel', tf), 'target-files:META/ab_partitions.txt')
+        tf = self.write('tf.zip', target_files('frankel', drop=('META/ab_partitions.txt',)))
+        self.refused(fp.classify(archive, 'frankel', tf, BUILD, None, self.root, work_dir=self.work), 'target-files:META/ab_partitions.txt')
         tf = self.write('tf.zip', target_files('frankel', drop=('RADIO/radio.img',)))
         self.refused(self.classify(archive, 'frankel', tf), 'target-files:RADIO/radio.img')
 
     def test_wrong_device(self):
         archive, _ = self.complete('frankel')
-        self.refused(self.classify(archive, 'rango', self.complete('rango')[1], key='0' * 64),
+        self.refused(self.classify(archive, 'rango', self.complete('rango')[1]),
                      'wrong-device:archive directory frankel-install', 'wrong-device:android-info board')
-        self.refused(self.classify(self.complete('rango')[0], 'rango', self.write('tf.zip', target_files('frankel')), key='0' * 64),
-                     'wrong-device:target-files board')
+        tf = self.write('tf.zip', target_files('frankel'))
+        self.refused(self.classify(self.complete('rango')[0], 'rango', tf, target_files_observation=None), 'wrong-device:target-files board')
 
     def test_mixed_firmware(self):
         _, tf = self.complete('frankel')
@@ -272,9 +569,8 @@ class Negative(Fixture):
         self.refused(self.classify(self.write('a.zip', data), 'frankel', tf), 'corrupt-entry:artifact')
         self.refused(self.classify(self.write('a.zip', b'PK\x03\x04 truncated'), 'frankel', tf), 'corrupt-archive:artifact')
 
-    def test_unsigned_or_mismatched_identity(self):
+    def test_unsigned_or_mismatched_avb_identity_and_build(self):
         archive, tf = self.complete('frankel')
-        self.refused(self.classify(archive, 'frankel', tf, root=ROOT), 'identity-mismatch:avb_pkmd.bin')
         self.refused(self.classify(self.write('a.zip', install('frankel', replace={'avb_pkmd.bin': b'test key'})), 'frankel', tf),
                      'identity-mismatch:avb_pkmd.bin')
         self.refused(self.classify(archive, 'frankel', tf, build='2026103102'), 'identity-mismatch:archive build',
