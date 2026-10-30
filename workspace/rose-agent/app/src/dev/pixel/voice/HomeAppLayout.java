@@ -21,6 +21,15 @@ final class HomeAppLayout {
   return widthDp < 720 ? 5 : 6;
  }
 
+ /** Columns of the Home page's few default apps (the reference's sparse first page), for the same inset area and
+  * measured cell as the app pages (px, with the density): three on a phone, so those apps read as a loose group
+  * rather than a short row of a full page; one row of four where two rows do not fit (a short or split screen);
+  * five on a wide screen. */
+ static int homeColumns(float width, float height, float cellHeight, float density) {
+  if (width / density >= 600) return 5;
+  return rows(height, cellHeight, density) >= 2 ? 3 : 4;
+ }
+
  /** A cell: padding, the tile, the gap and two label lines of the measured line height. */
  static float cellHeight(float density, float labelLineHeight) {
   return (2 * CELL_PAD_DP + TILE_DP + LABEL_GAP_DP) * density + LABEL_LINES * labelLineHeight;

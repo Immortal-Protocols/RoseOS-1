@@ -111,7 +111,9 @@ test('Home layout, page/gesture and overview Java checks run against the product
 });
 
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
- assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),this::apps,/);
+ assert.match(main,/new RoseHomeView\(this,RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\),homeColumns\)\);/);
+ // Home's columns come from the same planned/measured app area and cell as the app pages.
+ assert.match(main,/appPerPage=HomeAppLayout\.perPage\(width,height,cell,density\);homeColumns=HomeAppLayout\.homeColumns\(width,height,cell,density\);/);
  // The tray's Rose well is the plain navigation hook and nothing else.
  assert.match(homeTray,/rose\.setOnClickListener\(v -> openRose\.run\(\)\);/);
  assert.match(homeTray,/rose\.setContentDescription\("Open Rose"\);/);
@@ -133,14 +135,36 @@ test('the Rose entry opens App\'s conversation activity and only navigates',()=>
  }
 });
 
-test('the dock shows real installed apps through the existing launch path',()=>{
- assert.match(home,/WorkspaceLauncher\.open\(activity, app, label\)/);
- assert.match(home,/AppLabels\.label\(activity\.getPackageManager\(\), app\.activityInfo\.packageName/);
+test('Home shows the default apps through the app pages\' real tile and launch path',()=>{
+ // Home's cells are MainActivity.appTile: the installed icon/label, AppLabels and WorkspaceLauncher, as on the app pages.
+ assert.match(home,/for \(ResolveInfo app : dock\) grid\.addView\(activity\.appTile\(app\)\);/);
+ const tile=main.slice(main.indexOf(' View appTile(ResolveInfo app){'),main.indexOf('\n }',main.indexOf(' View appTile(ResolveInfo app){')));
+ assert.match(tile,/tile\.setOnClickListener\(v->WorkspaceLauncher\.open\(this,app,label\)\);/);
+ assert.match(tile,/AppLabels\.label\(getPackageManager\(\),app\.activityInfo\.packageName/);
+ assert.match(tile,/tile\.setContentDescription\(label\);/);
  assert.match(home,/pm\.resolveActivity\(role, PackageManager\.MATCH_DEFAULT_ONLY\)/);
  // A chooser ("android") or Rose Agent itself is never a dock app; only launchable activities are used.
  assert.match(home,/"android"\.equals\(pkg\) \|\| pkg\.equals\(self\)/);
  assert.match(home,/for \(ResolveInfo app : launchable\) if \(pkg\.equals\(app\.activityInfo\.packageName\)\)/);
  assert.ok(!/"(com|dev|org)\.[a-z0-9_.]+"/.test(home),'no hard-coded package names');
+});
+
+test('one persistent control bar: Home has no second shortcut dock over the tray (#157, APP-OS-VISUAL-1030)',()=>{
+ // The selected HiFi Home is apps on the wallpaper above the dots and the one tray; the old card dock stacked a
+ // second bar (its own panel, an "All apps" tile) directly over HomeTray.
+ for(const old of ['GradientDrawable','setCornerRadius','0xd9fafcf4','"All apps"','▦','dockTile','DockLabelView','LinearLayout'])
+  assert.ok(!home.includes(old),'RoseHomeView still builds the old dock: '+old);
+ // Home's grid is the app pages' HomeAppPage, bottom-aligned above the fixed dots/tray, with no re-plan callback.
+ assert.match(home,/HomeAppPage grid = new HomeAppPage\(activity, columns, null\);/);
+ assert.match(home,/addView\(grid, new LayoutParams\(-1, -1\)\);/);
+ // Its bottom padding is only the frame's inset (system bar + tray + dots), like the app pages: nothing is drawn under the tray.
+ assert.match(home,/side \+ i\.getSystemWindowInsetRight\(\), i\.getSystemWindowInsetBottom\(\)\);/);
+ const page=main.slice(main.indexOf(' View appPage('),main.indexOf(' TextView appLabel('));
+ assert.match(page,/dp\(HomeAppLayout\.MARGIN_DP\)\+i\.getSystemWindowInsetRight\(\),i\.getSystemWindowInsetBottom\(\)\);/);
+ // The tray and the one row of dots stay the frame's only bottom controls; every other app is a swipe or a dot away.
+ assert.equal((main.match(/new HomeTray\(/g)||[]).length,1);
+ assert.match(main,/dot\.setContentDescription\("Go to "\+titles\.get\(i\)\.toLowerCase\(Locale\.ROOT\)\);dot\.setFocusable\(true\);/);
+ assert.match(main,/void apps\(\)\{if\(launcherPager!=null\)launcherPager\.showPage\(ourAppsPage,true\);\}/);
 });
 
 test('an unchanged HOME or app-icon return reuses the built Home; changes rebuild it (OS-HOME-REUSE-001)',()=>{
@@ -233,22 +257,12 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
  for(const src of [homeTray,homeRose])for(const gl of ['GLSurfaceView','GLES','Shader','TextureView','SurfaceView'])assert.ok(!src.includes(gl),gl);
 });
 
-test('dock labels are fitted whole, never cut on one line (M008)',()=>{
- const tile=home.slice(home.indexOf('static View dockTile('),home.indexOf('/** Opens the conversation surface'));
- // The 302/304 tile forced one line with an end ellipsis: Messaging and Camera (system) showed cut at 720 px.
- assert.doesNotMatch(tile,/setSingleLine\(true\)/);
- assert.match(tile,/DockLabelView name = new DockLabelView\(activity, label\);/);
- assert.match(tile,/DockLabel fit = DockLabel\.fit\(label, basePx, basePx \* 10 \/ 12, available,/);
- // The full label stays the tile's accessible name and the launch label; the text view is not spoken twice.
- assert.match(tile,/tile\.setContentDescription\(label\);/);
- assert.match(tile,/name\.setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
- // Same 46dp icon and padding; tiles fill the tray height, top-aligned, so icons stay level when a label wraps.
- assert.match(tile,/tile\.addView\(icon, new LinearLayout\.LayoutParams\(activity\.dp\(46\), activity\.dp\(46\)\)\);/);
- assert.match(tile,/tile\.setGravity\(Gravity\.CENTER_HORIZONTAL \| Gravity\.TOP\);/);
- assert.equal((home.match(/new LinearLayout\.LayoutParams\(0, -1, 1\)/g)||[]).length,2);
- // Setters run only on a change, so measuring never loops through requestLayout.
- assert.match(tile,/if \(getMaxLines\(\) != fit\.lines\) setMaxLines\(fit\.lines\);/);
- assert.match(tile,/if \(!fit\.text\.contentEquals\(getText\(\)\)\) setText\(fit\.text\);/);
+test('Home labels are the app pages\' labels: whole names over two lines, never a one-line cut (M008)',()=>{
+ // 302/304 forced one line with an end ellipsis (Messaging, Camera (system) cut at 720 px). Home now uses appLabel.
+ const label=main.slice(main.indexOf(' TextView appLabel('),main.indexOf(' LinearLayout makePageDots('));
+ assert.doesNotMatch(label,/setSingleLine\(true\)/);
+ assert.match(label,/name\.setMaxLines\(HomeAppLayout\.LABEL_LINES\);/);
+ assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
 });
 
 test('the wallpaper is the exact Rose-Fold-v3 narrow Home image, drawn like background-size: cover',()=>{

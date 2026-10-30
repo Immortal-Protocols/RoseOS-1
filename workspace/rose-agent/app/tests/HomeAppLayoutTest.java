@@ -85,6 +85,24 @@ public final class HomeAppLayoutTest {
 
         // Accessible names replace the old visible headings.
         expect(HomeAppLayout.title(0, 1).equals("Apps") && HomeAppLayout.title(1, 3).equals("Apps, page 2 of 3"), "Page names");
+        // Home (#157, APP-OS-VISUAL-1030): the four default-role apps in the reference's sparse first-page grid, in
+        // the app pages' own cells and area, over the one tray: three columns on a phone, five unfolded, and one row
+        // of four only where two rows would not fit. Every case must keep all four inside the page.
+        expect(HomeAppLayout.homeColumns(312 * D, 560 * D, cell(1f), D) == 3
+            && HomeAppLayout.homeColumns(364 * D, 560 * D, cell(1f), D) == 3, "A phone's Home groups its default apps in three columns");
+        expect(HomeAppLayout.homeColumns(836 * D, 620 * D, cell(1f), D) == 5, "An unfolded Home uses five");
+        expect(HomeAppLayout.homeColumns(364 * D, 150 * D, cell(1f), D) == 4, "A short Home keeps its apps on one row");
+        expect(HomeAppLayout.homeColumns(364 * D, 250 * D, cell(2f), D) == 4, "200% text on a short Home: one row");
+        for (float[] screen : new float[][]{{360, 560}, {412, 560}, {412, 250}, {412, 150}, {280, 150}, {884, 620}, {884, 150}}) {
+            for (float scale : new float[]{1f, 1.3f, 2f}) {
+                float w = (screen[0] - 48) * D, h = screen[1] * D;
+                int homeColumns = HomeAppLayout.homeColumns(w, h, cell(scale), D);
+                fits(4, homeColumns, h, cell(scale), "Four default apps fit at " + screen[0] + "x" + screen[1] + " text " + scale);
+                fits(0, homeColumns, h, cell(scale), "No default apps: an empty Home grid");
+                expect(homeColumns >= 3 && homeColumns <= 5, "Home columns stay 3 to 5: " + homeColumns);
+            }
+        }
+
         System.out.println("HomeAppLayoutTest: " + checks + " checks passed");
     }
 }
