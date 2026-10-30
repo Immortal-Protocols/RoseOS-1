@@ -99,8 +99,9 @@ passes `--diagnostic-out <new owner-only file>` (Infra released this narrow opt-
 - `category` is one of a fixed list (`keystore_password_incorrect`, `key_password_incorrect`, `alias_not_found`,
   `keystore_unreadable`, `password_file_unreadable`, `java_runtime_error`, `apk_input_rejected`,
   `output_write_failed`, `signature_not_verified`, `certificate_pin_mismatch`, `tool_missing`, `timeout`,
-  `output_oversized`, `invocation_rejected`, `unclassified`, `none`). A match is an observation of the tool's message,
-  not proof of the underlying defect.
+  `output_oversized`, `invocation_rejected`, `password_file_exhausted`, `unclassified`, `none`). A match is an
+  observation of the tool's message, not proof of the underlying defect. The record schema keeps its name: producer
+  and consumer are this one file at one revision, and the record's fields are unchanged.
 - `childExit`/`childSignal` are the inner tool's; the wrapper's own exit (`sign-apk.py`, 1 on any failure) is
   recorded separately by the adapter as `signerWrapperExit`.
 
@@ -112,6 +113,59 @@ tool identity. On failure the refusal reads, for example,
 `malformed`, `oversized`, `tool_identity_mismatch`). A zero wrapper exit without a valid `complete` record is
 refused (`signer_diagnostic_invalid`). The independent signer/scheme/identity/native checks are unchanged and still
 decide success. The record file lives in the adapter's `work/` and is removed with it.
+
+## Exit 2 and the shared password file (MODELS-SIGN-INVOKE-001)
+
+Protected run 41004494974 reported `stage=sign outcome=exit child_exit=2 category=unclassified wrapper_exit=1`. Local
+investigation used the installed build-tools tree, proven file by file equal to the pinned `build-tools_r35_linux.zip`
+(`apksigner.jar` `00ef9948…`). It ran on a non-pinned distro OpenJDK 21, because the pinned AOSP JDK21 tree is not
+available locally.
+
+- **Tool fact (bytecode):** apksigner exits 2 only when `getSignerConfig` cannot load the signer
+  (`Failed to load signer "…"`). Option parsing errors exit 1.
+- **Tool fact (`apksigner sign --help`):** a file named for several passwords is read one line per password, keystore
+  password first, then key password.
+- **Invocation fact:** the adapter sets `storePasswordFile` and `keyPasswordFile` to the same `--password-file`, so
+  `sign-apk.py` passes `--ks-pass file:X --key-pass file:X`. The models-v0 bootstrap writes that passphrase as one line.
+- **Reproduced:** a synthetic RSA-4096 PKCS12 fixture (alias `rose-models`, one single-line passphrase for store and key)
+  signed through the real `sign-apk.py` returns exactly the production token. Separate files, the same file with two
+  lines, and the tool run without `--key-pass` all sign and verify. A wrong alias also exited 2 with `unclassified`, so
+  the production token alone does not prove which of these happened.
+
+**Invocation fix** (`scripts/sign-apk.py`, under Infra's narrow release of its password-argument construction):
+
+| Password files | Options passed |
+| --- | --- |
+| Store and key files differ | both `--ks-pass` and `--key-pass`, as before |
+| Same file, more than one line | both `--ks-pass` and `--key-pass`, as before (store password on line 1, key password on line 2) |
+| Same file, exactly one line | `--ks-pass` only |
+| Same file, larger than 64 KiB | refused before any tool starts (`invalid_or_missing_private_input`) |
+
+- With `--ks-pass` only, the tool opens the key with the keystore password. If that fails, it prompts. The diagnostic
+  path's stdin is `/dev/null`, so the prompt ends at once with `standard input closed`.
+- Only the shared file's line structure is read, in process. No password reaches argv, the environment or any output.
+- All other checks, the bounded capture and the receipts are unchanged.
+
+**Classifier** additions for the tool's own messages:
+
+| Category | Tool message |
+| --- | --- |
+| `password_file_exhausted` | `password for signer #N : end of file reached` |
+| `alias_not_found` | `entry "…" does not contain a key` |
+| `password_file_unreadable` | a `FileNotFoundException` raised from apksigner's `PasswordRetriever` (previously `output_write_failed`) |
+| `key_password_incorrect` | `password for signer #N: standard input closed` (the key did not open with the keystore password and there is no input) |
+
+**Real-tool tests:** `RealPinnedTool` in `test_sign_diagnostic.py` replays these cases with the real tool when an
+installed tree equal to the pinned archive members is present, and skips with its reason otherwise. It uses a PKCS12
+fixture shaped like the production store, plus a JKS fixture whose key password differs from the store password. The
+JKS fixture is needed because keytool cannot give a PKCS12 key its own password.
+
+**Evidence level:**
+
+- These runs used a non-pinned JDK. They do not establish equivalence with the pinned production JDK, and do not
+  prove the production cause.
+- Before any protected retry, the corrected invocation must be checked with the pinned JDK and SDK on the original
+  protected route.
 
 ## Ownership and cleanup
 
