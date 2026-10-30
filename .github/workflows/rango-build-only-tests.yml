@@ -16,6 +16,8 @@ on:
       - 'scripts/host-reconcile.py'
       - 'scripts/rose-verify.py'
       - 'scripts/background_apks.py'
+      - 'scripts/tests/test_background_apks_identity.py'
+      - 'scripts/tests/fixtures/apksigner-sdk37-v30/**'
       - 'scripts/prepare-background-policy.py'
       - 'scripts/apply-os-changes.py'
       - 'scripts/integration_copy.py'
@@ -35,6 +37,8 @@ on:
       - 'scripts/host-reconcile.py'
       - 'scripts/rose-verify.py'
       - 'scripts/background_apks.py'
+      - 'scripts/tests/test_background_apks_identity.py'
+      - 'scripts/tests/fixtures/apksigner-sdk37-v30/**'
       - 'scripts/prepare-background-policy.py'
       - 'scripts/apply-os-changes.py'
       - 'scripts/integration_copy.py'
@@ -62,6 +66,8 @@ jobs:
         run: python3 --version
       - name: Rango build-only tests (synthetic tree, fake runner)
         run: python3 scripts/tests/test_rango_build_only.py -v
+      - name: Shared APK identity parser (observed SDK 37 V3.0 signer line, synthetic negatives)
+        run: python3 scripts/tests/test_background_apks_identity.py -v
       - name: Rango local inputs and reconcile config tests (synthetic OTA, fake tools)
         run: |
           command -v mke2fs debugfs || ls -l /usr/sbin/mke2fs /usr/sbin/debugfs
