@@ -491,8 +491,11 @@ class StaticTest(unittest.TestCase):
 class ReconcileConfigTest(unittest.TestCase):
     def test_rango_reconcile_keeps_the_integration_and_none_of_frankel_state(self):
         settings = CONFIG['host']['integrate']['reconcile']
-        for key in ('projects', 'integrationOwnedRoots', 'sparsePaths', 'patcher'):
+        for key in ('integrationOwnedRoots', 'sparsePaths', 'patcher'):
             self.assertEqual(settings[key], FRANKEL[key], key)
+        # This retained recipe is hash-pinned (os/retained-rango/release.json, the bc855f1 bytes) and frozen; Frankel
+        # later added packages/apps/Launcher3 for #156 (9b0d94a), which the retained Rango build predates.
+        self.assertEqual(settings['projects'], [p for p in FRANKEL['projects'] if p != 'packages/apps/Launcher3'])
         self.assertNotIn('installedIdentities', settings, 'Frankel 2701 identities do not describe the Fold')
         args = ' '.join(settings['applyArgs'])
         for banned in ('--updater-url', 'releases/latest', '--installed-identities', '--locked-control', 'frankel',
