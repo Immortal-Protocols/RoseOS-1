@@ -17,7 +17,7 @@ run against a live resource.
 - **Data disk:** 500 GB pd-ssd, about 240 MB/s, so a restart reloads 60 GB in about 4 minutes. 200 GB would take about
   10 minutes.
 
-## 1. Resources (Infra; each line needs its stated authority)
+## 1. Resources (Infra; spend approved by Nathan, 17:47)
 
 ```bash
 P=protocols-465723; R=us-central1; Z=us-central1-a   # if capacity is refused: us-central1-c, -b, -f
@@ -69,7 +69,7 @@ cache against that receipt and refuses on any mismatch.
 **Readiness** means a real `chat/completions` call to the loaded model returns content from `muse-glimmer`. The model
 list alone does not count.
 
-## 4. TLS and auth (needs Chief's exact authority first)
+## 4. TLS and auth (approved by Nathan, 17:47)
 
 **Persistent certificate.** Create a new persistent ACME account (no email); this is a separate decision from the
 temporary 24 h account. Then:
@@ -90,13 +90,22 @@ certbot reconfigure --cert-name models.a-list.com --webroot -w /var/lib/rose-mod
 **Auth.** Follow `../../contracts/service-auth-v1.md`:
 - install the Google hardware-attestation root certificates (public files) into `/etc/rose-models/attestation-roots/`
   and record their hashes;
-- put the approved RoseOS `verifiedBootKey` (hex) in `/etc/rose-models/self-signed-boot-keys.txt`;
 - `systemctl enable --now models-attestation-status.timer`. It refreshes Google's status list; enrollment refuses
   while the list is missing or stale;
 - `python3 /etc/rose-models/lib/service/auth_service.py secret-init`;
 - `systemctl enable --now models-auth models-edge`.
 
 **Edge check:** with no token, `/v1/models` returns 401. With a token from the enrollment flow, it returns 200.
+
+**Add a phone (admin):** `apt-get install -y qrencode`, then run:
+
+```bash
+python3 /etc/rose-models/lib/service/auth_service.py invite --label nathan-pixel --uri-only | qrencode -t ansiutf8
+```
+
+Scan the code in the Models app. It is single use and valid for 24 h.
+- `auth_service.py invites` lists codes (never the codes themselves).
+- `auth_service.py revoke nathan-pixel` revokes that label's devices and its unused codes.
 
 ## 5. Operations
 
