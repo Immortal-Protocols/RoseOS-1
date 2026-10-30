@@ -326,6 +326,160 @@ class PrepareTest(Fixture):
             '--aapt', str(self.tools/'aapt'), '--apksigner', str(self.tools/'apksigner')])
         self.assertEqual(code, 1, 'a bare tool name is never looked up on PATH')
 
+NEXT = json.loads((ROOT/'os/build-only/rango-reconcile-next.json').read_text())
+C, R = 'c' * 40, 'a' * 40
+BLOB = NEXT['candidateInputs']['androidManifestBlob']
+
+class AdmitTest(unittest.TestCase):
+    """RANGO-CURRENT-M001: admission of a release owner's newly signed bundle (fake aapt/apksigner; the policy is
+    written by the real prepare-background-policy.py over those fakes). No key, network or device."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='rango-admit-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tools = self.tmp/'tools'
+        self.tools.mkdir()
+        for name, body in (('aapt', FAKE_AAPT), ('apksigner', FAKE_APKSIGNER)):
+            (self.tools/name).write_text(body)
+            (self.tools/name).chmod(0o755)
+        self.versions = {'dev.pixel.voice': 312, 'dev.pixel.calculator.agent': 5, 'dev.pixel.backgroundcontrol': 29}
+        self.bundle = self.make_bundle()
+        self.heads = {'HEAD': R, f'{C}:os/pinned-manifest.xml': BLOB, f'{R}:os/pinned-manifest.xml': BLOB}
+
+    def git(self, *args):
+        return self.heads.get(args[-1])
+
+    def make_bundle(self, name='bundle', versions=None, signer=CERT, candidate=None):
+        versions = versions or self.versions
+        bundle = self.tmp/name
+        (bundle/'signed-apps').mkdir(parents=True)
+        for package, version in versions.items():
+            data = apk(package, version, cert=signer)
+            (bundle/'signed-apps'/f'{package}.apk').write_bytes(data)
+            (bundle/'signed-apps'/f'{package}.receipt.json').write_text(json.dumps({'schemaVersion': 1,
+                'apk': f'{package}.apk', 'sha256': hashlib.sha256(data).hexdigest(), 'certificateSha256': [signer],
+                'signatureVerified': True, 'inputSha256': '0' * 64, 'installed': False, 'published': False}))
+        signed = bundle/'signed-apps'
+        subprocess.run([sys.executable, str(SCRIPTS/'prepare-background-policy.py'),
+            '--agent-apk', str(signed/'dev.pixel.backgroundcontrol.apk'), '--voice-apk', str(signed/'dev.pixel.voice.apk'),
+            '--target-apk', str(signed/'dev.pixel.calculator.agent.apk'), '--aapt', str(self.tools/'aapt'),
+            '--apksigner', str(self.tools/'apksigner'), '--sdk', '37', '--output', str(bundle/'background-policy.json')],
+            check=True, capture_output=True)
+        (bundle/'candidate.json').write_text(json.dumps(candidate or {'schema': 'roseos.rango-candidate.v1',
+            'device': 'rango', 'build': '2026103101', 'product': C, 'recipe': R, 'androidManifestBlob': BLOB,
+            'apps': [[p, v] for p, v in versions.items()]}))
+        return bundle
+
+    def admit(self, bundle=None, out=None):
+        return li.admit(bundle or self.bundle, out or self.tmp/'inputs', {'aapt': self.tools/'aapt',
+            'apksigner': self.tools/'apksigner'}, ROOT/'os/build-only/rango-reconcile-next.json', git_read=self.git)
+
+    def refused(self, expect, **kwargs):
+        with self.assertRaises(li.Failed) as caught:
+            self.admit(**kwargs)
+        self.assertIn(expect, str(caught.exception))
+        self.assertFalse((self.tmp/'inputs').exists(), 'nothing is written before every input is admitted')
+
+    def candidate(self, **changes):
+        data = json.loads((self.bundle/'candidate.json').read_text())
+        data.update(changes)
+        (self.bundle/'candidate.json').write_text(json.dumps(data))
+
+    def test_admits_exact_bytes_and_binds_c_r_and_build(self):
+        record = self.admit()
+        self.assertEqual((record['mode'], record['receiptType']), ('candidate', 'rango-local-inputs'))
+        self.assertEqual(record['candidate'], {'device': 'rango', 'build': '2026103101', 'product': C, 'recipe': R,
+            'androidManifestBlob': BLOB})
+        self.assertEqual({a['package']: (a['role'], a['versionCode']) for a in record['apps']},
+            {'dev.pixel.voice': ('voice', 312), 'dev.pixel.calculator.agent': ('target', 5),
+             'dev.pixel.backgroundcontrol': ('agent', 29)})
+        for app in record['apps']:
+            original = (self.bundle/'signed-apps'/f'{app["package"]}.apk').read_bytes()
+            self.assertEqual(Path(app['signedPath']).read_bytes(), original, 'bytes copied unchanged')
+            self.assertEqual(app['sha256'], hashlib.sha256(original).hexdigest())
+        self.assertEqual(Path(record['policy']['path']).read_bytes(), (self.bundle/'background-policy.json').read_bytes())
+        self.assertEqual(json.loads((self.tmp/'inputs/local-inputs.json').read_text()), record)
+        self.assertNotIn('ota', record, 'no 2901 extraction is involved')
+        self.refused_again()
+
+    def refused_again(self):
+        with self.assertRaises(li.Failed):
+            self.admit()
+
+    def test_wrong_candidate_identity_is_refused(self):
+        for changes, expect in (({'device': 'frankel'}, 'device rango'), ({'build': '20261031'}, 'ten-digit'),
+                ({'product': 'C' * 40}, 'full commit SHA'), ({'androidManifestBlob': '0' * 40}, 'another Android manifest'),
+                ({'schema': 'v0'}, 'schema'), ({'extra': 1}, 'exactly')):
+            with self.subTest(expect=expect):
+                original = (self.bundle/'candidate.json').read_text()
+                self.candidate(**changes)
+                self.refused(expect)
+                (self.bundle/'candidate.json').write_text(original)
+        self.heads['HEAD'] = 'b' * 40
+        self.refused("not the candidate's recipe R")
+        self.heads['HEAD'] = R
+        self.heads[f'{C}:os/pinned-manifest.xml'] = 'd' * 40
+        self.refused('product cccccccccccc does not carry the pinned Android manifest')
+        self.heads[f'{C}:os/pinned-manifest.xml'] = None
+        self.refused('does not carry the pinned Android manifest (got None)')
+
+    def test_wrong_versions_signer_or_apps_are_refused(self):
+        self.candidate(apps=[['dev.pixel.voice', 313], ['dev.pixel.calculator.agent', 5], ['dev.pixel.backgroundcontrol', 29]])
+        self.refused("('dev.pixel.voice', 312")
+        self.candidate(apps=[['dev.pixel.voice', 312], ['dev.pixel.voice', 312], ['dev.pixel.backgroundcontrol', 29]])
+        self.refused('once with a positive versionCode')
+        self.candidate(apps=[['dev.pixel.voice', 312], ['dev.pixel.backgroundcontrol', 29]])
+        self.refused('once with a positive versionCode')
+        other = self.make_bundle('other-signer', signer='ab' * 32)
+        self.refused('does not match', bundle=other)
+
+    def test_receipt_drift_and_cross_candidate_bytes_are_refused(self):
+        receipt = self.bundle/'signed-apps/dev.pixel.voice.receipt.json'
+        data = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps(dict(data, sha256='0' * 64)))
+        self.refused('does not match dev.pixel.voice.apk')
+        receipt.write_text(json.dumps(dict(data, signatureVerified=False)))
+        self.refused('does not match')
+        receipt.write_text(json.dumps(data))
+        # An APK from another candidate (other bytes) with its own matching receipt: the policy pins the original.
+        other = self.make_bundle('other', versions=dict(self.versions))
+        for name in ('dev.pixel.voice.apk', 'dev.pixel.voice.receipt.json'):
+            shutil.copyfile(other/'signed-apps'/name, self.bundle/'signed-apps'/name)
+        self.refused('the policy does not pin the admitted dev.pixel.voice bytes')
+
+    def test_missing_extra_and_linked_inputs_are_refused(self):
+        (self.bundle/'signed-apps/dev.pixel.calculator.agent.receipt.json').unlink()
+        self.refused("missing ['signed-apps/dev.pixel.calculator.agent.receipt.json']")
+        bundle = self.make_bundle('extra')
+        (bundle/'signed-apps/dev.pixel.other.apk').write_bytes(b'x')
+        self.refused("unexpected ['signed-apps/dev.pixel.other.apk']", bundle=bundle)
+        linked = self.make_bundle('linked')
+        target = linked/'signed-apps/dev.pixel.voice.apk'
+        moved = self.tmp/'outside.apk'
+        target.rename(moved)
+        target.symlink_to(moved)
+        self.refused('is a link', bundle=linked)
+        self.refused('absolute directory', bundle=Path('relative/bundle'))
+        (self.tmp/'inputs').mkdir()
+        with self.assertRaises(li.Failed) as caught:
+            self.admit()
+        self.assertIn('exists; choose a new inputs directory', str(caught.exception))
+
+    def test_policy_must_pin_the_bundle_and_the_product_settings(self):
+        policy = self.bundle/'background-policy.json'
+        data = json.loads(policy.read_text())
+        policy.write_text(json.dumps(dict(data, prototypeControl=True)))
+        self.refused('prototypeControl')
+        policy.write_text(json.dumps(dict(data, sdk=36)))
+        self.refused('SDK')
+        policy.write_text('{')
+        self.refused('not a valid policy')
+
+    def test_cli_admit_needs_its_own_arguments(self):
+        with self.assertRaises(SystemExit):
+            li.main(['admit', '--out', str(self.tmp/'o'), '--aapt', 'a', '--apksigner', 'b'])
+        with self.assertRaises(SystemExit):
+            li.main(['prepare', '--out', str(self.tmp/'o'), '--bundle', str(self.bundle)])
+
 class StaticTest(unittest.TestCase):
     def test_the_helper_reaches_no_network_signer_publisher_or_cloud(self):
         code = (SCRIPTS/'rango-local-inputs.py').read_text()
