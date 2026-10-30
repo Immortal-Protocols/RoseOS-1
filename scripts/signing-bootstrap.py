@@ -179,8 +179,10 @@ def approved_path(path):
 # Closed recipe vocabulary for generate_keys. A step names an approved tool and a list of arguments; each argument is
 # exactly one placeholder or a plain literal. Nothing else (no shell, path, environment or command text) is accepted.
 LITERAL = re.compile(r'[A-Za-z0-9_.,:=+@-][A-Za-z0-9_.,:=+@-]{0,127}')
-SUBJECT = re.compile(r'(/[A-Za-z]{1,3}=[A-Za-z0-9 ._-]{1,64}){1,8}')
-STEP_KEYS = {'tool', 'args', 'produces', 'stdin', 'exitStatus'}
+SUBJECT = re.compile(r'(/[A-Za-z]{1,3}=[A-Za-z0-9 ._-]{1,64}){1,8}/?')
+STEP_KEYS = {'tool', 'args', 'produces', 'stdin', 'exitStatus', 'removes'}
+PLACEHOLDERS = ('{out}', '{passphrase_file}', '{passphrase_file_arg}', '{subject}')
+INTERMEDIATE = re.compile(r'[a-z0-9_]+(\.[a-z0-9_]+){1,3}')
 
 
 def recipe_problems(profile):
@@ -190,12 +192,15 @@ def recipe_problems(profile):
         return [('missing', 'no reviewed generation recipe: ' + str((profile.get('generation') or {}).get('note', '')))]
     inventory = profile.get('keyInventory', {})
     allowed = set(inventory.get('requiredByConsumer', [])) | set(inventory.get('optionalByConsumer', []))
+    intermediates = set((profile.get('generation') or {}).get('intermediates') or [])
     if not isinstance(recipe, list) or not recipe:
         return [('invalid', 'recipe must be a non-empty list of steps')]
-    problems, produced = [], []
+    problems, produced, live = [], [], set()
+    if intermediates & allowed or not all(INTERMEDIATE.fullmatch(str(n)) for n in intermediates):
+        problems.append(('invalid', 'generation.intermediates must be plain file names outside the inventory'))
     for index, step in enumerate(recipe):
         if not isinstance(step, dict) or set(step) - STEP_KEYS or not {'tool', 'args', 'produces'} <= set(step):
-            problems.append(('invalid', f'step {index}: only tool, args, produces, stdin and exitStatus are accepted'))
+            problems.append(('invalid', f'step {index}: only tool, args, produces, stdin, exitStatus and removes are accepted'))
             continue
         if step['tool'] not in profile.get('tools', {}):
             problems.append(('invalid', f'step {index}: tool {step["tool"]!r} is not a profile tool'))
@@ -204,16 +209,24 @@ def recipe_problems(profile):
         if step.get('stdin', 'none') not in ('none', 'passphrase'):
             problems.append(('invalid', f'step {index}: stdin must be none or passphrase'))
         for arg in step['args'] if isinstance(step['args'], list) else [None]:
-            if not (isinstance(arg, str) and (arg in ('{out}', '{passphrase_file}', '{subject}')
-                    or (arg.startswith('{out}/') and arg[6:] in allowed | {Path(f).stem for f in allowed})
+            if not (isinstance(arg, str) and (arg in PLACEHOLDERS
+                    or (arg.startswith('{out}/') and arg[6:] in allowed | intermediates | {Path(f).stem for f in allowed})
                     or (LITERAL.fullmatch(arg) and '..' not in arg))):
                 problems.append(('invalid', f'step {index}: argument {str(arg)[:40]!r} is not a placeholder or plain literal'))
-        if not isinstance(step['produces'], list) or not set(step['produces']) <= allowed:
-            problems.append(('invalid', f'step {index}: produces must name inventory files'))
+        if not isinstance(step['produces'], list) or not set(step['produces']) <= allowed | intermediates:
+            problems.append(('invalid', f'step {index}: produces must name inventory files or declared intermediates'))
         else:
             produced += step['produces']
+            live |= set(step['produces']) & intermediates
+        removes = step.get('removes', [])
+        if not isinstance(removes, list) or not set(removes) <= live:
+            problems.append(('invalid', f'step {index}: removes may name only intermediates produced earlier'))
+        else:
+            live -= set(removes)
     if len(produced) != len(set(produced)):
         problems.append(('invalid', 'a file is produced by more than one step'))
+    if live:
+        problems.append(('invalid', f'intermediates {sorted(live)} are never removed'))
     missing = sorted(set(inventory.get('requiredByConsumer', [])) - set(produced))
     if missing:
         problems.append(('invalid', f'recipe does not produce {missing}'))
@@ -234,6 +247,10 @@ def generate_keys(workspace, profile, runner, token=None):
     problems = recipe_problems(profile)
     if problems:
         raise Blocked('recipe-missing' if problems[0][0] == 'missing' else 'recipe-invalid', problems[0][1])
+    for step in profile['generation']['recipe']:
+        installed = profile['tools'][step['tool']].get('installed') or {}
+        if not approved_path(installed.get('path')) or not HEX64.fullmatch(str(installed.get('sha256'))):
+            raise Blocked('tool-unapproved', f'{step["tool"]}: no measured installed path and sha256; nothing is run')
     workspace = Path(workspace)
     passphrase = workspace/'passphrase'
     fd = os.open(passphrase, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -242,7 +259,8 @@ def generate_keys(workspace, profile, runner, token=None):
     out = workspace/'out'
     out.mkdir(mode=0o700)
     expected = []
-    values = {'{out}': str(out), '{passphrase_file}': str(passphrase), '{subject}': str((profile.get('generation') or {}).get('subject'))}
+    values = {'{out}': str(out), '{passphrase_file}': str(passphrase), '{passphrase_file_arg}': 'file:' + str(passphrase),
+        '{subject}': str((profile.get('generation') or {}).get('subject'))}
     for index, step in enumerate(profile['generation']['recipe']):
         tool = profile['tools'][step['tool']]['installed']['path']
         argv = [values.get(a, str(out/a[6:]) if a.startswith('{out}/') else a) for a in step['args']]
@@ -250,6 +268,13 @@ def generate_keys(workspace, profile, runner, token=None):
         if status != step.get('exitStatus', 0):
             raise Blocked('generator-failed', f'step {index} ({step["tool"]}) exited {status}')
         expected += step['produces']
+        for name in step.get('removes', []):
+            # An intermediate (such as the unencrypted AVB key before encryption) is overwritten, then removed.
+            target = out/name
+            if target.is_file() and not target.is_symlink():
+                target.write_bytes(b'\0' * target.stat().st_size)
+            target.unlink()
+            expected.remove(name)
     names = sorted(os.listdir(out))
     if names != sorted(expected):
         raise Blocked('unexpected-output', f'generator wrote {names[:16]}, expected {sorted(expected)}')

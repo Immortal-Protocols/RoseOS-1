@@ -47,14 +47,10 @@ PASSPHRASE = b'correct horse battery staple synthetic\n'
 FRANKEL = {'otaCertificateSha256': 'f' * 64, 'avbPublicKeySha256': 'e' * 64}
 
 
-# A synthetic recipe in the closed vocabulary; its arguments are placeholders, not a claimed real generator interface.
-# The checked-in make_key steps (source-bound, S010) plus two SYNTHETIC avb steps standing in for the unread
-# generate-keys/encrypt-keys recipe; the avb arguments are placeholders, not a claimed real interface.
-SYNTHETIC_RECIPE = PROFILES['profiles']['fold-rango-v1']['generation']['recipe'] + [
-    {'tool': 'openssl', 'args': ['synthetic-rsa4096', '{out}/avb.pem', '{passphrase_file}'], 'produces': ['avb.pem']},
-    {'tool': 'avbtool', 'args': ['synthetic-extract', '{out}/avb.pem', '{out}/avb_pkmd.bin'], 'produces': ['avb_pkmd.bin']},
-]
-CERT_STEPS = len(PROFILES['profiles']['fold-rango-v1']['generation']['recipe'])
+# The checked-in, source-bound recipe (S010: make_key per signing key, then the AVB steps). Tests only ever run it
+# through MockRunner, which writes synthetic files; no generator, openssl or avbtool is executed.
+SYNTHETIC_RECIPE = PROFILES['profiles']['fold-rango-v1']['generation']['recipe']
+CERT_STEPS = sum(1 for s in SYNTHETIC_RECIPE if s['tool'] == 'generator')
 ENCRYPTED_DER = bytes([0x30, 0x10, 0x30, 0x0e]) + b'synthetic-encrypted'
 ENCRYPTED_PEM = b'-----BEGIN ENCRYPTED PRIVATE KEY-----\nc3ludGhldGlj\n-----END ENCRYPTED PRIVATE KEY-----\n'
 
@@ -75,7 +71,6 @@ def ready_profiles():
     fold['keyInventory']['complete'] = True
     for name, tool in fold['tools'].items():
         tool['installed'] = {'path': f'/opt/synthetic/{name}', 'sha256': hashlib.sha256(name.encode()).hexdigest()}
-    fold['generation'] = {'recipe': SYNTHETIC_RECIPE, 'subject': '/CN=Synthetic Test Only', 'note': 'synthetic test recipe'}
     fold['access'].update(addVersionExpires='2027-01-01T00:00:00Z', accessorExpires='2027-01-01T00:00:00Z')
     return profiles
 
@@ -182,7 +177,7 @@ def codes(receipt):
 
 class ZeroSideEffects(unittest.TestCase):
     def test_checked_in_profiles_stop_before_anything(self):
-        for name, expected in (('fold-rango-v1', {'recipe-missing', 'tool-unapproved'}), ('models-v0', {'profile-unbound'}),
+        for name, expected in (('fold-rango-v1', {'tool-unapproved'}), ('models-v0', {'profile-unbound'}),
                                ('rango', {'profile-unknown'}), ('none', {'profile-unknown'})):
             f, ex = Fixture(self), MockExecutor()
             receipt, _ = f.run(ex, name, PROFILES)
@@ -407,7 +402,7 @@ class Production(unittest.TestCase):
     def test_generation_is_not_implemented_and_add_failures_are_uncertain(self):
         with self.assertRaises(sb.Blocked) as blocked:
             sb.GcloudExecutor().generate(Path('/nonexistent'), PROFILES['profiles']['fold-rango-v1'])
-        self.assertEqual(blocked.exception.code, 'recipe-missing')  # before any file or process
+        self.assertEqual(blocked.exception.code, 'tool-unapproved')  # unmeasured tools: before any file or process
         gcloud, tmp = self.fake_gcloud('echo "$@" > "$(dirname "$0")/argv"; exit 1\n')
         data = tmp/'passphrase'
         data.write_bytes(PASSPHRASE)
@@ -463,7 +458,7 @@ class Guard(unittest.TestCase):
                 env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
             self.assertEqual(sb.main(['run', '--profile', 'fold-rango-v1', '--recipe-sha', SHA, '--state-dir', '/nonexistent/s',
                 '--receipt-dir', '/nonexistent/r'], env={'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}), 4)
-        self.assertIn('recipe-missing', out.getvalue())
+        self.assertIn('tool-unapproved: generator', out.getvalue())
         self.assertIn('profile-unbound', out.getvalue())
         self.assertEqual(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': FOLD['signer']}, SHA, NOW), [])
         self.assertTrue(sb.preflight('fold-rango-v1', READY, {'GITHUB_SHA': SHA, 'GCP_SIGNER_SERVICE_ACCOUNT': 'other@x.iam.gserviceaccount.com'}, SHA, NOW))
@@ -652,8 +647,9 @@ class Generator(unittest.TestCase):
             # Fixed approved tool paths, the passphrase only as a file path or stdin, never its value in argv.
             self.assertEqual({c[0] for c in runner.calls}, {FOLD['tools'][s['tool']]['installed']['path'] for s in SYNTHETIC_RECIPE})
             self.assertTrue(all('synthetic-token' not in ' '.join(c[1]) for c in runner.calls))
-            self.assertEqual([c[3] is not None for c in runner.calls], [True] * CERT_STEPS + [False, False])
-            self.assertIn('/CN=Synthetic Test Only', runner.calls[0][1])
+            self.assertEqual([c[3] is not None for c in runner.calls], [True] * CERT_STEPS + [False] * 3)
+            self.assertIn('/CN=GrapheneOS/', runner.calls[0][1])
+            self.assertIn('file:' + str(ws/'passphrase'), runner.calls[-1][1])  # -passout file:, not the value
         self.assertEqual(outputs[0], outputs[1])
 
     def test_failed_extra_or_missing_outputs_block(self):
@@ -663,12 +659,12 @@ class Generator(unittest.TestCase):
                 sb.generate_keys(self.workspace(), FOLD, runner, token='t')
             self.assertEqual(blocked.exception.code, code)
 
-    def test_checked_in_fold_recipe_is_missing_and_nothing_runs(self):
+    def test_checked_in_fold_recipe_needs_measured_tools_and_nothing_runs(self):
         runner, ws = MockRunner(), self.workspace()
         with self.assertRaises(sb.Blocked) as blocked:
             sb.generate_keys(ws, PROFILES['profiles']['fold-rango-v1'], runner)
-        self.assertEqual((blocked.exception.code, runner.calls, os.listdir(ws)), ('recipe-missing', [], []))
-        self.assertIn('recipe-missing', dict(sb.readiness('fold-rango-v1', PROFILES, NOW)))
+        self.assertEqual((blocked.exception.code, runner.calls, os.listdir(ws)), ('tool-unapproved', [], []))
+        self.assertIn('tool-unapproved', dict(sb.readiness('fold-rango-v1', PROFILES, NOW)))
 
     def test_recipe_rejects_injection_and_incomplete_steps(self):
         def problems(change):
@@ -741,7 +737,7 @@ class Inventory(unittest.TestCase):
                 self.assertIsNone(tool['source'], name)  # openssl: a host binary, no source identity claimed
         plan = sb.plan('fold-rango-v1', PROFILES)
         self.assertEqual(sorted(t['tool'] for t in plan['laterHostPreflight']), ['avbtool', 'decrypt-keys', 'generator', 'openssl'])
-        self.assertEqual(len(plan['missingSources']), 2)
+        self.assertEqual(plan['missingSources'], [])  # S010: inventory and recipe sources are closed
 
     def test_models_stays_unbound(self):
         models = PROFILES['profiles']['models-v0']
@@ -789,16 +785,16 @@ class Sources(unittest.TestCase):
             self.assertIn(fact, make_key)
         self.assertIn('openssl pkcs8 -inform DER -in $key.pk8 -passin env:password', decrypt)
         self.assertIn('openssl pkcs8 -topk8 -in avb.pem -passin env:password', decrypt)
-        recipe = PROFILES['profiles']['fold-rango-v1']['generation']['recipe']
+        recipe = PROFILES['profiles']['fold-rango-v1']['generation']['recipe'][:CERT_STEPS]
         cert_roles = [r['role'] for r in PROFILES['profiles']['fold-rango-v1']['keyInventory']['roles'] if r['files'][0].endswith('.pk8')]
         self.assertEqual([s['args'] for s in recipe], [[f'{{out}}/{r}', '{subject}'] for r in cert_roles])
         self.assertTrue(all(s['tool'] == 'generator' and s['stdin'] == 'passphrase' and s['exitStatus'] == 1 for s in recipe))
 
-    def test_unresolved_recipe_and_installed_identities_refuse_before_anything(self):
-        reasons = dict(sb.readiness('fold-rango-v1', PROFILES, NOW))
-        self.assertIn('generate-keys', PROFILES['profiles']['fold-rango-v1']['generation']['missing'][1]['source'])
-        self.assertIn('recipe-missing', reasons)
-        self.assertIn('tool-unapproved', reasons)
+    def test_only_installed_identities_remain_and_they_refuse_before_anything(self):
+        reasons = sb.readiness('fold-rango-v1', PROFILES, NOW)
+        self.assertEqual({code for code, _ in reasons}, {'tool-unapproved'})
+        self.assertEqual(sb.recipe_problems(PROFILES['profiles']['fold-rango-v1']), [])
+        self.assertNotIn('missing', PROFILES['profiles']['fold-rango-v1']['generation'])
         # Even with a valid recipe, an open generation.missing entry refuses generation.
         profiles = ready_profiles()
         profiles['profiles']['fold-rango-v1']['generation']['missing'] = [{'fact': 'synthetic open item'}]
@@ -823,6 +819,51 @@ class Sources(unittest.TestCase):
         with self.assertRaises(sb.Blocked) as blocked:
             sb.generate_keys(ws, FOLD, ZeroRunner(), token='t')
         self.assertEqual(blocked.exception.code, 'generator-failed')
+
+
+    def test_helper_fixtures_bind_the_recipe_and_subject(self):
+        generation = PROFILES['profiles']['fold-rango-v1']['generation']
+        for name, identity in generation['sources'].items():
+            self.assertEqual(sb.verify_source(identity, (FIXTURES/name).read_bytes()), [], name)
+        common = (FIXTURES/'common.sh').read_text()
+        keys = re.search(r'readonly signing_keys=\(([^)]*)\)', common)[1].split()
+        self.assertEqual(sorted(keys), sorted(s['args'][0][6:] for s in generation['recipe'] if s['tool'] == 'generator'))
+        generate = (FIXTURES/'generate-keys').read_text()
+        for fact in ('CN=GrapheneOS', 'make_key $key "/CN=$CN/"', 'openssl genrsa 4096 | openssl pkcs8 -topk8 -scrypt -out avb.pem',
+                     'avbtool.py extract_public_key --key avb.pem --output avb_pkmd.bin'):
+            self.assertIn(fact, generate)
+        self.assertIn('-passout env:new_password -scrypt', (FIXTURES/'encrypt-keys').read_text())
+        self.assertEqual(generation['subject'], '/CN=GrapheneOS/')
+        self.assertIn('no match with the existing Frankel keys is claimed', generation['subjectBasis'])
+        avb = generation['recipe'][CERT_STEPS:]
+        self.assertEqual([s['tool'] for s in avb], ['openssl', 'avbtool', 'openssl'])
+        self.assertEqual(avb[2]['removes'], ['avb.unencrypted.pem'])
+        self.assertEqual(generation['intermediates'], ['avb.unencrypted.pem'])
+
+    def test_intermediate_vocabulary(self):
+        def problems(change):
+            profile = copy.deepcopy(FOLD)
+            change(profile['generation'])
+            return sb.recipe_problems(profile)
+        self.assertEqual(problems(lambda g: None), [])
+        for name, change in {
+            'never removed': lambda g: g['recipe'][-1].pop('removes'),
+            'removes inventory file': lambda g: g['recipe'][-1].update(removes=['avb.pem']),
+            'removes before produced': lambda g: g['recipe'][CERT_STEPS].update(removes=['avb.unencrypted.pem']),
+            'undeclared intermediate': lambda g: g.update(intermediates=[]),
+            'intermediate is inventory': lambda g: g.update(intermediates=['avb.pem']),
+            'unsafe intermediate name': lambda g: g.update(intermediates=['../x.pem']),
+        }.items():
+            with self.subTest(name):
+                self.assertTrue(problems(change), name)
+
+    def test_intermediate_is_removed_from_the_workspace(self):
+        ws = Path(tempfile.mkdtemp(prefix='gen-'))
+        self.addCleanup(shutil.rmtree, ws, True)
+        sb.generate_keys(ws, FOLD, MockRunner(), token='t')
+        with tarfile.open(ws/'keys.tar.gz') as tar:
+            self.assertNotIn('rango/avb.unencrypted.pem', tar.getnames())
+        self.assertEqual(sorted(os.listdir(ws)), ['keys.tar.gz', 'passphrase'])
 
 
 if __name__ == '__main__':
