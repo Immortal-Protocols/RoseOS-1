@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import java.util.function.BooleanSupplier;
 
 /**
  * The fixed Home tray of the selected HiFi (prototypes/rose-hifi at ce126f56, OS-HIFI-HOME-001): a brushed
@@ -16,8 +17,9 @@ import android.widget.LinearLayout;
  * starts, mutes or ends voice). Each Home refresh hands it the RoseVisualState read from the voice service
  * (HomeRose), and applyVisual passes it to App's RosePresenceView (show(RoseVisualState)), the one shared
  * renderer; the renderer is excluded from accessibility and the well speaks its state, so there is one focus
- * target. There is no permitted overview route for a non-system Home yet, so that well is disabled and
- * says so; it never opens an unrelated picker.
+ * target. The overview well asks for the real system task overview through HomeOverview's one permitted route
+ * (OS-OVERVIEW-156-M001); each refresh shows whether that route is available, and a tap while it is not says
+ * so and opens nothing else, never an unrelated picker.
  */
 final class HomeTray extends LinearLayout {
  static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 104, WELL_H_DP = 66;
@@ -26,9 +28,10 @@ final class HomeTray extends LinearLayout {
  /** The last visual state applied, and the conversation it came from; null before the first refresh. */
  RoseVisualState shownVisual;
  ConversationState shownConversation;
- boolean released;
+ final BooleanSupplier overviewAvailable;
+ boolean released, shownOverviewAvailable;
 
- HomeTray(MainActivity activity, Runnable openRose) {
+ HomeTray(MainActivity activity, Runnable openRose, Runnable openOverview, BooleanSupplier overviewAvailable) {
   super(activity);
   setOrientation(HORIZONTAL);
   setGravity(Gravity.CENTER_VERTICAL);
@@ -56,11 +59,12 @@ final class HomeTray extends LinearLayout {
 
   FrameLayout overviewWell = well(activity);
   overviewWell.addView(new OverviewGlyph(activity), new FrameLayout.LayoutParams(-1, -1));
-  overviewWell.setEnabled(false);
+  overviewWell.setClickable(true);
   overviewWell.setFocusable(true);
-  overviewWell.setAlpha(.55f);
-  overviewWell.setContentDescription("Overview, not available yet");
+  overviewWell.setOnClickListener(v -> openOverview.run());
   overview = overviewWell;
+  this.overviewAvailable = overviewAvailable;
+  applyOverview(overviewAvailable.getAsBoolean());
   addView(overviewWell, new LayoutParams(activity.dp(WELL_W_DP), activity.dp(WELL_H_DP)));
  }
 
@@ -81,6 +85,15 @@ final class HomeTray extends LinearLayout {
   if (released) return;
   shownConversation = conversation;
   applyVisual(visual);
+  boolean available = overviewAvailable.getAsBoolean();
+  if (available != shownOverviewAvailable) applyOverview(available);
+ }
+
+ /** The overview well at full strength with its action when the route is available, dimmed with the reason when not. */
+ void applyOverview(boolean available) {
+  shownOverviewAvailable = available;
+  overview.setAlpha(available ? 1f : .55f);
+  overview.setContentDescription(HomeOverview.describe(available));
  }
 
  /** The tray is leaving (frame rebuilt, activity destroyed): stop animating and accept no further frames. */
