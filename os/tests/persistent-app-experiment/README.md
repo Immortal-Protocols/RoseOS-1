@@ -18,6 +18,16 @@ disposable AOSP emulator what the pinned package-manager source (OS-COMPONENT-EX
 The workflow `.github/workflows/systemui-persistent-experiment.yml` is manual only (`workflow_dispatch`): one
 ubuntu-24.04 job, 30 minutes, `contents: read`. It uploads `results.json` and small text excerpts only.
 
+## SystemUI stages (opt-in)
+
+`experiment.py run --systemui` adds `systemui_stages.py` after the fixture stages:
+- identity of the image's own `com.android.systemui`;
+- a refusal of the same APK re-signed with the job-local test key;
+- a staged same-version reinstall through `scripts/systemui-component-update.py`;
+- that tool's recovery to the image copy.
+
+These stages need only a booted emulator, not the fixture seeding. The workflow does not pass `--systemui`.
+
 ## What the run does not do
 
 - **No security or licence changes:**
@@ -25,7 +35,7 @@ ubuntu-24.04 job, 30 minutes, `contents: read`. It uploads `results.json` and sm
   - It does not change `/dev/kvm` access, SELinux or verity. If verity is enforcing, seeding is reported as
     unavailable instead of disabling it.
   - It grants no installer or rollback permission.
-- **No production targets:** it does not touch `com.android.systemui`, a phone, a builder, alpha or any release.
+- **No production targets:** without `--systemui` it does not touch `com.android.systemui`. It never touches a phone, a builder, alpha or any release.
 
 ## What a pass shows
 
