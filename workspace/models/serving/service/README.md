@@ -20,6 +20,7 @@ run against a live resource.
 ## 1. Resources (Infra; spend approved by Nathan, 17:47)
 
 ```bash
+B=/tmp/rose-models-bootstrap   # from step 2, built at a merged commit
 P=protocols-465723; R=us-central1; Z=us-central1-a   # if capacity is refused: us-central1-c, -b, -f
 gcloud compute addresses create models-glimmer-ip --project=$P --region=$R
 gcloud compute disks create models-glimmer-data --project=$P --zone=$Z --type=pd-ssd --size=500GB
@@ -27,77 +28,79 @@ gcloud compute instances create models-glimmer-01 --project=$P --zone=$Z --machi
   --provisioning-model=STANDARD --maintenance-policy=TERMINATE --restart-on-failure \
   --image-project=ubuntu-os-cloud --image-family=ubuntu-2404-lts-amd64 --boot-disk-size=150GB --boot-disk-type=pd-balanced \
   --disk=name=models-glimmer-data,device-name=models-data,mode=rw,auto-delete=no \
-  --address=models-glimmer-ip --tags=models-https --no-service-account --no-scopes
+  --address=models-glimmer-ip --tags=models-https --no-service-account --no-scopes \
+  --metadata=enable-guest-attributes=TRUE \
+  --metadata-from-file=startup-script=$B/startup-script.sh,rose-models-payload=$B/rose-models-payload.b64
 gcloud compute firewall-rules create models-https --project=$P --network=default --direction=INGRESS \
   --action=ALLOW --rules=tcp:443,tcp:80 --target-tags=models-https --source-ranges=0.0.0.0/0
 ```
 
 - **Port 80** serves only `/.well-known/acme-challenge/` and returns 404 for everything else. It exists for automatic
   renewal.
-- **SSH** goes through Infra's existing administrative route.
+- **No SSH is needed.** The startup script installs everything (step 2). The instance needs no service account; it
+  pulls the image from Docker Hub and packages from the Ubuntu and NVIDIA repositories over its external IP.
 - **DNS:** set the A record `models.a-list.com` to the reserved address (Infra's DNS custody).
 
-## 2. Host setup (on the VM, as root)
+## 2. Build the bootstrap (offline, at a merged commit)
 
 ```bash
-mkfs.ext4 -L models-data /dev/disk/by-id/google-models-data   # first boot only
-echo 'LABEL=models-data /mnt/models-data ext4 defaults,nofail 0 2' >> /etc/fstab && mkdir -p /mnt/models-data && mount -a
-apt-get update && apt-get install -y nvidia-driver-580-server docker.io nginx=1.24.0-2ubuntu7.19 certbot python3-cryptography
-systemctl disable --now nginx   # the distro unit would hold :80; models-edge runs the same binary
-# NVIDIA container toolkit from NVIDIA's apt repository, then:
-nvidia-ctk runtime configure --runtime=docker && systemctl restart docker && reboot
-docker pull vllm/vllm-openai@sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c
-docker image inspect --format '{{.Id}}' vllm/vllm-openai@sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c
-#   must print sha256:e90b8320f680a6a7b8daff87ad08cdf063a68d869880e662fd6d2cebfef689dc
+python3 workspace/models/serving/service/build_bootstrap.py --out /tmp/rose-models-bootstrap \
+  --attestation-roots <dir with Google's hardware-attestation root certificates, .pem>
 ```
 
-**Check the nginx binary.** Confirm that the installed `/usr/sbin/nginx` has sha256 `5bfff15e…756eed`; see
-`../https/README.md`.
+- **Output:** `startup-script.sh`, `rose-models-payload.b64` (about 53 KB; the limit is 256 KB) and
+  `bootstrap-manifest.json`.
+- **Integrity:** the script embeds the payload tar's sha256 and size, and refuses any other payload. Compare
+  `payloadTarSha256` with the value Core reports for that commit; the build is deterministic.
+- **Roots:** omit `--attestation-roots` to defer them. The VM then reports `auth: waiting attestation_roots_missing`.
 
-## 3. Install the service (repository checkout at a merged commit)
+## 3. What the VM does on every boot
+
+These stages are rerun-safe and each command has a time bound.
+
+| Stage | What it does |
+| --- | --- |
+| `disk` | formats the data disk only if it is provably blank (no signature, no wipefs entry, zero first MiB, at least 200 GB), then mounts it |
+| `packages` | the pinned Ubuntu NVIDIA 580.178.04 server packages, docker.io, nginx, certbot, cryptography and qrencode, and NVIDIA's container toolkit 1.20.1-1 (repository key fingerprint `C95B321B…F796ECB0`), then holds them |
+| `driver` | `nvidia-smi` must show 580.178.04 on 2 GPUs. Otherwise it **reboots once** for the kernel module, then fails |
+| `container` | the NVIDIA runtime for Docker |
+| `image` | pulls the pinned image digest and requires the pinned image ID |
+| `nginx` | checks the binary's sha256 and disables the distro unit |
+| `service` | installs the units and starts vLLM, health and verification. The first start downloads the model once and records the receipt |
+| `auth` | initializes the server secret once; starts the auth service when roots are present |
+| `tls` | runs certbot standalone only when instance metadata `rose-models-acme=agree-tos-no-email` is set **and** `models.a-list.com` resolves to this VM |
+| `edge` | starts Nginx, then switches renewals to the webroot |
+
+**Status:** one nonsecret JSON line, `ROSE-MODELS-BOOTSTRAP {...}`:
 
 ```bash
-python3 workspace/models/serving/service/render_service.py --out /etc/rose-models   # units, scripts, manifest with hashes
-install -m 644 /etc/rose-models/systemd/* /etc/systemd/system/ && systemctl daemon-reload
-systemctl enable --now muse-glimmer.service models-health.timer models-verify-full.timer   # first start downloads once
-cat /run/rose-models/health.json   # "starting", then "ready"
+gcloud compute instances get-serial-port-output models-glimmer-01 --project=$P --zone=$Z | grep ROSE-MODELS-BOOTSTRAP
+gcloud compute instances get-guest-attributes models-glimmer-01 --project=$P --zone=$Z --query-path=rose-models/
 ```
 
-The first verified load writes a model receipt to `/mnt/models-data/receipt.json`. Every later start verifies the
-cache against that receipt and refuses on any mismatch.
+- `result` is `ready`, `waiting` (it names the missing operator input), `rebooting` or `failed` (it names the stage
+  and category).
+- **Rerun** (for example after supplying an input) by resetting the VM or with `gcloud compute instances add-metadata`
+  followed by a reboot. Completed stages are skipped after verification.
 
-**Readiness** means a real `chat/completions` call to the loaded model returns content from `muse-glimmer`. The model
-list alone does not count.
+**Permissions this needs:**
+- **Create the instance:** create the instance with metadata, plus the IP and firewall from step 1.
+- **Read the status:** `compute.instances.getSerialPortOutput` or `getGuestAttributes`.
+- **Authorize ACME:** set `rose-models-acme`. Setting it is the persistent-certificate authorization: it creates a
+  no-email Let's Encrypt account on the VM.
 
-## 4. TLS and auth (approved by Nathan, 17:47)
+## 4. TLS and auth
 
-**Persistent certificate.** Create a new persistent ACME account (no email); this is a separate decision from the
-temporary 24 h account. Then:
-
-```bash
-install -d -m 755 /var/lib/rose-models/acme      # nginx workers read the webroot unprivileged
-install -d -m 700 /run/rose-edge                 # lets the hook's `nginx -t` run before the edge starts
-certbot certonly --standalone -d models.a-list.com --register-unsafely-without-email --agree-tos \
-  --deploy-hook /etc/rose-models/bin/tls-deploy   # edge not running yet: the hook checks and installs, no reload
-# ...start auth and the edge (below), then switch renewals to the edge's webroot:
-certbot reconfigure --cert-name models.a-list.com --webroot -w /var/lib/rose-models/acme
-```
-
+The bootstrap covers both: certbot standalone, `tls-deploy`, the secret, roots, auth and the edge, then the renewal
+webroot.
 - `certbot.timer` renews the certificate.
 - `tls-deploy` checks the new chain (`render_proxy.py check-tls`), switches atomically, runs `nginx -t`, and then
   reloads. On any failure it rolls back to the previous chain.
-
-**Auth.** Follow `../../contracts/service-auth-v1.md`:
-- install the Google hardware-attestation root certificates (public files) into `/etc/rose-models/attestation-roots/`
-  and record their hashes;
-- `systemctl enable --now models-attestation-status.timer`. It refreshes Google's status list; enrollment refuses
-  while the list is missing or stale;
-- `python3 /etc/rose-models/lib/service/auth_service.py secret-init`;
-- `systemctl enable --now models-auth models-edge`.
+- The attestation-status timer refreshes Google's revocation list; enrollment refuses while it is missing or stale.
 
 **Edge check:** with no token, `/v1/models` returns 401. With a token from the enrollment flow, it returns 200.
 
-**Add a phone (admin):** `apt-get install -y qrencode`, then run:
+**Add a phone (admin, on the VM through Infra's administrative route; `qrencode` is preinstalled):**
 
 ```bash
 python3 /etc/rose-models/lib/service/auth_service.py invite --label nathan-pixel --uri-only | qrencode -t ansiutf8
