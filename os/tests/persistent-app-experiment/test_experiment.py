@@ -71,7 +71,9 @@ class BoundaryTest(unittest.TestCase):
         on = WORKFLOW[WORKFLOW.index('\non:'):WORKFLOW.index('\npermissions:')]
         # Manual only; EXP006 adds one boolean input, default false (the synthetic-only run).
         self.assertEqual(on.strip(), "on:\n  workflow_dispatch:\n    inputs:\n      systemui:\n        description: "
-            "'Also run the opt-in SystemUI stages on the emulator image (EXP006)'\n        type: boolean\n        default: false")
+            "'Also run the opt-in SystemUI stages on the emulator image (EXP006)'\n        type: boolean\n        default: false"
+            "\n      kvm_acl:\n        description: 'Grant this job user rw on the KVM device for the run and restore it "
+            "(EXP006-KVM-001; approved runs only)'\n        type: boolean\n        default: false")
         for needle in ('permissions:\n  contents: read', 'cancel-in-progress: false', 'runs-on: ubuntu-24.04',
                 'timeout-minutes: 30', 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
                 'persist-credentials: false', 'retention-days: 7', 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'):
