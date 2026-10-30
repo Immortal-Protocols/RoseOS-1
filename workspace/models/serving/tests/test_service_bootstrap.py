@@ -38,6 +38,7 @@ class FakeHost(B.Host):
         self.probes, self.http_override = [], {}
         self.now, self.sleeps, self.on_sleep, self.events, self.md_reads = 0.0, 0, None, [], set()
         self.certbot_fail = self.acme_config_bad = False
+        self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
         self.disk = {'exists': True, 'sig': None, 'size': 500 * 10**9, 'wipefs': '', 'head': bytes(1 << 20)}
@@ -167,7 +168,7 @@ class FakeHost(B.Host):
                 if '--account' not in argv:
                     self.add_account('acct-new')
                 self.add_lineage(issued_by='webroot')
-                self.deploy_current()
+                self.tls_deploy(argv[argv.index('--deploy-hook') + 1])  # certbot exits 0 even if its hook fails
             return 0, ''
         if cmd == '/usr/sbin/nginx' and '/run/rose-acme' in argv:
             if argv[-1] == '-t':
@@ -176,8 +177,7 @@ class FakeHost(B.Host):
                 self.acme_exit(4242)
                 return 0, ''
         if cmd.endswith('/bin/tls-deploy'):
-            self.deploy_current()
-            return 0, ''
+            return self.tls_deploy(cmd)
         raise AssertionError(f'unexpected command {argv}')
 
     def start_daemon(self, argv, timeout=30):
@@ -288,6 +288,15 @@ class FakeHost(B.Host):
         if complete:
             (live / 'fullchain.pem').write_text('chain')
             (live / 'privkey.pem').write_text('KEY-NEVER-PRINTED')
+
+    def tls_deploy(self, cmd):
+        """The rendered hook: `deploy_results` queues (exit, stdout) failures, e.g. the argparse exit 2."""
+        assert cmd == '/etc/rose-models/bin/tls-deploy', cmd
+        self.events.append(('tls-deploy',))
+        if self.deploy_results:
+            return self.deploy_results.pop(0)
+        self.deploy_current()
+        return 0, '{"result": "deployed"}\n'
 
     def deploy_current(self):
         cur = self.path('/etc/rose-models/tls/current')
@@ -737,6 +746,47 @@ class Tls(Fixture):
         self.assertEqual((state, detail, self.certonly()), ('ok', 'installed existing certificate', []))
         self.assertFalse(self.host.probes)  # no ACME HTTP needed
 
+    def test_hook_failure_after_issuance_installs_the_retained_lineage_without_reissuing(self):
+        self.host.deploy_results = [(2, '')]  # the 275d6e2 hook: argparse exit 2, nothing on stdout
+        (state, detail), _, _ = self.tls()
+        self.assertEqual((state, detail), ('ok', 'issued (account registered), installed after the deploy hook failed'))
+        self.assertEqual(len(self.certonly()), 1)
+        self.assertEqual([e for e in self.host.events if e[0] in ('certonly', 'tls-deploy')],
+                         [('certonly', self.certonly()[0]), ('tls-deploy',), ('tls-deploy',)])
+        self.assertEqual(B.acme_identity(self.host), (['acct-new'], ['models.a-list.com']))
+
+    def test_retained_lineage_from_the_failed_live_hook_installs_on_the_next_reset_without_acme(self):
+        self.host.add_account('acct-live')  # the live state after certificate_not_installed: same account, one lineage
+        self.host.add_lineage(issued_by='webroot')
+        del self.host.md[B.ACK_KEY]  # no new acknowledgement and no :80 needed
+        (state, detail), _, code = self.tls()
+        self.assertEqual((state, detail, code), ('ok', 'installed existing certificate', 0))
+        self.assertEqual((self.certonly(), self.host.probes), ([], []))
+        self.assertEqual(self.host.count(*B.ACME_NGINX), 0)
+        self.assertNotIn(B.ACK_KEY, self.host.md_reads)
+        self.assertEqual(B.acme_identity(self.host), (['acct-live'], ['models.a-list.com']))
+        self.assertEqual(self.states(self.boot()[0])['edge'], ('ok', 'active'))
+
+    def test_install_failures_report_the_deploy_result_and_never_reissue(self):
+        refused = '{"reason": "certificate does not match key", "result": "refused", "stage": "check"}\n'
+        for label, results, facts in (('argparse', [(2, '')] * 2, {}),
+                                      ('refused', [(1, refused)] * 2,
+                                       {'reason': 'certificate does not match key', 'result': 'refused', 'stage': 'check'})):
+            with self.subTest(label):
+                shutil.rmtree(self.host.path('/etc/letsencrypt'), ignore_errors=True)
+                shutil.rmtree(self.host.path(B.STATE), ignore_errors=True)
+                self.host.deploy_results = list(results)
+                self.host.ack()  # this boot's acknowledgement
+                (state, detail), observed, code = self.tls()
+                self.assertEqual((state, detail, code), ('failed', 'certificate_install_failed', 1))
+                self.assertEqual((observed[0]['deployExit'], observed[0]['deploy']), (results[0][0], facts))
+                self.assertEqual(observed[0]['lineages'], ['models.a-list.com'])
+                certonly = len(self.certonly())
+                self.host.reboot()  # next reset: the kept lineage is installed, nothing is reissued
+                (state, detail), _, _ = self.tls()
+                self.assertEqual((state, detail, len(self.certonly())), ('ok', 'installed existing certificate', certonly))
+                shutil.rmtree(self.host.path('/etc/rose-models/tls'), ignore_errors=True)
+
     def test_ambiguous_or_incomplete_identity_is_refused_without_issuance(self):
         for label, setup, category in (
                 ('two accounts', lambda h: (h.add_account('a1'), h.add_account('a2')), 'acme_account_ambiguous'),
@@ -869,7 +919,7 @@ class AcmeHandshake(Fixture):
         (state, detail), _, code = self.tls()
         self.assertEqual((state, detail, code), ('ok', 'issued (account registered)', 0))
         kinds = [e[0] for e in self.host.events]
-        self.assertEqual(kinds, ['publish', 'certonly'])  # proof strictly before the single issuance
+        self.assertEqual(kinds, ['publish', 'certonly', 'tls-deploy'])  # proof strictly before the single issuance
         proof = json.loads(self.host.events[0][1].split(' ', 1)[1])
         conf = self.host.path('/etc/rose-models/edge/acme-only.conf').read_bytes()
         self.assertEqual((proof['payloadSha256'], proof['bootId']), ('sha', 'boot-1'))

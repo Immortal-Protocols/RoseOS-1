@@ -83,12 +83,16 @@ def main(argv=None):
     p.add_argument('--tls-dir', type=Path, default=Path('/etc/rose-models/tls'))
     p.add_argument('--hostname', default='models.a-list.com')
     p.add_argument('--pidfile', default='/run/rose-edge/nginx.pid')
-    p.add_argument('--nginx', nargs='+', default=['nginx', '-p', '/run/rose-edge', '-c', '/etc/rose-models/edge/nginx.conf'])
+    # Separate options: values starting with '-' cannot follow a multi-value option (the rendered hook exited 2).
+    p.add_argument('--nginx', default='/usr/sbin/nginx', help='nginx binary')
+    p.add_argument('--nginx-prefix', default='/run/rose-edge')
+    p.add_argument('--nginx-conf', default='/etc/rose-models/edge/nginx.conf')
     a = p.parse_args(argv)
     if not a.lineage:
         print(json.dumps({'result': 'refused', 'stage': 'input', 'reason': 'no lineage'}))
         return 2
-    out = deploy(a.lineage, a.tls_dir, a.hostname, a.nginx, edge_running=running(a.pidfile))
+    nginx = [a.nginx, '-p', a.nginx_prefix, '-c', a.nginx_conf]
+    out = deploy(a.lineage, a.tls_dir, a.hostname, nginx, edge_running=running(a.pidfile))
     print(json.dumps(out, sort_keys=True))
     return 0 if out['result'] == 'deployed' else 1
 

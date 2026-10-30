@@ -73,7 +73,8 @@ esac
 '''
     nginx = f'{NGINX} -p {RUN_EDGE} -c {root}/edge/nginx.conf'
     out['bin/tls-deploy'] = f'''#!/usr/bin/env bash
-exec {PY} {root}/lib/service/tls_deploy.py --tls-dir {root}/tls --pidfile {RUN_EDGE}/nginx.pid --nginx {nginx}
+exec {PY} {root}/lib/service/tls_deploy.py --tls-dir {root}/tls --pidfile {RUN_EDGE}/nginx.pid \\
+  --nginx {NGINX} --nginx-prefix {RUN_EDGE} --nginx-conf {root}/edge/nginx.conf
 '''
     for rel, src in LIB_FILES.items():
         out[rel] = src.read_text()

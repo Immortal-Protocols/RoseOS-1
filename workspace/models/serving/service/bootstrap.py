@@ -636,6 +636,25 @@ def stop_acme_http(host):
     raise Failed('acme_http_stop_failed')
 
 
+DEPLOY_FACTS = ('result', 'stage', 'reason', 'current', 'notAfter')
+
+
+def install_lineage(host, identity):
+    """Install the retained lineage's exact certificate and key with tls-deploy (check, switch, nginx -t). Never
+    contacts the CA. A failure reports tls-deploy's nonsecret JSON result and exit code."""
+    live = host.path(f'{LE}/live/{HOSTNAME}')
+    if not (live / 'fullchain.pem').exists() or not (live / 'privkey.pem').exists():
+        raise Failed('certificate_lineage_incomplete', [identity])
+    rc, out = host.run([f'{ROOT}/bin/tls-deploy'], 120, {'RENEWED_LINEAGE': f'{LE}/live/{HOSTNAME}'})
+    if rc != 0 or not host.path(f'{ROOT}/tls/current/fullchain.pem').exists():
+        try:
+            result = json.loads(out.strip().splitlines()[-1])
+            facts = {k: str(result[k])[:200] for k in DEPLOY_FACTS if k in result}
+        except (ValueError, IndexError, AttributeError):
+            facts = {}
+        raise Failed('certificate_install_failed', [{**identity, 'deployExit': rc, 'deploy': facts}])
+
+
 def stage_tls(host, ctx):
     current = host.path(ROOT) / 'tls/current/fullchain.pem'
     if current.exists():
@@ -649,11 +668,7 @@ def stage_tls(host, ctx):
     host.path('/run/rose-edge').mkdir(parents=True, exist_ok=True)
     deploy = f'{ROOT}/bin/tls-deploy'
     if lineages:  # issued earlier but never installed: install that exact certificate and key, never reissue
-        live = host.path(f'{LE}/live/{HOSTNAME}')
-        if not (live / 'fullchain.pem').exists() or not (live / 'privkey.pem').exists():
-            raise Failed('certificate_lineage_incomplete', [identity])
-        if host.run([deploy], 120, {'RENEWED_LINEAGE': f'{LE}/live/{HOSTNAME}'})[0] != 0 or not current.exists():
-            raise Failed('certificate_install_failed', [identity])
+        install_lineage(host, identity)
         return 'installed existing certificate'
     if (host.metadata('attributes/rose-models-acme') or '').strip() != ACME_FLAG:
         raise Waiting('acme_not_authorized')
@@ -695,9 +710,15 @@ def stage_tls(host, ctx):
                          [{'accounts': len(after), 'lineages': lineages_after, 'acmeHttp': codes}])
     finally:
         stop_acme_http(host)
-    if not current.exists():
-        raise Failed('certificate_not_installed')
-    return 'issued (account ' + ('reused' if accounts else 'registered') + ')'
+    how = 'issued (account ' + ('reused' if accounts else 'registered') + ')'
+    if current.exists():
+        return how
+    # certbot exits 0 even when its deploy hook fails: install the lineage it just kept, never reissue.
+    after, lineages_after = acme_identity(host)
+    if lineages_after != [HOSTNAME]:
+        raise Failed('certificate_not_installed', [{'accounts': len(after), 'lineages': lineages_after}])
+    install_lineage(host, {'accounts': len(after), 'lineages': lineages_after})
+    return how + ', installed after the deploy hook failed'
 
 
 def stage_edge(host, ctx):

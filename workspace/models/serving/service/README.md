@@ -96,7 +96,9 @@ The bootstrap covers both.
 **TLS stage, in order:**
 1. **Installed certificate:** done.
 2. **Issued-but-uninstalled lineage:** a lineage for `models.a-list.com` that was issued earlier is installed with
-   `tls-deploy`. It is never reissued, so its account and key identity are kept.
+   `tls-deploy`. It is never reissued, so its account and key identity are kept. This needs no ACME proof, ACK or
+   :80. The same install runs right after an issuance whose deploy hook failed (certbot still exits 0); a failed
+   install reports `tls-deploy`'s exit code and result.
 3. **Prepare:** start the ACME-only Nginx (`edge/acme-only.conf`, :80) and prove all of the following:
    - `nginx -t` passes;
    - the pid file names a running process of the pinned binary, loaded with that config, that holds the :80
