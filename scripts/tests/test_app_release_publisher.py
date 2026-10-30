@@ -164,6 +164,9 @@ class PublisherTest(unittest.TestCase):
         self.certificate = b'synthetic DER certificate'
         self.signer = hashlib.sha256(self.certificate).hexdigest()
         config['identities']['appSignerSha256'] = self.signer
+        # These publication/Latest/version tests describe the schema 1 route (still how every published release reads);
+        # the checked-in schema 2 selection is tested explicitly below (set_schema(2), APP-IDSIG-1030-M005).
+        config['appRelease']['compatibility']['schemaVersion'] = 1
         self.config_path.write_text(json.dumps(config))
         self.make_artifact()
 
@@ -215,7 +218,7 @@ class PublisherTest(unittest.TestCase):
             'versionName': '309-app-beta', 'size': len(apk), 'sha256': hashlib.sha256(apk).hexdigest(), 'signerSha256': self.signer,
             'candidate': CANDIDATE, 'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'], 'repository': 'Immortal-Protocols/pixel-ota',
             'tag': 'rose-agent-309', 'asset': 'dev.pixel.voice-309.apk', 'prerelease': True,
-            'compatibility': {'deviceCodenames': ['frankel'], 'abis': ['universal'], 'minSdk': 29, 'minOsBuild': '2026102804',
+            'compatibility': {'deviceCodenames': ['frankel'], 'abis': ['universal'], 'minSdk': 29, 'minOsBuild': '2026103012',
                 'minControllerVersion': 28},
             'apkUrl': 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-309/dev.pixel.voice-309.apk'})
         self.assertNotIn('checks', public, 'only the allowlisted public fields')
@@ -389,7 +392,7 @@ class PublisherTest(unittest.TestCase):
         latest_reads = [e for e in self.server.log if e[:2] == ('GET', REPO + '/releases/latest')]
         self.assertEqual(len(latest_reads), 2, 'Latest is read before and after publishing')
         # The support floor stays the 2804 Beta: the 2805 and 2806 promotions move Latest, not minOsBuild.
-        self.assertEqual(json.loads(result.stdout)['compatibility']['minOsBuild'], '2026102804')
+        self.assertEqual(json.loads(result.stdout)['compatibility']['minOsBuild'], '2026103012')
 
     def test_api_errors_never_print_bodies_or_the_token(self):
         self.server.fail = True
@@ -414,6 +417,14 @@ class PublisherReuseTest(PublisherTest):
         self.apk = apk_bytes(self.certificate, b'rose agent 308 bundled in 2806')
         self.binding = dict(REUSE, apkSha256=hashlib.sha256(self.apk).hexdigest())
         self.make_reuse()
+
+    def test_the_checked_in_schema2_refuses_reuse_without_a_retained_sidecar(self):
+        self.assertEqual(FRANKEL['appRelease']['compatibility']['schemaVersion'], 2)
+        self.set_schema(2)
+        result = self.reuse_publisher(public='schema2')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("schemaVersion 2 needs this APK's retained v4 signature", result.stderr)
+        self.assertEqual(self.server.log, [], 'nothing reached the API')
 
     def source(self, **change):
         return {'route': 'os-release-reuse', 'osBuild': '2026102806', 'buildTimestamp': 1793220605, 'sourceRun': 40778491188,
@@ -550,6 +561,7 @@ for _name in [n for n in vars(PublisherTest) if n.startswith('test_')]:
 
 APP_SOURCES = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice'
 PROBE = SCRIPTS/'tests/java/dev/pixel/voice/DirectUpdateReceiptProbe.java'
+CHECK_PROBE = SCRIPTS/'tests/java/dev/pixel/voice/DirectUpdateCheckProbe.java'
 RECEIPT_304 = SCRIPTS/'tests/fixtures/app-publication/dev.pixel.voice-304.receipt.json'
 
 class DirectUpdateContractTest(unittest.TestCase):
@@ -558,7 +570,7 @@ class DirectUpdateContractTest(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
         cls.classes = Path(cls.temp.name)/'classes'
-        sources = [APP_SOURCES/n for n in ('PublicApkDownload.java', 'MiniJson.java', 'DirectUpdate.java')] + [PROBE]
+        sources = [APP_SOURCES/n for n in ('PublicApkDownload.java', 'MiniJson.java', 'DirectUpdate.java')] + [PROBE, CHECK_PROBE]
         subprocess.run([shutil.which('javac') or 'javac', '-source', '8', '-target', '8', '-Xlint:-options', '-d', str(cls.classes),
             *map(str, sources)], check=True, capture_output=True)
 
@@ -573,8 +585,9 @@ class DirectUpdateContractTest(unittest.TestCase):
         self.config = json.loads(json.dumps(FRANKEL))
         self.count = 0
 
-    def produce(self, libs=(), facts=None, policy=None):
-        """public_files() for a 309 artifact verified exactly as main() verifies it; returns (document, receipt path)."""
+    def produce(self, libs=(), facts=None, policy=None, idsig=b'synthetic v4 signature'):
+        """public_files() for a 309 artifact verified exactly as main() verifies it, with the builder's v4 sidecar unless
+        idsig is None; returns (document, receipt path). The public directory then holds exactly the release's assets."""
         self.count += 1
         directory = self.root/f'artifact{self.count}'
         directory.mkdir()
@@ -587,14 +600,19 @@ class DirectUpdateContractTest(unittest.TestCase):
             'versionCode': 309, 'versionName': '309-app-beta', 'apk': 'dev.pixel.voice-309.apk', 'size': len(data),
             'sha256': hashlib.sha256(data).hexdigest(), 'signerSha256': self.config['identities']['appSignerSha256'],
             'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'], 'apkFacts': facts or {'minSdk': 29, 'nativeAbis': []}}
+        names = ['app-release-receipt.json', 'dev.pixel.voice-309.apk']
+        if idsig is not None:
+            (directory/'dev.pixel.voice-309.apk.idsig').write_bytes(idsig)
+            receipt['v4Signature'] = {'asset': 'dev.pixel.voice-309.apk.idsig', 'size': len(idsig),
+                'sha256': hashlib.sha256(idsig).hexdigest()}
+            names.append('dev.pixel.voice-309.apk.idsig')
         (directory/'app-release-receipt.json').write_text(json.dumps(receipt))
-        (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n'
-            for n in ('app-release-receipt.json', 'dev.pixel.voice-309.apk')))
+        (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n' for n in names))
         verified, apk = arp.verify_artifact(directory, self.config, CANDIDATE, [['dev.pixel.voice', 309]])
         document, _ = arp.public_files(verified, apk, self.config, self.root/f'public{self.count}')
         return document, self.root/f'public{self.count}/dev.pixel.voice-309.receipt.json'
 
-    def probe(self, receipt, version=309, device='frankel', abis='arm64-v8a', sdk=37, os_build='2026102805', controller=28,
+    def probe(self, receipt, version=309, device='frankel', abis='arm64-v8a', sdk=37, os_build='2026103012', controller=28,
               installed=305, signer=None):
         signer = signer or self.config['identities']['appSignerSha256']
         result = subprocess.run(['java', '-cp', str(self.classes), 'dev.pixel.voice.DirectUpdateReceiptProbe', str(receipt), str(version),
@@ -603,9 +621,10 @@ class DirectUpdateContractTest(unittest.TestCase):
 
     def test_the_produced_receipt_is_eligible_exactly_where_the_policy_says(self):
         document, receipt = self.produce()
-        self.assertEqual(self.probe(receipt), f'ELIGIBLE 309 {document["sha256"]} {document["size"]} universal 29 2026102804 28')
-        self.assertEqual(self.probe(receipt, os_build='2026102804', abis='x86_64'), self.probe(receipt))  # floor and universal
-        for kwargs, reason in ((dict(device='husky'), 'isn’t for this phone model'), (dict(os_build='2026102803'), 'needs Rose OS 2026102804'),
+        self.assertEqual(self.probe(receipt), f'ELIGIBLE 309 {document["sha256"]} {document["size"]} universal 29 2026103012 28')
+        self.assertEqual(self.probe(receipt, os_build='2026103012', abis='x86_64'), self.probe(receipt))  # floor and universal
+        for kwargs, reason in ((dict(device='husky'), 'isn’t for this phone model'), (dict(os_build='2026103011'), 'needs Rose OS 2026103012'),
+                (dict(os_build='2026102804'), 'needs Rose OS 2026103012'),  # the old 2804 floor no longer offers this install path
                 (dict(os_build='-'), 'build couldn’t be read'), (dict(controller=27), 'newer background controller'),
                 (dict(controller=-1), 'newer background controller'), (dict(sdk=28), 'newer Android version'),
                 (dict(signer='0' * 64), 'isn’t signed like the installed')):
@@ -625,8 +644,10 @@ class DirectUpdateContractTest(unittest.TestCase):
 
     def test_malformed_policy_is_refused_before_anything_is_written(self):
         good = FRANKEL['appRelease']['compatibility']
+        with self.assertRaisesRegex(arp.CheckFailed, "needs this APK's retained v4 signature"):
+            self.produce(idsig=None)
         for change, message in (({'schemaVersion': 3}, 'not schemaVersion 1 or 2'), ({'schemaVersion': '1'}, 'not schemaVersion 1 or 2'),
-                ({'schemaVersion': 2}, 'needs this APK\'s retained v4 signature'), ({'deviceCodenames': []}, 'deviceCodenames'),
+                ({'deviceCodenames': []}, 'deviceCodenames'),
                 ({'deviceCodenames': ['Frankel']}, 'deviceCodenames'), ({'deviceCodenames': ['frankel', 'frankel']}, 'deviceCodenames'),
                 ({'minOsBuild': '2804'}, 'ten-digit'), ({'minOsBuild': 2026102804}, 'ten-digit'),
                 ({'minControllerVersion': 0}, 'positive integer or null'), ({'minControllerVersion': '28'}, 'positive integer or null')):
@@ -642,8 +663,12 @@ class DirectUpdateContractTest(unittest.TestCase):
 
     def test_the_consumer_rejects_any_drift_from_the_produced_schema(self):
         document, receipt = self.produce()
-        for edit in (lambda d: d.pop('compatibility'), lambda d: d.pop('schemaVersion'), lambda d: d.update(schemaVersion=2),
-                lambda d: d.update(v4Signature={}), lambda d: d['compatibility'].pop('minControllerVersion'),
+        self.assertEqual(document['schemaVersion'], 2)
+        for edit in (lambda d: d.pop('compatibility'), lambda d: d.pop('schemaVersion'), lambda d: d.update(schemaVersion=3),
+                lambda d: d.update(v4Signature={}), lambda d: d.pop('v4Signature'),
+                lambda d: d['v4Signature'].update(asset='dev.pixel.voice-308.apk.idsig'), lambda d: d['v4Signature'].update(size=0),
+                lambda d: d['v4Signature'].update(size=1024**2 + 1), lambda d: d['v4Signature'].update(url='https://example.com/x'),
+                lambda d: d['compatibility'].pop('minControllerVersion'),
                 lambda d: d['compatibility'].update(abis=['universal', 'x86']), lambda d: d.update(apkUrl=d['apkUrl'] + '?x')):
             changed = json.loads(json.dumps(document))
             edit(changed)
@@ -654,6 +679,55 @@ class DirectUpdateContractTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256(RECEIPT_304.read_bytes()).hexdigest(), FRANKEL['appRelease']['built'][1]['publicReceiptSha256'])
         self.assertEqual(json.loads(RECEIPT_304.read_text())['sha256'], FRANKEL['appRelease']['built'][1]['sha256'])
         self.assertTrue(self.probe(RECEIPT_304, version=304, installed=303).startswith('UNAVAILABLE '))
+
+class DirectUpdateCheckTest(DirectUpdateContractTest):
+    """APP-IDSIG-1030-M005: the app's own DirectUpdate.check() and its APK/idsig fetchers against the publisher's generated
+    release assets (a local GitHub stand-in serving exactly those files). Synthetic bytes: wiring, not phone acceptance."""
+
+    def check(self, assets, os_build='2026103012', installed=305, signer=None):
+        signer = signer or self.config['identities']['appSignerSha256']
+        result = subprocess.run(['java', '-cp', str(self.classes), 'dev.pixel.voice.DirectUpdateCheckProbe', str(assets), '309',
+            'frankel', 'arm64-v8a', '37', os_build, '28', str(installed), signer], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    def test_generated_schema2_release_is_offered_and_both_downloads_verify(self):
+        document, receipt = self.produce()
+        assets = receipt.parent
+        self.assertEqual(sorted(p.name for p in assets.iterdir()), ['SHA256SUMS', 'dev.pixel.voice-309.apk',
+            'dev.pixel.voice-309.apk.idsig', 'dev.pixel.voice-309.receipt.json'])
+        self.assertEqual(self.check(assets), f'AVAILABLE Version 309 is available (installed 305). | FETCHED {document["size"]} 22')
+
+    def test_missing_or_tampered_sidecar_is_never_installed(self):
+        _, receipt = self.produce()
+        (receipt.parent/'dev.pixel.voice-309.apk.idsig').unlink()
+        self.assertTrue(self.check(receipt.parent).startswith('UNAVAILABLE Version 309 was published, but its signature file (.idsig) isn’t in the release'))
+        _, receipt = self.produce()
+        (receipt.parent/'dev.pixel.voice-309.apk.idsig').write_bytes(b'synthetic v4 signaturX')  # same size, other bytes
+        self.assertIn('| FETCH-FAILED The download didn’t match the published update.', self.check(receipt.parent))
+        _, receipt = self.produce()
+        (receipt.parent/'dev.pixel.voice-309.apk.idsig').write_bytes(b'another APK\'s v4 signature')  # wrong APK's sidecar
+        self.assertIn('| FETCH-FAILED ', self.check(receipt.parent))
+
+    def test_schema1_history_parses_but_is_never_installed(self):
+        policy = dict(self.config['appRelease']['compatibility'], schemaVersion=1)
+        document, receipt = self.produce(policy=policy, idsig=None)
+        self.assertEqual((document['schemaVersion'], 'v4Signature' in document), (1, False))
+        self.assertTrue(self.probe(receipt).startswith('ELIGIBLE 309 '), 'schema 1 still parses')
+        self.assertTrue(self.check(receipt.parent).startswith(
+            'UNAVAILABLE Version 309 was published, but it can’t be installed from Rose Agent: its release has no signature file'))
+
+    def test_legacy_os_unreadable_build_and_wrong_signer_are_refused(self):
+        _, receipt = self.produce()
+        for kwargs, reason in ((dict(os_build='2026103011'), 'needs Rose OS 2026103012 or newer'),
+                               (dict(os_build='2026102804'), 'needs Rose OS 2026103012 or newer'),
+                               (dict(os_build='-'), 'couldn’t be read'), (dict(signer='0' * 64), 'isn’t signed like the installed'),
+                               (dict(installed=309), 'up to date')):
+            with self.subTest(kwargs=kwargs):
+                self.assertIn(reason, self.check(receipt.parent, **kwargs))
+
+for _name in [n for n in vars(DirectUpdateContractTest) if n.startswith('test_')]:
+    setattr(DirectUpdateCheckTest, _name, None)
+
 
 class WorkflowAppPublisherTest(unittest.TestCase):
     def setUp(self):
