@@ -78,7 +78,8 @@
           "build/make",
           "build/release",
           "packages/apps/Updater",
-          "packages/modules/Permission"
+          "packages/modules/Permission",
+          "packages/apps/Launcher3"
         ],
         "integrationOwnedRoots": [
           "packages/apps/PixelBackgroundControl",

@@ -932,5 +932,15 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('fixture config cannot be used for production', out)
 
+
+class ReconcileProjects(unittest.TestCase):
+    def test_every_rose_inclusion_project_is_reconciled(self):
+        """Run 41129566701 (frankel 2026103010) failed at build: apply-os-changes patched packages/apps/Launcher3, which
+        had no shadow clone because host.integrate.reconcile.projects did not list it."""
+        root = SCRIPTS.parent
+        contract = json.loads((root/'os/devices/pixel10.json').read_text())['roseInclusion']['projects']
+        reconcile = json.loads((root/'os/release-pipeline/frankel.json').read_text())['host']['integrate']['reconcile']
+        self.assertEqual(set(contract) - set(reconcile['projects']) - set(reconcile['integrationOwnedRoots']), set())
+
 if __name__ == '__main__':
     unittest.main()
