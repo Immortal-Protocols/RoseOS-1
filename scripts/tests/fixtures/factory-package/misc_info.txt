@@ -1,0 +1,4 @@
+ab_update=true
+use_dynamic_partitions=true
+virtual_ab=true
+dynamic_partition_list=system system_ext product vendor

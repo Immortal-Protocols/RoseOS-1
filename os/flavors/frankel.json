@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.os-flavor",
+  "flavor": "frankel",
+  "basis": "FLAVOR001: install-artifact contract for one device flavor. Values marked 'from' are cross-checked by scripts/factory-package.py against the named source on every load; nothing here is evidence that an artifact was built, signed, installed or accepted on a phone.",
+  "device": {
+    "codename": "frankel",
+    "model": "Pixel 10",
+    "product": "frankel",
+    "board": "frankel",
+    "variant": "user",
+    "lunch": "frankel-cur-user",
+    "from": "os/devices/pixel10.json devices.frankel and adevtool vendor-skels firmware/android-info.txt (require board=)"
+  },
+  "provenance": {
+    "deviceContract": "os/devices/pixel10.json",
+    "manifest": "os/pinned-manifest.xml",
+    "release": "2026100600",
+    "vendorBuildId": "CP3A.261005.005",
+    "adevtool": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "androidInfoFixture": "os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices/frankel/firmware/android-info.txt",
+    "releaseScript": {
+      "repository": "GrapheneOS/script",
+      "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+      "generate-release.sh": "01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311",
+      "fixture": "scripts/tests/fixtures/permission-apex/script/generate-release.sh"
+    }
+  },
+  "firmware": {
+    "bootloader": "deepspace-17.4-16119390",
+    "baseband": "g5400i-260604-260807-B-16035863",
+    "partitionExists": [
+      "vendor_kernel_boot"
+    ],
+    "from": "os/devices/pixel10.json shared.firmware, equal to the pinned adevtool android-info.txt"
+  },
+  "artifacts": {
+    "ota": {
+      "file": "{device}-ota_update-{build}.zip",
+      "producer": "generate-release.sh ota_from_target_files, run by scripts/host-sign.py, which truncates the script before img_from_target_files",
+      "applicability": "In-place update only: a phone already running a build of this device whose recovery/update_engine trusts the same OTA certificate (metadata pre-device must equal the device). Never a first install, and never decomposed into partition images for fastboot.",
+      "dataWipe": false,
+      "requiresUnlockedBootloader": false
+    },
+    "factory": {
+      "file": "{device}-install-{build}.zip",
+      "topDirectory": "{device}-install-{build}",
+      "signature": "{device}-install-{build}.zip.sig (ssh-keygen -Y sign -n \"factory images\", only when the key directory holds id_ed25519)",
+      "producer": "generate-release.sh after the OTA: img_from_target_files -> device/common/generate-factory-images-common.sh -> fastboot -S 0x10000000 optimize-factory-image (MAX_DOWNLOAD_SIZE for rango|mustang|blazer|frankel)",
+      "currentlyProduced": false,
+      "currentlyProducedBasis": "No RoseOS job runs the factory stage: host-sign.py derive_release_script cuts at the one '\\nimg_from_target_files' anchor (OTA only). The sole writer of that cut is the signing owner.",
+      "requiredMembers": [
+        "android-info.txt",
+        "flash-all.sh",
+        "script.txt",
+        "avb_pkmd.bin",
+        "bootloader-{device}-{bootloader}.img",
+        "radio-{device}-{baseband}.img"
+      ],
+      "membersBasis": "Layout of a GrapheneOS-script install archive as checked by the historical os/reference-scripts/verify-factory-mustang.py (same release script family, Pixel 10 Pro XL); historical structure evidence, not a Frankel/Rango observation.",
+      "dataWipe": true,
+      "requiresUnlockedBootloader": true,
+      "dataWipeMarker": "erase userdata"
+    }
+  },
+  "inventory": {
+    "source": "the signed target-files the factory archive was generated from (never this file, never a guessed list)",
+    "abPartitions": "META/ab_partitions.txt",
+    "miscInfo": "META/misc_info.txt (ab_update, dynamic_partition_list, virtual_ab)",
+    "androidInfo": "OTA/android-info.txt",
+    "images": "IMAGES/{partition}.img: every A/B partition outside dynamic_partition_list that has one must appear byte-equal as {partition}.img",
+    "firmware": "RADIO/bootloader.img and RADIO/radio.img must equal the factory bootloader-/radio- images; A/B partitions without an IMAGES/ entry are counted as firmware-carried only then",
+    "dynamic": "dynamic_partition_list partitions must be covered by contiguous sparse super_1.img..super_N.img; their contents need otatools lpunpack and are not decomposed offline",
+    "layoutStatus": "unobserved",
+    "layoutBasis": "The RADIO/ and IMAGES/ layout is AOSP releasetools convention; no Frankel or Rango target-files listing is in this repository. A missing entry refuses, it never passes."
+  },
+  "installSemantics": {
+    "abUpdate": true,
+    "abUpdateBasis": "required to read ab_update=true from META/misc_info.txt; the archive flashes slot a and both bootloader slots per the historical install layout",
+    "dynamicPartitions": "read from misc_info dynamic_partition_list per artifact",
+    "virtualAb": "recorded from misc_info virtual_ab per artifact; OTA_ARGS=--disable_ublk for these devices in generate-release.sh",
+    "rollback": "Not claimed. A factory install wipes data; downgrade and anti-rollback behaviour on these devices is unmeasured.",
+    "relock": "Bootloader relock eligibility needs avb_pkmd.bin equal to the flavor's AVB public key AND physical acceptance; the classifier checks only the first and never claims relock is safe."
+  },
+  "identity": {
+    "avbPublicKeySha256From": "os/release-pipeline/frankel.json identities.avbPublicKeySha256",
+    "otaCertificateSha256From": "os/release-pipeline/frankel.json identities.otaCertificateSha256",
+    "signingKeys": "PIXEL_OS_SIGNING_KEYS_FRANKEL_V5 (signing owner; never read here)"
+  },
+  "retained": [
+    {
+      "build": "2026102901",
+      "release": "frankel-2026102901",
+      "artifactRoles": [
+        "ota-update"
+      ],
+      "factoryReady": false,
+      "basis": "Published Beta from os-release (host-sign.py OTA-only route); no install archive was produced"
+    }
+  ],
+  "missingForFactory": [
+    {
+      "input": "factory stage of generate-release.sh (img_from_target_files onward)",
+      "owner": "signing (host-sign.py derive_release_script)",
+      "next": "add an opt-in mode that keeps the script tail through optimize-factory-image and maps {device}-install-{build}.zip (+ .sig) into the release dir"
+    },
+    {
+      "input": "observed target-files META/ and RADIO/ listing for frankel",
+      "owner": "release (builder receipts)",
+      "next": "record `unzip -l` of META/ab_partitions.txt, META/misc_info.txt, RADIO/ and IMAGES/ names of one signed frankel target-files"
+    },
+    {
+      "input": "physical first-install acceptance",
+      "owner": "QA with an explicit device handback",
+      "next": "only after a classifier-ready archive exists"
+    }
+  ]
+}
