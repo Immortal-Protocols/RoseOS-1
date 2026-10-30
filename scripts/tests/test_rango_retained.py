@@ -654,11 +654,16 @@ class RetainedNotes(unittest.TestCase):
         with self.assertRaisesRegex(host_sign.AdapterFailed, f'candidate {head[:12]} has no os/release-notes/frankel-2026109999.md'):
             host_sign.release_notes(template, head, 'frankel', '2026109999')
 
+class CheckedInNotes(unittest.TestCase):
+    """The real pinned notes commit in this repository (release-verification checks out full history for it)."""
+
     def test_checked_in_pin_is_the_reviewed_rango_notes(self):
         pin = rr.notes_binding(CONFIG)
         self.assertEqual((pin['path'], pin['build'], pin['device']), ('os/release-notes/rango-2026103001.md', '2026103001', 'rango'))
         self.assertNotEqual(pin['commit'], CONFIG['target']['product'])
         self.assertEqual(hashlib.sha256((SCRIPTS.parent/pin['path']).read_bytes()).hexdigest(), pin['sha256'])
+        # The real pinned commit, as the builder reads it (CI checks out full history for this).
+        self.assertEqual(rr.notes_bytes(pin), (SCRIPTS.parent/pin['path']).read_bytes())
         text = NOTES_FILE.read_text()
         for phrase in ('rango 2026103001', 'Manual installation only', 'on-device update', 'has not been accepted on a phone',
                        'never the pixel-ota Latest'):

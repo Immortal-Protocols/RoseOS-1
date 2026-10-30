@@ -196,6 +196,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0  # the retained Rango release notes are verified from their own pinned commit
           persist-credentials: false
       - name: Manifest and stage tests
         run: |
