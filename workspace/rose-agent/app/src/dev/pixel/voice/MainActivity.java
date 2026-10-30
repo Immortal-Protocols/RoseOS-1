@@ -10,7 +10,7 @@ public class MainActivity extends Activity {
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
  boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
- LauncherPager launcherPager;LinearLayout homePageDots;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
+ LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,appAreaWidth=-1,appAreaHeight=-1;float appCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
@@ -366,62 +366,45 @@ public class MainActivity extends Activity {
   Comparator<ResolveInfo> byName=(a,b)->AppLabels.label(getPackageManager(),a.activityInfo.packageName,a.loadLabel(getPackageManager()).toString()).compareToIgnoreCase(AppLabels.label(getPackageManager(),b.activityInfo.packageName,b.loadLabel(getPackageManager()).toString()));
   for(ArrayList<ResolveInfo> group:Arrays.asList(systemApps,storeApps,otherApps))Collections.sort(group,byName);
   Collections.sort(ourApps,(a,b)->Integer.compare(AppLabels.suiteIndex(a.activityInfo.packageName,cameraPackage),AppLabels.suiteIndex(b.activityInfo.packageName,cameraPackage)));
-  float height=getResources().getDisplayMetrics().heightPixels/getResources().getDisplayMetrics().density;
-  final int gridColumns=Math.max(4,Math.min(8,getResources().getConfiguration().screenWidthDp/104));
-  int rows=Math.max(3,Math.min(6,(int)((height-250)/108))),perPage=rows*gridColumns;
-  ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>(),subtitles=new ArrayList<>();
+  ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>();
   // Home, then the app pages next to it under the fixed tray, then Widgets and the legacy voice page last (HomePages).
-  titles.add("Home");subtitles.add("");pages.add(new ArrayList<>());
+  titles.add("Home");pages.add(new ArrayList<>());
+  // One continuous real inventory, our apps first, then preinstalled, Play Store and other installs, each in name order;
+  // the page count follows from it and the inset viewport (HomeAppLayout), never a fixed count.
   ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,systemApps,storeApps,otherApps))launchable.addAll(group);
-  addAppGroup(pages,titles,subtitles,ourApps,"Our apps","Your everyday apps",Math.max(1,ourApps.size()));
-  addAppGroup(pages,titles,subtitles,systemApps,"Preinstalled","Included with this operating system",perPage);
-  addAppGroup(pages,titles,subtitles,storeApps,"Play Store","Installed through Google Play",perPage);
-  if(!otherApps.isEmpty())addAppGroup(pages,titles,subtitles,otherApps,"Other installs","Installed from other sources",perPage);
-  titles.add("Widgets");subtitles.add("");pages.add(new ArrayList<>());
-  titles.add("Voice home");subtitles.add("");pages.add(new ArrayList<>());
+  planAppPages();int appPages=HomeAppLayout.pages(launchable.size(),appPerPage);
+  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(launchable.size(),appPerPage,i);pages.add(new ArrayList<>(launchable.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
+  titles.add("Widgets");pages.add(new ArrayList<>());
+  titles.add("Voice home");pages.add(new ArrayList<>());
   int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;widgetsPage=HomePages.widgets(count);voicePage=HomePages.voice(count);
   if(selected<0||onVoice)selected=voicePage;
-  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new PlayfulTheme.World());
+  // One wallpaper behind every page, drawn at the scroll position so it stays put while the pages slide.
+  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new RoseHomeView.Wallpaper(getResources()));
   launcherPager.permission=this::canSwipePages;
-  launcherPager.listener=index->{drawer=index!=voicePage;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setAlpha(((Integer)dot.getTag())==index?1f:.27f);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
+  launcherPager.listener=index->{drawer=index!=voicePage;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setAlpha(((Integer)dot.getTag())==index?1f:.45f);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
-  page.setBackgroundColor(Color.TRANSPARENT);homePageDots=makePageDots(titles);page.addView(homePageDots,new LinearLayout.LayoutParams(-1,dp(30)));
-  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::apps,makePageDots(titles)));
+  // The legacy voice page keeps its own artwork; the one row of page dots is fixed in the HomeFrame.
+  homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
+  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::apps,new View(this)));
   for(int number=HomePages.FIRST_APPS;number<count;number++){
    if(number==voicePage){launcherPager.addView(page);continue;}
-   LinearLayout appPage=new LinearLayout(this);appPage.setOrientation(1);
-   appPage.setPadding(dp(18),dp(20),dp(18),dp(12));
-   appPage.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(18)+i.getSystemWindowInsetLeft(),dp(20)+i.getSystemWindowInsetTop(),dp(18)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());return i;});
-   TextView heading=text(titles.get(number),23,ink);heading.setTypeface(chatFont(900));heading.setAccessibilityHeading(true);heading.setPadding(dp(8),0,dp(8),dp(3));appPage.addView(heading);
-   TextView explanation=text(subtitles.get(number),12,secondary);explanation.setTypeface(chatFont(800));explanation.setPadding(dp(8),0,dp(8),dp(8));appPage.addView(explanation);
-   if(subtitles.get(number).isEmpty())explanation.setVisibility(View.GONE);
-   if(number==widgetsPage){
-    ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.setPadding(dp(8),dp(18),dp(8),dp(20));
-    clockWidget=new ClockWidgetView(this,chatFont(900),()->{Intent launch=getPackageManager().getLaunchIntentForPackage("dev.pixel.clock");if(launch!=null)startActivity(launch);else Toast.makeText(this,"Clock is unavailable",Toast.LENGTH_SHORT).show();});
-    weatherWidget=new WeatherWidgetView(this,chatFont(900));
-    galleryWidget=new GalleryWidgetView(this,chatFont(900),this::requestPhotoAccess);
-    LinearLayout widgets=new LinearLayout(this);widgets.setOrientation(LinearLayout.VERTICAL);widgets.addView(smallWidgetShelf(clockWidget,weatherWidget,galleryWidget),new LinearLayout.LayoutParams(-1,-2));
-    TextView credit=text("Weather by Open-Meteo",11,secondary);credit.setTypeface(chatFont(800));credit.setPadding(dp(3),dp(12),0,dp(8));credit.setOnClickListener(v->startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://open-meteo.com/"))));widgets.addView(credit,new LinearLayout.LayoutParams(-2,-2));
-    scroll.addView(widgets,new ScrollView.LayoutParams(-1,-2));appPage.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-    appPage.addView(makePageDots(titles),new LinearLayout.LayoutParams(-1,dp(30)));launcherPager.addView(appPage);continue;
-   }
-   boolean suite=titles.get(number).equals("Our apps");
-   ArrayList<ResolveInfo> apps=pages.get(number);
-   if(suite)appPage.addView(suiteGrid(apps),new LinearLayout.LayoutParams(-1,0,1));
-   else{
-    GridLayout grid=new GridLayout(this);grid.setColumnCount(gridColumns);grid.setRowCount(rows);grid.setAlignmentMode(GridLayout.ALIGN_BOUNDS);
-    appPage.addView(grid,new LinearLayout.LayoutParams(-1,0,1));
-    for(int cell=0;cell<perPage;cell++){
-     View tile=cell<apps.size()?appTile(apps.get(cell),false):new View(this);
-     GridLayout.LayoutParams lp=new GridLayout.LayoutParams(GridLayout.spec(cell/gridColumns,1f),GridLayout.spec(cell%gridColumns,1f));
-     lp.width=0;lp.height=0;lp.setGravity(Gravity.FILL);lp.setMargins(dp(2),0,dp(2),0);grid.addView(tile,lp);
-    }
-   }
-   appPage.addView(makePageDots(titles),new LinearLayout.LayoutParams(-1,dp(30)));
-   launcherPager.addView(appPage);
+   if(number!=widgetsPage){launcherPager.addView(appPage(pages.get(number),titles.get(number),launchable.isEmpty()));continue;}
+   // Widgets keeps its own artwork and heading; it is not an app page.
+   LinearLayout shelfPage=new LinearLayout(this);shelfPage.setOrientation(1);shelfPage.setBackground(new PlayfulTheme.World());
+   shelfPage.setPadding(dp(18),dp(20),dp(18),dp(12));
+   shelfPage.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(18)+i.getSystemWindowInsetLeft(),dp(20)+i.getSystemWindowInsetTop(),dp(18)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());return i;});
+   TextView heading=text(titles.get(number),23,ink);heading.setTypeface(chatFont(900));heading.setAccessibilityHeading(true);heading.setPadding(dp(8),0,dp(8),dp(3));shelfPage.addView(heading);
+   ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.setPadding(dp(8),dp(18),dp(8),dp(20));
+   clockWidget=new ClockWidgetView(this,chatFont(900),()->{Intent launch=getPackageManager().getLaunchIntentForPackage("dev.pixel.clock");if(launch!=null)startActivity(launch);else Toast.makeText(this,"Clock is unavailable",Toast.LENGTH_SHORT).show();});
+   weatherWidget=new WeatherWidgetView(this,chatFont(900));
+   galleryWidget=new GalleryWidgetView(this,chatFont(900),this::requestPhotoAccess);
+   LinearLayout widgets=new LinearLayout(this);widgets.setOrientation(LinearLayout.VERTICAL);widgets.addView(smallWidgetShelf(clockWidget,weatherWidget,galleryWidget),new LinearLayout.LayoutParams(-1,-2));
+   TextView credit=text("Weather by Open-Meteo",11,secondary);credit.setTypeface(chatFont(800));credit.setPadding(dp(3),dp(12),0,dp(8));credit.setOnClickListener(v->startActivity(new Intent(Intent.ACTION_VIEW,android.net.Uri.parse("https://open-meteo.com/"))));widgets.addView(credit,new LinearLayout.LayoutParams(-2,-2));
+   scroll.addView(widgets,new ScrollView.LayoutParams(-1,-2));shelfPage.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+   launcherPager.addView(shelfPage);
   }
-  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray);
+  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
   setContentView(homeFrame);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
@@ -440,80 +423,61 @@ public class MainActivity extends Activity {
   };
   for(View widget:widgets)shelf.addView(widget,new ViewGroup.LayoutParams(dp(190),dp(190)));return shelf;
  }
- /** Fit ordinary text on the actual inset viewport; reduce columns before wrapping large text. */
- ScrollView suiteGrid(ArrayList<ResolveInfo> apps){
-  ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);
-  LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);
-  scroll.addView(column,new ScrollView.LayoutParams(-1,-2));
-  ArrayList<LinearLayout> rows=new ArrayList<>();ArrayList<View> tiles=new ArrayList<>();
-  for(ResolveInfo app:apps)tiles.add(appTile(app,true));
-  arrangeSuiteRows(column,rows,tiles,4);
-  final int[] measured={-1,-1},columns={4};
-  scroll.addOnLayoutChangeListener((v,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->{
-   int width=right-left-scroll.getPaddingLeft()-scroll.getPaddingRight();
-   int height=bottom-top-scroll.getPaddingTop()-scroll.getPaddingBottom();
-   if(width<=0||height<=0||(measured[0]==width&&measured[1]==height))return;
-   measured[0]=width;measured[1]=height;
-   int textHeight=dp(36),labelWidth=0;
-   for(View tile:tiles){
-    TextView label=(TextView)((LinearLayout)tile).getChildAt(1);
-    android.graphics.Paint.FontMetricsInt metrics=label.getPaint().getFontMetricsInt();
-    textHeight=Math.max(textHeight,2*(metrics.descent-metrics.ascent)+dp(2));
-    labelWidth=Math.max(labelWidth,(int)Math.ceil(label.getPaint().measureText(label.getText().toString())));
-   }
-   int fitColumns=Math.max(1,Math.min(Math.max(4,getResources().getConfiguration().screenWidthDp/104),width/Math.max(dp(96),labelWidth+dp(14))));
-   if(fitColumns!=columns[0]){columns[0]=fitColumns;arrangeSuiteRows(column,rows,tiles,fitColumns);}
-   int rowCount=Math.max(1,rows.size()),fixed=dp(10+6+8+2)+textHeight;
-   int minFrame=dp(64),maxFrame=Math.min(dp(84),width/columns[0]-dp(8));
-   int frame=Math.max(minFrame,Math.min(maxFrame,height/rowCount-fixed));
-   int rowHeight=Math.max(height/rowCount,frame+fixed);
-   for(LinearLayout row:rows){LinearLayout.LayoutParams lp=(LinearLayout.LayoutParams)row.getLayoutParams();lp.height=rowHeight;row.setLayoutParams(lp);}
-   for(View tile:tiles){
-    LinearLayout cell=(LinearLayout)tile;cell.setPadding(dp(2),dp(10),dp(2),dp(6));
-    FrameLayout iconFrame=(FrameLayout)cell.getChildAt(0);LinearLayout.LayoutParams frameParams=(LinearLayout.LayoutParams)iconFrame.getLayoutParams();frameParams.width=frame;frameParams.height=frame+dp(2);iconFrame.setLayoutParams(frameParams);
-    ImageView image=(ImageView)iconFrame.getChildAt(0);FrameLayout.LayoutParams imageParams=(FrameLayout.LayoutParams)image.getLayoutParams();imageParams.width=frame-dp(8);imageParams.height=frame-dp(8);image.setLayoutParams(imageParams);
-    TextView label=(TextView)cell.getChildAt(1);LinearLayout.LayoutParams labelParams=(LinearLayout.LayoutParams)label.getLayoutParams();labelParams.height=textHeight;label.setLayoutParams(labelParams);
-   }
-  });
-  return scroll;
+ /** Columns and apps per page from the inset viewport (HomeAppLayout): the real measured app area once a page has
+  * reported it, else an estimate from the screen configuration for the first build. */
+ void planAppPages(){
+  float density=getResources().getDisplayMetrics().density;android.content.res.Configuration c=getResources().getConfiguration();
+  float width=appAreaWidth>0?appAreaWidth:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
+  float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp,HomeTray.HEIGHT_DP,HomeTray.GAP_DP,HomeFrame.DOTS_DP)*density;
+  float cell=appCellHeight>0?appCellHeight:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
+  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);
  }
- void arrangeSuiteRows(LinearLayout column,ArrayList<LinearLayout> rows,ArrayList<View> tiles,int columns){
-  for(View tile:tiles)if(tile.getParent() instanceof ViewGroup)((ViewGroup)tile.getParent()).removeView(tile);
-  column.removeAllViews();rows.clear();
-  for(int from=0;from<tiles.size();from+=columns){
-   LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.TOP);
-   int count=Math.min(columns,tiles.size()-from);float edge=(columns-count)/2f;
-   if(edge>0)row.addView(new View(this),new LinearLayout.LayoutParams(0,1,edge));
-   for(int i=0;i<count;i++){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1);lp.setMargins(dp(2),0,dp(2),0);row.addView(tiles.get(from+i),lp);}
-   if(edge>0)row.addView(new View(this),new LinearLayout.LayoutParams(0,1,edge));
-   column.addView(row,new LinearLayout.LayoutParams(-1,dp(138)));rows.add(row);
-  }
+ /** A page measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
+ void appPageMeasured(int width,int height,float cell){
+  if(!HomeAppLayout.replan(appColumns,appPerPage,width,height,cell,getResources().getDisplayMetrics().density))return;
+  if(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight)return;
+  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;
+  handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
  }
- void addAppGroup(ArrayList<ArrayList<ResolveInfo>> pages,ArrayList<String> titles,ArrayList<String> subtitles,ArrayList<ResolveInfo> apps,String title,String subtitle,int capacity){
-  int count=Math.max(1,(apps.size()+capacity-1)/capacity);
-  for(int i=0;i<count;i++){int start=i*capacity;pages.add(new ArrayList<>(apps.subList(start,Math.min(start+capacity,apps.size()))));titles.add(title+(count>1?" · "+(i+1)+" of "+count:""));subtitles.add(subtitle);}
+ /** One app page: the measured grid of real apps over the shared wallpaper, or a truthful note when none are installed. */
+ View appPage(ArrayList<ResolveInfo> apps,String title,boolean noApps){
+  View result;
+  if(noApps){TextView none=appLabel("No other apps are installed.");none.setGravity(Gravity.CENTER);none.setMaxLines(3);result=none;}
+  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(appTile(app));result=grid;}
+  result.setContentDescription(title);
+  result.setPadding(dp(HomeAppLayout.MARGIN_DP),dp(HomeAppLayout.TOP_DP),dp(HomeAppLayout.MARGIN_DP),0);
+  result.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
+  return result;
+ }
+ /** The reference label: 12.5sp, white over the wallpaper with a soft dark shadow, wrapping to two lines. */
+ TextView appLabel(String label){
+  TextView name=new TextView(this);name.setText(label);name.setTextSize(12.5f);name.setTextColor(0xffffffff);name.setTypeface(chatFont(800));
+  name.setShadowLayer(dp(3),0,dp(1),0xcc08162d);name.setIncludeFontPadding(false);name.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
+  name.setMaxLines(HomeAppLayout.LABEL_LINES);name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+  return name;
  }
  LinearLayout makePageDots(ArrayList<String> titles){
   LinearLayout dots=new LinearLayout(this);dots.setGravity(Gravity.CENTER);dots.setOrientation(0);
   for(int i=0;i<titles.size();i++){
-   final int target=i;TextView dot=text("●",10,ink);dot.setTag(i);dot.setGravity(Gravity.CENTER);dot.setAlpha(i==0?1f:.27f);
+   final int target=i;TextView dot=text("●",10,0xffffffff);dot.setShadowLayer(dp(2),0,0,0x66101e3c);dot.setTag(i);dot.setGravity(Gravity.CENTER);dot.setAlpha(i==0?1f:.45f);
    dot.setContentDescription("Go to "+titles.get(i).toLowerCase(Locale.ROOT));dot.setFocusable(true);dot.setOnClickListener(v->launcherPager.showPage(target,true));
-   dots.addView(dot,new LinearLayout.LayoutParams(dp(28),dp(30)));pageDots.add(dot);
+   dots.addView(dot,new LinearLayout.LayoutParams(dp(HomeFrame.DOTS_DP),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
   }
   return dots;
  }
- View appTile(ResolveInfo app,boolean suite){
-  LinearLayout tile=new LinearLayout(this);tile.setOrientation(1);tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);tile.setPadding(dp(2),dp(12),dp(2),dp(4));
+ /** A real app's cell: its own icon in the 64dp tile and its label, opening it (WorkspaceLauncher). */
+ View appTile(ResolveInfo app){
+  LinearLayout tile=new LinearLayout(this);tile.setOrientation(1);tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);tile.setPadding(dp(2),dp(HomeAppLayout.CELL_PAD_DP),dp(2),dp(HomeAppLayout.CELL_PAD_DP));
   String originalLabel=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
   final String label=originalLabel;tile.setContentDescription(label);tile.setClickable(true);tile.setFocusable(true);
   tile.setOnClickListener(v->WorkspaceLauncher.open(this,app,label));
   FrameLayout iconFrame=new FrameLayout(this);iconFrame.setBackground(raised(PixelAppearance.color(0xfffff7e5),PixelAppearance.color(0xff789ab5),18));
   int iconResource=AppLabels.icon(getPackageManager(),app.activityInfo.packageName);
-  ImageView icon=new ImageView(this);icon.setImageDrawable(iconResource==0?app.loadIcon(getPackageManager()):getDrawable(iconResource));icon.setScaleType(ImageView.ScaleType.FIT_CENTER);icon.setBackground(shape(PixelAppearance.color(0xfffff7e5),15));icon.setClipToOutline(true);icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-  FrameLayout.LayoutParams imageParams=new FrameLayout.LayoutParams(dp(suite?76:60),dp(suite?76:60),Gravity.TOP|Gravity.CENTER_HORIZONTAL);imageParams.topMargin=dp(2);iconFrame.addView(icon,imageParams);
-  tile.addView(iconFrame,new LinearLayout.LayoutParams(dp(suite?84:68),dp(suite?86:70)));
-  TextView name=text(label,suite?14:12,ink);name.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);name.setMaxLines(2);name.setEllipsize(android.text.TextUtils.TruncateAt.END);name.setTypeface(chatFont(800));name.setIncludeFontPadding(false);
-  name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);LinearLayout.LayoutParams labelParams=new LinearLayout.LayoutParams(-1,dp(36));labelParams.topMargin=dp(8);tile.addView(name,labelParams);
+  ImageView icon=new ImageView(this);icon.setImageDrawable(iconResource==0?app.loadIcon(getPackageManager()):getDrawable(iconResource));icon.setScaleType(ImageView.ScaleType.FIT_CENTER);icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  iconFrame.addView(icon,new FrameLayout.LayoutParams(dp(HomeAppLayout.ICON_DP),dp(HomeAppLayout.ICON_DP),Gravity.CENTER));
+  tile.addView(iconFrame,new LinearLayout.LayoutParams(dp(HomeAppLayout.TILE_DP),dp(HomeAppLayout.TILE_DP)));
+  TextView name=appLabel(label);name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  LinearLayout.LayoutParams labelParams=new LinearLayout.LayoutParams(-1,HomeAppLayout.LABEL_LINES*name.getLineHeight());labelParams.topMargin=dp(HomeAppLayout.LABEL_GAP_DP);tile.addView(name,labelParams);
   return tile;
  }
 

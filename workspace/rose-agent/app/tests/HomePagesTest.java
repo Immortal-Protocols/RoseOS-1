@@ -31,6 +31,28 @@ public final class HomePagesTest {
         // Recreation restores the saved page within the rebuilt pager.
         expect(HomePages.restore(3, count) == 3 && HomePages.restore(9, count) == 5 && HomePages.restore(-1, count) == 0
                 && HomePages.restore(2, 0) == 0, "Restore clamps to the pages that exist");
+        // Gesture ownership (LauncherPager): inside the slop nobody owns the drag; clearly vertical stays with the
+        // child (a scrolling list); clearly horizontal goes to the pager, which cancels the child's tap.
+        float slop = 24;
+        expect(HomePages.owner(10, 5, slop) == HomePages.UNDECIDED, "A small wobble is still a tap");
+        expect(HomePages.owner(5, 40, slop) == HomePages.CHILD, "Vertical stays with the child");
+        expect(HomePages.owner(-60, 10, slop) == HomePages.PAGER && HomePages.owner(60, -10, slop) == HomePages.PAGER, "Horizontal pages");
+        expect(HomePages.owner(40, 35, slop) == HomePages.UNDECIDED, "A diagonal is not taken from the child until it is clearly horizontal");
+
+        // Settling a released drag: width 1000, fling threshold 1700 px/s, six pages.
+        int w = 1000, n = 6; float fling = 1700;
+        expect(HomePages.settle(1, -150, 0, w, fling, 1, n) == 1, "A partial drag springs back");
+        expect(HomePages.settle(1, -250, 0, w, fling, 1, n) == 2, "Past a fifth of the width turns the page");
+        expect(HomePages.settle(1, 250, 0, w, fling, 1, n) == 0, "...either way");
+        expect(HomePages.settle(1, -50, -3000, w, fling, 1, n) == 2, "A short fling turns the page");
+        // The demonstrated defect: a drag that reverses at the end. Before, distance won, so 30% left then a fling
+        // right still turned to the next page, against the finger. Now the release direction decides.
+        expect(HomePages.settle(1, -300, 3000, w, fling, 1, n) == 0, "A reversed fling goes where the finger last went");
+        expect(HomePages.settle(1, 300, -3000, w, fling, 1, n) == 2, "...in both directions");
+        // Never past the ends, never more than one page from the start, even if scrolled further.
+        expect(HomePages.settle(0, 400, 0, w, fling, 0, n) == 0 && HomePages.settle(5, -400, 0, w, fling, 5, n) == 5, "Ends hold");
+        expect(HomePages.settle(1, -80, 0, w, fling, 4, n) == 2, "A drag that scrolled far still settles one page away");
+        expect(HomePages.settle(2, 0, 0, w, fling, 2, 1) == 0, "A pager with one page always settles on it");
         System.out.println("HomePagesTest: " + checks + " checks passed");
     }
 }

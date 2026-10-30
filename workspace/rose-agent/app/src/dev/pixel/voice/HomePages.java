@@ -25,6 +25,32 @@ final class HomePages {
   return previous;
  }
 
+ /** Who owns a single-finger drag so far (LauncherPager): the pager once it is clearly horizontal, the child once
+  * it is clearly vertical, nobody yet inside the slop. A drag the pager takes cancels the child's tap. */
+ static final int UNDECIDED = 0, PAGER = 1, CHILD = 2;
+ static int owner(float dx, float dy, float slop) {
+  dx = Math.abs(dx); dy = Math.abs(dy);
+  if (dy > slop && dy > dx) return CHILD;
+  if (dx > slop && dx > dy * 1.35f) return PAGER;
+  return UNDECIDED;
+ }
+
+ /**
+  * Where a released drag settles, never more than one page from where it started and always a real page.
+  * A fling decides first, by its direction at release, so a drag that reverses at the end goes where the
+  * finger last went; otherwise a drag past a fifth of the width turns the page; otherwise the nearest page.
+  * @param dx       the finger's travel since down (negative: toward the next page)
+  * @param vx       the release velocity in px/s
+  * @param nearest  the page nearest the current scroll position
+  */
+ static int settle(int downPage, float dx, float vx, int width, float flingThreshold, int nearest, int count) {
+  int target;
+  if (Math.abs(vx) > flingThreshold) target = downPage + (vx < 0 ? 1 : -1);
+  else if (Math.abs(dx) > width * .2f) target = downPage + (dx < 0 ? 1 : -1);
+  else target = Math.max(downPage - 1, Math.min(downPage + 1, nearest));
+  return Math.max(0, Math.min(count - 1, target));
+ }
+
  /** A page saved before recreation, kept within the rebuilt pager. */
  static int restore(int saved, int count) {
   return saved < 0 || count <= 0 ? HOME : Math.min(saved, count - 1);
