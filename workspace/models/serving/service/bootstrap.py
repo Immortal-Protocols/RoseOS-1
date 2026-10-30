@@ -16,8 +16,10 @@ run in order and are rerun-safe: each first checks whether its result is already
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   auth       secret-init once; the auth service only once attestation roots are present
   tls        an installed certificate; else an issued-but-uninstalled lineage is installed (never reissued); else, with
-             rose-models-acme set and DNS here, an ACME-only Nginx is started and proven (challenge 200, all else 404),
-             certbot issues via its webroot reusing the single existing account (ambiguity fails), and it is stopped
+             rose-models-acme set and DNS here, an ACME-only Nginx is started and proven (challenge 200, all else 404);
+             that proof is published, then the stage waits (bounded) for metadata rose-models-acme-ack equal to
+             <payload sha256>:<boot id>. Only then does certbot issue once via its webroot, reusing the single existing
+             account (ambiguity fails). A timeout issues nothing. The ACME-only Nginx is stopped either way
   edge       the Nginx edge once TLS and auth are up; a standalone-issued lineage is switched to the webroot
 
 Every command has a time bound. Output: one nonsecret JSON line (stdout, so it reaches the serial console), the status
@@ -138,6 +140,13 @@ class Host:
 
     def sleep(self, seconds):
         time.sleep(seconds)
+
+    def clock(self):
+        return time.monotonic()
+
+    def publish(self, line):
+        """An interim nonsecret line on the serial console (the startup script's stdout)."""
+        print(line, flush=True)
 
     def read_head(self, device, n):
         with open(self.path(device), 'rb') as f:
@@ -430,6 +439,8 @@ ACME_WEBROOT = '/var/lib/rose-models/acme'
 ACME_RUN = '/run/rose-acme'
 ACME_NGINX = ['/usr/sbin/nginx', '-p', ACME_RUN, '-c', f'{ROOT}/edge/acme-only.conf']
 ACME_404 = ('/', '/v1/models', '/v1/chat/completions', '/v1/auth/challenge', '/v1/auth/token')
+ACK_KEY = 'attributes/rose-models-acme-ack'  # existing instance metadata; the operator sets it with add-metadata
+ACK_TIMEOUT_S, ACK_POLL_S = 1800, 10
 
 
 def acme_identity(host):
@@ -517,8 +528,31 @@ def stage_tls(host, ctx):
     external = (host.metadata('network-interfaces/0/access-configs/0/external-ip') or '').strip()
     if not external or host.resolve(HOSTNAME) != [external]:
         raise Waiting('dns_not_pointing_here')
+    boot = host.boot_id()
+    attempted = host.path(STATE) / f'acme-issue-attempted-{boot}'
+    if attempted.exists():  # at most one issuance per acknowledged boot; a retry needs a new reset and acknowledgement
+        raise Failed('acme_issuance_already_attempted_this_boot', [identity])
     try:
         codes = prepare_acme_http(host)
+        expected_ack = f"{ctx['payloadSha256']}:{boot}"
+        conf = host.path(f'{ROOT}/edge/acme-only.conf')
+        proof = {'schema': 'rose-models-acme-proof/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': boot,
+                 'config': f'{ROOT}/edge/acme-only.conf', 'configSha256': hashlib.sha256(conf.read_bytes()).hexdigest(),
+                 'pidVerified': True, 'acmeHttp': codes, 'accounts': len(accounts), 'lineages': lineages,
+                 'awaiting': 'metadata rose-models-acme-ack=' + expected_ack, 'timeoutSeconds': ACK_TIMEOUT_S}
+        line = json.dumps(proof, sort_keys=True)
+        host.put_guest_attribute('acme-proof', line)  # published BEFORE any issuance
+        host.publish('ROSE-MODELS-ACME-PROOF ' + line)
+        deadline, seen = host.clock() + ACK_TIMEOUT_S, 'absent'
+        while True:
+            ack = (host.metadata(ACK_KEY) or '').strip()
+            if ack == expected_ack:
+                break
+            seen = 'mismatch' if ack else 'absent'  # a stale boot or payload never issues
+            if host.clock() >= deadline:
+                raise Failed('acme_ack_timeout', [{'expectedAck': expected_ack, 'seen': seen, 'acmeHttp': codes}])
+            host.sleep(ACK_POLL_S)
+        attempted.write_text(expected_ack + '\n')
         argv = ['certbot', 'certonly', '--webroot', '-w', ACME_WEBROOT, '-n', '-d', HOSTNAME, '--deploy-hook', deploy]
         # Exactly one existing account is reused; none means the approved first registration (no email).
         argv += ['--account', accounts[0]] if accounts else ['--agree-tos', '--register-unsafely-without-email']
@@ -563,7 +597,7 @@ def run(host, payload, payload_sha256, now=time.time):
     try:
         config = json.loads((payload / 'etc-rose-models/lib/muse-glimmer-30b.json').read_text())
         runtime = next(o for o in config['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')['runtime']
-        ctx = {'payload': payload, 'runtime': runtime, 'results': {}}
+        ctx = {'payload': payload, 'runtime': runtime, 'results': {}, 'payloadSha256': payload_sha256}
         stopped = None
         for name, fn in STAGES:
             if stopped and not (stopped == 'waiting' and name in INDEPENDENT | {'edge'}):
