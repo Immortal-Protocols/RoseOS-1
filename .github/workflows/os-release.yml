@@ -163,9 +163,6 @@ jobs:
           fi
           # The device names attempt directories and artifacts: a plain codename, admitted by the pipeline's allowlist.
           [[ "$ROSE_DEVICE" =~ ^[a-z][a-z0-9]{1,31}$ ]]
-          # RELEASE020: a campaign chains latest-beta runs only; its input shape is checked before any host starts.
-          python3 scripts/release-chain.py check --campaign "${CAMPAIGN:-}"
-          [[ -z "${CAMPAIGN:-}" || "$MODE" == latest-beta ]]
           python3 -c 'import importlib.util, os; s = importlib.util.spec_from_file_location("p", "scripts/release-pipeline.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); m.resolve_device(os.environ["ROSE_DEVICE"])'
           # Every mode other than os-release (app, alpha, reuse) is bound to frankel's records.
           [[ "$MODE" == os-release || "$ROSE_DEVICE" == frankel ]]
@@ -196,6 +193,9 @@ jobs:
           # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
           [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
           [[ "$MODE" != app-reuse ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); b = json.loads(os.environ["REUSE_BINDING"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice" and sorted(b) == ["apkSha256", "signedTargetFilesSha256", "sourceRun", "unsignedTargetFilesSha256"] and type(b["sourceRun"]) is int and b["sourceRun"] > 0 and all(isinstance(b[k], str) and re.fullmatch("[0-9a-f]{64}", b[k]) for k in b if k != "sourceRun")'
+          # RELEASE020: a campaign chains latest-beta runs only; its input shape is checked before any host starts.
+          python3 scripts/release-chain.py check --campaign "${CAMPAIGN:-}"
+          [[ -z "${CAMPAIGN:-}" || "$MODE" == latest-beta ]]
       # rango-retained (OCT30-INFRA-S015): every real binding is checked here, before the controller; unbound ones exit 4.
       - name: Retained Rango preflight
         if: inputs.mode == 'rango-retained'
