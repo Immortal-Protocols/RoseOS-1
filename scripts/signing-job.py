@@ -273,13 +273,20 @@ def download(url, destination):
 API = {'get': github_get, 'download': download}
 
 
-def ingress(env, source_run, artifact_id, artifact_digest, manifest_sha256, out, signing_root=SIGNING_ROOT):
+def ingress(env, source_run, artifact_id, artifact_digest, manifest_sha256, out, signing_root=SIGNING_ROOT, request_id=None):
     """Validate the source run, the artifact and every archive member; write the bundle and provenance.json to out."""
     for value, pattern, name in ((source_run, r'[1-9][0-9]{0,19}', 'source_run'), (artifact_id, r'[1-9][0-9]{0,19}', 'artifact_id'),
                                  (artifact_digest, r'sha256:[0-9a-f]{64}', 'artifact_digest'),
                                  (manifest_sha256, r'[0-9a-f]{64}', 'manifest_sha256')):
         if not re.fullmatch(pattern, str(value)):
             raise Refused(f'ingress_refused: {name} is not exact')
+    # SIGN-023: request_id = <source_run>.<source_attempt>.<device>-<build>; it correlates the dispatch (the run-name),
+    # and every part of it is checked against the API and the validated manifest; the title alone proves nothing.
+    request = re.fullmatch(r'([1-9][0-9]{0,19})\.([1-9][0-9]{0,4})\.([a-z][a-z0-9]{1,31})-([0-9]{10})', str(request_id))
+    if not request:
+        raise Refused('ingress_refused: request_id must be <source_run>.<source_attempt>.<device>-<build>')
+    if request[1] != str(source_run):
+        raise Refused('ingress_refused: request_id names another source run')
     artifact = API['get'](env, f'/actions/artifacts/{artifact_id}')
     run = API['get'](env, f'/actions/runs/{source_run}')
     repository = env.get('GITHUB_REPOSITORY')
@@ -289,6 +296,8 @@ def ingress(env, source_run, artifact_id, artifact_digest, manifest_sha256, out,
     if run.get('path') != SOURCE_WORKFLOW or (run.get('repository') or {}).get('full_name') != repository \
             or run.get('head_branch') != 'main' or run.get('status') not in ('in_progress', 'completed'):
         raise Refused("ingress_refused: the source run is not this repository's os-release run on main")
+    if str(run.get('run_attempt')) != request[2]:
+        raise Refused('ingress_refused: request_id names another attempt of the source run')
     out = Path(out)
     out.mkdir(parents=True)
     archive = out.parent/f'{out.name}.zip'
@@ -320,10 +329,12 @@ def ingress(env, source_run, artifact_id, artifact_digest, manifest_sha256, out,
             if (out/name).stat().st_size != spec['size'] or sha256_file(out/name) != spec['sha256']:
                 raise Refused(f'ingress_refused: member {name} differs from inputs.{key}')
     archive.unlink()
+    if (m['device'], m['build']) != (request[3], request[4]):
+        raise Refused('ingress_refused: request_id names another device or build than the manifest')
     source = m.get('source')
     if source is not None and (str(source.get('run')) != str(source_run) or source.get('headSha') != run.get('head_sha')):
         raise Refused('ingress_refused: the manifest names another source run')
-    provenance = {'sourceRun': str(source_run), 'headSha': run.get('head_sha'), 'workflow': SOURCE_WORKFLOW, 'repository': repository,
+    provenance = {'requestId': request_id, 'sourceAttempt': request[2], 'sourceRun': str(source_run), 'headSha': run.get('head_sha'), 'workflow': SOURCE_WORKFLOW, 'repository': repository,
         'artifactId': str(artifact_id), 'artifactDigest': artifact_digest, 'manifestSha256': manifest_sha256,
         'job': f'{m["device"]}-{m["build"]}', 'inbox': str(Path(m['inputs']['targetFiles']['path']).parent)}
     (out/'provenance.json').write_text(json.dumps(provenance, indent=2, sort_keys=True) + '\n')
@@ -452,6 +463,7 @@ def main(argv=None):
     for name in ('--source-run', '--artifact-id', '--artifact-digest', '--manifest-sha256', '--out'):
         g.add_argument(name, required=True)
     g.add_argument('--signing-root', default=SIGNING_ROOT)
+    g.add_argument('--request-id', required=True)
     t = sub.add_parser('stage')
     t.add_argument('--bundle', required=True)
     t.add_argument('--signing-root', required=True)
@@ -460,7 +472,8 @@ def main(argv=None):
         if a.command == 'run':
             result = run(a.manifest, a.jobs_root, a.out_root)
         elif a.command == 'ingress':
-            result = ingress(dict(os.environ), a.source_run, a.artifact_id, a.artifact_digest, a.manifest_sha256, a.out, a.signing_root)
+            result = ingress(dict(os.environ), a.source_run, a.artifact_id, a.artifact_digest, a.manifest_sha256, a.out, a.signing_root,
+                a.request_id)
         elif a.command == 'stage':
             result = {'manifest': stage(a.bundle, a.signing_root)}
         else:
