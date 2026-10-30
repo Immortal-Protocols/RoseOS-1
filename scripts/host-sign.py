@@ -140,11 +140,35 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
                 f'"$EPOCHREALTIME" $$ >> {shlex.quote(str(trace))} 2>/dev/null || true; }}\n')
     return ''.join(lines)
 
-def candidate_file(sha, path):
-    result = subprocess.run(['git', '-C', str(ROOT), 'show', f'{sha}:{path}'], capture_output=True)
+def candidate_file(sha, path, repo=ROOT):
+    result = subprocess.run(['git', '-C', str(repo), 'show', f'{sha}:{path}'], capture_output=True)
     if result.returncode:
         raise AdapterFailed(f'candidate {sha[:12]} has no {path}')
     return result.stdout
+
+NOTES_REPO = [ROOT]  # the repository holding pinned retained notes (tests substitute a synthetic history)
+
+def release_notes(sign, sha, device, build):
+    """UPDATE.md bytes. Default (every Frankel build): updateNotes is a path template read from the candidate commit.
+    Retained Rango (OCT30-INFRA-S017 notes pin): the immutable product commit has no notes for its build, so updateNotes
+    is a separately pinned {commit, path, sha256, build, device}; the bytes are read from that commit and re-hashed."""
+    pinned = sign['updateNotes']
+    if not isinstance(pinned, dict):
+        notes = candidate_file(sha, pinned.format(device=device, build=build))
+        if build.encode() not in notes:
+            raise AdapterFailed(f'release notes in candidate {sha[:12]} do not name build {build}')
+        return notes
+    if (pinned.get('device'), pinned.get('build')) != (device, build):
+        raise AdapterFailed(f'pinned release notes are for {pinned.get("device")} {pinned.get("build")}, not {device} {build}')
+    if not re.fullmatch(r'[0-9a-f]{40}', str(pinned.get('commit'))) or not re.fullmatch(r'os/release-notes/[\w.-]+\.md', str(pinned.get('path'))) \
+            or not re.fullmatch(r'[0-9a-f]{64}', str(pinned.get('sha256'))):
+        raise AdapterFailed('pinned release notes need a full commit, an os/release-notes/*.md path and a sha256')
+    notes = candidate_file(pinned['commit'], pinned['path'], NOTES_REPO[0])
+    if hashlib.sha256(notes).hexdigest() != pinned['sha256']:
+        raise AdapterFailed(f'pinned release notes {pinned["path"]} at {pinned["commit"][:12]} differ from their sha256')
+    if build.encode() not in notes:
+        raise AdapterFailed(f'pinned release notes {pinned["path"]} do not name build {build}')
+    return notes
 
 def copy_fresh(source, target):
     if not Path(source).is_file():
@@ -207,9 +231,7 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     sign, source_root = config['host']['sign'], Path(os.getcwd())
     device, build, stamp, sha = config['target']['device'], env['BUILD_NUMBER'], env['BUILD_DATETIME'], env['ROSE_CANDIDATE_SHA']
     release_dir = Path(env['ROSE_RELEASE_DIR'])
-    notes = candidate_file(sha, sign['updateNotes'].format(device=device, build=build))
-    if build.encode() not in notes:
-        raise AdapterFailed(f'release notes in candidate {sha[:12]} do not name build {build}')
+    notes = release_notes(sign, sha, device, build)
     releases = prepare_release_dir(source_root, device, build, sha, env.get('ROSE_SIGN_RESUME_ARCHIVE') or None)
     unsigned, otatools = retained[1:] if retained else (release_dir/'unsigned-target_files.zip', source_root/env['OUT_DIR']/sign['otatools'])
     copy_fresh(unsigned, releases/f'{device}-target_files.zip')
