@@ -109,28 +109,34 @@ public final class RosePresenceModelTest {
         // eased microphone value; camera tilt and cut-face colour recomputed here from the shader's numbers.
         RosePresenceModel tone = new RosePresenceModel();
         tone.mic = 1f;
-        expect(java.util.Arrays.equals(tone.tones(), RosePresenceModel.ROSE_TONES), "Mic on: the rose tones");
+        expect(java.util.Arrays.equals(tone.upperTones(), RosePresenceModel.ROSE_UPPER)
+            && java.util.Arrays.equals(tone.lowerTones(), RosePresenceModel.ROSE_LOWER), "Mic on: the rose tones");
         tone.mic = 0f;
-        expect(java.util.Arrays.equals(tone.tones(), RosePresenceModel.SILVER_TONES), "Muted: the silver tones");
+        expect(java.util.Arrays.equals(tone.upperTones(), RosePresenceModel.SILVER_UPPER)
+            && java.util.Arrays.equals(tone.lowerTones(), RosePresenceModel.SILVER_LOWER), "Muted: the silver tones");
         tone.mic = .5f;
-        int mid = tone.tones()[3];
-        expect(mid != RosePresenceModel.ROSE_TONES[3] && mid != RosePresenceModel.SILVER_TONES[3], "Mid-ease tones are in between");
-        expect(RosePresenceModel.TONE_STOPS.length == RosePresenceModel.ROSE_TONES.length
-            && RosePresenceModel.TONE_STOPS.length == RosePresenceModel.SILVER_TONES.length, "One tone per stop");
-        for (int i = 1; i < RosePresenceModel.TONE_STOPS.length; i++) {
-            expect(RosePresenceModel.TONE_STOPS[i] > RosePresenceModel.TONE_STOPS[i - 1], "Stops ascend");
-            expect(luma(RosePresenceModel.ROSE_TONES[i]) <= luma(RosePresenceModel.ROSE_TONES[i - 1])
-                && luma(RosePresenceModel.SILVER_TONES[i]) <= luma(RosePresenceModel.SILVER_TONES[i - 1]), "Lit from above: darker downwards");
+        int mid = tone.lowerTones()[0];
+        expect(mid != RosePresenceModel.ROSE_LOWER[0] && mid != RosePresenceModel.SILVER_LOWER[0], "Mid-ease tones are in between");
+        for (int[][] run : new int[][][]{{RosePresenceModel.ROSE_UPPER, RosePresenceModel.SILVER_UPPER}, {RosePresenceModel.ROSE_LOWER, RosePresenceModel.SILVER_LOWER}})
+            expect(run[0].length == run[1].length, "Rose and silver share their stops");
+        expect(RosePresenceModel.UPPER_STOPS.length == RosePresenceModel.ROSE_UPPER.length
+            && RosePresenceModel.LOWER_STOPS.length == RosePresenceModel.ROSE_LOWER.length, "One tone per stop");
+        for (int[] lower : new int[][]{RosePresenceModel.ROSE_LOWER, RosePresenceModel.SILVER_LOWER})
+            for (int i = 1; i < lower.length; i++) expect(luma(lower[i]) <= luma(lower[i - 1]), "The lower shell darkens downwards");
+        for (int[][] pair : new int[][][]{{RosePresenceModel.ROSE_UPPER, RosePresenceModel.ROSE_LOWER}, {RosePresenceModel.SILVER_UPPER, RosePresenceModel.SILVER_LOWER}}) {
+            int[] up = pair[0], low = pair[1];
+            expect(luma(up[up.length - 1]) > luma(up[1]), "The upper shell brightens into its rim (Fresnel edge)");
+            expect(luma(low[0]) < luma(up[up.length - 1]) && luma(low[0]) < luma(up[2]), "The step to dark is at the seam, not above it");
         }
-        expect(chroma(RosePresenceModel.ROSE_TONES[3]) < chroma(RosePresenceModel.ROSE) / 2,
-            "The rendered rose is far less saturated than the raw #f27a87 base the view used to paint");
-        expect(hue(RosePresenceModel.ROSE_TONES[1]) == 'r' && hue(RosePresenceModel.SILVER_TONES[1]) == 'b', "Rose stays warm, silver stays cool");
+        expect(chroma(RosePresenceModel.ROSE_LOWER[0]) < chroma(RosePresenceModel.ROSE) / 2,
+            "The rendered rose is far less saturated than the raw #f27a87 base");
+        expect(hue(RosePresenceModel.ROSE_UPPER[1]) == 'r' && hue(RosePresenceModel.SILVER_UPPER[1]) == 'b', "Rose stays warm, silver stays cool");
         double tilt = Math.sin(Math.atan((1.8 - .15) / 7.4));
         expect(Math.abs(RosePresenceModel.TILT - tilt) < 1e-6 && RosePresenceModel.TILT > .21f && RosePresenceModel.TILT < .22f,
             "Rims flatten by the camera's ~12.6 degree elevation: " + RosePresenceModel.TILT);
         expect(RosePresenceModel.ROSE_FACE == shaderFace(.95, .48, .53) && RosePresenceModel.SILVER_FACE == shaderFace(.65, .73, .81),
             "Cut face: base*.16, tone-mapped and gamma-corrected as the shader does");
-        expect(luma(RosePresenceModel.ROSE_FACE) < luma(RosePresenceModel.ROSE_TONES[6]), "The cut face is darker than the shell");
+        expect(luma(RosePresenceModel.ROSE_FACE) < luma(RosePresenceModel.ROSE_LOWER[3]), "The cut face is darker than the shell");
 
         System.out.println("RosePresenceModelTest: " + checks + " checks passed");
     }
