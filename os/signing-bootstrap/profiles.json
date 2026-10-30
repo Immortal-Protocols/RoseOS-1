@@ -31,14 +31,26 @@
         ]
       },
       "keyInventory": {
-        "complete": false,
+        "complete": true,
         "requiredByConsumer": [
           "releasekey.pk8",
           "releasekey.x509.pem",
           "platform.pk8",
           "platform.x509.pem",
+          "shared.pk8",
+          "shared.x509.pem",
+          "media.pk8",
+          "media.x509.pem",
+          "networkstack.pk8",
+          "networkstack.x509.pem",
+          "sdk_sandbox.pk8",
+          "sdk_sandbox.x509.pem",
           "bluetooth.pk8",
           "bluetooth.x509.pem",
+          "gmscompat_lib.pk8",
+          "gmscompat_lib.x509.pem",
+          "nfc.pk8",
+          "nfc.x509.pem",
           "avb.pem",
           "avb_pkmd.bin"
         ],
@@ -53,13 +65,15 @@
               "releasekey.x509.pem"
             ],
             "formats": [
-              "PKCS#8 DER, encrypted (decrypted by scripts/host-decrypt-keys.py: openssl pkcs8 -inform DER -passin file:)",
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
               "X.509 PEM"
             ],
-            "algorithm": null,
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
             "evidence": [
-              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --extra_apks ...=$KEY_DIR/releasekey (APKs and APEX containers); host_secrets.check_public_pins pins releasekey.x509.pem as the OTA certificate",
-              "adevtool 17df3b79a73e67ad68387b35c7d41c85e1d8103c (supported read, OCT29-INFRA-S006): src/build/soong.ts RESIGN_WITH_RELEASEKEY_CERT -> default_dev_cert (git blob f05513022f715cf71ef5f8f11f7e49f6bb4e99ab)"
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/testkey and $devkey/devkey to $KEY_DIR/releasekey; script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311) --extra_apks ...=$KEY_DIR/releasekey; host_secrets pins releasekey.x509.pem as the OTA certificate",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
             ]
           },
           {
@@ -69,12 +83,87 @@
               "platform.x509.pem"
             ],
             "formats": [
-              "PKCS#8 DER, encrypted",
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
               "X.509 PEM"
             ],
-            "algorithm": null,
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
             "evidence": [
-              "adevtool 17df3b79a73e67ad68387b35c7d41c85e1d8103c (supported read, OCT29-INFRA-S006): src/build/soong.ts RESIGN_WITH_PLATFORM_CERT -> certificate: 'platform' for generated vendor APKs whose stock signer equals framework-res.apk (src/frontend/generate.ts updatePresigned, git blob 529ada1ed833310e22b97d22bea0eab23f3bf66e); resolved through sign_target_files_apks -d $KEY_DIR"
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/platform; adevtool 17df3b79 soong.ts certificate: platform",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
+            ]
+          },
+          {
+            "role": "shared",
+            "files": [
+              "shared.pk8",
+              "shared.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
+              "X.509 PEM"
+            ],
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
+            "evidence": [
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/shared",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
+            ]
+          },
+          {
+            "role": "media",
+            "files": [
+              "media.pk8",
+              "media.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
+              "X.509 PEM"
+            ],
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
+            "evidence": [
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/media",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
+            ]
+          },
+          {
+            "role": "networkstack",
+            "files": [
+              "networkstack.pk8",
+              "networkstack.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
+              "X.509 PEM"
+            ],
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
+            "evidence": [
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/networkstack",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
+            ]
+          },
+          {
+            "role": "sdk_sandbox",
+            "files": [
+              "sdk_sandbox.pk8",
+              "sdk_sandbox.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
+              "X.509 PEM"
+            ],
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
+            "evidence": [
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/sdk_sandbox",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
             ]
           },
           {
@@ -84,12 +173,51 @@
               "bluetooth.x509.pem"
             ],
             "formats": [
-              "PKCS#8 DER, encrypted",
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
               "X.509 PEM"
             ],
-            "algorithm": null,
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
             "evidence": [
-              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --extra_apks Bluetooth.apk=$KEY_DIR/bluetooth"
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/bluetooth; script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311) --extra_apks Bluetooth.apk=$KEY_DIR/bluetooth",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
+            ]
+          },
+          {
+            "role": "gmscompat_lib",
+            "files": [
+              "gmscompat_lib.pk8",
+              "gmscompat_lib.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
+              "X.509 PEM"
+            ],
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
+            "evidence": [
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/gmscompat_lib",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
+            ]
+          },
+          {
+            "role": "nfc",
+            "files": [
+              "nfc.pk8",
+              "nfc.x509.pem"
+            ],
+            "formats": [
+              "PKCS#8 DER, scrypt-encrypted with the passphrase (make_key -passout env:password -scrypt); decrypted by host-decrypt-keys.py / decrypt-keys (openssl pkcs8 -inform DER -passin)",
+              "X.509 PEM"
+            ],
+            "algorithm": "RSA-4096 (F4), SHA-256 self-signed X.509, 10000 days: generate-keys calls make_key with two arguments, which selects RSA-4096",
+            "evidence": [
+              "GrapheneOS/platform_build b0f697df8cc9519408ca0a404e918cd51bde0735 tools/releasetools/sign_target_files_apks.py (blob b3bb318917f5e8744c4d5a505112373e58e141a5, sha256 066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d) BuildKeyMap -d: -d maps $devkey/nfc",
+              "GrapheneOS/platform_development 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b tools/make_key (blob 54bf82dd5ce666c6575866ea08fe67d232d3b5ad)",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): make_key $key \"/CN=$CN/\" for each key of common.sh (blob dd0e6e66ae765e4888e1baaaed8bb58b0b678b68) signing_keys; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -outform DER -passout ... -scrypt"
             ]
           },
           {
@@ -98,11 +226,13 @@
               "avb.pem"
             ],
             "formats": [
-              "PEM private key, encrypted (rewritten unencrypted by scripts/host-decrypt-keys.py: openssl pkcs8 -topk8 -nocrypt)"
+              "PKCS#8 PEM private key, encrypted with the passphrase (decrypt-keys and host-decrypt-keys.py: openssl pkcs8 -topk8 -in avb.pem -passin ... -nocrypt)"
             ],
-            "algorithm": "SHA256_RSA4096 (RSA-4096)",
+            "algorithm": "RSA-4096 for SHA256_RSA4096",
             "evidence": [
-              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --avb_vbmeta_key $KEY_DIR/avb.pem --avb_vbmeta_algorithm SHA256_RSA4096 and --extra_apex_payload_key ...=$KEY_DIR/avb.pem for rango"
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): --avb_vbmeta_key $KEY_DIR/avb.pem --avb_vbmeta_algorithm SHA256_RSA4096, --extra_apex_payload_key ...=$KEY_DIR/avb.pem",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 decrypt-keys (blob b621d1e02c1091089bd8e0d09c227d8f8e5006b5) and scripts/host-decrypt-keys.py",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): openssl genrsa 4096 | openssl pkcs8 -topk8 -scrypt -out avb.pem; encrypt-keys (blob 90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad): openssl pkcs8 -topk8 -in avb.pem -passout ... -scrypt"
             ]
           },
           {
@@ -111,11 +241,13 @@
               "avb_pkmd.bin"
             ],
             "formats": [
-              "AVB public key metadata of avb.pem"
+              "AVB public key of avb.pem (avbtool extract_public_key --key avb.pem --output avb_pkmd.bin)"
             ],
-            "algorithm": "derived from avb.pem",
+            "algorithm": "derived from avb.pem; avbtool reads the key with openssl rsa -in and no passphrase, so extraction needs the unencrypted key",
             "evidence": [
-              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): AVB_PKMD=$KEY_DIR/avb_pkmd.bin; host_secrets.check_public_pins pins its sha256 as the AVB public key"
+              "AOSP platform/external/avb ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee avbtool.py (blob c0f3c7c62c4121edca58727ae60e17818d46155c) extract_public_key",
+              "script/generate-release.sh at script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 (scripts/tests/fixtures/permission-apex, sha256 01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311): AVB_PKMD=$KEY_DIR/avb_pkmd.bin; host_secrets pins its sha256",
+              "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): avbtool.py extract_public_key --key avb.pem --output avb_pkmd.bin"
             ]
           },
           {
@@ -133,49 +265,37 @@
             ]
           }
         ],
-        "missing": [
-          {
-            "fact": "the complete default certificate set that sign_target_files_apks -d $KEY_DIR maps (beyond releasekey and platform) and each certificate's key algorithm",
-            "source": "build/make tools/releasetools/sign_target_files_apks.py",
-            "project": "platform_build (path build/make)",
-            "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
-            "owner": "GrapheneOS (remote grapheneos)",
-            "admitted": false
-          },
-          {
-            "fact": "the key generation recipe (per-role generator, parameters, encryption and avb_pkmd.bin derivation)",
-            "source": "the generation recipe source (candidate, unverified: development/tools/make_key and a GrapheneOS key encryption helper in script/)",
-            "project": "platform_development (path development) 4089e8b6cfe6cc088006fcc7ad34ba1132356a1b; script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
-            "owner": "GrapheneOS (remote grapheneos)",
-            "admitted": false
-          }
-        ]
+        "basis": "OCT29-INFRA-S010: the nine signing_keys of script common.sh @ 09d65184, equal to the -d default set of sign_target_files_apks.py @ b0f697df, plus avb.pem and avb_pkmd.bin from generate-keys and the generate-release.sh consumer files. id_ed25519 is optional and not produced by generate-keys."
       },
       "tools": {
         "generator": {
           "kind": "source-script",
           "source": {
-            "path": "development/tools/make_key",
-            "project": "platform_development",
+            "path": "tools/make_key",
+            "repository": "GrapheneOS/platform_development",
+            "project": "platform_development (path development)",
             "revision": "4089e8b6cfe6cc088006fcc7ad34ba1132356a1b",
-            "pathVerified": false
+            "gitBlob": "54bf82dd5ce666c6575866ea08fe67d232d3b5ad",
+            "pathVerified": true
           },
-          "sourceSha256": null,
+          "sourceSha256": "88073d52fd10ab7931c64c14be7860c8795350dfcb101460a315408c148d8e6d",
           "installed": {
             "path": null,
             "sha256": null
           },
-          "requiredObservation": "source bytes not admitted; installed path and sha256 measured on the builder by a later host preflight"
+          "requiredObservation": "installed path and sha256 of development/tools/make_key on the builder (a source hash is not an installed identity)"
         },
         "decrypt-keys": {
           "kind": "source-script",
           "source": {
-            "path": "script/decrypt-keys",
+            "path": "decrypt-keys",
+            "repository": "GrapheneOS/script",
             "project": "script",
             "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+            "gitBlob": "b621d1e02c1091089bd8e0d09c227d8f8e5006b5",
             "pathVerified": true
           },
-          "sourceSha256": null,
+          "sourceSha256": "c0109995fe2c64d0f0010bcdecd2db3dd285a17e330aee101077eb6b7d347e4c",
           "installed": {
             "path": null,
             "sha256": null
@@ -185,17 +305,19 @@
         "avbtool": {
           "kind": "source-script",
           "source": {
-            "path": "external/avb/avbtool.py",
-            "project": "platform/external/avb",
+            "path": "avbtool.py",
+            "repository": "AOSP platform/external/avb",
+            "project": "platform/external/avb (path external/avb)",
             "revision": "ba2dec4b035b0a3b61c5f8f8a74d86bcd450b1ee",
-            "pathVerified": false
+            "gitBlob": "c0f3c7c62c4121edca58727ae60e17818d46155c",
+            "pathVerified": true
           },
-          "sourceSha256": null,
+          "sourceSha256": "1aa6f2b462aa67aa3fdf488bee83ab517de8ad9d8228c7b45c35267ab2cf6781",
           "installed": {
             "path": null,
             "sha256": null
           },
-          "requiredObservation": "source bytes not admitted; installed path and sha256 measured on the builder"
+          "requiredObservation": "installed path and sha256 of avbtool on the builder; it runs openssl (avb_openssl beside it, else PATH)"
         },
         "openssl": {
           "kind": "host-binary",
@@ -205,14 +327,214 @@
             "path": null,
             "sha256": null
           },
-          "requiredObservation": "builder host openssl used by scripts/host-decrypt-keys.py; installed path and sha256 measured on the builder"
+          "requiredObservation": "installed path and sha256 of the builder openssl used by the AVB recipe steps, by make_key and avbtool (through PATH) and by scripts/host-decrypt-keys.py"
         }
       },
       "generation": {
-        "recipe": null,
-        "note": "Closed-vocabulary steps run by scripts/signing-bootstrap.py generate_keys; null until the generation recipe source is admitted and reviewed. Nothing is guessed."
+        "recipe": [
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/releasekey",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "releasekey.pk8",
+              "releasekey.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/platform",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "platform.pk8",
+              "platform.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/shared",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "shared.pk8",
+              "shared.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/media",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "media.pk8",
+              "media.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/networkstack",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "networkstack.pk8",
+              "networkstack.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/sdk_sandbox",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "sdk_sandbox.pk8",
+              "sdk_sandbox.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/bluetooth",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "bluetooth.pk8",
+              "bluetooth.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/gmscompat_lib",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "gmscompat_lib.pk8",
+              "gmscompat_lib.x509.pem"
+            ]
+          },
+          {
+            "tool": "generator",
+            "args": [
+              "{out}/nfc",
+              "{subject}"
+            ],
+            "stdin": "passphrase",
+            "exitStatus": 1,
+            "produces": [
+              "nfc.pk8",
+              "nfc.x509.pem"
+            ]
+          },
+          {
+            "tool": "openssl",
+            "args": [
+              "genrsa",
+              "-out",
+              "{out}/avb.unencrypted.pem",
+              "4096"
+            ],
+            "produces": [
+              "avb.unencrypted.pem"
+            ]
+          },
+          {
+            "tool": "avbtool",
+            "args": [
+              "extract_public_key",
+              "--key",
+              "{out}/avb.unencrypted.pem",
+              "--output",
+              "{out}/avb_pkmd.bin"
+            ],
+            "produces": [
+              "avb_pkmd.bin"
+            ]
+          },
+          {
+            "tool": "openssl",
+            "args": [
+              "pkcs8",
+              "-topk8",
+              "-in",
+              "{out}/avb.unencrypted.pem",
+              "-out",
+              "{out}/avb.pem",
+              "-passout",
+              "{passphrase_file_arg}",
+              "-scrypt"
+            ],
+            "produces": [
+              "avb.pem"
+            ],
+            "removes": [
+              "avb.unencrypted.pem"
+            ]
+          }
+        ],
+        "intermediates": [
+          "avb.unencrypted.pem"
+        ],
+        "subject": "/CN=GrapheneOS/",
+        "subjectBasis": "GrapheneOS/script 09d651841b55e42b9cee7392f0ce29ebda8c8fb5 generate-keys (blob 5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e): CN=GrapheneOS; make_key $key \"/CN=$CN/\". This is the retained existing pattern's public subject; no RoseOS or Frankel certificate subject is retained in this repository, so no match with the existing Frankel keys is claimed.",
+        "note": "Non-interactive form of generate-keys + encrypt-keys: make_key reads the passphrase from stdin and writes scrypt-encrypted PKCS#8 DER (it always exits 1 through its EXIT trap); the AVB key is generated with openssl genrsa 4096, its public key extracted by avbtool (which needs the unencrypted key, as in generate-keys before encryption), then encrypted with openssl pkcs8 -topk8 -scrypt using the passphrase file (encrypt-keys form); the unencrypted intermediate stays in the owner-only workspace and is overwritten and removed after encryption. Nothing runs until the installed tool identities are measured.",
+        "sources": {
+          "generate-keys": {
+            "repository": "GrapheneOS/script",
+            "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+            "path": "generate-keys",
+            "gitBlob": "5c38a53eeda4eb16c55bd3a3ad776a3cb1d6349e",
+            "sha256": "f47098e935b3418f267c2f06f41105d01fef57ed74e872a46e888d63cf89f588"
+          },
+          "encrypt-keys": {
+            "repository": "GrapheneOS/script",
+            "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+            "path": "encrypt-keys",
+            "gitBlob": "90ab9b0cda1fbbd81e9fbbd48d352ab2e3edc3ad",
+            "sha256": "70bc26f545bbbd2509d3fd8dc11e7c21054c170116781e87804003153222e861"
+          },
+          "common.sh": {
+            "repository": "GrapheneOS/script",
+            "revision": "09d651841b55e42b9cee7392f0ce29ebda8c8fb5",
+            "path": "common.sh",
+            "gitBlob": "dd0e6e66ae765e4888e1baaaed8bb58b0b678b68",
+            "sha256": "d6ff8cd70b065af7e129a95d026ff5ddd8564a6e12fa340cd02fd93deba76262"
+          }
+        }
       },
-      "avbAlgorithm": "SHA256_RSA4096"
+      "avbAlgorithm": "SHA256_RSA4096",
+      "sources": {
+        "signTargetFilesApks": {
+          "repository": "GrapheneOS/platform_build",
+          "path": "tools/releasetools/sign_target_files_apks.py",
+          "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+          "gitBlob": "b3bb318917f5e8744c4d5a505112373e58e141a5",
+          "sha256": "066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d"
+        }
+      }
     },
     "models-v0": {
       "status": "unbound",

@@ -1,0 +1,49 @@
+name: Models signing verification
+
+# Source tests for the Rose Models (dev.pixel.models) signing adapter: closed profile, input
+# binding, refusal order, signer/output inspection and receipts, with synthetic fixtures and a
+# mocked signer. No keys, secrets, signing, SDK download or artifact access.
+on:
+  pull_request:
+    paths:
+      - 'workspace/models/signing/**'
+      - 'workspace/models/android/tests/verify-artifact.sh'
+      - 'scripts/sign-apk.py'
+      - '.github/workflows/models-signing-verification.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/models/signing/**'
+      - 'workspace/models/android/tests/verify-artifact.sh'
+      - 'scripts/sign-apk.py'
+      - '.github/workflows/models-signing-verification.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-signing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adapter-source-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Adapter tests (synthetic fixtures, mocked signer)
+        working-directory: workspace/models/signing
+        run: |
+          python3 --version
+          python3 -m unittest -v test_models_signing
+      - name: Committed profile is valid and refuses while unbound
+        run: |
+          set +e
+          python3 workspace/models/signing/models_signing.py plan > plan.json
+          code=$?
+          set -e
+          cat plan.json
+          test "$code" -eq 3
+          grep -q '"blocked": \["signer_unbound", "tool_unbound"\]' plan.json

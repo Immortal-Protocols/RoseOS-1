@@ -309,6 +309,9 @@ class Fixture:
             project = str(Path(argv[argv.index('-C') + 1]).relative_to(self.source))
             return subprocess.CompletedProcess(argv, 0, heads[project] + '\n', '')
         host.runner = runner
+        host.system_root = self.tmp/'system'  # never the real /usr/bin of the test machine
+        host.system_root.mkdir(exist_ok=True)
+        host.step_summary = None
         for key, value in kw.items():
             setattr(host, key, value)
         return host
@@ -352,7 +355,12 @@ class ProbeTest(unittest.TestCase):
             on_disk = f.receipt(evidence)
             self.assertEqual(on_disk, json.loads(json.dumps(receipt)))
             self.assertEqual((evidence/'SHA256SUMS').read_text(),
-                f'{readiness.sha256_file(evidence/"device-readiness.json")}  device-readiness.json\n')
+                f'{readiness.sha256_file(evidence/"device-readiness.json")}  device-readiness.json\n'
+                f'{readiness.sha256_file(evidence/"signing-tools.json")}  signing-tools.json\n')
+            signing = json.loads((evidence/'signing-tools.json').read_text())
+            self.assertEqual(signing['status'], 'observed')
+            self.assertEqual({t: r['status'] for t, r in signing['tools'].items()},
+                {'make_key': 'missing', 'decrypt-keys': 'missing', 'keytool': 'missing', 'openssl': 'missing'})
             self.assertEqual((receipt['recipeSha'], receipt['attempt'], receipt['lock']['acquired'], receipt['executedMake']),
                 (f.recipe, '4081-1', True, False))
             self.assertEqual(receipt['contract']['sha256'], readiness.sha256_file(ROOT/'os/devices/pixel10.json'))

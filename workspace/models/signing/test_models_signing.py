@@ -1,0 +1,436 @@
+"""Source tests for the Rose Models signing adapter. Synthetic fixtures, a fake SDK, a public fake
+fingerprint and mocked signer/inspector only: no key, keystore, password, real apksigner or network.
+These tests prove adapter logic, not a real signature or an installed host tool."""
+import copy
+import hashlib
+import json
+import os
+import stat
+import subprocess
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import models_signing as ms
+
+FAKE_SIGNER = '0123456789abcdef' * 4          # public, obviously fake
+OTHER_SIGNER = 'fedcba9876543210' * 4
+SOURCE = 'a' * 40
+RUN, ATTEMPT = '424242', '1'
+ZIP_TIME = (2026, 1, 1, 0, 0, 0)
+
+
+def h(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def write_apk(path, native, extra=None):
+    with zipfile.ZipFile(path, 'w') as z:
+        for name, data in [('AndroidManifest.xml', b'synthetic manifest'), ('classes.dex', b'dex'),
+                           (ms.NATIVE_ENTRY, native)] + (extra or []):
+            info = zipfile.ZipInfo(name, ZIP_TIME)
+            z.writestr(info, data)
+
+
+def badging(package='dev.pixel.models', version=('1', '0.1.0-dev-unsigned'), abi='arm64-v8a'):
+    return (f"package: name='{package}' versionCode='{version[0]}' versionName='{version[1]}' "
+            "platformBuildVersionName='15'\nsdkVersion:'29'\ntargetSdkVersion:'35'\n"
+            "uses-permission: name='android.permission.INTERNET'\napplication-label:'Rose Models'\n"
+            f"native-code: '{abi}'\n")
+
+
+def make_artifact(root, native=b'synthetic arm64 library', **badging_args):
+    """A retained-artifact directory shaped exactly like stage-artifact.sh output."""
+    d = Path(root)
+    d.mkdir()
+    write_apk(d / 'rose-models-unsigned.apk', native)
+    (d / 'librose_chat_android.so').write_bytes(native)
+    (d / 'apk-metadata.txt').write_text(badging(**badging_args))
+    apk_sha, so_sha = h((d / 'rose-models-unsigned.apk').read_bytes()), h(native)
+    (d / 'build-receipt.txt').write_text(f'apk_sha256: {apk_sha}\n')
+    fields = {
+        'schema': 'rose-models-unsigned-artifact/1', 'source_sha': SOURCE, 'source_dirty_models_files': '0',
+        'github_event': 'push', 'github_ref': 'refs/heads/main', 'github_sha': SOURCE,
+        'github_run_id': RUN, 'github_run_attempt': ATTEMPT,
+        'tree_android': 'b' * 40, 'tree_rose_chat_android': 'c' * 40, 'tree_rose_chat_core': 'd' * 40,
+        'tree_contracts': 'e' * 40, 'cargo_lock_rose_chat_android_sha256': '1' * 64,
+        'cargo_lock_rose_chat_core_sha256': '2' * 64,
+        'apk_sha256': apk_sha, 'native_sha256': so_sha, 'native_in_apk_sha256': so_sha,
+    }
+    (d / 'artifact-receipt.txt').write_text(''.join(f'{k}: {v}\n' for k, v in fields.items()))
+    rehash(d)
+    return d
+
+
+def rehash(d):
+    names = ['rose-models-unsigned.apk', 'librose_chat_android.so', 'apk-metadata.txt',
+             'build-receipt.txt', 'artifact-receipt.txt']
+    (d / 'SHA256SUMS').write_text(''.join(f'{h((d / n).read_bytes())}  {n}\n' for n in names))
+
+
+def make_sdk(root, metadata_text):
+    """Fake build-tools: aapt prints the fixture badging, apksigner.jar is inert bytes."""
+    bt = Path(root) / 'build-tools/android-15'
+    (bt / 'lib').mkdir(parents=True)
+    (bt / 'aapt').write_text('#!/bin/sh\ncat <<\'EOF\'\n' + metadata_text + 'EOF\n')
+    os.chmod(bt / 'aapt', 0o755)
+    (bt / 'lib/apksigner.jar').write_bytes(b'synthetic apksigner jar')
+    return Path(root)
+
+
+def profile_for(artifact, sdk, signer=FAKE_SIGNER):
+    p = ms.load_profile(Path(ms.__file__).with_name('profile.json'))
+    p = copy.deepcopy(p)
+    receipt = ms._receipt_fields(artifact / 'artifact-receipt.txt')
+    p['expectedInput'].update({
+        'sourceSha': SOURCE, 'runId': RUN, 'runAttempt': ATTEMPT,
+        'apkSha256': h((artifact / 'rose-models-unsigned.apk').read_bytes()),
+        'nativeSha256': h((artifact / 'librose_chat_android.so').read_bytes()),
+        'artifactReceiptSha256': h((artifact / 'artifact-receipt.txt').read_bytes()),
+        'apkMetadataSha256': h((artifact / 'apk-metadata.txt').read_bytes()),
+        'buildReceiptSha256': h((artifact / 'build-receipt.txt').read_bytes()),
+        'treeAndroid': receipt['tree_android'], 'treeRoseChatAndroid': receipt['tree_rose_chat_android'],
+        'treeRoseChatCore': receipt['tree_rose_chat_core'], 'treeContracts': receipt['tree_contracts'],
+        'cargoLockRoseChatAndroid': receipt['cargo_lock_rose_chat_android_sha256'],
+        'cargoLockRoseChatCore': receipt['cargo_lock_rose_chat_core_sha256'],
+    })
+    p['signer'] = {'status': 'bound', 'certificateSha256': signer}
+    p['tool'] = {'status': 'bound', **ms.tool_hashes(sdk)}
+    return p
+
+
+class MockSigner:
+    """Stands in for scripts/sign-apk.py. Records calls; never touches key material."""
+
+    def __init__(self, returncode=0, mutate_input=None, receipt_signers=None):
+        self.calls, self.returncode = [], returncode
+        self.mutate_input, self.receipt_signers = mutate_input, receipt_signers
+
+    def __call__(self, argv, env):
+        self.calls.append((argv, env))
+        unsigned = Path(argv[2])
+        out = Path(argv[argv.index('--output') + 1])
+        pin = argv[argv.index('--expected-cert-sha256') + 1]
+        if self.mutate_input:
+            self.mutate_input()
+        if self.returncode:
+            out.write_bytes(b'partial')
+            return SimpleNamespace(returncode=self.returncode, stderr='APK signing stopped: signing_failed\n')
+        with zipfile.ZipFile(unsigned) as src, zipfile.ZipFile(out, 'w') as dst:
+            for info in src.infolist():
+                dst.writestr(info, src.read(info))
+            dst.writestr(zipfile.ZipInfo('META-INF/MOCK-NOT-A-SIGNATURE', ZIP_TIME), b'mock')
+        out.with_suffix('.apk.idsig').write_bytes(b'mock idsig')
+        out.with_suffix('.receipt.json').write_text(json.dumps({
+            'sha256': h(out.read_bytes()), 'inputSha256': h(unsigned.read_bytes()),
+            'certificateSha256': self.receipt_signers or [pin]}))
+        return SimpleNamespace(returncode=0, stderr='')
+
+
+def mock_inspector(signers=None, schemes=None, badging_text=None):
+    calls = []
+
+    def inspect(apk, sdk_root):
+        calls.append(apk)
+        return {'verified': True, 'signers': [FAKE_SIGNER] if signers is None else signers,
+                'schemes': schemes or {'v1': False, 'v2': True, 'v3': True, 'v4': True},
+                'badging': ms._badging(badging_text or badging())}
+    inspect.calls = calls
+    return inspect
+
+
+class Fixture(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='models-signing-test-'))
+        self.artifact = make_artifact(self.tmp / 'artifact')
+        self.sdk = make_sdk(self.tmp / 'sdk', badging())
+        self.profile = profile_for(self.artifact, self.sdk)
+        secrets = self.tmp / 'operator'
+        secrets.mkdir(mode=0o700)
+        self.keystore, self.password = secrets / 'models.p12', secrets / 'password'
+        self.keystore.write_bytes(b'NOT A KEYSTORE: placeholder bytes for path checks only')
+        self.password.write_text('NOT A PASSWORD\n')
+        os.chmod(self.keystore, 0o600)
+        os.chmod(self.password, 0o600)
+        self.out = self.tmp / 'signed'
+
+    def tearDown(self):
+        subprocess.run(['rm', '-rf', str(self.tmp)])
+
+    def sign(self, profile=None, executor=None, inspector=None, out=None, keystore=None):
+        return ms.sign(profile or self.profile, self.artifact, out or self.out, keystore or self.keystore,
+                       self.password, self.sdk, executor=executor or MockSigner(),
+                       inspector=inspector or mock_inspector(), evidence_tier='mock-source-test')
+
+    def assertRefused(self, category, fn, *args, **kw):
+        with self.assertRaises(ms.Refused) as ctx:
+            fn(*args, **kw)
+        self.assertTrue(str(ctx.exception).startswith(category), str(ctx.exception))
+        return ctx.exception
+
+    def assertNoSuccess(self):
+        self.assertFalse((self.out / 'models-signing-receipt.json').exists())
+        self.assertFalse((self.out / ms.SIGNED_NAME).exists())
+
+    def assertOperatorFilesIntact(self):
+        self.assertEqual(self.keystore.read_bytes(), b'NOT A KEYSTORE: placeholder bytes for path checks only')
+        self.assertEqual(self.password.read_text(), 'NOT A PASSWORD\n')
+
+
+class ProfileTests(Fixture):
+    def test_committed_profile_is_valid_and_unbound(self):
+        p = ms.load_profile(Path(ms.__file__).with_name('profile.json'))
+        self.assertEqual(p['package'], 'dev.pixel.models')
+        self.assertEqual(ms.readiness(p), ['signer_unbound', 'tool_unbound'])
+        self.assertEqual(p['expectedInput']['apkSha256'],
+                         '7c8fc53c59517da7cd466c7e9695d26846485aced74de53ee764e71b11dfae15')
+
+    def write(self, data):
+        f = self.tmp / 'p.json'
+        f.write_text(json.dumps(data))
+        return f
+
+    def test_closed_schema(self):
+        cases = {
+            'unknown field': lambda p: p.update(command='rm -rf /'),
+            'missing field': lambda p: p.pop('tool'),
+            'other purpose': lambda p: p.update(purpose='sign-anything'),
+            'voice package': lambda p: p.update(package='dev.pixel.voice'),
+            'other alias': lambda p: p.update(keyAlias='rose-agent'),
+            'floating source': lambda p: p['expectedInput'].update(sourceSha='main'),
+            'short hash': lambda p: p['expectedInput'].update(apkSha256='7c8fc53c'),
+            'pull request ref': lambda p: p['expectedInput'].update(githubRef='refs/pull/135/merge'),
+            'unknown expected field': lambda p: p['expectedInput'].update(extra='x'),
+            'unbound with value': lambda p: p['signer'].update(certificateSha256=FAKE_SIGNER),
+            'bound without value': lambda p: p['signer'].update(status='bound'),
+            'upper-case pin': lambda p: p['signer'].update(status='bound', certificateSha256=FAKE_SIGNER.upper()),
+            'v1 only': lambda p: p.update(requiredSchemes=['v1']),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                p = copy.deepcopy(self.profile)
+                p['signer'] = {'status': 'unbound', 'certificateSha256': None}
+                mutate(p)
+                self.assertRaises(ms.Refused, ms.load_profile, self.write(p))
+
+    def test_plan_reads_nothing_private(self):
+        with mock.patch.object(ms, 'check_private_file') as private:
+            planned = ms.plan(self.profile, self.artifact, self.out)
+        private.assert_not_called()
+        self.assertEqual(planned['blocked'], [])
+        self.assertFalse(self.out.exists())
+
+    def test_plan_path_guards(self):
+        self.out.mkdir()
+        self.assertRefused('output_collision', ms.plan, self.profile, self.artifact, self.out)
+        link = self.tmp / 'link'
+        link.symlink_to(self.artifact)
+        self.assertRefused('unsafe_path', ms.plan, self.profile, link, self.tmp / 'o2')
+        self.assertRefused('unsafe_path', ms.plan, self.profile, self.artifact, ms.REPO / 'out-signed')
+
+    def test_cli_plan_refuses_unbound_committed_profile(self):
+        r = subprocess.run(['python3', str(Path(ms.__file__)), 'plan'], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertEqual(json.loads(r.stdout)['blocked'], ['signer_unbound', 'tool_unbound'])
+
+
+class SignTests(Fixture):
+    def test_positive_mock_path(self):
+        signer, inspector = MockSigner(), mock_inspector()
+        receipt = self.sign(executor=signer, inspector=inspector)
+        self.assertEqual(len(signer.calls), 1)
+        argv, env = signer.calls[0]
+        self.assertEqual(argv[1], str(ms.SIGN_APK))
+        self.assertEqual(set(env), {'PATH', 'ANDROID_SDK_ROOT'})
+        self.assertNotIn('NOT A PASSWORD', ' '.join(argv) + json.dumps(env))
+        self.assertEqual(receipt['evidenceTier'], 'mock-source-test')
+        self.assertIn('MOCK', receipt['notice'])
+        self.assertEqual(receipt['signerCertificateSha256'], FAKE_SIGNER)
+        self.assertEqual(receipt['input']['apkSha256'], self.profile['expectedInput']['apkSha256'])
+        self.assertEqual(receipt['output']['sha256'], h((self.out / ms.SIGNED_NAME).read_bytes()))
+        self.assertFalse((self.out / 'work').exists(), 'adapter-owned config/copy removed')
+        written = ''.join(f.read_text(errors='replace') for f in self.out.iterdir() if f.suffix == '.json')
+        self.assertNotIn(str(self.tmp / 'operator'), written, 'no private path in receipts')
+        self.assertEqual(stat.S_IMODE((self.out / 'models-signing-receipt.json').stat().st_mode), 0o600)
+        self.assertOperatorFilesIntact()
+
+    def test_unbound_profile_touches_nothing(self):
+        for block in ('signer', 'tool'):
+            with self.subTest(block):
+                p = copy.deepcopy(self.profile)
+                p[block] = ms.load_profile(Path(ms.__file__).with_name('profile.json'))[block]
+                signer, inspector = MockSigner(), mock_inspector()
+                run_tool, tools = mock.Mock(), mock.Mock()
+                with mock.patch.object(ms, 'check_private_file') as private:
+                    self.assertRefused('not_ready', ms.sign, p, self.artifact, self.out, self.keystore,
+                                       self.password, self.sdk, executor=signer, inspector=inspector,
+                                       tools=tools, run_tool=run_tool)
+                private.assert_not_called()
+                run_tool.assert_not_called()
+                tools.assert_not_called()
+                self.assertEqual((signer.calls, inspector.calls), ([], []))
+                self.assertFalse(self.out.exists())
+
+    def test_wrong_package_version_abi_in_input(self):
+        # verify-artifact.sh (unchanged) already rejects a foreign package or ABI on input; the
+        # adapter's own identity check is what catches a version change, and every output change.
+        for name, kw, category in [('voice', {'package': 'dev.pixel.voice'}, 'input_verifier_failed'),
+                                   ('version', {'version': ('2', '0.2.0')}, 'wrong_version'),
+                                   ('abi', {'abi': 'x86_64'}, 'input_verifier_failed')]:
+            with self.subTest(name):
+                art = make_artifact(self.tmp / f'art-{name}', **kw)
+                sdk = make_sdk(self.tmp / f'sdk-{name}', badging(**kw))
+                p = profile_for(art, sdk)  # every hash matches: only the identity check can refuse
+                signer = MockSigner()
+                self.assertRefused(category, ms.sign, p, art, self.tmp / f'o-{name}', self.keystore,
+                                   self.password, sdk, executor=signer, inspector=mock_inspector())
+                self.assertEqual(signer.calls, [])
+
+    def test_mutated_input_files(self):
+        for name in ('rose-models-unsigned.apk', 'librose_chat_android.so', 'artifact-receipt.txt'):
+            with self.subTest(name):
+                art = make_artifact(self.tmp / f'm-{name}')
+                f = art / name
+                f.write_bytes(f.read_bytes() + b'!')
+                signer = MockSigner()
+                self.assertRefused('input_verifier_failed', ms.sign, self.profile, art, self.tmp / f'o-{name}',
+                                   self.keystore, self.password, self.sdk, executor=signer,
+                                   inspector=mock_inspector())
+                self.assertEqual(signer.calls, [])
+
+    def test_consistent_but_swapped_artifact_needs_external_binding(self):
+        # A self-consistent artifact with a different library passes verify-artifact.sh on its
+        # own; only the profile's external expected hashes stop it.
+        swapped = make_artifact(self.tmp / 'swapped', native=b'some other library')
+        r = subprocess.run(['bash', str(ms.VERIFY_ARTIFACT), str(swapped), '--source', SOURCE,
+                            '--run', RUN, '--attempt', ATTEMPT], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        signer = MockSigner()
+        self.assertRefused('input_hash_mismatch', ms.sign, self.profile, swapped, self.out,
+                           self.keystore, self.password, self.sdk, executor=signer, inspector=mock_inspector())
+        self.assertEqual(signer.calls, [])
+
+    def test_wrong_source_run_attempt_tree(self):
+        for key, value, category in [('sourceSha', 'f' * 40, 'input_verifier_failed'),
+                                     ('runId', '1', 'input_verifier_failed'),
+                                     ('runAttempt', '2', 'input_verifier_failed'),
+                                     ('treeRoseChatCore', '9' * 40, 'source_binding'),
+                                     ('cargoLockRoseChatAndroid', '9' * 64, 'source_binding')]:
+            with self.subTest(key):
+                p = copy.deepcopy(self.profile)
+                p['expectedInput'][key] = value
+                self.assertRefused(category, ms.sign, p, self.artifact, self.tmp / f'o-{key}', self.keystore,
+                                   self.password, self.sdk, executor=MockSigner(), inspector=mock_inspector())
+
+    def test_wrong_missing_multiple_signers(self):
+        for name, signers in [('wrong', [OTHER_SIGNER]), ('missing', []),
+                              ('multiple', [FAKE_SIGNER, OTHER_SIGNER])]:
+            with self.subTest(name):
+                out = self.tmp / f'o-{name}'
+                self.assertRefused('signer_mismatch', self.sign, executor=MockSigner(),
+                                   inspector=mock_inspector(signers=signers), out=out)
+                self.assertFalse((out / 'models-signing-receipt.json').exists())
+                self.assertFalse((out / ms.SIGNED_NAME).exists())
+                failure = json.loads((out / 'models-signing-failure.json').read_text())
+                self.assertEqual(failure['stage'], 'inspect')
+                self.assertIn(ms.SIGNED_NAME, failure['removedOutputSha256'])
+        self.assertRefused('signer_receipt_mismatch', self.sign,
+                           executor=MockSigner(receipt_signers=[OTHER_SIGNER]), out=self.tmp / 'o-receipt')
+
+    def test_missing_scheme_and_identity_change_in_output(self):
+        self.assertRefused('scheme_missing', self.sign,
+                           inspector=mock_inspector(schemes={'v2': True, 'v3': False}), out=self.tmp / 'o1')
+        self.assertRefused('wrong_package', self.sign,
+                           inspector=mock_inspector(badging_text=badging(package='dev.pixel.voice')),
+                           out=self.tmp / 'o2')
+
+    def test_signer_command_failure(self):
+        self.assertRefused('signer_failed', self.sign, executor=MockSigner(returncode=1))
+        self.assertNoSuccess()
+        failure = json.loads((self.out / 'models-signing-failure.json').read_text())
+        self.assertEqual((failure['stage'], failure['category']),
+                         ('sign', 'signer_failed: APK signing stopped: signing_failed'))
+        self.assertIn(ms.SIGNED_NAME, failure['removedOutputSha256'])
+        self.assertFalse((self.out / 'work').exists())
+        self.assertOperatorFilesIntact()
+
+    def test_input_mutation_during_execution(self):
+        apk = self.artifact / 'rose-models-unsigned.apk'
+        signer = MockSigner(mutate_input=lambda: apk.write_bytes(apk.read_bytes() + b'late change'))
+        self.assertRefused('input_changed', self.sign, executor=signer)
+        self.assertNoSuccess()
+
+    def test_private_input_guards(self):
+        cases = []
+        loose = self.tmp / 'operator/loose.p12'
+        loose.write_bytes(b'x')
+        os.chmod(loose, 0o644)
+        cases.append(('group/other readable', loose))
+        link = self.tmp / 'operator/link.p12'
+        link.symlink_to(self.keystore)
+        cases.append(('symlink', link))
+        cases.append(('missing', self.tmp / 'operator/none.p12'))
+        for name, keystore in cases:
+            with self.subTest(name):
+                signer = MockSigner()
+                with self.assertRaises(ms.Refused):
+                    self.sign(executor=signer, keystore=keystore, out=self.tmp / f'o-{name}')
+                self.assertEqual(signer.calls, [])
+                self.assertFalse((self.tmp / f'o-{name}').exists())
+        self.assertOperatorFilesIntact()
+
+    def test_tool_identity_mismatch(self):
+        (self.sdk / 'build-tools/android-15/lib/apksigner.jar').write_bytes(b'a different tool')
+        signer = MockSigner()
+        self.assertRefused('tool_mismatch', self.sign, executor=signer)
+        self.assertEqual(signer.calls, [])
+
+    def test_output_collision_with_existing_files(self):
+        self.out.mkdir()
+        (self.out / 'keep.txt').write_text('unrelated')
+        self.assertRefused('output_collision', self.sign)
+        self.assertEqual((self.out / 'keep.txt').read_text(), 'unrelated')
+
+
+class NegativeControls(Fixture):
+    """Disabling an essential check must make the matching test case pass through, which shows
+    the tests above depend on that check and not on an accident."""
+
+    def test_removing_identity_check_lets_foreign_output_through(self):
+        # Signed output that inspects as dev.pixel.voice is refused (test_missing_scheme_and_...);
+        # with the identity check removed it would be accepted and mislabelled as Models.
+        voice = mock_inspector(badging_text=badging(package='dev.pixel.voice'))
+        with mock.patch.object(ms, '_require_identity', lambda *a: None):
+            receipt = self.sign(inspector=voice)
+        self.assertEqual(receipt['package'], 'dev.pixel.models')
+
+    def test_removing_signer_pin_check_lets_wrong_signer_through(self):
+        with mock.patch.object(ms, '_require_signer', lambda *a: None):
+            receipt = self.sign(inspector=mock_inspector(signers=[OTHER_SIGNER]))
+        self.assertEqual(receipt['signerCertificateSha256'], FAKE_SIGNER)  # would claim the bound signer
+
+    def test_removing_version_check_lets_wrong_version_through(self):
+        art = make_artifact(self.tmp / 'v2', version=('2', '0.2.0'))
+        sdk = make_sdk(self.tmp / 'sdk-v2', badging(version=('2', '0.2.0')))
+        with mock.patch.object(ms, '_require_identity', lambda *a: None):
+            ms.sign(profile_for(art, sdk), art, self.out, self.keystore, self.password, sdk,
+                    executor=MockSigner(), inspector=mock_inspector(), evidence_tier='mock-source-test')
+
+    def test_removing_external_binding_lets_swapped_artifact_through(self):
+        swapped = make_artifact(self.tmp / 'swapped', native=b'some other library')
+        loose = copy.deepcopy(self.profile)
+        with mock.patch.object(ms, 'verify_input',
+                               lambda p, d, **kw: {'apkSha256': h((d / 'rose-models-unsigned.apk').read_bytes()),
+                                                   'nativeSha256': h(b'some other library')}):
+            loose['expectedInput']['apkSha256'] = h((swapped / 'rose-models-unsigned.apk').read_bytes())
+            loose['expectedInput']['nativeSha256'] = h(b'some other library')
+            receipt = ms.sign(loose, swapped, self.out, self.keystore, self.password, self.sdk,
+                              executor=MockSigner(), inspector=mock_inspector(), evidence_tier='mock-source-test')
+        self.assertNotEqual(receipt['input']['apkSha256'], self.profile['expectedInput']['apkSha256'])
+
+
+if __name__ == '__main__':
+    unittest.main()

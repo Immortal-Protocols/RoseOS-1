@@ -64,6 +64,7 @@ on:
       - 'os/background-control/agent-pip/AndroidManifest.xml'
       - 'scripts/device-readiness.py'
       - 'scripts/tests/test_device_readiness.py'
+      - 'scripts/tests/test_signing_tool_observation.py'
       - 'scripts/blazer-preparation-preflight.py'
       - 'scripts/tests/test_blazer_preparation_preflight.py'
       - 'scripts/signing-bootstrap.py'
@@ -137,6 +138,7 @@ on:
       - 'os/background-control/agent-pip/AndroidManifest.xml'
       - 'scripts/device-readiness.py'
       - 'scripts/tests/test_device_readiness.py'
+      - 'scripts/tests/test_signing_tool_observation.py'
       - 'scripts/blazer-preparation-preflight.py'
       - 'scripts/tests/test_blazer_preparation_preflight.py'
       - 'scripts/signing-bootstrap.py'
@@ -189,6 +191,7 @@ jobs:
           python3 os/tests/test_cuttlefish_alpha_product.py
           python3 scripts/tests/test_device_contract.py
           python3 scripts/tests/test_device_readiness.py
+          python3 scripts/tests/test_signing_tool_observation.py
           python3 scripts/tests/test_blazer_preparation_preflight.py
           python3 scripts/tests/test_signing_bootstrap.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
