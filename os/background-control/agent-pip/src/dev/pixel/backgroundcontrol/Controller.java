@@ -43,6 +43,8 @@ public final class Controller {
  static JSONObject refusal(Map<String,Object> fields,JSONObject current)throws Exception{JSONObject r=new JSONObject();for(Map.Entry<String,Object> f:fields.entrySet())r.put(f.getKey(),f.getValue());return r.put("current",current);}
  static String taskParam(JSONObject p)throws Exception{return StopLedger.taskId(p.has("taskId")&&!p.isNull("taskId")?p.getString("taskId"):null);}
  // An agent stop tagged for another task (for example a late turn-end cleanup) leaves this workspace alone.
+ /** #156: resolves an overview selection against this live session only. Its own display comes from its accessibility windows. */
+ @SuppressWarnings("unchecked") static synchronized WatchBinding resolveSelection(int display,String pkg){int own=-1;if(session!=null)try{List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);for(AccessibilityWindowInfo w:windows){int d=w.getDisplayId();own=own==-1?d:(own==d?own:-2);w.recycle();}}catch(Throwable e){own=-1;}return WatchBinding.fromSelection(display,pkg,session!=null,status,own<0?-1:own,target,id,taskId);}
  static synchronized JSONObject agentStop(Context c,JSONObject p)throws Exception{String task=taskParam(p);Map<String,Object> stale=stops.taskMismatch(task,taskId);if(stale!=null)return refusal(stale,state(c));stop(c,StopLedger.AGENT);return state(c);}
  static synchronized JSONObject start(Context context,JSONObject p)throws Exception{
   Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=taskParam(p);
