@@ -1,0 +1,141 @@
+diff --git a/res/values/config.xml b/res/values/config.xml
+index e4299eb..ec0883f 100644
+--- a/res/values/config.xml
++++ b/res/values/config.xml
+@@ -2,6 +2,8 @@
+ <resources>
+     <string name="url" translatable="false">https://releases.grapheneos.org/</string>
+     <string name="channel_default" translatable="false">prod</string>
++    <!-- RoseOS: GitHub release list for a device published as separate releases; empty uses url as is. -->
++    <string name="release_index" translatable="false"></string>
+     <!-- Wire channels with published DEVICE-channel metadata under the url above. -->
+     <string-array name="channel_published" translatable="false">
+         <item>stable</item>
+diff --git a/src/app/seamlessupdate/client/Service.java b/src/app/seamlessupdate/client/Service.java
+index b81a7e5..09d99b0 100644
+--- a/src/app/seamlessupdate/client/Service.java
++++ b/src/app/seamlessupdate/client/Service.java
+@@ -32,6 +32,8 @@ import java.io.OutputStream;
+ import java.net.URL;
+ import java.nio.file.Files;
+ import java.security.GeneralSecurityException;
++import java.util.ArrayList;
++import java.util.List;
+ import java.util.concurrent.CountDownLatch;
+ import java.util.zip.ZipEntry;
+ import java.util.zip.ZipFile;
+@@ -41,6 +43,9 @@ import javax.net.ssl.HttpsURLConnection;
+ import libcore.io.IoUtils;
+ 
+ import org.grapheneos.tls.ModernTLSSocketFactory;
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
+ 
+ public class Service extends IntentService {
+     private static final String TAG = "Service";
+@@ -59,6 +64,8 @@ public class Service extends IntentService {
+ 
+     private NotificationHandler notificationHandler;
+     private boolean mUpdating = false;
++    /** The base for this check: the configured url, or one release's download path (RoseReleases). */
++    private String baseUrl;
+ 
+     public Service() {
+         super(TAG);
+@@ -71,7 +78,7 @@ public class Service extends IntentService {
+     }
+ 
+     private HttpsURLConnection fetchData(final Network network, final String path) throws IOException {
+-        final URL url = new URL(getString(R.string.url) + path);
++        final URL url = new URL(baseUrl + path);
+         final HttpsURLConnection urlConnection = (HttpsURLConnection) network.openConnection(url);
+         urlConnection.setSSLSocketFactory(tlsSocketFactory);
+         urlConnection.setConnectTimeout(CONNECT_TIMEOUT);
+@@ -122,7 +129,7 @@ public class Service extends IntentService {
+         if (streaming) {
+             final SharedPreferences preferences = Settings.getPreferences(this);
+             final String downloadFile = preferences.getString(PREFERENCE_DOWNLOAD_FILE, null);
+-            engine.applyPayload(getString(R.string.url) + downloadFile.replace("-streaming", ""), payloadOffset, 0, headerKeyValuePairs);
++            engine.applyPayload(baseUrl + downloadFile.replace("-streaming", ""), payloadOffset, 0, headerKeyValuePairs);
+         } else {
+             UPDATE_PATH.setReadable(true, false);
+             engine.applyPayload("file://" + UPDATE_PATH, payloadOffset, 0, headerKeyValuePairs);
+@@ -258,6 +265,52 @@ public class Service extends IntentService {
+         notificationHandler.showRebootNotification();
+     }
+ 
++    /** The public release list, read anonymously (bounded pages and bytes), reduced to RoseReleases' input. */
++    private RoseReleases.Choice resolveRelease(final Network network, final String index, final String channel)
++            throws IOException {
++        final List<RoseReleases.Release> releases = new ArrayList<>();
++        for (int page = 1; page <= RoseReleases.MAX_PAGES; page++) {
++            final HttpsURLConnection connection =
++                    (HttpsURLConnection) network.openConnection(new URL(RoseReleases.page(index, page)));
++            connection.setSSLSocketFactory(tlsSocketFactory);
++            connection.setConnectTimeout(CONNECT_TIMEOUT);
++            connection.setReadTimeout(READ_TIMEOUT);
++            connection.setInstanceFollowRedirects(false);
++            connection.setRequestProperty("Accept", "application/vnd.github+json");
++            try {
++                final int status = connection.getResponseCode();
++                if (status != 200) {
++                    throw new IOException("release list unavailable (" + status + ")");
++                }
++                final JSONArray list;
++                try (final InputStream input = connection.getInputStream()) {
++                    final byte[] body = input.readNBytes(2 * 1024 * 1024 + 1);
++                    if (body.length > 2 * 1024 * 1024) throw new IOException("release list too large");
++                    list = new JSONArray(new String(body, java.nio.charset.StandardCharsets.UTF_8));
++                }
++                for (int i = 0; i < list.length(); i++) {
++                    final JSONObject release = list.getJSONObject(i);
++                    final List<RoseReleases.Asset> assets = new ArrayList<>();
++                    final JSONArray files = release.optJSONArray("assets");
++                    for (int j = 0; files != null && j < files.length(); j++) {
++                        final JSONObject asset = files.getJSONObject(j);
++                        assets.add(new RoseReleases.Asset(asset.optString("name", null), asset.optString("state", null)));
++                    }
++                    releases.add(new RoseReleases.Release(release.optString("tag_name", null),
++                            release.optBoolean("draft", true), assets));
++                }
++                if (list.length() < RoseReleases.PER_PAGE) {
++                    return RoseReleases.choose(releases, true, DEVICE, channel, INCREMENTAL);
++                }
++            } catch (JSONException e) {
++                throw new IOException("release list unreadable");
++            } finally {
++                connection.disconnect();
++            }
++        }
++        return RoseReleases.choose(releases, false, DEVICE, channel, INCREMENTAL);
++    }
++
+     @Override
+     protected void onHandleIntent(final Intent intent) {
+         Log.d(TAG, "onHandleIntent");
+@@ -301,6 +354,24 @@ public class Service extends IntentService {
+                 return;
+             }
+ 
++            // RoseOS: a device published as separate releases resolves one release first, so the metadata and
++            // the OTA below come from the same release; an empty release_index keeps the configured url.
++            baseUrl = getString(R.string.url);
++            final String releaseIndex = getString(R.string.release_index);
++            if (!releaseIndex.isEmpty()) {
++                final RoseReleases.Choice choice = resolveRelease(network, releaseIndex, channel);
++                if (choice.error != null) {
++                    throw new IOException("release discovery failed: " + choice.error);
++                }
++                if (choice.upToDate()) {
++                    notificationHandler.showUpdatedNotification(channel);
++                    Log.d(TAG, "no " + DEVICE + " release newer than " + INCREMENTAL);
++                    mUpdating = false;
++                    return;
++                }
++                baseUrl = RoseReleases.base(baseUrl, choice.tag);
++            }
++
+             Log.d(TAG, "fetching metadata for " + DEVICE + "-" + channel);
+             connection = fetchData(network, DEVICE + "-" + channel);
+             final String[] metadata;
