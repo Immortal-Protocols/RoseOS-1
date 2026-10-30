@@ -1,0 +1,37 @@
+{
+  "schema": "rose-models-signing-profile/1",
+  "purpose": "sign-retained-unsigned-models-apk",
+  "package": "dev.pixel.models",
+  "keyAlias": "rose-models",
+  "versionCode": "1",
+  "versionName": "0.1.0-dev-unsigned",
+  "abi": "arm64-v8a",
+  "requiredSchemes": ["v2", "v3"],
+  "expectedInput": {
+    "githubEvent": "push",
+    "githubRef": "refs/heads/main",
+    "sourceSha": "8ff67d6bcfabad015dae7d370325cf8bf21690d2",
+    "runId": "40960062067",
+    "runAttempt": "1",
+    "apkSha256": "7c8fc53c59517da7cd466c7e9695d26846485aced74de53ee764e71b11dfae15",
+    "nativeSha256": "f3aad0226f99a8b0853663d08bd0e623559741338dd54915443f1daac811d060",
+    "artifactReceiptSha256": "df269566539dec21dd0d4f7e8e33fdcfb5975f262cdf4860b19719c66af94d54",
+    "apkMetadataSha256": "cc1c42104c1e2116e9bdfe8b049a73a9cf47f9757edead87134bb1a5f2e78ddc",
+    "buildReceiptSha256": "b3819357931761b7b147e7827e1fb5cdc723ecd3ad53bf7be04a2fd2b9f7a544",
+    "treeAndroid": "7b8b79783bc12db7f89b763b5f107fb38654a3a6",
+    "treeRoseChatAndroid": "09859c9a84892d1336f1ae5b69bb68f877030bb8",
+    "treeRoseChatCore": "665ffe46a629877a12cb87ca567ce74f40616a5f",
+    "treeContracts": "10a4dbdf3a2e7147bc64f0d3b9686b87b7c29964",
+    "cargoLockRoseChatAndroid": "8b843cce02f19bf86a31554018bd56e94c4d0b0acf847c364545cdf4b1349139",
+    "cargoLockRoseChatCore": "95378f5c99aa716c2ea6b505570e5869c9db24b6159cd03fcef2def8bd388861"
+  },
+  "signer": {
+    "status": "unbound",
+    "certificateSha256": null
+  },
+  "tool": {
+    "status": "unbound",
+    "apksignerSha256": null,
+    "aaptSha256": null
+  }
+}
