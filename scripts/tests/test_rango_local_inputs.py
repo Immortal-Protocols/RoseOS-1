@@ -40,11 +40,27 @@ assert sys.argv[1:3] == ['dump', 'badging'], sys.argv
 row = json.loads(zipfile.ZipFile(sys.argv[3]).read('identity.json'))
 print(f"package: name='{row['package']}' versionCode='{row['version']}' versionName='x'")
 '''
+# FAKE_APKSIGNER_FORMAT selects the printed signer line: "numbered" (older apksigner), "v3.0" (the label actually
+# observed from the SDK 37 verification, scripts/tests/fixtures/apksigner-sdk37-v30), and two SYNTHETIC negative
+# controls: "unknown-label" (an unsupported label) and "two-signers" (two distinct V3.0 signers). FAKE_APKSIGNER_EXIT
+# sets the exit status. Every call is logged beside the tool so a test can see both verification passes.
 FAKE_APKSIGNER = '''#!/usr/bin/env python3
-import json, sys, zipfile
+import json, os, pathlib, sys, zipfile
 assert sys.argv[1:7] == ['verify', '--print-certs', '--min-sdk-version', '37', '--max-sdk-version', '37'], sys.argv
+with open(pathlib.Path(__file__).with_name('apksigner.calls'), 'a') as log:
+    log.write(sys.argv[7] + '\\n')
 row = json.loads(zipfile.ZipFile(sys.argv[7]).read('identity.json'))
-print(f"Signer #1 certificate SHA-256 digest: {row['cert']}")
+fmt = os.environ.get('FAKE_APKSIGNER_FORMAT', 'numbered')
+if fmt == 'numbered':
+    print(f"Signer #1 certificate SHA-256 digest: {row['cert']}")
+elif fmt == 'v3.0':
+    print(f"V3.0 Signer: certificate SHA-256 digest: {row['cert'].lower()}")
+elif fmt == 'unknown-label':
+    print(f"V9.9 Signer: certificate SHA-256 digest: {row['cert'].lower()}")
+elif fmt == 'two-signers':
+    print(f"V3.0 Signer: certificate SHA-256 digest: {row['cert'].lower()}")
+    print("V3.0 Signer: certificate SHA-256 digest: " + "cd" * 32)
+sys.exit(int(os.environ.get('FAKE_APKSIGNER_EXIT', '0')))
 '''
 # erofs stand-in: "extracts" the staged tree recorded beside the tool; never follows links (copytree symlinks=True).
 FAKE_FSCK_EROFS = '''#!/usr/bin/env python3
@@ -220,6 +236,40 @@ class PrepareTest(Fixture):
         self.write_release()
         shutil.rmtree(self.tmp/'inputs', ignore_errors=True)
         self.fails("('dev.pixel.backgroundcontrol', 27")
+
+    def test_the_observed_sdk37_v3_0_signer_label_passes_both_verification_passes(self):
+        observed = (SCRIPTS/'tests/fixtures/apksigner-sdk37-v30/observed-line.txt').read_text().strip()
+        self.assertEqual(observed, 'V3.0 Signer: certificate SHA-256 digest: ' + CERT.lower())
+        os.environ['FAKE_APKSIGNER_FORMAT'] = 'v3.0'
+        self.addCleanup(os.environ.pop, 'FAKE_APKSIGNER_FORMAT', None)
+        record = self.prepare()
+        # The extractor verifies each extracted APK, then prepare-background-policy.py (a subprocess) verifies the
+        # same three files again: six calls, each signed path exactly twice, both through the shared parser.
+        calls = (self.tools/'apksigner.calls').read_text().split()
+        signed = sorted(a['signedPath'] for a in record['apps'])
+        self.assertEqual(sorted(calls), sorted(signed * 2))
+        policy = json.loads((self.tmp/'inputs/background-policy.json').read_text())
+        self.assertEqual(policy['agent']['certificates'], [CERT.upper()])
+        self.assertEqual(policy['voice']['certificates'], [CERT.upper()])
+        self.assertEqual(policy['targets'][0]['certificates'], [CERT.upper()])
+        self.assertEqual({a['package']: (a['versionCode'], a['sha256']) for a in record['apps']},
+            {p: (v, hashlib.sha256(self.apks[p]).hexdigest()) for p, v in
+             (('dev.pixel.backgroundcontrol', 28), ('dev.pixel.voice', 310), ('dev.pixel.calculator.agent', 4))})
+
+    def test_unsupported_labels_extra_signers_and_failed_verification_are_refused(self):
+        for env, expect in (({'FAKE_APKSIGNER_FORMAT': 'unknown-label'}, 'No verified signer for target SDK 37'),
+                ({'FAKE_APKSIGNER_FORMAT': 'two-signers'}, 'CDCDCD'),
+                ({'FAKE_APKSIGNER_FORMAT': 'v3.0', 'FAKE_APKSIGNER_EXIT': '1'}, 'exit status 1')):
+            with self.subTest(env=env):
+                os.environ.update(env)
+                try:
+                    shutil.rmtree(self.tmp/'inputs', ignore_errors=True)
+                    with self.assertRaises(Exception) as caught:
+                        self.prepare()
+                    self.assertIn(expect, str(caught.exception))
+                finally:
+                    for key in env:
+                        os.environ.pop(key, None)
 
     def test_malicious_archives_are_refused(self):
         for entries, device, expect in (([('../../etc/passwd', b'x')], 'frankel', 'unsafe entry names'),
