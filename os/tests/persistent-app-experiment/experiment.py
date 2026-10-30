@@ -373,7 +373,9 @@ def main(argv=None):
         if not a.evidence:
             p.error('run needs --evidence')
         results = run(a.sdk, a.work, a.evidence)
-        print(json.dumps({k: v['result'] for k, v in results['stages'].items()}, indent=2))
+        # Results and reasons in the job log too, so the outcome is readable without downloading the artifact.
+        print(json.dumps({k: {'result': v['result'], 'reason': v.get('reason')} for k, v in results['stages'].items()},
+            indent=2, sort_keys=True))
         return 0
     except (Unavailable, Failed) as error:
         print(json.dumps({'error': str(error)}), file=sys.stderr)
