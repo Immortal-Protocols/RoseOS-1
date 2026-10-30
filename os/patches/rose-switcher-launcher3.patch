@@ -1,0 +1,18 @@
+diff --git a/quickstep/res/layout/fallback_recents_activity.xml b/quickstep/res/layout/fallback_recents_activity.xml
+index 65f606a..580dc6e 100644
+--- a/quickstep/res/layout/fallback_recents_activity.xml
++++ b/quickstep/res/layout/fallback_recents_activity.xml
+@@ -57,5 +57,13 @@
+             layout="@layout/overview_empty_recents_message"
+             android:visibility="gone"/>
+ 
++        <!-- RoseOS (#156): Rose Agent's running work, above the human-task carousel; scrolls on its own. -->
++        <com.android.quickstep.fallback.RoseAgentStrip
++            android:id="@+id/rose_agent_strip"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_gravity="top"
++            android:layout_marginTop="40dp" />
++
+     </com.android.quickstep.fallback.RecentsDragLayer>
+ </com.android.launcher3.LauncherRootView>
