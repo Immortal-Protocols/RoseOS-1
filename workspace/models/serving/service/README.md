@@ -99,12 +99,15 @@ The bootstrap covers both.
    `tls-deploy`. It is never reissued, so its account and key identity are kept.
 3. **Prepare:** start the ACME-only Nginx (`edge/acme-only.conf`, :80) and prove all of the following:
    - `nginx -t` passes;
-   - the pid file names a live process loaded with that config;
+   - the pid file names a running process of the pinned binary, loaded with that config, that holds the :80
+     listener. An ACME-only Nginx left by an earlier attempt is replaced; a foreign pid or listener is refused, never
+     killed. The start runs with all output discarded and reports only `exit`, `signal`, `deadline` or `not_started`;
    - a synthetic challenge returns 200 with its exact content;
    - `/`, `/v1/models`, `/v1/chat/completions` and `/v1/auth/*` return 404.
 4. **Issue:** `certbot certonly --webroot`. It reuses the single existing ACME account (`--account`); with none, it
    registers the approved no-email account once. The deploy hook installs the result. The ACME-only Nginx is then
-   stopped on success and on failure, and the edge takes over :80 and :443.
+   stopped on success and on failure (quit, then TERM, waiting until it has exited), and the edge takes over :80
+   and :443.
 5. **Refusals, all without issuing:**
    - more than one account (`acme_account_ambiguous`);
    - a second or renamed lineage (`certificate_lineage_ambiguous`);
@@ -120,7 +123,7 @@ channel.
    attribute `rose-models/acme-proof`. It must show:
    - this payload's sha256 and the boot ID;
    - the `acme-only.conf` sha256;
-   - `pidVerified`;
+   - `pidVerified` with `exe`, `config` and `listener` all true;
    - challenge 200;
    - 404 for `/`, inference and auth.
 3. Restore the already-approved ACME :80 ingress.

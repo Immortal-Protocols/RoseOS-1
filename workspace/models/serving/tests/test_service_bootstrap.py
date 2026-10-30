@@ -38,7 +38,8 @@ class FakeHost(B.Host):
         self.probes, self.http_override = [], {}
         self.now, self.sleeps, self.on_sleep, self.events, self.md_reads = 0.0, 0, None, [], set()
         self.certbot_fail = self.acme_config_bad = False
-        self.acme_cmdline = None
+        self.acme_cmdline = self.acme_exe = self.acme_start = None
+        self.acme_listens = True
         self.disk = {'exists': True, 'sig': None, 'size': 500 * 10**9, 'wipefs': '', 'head': bytes(1 << 20)}
         self.mounted = False
         self.packages = {}  # package -> (version, dpkg Status field); served by the REAL dpkg-query below
@@ -169,22 +170,49 @@ class FakeHost(B.Host):
                 self.deploy_current()
             return 0, ''
         if cmd == '/usr/sbin/nginx' and '/run/rose-acme' in argv:
-            pid = self.path('/run/rose-acme/nginx.pid')
             if argv[-1] == '-t':
                 return (1, '') if self.acme_config_bad else (0, '')
             if argv[-2:] == ['-s', 'quit']:
-                pid.unlink(missing_ok=True)
+                self.acme_exit(4242)
                 return 0, ''
-            pid.parent.mkdir(parents=True, exist_ok=True)
-            pid.write_text('4242\n')
-            proc = self.path('/proc/4242')
-            proc.mkdir(parents=True, exist_ok=True)
-            (proc / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in (self.acme_cmdline or argv)) + b'\0')
-            return 0, ''
         if cmd.endswith('/bin/tls-deploy'):
             self.deploy_current()
             return 0, ''
         raise AssertionError(f'unexpected command {argv}')
+
+    def start_daemon(self, argv, timeout=30):
+        """The daemonizing nginx: pid file, /proc identity (exe, process title, listening socket) like the real one."""
+        self.calls.append(argv)
+        assert argv == B.ACME_NGINX, argv
+        if self.acme_start:
+            return self.acme_start
+        self.path('/run/rose-acme/nginx.pid').write_text('4242\n')
+        proc = self.path('/proc/4242')
+        (proc / 'fd').mkdir(parents=True, exist_ok=True)
+        (proc / 'exe').symlink_to(self.acme_exe or self.path('/usr/sbin/nginx').resolve())
+        (proc / 'stat').write_text('4242 (nginx) S 1 4242 4242 0 -1\n')
+        (proc / 'cmdline').write_bytes(' '.join(self.acme_cmdline or ['nginx: master process', *argv]).encode() + b'\0')
+        if self.acme_listens:
+            os.symlink('socket:[777]', proc / 'fd/6')
+            self.listen(80, 777)
+        return None
+
+    def listen(self, port, inode):
+        tcp = self.path('/proc/net/tcp')
+        tcp.parent.mkdir(parents=True, exist_ok=True)
+        lines = tcp.read_text() if tcp.exists() else '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+        tcp.write_text(lines + f'   0: 00000000:{port:04X} 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 {inode} 1\n')
+
+    def acme_exit(self, pid):
+        self.path('/run/rose-acme/nginx.pid').unlink(missing_ok=True)
+        shutil.rmtree(self.path(f'/proc/{pid}'), ignore_errors=True)
+        tcp = self.path('/proc/net/tcp')
+        if tcp.exists():
+            tcp.write_text(''.join(l for l in tcp.read_text().splitlines(True) if ' 777 ' not in l))  # its listener
+
+    def kill(self, pid, sig):
+        self.events.append(('kill', pid, sig))
+        self.acme_exit(pid)
 
     def key_fpr(self, fpr):
         return B.NVIDIA_KEY_FPR if fpr == self.expected_key_sha1 else fpr
@@ -233,7 +261,8 @@ class FakeHost(B.Host):
         self.probes.append(url)
         if not self.acme_running():
             return 0, b''
-        path = url.split('127.0.0.1', 1)[1]
+        assert url.startswith('http://127.0.0.1:80/'), url
+        path = url.split('127.0.0.1:80', 1)[1]
         if path in self.http_override:
             return self.http_override[path]
         if path.startswith('/.well-known/acme-challenge/'):
@@ -668,7 +697,7 @@ class Tls(Fixture):
         self.assertIn('--webroot', argv)
         self.assertNotIn('--standalone', argv)
         self.assertIn('--register-unsafely-without-email', argv)
-        probed = [u.split('127.0.0.1', 1)[1] for u in self.host.probes]
+        probed = [u.split('127.0.0.1:80', 1)[1] for u in self.host.probes]
         self.assertTrue(probed[0].startswith('/.well-known/acme-challenge/rose-probe-'))
         self.assertEqual(probed[1:], list(B.ACME_404))
         self.assertEqual(list(self.host.path(B.ACME_WEBROOT + '/.well-known/acme-challenge').iterdir()), [])
@@ -723,20 +752,77 @@ class Tls(Fixture):
                 self.assertEqual(self.certonly(), [])
                 self.assertNotIn('KEY-NEVER-PRINTED', json.dumps(observed))
 
+    def reset_acme(self):
+        h = self.host
+        h.acme_config_bad, h.http_override, h.acme_listens = False, {}, True
+        h.acme_cmdline = h.acme_exe = h.acme_start = None
+        h.acme_exit(4242)
+        h.path('/proc/net/tcp').unlink(missing_ok=True)
+        shutil.rmtree(h.path('/proc/5555'), ignore_errors=True)
+
     def test_acme_http_must_be_proven_before_any_issuance(self):
         for label, setup, category in (
                 ('config invalid', lambda h: setattr(h, 'acme_config_bad', True), 'acme_http_config_invalid'),
-                ('pid is another process', lambda h: setattr(h, 'acme_cmdline', ['/usr/sbin/nginx', '-c', '/etc/other.conf']),
+                ('parent exits nonzero', lambda h: setattr(h, 'acme_start', 'exit'), 'acme_http_start_failed'),
+                ('parent past deadline', lambda h: setattr(h, 'acme_start', 'deadline'), 'acme_http_start_failed'),
+                ('pid loaded another config',
+                 lambda h: setattr(h, 'acme_cmdline', ['nginx: master process /usr/sbin/nginx -c /etc/other.conf']),
                  'acme_http_pid_unverified'),
+                ('pid holds no :80 listener', lambda h: setattr(h, 'acme_listens', False), 'acme_http_pid_unverified'),
+                ('pid runs another binary', lambda h: setattr(h, 'acme_exe', '/usr/bin/python3'), 'acme_http_pid_unverified'),
+                ('port already taken', lambda h: h.listen(80, 999), 'acme_http_port_occupied'),
                 ('root path answers', lambda h: h.http_override.update({'/': (200, b'')}), 'acme_http_not_ready'),
                 ('auth path answers', lambda h: h.http_override.update({'/v1/auth/token': (405, b'')}), 'acme_http_not_ready')):
             with self.subTest(label):
-                self.host.acme_config_bad, self.host.acme_cmdline, self.host.http_override = False, None, {}
-                self.host.path('/run/rose-acme/nginx.pid').unlink(missing_ok=True)
+                self.reset_acme()
                 setup(self.host)
-                (state, detail), _, code = self.tls()
+                (state, detail), observed, code = self.tls()
                 self.assertEqual((state, detail, code), ('failed', category, 1))
                 self.assertEqual(self.certonly(), [])
+                if category == 'acme_http_start_failed':
+                    self.assertEqual(observed, [{'reason': self.host.acme_start}])  # a category, never raw stderr
+
+    def test_stale_foreign_and_leftover_pids(self):
+        pidfile = self.host.path('/run/rose-acme/nginx.pid')
+        pidfile.parent.mkdir(parents=True, exist_ok=True)
+        pidfile.write_text('9999\n')  # stale: no such process
+        self.host.ack(payload='other')  # stop after the proof
+        self.assertEqual(self.tls()[0], ('failed', 'acme_ack_timeout'))
+        self.assertEqual(self.host.count('/usr/sbin/nginx', '-p', '/run/rose-acme', '-c',
+                                         '/etc/rose-models/edge/acme-only.conf', '-s', 'quit'), 1)  # only its own
+        self.assertFalse(self.host.acme_running())
+        foreign = self.host.path('/proc/5555')
+        foreign.mkdir(parents=True)
+        (foreign / 'exe').symlink_to('/usr/bin/python3')
+        (foreign / 'stat').write_text('5555 (python3) S 1 5555 5555 0 -1\n')
+        pidfile.write_text('5555\n')
+        before = len(self.host.calls)
+        self.assertEqual(self.tls()[0], ('failed', 'acme_http_pid_foreign'))
+        self.assertEqual((pidfile.read_text(), foreign.exists()), ('5555\n', True))  # neither touched nor killed
+        self.assertFalse([c for c in self.host.calls[before:] if 'quit' in c or c == B.ACME_NGINX])
+        self.assertFalse([e for e in self.host.events if e[0] == 'kill'])
+        self.reset_acme()
+        self.host.start_daemon(B.ACME_NGINX)  # left by an earlier attempt: replaced, so the loaded config is current
+        self.host.reboot()
+        self.host.ack()
+        self.assertEqual(self.tls()[0], ('ok', 'issued (account registered)'))
+        self.assertEqual(self.host.count('/usr/sbin/nginx', '-p', '/run/rose-acme', '-c',
+                                         '/etc/rose-models/edge/acme-only.conf', '-s', 'quit'), 3)
+
+    def test_cleanup_escalates_to_term_only_for_its_own_nginx(self):
+        self.host.ack()
+        self.host.fail = {}
+        original = self.host.run
+        def quit_ignored(argv, timeout=300, env=None):
+            if argv[-2:] == ['-s', 'quit']:
+                self.host.calls.append(argv)
+                return 0, ''
+            return original(argv, timeout, env)
+        self.host.run = quit_ignored
+        (state, detail), _, _ = self.tls()
+        self.assertEqual((state, detail), ('ok', 'issued (account registered)'))
+        self.assertEqual([e for e in self.host.events if e[0] == 'kill'], [('kill', 4242, B.signal.SIGTERM)])
+        self.assertFalse(self.host.acme_running())
 
     def test_no_acme_listener_without_authorization_or_dns(self):
         del self.host.md['attributes/rose-models-acme']
@@ -786,7 +872,8 @@ class AcmeHandshake(Fixture):
         self.assertEqual(kinds, ['publish', 'certonly'])  # proof strictly before the single issuance
         proof = json.loads(self.host.events[0][1].split(' ', 1)[1])
         conf = self.host.path('/etc/rose-models/edge/acme-only.conf').read_bytes()
-        self.assertEqual((proof['payloadSha256'], proof['bootId'], proof['pidVerified']), ('sha', 'boot-1', True))
+        self.assertEqual((proof['payloadSha256'], proof['bootId']), ('sha', 'boot-1'))
+        self.assertEqual(proof['pidVerified'], {'exe': True, 'config': True, 'listener': True})
         self.assertEqual(proof['configSha256'], __import__('hashlib').sha256(conf).hexdigest())
         self.assertEqual(proof['acmeHttp'], {'challenge': 200, **{p: 404 for p in B.ACME_404}})
         self.assertEqual(proof['awaiting'], 'metadata rose-models-acme-ack=sha:boot-1')
