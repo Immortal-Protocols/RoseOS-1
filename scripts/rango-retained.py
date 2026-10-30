@@ -422,7 +422,20 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True, loc
 # contract only: release.json signing.identityPolicy.firstUse.selected is false and the route refuses while it is not
 # explicitly selected. Nothing here reads a secret; it judges version metadata and public identities handed to it.
 
-VERSION_NAME = re.compile(r'projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/secrets/([A-Za-z0-9_-]{1,255})/versions/([1-9][0-9]{0,9})')
+# Secret Manager may name the parent project by its id or by its number; only the fixed project's own id and its pinned
+# number (firstUse.projectNumber) are admitted, never another number, a location scope or an alias version.
+VERSION_NAME = re.compile(r'projects/([a-z][a-z0-9-]{4,28}[a-z0-9]|[1-9][0-9]{5,19})/secrets/([A-Za-z0-9_-]{1,255})/versions/([1-9][0-9]{0,9})')
+
+
+def version_name_shape(name, project, number, secret):
+    """A closed, nonsecret classification of a refused version name (no raw value is ever reported)."""
+    match = re.fullmatch(r'projects/([^/]+)/(locations/[^/]+/)?secrets/([^/]+)/versions/([^/]+)', str(name))
+    if not match:
+        return 'shape=other'
+    shape = 'regional' if match[2] else 'project-number' if match[1].isdigit() else 'project-id'
+    return (f'shape={shape} project={"match" if match[1] in (project, number) else "other"} '
+        f'container={"match" if match[3] == secret else "other"} '
+        f'version={"numeric" if re.fullmatch(r"[1-9][0-9]{0,9}", match[4]) else "other"}')
 
 
 def identity_policy(cfg):
@@ -462,8 +475,10 @@ def first_use_admission(metadata, contract, prof=None):
             raise Refused(f'identity_versions_ambiguous: {secret} must hold exactly one version')
         version = versions[0] if isinstance(versions[0], dict) else {}
         match = VERSION_NAME.fullmatch(str(version.get('name')))
-        if not match or match[1] != prof['project'] or match[2] != secret:
-            raise Refused(f'identity_versions_ambiguous: {secret} version is not a numeric version of the fixed container')
+        number = contract.get('projectNumber')
+        if not match or match[1] not in (prof['project'], number) or match[2] != secret:
+            raise Refused(f'identity_versions_ambiguous: {secret} version is not a numeric version of the fixed container '
+                f'({version_name_shape(version.get("name"), prof["project"], number, secret)})')
         if version.get('state') != 'ENABLED':
             raise Refused(f'identity_versions_partial: {secret} version is {version.get("state")!r}, not ENABLED')
         created = _utc(version.get('createTime'))
