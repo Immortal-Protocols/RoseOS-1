@@ -204,12 +204,12 @@ test('the Home tray stays fixed over the swiping pages, above system insets (OS-
  assert.match(homeFrame,/trayParams\.setMargins\(side \+ left, 0, side \+ right, gap \+ bottom\);/);
  // Production status and navigation bars stay: nothing hides system bars.
  for(const src of [homeFrame,homeTray])for(const hide of ['SYSTEM_UI_FLAG','hide(WindowInsets','setDecorFitsSystemWindows','FLAG_FULLSCREEN'])assert.ok(!src.includes(hide),hide);
- // The selected HiFi composition (ce126f56): a 92dp bar with 22dp corners and two 104x66dp wells at its ends.
- assert.match(homeTray,/static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 104, WELL_H_DP = 66;/);
- // APP-OS-VISUAL-1030: the shared TrayMaterial (22dp-corner brushed tray); each well view is its 104x66 glass plus
- // the pocket on every side, and the end padding keeps the glass 22dp from the tray's ends (.tray.two).
+ // #157: Nathan's selected Home image (sha256 109faa23…cd1b4): a 92dp bar holding two 112x80dp oval wells centred
+ // about 24.5% and 75.5% along it (glass 33dp in from the ends of a 363dp bar).
+ assert.match(homeTray,/static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 112, WELL_H_DP = 80;/);
+ // The shared TrayMaterial; each well view is its glass plus the pocket on every side.
  assert.match(homeTray,/setBackground\(new TrayMaterial\.Tray\(activity\.getResources\(\)\.getDisplayMetrics\(\)\.density\)\);/);
- assert.match(homeTray,/setPadding\(activity\.dp\(22 - TrayMaterial\.POCKET_DP\), 0, activity\.dp\(22 - TrayMaterial\.POCKET_DP\), 0\);/);
+ assert.match(homeTray,/setPadding\(activity\.dp\(33 - TrayMaterial\.POCKET_DP\), 0, activity\.dp\(33 - TrayMaterial\.POCKET_DP\), 0\);/);
  assert.equal((homeTray.match(/new LayoutParams\(activity\.dp\(WELL_W_DP \+ 2 \* TrayMaterial\.POCKET_DP\), activity\.dp\(WELL_H_DP \+ 2 \* TrayMaterial\.POCKET_DP\)\)/g)||[]).length,2);
  assert.match(homeTray,/addView\(new View\(activity\), new LayoutParams\(0, 1, 1\)\);/);
  assert.ok(!home.includes('sessionMark')&&!home.includes('showSession')&&!home.includes('RoseMark'));
@@ -313,19 +313,20 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
  assert.match(conversation,/row\.setBackground\(new TrayMaterial\.Tray\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);row\.setElevation\(dp\(12\)\);/);
  assert.ok(!/GradientDrawable/.test(homeTray),'HomeTray draws no private gradient');
  assert.ok(!/0xfaffffff,0x8cffffff|0xfff6f7f9,0xffe3e7eb/.test(conversation),'the conversation has no copy of the material');
- // Effective style.css values at ce126f56 (review overrides applied): alpha x 255, rounded.
+ // #157: values measured from the selected image's pixels (alpha x 255, rounded). The bar is mid silver (top #c1c3c9,
+ // middle #c3c5ca, bottom #c6c8cd) with small corners; the wells are clear oval glass over the metal (interior #abb3bd).
  const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
- assert.ok(material.includes(`GLASS = {${argb(.98,'ffffff')}, ${argb(.55,'ffffff')}, ${argb(.35,'d6e2f0')}, ${argb(.5,'becee0')}}`),'well glass');
- assert.match(material,/GLASS_STOPS = \{0f, \.34f, \.68f, 1f\};/);
- assert.match(material,/ellipse\.setScale\(1\.1f \* w, \.8f \* h\);/);assert.match(material,/ellipse\.postTranslate\(lens\.left \+ \.32f \* w, lens\.top \+ \.18f \* h\);/);
- for(const [name,a,rgb] of [['INNER_EDGE',.65,'ffffff'],['LOWER_SHADE',.22,'465c7d'],['SHEEN',.85,'ffffff'],['PRESSED_SHADE',.3,'3c506e'],
-   ['POCKET_EDGE',.42,'5f738e'],['COLLAR',.9,'c6ced7'],['COLLAR_LINE',.35,'78879b'],['LIP',.75,'ffffff'],['LOWER_RIM',.28,'3c4b5f']])
+ assert.match(material,/109faa230ca63744dc393a65d03ae525ca1e0d77bf98e0db5a423c670bccd1b4/,'the reference image is named by its hash');
+ assert.match(material,/METAL = \{0xffc4c6cc, 0xffc1c3c9, 0xffc3c5ca, 0xffc6c8cd\};/);assert.match(material,/METAL_STOPS = \{0f, \.38f, \.62f, 1f\};/);
+ assert.match(material,/static final int GRAIN = 2;/);
+ assert.ok(material.includes(`SPECULAR = {0x00ffffff, ${argb(.2,'ffffff')}, 0x00ffffff}`));assert.match(material,/SPECULAR_STOPS = \{\.28f, \.44f, \.60f\};/);
+ for(const [name,a,rgb] of [['TINT',.18,'2a3c5a'],['LIGHT',.35,'ffffff'],['RIM',.7,'ffffff'],['RIM_SHADOW',.3,'28374f'],['LOWER_SHADE',.22,'465c7d'],
+   ['SHEEN',.3,'ffffff'],['PRESSED_SHADE',.3,'3c506e'],['OUTER_SHADOW',.25,'28374f'],['LOWER_RIM',.4,'3c4b5f']])
   assert.ok(material.includes(`${name} = ${argb(a,rgb)}`),name);
- // The tray metal is the prototype's rendered output (its overlay brush lightens the CSS stops), measured and checked
- // in host-rendered native output (M003); the grain is weak enough not to darken it.
- assert.match(material,/METAL = \{0xfff6f7f9, 0xffe7eaee, 0xffdbe0e5, 0xffe8ebee\};/);assert.match(material,/static final int GRAIN = 1;/);assert.match(material,/METAL_STOPS = \{0f, \.38f, \.62f, 1f\};/);
- assert.ok(material.includes(`SPECULAR = {0x00ffffff, ${argb(.55,'ffffff')}, 0x00ffffff}`));assert.match(material,/SPECULAR_STOPS = \{\.28f, \.44f, \.60f\};/);
- assert.match(material,/POCKET_DP = 5;/);assert.match(material,/RADIUS_DP = 22;/);
+ // The lens is an ellipse, not a pill, and every glass layer is an oval.
+ assert.match(material,/lensPath\.addOval\(lens, android\.graphics\.Path\.Direction\.CW\);/);
+ assert.ok(!/drawRoundRect\(lens/.test(material),'no pill-shaped glass');
+ assert.match(material,/POCKET_DP = 5;/);assert.match(material,/RADIUS_DP = 12;/);
  // The pocket paints only outside the lens (CSS box-shadow spreads): host-rendered native output showed the dark
  // pocket fills through the translucent glass, 36-49 levels darker than the reference, until they were clipped out.
  assert.match(material,/int save = canvas\.save\(\);\s*canvas\.clipOutPath\(lensPath\);[\s\S]*?canvas\.restoreToCount\(save\);\s*\/\/ The glass\./);
@@ -343,8 +344,8 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
 test('the overview well draws the HiFi three-bar glyph with its gradients and rings (APP-OS-VISUAL-1030)',()=>{
  const glyph=read('../app/src/dev/pixel/voice/TrayMaterial.java').slice(read('../app/src/dev/pixel/voice/TrayMaterial.java').indexOf('static final class Overview extends Drawable'));
  assert.match(homeTray,/setBackground\(new TrayMaterial\.Overview\(activity\.getResources\(\)\.getDisplayMetrics\(\)\.density\)\);\s*setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
- // .overview-glyph i at ce126f56: 11-wide bars 30 tall (34 in the middle), 4 apart, 5 radius.
- assert.match(glyph,/float width = 11 \* unit, gap = 4 \* unit/);assert.match(glyph,/float half = \(i == 1 \? 17 : 15\) \* unit/);
+ // 11-wide bars, 4 apart, 5 radius; #157: the outer bars are 24 tall beside the middle 34 (about 70%, as in the image).
+ assert.match(glyph,/float width = 11 \* unit, gap = 4 \* unit/);assert.match(glyph,/float half = \(i == 1 \? 17 : 12\) \* unit/);
  assert.match(glyph,/float radius = 5 \* unit;/);
  const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
  assert.match(glyph,/BAR = \{0xffffffff, 0xffe2e8f0\}, ACCENT = \{0xff6aa2ff, 0xff2f6be6\};/);

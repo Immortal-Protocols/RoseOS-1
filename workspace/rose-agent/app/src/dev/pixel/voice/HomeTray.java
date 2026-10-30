@@ -7,9 +7,9 @@ import android.widget.LinearLayout;
 import java.util.function.BooleanSupplier;
 
 /**
- * The fixed Home tray of the selected HiFi (prototypes/rose-hifi at ce126f56, OS-HIFI-HOME-001): a brushed
- * light-metal bar, 92dp high with 22dp corners, holding two 104x66dp pill wells at its ends, Rose and
- * overview, that stay put while the pages swipe beneath. Rose only navigates to the conversation (never
+ * The fixed Home tray (OS-HIFI-HOME-001; #157: Nathan's selected Home image): a brushed silver bar, 92dp high
+ * with small corners, holding two 112x80dp oval glass wells, Rose and overview, centred about a quarter of the way
+ * in from each end, that stay put while the pages swipe beneath. Rose only navigates to the conversation (never
  * starts, mutes or ends voice). Each Home refresh hands it the RoseVisualState read from the voice service
  * (HomeRose), and applyVisual passes it to App's RosePresenceView (show(RoseVisualState)), the one shared
  * renderer; the renderer is excluded from accessibility and the well speaks its state, so there is one focus
@@ -18,7 +18,7 @@ import java.util.function.BooleanSupplier;
  * so and opens nothing else, never an unrelated picker.
  */
 final class HomeTray extends LinearLayout {
- static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 104, WELL_H_DP = 66;
+ static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 112, WELL_H_DP = 80;
  final View presence, overview;
  final RosePresenceView roseView;
  /** The last visual state applied, and the conversation it came from; null before the first refresh. */
@@ -31,8 +31,9 @@ final class HomeTray extends LinearLayout {
   super(activity);
   setOrientation(HORIZONTAL);
   setGravity(Gravity.CENTER_VERTICAL);
-  // The wells' glass sits 22dp in from the ends (.tray.two padding); each well view adds its pocket around it.
-  setPadding(activity.dp(22 - TrayMaterial.POCKET_DP), 0, activity.dp(22 - TrayMaterial.POCKET_DP), 0);
+  // #157: the image's wells are centred 24.5% and 75.5% along the bar; on a 363dp bar that puts the 112dp glass about
+  // 33dp in from each end. Each well view adds its pocket around the glass.
+  setPadding(activity.dp(33 - TrayMaterial.POCKET_DP), 0, activity.dp(33 - TrayMaterial.POCKET_DP), 0);
   setBackground(new TrayMaterial.Tray(activity.getResources().getDisplayMetrics().density));
   setElevation(activity.dp(12));
   // Rose at the reference size overhangs its well, as the HiFi canvas does; nothing here clips it.
