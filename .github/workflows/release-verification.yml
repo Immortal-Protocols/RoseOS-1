@@ -9,6 +9,7 @@ on:
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
       - 'scripts/release-chain.py'
+      - 'scripts/release-transport.py'
       - 'scripts/signing-job.py'
       - 'scripts/tests/test_signing_*.py'
       - '.github/workflows/os-sign.yml'
@@ -102,6 +103,7 @@ on:
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
       - 'scripts/release-chain.py'
+      - 'scripts/release-transport.py'
       - 'scripts/signing-job.py'
       - 'scripts/tests/test_signing_*.py'
       - '.github/workflows/os-sign.yml'
@@ -220,6 +222,7 @@ jobs:
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_release_chain.py
+          python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py
           python3 scripts/tests/test_signing_job.py
           python3 scripts/tests/test_signing_acceptance.py
