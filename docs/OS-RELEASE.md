@@ -201,6 +201,12 @@ with `git show` from that commit, never the working tree. They are re-hashed bef
 Rango builder checks out full history for that read. Frankel still reads `os/release-notes/{device}-{build}.md` from
 its candidate commit, unchanged.
 
+**Version names by project number.** Secret Manager may name a version's parent project by its number. First-use
+admission accepts only the fixed project's id (`protocols-465723`) or its pinned number (`firstUse.projectNumber`,
+1072799993443, supplied by the authorized 15:13 UTC packet and the prior Oct 28 IAM receipt). Any other number or id, a location scope, an alias or a
+nonpositive version refuses, with a closed diagnostic (shape, project, container and version classes, never the raw
+name). Run 41077961699 refused at this point, before any payload or enrolment.
+
 **Guard versus builder preflight.** The hosted guard (`preflight --job guard`) checks the complete static config,
 provenance selection, pinned notes and the declared `input.transport`, but never reads the builder-local input
 directory, which the hosted runner cannot see; `--input-dir` is refused there. `preflight --job builder` checks the

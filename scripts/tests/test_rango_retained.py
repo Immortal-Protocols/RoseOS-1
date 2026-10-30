@@ -886,6 +886,50 @@ class FirstUseContract(unittest.TestCase):
             with self.assertRaisesRegex(rr.Refused, category):
                 rr.first_use_admission(metadata, self.CONTRACT)
 
+    def numbered(self, role, secret, project='1072799993443', version='1', **row):
+        """A version row as Secret Manager may return it: the parent project named by its NUMBER."""
+        return dict({'name': f'projects/{project}/secrets/{secret}/versions/{version}', 'state': 'ENABLED',
+            'createTime': '2026-10-30T07:20:31.120Z'}, **row)
+
+    def test_the_fixed_project_by_number_or_id_is_admitted_and_nothing_else(self):
+        """Run 41077961699 refused a version name before payload/enrolment; the parser only knew the project id. The
+        exact returned name was not exported, so both canonical forms are tested; only the pinned number is admitted."""
+        keys, phrase = 'PIXEL_OS_SIGNING_KEYS_RANGO_V1', 'PIXEL_OS_SIGNING_PASSPHRASE_RANGO_V1'
+        self.assertEqual(self.CONTRACT['projectNumber'], '1072799993443')
+        numbered = self.metadata(keys=[self.numbered('keys', keys)], passphrase=[self.numbered('passphrase', phrase)])
+        self.assertEqual(rr.first_use_admission(numbered, self.CONTRACT), {'keys': '1', 'passphrase': '1'})
+        mixed = self.metadata(keys=[self.numbered('keys', keys, version='3')])
+        self.assertEqual(rr.first_use_admission(mixed, self.CONTRACT), {'keys': '3', 'passphrase': '1'})
+        unpinned = {k: v for k, v in self.CONTRACT.items() if k != 'projectNumber'}
+        cases = [
+            (self.metadata(keys=[self.numbered('keys', keys, project='1072799993444')]), 'shape=project-number project=other'),
+            (self.metadata(keys=[self.numbered('keys', keys, project='107279999344')]), 'shape=project-number project=other'),
+            (self.metadata(keys=[self.numbered('keys', keys, project='protocols-465724')]), 'shape=project-id project=other'),
+            (self.metadata(keys=[dict(self.numbered('keys', keys), name=f'projects/1072799993443/locations/us-west2/secrets/{keys}/versions/1')]),
+             'shape=regional'),
+            (self.metadata(keys=[self.numbered('keys', 'PIXEL_OS_SIGNING_KEYS_V1')]), 'container=other'),
+            (self.metadata(passphrase=[self.numbered('passphrase', keys)]), 'container=other'),
+            (self.metadata(keys=[self.numbered('keys', keys, version='latest')]), 'version=other'),
+            (self.metadata(keys=[self.numbered('keys', keys, version='0')]), 'version=other'),
+            (self.metadata(keys=[self.numbered('keys', keys, version='-1')]), 'version=other'),
+            (self.metadata(keys=['projects/1072799993443/secrets/x/versions/1']), 'shape=other'),
+        ]
+        for metadata, diagnostic in cases:
+            with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(rr.Refused, 'identity_versions_ambiguous') as caught:
+                rr.first_use_admission(metadata, self.CONTRACT)
+            self.assertIn(diagnostic, str(caught.exception))
+            self.assertNotIn('107279999344', str(caught.exception))  # closed classes only, never the raw name
+        with self.assertRaisesRegex(rr.Refused, 'shape=project-number project=other'):
+            rr.first_use_admission(numbered, unpinned)  # a number is admitted only against the pinned one
+        for metadata, category in (
+                (self.metadata(keys=[self.numbered('keys', keys), self.numbered('keys', keys, version='2')]), 'identity_versions_ambiguous'),
+                (self.metadata(keys=[self.numbered('keys', keys, state='DISABLED')]), 'identity_versions_partial'),
+                (self.metadata(keys=[self.numbered('keys', keys, state='DESTROYED')]), 'identity_versions_partial'),
+                (self.metadata(keys=[self.numbered('keys', keys, createTime='2026-10-30T07:20:45Z')]), 'identity_versions_untimely'),
+                (self.metadata(keys=[self.numbered('keys', keys, createTime='2026-10-30T07:20:14Z')]), 'identity_versions_untimely')):
+            with self.subTest(category=category), self.assertRaisesRegex(rr.Refused, category):
+                rr.first_use_admission(metadata, self.CONTRACT)
+
     def test_record_is_enrolled_once_atomically_and_matched_later(self):
         t = Tmp(self)
         binding = {'versions': {'keys': '1', 'passphrase': '1'}, 'otaCertificateSha256': 'a' * 64, 'avbPublicKeySha256': 'b' * 64,
@@ -1123,6 +1167,15 @@ class FirstUseRoute(Route):
             shutil.rmtree(self.release, ignore_errors=True)
             self.refuse(category)
             self.assertEqual(self.payload, [])
+
+    def test_number_named_versions_enrol_sign_and_verify(self):
+        """The connected route with version names carrying the pinned project number (the plausible 41077961699 shape)."""
+        self.metadata_override = lambda project, secret, n: [{'name': f'projects/1072799993443/secrets/{secret}/versions/1',
+            'state': 'ENABLED', 'createTime': '2026-10-30T07:20:30Z'}]
+        self.sign()
+        self.assertEqual(self.payload, [('1', '1')])
+        self.assertEqual(self.record()['versions'], {'keys': '1', 'passphrase': '1'})
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
 
     def test_metadata_race_refuses(self):
         def changing(project, secret, n):

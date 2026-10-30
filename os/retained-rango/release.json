@@ -61,6 +61,8 @@
         "basis": "SELECTED (owner 13:07 UTC): the two fixed Rango containers as trust anchors; exactly one ENABLED version in each, created inside the bootstrap window, pinned by numeric id before access; identity derived in the signing operation, Frankel collision refused, written once and equal on every later run. Consistency with the completed bootstrap, not cryptographic proof that no other writer acted.",
         "bootstrapRun": "41019390144",
         "bootstrapRecipe": "99357a10a2e63021d5df76b962c5aee9e76216d1",
+        "projectNumber": "1072799993443",
+        "projectNumberBasis": "The fixed project protocols-465723 is project number 1072799993443, as supplied before run 41077961699's refusal by the authorized 15:13 UTC inbox packet and the owner's continuation, with independent prior provenance in the approved 2026-10-28 22:45 UTC Mac IAM receipt 20261028T224523Z and the Chief's 2026-10-29 19:24 UTC reuse instruction. Secret Manager version names may carry the number instead of the id; run 41077961699 refused a version name before any payload or enrolment (identity_versions_ambiguous; the exact name was not exported, so neither form is claimed as the returned shape). Only this id and this number are admitted.",
         "windowStart": "2026-10-30T07:20:15Z",
         "windowEnd": "2026-10-30T07:20:44Z",
         "recordDir": "/home/pixelbuild/rose-actions/rango-identity",
