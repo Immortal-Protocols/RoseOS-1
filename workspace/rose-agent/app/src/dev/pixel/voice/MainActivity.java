@@ -381,7 +381,7 @@ public class MainActivity extends Activity {
   // One wallpaper behind every page, drawn at the scroll position so it stays put while the pages slide.
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new RoseHomeView.Wallpaper(getResources()));
   launcherPager.permission=this::canSwipePages;
-  launcherPager.listener=index->{drawer=index!=voicePage;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setAlpha(((Integer)dot.getTag())==index?1f:.45f);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
+  launcherPager.listener=index->{drawer=index!=voicePage;launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);if(clockWidget!=null)clockWidget.setActive(screenHostActive&&index==widgetsPage);if(weatherWidget!=null)weatherWidget.setActive(screenHostActive&&index==widgetsPage);if(galleryWidget!=null)galleryWidget.setActive(screenHostActive&&index==widgetsPage);if(!drawer)refresh();};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   // The legacy voice page keeps its own artwork; the one row of page dots is fixed in the HomeFrame.
@@ -449,17 +449,18 @@ public class MainActivity extends Activity {
   result.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
   return result;
  }
- /** The reference label: 12.5sp, white over the wallpaper with a soft dark shadow, wrapping to two lines. */
+ /** The reference label (.app .label): 12.5sp system sans at weight 500 (the HiFi's Inter falls back to the system UI
+  * sans), white over the wallpaper with its 0 1px 3px rgba(8,22,45,.75) shadow, wrapping to two lines. */
  TextView appLabel(String label){
-  TextView name=new TextView(this);name.setText(label);name.setTextSize(12.5f);name.setTextColor(0xffffffff);name.setTypeface(chatFont(800));
-  name.setShadowLayer(dp(3),0,dp(1),0xcc08162d);name.setIncludeFontPadding(false);name.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
+  TextView name=new TextView(this);name.setText(label);name.setTextSize(12.5f);name.setTextColor(0xffffffff);name.setTypeface(Typeface.create(Typeface.SANS_SERIF,500,false));name.setLetterSpacing(.005f);
+  name.setShadowLayer(dp(3),0,dp(1),0xbf08162d);name.setIncludeFontPadding(false);name.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
   name.setMaxLines(HomeAppLayout.LABEL_LINES);name.setEllipsize(android.text.TextUtils.TruncateAt.END);
   return name;
  }
  LinearLayout makePageDots(ArrayList<String> titles){
   LinearLayout dots=new LinearLayout(this);dots.setGravity(Gravity.CENTER);dots.setOrientation(0);
   for(int i=0;i<titles.size();i++){
-   final int target=i;TextView dot=text("●",10,0xffffffff);dot.setShadowLayer(dp(2),0,0,0x66101e3c);dot.setTag(i);dot.setGravity(Gravity.CENTER);dot.setAlpha(i==0?1f:.45f);
+   final int target=i;TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density));dot.setTag(i);dot.setSelected(i==0);
    dot.setContentDescription("Go to "+titles.get(i).toLowerCase(Locale.ROOT));dot.setFocusable(true);dot.setOnClickListener(v->launcherPager.showPage(target,true));
    dots.addView(dot,new LinearLayout.LayoutParams(dp(HomeFrame.DOTS_DP),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
   }

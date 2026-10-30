@@ -324,6 +324,29 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
  assert.match(conversation,/int lens=ConversationPresentation\.wellWidth\(getResources\(\)\.getConfiguration\(\)\.screenWidthDp,TrayMaterial\.POCKET_DP\);/);
 });
 
+test('app labels and page dots follow the HiFi type and dot treatment (APP-OS-VISUAL-1030)',()=>{
+ // .app .label at ce126f56: 12.5px, weight 500, white, letter-spacing .005em, shadow 0 1px 3px rgba(8,22,45,.75) (the
+ // override's middle layer; Android draws one). Inter falls back to the system UI sans; no font asset is added.
+ const label=main.slice(main.indexOf(' TextView appLabel('),main.indexOf(' LinearLayout makePageDots('));
+ assert.match(label,/name\.setTextSize\(12\.5f\);name\.setTextColor\(0xffffffff\);name\.setTypeface\(Typeface\.create\(Typeface\.SANS_SERIF,500,false\)\);name\.setLetterSpacing\(\.005f\);/);
+ assert.match(label,/name\.setShadowLayer\(dp\(3\),0,dp\(1\),0xbf08162d\);/);
+ assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');
+ // .page-dots button i: drawn circles in 44dp targets; the current page is the view's selected state (aria-current).
+ const dots=main.slice(main.indexOf(' LinearLayout makePageDots('),main.indexOf(' View appTile('));
+ assert.match(dots,/TextView dot=new TextView\(this\);dot\.setBackground\(new HomeDot\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);dot\.setTag\(i\);dot\.setSelected\(i==0\);/);
+ assert.match(dots,/dot\.setContentDescription\("Go to "\+titles\.get\(i\)\.toLowerCase\(Locale\.ROOT\)\);dot\.setFocusable\(true\);dot\.setOnClickListener\(v->launcherPager\.showPage\(target,true\)\);/);
+ assert.match(dots,/new LinearLayout\.LayoutParams\(dp\(HomeFrame\.DOTS_DP\),dp\(HomeFrame\.DOTS_DP\)\)/);
+ assert.ok(!/●/.test(dots)&&!/dot\.setAlpha/.test(main),'no glyph dots or alpha dimming');
+ assert.match(main,/for\(TextView dot:pageDots\)dot\.setSelected\(\(\(Integer\)dot\.getTag\(\)\)==index\);/);
+ const dot=read('../app/src/dev/pixel/voice/HomeDot.java');
+ const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
+ assert.match(dot,/DOT_DP = 8, CURRENT_DP = 9, GLOW_DP = 6;/);
+ assert.ok(dot.includes(`IDLE = ${argb(.45,'ffffff')}, RING = ${argb(.15,'1e3c64')}, CURRENT = 0xffffffff, GLOW = ${argb(.8,'ffffff')}`));
+ assert.match(dot,/if \(s == android\.R\.attr\.state_selected\) now = true;/);
+ const draw=dot.slice(dot.indexOf('@Override public void draw('),dot.indexOf('@Override public boolean isStateful'));
+ assert.ok(!draw.includes('new '),'no allocation while drawing');
+});
+
 test('app tiles are the HiFi frosted glass, on Home and the app pages alike (APP-OS-VISUAL-1030)',()=>{
  const glass=read('../app/src/dev/pixel/voice/HomeGlassTile.java');
  const tile=main.slice(main.indexOf(' View appTile(ResolveInfo app){'),main.indexOf('\n }',main.indexOf(' View appTile(ResolveInfo app){')));
