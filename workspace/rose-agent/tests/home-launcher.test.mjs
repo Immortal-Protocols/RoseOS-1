@@ -10,6 +10,7 @@ import {fileURLToPath} from 'node:url';
 const read=path=>fs.readFileSync(new URL(path,import.meta.url),'utf8');
 const main=read('../app/src/dev/pixel/voice/MainActivity.java');
 const home=read('../app/src/dev/pixel/voice/RoseHomeView.java');
+const layout=read('../app/src/dev/pixel/voice/HomeAppLayout.java');
 const homeTray=read('../app/src/dev/pixel/voice/HomeTray.java');
 const homeFrame=read('../app/src/dev/pixel/voice/HomeFrame.java');
 const homeRose=read('../app/src/dev/pixel/voice/HomeRose.java');
@@ -265,15 +266,40 @@ test('Home labels are the app pages\' labels: whole names over two lines, never 
  assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
 });
 
-test('the wallpaper is the exact Rose-Fold-v3 narrow Home image, drawn like background-size: cover',()=>{
+test('the wallpaper is drawn like the HiFi .wall: cover at 62% 30%; its bytes stay the verified reference (APP-OS-VISUAL-1030)',()=>{
  const jpeg=fs.readFileSync(new URL('../app/res/drawable-nodpi/rose_home_wallpaper.jpg',import.meta.url));
- // First embedded JPEG of Rose-Fold-v3.html (Library v2, SHA-256 67bf7a50…05ee), 461 x 1024.
+ // First embedded JPEG of Rose-Fold-v3.html (Library v2, SHA-256 67bf7a50…05ee), 461 x 1024. scripts/rose-verify.py
+ // (Infra) pins these bytes as its reference; swapping in the HiFi's own wallpaper.jpg is a separately coordinated hunk.
  assert.equal(crypto.createHash('sha256').update(jpeg).digest('hex'),'409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5');
  assert.match(home,/BitmapFactory\.decodeResource\(resources, R\.drawable\.rose_home_wallpaper\)/);
+ assert.match(home,/HomeAppLayout\.cover\(wallpaper\.getWidth\(\), wallpaper\.getHeight\(\), bounds\.width\(\), bounds\.height\(\),\s+HomeAppLayout\.WALL_X, HomeAppLayout\.WALL_Y\);/);
+ assert.match(layout,/WALL_X = \.62f, WALL_Y = \.30f, IVORY_X = \.80f, IVORY_Y = \.20f;/);
+ const drawing=read('../app/src/dev/pixel/voice/ConversationDrawing.java');
+ assert.match(drawing,/HomeAppLayout\.cover\(wallpaper\.getWidth\(\),wallpaper\.getHeight\(\),w\*1\.2f,h\*1\.2f,HomeAppLayout\.IVORY_X,HomeAppLayout\.IVORY_Y\)/,'the reading surface crops too, never stretches the image');
+ assert.ok(!/new Rect\(0,0,wallpaper\.getWidth\(\),wallpaper\.getHeight\(\)\)/.test(drawing),'no whole-image stretch');
  // The crop is prepared when the bounds change, not allocated per frame.
  const draw=home.slice(home.indexOf('@Override public void draw(Canvas canvas)'));
  assert.ok(!draw.slice(0,draw.indexOf('\n  }')).includes('new '),'no allocation while drawing the wallpaper');
  assert.match(home,/@Override protected void onBoundsChange\(Rect bounds\)/);
+});
+
+test('app tiles are the HiFi frosted glass, on Home and the app pages alike (APP-OS-VISUAL-1030)',()=>{
+ const glass=read('../app/src/dev/pixel/voice/HomeGlassTile.java');
+ const tile=main.slice(main.indexOf(' View appTile(ResolveInfo app){'),main.indexOf('\n }',main.indexOf(' View appTile(ResolveInfo app){')));
+ assert.match(tile,/iconFrame\.setBackground\(new HomeGlassTile\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);iconFrame\.setElevation\(dp\(4\)\);/);
+ assert.ok(!/raised\(/.test(tile),'no cream raised tile');
+ // style.css .tile at ce126f56: 18px radius; linear-gradient(160deg, rgba(255,255,255,.62), rgba(255,255,255,.18) 55%,
+ // rgba(225,236,248,.32)); rings rgba(120,150,190,.32) and inset rgba(255,255,255,.5); top inset rgba(255,255,255,.95);
+ // inset 0 -2px 6px rgba(60,90,130,.18); ::after sheen rgba(255,255,255,.55) over the top half.
+ const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
+ assert.match(glass,/RADIUS_DP = 18;/);
+ assert.ok(glass.includes(`FILL = {${argb(.62,'ffffff')}, ${argb(.18,'ffffff')}, ${argb(.32,'e1ecf8')}}`),'fill');
+ assert.match(glass,/FILL_STOPS = \{0f, \.55f, 1f\};/);assert.match(glass,/Math\.toRadians\(160\)/);
+ for(const [name,a,rgb] of [['OUTER_RING',.32,'7896be'],['INNER_RING',.5,'ffffff'],['TOP_EDGE',.95,'ffffff'],['LOWER_SHADE',.18,'3c5a82'],['SHEEN',.55,'ffffff']])
+  assert.ok(glass.includes(`${name} = ${argb(a,rgb)}`),name);
+ // Decorative: the tile is still the one spoken, clickable target; the drawable holds no listener or text.
+ assert.ok(!/setOnClickListener|setContentDescription|drawText/.test(glass));
+ assert.match(tile,/tile\.setContentDescription\(label\);tile\.setClickable\(true\);tile\.setFocusable\(true\);/);
 });
 
 test('no conversation-page check uses a literal page index',()=>{

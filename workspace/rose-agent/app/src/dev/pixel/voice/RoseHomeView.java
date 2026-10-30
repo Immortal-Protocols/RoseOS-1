@@ -88,8 +88,8 @@ final class RoseHomeView extends FrameLayout {
   return insets;
  }
 
- /** The shared Home wallpaper, the same bytes and decode as before, drawn behind the pager at its scroll
-  * position. CSS background-size: cover, centered: scale to fill and crop the overflow equally. */
+ /** The shared Home wallpaper (rose_home_wallpaper, the verified reference bytes) drawn behind the pager as the
+  * selected HiFi's .wall: background-size: cover at background-position 62% 30%. */
  static final class Wallpaper extends Drawable {
   final Bitmap wallpaper;
   final Rect source = new Rect();
@@ -101,17 +101,11 @@ final class RoseHomeView extends FrameLayout {
   }
 
   @Override protected void onBoundsChange(Rect bounds) {
-   int w = bounds.width(), h = bounds.height();
    source.setEmpty();
-   if (wallpaper == null || w <= 0 || h <= 0) return;
-   int bw = wallpaper.getWidth(), bh = wallpaper.getHeight();
-   if ((long) bw * h > (long) bh * w) {
-    int cropW = Math.round(bh * (float) w / h);
-    source.set((bw - cropW) / 2, 0, (bw + cropW) / 2, bh);
-   } else {
-    int cropH = Math.round(bw * (float) h / w);
-    source.set(0, (bh - cropH) / 2, bw, (bh + cropH) / 2);
-   }
+   if (wallpaper == null) return;
+   int[] crop = HomeAppLayout.cover(wallpaper.getWidth(), wallpaper.getHeight(), bounds.width(), bounds.height(),
+     HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y);
+   source.set(crop[0], crop[1], crop[2], crop[3]);
   }
 
   @Override public void draw(Canvas canvas) {
