@@ -31,6 +31,8 @@ final class DeviceAuthTest {
     static final String TOKEN = ORIGIN + "/v1/auth/token";
     static final String CHAT = ORIGIN + "/v1/chat/completions";
     static final String BEARER = "SYNTHETIC-BEARER-NOT-A-SECRET-91c2";
+    static final String INVITE = "rgi1.SYNTHETICinviteNOTaSECRET0123456789abcdefgh";
+    static final String INVITE2 = "rgi1.SYNTHETICsecondINVITE_0123456789abcdefghijk";
 
     private DeviceAuthTest() {
     }
@@ -55,6 +57,154 @@ final class DeviceAuthTest {
         authOriginsMustMatch();
         cancelDuringBackoffStops();
         endToEndInferenceUsesTheIssuedBearer();
+        inviteLinkIsExact();
+        noInviteWaitsForAScanWithoutNetwork();
+        invalidInviteWaitsForAnExplicitNewScan();
+        lostEnrollmentReplyIsRecoveredWithoutANewKeyOrCode();
+        uncommittedEnrollmentRetriesWithTheSameInvite();
+        restartWhilePendingRenewsOrAsksForAScan();
+        otherRefusalsAreTerminalAndTtlIsBounded();
+        stopWhilePendingKeepsTheKey();
+    }
+
+    static void inviteLinkIsExact() {
+        check(INVITE.equals(InviteLink.parse(InviteLink.PREFIX + INVITE)), "exact link accepted");
+        for (String bad : new String[] {null, "", InviteLink.PREFIX, InviteLink.PREFIX + INVITE + "x",
+                InviteLink.PREFIX + INVITE.substring(0, INVITE.length() - 1), InviteLink.PREFIX + INVITE + "&invite=" + INVITE,
+                InviteLink.PREFIX + INVITE + "&origin=https://evil.test", InviteLink.PREFIX + INVITE + "&model=other",
+                InviteLink.PREFIX + INVITE + "#frag", InviteLink.PREFIX + "rgi2." + INVITE.substring(5),
+                InviteLink.PREFIX + INVITE.replace('a', '%'), InviteLink.PREFIX + INVITE.replace('a', '+'),
+                "dev.pixel.models://enroll/?invite=" + INVITE, "dev.pixel.models://user@enroll?invite=" + INVITE,
+                "dev.pixel.models://enroll:443?invite=" + INVITE, "DEV.PIXEL.MODELS://enroll?invite=" + INVITE,
+                "https://models.a-list.com/enroll?invite=" + INVITE, "dev.pixel.models://other?invite=" + INVITE,
+                "dev.pixel.models://enroll?x=1&invite=" + INVITE}) {
+            check(InviteLink.parse(bad) == null, "rejected: " + bad);
+        }
+    }
+
+    static void noInviteWaitsForAScanWithoutNetwork() throws Exception {
+        Server s = new Server();
+        MemStore store = new MemStore();
+        DeviceAuth a = bare(s, new SoftKey(), store);
+        expect(a, 403, "auth_invite_needed");
+        check(s.opened.isEmpty() && a.state() == DeviceAuth.State.INVITE_NEEDED, "no code: nothing sent, waits for a scan");
+        check(!a.offerInvite("rgi1.short") && !a.offerInvite(null), "only a well-formed code is accepted");
+    }
+
+    static void invalidInviteWaitsForAnExplicitNewScan() throws Exception {
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        MemStore store = new MemStore();
+        DeviceAuth a = auth(s, key, store);
+        s.challenge("c-1").token(403, "{\"error\":\"invite_invalid\"}");
+        expect(a, 403, "auth_invite_invalid");
+        check(a.state() == DeviceAuth.State.INVITE_NEEDED && key.exists(), "used/expired code: waits, key kept");
+        expect(a, 403, "auth_invite_needed");
+        check(s.opened.size() == 2, "the rejected code is not sent again");
+        check(a.offerInvite(INVITE2), "an explicit new scan is accepted");
+        s.challenge("c-2").token(200, tokenReply(key));
+        a.current(NEVER);
+        check(a.state() == DeviceAuth.State.ENROLLED && key.created == 2
+                && INVITE2.equals(Json.string(Json.object(Json.parse(s.bodies.get(3))), "invite")), "new code enrolls");
+        s.challenge("c-3").token(403, "{\"error\":\"invite_required\"}");
+        MemStore fresh = new MemStore();
+        expect(auth(s, new SoftKey(), fresh), 403, "auth_invite_invalid");
+        check("invite_needed".equals(fresh.get(DeviceAuth.STATE)), "invite_required also waits for a scan");
+    }
+
+    /** The server committed the enrollment (and spent the code) but the reply was lost. */
+    static void lostEnrollmentReplyIsRecoveredWithoutANewKeyOrCode() throws Exception {
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        MemStore store = new MemStore();
+        s.challenge("c-1");
+        s.failNext(TOKEN, new java.io.IOException("connection reset after commit"));
+        s.challenge("c-2").token(200, tokenReply(key));
+        EndpointCredential c = auth(s, key, store).current(NEVER);
+        Map<String, Object> second = Json.object(Json.parse(s.bodies.get(3)));
+        check(c != null && key.created == 1 && "enrolled".equals(store.get(DeviceAuth.STATE)), "recovered, same key");
+        check(!second.containsKey("invite") && !second.containsKey("attestation")
+                && key.keyIdHex().equals(Json.string(second, "key_id")), "recovery is a renewal: no code spent again");
+    }
+
+    /** The enrollment never committed (503): renewal answers key_unknown, then a new key uses the same code. */
+    static void uncommittedEnrollmentRetriesWithTheSameInvite() throws Exception {
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        MemStore store = new MemStore();
+        s.challenge("c-1").token(503, "{}");
+        s.challenge("c-2").token(401, "{\"error\":\"key_unknown\"}");
+        s.challenge("c-3").token(200, tokenReply(key));
+        auth(s, key, store).current(NEVER);
+        check(key.created == 2 && INVITE.equals(Json.string(Json.object(Json.parse(s.bodies.get(5))), "invite")),
+                "only after key_unknown: a new key, the same unspent code");
+    }
+
+    static void restartWhilePendingRenewsOrAsksForAScan() throws Exception {
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        MemStore store = new MemStore();
+        s.challenge("c-1");
+        for (int i = 0; i < 2; i++) {
+            s.failNext(TOKEN, new java.io.IOException("lost"));
+            s.challenge("c-" + (i + 2));
+        }
+        s.failNext(TOKEN, new java.io.IOException("lost"));
+        try {
+            auth(s, key, store).current(NEVER);
+        } catch (CredentialSource.AuthFailure expected) {
+        }
+        check("pending".equals(store.get(DeviceAuth.STATE)) && key.created == 1, "unknown outcome: key kept pending");
+        s.challenge("c-9").token(200, tokenReply(key));
+        bare(s, key, store).current(NEVER); // restarted: no invite in memory
+        check("enrolled".equals(store.get(DeviceAuth.STATE)) && key.created == 1, "restart recovers by renewal");
+        MemStore other = new MemStore();
+        SoftKey k2 = new SoftKey();
+        s.challenge("d-1").token(503, "{}").challenge("d-2").token(503, "{}").challenge("d-3").token(503, "{}");
+        expect(auth(s, k2, other), 503, "auth_unavailable");
+        s.challenge("d-4").token(401, "{\"error\":\"key_unknown\"}");
+        expect(bare(s, k2, other), 403, "auth_invite_needed");
+        check(k2.created == 1, "never committed and no code after restart: scan again, no new key yet");
+    }
+
+    static void otherRefusalsAreTerminalAndTtlIsBounded() throws Exception {
+        for (String error : new String[] {"enrollment_closed", "attestation_revoked", "key_revoked"}) {
+            Server s = new Server();
+            MemStore store = new MemStore();
+            s.challenge("c-1").token(403, "{\"error\":\"" + error + "\"}");
+            DeviceAuth a = auth(s, new SoftKey(), store);
+            expect(a, 403, "auth_refused");
+            check(!a.offerInvite(INVITE2) && a.state() == DeviceAuth.State.REFUSED, error + ": terminal, a scan does not bypass");
+        }
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        s.challenge("c-1").token(200, (java.util.function.Supplier<String>) () -> "{\"access_token\":\"" + BEARER
+                + "\",\"token_type\":\"Bearer\",\"expires_in\":86400,\"key_id\":\"" + key.keyIdHex() + "\"}");
+        expect(auth(s, key, new MemStore()), 502, "auth_invalid_reply");
+    }
+
+    static void stopWhilePendingKeepsTheKey() throws Exception {
+        Server s = new Server();
+        SoftKey key = new SoftKey();
+        MemStore store = new MemStore();
+        s.challenge("c-1").token(503, "{}");
+        final boolean[] cancelled = {false};
+        DeviceAuth a = new DeviceAuth(CHALLENGE, TOKEN, key, store, s::open, () -> 0, ms -> cancelled[0] = true);
+        a.offerInvite(INVITE);
+        try {
+            a.current(new CredentialSource.Cancel() {
+                public boolean isCancelled() {
+                    return cancelled[0];
+                }
+
+                public void track(HttpURLConnection c) {
+                }
+            });
+            check(false, "cancel ignored");
+        } catch (CredentialSource.AuthFailure f) {
+            check(f.isCancelled() && "pending".equals(store.get(DeviceAuth.STATE)) && key.exists(),
+                    "Stop while pending: cancelled, key and pending state kept");
+        }
     }
 
     static void freshInstallEnrollsAutomatically() throws Exception {
@@ -65,12 +215,13 @@ final class DeviceAuthTest {
         EndpointCredential c = auth(s, key, store).current(NEVER);
         check(c.matches(CHAT) && ("Bearer " + BEARER).equals(c.authorizationHeader()), "fresh install gets a bearer");
         Map<String, Object> enroll = Json.object(Json.parse(s.bodies.get(1)));
+        check(INVITE.equals(Json.string(enroll, "invite")), "the scanned invite goes with the first enrollment");
         check("c-1".equals(Json.string(enroll, "challenge")) && enroll.get("attestation") instanceof List
                 && key.verify("c-1", Json.string(enroll, "signature")), "enroll: challenge, attestation, valid signature");
         check(key.created == 1 && key.lastChallenge.equals("c-1"), "key attests the server challenge");
         check(DeviceAuth.State.ENROLLED.toString().equals(store.get(DeviceAuth.STATE).toUpperCase())
                 && key.keyIdHex().equals(store.get(DeviceAuth.KEY_ID)), "state and public key id stored");
-        check(!store.values().contains(BEARER), "bearer is not persisted");
+        check(!store.values().contains(BEARER) && !store.values().contains(INVITE), "bearer and invite are not persisted");
     }
 
     static void restartRenewsWithoutNewKeyOrTyping() throws Exception {
@@ -83,7 +234,7 @@ final class DeviceAuthTest {
         DeviceAuth restarted = auth(s, key, store); // new process: no bearer in memory
         restarted.current(NEVER);
         Map<String, Object> renew = Json.object(Json.parse(s.bodies.get(3)));
-        check(key.created == 1 && !renew.containsKey("attestation") && key.keyIdHex().equals(Json.string(renew, "key_id"))
+        check(key.created == 1 && !renew.containsKey("attestation") && !renew.containsKey("invite") && key.keyIdHex().equals(Json.string(renew, "key_id"))
                 && key.verify("c-2", Json.string(renew, "signature")), "restart renews by proof of possession, same key");
     }
 
@@ -92,6 +243,7 @@ final class DeviceAuthTest {
         SoftKey key = new SoftKey();
         long[] now = {1_000_000};
         DeviceAuth a = new DeviceAuth(CHALLENGE, TOKEN, key, new MemStore(), s::open, () -> now[0], ms -> now[0] += ms);
+        a.offerInvite(INVITE);
         s.challenge("c-1").token(200, tokenReply(key));
         a.current(NEVER);
         a.current(NEVER);
@@ -115,11 +267,9 @@ final class DeviceAuthTest {
         int opened = s.opened.size();
         expect(auth(s, key, store), 403, "auth_revoked");
         check(s.opened.size() == opened && key.created == 1, "restart: no request, no new key, no re-enrollment");
-        try {
-            a.reset();
-        } catch (Exception e) {
-            throw new AssertionError(e);
-        }
+        check(!a.offerInvite(INVITE2), "a new code does not bypass revocation");
+        a.reset();
+        check(a.offerInvite(INVITE2), "after an explicit reset a new code is accepted");
         s.challenge("c-3").token(200, tokenReply(key));
         a.current(NEVER);
         check(key.created == 2 && "enrolled".equals(store.get(DeviceAuth.STATE)), "explicit reset enrolls a new key");
@@ -146,6 +296,7 @@ final class DeviceAuthTest {
             waits.add(ms);
             now[0] += ms;
         });
+        a.offerInvite(INVITE);
         for (int i = 0; i < 3; i++) {
             s.reply(CHALLENGE, 429, "{}", "7");
         }
@@ -218,6 +369,7 @@ final class DeviceAuthTest {
             now[0] += ms;
             cancelled[0] = true; // Stop pressed during the first backoff
         });
+        a.offerInvite(INVITE);
         try {
             a.current(new CredentialSource.Cancel() {
                 public boolean isCancelled() {
@@ -273,7 +425,14 @@ final class DeviceAuthTest {
         }
     };
 
+    /** With a scanned invite in memory (refused, harmlessly, once enrolled/revoked/refused). */
     static DeviceAuth auth(Server s, DeviceKey key, MemStore store) {
+        DeviceAuth a = bare(s, key, store);
+        a.offerInvite(INVITE);
+        return a;
+    }
+
+    static DeviceAuth bare(Server s, DeviceKey key, MemStore store) {
         return new DeviceAuth(CHALLENGE, TOKEN, key, store, s::open, System::currentTimeMillis, ms -> { });
     }
 

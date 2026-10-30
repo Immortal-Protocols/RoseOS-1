@@ -21,7 +21,8 @@ The conversation, history, action validation, limits, fencing, Stop and backgrou
 | `AppAllowlist`, `AllowlistLauncher` | `open_app {app_id}` policy: user-selected allowlist (`[a-z][a-z0-9_]{0,31}` ids), installed and unambiguous launcher component, keyguard check |
 | `AndroidAppLauncher` | Platform calls only: list launcher activities, read the keyguard, start one explicit component (adapted from the narrow launch path in Rose Agent's `PhoneControl` at 9664372b) |
 | `HttpsInferenceClient`, `EndpointPolicy` | HTTPS-only POST of the agent's request body with the bearer from `CredentialSource`, on a worker thread with platform trust. No redirects, a 4 MiB response cap, cancel by disconnect. Reports the raw status and body, or `connect` / `timeout_connect` / `timeout_response` / `tls` / `response_too_large`; a credential it cannot get is reported as the auth server's status |
-| `DeviceAuth`, `KeystoreDeviceKey`, `ModelsService` | service-auth-v1 (`workspace/models/contracts/service-auth-v1.md`) against the fixed `https://models.a-list.com` / `muse-glimmer`: a hardware-attested Keystore P-256 key enrolls once, then each 1 h bearer is renewed by signing a fresh challenge. The bearer stays in memory; prefs keep only the key id and state |
+| `DeviceAuth`, `KeystoreDeviceKey`, `ModelsService` | service-auth-v1 (`workspace/models/contracts/service-auth-v1.md`) against the fixed `https://models.a-list.com` / `muse-glimmer`: a hardware-attested Keystore P-256 key enrolls once with an admin invite, then each bearer (at most 1 h) is renewed by signing a fresh challenge. Bearer and invite stay in memory; prefs keep only the key id and state |
+| `InviteLink` | The admin QR: exactly `dev.pixel.models://enroll?invite=rgi1.<43 base64url>` (VIEW, cold start or `onNewIntent`), read once and cleared from the intent. No camera or storage permission: any scanner opens the link |
 | `Json` | A small JSON codec with no Android dependency |
 | `MainActivity` | Programmatic UI. No inference settings: Settings shows the fixed service and offers **Reset sign-in**; the Apps picker stays. Old endpoint/model prefs are removed on start; chat and app data are kept |
 
@@ -39,8 +40,10 @@ The conversation, history, action validation, limits, fencing, Stop and backgrou
   anchors only. No secret ships in the APK; the bearer goes only to its own origin.
 - Sign-in is automatic and never blocks Send. Each turn has at most two HTTP inference attempts:
   one 401 renews and resends once only while an attempt is left, so there is never a third.
-- A 403 is terminal: the bearer is cleared, the key and a revoked/refused state are kept, and
-  nothing re-enrolls until **Reset sign-in** is chosen. 429 (Retry-After) and 5xx retry at most
+- The invite goes only with the first enrollment. A key is recorded as pending before that request,
+  so a lost reply is recovered by renewal (no new key, no second code); only a 401 `key_unknown`
+  allows a new key, with the same code. 403 `invite_required`/`invite_invalid` waits for a new scan;
+  any other 403 is terminal (key and state kept) until **Reset sign-in** is chosen. 429 (Retry-After) and 5xx retry at most
   three times; 400/401 and TLS failures never retry. Stop cancels sign-in and inference.
 
 ## Build and test

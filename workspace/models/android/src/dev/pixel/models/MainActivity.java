@@ -2,6 +2,7 @@ package dev.pixel.models;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -57,6 +58,7 @@ public final class MainActivity extends Activity implements TurnView {
         allowlist = AppAllowlist.parse(prefs.getString(KEY_ALLOWLIST, ""));
         buildUi();
         auth = new DeviceAuth(new KeystoreDeviceKey(), store(prefs));
+        String inviteProblem = takeInvite(getIntent());
         NativeAgent agent;
         try {
             agent = new NativeAgent(AgentConfigJson.build(ModelsService.MODEL, AgentConfigJson.DEFAULT_SYSTEM_PROMPT,
@@ -71,6 +73,41 @@ public final class MainActivity extends Activity implements TurnView {
                 new AllowlistLauncher(allowlist, new AndroidAppLauncher(this)), this, main::post,
                 (millis, task) -> main.postDelayed(task, millis));
         connect();
+        if (inviteProblem != null) {
+            setStatus(inviteProblem);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String problem = takeInvite(intent);
+        if (problem != null) {
+            setStatus(problem);
+        } else if (host != null) {
+            connect();
+        }
+    }
+
+    /**
+     * Reads a scanned invite link once: the exact form only (InviteLink), handed to DeviceAuth in memory and
+     * removed from the intent so a recreate never reads it again. Returns a problem to show, or null.
+     */
+    private String takeInvite(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null) {
+            return null;
+        }
+        String code = InviteLink.parse(intent.getDataString());
+        intent.setData(null);
+        setIntent(new Intent(Intent.ACTION_MAIN));
+        if (code == null) {
+            return "That is not a Rose Models sign-in code.";
+        }
+        if (!auth.offerInvite(code)) {
+            return auth.state() == DeviceAuth.State.ENROLLED ? "This phone is already signed in."
+                    : "Choose Settings → Reset sign-in before using a new code.";
+        }
+        return null;
     }
 
     @Override
@@ -199,6 +236,10 @@ public final class MainActivity extends Activity implements TurnView {
         switch (auth.state()) {
             case ENROLLED:
                 return "this phone is enrolled";
+            case PENDING:
+                return "enrolling";
+            case INVITE_NEEDED:
+                return "scan the admin's sign-in QR code";
             case REVOKED:
                 return "revoked";
             case REFUSED:
