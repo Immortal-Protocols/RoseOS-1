@@ -89,7 +89,10 @@ certbot reconfigure --cert-name models.a-list.com --webroot -w /var/lib/rose-mod
 
 **Auth.** Follow `../../contracts/service-auth-v1.md`:
 - install the Google hardware-attestation root certificates (public files) into `/etc/rose-models/attestation-roots/`
-  and record their hashes; optionally list revoked serials (lowercase hex) in `/etc/rose-models/attestation-revoked.txt`;
+  and record their hashes;
+- put the approved RoseOS `verifiedBootKey` (hex) in `/etc/rose-models/self-signed-boot-keys.txt`;
+- `systemctl enable --now models-attestation-status.timer`. It refreshes Google's status list; enrollment refuses
+  while the list is missing or stale;
 - `python3 /etc/rose-models/lib/service/auth_service.py secret-init`;
 - `systemctl enable --now models-auth models-edge`.
 

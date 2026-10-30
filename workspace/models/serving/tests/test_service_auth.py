@@ -5,6 +5,7 @@ Google-rooted Android attestation; it is not one. The HTTP test drives the real 
 import base64
 import datetime
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -58,9 +59,13 @@ def explicit(tag, inner):
     return der(tag, inner, True, cls=2)
 
 
-def key_description(challenge, package=A.PACKAGE, signer=A.SIGNER_SHA256, level=1, boot=1, app_in_software=True):
+BOOT_KEY = b'\x11' * 32  # the pinned SelfSigned verified-boot key in these fixtures
+
+
+def key_description(challenge, package=A.PACKAGE, signer=A.SIGNER_SHA256, level=1, boot=1, app_in_software=True,
+                    locked=True, boot_key=BOOT_KEY):
     app = seq(setof(seq(octets(package.encode()), integer(1))), setof(octets(bytes.fromhex(signer))))
-    rot = seq(octets(b'\x11' * 32), der(0x01, b'\xff'), enum(boot), octets(b'\x22' * 32))
+    rot = seq(octets(boot_key), der(0x01, b'\xff' if locked else b'\x00'), enum(boot), octets(b'\x22' * 32))
     software = seq(explicit(709, octets(app))) if app_in_software else seq()
     hardware = seq(explicit(704, rot), *([] if app_in_software else [explicit(709, octets(app))]))
     return seq(integer(300), enum(level), integer(300), enum(level), octets(challenge), octets(b''), software, hardware)
@@ -99,8 +104,9 @@ class Fixture(unittest.TestCase):
         self.store = A.Store(self.tmp)
         self.store.init_secret()
         self.now = NOW
-        self.policy = {'roots': {A.spki(self.root.public_key())}, 'revokedSerials': set(),
-                       'bootStates': {'Verified', 'SelfSigned'}, 'maxKeys': 3, 'enrollPerDay': 2}
+        self.revoked = set()
+        self.policy = {'roots': {A.spki(self.root.public_key())}, 'revoked': lambda: self.revoked,
+                       'selfSignedBootKeys': {BOOT_KEY.hex()}, 'maxKeys': 3, 'enrollPerDay': 2}
         self.svc = A.Service(self.store, self.policy, clock=lambda: self.now)
         self.device = ec.generate_private_key(ec.SECP256R1())
 
@@ -143,6 +149,8 @@ class Protocol(Fixture):
             'software keystore': (401, 'security_level', {'level': 0}),
             'unverified boot': (401, 'boot_state', {'boot': 2}),
             'failed boot': (401, 'boot_state', {'boot': 3}),
+            'self-signed with an unpinned boot key': (401, 'boot_state', {'boot_key': b'\x33' * 32}),
+            'unlocked bootloader': (401, 'device_unlocked', {'locked': False}),
         }
         for label, (status, category, kw) in cases.items():
             with self.subTest(label):
@@ -151,6 +159,7 @@ class Protocol(Fixture):
                 self.assertEqual((ctx.exception.status, ctx.exception.category), (status, category))
         self.assertEqual(self.store.registry()['keys'], {})
         self.enroll(app_in_software=False)  # attestationApplicationId accepted in either list
+        self.enroll(key=ec.generate_private_key(ec.SECP256R1()), boot=0, boot_key=b'\x44' * 32)  # Verified: any key
 
     def test_chain_challenge_and_signature_refusals(self):
         c = self.svc.challenge()['challenge']
@@ -186,7 +195,7 @@ class Protocol(Fixture):
                     days=(-10, -1), ca=False)
         self.refused(401, 'attestation_expired', self.svc.token,
                      {'challenge': c, 'attestation': [b64(leaf), b64(self.mid), b64(self.root)], 'signature': self.signature(c)})
-        self.policy['revokedSerials'] = {format(self.mid.serial_number, 'x')}
+        self.revoked = {format(self.mid.serial_number, 'x')}
         self.refused(403, 'attestation_revoked', self.enroll)
 
     def test_revocation_rotation_and_enrollment_caps(self):
@@ -231,6 +240,73 @@ class Protocol(Fixture):
         self.refused(503, 'not_initialized', svc.challenge)
 
 
+class ClosedContract(Fixture):
+    """Manager contract closure 17:13: single-use challenges across restarts, root-side extension bound to proof of
+    possession, revocation freshness, and revocation at renewal."""
+
+    def test_challenge_is_single_use_even_after_a_restart(self):
+        c = self.svc.challenge()['challenge']
+        body = {'challenge': c, 'attestation': self.chain(c), 'signature': self.signature(c)}
+        t = self.svc.token(body)
+        self.refused(401, 'challenge_reused', self.svc.token, body)
+        restarted = A.Service(A.Store(self.tmp), self.policy, clock=lambda: self.now)
+        self.refused(401, 'challenge_reused', restarted.token, body)
+        restarted.validate('Bearer ' + t['access_token'])  # live tokens survive a restart
+        c2 = restarted.challenge()['challenge']
+        renew = {'challenge': c2, 'key_id': t['key_id'], 'signature': self.signature(c2)}
+        restarted.token(renew)
+        self.refused(401, 'challenge_reused', self.svc.token, renew)
+        self.now += 61  # consumed challenges are pruned once expired
+        self.store.update_registry(lambda reg: self.svc._commit(reg, {'n': 'x', 'e': self.now + 60}, t['key_id'], None,
+                                                                None, set(), self.now))
+        self.assertEqual(list(self.store.registry()['usedChallenges']), ['x'])
+
+    def test_the_extension_nearest_the_root_decides_and_its_key_must_prove_possession(self):
+        c = self.svc.challenge()['challenge']
+        # An attested key (extension for another challenge) issues a leaf that carries a forged, matching extension.
+        attest_key = ec.generate_private_key(ec.SECP256R1())
+        attest = cert(attest_key, self.mid_key, 'Attest Key', 'Synthetic Intermediate', ext=key_description(b'other'))
+        forged = cert(self.device, attest_key, 'Forged Leaf', 'Attest Key', ext=key_description(c.encode()), ca=False)
+        chain = [b64(forged), b64(attest), b64(self.mid), b64(self.root)]
+        self.refused(401, 'challenge_mismatch', self.svc.token, {'challenge': c, 'attestation': chain, 'signature': self.signature(c)})
+        # With a matching root-side extension, the leaf key cannot stand in for the attested key.
+        c = self.svc.challenge()['challenge']
+        attest = cert(attest_key, self.mid_key, 'Attest Key', 'Synthetic Intermediate', ext=key_description(c.encode()))
+        forged = cert(self.device, attest_key, 'Forged Leaf', 'Attest Key', ca=False)
+        chain = [b64(forged), b64(attest), b64(self.mid), b64(self.root)]
+        self.refused(401, 'signature_invalid', self.svc.token, {'challenge': c, 'attestation': chain, 'signature': self.signature(c)})
+        c = self.svc.challenge()['challenge']
+        plain = cert(self.device, self.mid_key, 'k', 'Synthetic Intermediate', ca=False)
+        self.refused(401, 'key_description_invalid', self.svc.token,
+                     {'challenge': c, 'attestation': [b64(plain), b64(self.mid), b64(self.root)], 'signature': self.signature(c)})
+        broken = cert(self.device, self.mid_key, 'k', 'Synthetic Intermediate', ext=b'\x30\x03\x02\x01', ca=False)
+        self.refused(401, 'key_description_invalid', self.svc.token,
+                     {'challenge': c, 'attestation': [b64(broken), b64(self.mid), b64(self.root)], 'signature': self.signature(c)})
+
+    def test_revocation_status_freshness_and_revocation_at_renewal(self):
+        status = self.tmp / 'status.json'
+        clock = [NOW]
+        rs = A.RevocationStatus(status, max_age_s=100, clock=lambda: clock[0])
+        self.refused(503, 'revocation_status_missing', rs)
+        status.write_text(json.dumps({'entries': {'00ABC': {'status': 'REVOKED'}}}))
+        os.utime(status, (NOW, NOW))
+        self.assertEqual(rs(), {'abc'})
+        clock[0] += 101
+        self.refused(503, 'revocation_status_stale', rs)
+        os.utime(status, (clock[0], clock[0]))
+        status.write_text('not json')
+        os.utime(status, (clock[0] + 1, clock[0] + 1))
+        self.refused(503, 'revocation_status_invalid', rs)
+        self.policy['revoked'] = rs
+        self.refused(503, 'revocation_status_invalid', self.enroll)  # enrollment fails closed
+        self.policy['revoked'] = lambda: self.revoked
+        t = self.enroll()
+        self.revoked = {format(self.mid.serial_number, 'x')}  # Google revokes the intermediate after enrollment
+        c = self.svc.challenge()['challenge']
+        self.refused(403, 'key_revoked', self.svc.token, {'challenge': c, 'key_id': t['key_id'], 'signature': self.signature(c)})
+        self.refused(403, 'key_revoked', self.svc.validate, 'Bearer ' + t['access_token'])  # persisted revocation
+
+
 class Http(Fixture):
     def test_loopback_server_endpoints(self):
         server = A.ThreadingHTTPServer(('127.0.0.1', 0), A.handler(self.svc))
@@ -268,7 +344,8 @@ class Cli(unittest.TestCase):
     def test_operator_commands_and_serve_refusal(self):
         tmp = Path(tempfile.mkdtemp(prefix='auth-cli-'))
         self.addCleanup(shutil.rmtree, tmp, True)
-        args = ['--state-dir', str(tmp / 'state'), '--roots', str(tmp / 'roots'), '--revoked-serials', str(tmp / 'none')]
+        args = ['--state-dir', str(tmp / 'state'), '--roots', str(tmp / 'roots'), '--revocation-status', str(tmp / 'none'),
+                '--self-signed-boot-keys', str(tmp / 'none')]
         (tmp / 'roots').mkdir()
         self.assertEqual(A.main(['serve', *args]), 4)  # no trusted roots installed
         self.assertEqual(A.main(['secret-init', *args]), 0)

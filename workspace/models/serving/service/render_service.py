@@ -105,12 +105,27 @@ TimeoutStopSec=120''',
         '[Service]\n\n', '[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=yes\n')
     out['systemd/models-auth.service'] = unit(
         'Models service-auth-v1 credential service on 127.0.0.1:8090',
-        f'''ExecStart={PY} {root}/lib/service/auth_service.py serve --state-dir /var/lib/rose-models/auth --roots {root}/attestation-roots --revoked-serials {root}/attestation-revoked.txt
+        f'''ExecStart={PY} {root}/lib/service/auth_service.py serve --state-dir /var/lib/rose-models/auth --roots {root}/attestation-roots --revocation-status /var/lib/rose-models/attestation-status.json --self-signed-boot-keys {root}/self-signed-boot-keys.txt
 Restart=always
 RestartSec=5
 ReadWritePaths=/var/lib/rose-models/auth
 {hardening}''',
         'After=network.target\nStartLimitIntervalSec=600\nStartLimitBurst=10')
+    out['bin/refresh-attestation-status'] = f'''#!/usr/bin/env bash
+# Fetch Google's Android attestation status list (revocations) for models-auth; keep the old copy on any failure.
+set -euo pipefail
+dst=/var/lib/rose-models/attestation-status.json
+curl -fsS --proto =https --max-time 60 --max-filesize 16777216 -o "$dst.tmp" https://android.googleapis.com/attestation/status
+{PY} -c 'import json, sys; assert isinstance(json.load(open(sys.argv[1]))["entries"], dict)' "$dst.tmp"
+mv "$dst.tmp" "$dst"
+'''
+    out['systemd/models-attestation-status.service'] = unit(
+        "Refresh Google's Android attestation status list for models-auth",
+        f'Type=oneshot\nExecStart={root}/bin/refresh-attestation-status',
+        'After=network-online.target\nWants=network-online.target', install=None)
+    out['systemd/models-attestation-status.timer'] = unit(
+        'Refresh the attestation status list every 6 hours', '', install='WantedBy=timers.target').replace(
+        '[Service]\n\n', '[Timer]\nOnBootSec=1min\nOnUnitActiveSec=6h\nRandomizedDelaySec=10min\nPersistent=yes\n')
     out['systemd/models-edge.service'] = unit(
         'Models Nginx TLS edge for models.a-list.com',
         f'''RuntimeDirectory=rose-edge

@@ -8,6 +8,8 @@ Nginx proxies POST /v1/auth/challenge and /v1/auth/token here with per-IP limits
 
 State (owner-only, under --state-dir): secret.json {current, previous}, registry.json {keys, enrollmentOpen, days}.
 Trusted roots: every *.pem/*.der in --roots (Google hardware attestation roots, installed by the operator).
+Revocation: Google's attestation status JSON at --revocation-status, refreshed by the operator's timer; enrollment
+refuses (503) while it is missing or stale. SelfSigned boots need a pinned verifiedBootKey (--self-signed-boot-keys).
 Nothing secret is logged; the request log is disabled.
 """
 import argparse
@@ -115,10 +117,13 @@ def key_description(der):
             name = children(inner, info[3], info[4])[0]
             out['packages'].add(inner[name[3]:name[4]].decode('utf-8', 'replace'))
         out['signers'] = {inner[d[3]:d[4]].hex() for d in children(inner, digests[3], digests[4])}
+    out.update(bootKey=None, deviceLocked=False)
     rot = lists['hardware'].get(704)
     if rot:
         seq = tlv(der, rot[0])
         fields = children(der, seq[3], seq[4])
+        out['bootKey'] = der[fields[0][3]:fields[0][4]].hex()
+        out['deviceLocked'] = der[fields[1][3]:fields[1][4]] not in (b'', b'\x00')
         out['bootState'] = BOOT_STATES.get(integer(der, fields[2]))
     return out
 
@@ -166,17 +171,23 @@ def verify_attestation(chain_b64, challenge, policy, now):
             raise Refused(401, 'attestation_chain_invalid') from None
     if spki(chain[-1].public_key()) not in policy['roots']:
         raise Refused(401, 'attestation_root_untrusted')
+    revoked = policy['revoked']()  # refuses when the revocation status is missing or stale
     for cert in chain:
         if not validity(cert, 'before') <= now <= validity(cert, 'after'):
             raise Refused(401, 'attestation_expired')
-        if format(cert.serial_number, 'x') in policy['revokedSerials']:
+        if format(cert.serial_number, 'x') in revoked:
             raise Refused(403, 'attestation_revoked')
-    leaf = chain[0]
-    if not isinstance(leaf.public_key(), ec.EllipticCurvePublicKey) or leaf.public_key().curve.name != 'secp256r1':
+    # Android's guidance: trust the attestation extension nearest the root. Certificates below it could have been
+    # issued by an attested key, so their extensions prove nothing. Its certified key must do proof of possession.
+    attested = next((c for c in reversed(chain) if KEY_DESCRIPTION_OID in [e.oid for e in c.extensions]), None)
+    if attested is None:
+        raise Refused(401, 'key_description_invalid')
+    key = attested.public_key()
+    if not isinstance(key, ec.EllipticCurvePublicKey) or key.curve.name != 'secp256r1':
         raise Refused(401, 'key_type')
     try:
-        desc = key_description(leaf.extensions.get_extension_for_oid(KEY_DESCRIPTION_OID).value.value)
-    except (x509.ExtensionNotFound, ValueError, IndexError):
+        desc = key_description(attested.extensions.get_extension_for_oid(KEY_DESCRIPTION_OID).value.value)
+    except (ValueError, IndexError):
         raise Refused(401, 'key_description_invalid') from None
     if desc['attestationSecurityLevel'] not in TEE_LEVELS or desc['keyMintSecurityLevel'] not in TEE_LEVELS:
         raise Refused(401, 'security_level')
@@ -184,9 +195,15 @@ def verify_attestation(chain_b64, challenge, policy, now):
         raise Refused(401, 'challenge_mismatch')
     if desc['packages'] != {PACKAGE} or desc['signers'] != {SIGNER_SHA256}:
         raise Refused(401, 'application_mismatch')
-    if desc['bootState'] not in policy['bootStates']:
+    if not desc['deviceLocked']:
+        raise Refused(401, 'device_unlocked')
+    if desc['bootState'] == 'Verified':
+        pass
+    elif desc['bootState'] == 'SelfSigned' and desc['bootKey'] in policy['selfSignedBootKeys']:
+        pass  # a custom OS (RoseOS) only with its approved, pinned verified-boot key
+    else:
         raise Refused(401, 'boot_state')
-    return leaf.public_key()
+    return key, [format(c.serial_number, 'x') for c in chain]
 
 
 # ---- state ---------------------------------------------------------------------------------------------------------
@@ -229,11 +246,13 @@ class Store:
         return self._read(self.registry_path, {'keys': {}, 'enrollmentOpen': True, 'days': {}})
 
     def update_registry(self, fn):
+        """fn's changes are written even when it refuses: a consumed challenge or an automatic revocation stays."""
         with self.locked():
             reg = self.registry()
-            result = fn(reg)
-            self._write(self.registry_path, reg)
-            return result
+            try:
+                return fn(reg)
+            finally:
+                self._write(self.registry_path, reg)
 
     def init_secret(self, rotate=False):
         with self.locked():
@@ -284,12 +303,14 @@ class Service:
                 or not isinstance(body.get('signature'), str):
             raise Refused(400, 'malformed')
         challenge = body['challenge']
-        if opened(self.store.secrets(), 'rgc1', challenge, now) is None:
+        opened_challenge = opened(self.store.secrets(), 'rgc1', challenge, now)
+        if opened_challenge is None:
             raise Refused(401, 'challenge_invalid')
+        serials = None
         if 'attestation' in body:
             if not isinstance(body['attestation'], list):
                 raise Refused(400, 'malformed')
-            public_key = verify_attestation(body['attestation'], challenge, self.policy, now)
+            public_key, serials = verify_attestation(body['attestation'], challenge, self.policy, now)
             der = spki(public_key)
             key_id = hashlib.sha256(der).hexdigest()
         elif isinstance(body.get('key_id'), str):
@@ -297,8 +318,6 @@ class Service:
             entry = self.store.registry()['keys'].get(key_id)
             if entry is None:
                 raise Refused(401, 'key_unknown')
-            if entry['revoked']:
-                raise Refused(403, 'key_revoked')
             der = base64.b64decode(entry['spki'])
             public_key = serialization.load_der_public_key(der)
         else:
@@ -308,13 +327,25 @@ class Service:
                               ec.ECDSA(hashes.SHA256()))
         except (InvalidSignature, ValueError):
             raise Refused(401, 'signature_invalid') from None
-        if 'attestation' in body:
-            self.store.update_registry(lambda reg: self._enroll(reg, key_id, der, now))
+        revoked = None if serials is not None else self.policy['revoked']()
+        self.store.update_registry(lambda reg: self._commit(reg, opened_challenge, key_id, der, serials, revoked, now))
         token = sign(self.store.secrets()[0], 'rgm1', {'k': key_id, 'e': int(now) + TOKEN_TTL_S})
         return {'access_token': token, 'token_type': 'Bearer', 'expires_in': TOKEN_TTL_S, 'key_id': key_id}
 
-    def _enroll(self, reg, key_id, der, now):
+    def _commit(self, reg, challenge, key_id, der, serials, revoked, now):
+        """Under the registry lock: consume the challenge once (persisted, so a restart cannot replay it), then
+        enroll or check the key."""
+        used = {n: e for n, e in reg.setdefault('usedChallenges', {}).items() if e > now}
+        if challenge['n'] in used:
+            raise Refused(401, 'challenge_reused')
+        used[challenge['n']] = challenge['e']
+        reg['usedChallenges'] = used
         entry = reg['keys'].get(key_id)
+        if serials is None:  # renewal
+            if entry['revoked'] or set(entry.get('serials', [])) & revoked:
+                entry['revoked'] = True
+                raise Refused(403, 'key_revoked')
+            return
         if entry is not None:
             if entry['revoked']:
                 raise Refused(403, 'key_revoked')
@@ -325,7 +356,8 @@ class Service:
                 or reg['days'][day] >= self.policy['enrollPerDay']):
             raise Refused(403, 'enrollment_closed')
         reg['days'][day] += 1
-        reg['keys'][key_id] = {'spki': base64.b64encode(der).decode(), 'enrolledAt': int(now), 'revoked': False}
+        reg['keys'][key_id] = {'spki': base64.b64encode(der).decode(), 'enrolledAt': int(now), 'revoked': False,
+                               'serials': serials}
 
     def validate(self, authorization):
         now = self.clock()
@@ -386,12 +418,36 @@ def handler(service):
     return Handler
 
 
+class RevocationStatus:
+    """Google's attestation status list (JSON {"entries": {"<serial hex>": {...}}}), refreshed by the operator's
+    timer. Enrollment refuses while it is missing or older than max_age_s; any listed serial counts as revoked."""
+
+    def __init__(self, path, max_age_s=48 * 3600, clock=time.time):
+        self.path, self.max_age_s, self.clock = Path(path), max_age_s, clock
+        self.cached = (None, frozenset())
+
+    def __call__(self):
+        try:
+            mtime = self.path.stat().st_mtime
+        except OSError:
+            raise Refused(503, 'revocation_status_missing') from None
+        if self.clock() - mtime > self.max_age_s:
+            raise Refused(503, 'revocation_status_stale')
+        if self.cached[0] != mtime:
+            try:
+                entries = json.loads(self.path.read_text())['entries']
+                self.cached = (mtime, frozenset(k.lower().lstrip('0') or '0' for k in entries))
+            except (OSError, ValueError, KeyError, AttributeError):
+                raise Refused(503, 'revocation_status_invalid') from None
+        return self.cached[1]
+
+
 def policy_from(a):
-    revoked = set()
-    if a.revoked_serials and Path(a.revoked_serials).exists():
-        revoked = {line.strip().lower() for line in Path(a.revoked_serials).read_text().split() if line.strip()}
-    return {'roots': load_roots(a.roots) if a.roots else set(), 'revokedSerials': revoked,
-            'bootStates': set(a.boot_states.split(',')), 'maxKeys': a.max_keys, 'enrollPerDay': a.enroll_per_day}
+    boot_keys = set()
+    if a.self_signed_boot_keys and Path(a.self_signed_boot_keys).exists():
+        boot_keys = {line.strip().lower() for line in Path(a.self_signed_boot_keys).read_text().split() if line.strip()}
+    return {'roots': load_roots(a.roots) if a.roots else set(), 'revoked': RevocationStatus(a.revocation_status),
+            'selfSignedBootKeys': boot_keys, 'maxKeys': a.max_keys, 'enrollPerDay': a.enroll_per_day}
 
 
 def main(argv=None):
@@ -401,8 +457,9 @@ def main(argv=None):
     p.add_argument('key_id', nargs='?')
     p.add_argument('--state-dir', type=Path, default=Path('/var/lib/rose-models/auth'))
     p.add_argument('--roots', type=Path, default=Path('/etc/rose-models/attestation-roots'))
-    p.add_argument('--revoked-serials', type=Path, default=Path('/etc/rose-models/attestation-revoked.txt'))
-    p.add_argument('--boot-states', default='Verified,SelfSigned')
+    p.add_argument('--revocation-status', type=Path, default=Path('/var/lib/rose-models/attestation-status.json'))
+    p.add_argument('--self-signed-boot-keys', type=Path, default=Path('/etc/rose-models/self-signed-boot-keys.txt'),
+                   help='approved verifiedBootKey values (hex), one per line; SelfSigned boots need one')
     p.add_argument('--max-keys', type=int, default=200)
     p.add_argument('--enroll-per-day', type=int, default=50)
     p.add_argument('--port', type=int, default=8090)
