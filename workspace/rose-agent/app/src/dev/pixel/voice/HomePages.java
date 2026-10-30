@@ -1,15 +1,14 @@
 package dev.pixel.voice;
 
-/** Home page order and where an entry lands (OS-HIFI-HOME-001). Pages run Home, the app pages, Widgets,
- * then the legacy voice page last, so a swipe from Home reaches the apps under the fixed tray. A HOME
- * press that returns from an app or the Rose conversation keeps the page the owner left, like a phone
- * launcher; HOME while Home is already showing, or the app icon, goes to Home. Pure logic, no Android types. */
+/** Home page order and where an entry lands (OS-HIFI-HOME-001, #223). Pages run Home, then the app pages, and
+ * nothing else: the legacy Widgets and voice ("Tap to talk") pages are no longer pages, so normal swipes stay in
+ * the current Home. The voice controls open only on request (MainActivity.showVoiceControls). A HOME press that
+ * returns from an app or the Rose conversation keeps the page the owner left, like a phone launcher; HOME while
+ * Home is already showing, or the app icon, goes to Home. Pure logic, no Android types. */
 final class HomePages {
  private HomePages() {}
 
  static final int HOME = 0, FIRST_APPS = 1;
- static int widgets(int count) { return count - 2; }
- static int voice(int count) { return count - 1; }
 
  /**
   * @param showHome   the entry is a Home entry (HomeEntry.showHome)
@@ -21,7 +20,7 @@ final class HomePages {
  static int target(boolean showHome, boolean launcher, boolean homeShown, int previous, int fallback, int count) {
   if (!showHome) return fallback;
   if (launcher || homeShown) return HOME;
-  if (previous < 0 || previous >= count || previous == voice(count)) return HOME;
+  if (previous < 0 || previous >= count) return HOME;
   return previous;
  }
 
@@ -51,8 +50,9 @@ final class HomePages {
   return Math.max(0, Math.min(count - 1, target));
  }
 
- /** A page saved before recreation, kept within the rebuilt pager. */
+ /** A page saved before recreation, if the rebuilt pager still has it. A page that no longer exists (one the app
+  * inventory lost, or a Widgets or voice page saved before #223) returns to Home rather than the nearest app page. */
  static int restore(int saved, int count) {
-  return saved < 0 || count <= 0 ? HOME : Math.min(saved, count - 1);
+  return saved < 0 || saved >= count ? HOME : saved;
  }
 }

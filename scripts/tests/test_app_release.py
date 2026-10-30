@@ -32,7 +32,7 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # directory, stage receipt, artifact name and publish call (exact lines pinned in test_device_contract.py).
 # OCT30-INFRA-S014 moved both jobs once: the builder allocates the latest-beta candidate and exports its identity, and
 # the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
-OS_JOBS_AT_BASE = {'builder': '357a468def35ece2735b2879f73ed5adb05e1111d7da5c595e7fcd4a313dad93',
+OS_JOBS_AT_BASE = {'builder': 'bc03439b3d94cb52db6fffecb2bc3669e4ba0d050a6f2ebee1024a55d7676151',  # + RELEASE020 M2 opt-in packaging step
     'publisher': '7712e43e8ed4940f1656cd1e38e3ef8a877cc2a0fb6b6218d14437f9ce3c1ef4'}
 
 def script(path, body):

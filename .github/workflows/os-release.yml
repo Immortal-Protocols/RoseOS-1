@@ -424,6 +424,19 @@ jobs:
       - name: Verify the unsigned build
         if: inputs.resume_failed_stage == 'none' || inputs.resume_failed_stage == 'bytes-verify'
         run: bash scripts/os-release-stage.sh bytes-verify verify-build
+      # RELEASE020 M2 (opt-in, repository variable ROSE_SIGNING_TRANSPORT=package): package the verified unsigned build as
+      # a hash-bound roseos.signing-job.v1 job for the dedicated signer (os-sign.yml) beside the attempt. Local only:
+      # nothing is uploaded or sent and this run still signs on its existing route below.
+      - name: Package the signing job for the dedicated signer (opt-in)
+        if: inputs.mode == 'latest-beta' && vars.ROSE_SIGNING_TRANSPORT == 'package'
+        run: |
+          set -euo pipefail
+          read -r src otatools < <(python3 -c 'import json; h = json.load(open("os/release-pipeline/frankel.json"))["host"]; print(h["sourceRoot"], h["outDir"] + "/" + h["sign"]["otatools"])')
+          git show "$CANDIDATE_SHA:os/release-notes/$ROSE_DEVICE-$BUILD_NUMBER.md" > "$RUNNER_TEMP/UPDATE.md"
+          python3 scripts/release-transport.py package --release-dir "$ROSE_BASE/release" --otatools "$src/$otatools" \
+            --device "$ROSE_DEVICE" --build "$BUILD_NUMBER" --timestamp "$BUILD_TIMESTAMP" --candidate "$CANDIDATE_SHA" \
+            --notes "$RUNNER_TEMP/UPDATE.md" --config os/release-pipeline/frankel.json \
+            --job-id "$ROSE_DEVICE-$BUILD_NUMBER-$GITHUB_RUN_ID" --out "$ROSE_BASE/signing-jobs"
       - name: Signer access for OS signing
         if: inputs.resume_failed_stage != 'ota-verify'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"

@@ -16,7 +16,8 @@ test('the three trial entries are gone from the Home menu, not renamed or moved'
  assert.ok(options.length>0,'found homeOptions');
  for(const gone of ['DeepSeek Fast (trial)','Luna-first voice (trial)','ARTEMIS phone control (trial)'])assert.ok(!labels.includes(gone),gone);
  assert.ok(!labels.some(l=>/deepseek|luna|artemis|advanced/i.test(l)),'no renamed entry or Advanced replacement: '+labels.join(', '));
- assert.deepEqual(labels,['Server connection','Conversation mode','Conversation notes','Pair with Mac','Location access','General Decisions routing',
+ // #223: 'Voice controls' (first) is how the legacy voice page opens now that it is not a Home page.
+ assert.deepEqual(labels,['Voice controls','Server connection','Conversation mode','Conversation notes','Pair with Mac','Location access','General Decisions routing',
   'Live Mac screen','Keep screen on','App control while locked','Classic home','Try conversation home','Visual cards','Reject changed screens',
   'Stable-field typing','Voice boost (+6 dB)','Double tap toggles mute','Set up connected glasses','Talk to a Guardian','Your apps','Result card style'],
   'every other entry is kept, in order');

@@ -28,14 +28,15 @@ test('the HOME activity identity is unchanged',()=>{
 });
 
 test('HOME and the app icon land on Rose Home; the icon opens the Rose conversation; other opens keep their page',()=>{
- // Page indices are named and set from the built page list (HomePages): Home, apps, Widgets, legacy voice last.
- assert.match(main,/int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;/);
- assert.match(main,/homePage=HomePages\.HOME;ourAppsPage=HomePages\.FIRST_APPS;widgetsPage=HomePages\.widgets\(count\);voicePage=HomePages\.voice\(count\);/);
+ // Page indices are named and set from the built page list (HomePages): Home, then the apps (#223: no Widgets or voice page).
+ assert.match(main,/int homePage=0,ourAppsPage=1;boolean voiceControls;/);
+ assert.match(main,/homePage=HomePages\.HOME;ourAppsPage=HomePages\.FIRST_APPS;\n/);
+ assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
  // Cold start routes only a fresh intent; recreation (saved state) keeps the saved page, never reopening the conversation.
- assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);\}/);
+ assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);showSettingsFor\(getIntent\(\)\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
- assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
+ assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)closeVoiceControls\(\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
  // "Home shown" means only paused, never stopped: an app or the conversation over Home stops it.
  assert.match(main,/@Override protected void onStop\(\)\{super\.onStop\(\);homeStopped=true;\}/);
@@ -45,22 +46,32 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.match(main,/void openRoseConversation\(\)\{startActivity\(new Intent\(this,RoseConversationActivity\.class\)\);\}/);
  for(const absent of ['RoleManager','ROLE_HOME','WallpaperManager','setPreferredActivity','clearPackagePreferredActivities'])assert.ok(!main.includes(absent),absent);
  assert.doesNotMatch(route.slice(0,route.indexOf('\n')),/VoiceService|talk|endConversation|mute/i);
- // Rebuilding for menu actions or package changes keeps the current page, and the legacy voice page if shown.
- assert.match(main,/int selected=preservePage&&launcherPager!=null\?launcherPager\.currentPage\(\):-1;boolean onVoice=selected>=0&&selected==voicePage;/);
- assert.match(main,/if\(selected<0\|\|onVoice\)selected=voicePage;/);
+ // Rebuilding for menu actions or package changes keeps the current page while it exists; a fresh build opens on
+ // Home (#223: before, it opened on the legacy voice page, so a rebuild or a non-HOME entry showed "Tap to talk").
+ assert.match(main,/int selected=preservePage&&launcherPager!=null\?launcherPager\.currentPage\(\):-1;\n/);
+ assert.match(main,/selected=HomePages\.restore\(selected,count\);/);
 });
 
-test('Home comes first, the app pages follow it, and the legacy voice page is last (OS-HIFI-HOME-001)',()=>{
+test('Home comes first, the app pages follow it, and nothing else is a page (OS-HIFI-HOME-001, #223)',()=>{
  const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
- const order=['titles.add("Home")','HomeAppLayout.title(i,appPages)','titles.add("Widgets")','titles.add("Voice home")'].map(t=>pages.indexOf(t));
+ const order=['titles.add("Home")','HomeAppLayout.title(i,appPages)'].map(t=>pages.indexOf(t));
+ // #223: the legacy Widgets and voice ("Tap to talk") pages are not pages any more, and no widget is built.
+ for(const gone of ['titles.add("Widgets")','titles.add("Voice home")','new ClockWidgetView','new WeatherWidgetView','new GalleryWidgetView','launcherPager.addView(page)'])
+  assert.ok(!pages.includes(gone),gone);
  // The app pages hold one continuous real inventory: our apps first, then preinstalled, Play Store and other installs.
  assert.match(pages,/for\(ArrayList<ResolveInfo> group:Arrays\.asList\(ourApps,systemApps,storeApps,otherApps\)\)launchable\.addAll\(group\);/);
  assert.deepEqual([...order].sort((a,b)=>a-b),order);
  assert.ok(order.every(i=>i>=0));
- assert.ok(pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView(')<pages.indexOf('if(number==voicePage){launcherPager.addView(page);continue;}'));
- assert.match(pages,/for\(int number=HomePages\.FIRST_APPS;number<count;number\+\+\)\{\n   if\(number==voicePage\)\{launcherPager\.addView\(page\);continue;\}/);
- // Only the conversation page runs the voice refresh and the swipe-up gesture.
- assert.match(pages,/drawer=index!=voicePage;/);
+ assert.ok(pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView(')<pages.indexOf('for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage('));
+ // Long-pressing Home opens the Home options; the legacy voice controls open over Home only from there or the
+ // conversation's Settings, and only they run the voice refresh (drawer is false while they are shown).
+ assert.match(pages,/roseHome\.setOnLongClickListener\(v->\{homeOptions\(v\);return true;\}\);/);
+ assert.match(pages,/setContentView\(homeFrame\);drawer=true;if\(voiceControls\)attachVoiceControls\(\);/);
+ assert.match(main,/void showVoiceControls\(\)\{voiceControls=true;attachVoiceControls\(\);\}/);
+ assert.match(main,/void closeVoiceControls\(\)\{voiceControls=false;drawer=true;/);
+ assert.match(main,/if\(!voiceControls\)menu\.getMenu\(\)\.add\("Voice controls"\)\.setOnMenuItemClickListener\(i->\{showVoiceControls\(\);return true;\}\);/);
+ assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
+ assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
  assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);/);
 });
@@ -165,7 +176,7 @@ test('one persistent control bar: Home has no second shortcut dock over the tray
  // The tray and the one row of dots stay the frame's only bottom controls; every other app is a swipe or a dot away.
  assert.equal((main.match(/new HomeTray\(/g)||[]).length,1);
  assert.match(main,/dot\.setContentDescription\("Go to "\+titles\.get\(i\)\.toLowerCase\(Locale\.ROOT\)\);dot\.setFocusable\(true\);/);
- assert.match(main,/void apps\(\)\{if\(launcherPager!=null\)launcherPager\.showPage\(ourAppsPage,true\);\}/);
+ assert.match(main,/void apps\(\)\{closeVoiceControls\(\);if\(launcherPager!=null\)launcherPager\.showPage\(ourAppsPage,true\);\}/);
 });
 
 test('an unchanged HOME or app-icon return reuses the built Home; changes rebuild it (OS-HOME-REUSE-001)',()=>{
@@ -388,9 +399,9 @@ test('app tiles are the HiFi frosted glass, on Home and the app pages alike (APP
 });
 
 test('no conversation-page check uses a literal page index',()=>{
- assert.ok(!/currentPage\(\)\s*==\s*\d/.test(main),'use voicePage/homePage, not a number');
- // Completed-task details auto-open only while the conversation page is visible.
- assert.match(main,/launcherPager\.currentPage\(\)==voicePage\)&&visualDetail==null&&screenDetail==null/);
+ assert.ok(!/currentPage\(\)\s*==\s*\d/.test(main),'use homePage/ourAppsPage, not a number');
+ // Completed-task details auto-open only while the voice controls are shown (#223: they are no longer a page).
+ assert.match(main,/\(launcherPager==null\|\|voiceControls\)&&visualDetail==null&&screenDetail==null/);
 });
 
 test('the tray Rose renders and speaks the same authoritative state as the tray service and conversation',()=>{
@@ -413,5 +424,6 @@ test('the tray Rose renders and speaks the same authoritative state as the tray 
 });
 
 test('Back from the conversation or app pages returns Home',()=>{
- assert.match(main,/else if\(drawer&&launcherPager!=null\)launcherPager\.showPage\(homePage,true\);else if\(experimentalHome&&chatMode\)\{chatMode=false;home\(\);\}else if\(launcherPager!=null\)launcherPager\.showPage\(homePage,true\);\}/);
+ assert.match(main,/else if\(drawer&&launcherPager!=null\)launcherPager\.showPage\(homePage,true\);else if\(experimentalHome&&chatMode\)\{chatMode=false;home\(\);\}else if\(voiceControls\)closeVoiceControls\(\);else if\(launcherPager!=null\)launcherPager\.showPage\(homePage,true\);\}/);
+ // #223: Back first leaves the conversation mode inside the voice controls, then closes them back to Home.
 });
