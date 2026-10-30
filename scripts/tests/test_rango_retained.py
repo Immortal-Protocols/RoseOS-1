@@ -112,6 +112,13 @@ def notes_history(test):
         'sha256': hashlib.sha256(NOTES_FILE.read_bytes()).hexdigest(), 'build': '2026103001', 'device': 'rango'}
 
 
+def bootstrap_mode(cfg):
+    """The preserved bootstrap-receipt identity route (the checked-in config selects first-use since 13:07 UTC)."""
+    cfg['signing']['identityPolicy']['mode'] = 'bootstrap-receipt'
+    cfg['signing']['identityPolicy']['firstUse']['selected'] = False
+    return cfg
+
+
 def signed_target_files(out, target):
     """SYNTHETIC signed target-files: a real archive (so the real upstream Updater check reads it) without any Updater."""
     with zipfile.ZipFile(out/'signed-target_files.zip', 'w') as z:
@@ -119,20 +126,18 @@ def signed_target_files(out, target):
 
 
 class Config(unittest.TestCase):
-    def test_checked_in_route_is_unbound_and_refuses_before_any_host(self):
-        read = []  # the checked-in notes pin is read with git show; a shallow CI checkout lacks that commit
-        saved = rr.notes_bytes
-        rr.notes_bytes = read.append
-        self.addCleanup(setattr, rr, 'notes_bytes', saved)
-        # OCT30-INFRA-S017: the four Fold tools are proven per run by the admitted S016 helper, so no static installed
-        # hash is a prerequisite any more; everything else stays genuinely unbound.
-        self.assertEqual(rr.preflight(), ['input.transport', 'input.directory', 'signing.bootstrapReceipt',
-            'signing.otatoolsProvenance', 'signing.releaseScriptProvenance', 'publication.feedChannel',
-            'verification.expected', 'verification.updater.included'])
-        self.assertEqual(read, [CONFIG['publication']['notes']] * 1)
-        self.assertEqual(rr.main(['preflight']), 4)
+    def test_checked_in_recipe_is_bound_and_passes_the_hosted_guard(self):
+        # FINAL static data handoff: every static binding is in release.json. The hosted guard passes with nothing missing
+        # and reads no input; only the builder (which holds the transferred directory) can check the real files.
+        self.assertEqual(rr.preflight(local=False), [])
+        self.assertEqual(rr.main(['preflight', '--job', 'guard']), 0)
+        self.assertFalse(Path(CONFIG['input']['transport']['directory']).exists())  # not on this runner
+        with self.assertRaisesRegex(rr.Refused, 'input_unsafe'):
+            rr.preflight(local=True)
+        self.assertEqual(rr.main(['preflight', '--job', 'builder']), 1)
         self.assertEqual((CONFIG['target']['device'], CONFIG['target']['product'], CONFIG['target']['build']),
             ('rango', '02b21bc69f9afd281422d42e3dcf8a456e471de1', '2026103001'))
+        self.assertIsNone(CONFIG['signing']['bootstrapReceipt'])  # held; not used under the selected first-use policy
 
     def test_mutated_config_cannot_reach_latest_or_another_device(self):
         for path, value in ((('publication', 'latest'), True), (('publication', 'tag'), 'frankel-{build}'),
@@ -268,7 +273,7 @@ class BoundSigning(unittest.TestCase):
     secrets, per-secret versions and identities from the bootstrap receipt and the staged consumer inputs."""
 
     def bind_everything(self):
-        cfg = copy.deepcopy(CONFIG)
+        cfg = bootstrap_mode(copy.deepcopy(CONFIG))
         cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': '/synthetic/unused'}
         cfg['signing'].update(otatoolsProvenance={'revision': 'r'}, releaseScriptProvenance={'revision': 's'})
         self.product, notes = notes_history(self)
@@ -294,8 +299,14 @@ class BoundSigning(unittest.TestCase):
         saved = host_sign.host_secrets.fetch_secret
         host_sign.host_secrets.fetch_secret = lambda *a, **k: fetched.append(a)
         self.addCleanup(setattr, host_sign.host_secrets, 'fetch_secret', saved)
-        with self.assertRaises(host_sign.AdapterSetupMissing) as error:
+        # The checked-in recipe declares the real retained receipt (54d4cf66); a SYNTHETIC staged input is refused.
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'input_drift: the staged receipt is not the one input.transport declares'):
             host_sign.main(env=self.env(t, t.root/'consumer', t.root/'absent.json'))
+        self.assertEqual(fetched, [])
+        # The preserved bootstrap-receipt route refuses without its receipt.
+        bootstrap_mode(self.bind_everything())  # host-sign's own seam with this module's (patched) config
+        with self.assertRaises(host_sign.AdapterSetupMissing) as error:
+            host_sign.retained_inputs(self.env(t, t.root/'consumer', t.root/'absent.json'), rr)
         self.assertIn('signing.bootstrapReceipt', error.exception.missing)
         self.assertEqual(fetched, [])
 
@@ -348,6 +359,7 @@ class Route(unittest.TestCase):
         self.ota_cert, self.avb = synthetic_identity(self.ident)
         self.src = self.t.input()
         cfg = copy.deepcopy(CONFIG)
+        bootstrap_mode(cfg)
         cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
         cfg['signing'].update(bootstrapReceipt=bootstrap(publicIdentity={'otaCertificateSha256': self.ota_cert,
             'avbPublicKeySha256': self.avb, 'members': []}), otatoolsProvenance={'synthetic': True},
@@ -474,6 +486,10 @@ class Route(unittest.TestCase):
         self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
         self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
         self.assertEqual(self.cli('preflight', '--job', 'builder'), 0)
+        receipt_sha = hashlib.sha256((self.src/'rango-retained-input.json').read_bytes()).hexdigest()
+        for declared, code in (('0' * 64, 1), (receipt_sha, 0)):  # the declared receipt hash binds the staged receipt
+            self.cfg['input']['transport']['receiptSha256'] = declared
+            self.assertEqual(self.cli('preflight', '--job', 'builder'), code)
         for name, damage in (('tampered', lambda d: (d/'rango-background-policy.json').write_bytes(b'{"tampered": true}')),
                              ('extra', lambda d: (d/'notes.txt').write_text('x')),
                              ('partial', lambda d: (d/'rango-otatools.zip').unlink()),
@@ -670,6 +686,43 @@ class CheckedInNotes(unittest.TestCase):
             self.assertIn(phrase, text)
 
 
+class CheckedInRecipe(unittest.TestCase):
+    """FINAL static data handoff: the bound release.json values, through release-pipeline's own static requirements."""
+
+    def test_bound_expectations_satisfy_the_pipeline_without_frankel_identities(self):
+        binding = {'otaCertificateSha256': 'a' * 64, 'avbPublicKeySha256': 'b' * 64}  # SYNTHETIC first-use runtime outputs
+        config = rr.pipeline_config(CONFIG, binding)
+        module = rr.pipeline()
+        self.assertEqual(module.updater_missing(config), [])
+        self.assertEqual(module.updater_record(config)['roseDiscovery'], False)
+        self.assertEqual(module.permission_apex.missing(config['permissionApex']), [])
+        self.assertEqual([k for k in module.SYSTEMUI_TRAY_REQUIRED if not config['systemUiTray'].get(k)], [])
+        self.assertEqual([k for k, v in config['host']['tools'].items() if not v], [])
+        self.assertEqual(config['target'], {'device': 'rango', 'variant': 'user'})
+        self.assertEqual(config['identities'], dict(binding, appSignerSha256='650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb'))
+        frankel = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['identities']
+        self.assertNotIn(frankel['otaCertificateSha256'], json.dumps(CONFIG))
+        self.assertNotIn(frankel['avbPublicKeySha256'], json.dumps(CONFIG))
+        channel = config['publication']['channels']['beta']
+        self.assertEqual((channel['promoteLatest'], channel['feedChannel']), (False, 'beta'))
+        receipt = {'build': {'timestamp': 1793328547}}
+        cand = rr.candidate(CONFIG, receipt)
+        self.assertEqual(f"{cand['build']} {cand['timestamp']} {cand['device']} {channel['feedChannel']}", '2026103001 1793328547 rango beta')
+        self.assertEqual(sorted(a[0] for a in config['apps']), ['dev.pixel.backgroundcontrol', 'dev.pixel.calculator.agent', 'dev.pixel.voice'])
+
+    def test_bound_provenance_and_transport_are_exact(self):
+        signing, transport = CONFIG['signing'], CONFIG['input']['transport']
+        self.assertEqual(transport['directory'], '/home/pixelbuild/rose-actions/rango-retained/2026103001-transfer007/input')
+        self.assertEqual(transport['receiptSha256'], '54d4cf665e9bc47d584abda8ab6c130687cc748b7752d156e81e94462bd2173e')
+        self.assertEqual(signing['otatoolsProvenance']['sha256'], '22d62464ff3fa74fe3fa2b4c118bba116bc3a3aa504feddcdcf38fc3f3cbb664')
+        self.assertEqual(signing['otatoolsProvenance']['resolvedManifestSha256'],
+            hashlib.sha256((SCRIPTS.parent/'os/pinned-manifest.xml').read_bytes()).hexdigest())
+        self.assertEqual(signing['releaseScriptProvenance']['files']['generate-release.sh'],
+            hashlib.sha256((SCRIPTS/'tests/fixtures/permission-apex/script/generate-release.sh').read_bytes()).hexdigest())
+        self.assertEqual(signing['releaseScriptProvenance']['files']['common.sh'],
+            'd6ff8cd70b065af7e129a95d026ff5ddd8564a6e12fa340cd02fd93deba76262')
+
+
 class UpdaterContract(unittest.TestCase):
     """OCT30-INFRA-S018: verification.updater is the upstream contract of the keep-upstream-updater recipe, bound to the
     pinned reconcile file by hash; unbound fields are named, contradictions refuse."""
@@ -679,11 +732,14 @@ class UpdaterContract(unittest.TestCase):
         cfg['verification']['updater'].update(changes)
         return cfg
 
-    def test_checked_in_contract_is_bound_to_the_retained_recipe_and_unbound_on_presence(self):
+    def test_checked_in_contract_is_the_evidenced_absence_of_the_retained_recipe(self):
         spec = CONFIG['verification']['updater']
-        self.assertEqual((spec['mode'], spec['included']), ('upstream', None))
+        self.assertEqual((spec['mode'], spec['included']), ('upstream', False))
+        self.assertNotIn('signer', spec)
+        self.assertNotIn('resources', spec)
         self.assertEqual(hashlib.sha256((SCRIPTS.parent/spec['recipe']['path']).read_bytes()).hexdigest(), spec['recipe']['sha256'])
-        self.assertEqual(rr.updater_contract(CONFIG, check=True), ['updater.included'])
+        self.assertEqual(rr.updater_contract(CONFIG, check=True), [])
+        self.assertEqual(rr.updater_contract(self.cfg(included=None), check=True), ['updater.included'])
         contract = rr.updater_contract(self.cfg(included=False))
         self.assertIn('--keep-upstream-updater', contract['recipeApplyArgs'])
         self.assertNotIn('--updater-url', contract['recipeApplyArgs'])
@@ -713,15 +769,16 @@ class UnboundRoute(unittest.TestCase):
         t = Tmp(self)
         rr.stage(t.input(), t.root/'consumer')
         called = []
-        with self.assertRaises(rr.SetupMissing):
+        # The checked-in recipe is bound to the real retained receipt; a SYNTHETIC staged input refuses before any signer.
+        with self.assertRaisesRegex(rr.Refused, 'input_drift'):
             rr.sign({}, t.root/'consumer', t.root/'release', signer=lambda env: called.append(env),
                 lock=lambda path: contextlib.nullcontext())
         for step in (lambda: rr.verify({}, t.root/'consumer', t.root/'release'),
                      lambda: rr.stage_artifact({}, t.root/'consumer', t.root/'release', t.root/'artifact')):
-            with self.assertRaises(rr.SetupMissing):
+            with self.assertRaises(rr.Refused):
                 step()
         self.assertEqual(called, [])
-        self.assertEqual(rr.main(['stage', '--consumer', str(t.root/'c2')]), 4)
+        self.assertEqual(rr.main(['stage', '--consumer', str(t.root/'c2')]), 1)  # the builder directory is not here
 
 
 class SigningOnly(Route):
@@ -790,22 +847,27 @@ class FirstUseContract(unittest.TestCase):
         rows.update(change)
         return rows
 
-    def test_checked_in_policy_is_the_bootstrap_receipt_and_first_use_is_unselected(self):
-        self.assertEqual(CONFIG['signing']['identityPolicy']['mode'], 'bootstrap-receipt')
-        self.assertIs(self.CONTRACT['selected'], False)
-        self.assertEqual(rr.identity_policy(CONFIG), 'bootstrap-receipt')
+    def test_checked_in_policy_is_the_selected_first_use_contract(self):
+        # Owner selected 13:07 UTC; the bootstrap-receipt route stays available and unselected first-use still refuses.
+        self.assertEqual(CONFIG['signing']['identityPolicy']['mode'], 'first-use-containers')
+        self.assertIs(self.CONTRACT['selected'], True)
+        self.assertEqual(rr.identity_policy(CONFIG), 'first-use-containers')
+        self.assertEqual((self.CONTRACT['bootstrapRun'], self.CONTRACT['bootstrapRecipe'], self.CONTRACT['windowStart'],
+            self.CONTRACT['windowEnd']), ('41019390144', '99357a10a2e63021d5df76b962c5aee9e76216d1', '2026-10-30T07:20:15Z',
+            '2026-10-30T07:20:44Z'))
+        self.assertEqual(rr.identity_policy(bootstrap_mode(copy.deepcopy(CONFIG))), 'bootstrap-receipt')
         cfg = copy.deepcopy(CONFIG)
-        cfg['signing']['identityPolicy']['mode'] = 'first-use-containers'
+        cfg['signing']['identityPolicy']['firstUse']['selected'] = False
         with self.assertRaisesRegex(rr.Refused, 'identity_policy_unselected'):
-            rr.preflight(cfg=cfg)
+            rr.preflight(cfg=cfg, local=False)
         cfg['signing']['identityPolicy']['firstUse']['selected'] = True
         # Selected: no bootstrap receipt and no identity is required before the protected signing derivation.
-        missing = rr.preflight(cfg=cfg)
+        missing = rr.preflight(cfg=cfg, local=False)
         self.assertNotIn('signing.bootstrapReceipt', missing)
         self.assertFalse([m for m in missing if m.startswith('signing.identityPolicy')])
         cfg['signing']['identityPolicy']['mode'] = 'latest'
         with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
-            rr.preflight(cfg=cfg)
+            rr.preflight(cfg=cfg, local=False)
 
     def test_exactly_one_enabled_timely_version_per_container_is_pinned(self):
         self.assertEqual(rr.first_use_admission(self.metadata(), self.CONTRACT), {'keys': '1', 'passphrase': '1'})
@@ -861,10 +923,11 @@ class FirstUseContract(unittest.TestCase):
             'repository': {'full_name': 'Immortal-Protocols/RoseOS-1'}}
         self.addCleanup(rr.RUN_READER.__setitem__, 0, saved)
         env = {'GITHUB_RUN_ID': '42', 'GITHUB_REPOSITORY': 'Immortal-Protocols/RoseOS-1'}
-        self.assertEqual(rr.bootstrap_provenance(env, CONFIG), {'policy': 'bootstrap-receipt', 'checked': False, 'consumerRunId': '42'})
+        self.assertEqual(rr.bootstrap_provenance(env, bootstrap_mode(copy.deepcopy(CONFIG))),
+            {'policy': 'bootstrap-receipt', 'checked': False, 'consumerRunId': '42'})
         self.assertEqual(calls, [])
         cfg = copy.deepcopy(CONFIG)
-        cfg['signing']['identityPolicy']['mode'] = 'first-use-containers'
+        cfg['signing']['identityPolicy']['firstUse']['selected'] = False
         with self.assertRaisesRegex(rr.Refused, 'identity_policy_unselected'):
             rr.bootstrap_provenance(env, cfg)
         self.assertEqual(calls, [])

@@ -381,9 +381,12 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True, loc
         pass
     elif input_dir:
         try:
-            _, unbound, _ = check_directory(input_dir, cfg)
+            _, unbound, observed = check_directory(input_dir, cfg)
         except SetupMissing as error:
-            unbound = error.missing
+            unbound, observed = error.missing, {}
+        declared = (transport or {}).get('receiptSha256')
+        if declared and observed and observed['receiptSha256'] != declared:
+            raise Refused('input_drift: the staged receipt is not the one input.transport declares')
         missing += unbound
     else:
         missing.append('input.directory')

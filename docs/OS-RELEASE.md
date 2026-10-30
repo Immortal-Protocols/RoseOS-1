@@ -142,15 +142,16 @@ The `latest-beta` button and the Frankel modes are unchanged.
   No installed hash is trusted from source.
 - `feedChannel` and `notes` stay signing prerequisites, because they produce the signed public assets `rango-stable`
   and `UPDATE.md` that `verify_signed` checks. The repository, tag and Latest settings are publication-only.
-- The identity authority (`signing.identityPolicy.mode`) is the genuine `fold-rango-v1` bootstrap receipt. That
-  receipt is still unbound: artifact 12961047183 is held and is never retrieved another way.
-- The first-use container contract (`identityPolicy.firstUse`) is proposed only, with `selected: false`:
+- The identity authority (`signing.identityPolicy.mode`) is `first-use-containers`, selected by the owner at 13:07 UTC.
+  The bootstrap-receipt route stays available; its receipt (artifact 12961047183) is held, never retrieved another way,
+  so `signing.bootstrapReceipt` stays null. The bootstrap itself completed (run 41019390144) and is never repeated.
+- The first-use container contract (`identityPolicy.firstUse`, `selected: true`):
   - exactly one ENABLED version in each fixed container, created inside the bootstrap window;
   - numeric versions pinned before access;
   - a write-once identity binding that refuses a Frankel collision and must match on every later run.
 
-  It refuses while unselected, before any metadata or secret call. When explicitly selected (OCT30-INFRA-S017-FIX001,
-  connected in source and synthetic tests only; nothing selects it):
+  It refuses while unselected, before any metadata or secret call. Selected (OCT30-INFRA-S017-FIX001 connected it;
+  the public identity and numeric versions are runtime outputs, never prefilled):
   - the hosted guard checks the bootstrap run (`check-bootstrap-run`) and hands a same-run receipt to the builder,
     because the builder has no Actions read access; bootstrap-receipt mode records `checked: false` without a call;
   - `sign` pins both numeric versions and rechecks them under the shared lock; inside host-sign's retained seam the
@@ -176,9 +177,21 @@ without Rose on-device discovery (13:32:59 UTC); Rose Updater integration follow
 - `verification.json` records `updater` with `mode` and `roseDiscovery` (true only for `rose`). A public GitHub Beta
   is not on-device discovery.
 - `os/retained-rango/release.json` `verification.updater` binds the recipe as the pinned `rango-reconcile.json`
-  path and sha256. `included` stays null until the bounded index of the actual target-files says whether the
-  Updater is there. The source expectation is absent: upstream `media_system.mk` adds it only with
-  `OFFICIAL_BUILD=true`, and the patcher only with `--updater-url`.
+  path and sha256, with `included: false`. The source expectation was absence (upstream `media_system.mk` adds it only
+  with `OFFICIAL_BUILD=true`, the patcher only with `--updater-url`), and the Mac's inspection of the retained
+  target-files confirmed it: all 217 APK identities decoded without `app.seamlessupdate.client` (receipt 9a134b49), and
+  none of the three supporting XML paths in the 10221-member index (7cce414e). The signed target-files is rechecked.
+
+**Bound retained recipe (FINAL static data handoff, 14:37 UTC).** `os/retained-rango/release.json` now binds the
+transport (the transferred `2026103001-transfer007/input` directory, input receipt 54d4cf66), first-use selected,
+otatools provenance (product, resolved manifest, compile and collection receipts, archive bytes), release-script
+provenance (GrapheneOS/script 09d65184 `generate-release.sh` and `common.sh` hashes), `feedChannel: beta` (a
+classification; nothing on the phone reads `rango-stable`), the notes pin, the Updater absence and
+`verification.expected` (shared-source framework, Permission APEX and SystemUI expectations, the retained apps and
+signer, the builder's tool paths). The hosted guard passes with nothing missing. Still runtime-only, inside the one
+protected run: the builder's real input files and hashes, the host tool and release-script executable comparisons,
+the local tool proof, two-container version admission, key pairs and the Frankel collision check, the durable
+first-use record, and verification of the actual signed bytes.
 
 **Retained release notes pin.** The immutable product `02b21bc6` holds notes only for frankel builds, so
 `publication.notes` pins UPDATE.md separately: `{commit, path, sha256, build, device}` for exactly rango 2026103001
