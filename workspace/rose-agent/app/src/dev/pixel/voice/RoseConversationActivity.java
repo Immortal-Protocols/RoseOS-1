@@ -266,17 +266,28 @@ public final class RoseConversationActivity extends Activity {
   * pairing or credential. A compatible newer version can be installed only by tapping Install (SelfUpdate admission,
   * then the service's verified delivery); checking alone never downloads the APK or installs. */
  void checkForUpdate(){
-  android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setTitle("Update Rose Agent").setMessage("Checking for updates…")
+  TextView title=new TextView(this);title.setPadding(dp(24),dp(20),dp(24),0);title.setTextSize(20);title.setText("Update Rose Agent · "+UpdateAttempts.channel(this).label+" ▾");title.setContentDescription("Update channel "+UpdateAttempts.channel(this).label+". Change channel");
+  android.app.AlertDialog dialog=new android.app.AlertDialog.Builder(this).setCustomTitle(title).setMessage("Checking for updates…")
    .setNegativeButton("Close",null).setNeutralButton("Check again",null).setPositiveButton("Install",null).create();
   dialog.setOnShowListener(d->{Button again=dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL),install=dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
-   install.setVisibility(View.GONE);again.setOnClickListener(v->runUpdateCheck(dialog,again,install));runUpdateCheck(dialog,again,install);});
+   install.setVisibility(View.GONE);again.setOnClickListener(v->runUpdateCheck(dialog,again,install));runUpdateCheck(dialog,again,install);
+   title.setOnClickListener(v->chooseUpdateChannel(title,()->runUpdateCheck(dialog,again,install)));});
   dialog.show();
+ }
+ /** The owner's update channel (UpdateAttempts): Alpha/Beta/Prod, kept as chosen; DirectUpdate reports an unpublished one
+  * as unavailable without fetching it. */
+ void chooseUpdateChannel(TextView title,Runnable recheck){
+  DirectUpdate.Channel[] all=DirectUpdate.Channel.values();String[] labels=new String[all.length];
+  for(int i=0;i<all.length;i++)labels[i]=all[i].label;
+  new android.app.AlertDialog.Builder(this).setTitle("Update channel").setSingleChoiceItems(labels,UpdateAttempts.channel(this).ordinal(),(d,which)->{
+   UpdateAttempts.setChannel(this,all[which]);title.setText("Update Rose Agent · "+all[which].label+" ▾");title.setContentDescription("Update channel "+all[which].label+". Change channel");d.dismiss();recheck.run();}).show();
  }
  void runUpdateCheck(android.app.AlertDialog dialog,Button again,Button install){
   dialog.setMessage("Checking for updates…");again.setEnabled(false);install.setVisibility(View.GONE);
   new Thread(()->{
-   DirectUpdate.Device device=Delivery.localDevice(this);DirectUpdate.Result result;
-   try{result=DirectUpdate.check(new Delivery.PublicHttp(),device);}
+   DirectUpdate.Device device=Delivery.localDevice(this);DirectUpdate.Result result;DirectUpdate.Channel channel=UpdateAttempts.channel(this);
+   UpdateAttempts.recover(this,device.installed); // an interrupted attempt's own session and download
+   try{result=DirectUpdate.check(new Delivery.PublicHttp(),device,channel);}
    catch(Exception e){result=new DirectUpdate.Result(DirectUpdate.State.ERROR,"Couldn’t check for updates ("+e.getClass().getSimpleName()+").",null);}
    final DirectUpdate.Result r=result;
    runOnUiThread(()->{if(!dialog.isShowing())return;
@@ -300,8 +311,7 @@ public final class RoseConversationActivity extends Activity {
  }
  /** The recorded attempt for this offered version only; an earlier attempt for another version says nothing. */
  String selfUpdateText(long offered,long installed){
-  android.content.SharedPreferences p=getSharedPreferences("self-update",0);
-  return p.getLong("target",-1)==offered?SelfUpdate.attemptText(offered,p.getString("state",""),installed):"";
+  return UpdateAttempts.text(this,offered,installed);
  }
 
 }
