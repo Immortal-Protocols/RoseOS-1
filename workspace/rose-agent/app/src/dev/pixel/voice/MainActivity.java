@@ -10,7 +10,7 @@ public class MainActivity extends Activity {
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
  boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
- LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,appAreaWidth=-1,appAreaHeight=-1;float appCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
+ LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,appAreaWidth=-1,appAreaHeight=-1;float appCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,voicePage=1,widgetsPage=2,ourAppsPage=3;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
@@ -386,7 +386,7 @@ public class MainActivity extends Activity {
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   // The legacy voice page keeps its own artwork; the one row of page dots is fixed in the HomeFrame.
   homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
-  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),this::apps,new View(this)));
+  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),homeColumns));
   for(int number=HomePages.FIRST_APPS;number<count;number++){
    if(number==voicePage){launcherPager.addView(page);continue;}
    if(number!=widgetsPage){launcherPager.addView(appPage(pages.get(number),titles.get(number),launchable.isEmpty()));continue;}
@@ -430,7 +430,7 @@ public class MainActivity extends Activity {
   float width=appAreaWidth>0?appAreaWidth:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
   float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp,HomeTray.HEIGHT_DP,HomeTray.GAP_DP,HomeFrame.DOTS_DP)*density;
   float cell=appCellHeight>0?appCellHeight:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
-  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);
+  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);homeColumns=HomeAppLayout.homeColumns(width,height,cell,density);
  }
  /** A page measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
  void appPageMeasured(int width,int height,float cell){
@@ -465,13 +465,13 @@ public class MainActivity extends Activity {
   }
   return dots;
  }
- /** A real app's cell: its own icon in the 64dp tile and its label, opening it (WorkspaceLauncher). */
+ /** A real app's cell: its own icon in the 64dp HiFi glass tile (HomeGlassTile) and its label, opening it (WorkspaceLauncher). */
  View appTile(ResolveInfo app){
   LinearLayout tile=new LinearLayout(this);tile.setOrientation(1);tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);tile.setPadding(dp(2),dp(HomeAppLayout.CELL_PAD_DP),dp(2),dp(HomeAppLayout.CELL_PAD_DP));
   String originalLabel=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
   final String label=originalLabel;tile.setContentDescription(label);tile.setClickable(true);tile.setFocusable(true);
   tile.setOnClickListener(v->WorkspaceLauncher.open(this,app,label));
-  FrameLayout iconFrame=new FrameLayout(this);iconFrame.setBackground(raised(PixelAppearance.color(0xfffff7e5),PixelAppearance.color(0xff789ab5),18));
+  FrameLayout iconFrame=new FrameLayout(this);iconFrame.setBackground(new HomeGlassTile(getResources().getDisplayMetrics().density));iconFrame.setElevation(dp(4));
   int iconResource=AppLabels.icon(getPackageManager(),app.activityInfo.packageName);
   ImageView icon=new ImageView(this);icon.setImageDrawable(iconResource==0?app.loadIcon(getPackageManager()):getDrawable(iconResource));icon.setScaleType(ImageView.ScaleType.FIT_CENTER);icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
   iconFrame.addView(icon,new FrameLayout.LayoutParams(dp(HomeAppLayout.ICON_DP),dp(HomeAppLayout.ICON_DP),Gravity.CENTER));

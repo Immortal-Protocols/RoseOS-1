@@ -21,6 +21,15 @@ final class HomeAppLayout {
   return widthDp < 720 ? 5 : 6;
  }
 
+ /** Columns of the Home page's few default apps (the reference's sparse first page), for the same inset area and
+  * measured cell as the app pages (px, with the density): three on a phone, so those apps read as a loose group
+  * rather than a short row of a full page; one row of four where two rows do not fit (a short or split screen);
+  * five on a wide screen. */
+ static int homeColumns(float width, float height, float cellHeight, float density) {
+  if (width / density >= 600) return 5;
+  return rows(height, cellHeight, density) >= 2 ? 3 : 4;
+ }
+
  /** A cell: padding, the tile, the gap and two label lines of the measured line height. */
  static float cellHeight(float density, float labelLineHeight) {
   return (2 * CELL_PAD_DP + TILE_DP + LABEL_GAP_DP) * density + LABEL_LINES * labelLineHeight;
@@ -74,6 +83,25 @@ final class HomeAppLayout {
  static float gridTop(float height, float cellHeight, int usedRows, float density) {
   float grid = usedRows * cellHeight + Math.max(0, usedRows - 1) * rowGap(height, cellHeight, usedRows, density);
   return Math.max(0, height - grid);
+ }
+
+ /** The HiFi wallpaper's position (style.css .wall: background-position 62% 30%) and the reading surface's faint
+  * copy of it (.ivory-bg::after: 80% 20%). */
+ static final float WALL_X = .62f, WALL_Y = .30f, IVORY_X = .80f, IVORY_Y = .20f;
+
+ /** CSS background-size: cover at background-position x% y%: the source rectangle {left, top, right, bottom} of a
+  * bitmapWidth x bitmapHeight image that fills a width x height area at its own aspect, the overflow cropped so
+  * the point x/y of the way across the spare image lines up with x/y of the way across the area. */
+ static int[] cover(int bitmapWidth, int bitmapHeight, float width, float height, float x, float y) {
+  if (bitmapWidth <= 0 || bitmapHeight <= 0 || width <= 0 || height <= 0) return new int[4];
+  if ((double) bitmapWidth * height > (double) bitmapHeight * width) {
+   int cropW = Math.max(1, Math.round(bitmapHeight * width / height));
+   int left = Math.round((bitmapWidth - cropW) * x);
+   return new int[]{left, 0, left + cropW, bitmapHeight};
+  }
+  int cropH = Math.max(1, Math.round(bitmapWidth * height / width));
+  int top = Math.round((bitmapHeight - cropH) * y);
+  return new int[]{0, top, bitmapWidth, top + cropH};
  }
 
  /** The accessible name of app page index of total (no visible heading is drawn). */
