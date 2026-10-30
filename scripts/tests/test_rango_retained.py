@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -84,6 +85,33 @@ class Tmp:
         return d
 
 
+NOTES_FILE = SCRIPTS.parent/'os/release-notes/rango-2026103001.md'
+
+
+def notes_history(test):
+    """A SYNTHETIC git history: a product commit with no Rango notes, then a separate notes commit holding the real
+    checked-in rango-2026103001.md bytes. Both modules read pinned notes from it. Returns (product, binding)."""
+    repo = Path(tempfile.mkdtemp(prefix='notes-repo-'))
+    test.addCleanup(shutil.rmtree, repo, True)
+    git = ['git', '-C', str(repo), '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false']
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    (repo/'os/release-notes').mkdir(parents=True)
+    (repo/'os/release-notes/frankel-2026102901.md').write_text('# frankel 2026102901\n')
+    subprocess.run(git + ['add', '-A'], check=True)
+    subprocess.run(git + ['commit', '-qm', 'product'], check=True)
+    product = subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip()
+    shutil.copyfile(NOTES_FILE, repo/'os/release-notes/rango-2026103001.md')
+    subprocess.run(git + ['add', '-A'], check=True)
+    subprocess.run(git + ['commit', '-qm', 'notes'], check=True)
+    commit = subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip()
+    for module in (rr, host_sign):
+        saved = module.NOTES_REPO[0]
+        module.NOTES_REPO[0] = repo
+        test.addCleanup(module.NOTES_REPO.__setitem__, 0, saved)
+    return product, {'commit': commit, 'path': 'os/release-notes/rango-2026103001.md',
+        'sha256': hashlib.sha256(NOTES_FILE.read_bytes()).hexdigest(), 'build': '2026103001', 'device': 'rango'}
+
+
 def signed_target_files(out, target):
     """SYNTHETIC signed target-files: a real archive (so the real upstream Updater check reads it) without any Updater."""
     with zipfile.ZipFile(out/'signed-target_files.zip', 'w') as z:
@@ -92,11 +120,16 @@ def signed_target_files(out, target):
 
 class Config(unittest.TestCase):
     def test_checked_in_route_is_unbound_and_refuses_before_any_host(self):
+        read = []  # the checked-in notes pin is read with git show; a shallow CI checkout lacks that commit
+        saved = rr.notes_bytes
+        rr.notes_bytes = read.append
+        self.addCleanup(setattr, rr, 'notes_bytes', saved)
         # OCT30-INFRA-S017: the four Fold tools are proven per run by the admitted S016 helper, so no static installed
         # hash is a prerequisite any more; everything else stays genuinely unbound.
         self.assertEqual(rr.preflight(), ['input.transport', 'input.directory', 'signing.bootstrapReceipt',
-            'signing.otatoolsProvenance', 'signing.releaseScriptProvenance', 'publication.feedChannel', 'publication.notes',
+            'signing.otatoolsProvenance', 'signing.releaseScriptProvenance', 'publication.feedChannel',
             'verification.expected', 'verification.updater.included'])
+        self.assertEqual(read, [CONFIG['publication']['notes']] * 1)
         self.assertEqual(rr.main(['preflight']), 4)
         self.assertEqual((CONFIG['target']['device'], CONFIG['target']['product'], CONFIG['target']['build']),
             ('rango', '02b21bc69f9afd281422d42e3dcf8a456e471de1', '2026103001'))
@@ -238,7 +271,8 @@ class BoundSigning(unittest.TestCase):
         cfg = copy.deepcopy(CONFIG)
         cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': '/synthetic/unused'}
         cfg['signing'].update(otatoolsProvenance={'revision': 'r'}, releaseScriptProvenance={'revision': 's'})
-        cfg['publication'].update(feedChannel='stable', notes='os/release-notes/{device}-{build}.md')
+        self.product, notes = notes_history(self)
+        cfg['publication'].update(feedChannel='stable', notes=notes)
         cfg['verification']['expected'] = {'apps': []}
         cfg['verification']['updater']['included'] = False
         saved = (rr.config, rr.tool_bindings)
@@ -318,7 +352,8 @@ class Route(unittest.TestCase):
         cfg['signing'].update(bootstrapReceipt=bootstrap(publicIdentity={'otaCertificateSha256': self.ota_cert,
             'avbPublicKeySha256': self.avb, 'members': []}), otatoolsProvenance={'synthetic': True},
             releaseScriptProvenance={'synthetic': True})
-        cfg['publication'].update(feedChannel='stable', notes='os/release-notes/{device}-{build}.md')
+        self.product, notes = notes_history(self)
+        cfg['publication'].update(feedChannel='stable', notes=notes)
         # OCT30-INFRA-S018: the complete SYNTHETIC upstream contract (absence); the real check_updater runs on the signed zip.
         cfg['verification']['updater']['included'] = False
         cfg['verification']['expected'] = {'variant': 'user', 'apps': [['dev.pixel.voice', 311]],
@@ -386,7 +421,8 @@ class Route(unittest.TestCase):
         (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango {config['publication']['channels']['beta']['feedChannel']}\n")
         for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):
             shutil.copyfile(self.ident/name, public/name)
-        (public/'UPDATE.md').write_text('SYNTHETIC notes for rango 2026103001\n')
+        (public/'UPDATE.md').write_bytes(host_sign.release_notes(config['host']['sign'], CONFIG['target']['product'], 'rango',
+            env['BUILD_NUMBER']))  # host-sign's own notes lookup, from the separately pinned commit
         return 0
 
     def sign(self):
@@ -409,6 +445,66 @@ class Route(unittest.TestCase):
         self.assertNotIn('promoted latest', (self.t.root/'fake/events.log').read_text())
         manifest = json.loads((self.artifact/'manifest.json').read_text())
         self.assertEqual((manifest['target']['device'], manifest['identities']['otaCertificateSha256']), ('rango', self.ota_cert))
+
+    def cli(self, *argv):
+        """The real CLI, as the workflow runs it (os-release.yml rango-guard/rango-builder steps)."""
+        return rr.main(list(argv))
+
+    def test_cli_guard_checks_declarations_and_builder_checks_the_actual_files(self):
+        """Consolidated audit defect 2: the hosted guard cannot read the builder's staging directory. --job guard checks
+        the complete static config and the declared transport only; --job builder keeps the exact local file checks."""
+        builder_path = self.t.root/'pixelbuild/rose-actions/rango-retained/2026103001-transfer007/input'  # never created
+        self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(builder_path)}
+        reads, saved = [], rr.check_directory
+        rr.check_directory = lambda *a, **k: reads.append(a) or (_ for _ in ()).throw(AssertionError('guard read the input'))
+        try:
+            self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
+            self.assertEqual(self.cli('preflight', '--job', 'guard', '--input-dir', str(self.src)), 1)
+        finally:
+            rr.check_directory = saved
+        self.assertEqual(reads, [])
+        self.assertFalse(builder_path.exists())
+        self.assertEqual(self.cli('preflight', '--job', 'builder'), 1)  # the same missing path refuses on the builder
+        for transport, code in ((None, 4), ({'kind': 'synthetic-local-directory', 'directory': 'relative/input'}, 1),
+                                ({'directory': str(builder_path)}, 1)):
+            self.cfg['input']['transport'] = transport
+            with self.subTest(transport=transport):
+                self.assertEqual(self.cli('preflight', '--job', 'guard'), code)
+                self.assertEqual(self.cli('preflight', '--job', 'builder'), code)
+        self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
+        self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
+        self.assertEqual(self.cli('preflight', '--job', 'builder'), 0)
+        for name, damage in (('tampered', lambda d: (d/'rango-background-policy.json').write_bytes(b'{"tampered": true}')),
+                             ('extra', lambda d: (d/'notes.txt').write_text('x')),
+                             ('partial', lambda d: (d/'rango-otatools.zip').unlink()),
+                             ('truncated', lambda d: (d/'rango-target_files.zip').write_bytes(b'short'))):
+            bad = self.t.root/f'input-{name}'
+            shutil.copytree(self.src, bad)
+            damage(bad)
+            self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(bad)}
+            with self.subTest(damage=name):
+                self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)  # declarations only; bytes are the builder's
+                self.assertEqual(self.cli('preflight', '--job', 'builder'), 1)
+        self.cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
+        consumer = self.t.root/'cli-consumer'
+        self.assertEqual(self.cli('stage', '--consumer', str(consumer)), 0)
+        self.assertEqual(self.cli('recheck', '--consumer', str(consumer)), 0)
+        (consumer/'input/rango-background-policy.json').write_bytes(b'{"tampered": true}')
+        self.assertEqual(self.cli('recheck', '--consumer', str(consumer)), 1)
+
+    def test_cli_guard_builder_then_sign_verify_stage_and_hosted_publish(self):
+        """The selected contract end to end on synthetic boundaries: CLI guard -> CLI builder preflight -> sign ->
+        verify (real upstream Updater check) -> stage (pinned notes) -> hosted publish, never Latest."""
+        self.assertEqual(self.cli('preflight', '--job', 'guard'), 0)
+        self.assertEqual(self.cli('preflight', '--job', 'builder'), 0)
+        self.sign()
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertEqual((self.artifact/'assets/UPDATE.md').read_bytes(), NOTES_FILE.read_bytes())
+        report = rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        self.assertEqual((report['promoted'], report.get('finalizedPublic')), (False, True))
+        receipt = json.loads((self.artifact/'assets/verification.json').read_text())
+        self.assertEqual((receipt['updater']['mode'], receipt['updater']['roseDiscovery']), ('upstream', False))
 
     def test_verification_failure_prevents_publication(self):
         self.sign()
@@ -439,6 +535,29 @@ class Route(unittest.TestCase):
         (self.artifact/'rango-bindings.json').write_text(json.dumps(bindings))
         (self.artifact/'assets/rango-ota_update-2026103001.zip').write_bytes(b'tampered in transfer')
         with self.assertRaises(self.module.CheckFailed):
+            rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        self.assertFalse((self.t.root/'fake/releases').exists())
+
+    def test_staged_and_published_notes_are_exactly_the_pinned_bytes(self):
+        self.sign()
+        rr.verify(self.env, self.consumer, self.release, self.adapter)
+        notes = self.cfg['publication']['notes']
+        good = (self.release/'public/UPDATE.md').read_bytes()
+        (self.release/'public/UPDATE.md').write_bytes(good + b'edited\n')
+        with self.assertRaisesRegex(rr.Refused, 'notes_drift'):
+            rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        (self.release/'public/UPDATE.md').write_bytes(good)
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertEqual((self.artifact/'assets/UPDATE.md').read_bytes(), NOTES_FILE.read_bytes())
+        bindings = json.loads((self.artifact/'rango-bindings.json').read_text())
+        self.assertEqual(bindings['notesSource'], notes)
+        self.assertNotEqual(bindings['notesSource']['commit'], CONFIG['target']['product'])
+        (self.artifact/'rango-bindings.json').write_text(json.dumps(dict(bindings, notesSource=dict(notes, commit='e' * 40))))
+        with self.assertRaisesRegex(rr.Refused, 'notes_foreign'):
+            rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        (self.artifact/'rango-bindings.json').write_text(json.dumps(bindings))
+        (self.artifact/'assets/UPDATE.md').write_bytes(b'SYNTHETIC swapped notes for 2026103001\n')
+        with self.assertRaisesRegex(rr.Refused, 'notes_drift'):
             rr.publish(self.artifact, adapter=self.adapter, selected=True)
         self.assertFalse((self.t.root/'fake/releases').exists())
 
@@ -485,6 +604,70 @@ class Route(unittest.TestCase):
         with self.assertRaisesRegex(rr.Refused, 'lock_held'):
             rr.sign(self.env, self.consumer, self.release, signer=lambda env: called.append(env))
         self.assertEqual(called, [])
+
+
+class RetainedNotes(unittest.TestCase):
+    """Retained notes pin: the immutable product commit has no notes for rango 2026103001, so UPDATE.md is read from a
+    separately pinned commit/path/sha256 for the exact build and device; Frankel's candidate-commit lookup is unchanged."""
+
+    def setUp(self):
+        self.product, self.pin = notes_history(self)
+
+    def sign(self, **changes):
+        return {'updateNotes': dict(self.pin, **changes)}
+
+    def test_product_without_notes_and_separately_pinned_notes_give_the_exact_bytes(self):
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'has no os/release-notes/rango-2026103001.md'):
+            host_sign.candidate_file(self.product, 'os/release-notes/rango-2026103001.md', rr.NOTES_REPO[0])  # the defect
+        self.assertEqual(host_sign.release_notes(self.sign(), self.product, 'rango', '2026103001'), NOTES_FILE.read_bytes())
+        self.assertEqual(rr.notes_bytes(self.pin), NOTES_FILE.read_bytes())
+
+    def test_wrong_hash_build_device_path_or_source_refuses(self):
+        for changes, message in (({'sha256': '0' * 64}, 'differ from their sha256'),
+                                 ({'build': '2026103002'}, 'not rango 2026103001'),
+                                 ({'device': 'frankel'}, 'not rango 2026103001'),
+                                 ({'path': 'os/release-notes/frankel-2026102901.md'}, 'differ from their sha256'),
+                                 ({'path': 'scripts/host-sign.py'}, 'os/release-notes'),
+                                 ({'path': 'os/release-notes/absent.md'}, 'has no os/release-notes/absent.md'),
+                                 ({'commit': self.product}, 'has no os/release-notes/rango-2026103001.md'),
+                                 ({'commit': self.pin['commit'][:12]}, 'full commit')):
+            with self.subTest(changes=changes), self.assertRaisesRegex(host_sign.AdapterFailed, re.escape(message)):
+                host_sign.release_notes(self.sign(**changes), self.product, 'rango', '2026103001')
+        cfg = copy.deepcopy(CONFIG)
+        for changes, category in (({'sha256': '0' * 64}, 'notes_drift'), ({'commit': self.product}, 'notes_unavailable'),
+                                  ({'path': 'os/release-notes/frankel-2026102901.md'}, 'notes_drift'),
+                                  ({'build': '2026103002'}, 'notes_foreign'), ({'device': 'frankel'}, 'notes_foreign'),
+                                  ({'commit': CONFIG['target']['product']}, 'notes_invalid'),
+                                  ({'path': 'os/release-notes/../x.md'}, 'notes_invalid'), ({'extra': 1}, 'notes_invalid')):
+            cfg['publication']['notes'] = dict(self.pin, **changes)
+            with self.subTest(changes=changes), self.assertRaisesRegex(rr.Refused, category):
+                rr.notes_bytes(rr.notes_binding(cfg))
+        cfg['publication']['notes'] = 'os/release-notes/{device}-{build}.md'  # the product-commit template is not admitted
+        with self.assertRaisesRegex(rr.Refused, 'notes_invalid'):
+            rr.notes_binding(cfg)
+
+    def test_frankel_default_lookup_is_unchanged(self):
+        head = subprocess.check_output(['git', '-C', str(SCRIPTS.parent), 'rev-parse', 'HEAD'], text=True).strip()
+        template = {'updateNotes': 'os/release-notes/{device}-{build}.md'}
+        self.assertEqual(host_sign.release_notes(template, head, 'frankel', '2026102901'),
+            (SCRIPTS.parent/'os/release-notes/frankel-2026102901.md').read_bytes())
+        with self.assertRaisesRegex(host_sign.AdapterFailed, f'candidate {head[:12]} has no os/release-notes/frankel-2026109999.md'):
+            host_sign.release_notes(template, head, 'frankel', '2026109999')
+
+class CheckedInNotes(unittest.TestCase):
+    """The real pinned notes commit in this repository (release-verification checks out full history for it)."""
+
+    def test_checked_in_pin_is_the_reviewed_rango_notes(self):
+        pin = rr.notes_binding(CONFIG)
+        self.assertEqual((pin['path'], pin['build'], pin['device']), ('os/release-notes/rango-2026103001.md', '2026103001', 'rango'))
+        self.assertNotEqual(pin['commit'], CONFIG['target']['product'])
+        self.assertEqual(hashlib.sha256((SCRIPTS.parent/pin['path']).read_bytes()).hexdigest(), pin['sha256'])
+        # The real pinned commit, as the builder reads it (CI checks out full history for this).
+        self.assertEqual(rr.notes_bytes(pin), (SCRIPTS.parent/pin['path']).read_bytes())
+        text = NOTES_FILE.read_text()
+        for phrase in ('rango 2026103001', 'Manual installation only', 'on-device update', 'has not been accepted on a phone',
+                       'never the pixel-ota Latest'):
+            self.assertIn(phrase, text)
 
 
 class UpdaterContract(unittest.TestCase):
@@ -771,7 +954,8 @@ class FirstUseRoute(Route):
         (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango stable\n")
         for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):
             shutil.copyfile(self.ident/name, public/name)
-        (public/'UPDATE.md').write_text('SYNTHETIC notes for rango 2026103001\n')
+        (public/'UPDATE.md').write_bytes(host_sign.release_notes(config['host']['sign'], CONFIG['target']['product'], 'rango',
+            env['BUILD_NUMBER']))  # host-sign's own notes lookup, from the separately pinned commit
         return 0
 
     def record(self):
@@ -844,7 +1028,7 @@ class FirstUseRoute(Route):
         self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
         rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
         bindings = json.loads((self.artifact/'rango-bindings.json').read_text())
-        self.assertEqual(sorted(bindings), ['firstUseBinding', 'inputReceipt'])
+        self.assertEqual(sorted(bindings), ['firstUseBinding', 'inputReceipt', 'notesSource'])
         manifest = json.loads((self.artifact/'manifest.json').read_text())
         self.assertEqual(manifest['identities']['otaCertificateSha256'], self.ota_cert)
         self.assertEqual(published, [])
@@ -1033,6 +1217,7 @@ class Workflow(unittest.TestCase):
             'actions-gcp-login.py login', 'rango-retained.py sign')]
         self.assertEqual(order, sorted(order))
         self.assertNotIn('run-id:', builder)  # same-run provenance only, never another run's artifact
+        self.assertIn('          fetch-depth: 0  # the separately pinned release notes are read from their own commit\n', builder)
         self.assertNotIn('actions: read', builder)
         cleanup = re.search(r'    needs: \[([^\]]*)\]', j['cleanup'])[1].split(', ')
         self.assertTrue({'controller', 'rango-builder', 'rango-publisher'} <= set(cleanup))

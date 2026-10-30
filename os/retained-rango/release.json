@@ -58,8 +58,14 @@
     "latest": false,
     "api": "https://api.github.com",
     "uploads": "https://uploads.github.com",
-    "notes": null,
-    "notesBasis": "Unbound: UPDATE.md for this build must come from an immutable reviewed commit; none names rango 2026103001.",
+    "notes": {
+      "commit": "9131f97fe5fa9564e450b6f5f16137c467139491",
+      "path": "os/release-notes/rango-2026103001.md",
+      "sha256": "90539022181b87a99e95aac6ba881654a99410350c8ff65b86d8a98e16fec228",
+      "build": "2026103001",
+      "device": "rango"
+    },
+    "notesBasis": "Retained notes pin: the immutable product 02b21bc6 has notes only for frankel builds, so UPDATE.md comes from this separately reviewed commit and path, read with git show (never the working tree) and re-hashed before any login, by host-sign again, at staging and by the hosted publisher; it is recorded as notesSource in rango-bindings.json. Manual installation only: no RoseOS on-device discovery.",
     "selectionBasis": "OCT30-INFRA-S017: signing never publishes. Publication runs only when the workflow input rango_publish is explicitly true (default false), enforced by the job condition and by rango-retained.py publish. feedChannel and notes stay signing prerequisites because they are signed public assets (rango-stable, UPDATE.md) checked by verify_signed; repository, tag and latest are publication-only."
   },
   "verification": {
