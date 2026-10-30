@@ -1,6 +1,7 @@
 """OCT30-INFRA-S015: scripts/rango-retained.py, the retained Rango signing and separate-release route.
 
 Synthetic receipts, files and a fake release client only: no host, secret, key, bootstrap, network or publication."""
+import contextlib
 import copy
 import hashlib
 import importlib.util
@@ -32,6 +33,7 @@ CONFIG = rr.config()
 FRANKEL = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 TARGET, OTATOOLS = b'synthetic rango target-files', b'synthetic rango otatools'
+MANIFEST, POLICY = b'<manifest><!-- synthetic rango resolved manifest --></manifest>\n', b'{"synthetic": "rango policy"}\n'
 
 
 def h(data):
@@ -41,12 +43,12 @@ def h(data):
 def receipt(**change):
     data = {'schema': 'roseos.rango-retained-input.v1', 'device': 'rango', 'product': CONFIG['target']['product'],
         'build': {'number': '2026103001', 'timestamp': 1793330000},
-        'source': {'manifestSha256': '1' * 64, 'configSha256': '2' * 64, 'compileReceiptSha256': '3' * 64, 'compileExit': 0,
+        'source': {'manifestSha256': h(MANIFEST), 'configSha256': '2' * 64, 'compileReceiptSha256': '3' * 64, 'compileExit': 0,
                    'overlays': [{'path': 'scripts/background_apks.py', 'sha256': '4' * 64}]},
         'artifacts': {'targetFiles': {'name': 'rango-target_files.zip', 'size': len(TARGET), 'sha256': h(TARGET)},
                       'otatools': {'name': 'rango-otatools.zip', 'size': len(OTATOOLS), 'sha256': h(OTATOOLS)}},
         'apps': {'roseApk': {'packageName': 'dev.pixel.voice', 'versionCode': 311, 'sha256': '5' * 64, 'signerSha256': '6' * 64},
-                 'policySha256': '7' * 64},
+                 'policySha256': h(POLICY)},
         'producer': {'route': 'rango-build-only', 'operator': 'mac-operator', 'host': 'mac-builder'}}
     data.update(change)
     return data
@@ -74,6 +76,8 @@ class Tmp:
         (d/'rango-retained-input.json').write_text(json.dumps(data or receipt()))
         (d/'rango-target_files.zip').write_bytes(target)
         (d/'rango-otatools.zip').write_bytes(otatools)
+        (d/'rango-resolved-manifest.xml').write_bytes(MANIFEST)
+        (d/'rango-background-policy.json').write_bytes(POLICY)
         return d
 
 
@@ -141,7 +145,8 @@ class Staging(unittest.TestCase):
         t = Tmp(self)
         src = t.input()
         record = rr.stage(src, t.root/'consumer')
-        self.assertEqual(record['files'], {'rango-target_files.zip': h(TARGET), 'rango-otatools.zip': h(OTATOOLS)})
+        self.assertEqual(record['files'], {'rango-target_files.zip': h(TARGET), 'rango-otatools.zip': h(OTATOOLS),
+            'rango-resolved-manifest.xml': h(MANIFEST), 'rango-background-policy.json': h(POLICY)})
         self.assertEqual(record['unbound'], [])
         (src/'rango-target_files.zip').write_bytes(b'source changed after staging')  # the copy is what is used
         self.assertEqual(rr.recheck(t.root/'consumer')[2]['files'], record['files'])
@@ -220,7 +225,7 @@ class BoundSigning(unittest.TestCase):
 
     def bind_everything(self):
         cfg = copy.deepcopy(CONFIG)
-        cfg['input']['transport'] = 'reviewed-local-directory'
+        cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': '/synthetic/unused'}
         cfg['signing'].update(otatoolsProvenance={'revision': 'r'}, releaseScriptProvenance={'revision': 's'})
         cfg['publication'].update(feedChannel='stable', notes='os/release-notes/{device}-{build}.md')
         cfg['verification']['expected'] = {'apps': []}
@@ -275,112 +280,220 @@ class BoundSigning(unittest.TestCase):
         self.assertIn("config = retained[0] if retained else json.loads(Path(config_path).read_text())", text)
 
 
+def synthetic_identity(root):
+    """SYNTHETIC public identity for the fixture route: a throwaway certificate and AVB blob (never a real key)."""
+    import subprocess
+    key, pem = root/'synthetic.key', root/'releasekey.x509.pem'
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(key), '-subj', '/CN=synthetic-rango',
+        '-days', '1', '-out', str(pem)], check=True, capture_output=True)
+    key.unlink()
+    (root/'avb_pkmd.bin').write_bytes(b'synthetic rango avb key blob')
+    return pipeline.cert_sha256(pem.read_text()), h((root/'avb_pkmd.bin').read_bytes())
+
+
+class Route(unittest.TestCase):
+    """The connected fixture route: stage -> host-sign retained seam (signing mocked) -> release-pipeline verify_signed
+    (image/OTA/AVB tool checks mocked) -> stage_artifact -> publish (draft, download check) -> public, never Latest."""
+
+    def setUp(self):
+        self.t = Tmp(self)
+        self.ident = self.t.root/'identity'
+        self.ident.mkdir()
+        self.ota_cert, self.avb = synthetic_identity(self.ident)
+        self.src = self.t.input()
+        cfg = copy.deepcopy(CONFIG)
+        cfg['input']['transport'] = {'kind': 'synthetic-local-directory', 'directory': str(self.src)}
+        cfg['signing'].update(bootstrapReceipt=bootstrap(publicIdentity={'otaCertificateSha256': self.ota_cert,
+            'avbPublicKeySha256': self.avb, 'members': []}), otatoolsProvenance={'synthetic': True},
+            releaseScriptProvenance={'synthetic': True})
+        cfg['publication'].update(feedChannel='stable', notes='os/release-notes/{device}-{build}.md')
+        cfg['verification']['expected'] = {'variant': 'user', 'apps': [['dev.pixel.voice', 311]],
+            'identities': {'appSignerSha256': '6' * 64}, 'host': {'tools': {}}}
+        for name in ('apksigner', 'aapt'):  # SYNTHETIC tool paths; the tool-running checks are mocked
+            (self.t.root/name).write_text('#!/bin/sh\nexit 1\n')
+            cfg['verification']['expected']['host']['tools'][name] = str(self.t.root/name)
+        self.cfg = cfg
+        saved = (rr.config, rr.tool_bindings)
+        rr.config = lambda: cfg
+        rr.tool_bindings = lambda prof=None: []
+        self.addCleanup(setattr, rr, 'config', saved[0])
+        self.addCleanup(setattr, rr, 'tool_bindings', saved[1])
+        self.module = rr.pipeline()
+        self.checks = []
+        for name in ('check_build_identity', 'check_apps', 'check_updater', 'check_image_bytes', 'check_ota', 'check_payload',
+                     'check_vbmeta'):
+            self.mock_check(name, [])
+        for name in ('check_permission_apex', 'check_systemui_tray'):
+            self.mock_check(name, ([], {'synthetic': True}))
+        self.consumer = self.t.root/'consumer'
+        rr.stage(self.src, self.consumer)
+        self.release, self.artifact = self.t.root/'release', self.t.root/'artifact'
+        self.adapter = self.module.Fake(self.t.root/'fake')
+        (self.t.root/'source-root').mkdir()
+        self.env = {'HOME': str(self.t.root), 'ROSE_RETAINED_SOURCE_ROOT': str(self.t.root/'source-root')}
+
+    def mock_check(self, name, result):
+        saved = getattr(self.module, name)
+
+        def check(*args, **kwargs):
+            config = next(a for a in args if isinstance(a, dict) and 'target' in a) if any(
+                isinstance(a, dict) and 'target' in a for a in args) else None
+            self.checks.append((name, config and config['target']['device']))
+            return result
+        setattr(self.module, name, check)
+        self.addCleanup(setattr, self.module, name, saved)
+
+    def signer(self, env):
+        """Mocked cryptographic signing behind host-sign.py's real retained seam (bound config, revalidated input)."""
+        config, target, otatools = host_sign.retained_inputs(env, rr)
+        self.signed_with = config['host']['sign']
+        out = Path(env['ROSE_RELEASE_DIR'])
+        public = out/'public'
+        public.mkdir()
+        (out/'signed-target_files.zip').write_bytes(b'SYNTHETIC signed ' + target.read_bytes())
+        (public/'rango-ota_update-2026103001.zip').write_bytes(b'SYNTHETIC rango OTA')
+        (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango {config['publication']['channels']['beta']['feedChannel']}\n")
+        for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):
+            shutil.copyfile(self.ident/name, public/name)
+        (public/'UPDATE.md').write_text('SYNTHETIC notes for rango 2026103001\n')
+        return 0
+
+    def sign(self):
+        return rr.sign(self.env, self.consumer, self.release, signer=self.signer, lock=lambda path: contextlib.nullcontext())
+
+    def test_bound_fixture_reaches_the_public_never_latest_release(self):
+        self.assertEqual(self.sign()['candidate'], {'sha': CONFIG['target']['product'], 'build': '2026103001',
+            'timestamp': '1793330000', 'channel': 'beta', 'device': 'rango'})
+        self.assertEqual((self.signed_with['keysSecret'], self.signed_with['passphraseSecret']),
+            ('PIXEL_OS_SIGNING_KEYS_RANGO_V1', 'PIXEL_OS_SIGNING_PASSPHRASE_RANGO_V1'))
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+        self.assertTrue({('check_ota', 'rango'), ('check_vbmeta', 'rango')} <= set(self.checks))
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertEqual(sorted(p.name for p in (self.artifact/'assets').iterdir()), sorted(self.module.public_assets('rango', '2026103001')))
+        report = rr.publish(self.artifact, adapter=self.adapter)
+        self.assertEqual((report['promoted'], report.get('finalizedPublic')), (False, True))
+        store = self.t.root/'fake/releases/rango-2026103001'
+        self.assertEqual(sorted(p.name for p in store.iterdir()), ['public'])
+        self.assertIn('finalized public, not Latest', (self.t.root/'fake/events.log').read_text())
+        self.assertNotIn('promoted latest', (self.t.root/'fake/events.log').read_text())
+        manifest = json.loads((self.artifact/'manifest.json').read_text())
+        self.assertEqual((manifest['target']['device'], manifest['identities']['otaCertificateSha256']), ('rango', self.ota_cert))
+
+    def test_verification_failure_prevents_publication(self):
+        self.sign()
+        self.mock_check('check_ota', ['OTA package signature does not verify'])
+        with self.assertRaisesRegex(self.module.CheckFailed, 'OTA package signature'):
+            rr.verify(self.env, self.consumer, self.release, self.adapter)
+        with self.assertRaises(Exception):
+            rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertFalse((self.t.root/'fake/releases').exists())
+
+    def test_promote_tampering_and_foreign_bindings_never_publish(self):
+        self.sign()
+        rr.verify(self.env, self.consumer, self.release, self.adapter)
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        with self.assertRaisesRegex(rr.Refused, 'latest_refused'):
+            rr.publish(self.artifact, promote=True, adapter=self.adapter)
+        bindings = json.loads((self.artifact/'rango-bindings.json').read_text())
+        evil = copy.deepcopy(bindings)
+        evil['bootstrapReceipt']['publicIdentity']['otaCertificateSha256'] = FRANKEL['identities']['otaCertificateSha256']
+        (self.artifact/'rango-bindings.json').write_text(json.dumps(evil))
+        with self.assertRaisesRegex(rr.Refused, 'signer_collision'):
+            rr.publish(self.artifact, adapter=self.adapter)
+        evil = copy.deepcopy(bindings)
+        evil['inputReceipt']['device'] = 'frankel'
+        (self.artifact/'rango-bindings.json').write_text(json.dumps(evil))
+        with self.assertRaisesRegex(rr.Refused, 'input_foreign'):
+            rr.publish(self.artifact, adapter=self.adapter)
+        (self.artifact/'rango-bindings.json').write_text(json.dumps(bindings))
+        (self.artifact/'assets/rango-ota_update-2026103001.zip').write_bytes(b'tampered in transfer')
+        with self.assertRaises(self.module.CheckFailed):
+            rr.publish(self.artifact, adapter=self.adapter)
+        self.assertFalse((self.t.root/'fake/releases').exists())
+
+    def test_drift_after_staging_refuses_before_signing(self):
+        (self.consumer/'input/rango-background-policy.json').write_bytes(b'{"tampered": true}')
+        called = []
+        with self.assertRaisesRegex(rr.Refused, 'input_drift'):
+            rr.sign(self.env, self.consumer, self.release, signer=lambda env: called.append(env),
+                lock=lambda path: contextlib.nullcontext())
+        self.assertEqual(called, [])
+
+    def test_expected_config_cannot_carry_identities_or_publication(self):
+        for key, value in (('publication', {}), ('target', {}), ('identities', {'otaCertificateSha256': 'f' * 64})):
+            cfg = copy.deepcopy(self.cfg)
+            cfg['verification']['expected'][key] = value
+            with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
+                rr.pipeline_config(cfg, rr.signer_binding(cfg['signing']['bootstrapReceipt']))
+
+    def test_held_lock_refuses_before_signing(self):
+        import fcntl
+        lock = self.t.root/'shared.lock'
+        self.cfg['signing']['lockPath'] = str(lock)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        called = []
+        with self.assertRaisesRegex(rr.Refused, 'lock_held'):
+            rr.sign(self.env, self.consumer, self.release, signer=lambda env: called.append(env))
+        self.assertEqual(called, [])
+
+
+class UnboundRoute(unittest.TestCase):
+    def test_checked_in_route_refuses_every_step_before_any_signer(self):
+        t = Tmp(self)
+        rr.stage(t.input(), t.root/'consumer')
+        called = []
+        with self.assertRaises(rr.SetupMissing):
+            rr.sign({}, t.root/'consumer', t.root/'release', signer=lambda env: called.append(env),
+                lock=lambda path: contextlib.nullcontext())
+        for step in (lambda: rr.verify({}, t.root/'consumer', t.root/'release'),
+                     lambda: rr.stage_artifact({}, t.root/'consumer', t.root/'release', t.root/'artifact')):
+            with self.assertRaises(rr.SetupMissing):
+                step()
+        self.assertEqual(called, [])
+        self.assertEqual(rr.main(['stage', '--consumer', str(t.root/'c2')]), 4)
+
+
 class FakeClient:
-    """Release API stand-in: assets uploaded, downloaded back byte for byte; Latest is a release attribute."""
-
-    def __init__(self, latest='frankel-2026102806', existing=None, move_latest=False):
-        self.releases, self.latest, self.calls, self.move_latest = {}, latest, [], move_latest
-        if existing:
-            self.releases[existing] = {'id': 1, 'tag_name': existing, 'draft': False, 'assets': []}
-
-    def find_release(self, tag):
-        return self.releases.get(tag)
-
-    def create_draft(self, tag, name, body):
-        self.calls.append(('create_draft', tag))
-        self.releases[tag] = {'id': 7, 'tag_name': tag, 'draft': True, 'assets': [], 'body': body}
-        return self.releases[tag]
-
-    def get_release(self, release_id):
-        return next(r for r in self.releases.values() if r['id'] == release_id)
-
-    def upload(self, release_id, path):
-        release = self.get_release(release_id)
-        data = Path(path).read_bytes()
-        release['assets'].append({'id': len(release['assets']) + 10, 'name': Path(path).name, 'size': len(data),
-            'digest': 'sha256:' + h(data), 'state': 'uploaded', 'data': data})
-
-    def delete_asset(self, asset_id):
-        raise AssertionError('nothing to reconcile')
-
-    def download(self, asset_id, destination, size):
-        asset = next(a for r in self.releases.values() for a in r['assets'] if a['id'] == asset_id)
-        Path(destination).write_bytes(asset['data'])
+    def __init__(self, latest='frankel-2026102806', move=False):
+        self.latest, self.move, self.calls = latest, move, []
 
     def latest_tag(self):
         return self.latest
 
     def finalize_public(self, release_id):
         self.calls.append(('finalize_public', release_id))
-        release = self.get_release(release_id)
-        release['draft'] = False
-        if self.move_latest:
-            self.latest = release['tag_name']
-        return release
+        if self.move:
+            self.latest = 'rango-2026103001'
 
     def promote(self, release_id):
-        raise AssertionError('a Rango release is never promoted')
+        raise AssertionError('never promoted')
 
 
-class SeparateRelease(unittest.TestCase):
-    def assets(self, t, names=('rango-ota_update-2026103001.zip', 'rango-stable', 'releasekey.x509.pem', 'avb_pkmd.bin',
-                               'SHA256SUMS', 'UPDATE.md', 'verification.json')):
-        d = t.root/'assets'
-        d.mkdir()
-        rows = []
-        for name in names:
-            (d/name).write_bytes(f'synthetic {name}'.encode())
-            rows.append({'name': name, 'size': len(f'synthetic {name}'), 'sha256': h(f'synthetic {name}'.encode())})
-        return d, {'assets': rows}
+class ProductionFinalize(unittest.TestCase):
+    def adapter(self, client, already=False):
+        prod = pipeline.Production()
+        prod.client, prod.release, prod.already_published, prod.latest_before = client, {'id': 7}, already, client.latest
+        return prod
 
-    def test_verified_draft_becomes_public_without_changing_latest(self):
-        t = Tmp(self)
-        d, manifest = self.assets(t)
+    def test_public_finalization_keeps_latest(self):
         client = FakeClient()
-        result = rr.publish_separate(client, CONFIG, '2026103001', 'notes', manifest, d, t.root/'download')
-        self.assertEqual(result['tag'], 'rango-2026103001')
-        self.assertEqual((result['latestBefore'], result['latestAfter']), ('frankel-2026102806', 'frankel-2026102806'))
-        self.assertEqual(client.calls, [('create_draft', 'rango-2026103001'), ('finalize_public', 7)])
-        self.assertEqual(sorted(p.name for p in (t.root/'download').iterdir()), sorted(r['name'] for r in manifest['assets']))
+        self.adapter(client).finalize_public({}, {}, None)
+        self.assertEqual((client.calls, client.latest), ([('finalize_public', 7)], 'frankel-2026102806'))
 
-    def test_latest_is_never_changed_even_under_promote_or_config_mutation(self):
-        t = Tmp(self)
-        d, manifest = self.assets(t)
-        with self.assertRaisesRegex(rr.Refused, 'latest_refused'):
-            rr.publish_separate(FakeClient(), CONFIG, '2026103001', 'n', manifest, d, t.root/'x', promote=True)
-        evil = copy.deepcopy(CONFIG)
-        evil['publication']['latest'] = True
-        with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
-            rr.publish_separate(FakeClient(), evil, '2026103001', 'n', manifest, d, t.root/'y')
-        with self.assertRaisesRegex(rr.Refused, 'latest_changed'):
-            rr.publish_separate(FakeClient(move_latest=True), CONFIG, '2026103001', 'n', manifest, d, t.root/'z')
-        with self.assertRaisesRegex(rr.Refused, 'release_exists'):
-            rr.publish_separate(FakeClient(existing='rango-2026103001'), CONFIG, '2026103001', 'n', manifest, d, t.root/'w')
-        with self.assertRaisesRegex(rr.Refused, 'input_foreign'):
-            rr.publish_separate(FakeClient(), CONFIG, '2026103002', 'n', manifest, d, t.root/'v')
-
-    def test_assets_must_be_rango_prefixed(self):
-        t = Tmp(self)
-        d, manifest = self.assets(t, names=('frankel-ota_update-2026103001.zip', 'SHA256SUMS'))
-        with self.assertRaisesRegex(rr.Refused, 'asset_foreign'):
-            rr.publish_separate(FakeClient(), CONFIG, '2026103001', 'n', manifest, d, t.root/'download')
-
-    def test_download_mismatch_stops_before_public_finalization(self):
-        t = Tmp(self)
-        d, manifest = self.assets(t)
-        client = FakeClient()
-        original = client.download
-        client.download = lambda asset_id, destination, size: (original(asset_id, destination, size),
-            Path(destination).write_bytes(b'corrupted'))
-        with self.assertRaises(Exception):
-            rr.publish_separate(client, CONFIG, '2026103001', 'n', manifest, d, t.root/'download')
-        self.assertNotIn(('finalize_public', 7), client.calls)
-        self.assertTrue(client.releases['rango-2026103001']['draft'])
+    def test_latest_move_or_existing_release_refuses(self):
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'Latest moved'):
+            self.adapter(FakeClient(move=True)).finalize_public({}, {}, None)
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'must be fresh'):
+            self.adapter(FakeClient(), already=True).finalize_public({}, {}, None)
 
     def test_public_finalization_never_requests_latest(self):
         text = (SCRIPTS/'github_release_publisher.py').read_text()
         body = text.split('def finalize_public', 1)[1].split('\n    def ', 1)[0]
         self.assertIn("body={'draft': False, 'prerelease': False, 'make_latest': 'false'}", body)
+        source = (SCRIPTS/'release-pipeline.py').read_text()
+        self.assertIn("finalized = bool(channel.get('finalizePublic')) and device not in LATEST_DEVICES and not promoted", source)
 
 
 def jobs(text):
@@ -389,20 +502,31 @@ def jobs(text):
 
 
 class Workflow(unittest.TestCase):
-    def test_mode_refuses_on_the_hosted_guard_before_any_controller(self):
+    def test_mode_is_gated_by_the_guard_and_reuses_the_existing_trust(self):
         j = jobs(WORKFLOW)
-        guard = j['guard']
+        guard, builder, publisher = j['guard'], j['rango-builder'], j['rango-publisher']
         self.assertIn('models-sign, rango-retained, ', WORKFLOW)
         self.assertIn('        default: latest-beta\n', WORKFLOW)
-        order = [guard.index(s) for s in ('name: Candidate is an exact commit on main', 'python3 scripts/rango-retained.py preflight --job guard',
-            'name: Retained Rango runtime is not selected', 'name: Bootstrap preflight')]
+        self.assertNotIn('runtime is not selected', WORKFLOW)  # bindings gate the route, not an unconditional refusal
+        self.assertLess(guard.index('python3 scripts/rango-retained.py preflight --job guard'), guard.index('name: Bootstrap preflight'))
+        self.assertIn("    needs: controller\n    if: inputs.mode == 'rango-retained'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", builder)
+        order = [builder.index(s) for s in ('rango-retained.py preflight --job builder', 'rango-retained.py stage --consumer',
+            'actions-gcp-login.py login', 'rango-retained.py sign', 'actions-gcp-login.py logout', 'rango-retained.py verify',
+            'rango-retained.py stage-artifact', 'name: rango-release-${{ github.run_id }}')]
         self.assertEqual(order, sorted(order))
-        self.assertIn('    needs: guard\n', j['controller'])
+        self.assertIn("      - name: Drop signer access\n        if: always()\n", builder)
+        self.assertIn("    needs: rango-builder\n    if: inputs.mode == 'rango-retained'\n", publisher)
+        self.assertIn('python3 scripts/rango-retained.py publish --artifact-dir "$RUNNER_TEMP/rango-artifact"', publisher)
+        self.assertNotIn('--promote', publisher)
+        for job in (builder, publisher):
+            self.assertNotIn('actions: write', job)
+            self.assertNotIn('sign-apk.py', job)
+        cleanup = re.search(r'    needs: \[([^\]]*)\]', j['cleanup'])[1].split(', ')
+        self.assertTrue({'controller', 'rango-builder', 'rango-publisher'} <= set(cleanup))
+        self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", j['cleanup'])
         for name, body in j.items():
-            if name == 'guard':
-                continue
-            self.assertNotIn('rango-retained', body, name)  # no controller, builder, signer or publisher job in this mode
-        self.assertIn('elif [[ "$MODE" == rango-retained ]]; then', guard)
+            if name not in ('guard', 'rango-builder', 'rango-publisher', 'cleanup'):
+                self.assertNotIn('rango-retained', body, name)
 
     def test_actual_ci_runs_this_suite(self):
         ci = (ROOT/'.github/workflows/release-verification.yml').read_text()

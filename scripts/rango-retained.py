@@ -13,6 +13,15 @@ every real binding; a null one is unbound and the route refuses before any contr
                        validate the local input directory and copy it into a fresh task-owned consumer directory, then
                        revalidate the copy (the only input interface; no remote URL, credential or held route)
   recheck --consumer C revalidate a staged consumer directory (run again immediately before secret access)
+  sign --consumer C --release-dir R
+                       builder: host-sign.py's retained route under the shared lock (bound config, revalidated input)
+  verify --consumer C --release-dir R
+                       builder: release-pipeline verify_signed with the bound Rango expectations and identities
+  stage-artifact --consumer C --release-dir R --artifact-dir A
+                       builder: release-pipeline stage_artifact plus the nonsecret bindings for the publisher
+  publish --artifact-dir A
+                       hosted publisher: revalidate the bindings, release-pipeline publish (draft, download check), then
+                       public with make_latest=false; Latest must be unchanged and promote is refused
 
 Exit status: 0 done, 1 refused (category on stderr), 2 invalid input, 4 setup missing.
 """
@@ -166,13 +175,14 @@ def _plain_directory(path):
 
 
 def check_directory(directory, cfg=None):
-    """Exactly the receipt, target-files and otatools, each a regular file matching the receipt's size and hash."""
+    """Exactly the receipt, target-files, otatools, resolved manifest and background policy, each a regular file matching
+    the receipt's size and hash (the manifest and policy by their receipt sha256 once bound)."""
     cfg = cfg or config()
     spec = cfg['input']
     directory = _plain_directory(directory)
     names = sorted(os.listdir(directory))
-    if names != sorted([spec['receiptFile'], spec['targetFiles'], spec['otatools']]):
-        raise Refused('input_inventory: the directory must hold exactly the receipt, target-files and otatools')
+    if names != sorted([spec['receiptFile'], spec['targetFiles'], spec['otatools'], spec['resolvedManifest'], spec['policy']]):
+        raise Refused('input_inventory: the directory must hold exactly the receipt, target-files, otatools, resolved manifest and policy')
     _regular(directory/spec['receiptFile'])
     fd = os.open(directory/spec['receiptFile'], os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as f:
@@ -191,6 +201,13 @@ def check_directory(directory, cfg=None):
         if (size, digest) != (expected['size'], expected['sha256']):
             raise Refused(f'input_drift: {expected["name"]} differs from the receipt')
         observed[expected['name']] = digest
+    for name, bound in ((spec['resolvedManifest'], (receipt.get('source') or {}).get('manifestSha256')),
+                        (spec['policy'], (receipt.get('apps') or {}).get('policySha256'))):
+        _regular(directory/name)
+        _, digest = _hash(directory/name, spec['limits']['metadataBytes'])
+        if bound is not None and digest != bound:
+            raise Refused(f'input_drift: {name} differs from the receipt')
+        observed[name] = digest
     receipt_sha = hashlib.sha256((directory/spec['receiptFile']).read_bytes()).hexdigest()
     return receipt, unbound, {'receiptSha256': receipt_sha, 'files': observed}
 
@@ -274,13 +291,21 @@ def tool_bindings(prof=None):
         or not HEX64.fullmatch(str(((prof['tools'].get(name) or {}).get('installed') or {}).get('sha256')))]
 
 
-def preflight(input_dir=None, bootstrap_receipt=None, cfg=None):
+def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
     """Every unbound binding of the route, before any controller, login or secret. Wrong values refuse instead."""
     cfg = check_config(cfg or config())
     missing = []
-    if cfg['input'].get('transport') is None:
+    transport = cfg['input'].get('transport')
+    if not inputs:
+        pass
+    elif transport is None:
         missing.append('input.transport')
-    if input_dir:
+    elif not isinstance(transport, dict) or not str(transport.get('directory', '')).startswith('/') or not transport.get('kind'):
+        raise Refused('config_invalid: input.transport must name its kind and an absolute builder directory')
+    input_dir = input_dir or (transport or {}).get('directory')
+    if not inputs:
+        pass
+    elif input_dir:
         try:
             _, unbound, _ = check_directory(input_dir, cfg)
         except SetupMissing as error:
@@ -305,6 +330,16 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None):
     return list(dict.fromkeys(missing))
 
 
+def bootstrap_receipt(env, cfg):
+    """The bound public bootstrap receipt: inline in the config, or (tests and reruns) a file named by the environment."""
+    if env.get('ROSE_RETAINED_BOOTSTRAP_RECEIPT'):
+        try:
+            return json.loads(Path(env['ROSE_RETAINED_BOOTSTRAP_RECEIPT']).read_text())
+        except (OSError, ValueError):
+            return None
+    return cfg['signing'].get('bootstrapReceipt')
+
+
 def jdk_home():
     trust = json.loads(PROFILES_PATH.read_text())['profiles']['models-v0']['tools']['keytool']['trust']
     return str(Path(trust['root'])/trust['treePath'])
@@ -314,10 +349,7 @@ def sign_inputs(env):
     """host-sign.py's retained route: the bound config and the revalidated consumer inputs, or a refusal."""
     cfg = check_config(config())
     consumer = env.get('ROSE_RETAINED_INPUT', '')
-    try:
-        bootstrap = json.loads(Path(env.get('ROSE_RETAINED_BOOTSTRAP_RECEIPT', '')).read_text())
-    except (OSError, ValueError):
-        bootstrap = None
+    bootstrap = bootstrap_receipt(env, cfg)
     missing = preflight(Path(consumer)/'input' if consumer else None, bootstrap, cfg)
     if missing:
         raise SetupMissing(missing)
@@ -336,33 +368,152 @@ def sign_inputs(env):
     return bound, data/cfg['input']['targetFiles'], data/cfg['input']['otatools']
 
 
-# ---------------------------------------------------------------- separate publication (never Latest)
+# ---------------------------------------------------------------- connected route (existing pipeline functions)
 
-def publish_separate(client, cfg, build, body, manifest, assets_dir, download_dir, promote=False):
-    """A verified, download-checked draft becomes a public release that never changes Latest: make_latest is always
-    false, an explicit promote refuses, and Latest must be the same release before and after."""
-    cfg = check_config(cfg)
-    spec = importlib.util.spec_from_file_location('github_release_publisher_for_rango', ROOT/'scripts/github_release_publisher.py')
-    publisher = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(publisher)
+PIPELINE_SECTIONS_FORBIDDEN = ('target', 'publication', 'fixture')
+
+
+_PIPELINE = []
+
+
+def pipeline():
+    """release-pipeline.py, loaded once: the route calls its functions, it does not copy them."""
+    if not _PIPELINE:
+        sys.path.insert(0, str(ROOT/'scripts'))
+        spec = importlib.util.spec_from_file_location('release_pipeline_for_rango', ROOT/'scripts/release-pipeline.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _PIPELINE.append(module)
+    return _PIPELINE[0]
+
+
+def pipeline_config(cfg, binding):
+    """A release-pipeline config for Rango built only from bound values: the verification expectations, the OTA and AVB
+    identities of the genuine bootstrap, and the fixed rango-{build} never-Latest publication."""
+    expected = cfg['verification'].get('expected')
+    if not isinstance(expected, dict) or any(k in expected for k in PIPELINE_SECTIONS_FORBIDDEN) \
+            or set(expected.get('identities') or {}) - {'appSignerSha256'} or not expected.get('variant'):
+        raise Refused('config_invalid: verification.expected must not carry target, publication or OTA/AVB identities')
+    config = json.loads(json.dumps(expected))
+    config['target'] = {'device': 'rango', 'variant': expected['variant']}
+    config['identities'] = dict(expected.get('identities') or {}, otaCertificateSha256=binding['otaCertificateSha256'],
+        avbPublicKeySha256=binding['avbPublicKeySha256'])
+    publication = cfg['publication']
+    config['publication'] = {'repository': publication['repository'], 'tag': publication['tag'], 'api': publication['api'],
+        'uploads': publication['uploads'],
+        'channels': {'beta': {'promoteLatest': False, 'finalizePublic': True, 'feedChannel': publication['feedChannel']}}}
+    return config
+
+
+def candidate(cfg, receipt):
+    return {'sha': cfg['target']['product'], 'build': cfg['target']['build'], 'timestamp': str(receipt['build']['timestamp']),
+        'channel': 'beta', 'device': 'rango'}
+
+
+def bound(env, consumer, cfg=None):
+    """Everything bound and the consumer revalidated, or a refusal naming what is not."""
+    cfg = check_config(cfg or config())
+    receipt = bootstrap_receipt(env, cfg)
+    missing = preflight(Path(consumer)/'input', receipt, cfg)
+    if missing:
+        raise SetupMissing(missing)
+    input_receipt, _, _ = recheck(consumer, cfg)
+    binding = signer_binding(receipt)
+    apps = cfg['verification']['expected'].get('apps') or []
+    rose = input_receipt['apps']['roseApk']
+    if ['dev.pixel.voice', rose['versionCode']] not in [list(a) for a in apps]:
+        raise Refused('input_foreign: the expected apps do not include the retained Rose Agent version')
+    return cfg, input_receipt, binding, pipeline_config(cfg, binding), candidate(cfg, input_receipt)
+
+
+class Args:
+    def __init__(self, **values):
+        self.__dict__.update(values)
+
+
+def sign(env, consumer, release_dir, signer=None, lock=None):
+    """host-sign.py's retained route under the shared global lock, cwd at the original source root."""
+    cfg, input_receipt, _, _, cand = bound(env, consumer)
+    release_dir = Path(release_dir)
+    release_dir.mkdir(parents=True, exist_ok=False)
+    data = Path(consumer)/'input'
+    shutil.copyfile(data/cfg['input']['policy'], release_dir/'background-policy.json')
+    shutil.copyfile(data/cfg['input']['resolvedManifest'], release_dir/'resolved-manifest.xml')
+    sign_env = dict(env, ROSE_RETAINED_INPUT=str(consumer), ROSE_CANDIDATE_SHA=cand['sha'], BUILD_NUMBER=cand['build'],
+        BUILD_DATETIME=cand['timestamp'], ROSE_RELEASE_DIR=str(release_dir))
+    if signer is None:
+        spec = importlib.util.spec_from_file_location('host_sign_for_rango', ROOT/'scripts/host-sign.py')
+        host_sign = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(host_sign)
+        signer = host_sign.main
+    with (lock or shared_lock)(cfg['signing']['lockPath']):
+        cwd = os.getcwd()
+        os.chdir(env.get('ROSE_RETAINED_SOURCE_ROOT') or cfg['signing']['sourceRoot'])
+        try:
+            signer(env=sign_env)
+        finally:
+            os.chdir(cwd)
+    return {'stage': 'sign', 'candidate': cand}
+
+
+def verify(env, consumer, release_dir, adapter=None):
+    """release-pipeline verify_signed with the Rango expectations; its allowlist, feed and receipt logic are unchanged."""
+    _, _, _, config, cand = bound(env, consumer)
+    module = pipeline()
+    return module.verify_signed(Args(release_dir=str(release_dir)), config, cand, adapter or module.Production())
+
+
+def stage_artifact(env, consumer, release_dir, artifact_dir, adapter=None):
+    """release-pipeline stage_artifact plus the nonsecret bindings the hosted publisher revalidates."""
+    cfg, input_receipt, _, config, cand = bound(env, consumer)
+    module = pipeline()
+    apps = json.dumps(cfg['verification']['expected']['apps'])
+    result = module.stage_artifact(Args(release_dir=str(release_dir), artifact_dir=str(artifact_dir), apps=apps), config, cand,
+        adapter or module.Production())
+    bindings = {'inputReceipt': input_receipt, 'bootstrapReceipt': bootstrap_receipt(env, cfg)}
+    fd = os.open(Path(artifact_dir)/'rango-bindings.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(bindings, f, indent=2, sort_keys=True)
+    return result
+
+
+def publish(artifact_dir, promote=False, adapter=None, cfg=None):
+    """Hosted publisher: revalidate the bindings, then release-pipeline publish (draft, download check) and the adapter's
+    never-Latest public finalization. promote refuses; Latest must not move."""
+    cfg = check_config(cfg or config())
     if promote:
         raise Refused('latest_refused: a Rango release is never promoted to Latest')
-    if build != cfg['target']['build']:
-        raise Refused('input_foreign: only the retained build is published')
-    tag = cfg['publication']['tag'].format(build=build)
-    if any(not row['name'].startswith('rango-') for row in manifest['assets']
-           if row['name'] not in ('releasekey.x509.pem', 'avb_pkmd.bin', 'SHA256SUMS', 'UPDATE.md', 'verification.json')):
-        raise Refused('asset_foreign: device assets must be rango-prefixed')
-    if client.find_release(tag) is not None:
-        raise Refused(f'release_exists: {tag} already exists; it is not reconciled or overwritten')
-    before = client.latest_tag()
-    release, download, already = publisher.publish_release(client, tag, tag, body, manifest, assets_dir, download_dir)
-    if not already:
-        client.finalize_public(release['id'])
-    after = client.latest_tag()
-    if after != before:
-        raise Refused(f'latest_changed: Latest moved from {before} to {after}')
-    return {'tag': tag, 'releaseId': release['id'], 'latestBefore': before, 'latestAfter': after, 'downloadChecked': str(download)}
+    try:
+        bindings = json.loads((Path(artifact_dir)/'rango-bindings.json').read_text())
+    except (OSError, ValueError):
+        raise Refused('artifact_invalid: no Rango bindings in the transferred artifact') from None
+    missing = check_receipt(bindings.get('inputReceipt'), cfg)
+    missing += preflight(None, bindings.get('bootstrapReceipt'), cfg, inputs=False)
+    if missing:
+        raise SetupMissing(missing)
+    binding = signer_binding(bindings['bootstrapReceipt'])
+    release_config, cand = pipeline_config(cfg, binding), candidate(cfg, bindings['inputReceipt'])
+    module = pipeline()
+    return module.publish(Args(artifact_dir=str(artifact_dir), promote=False, allocation=None), release_config, cand,
+        adapter or module.Production())
+
+
+def shared_lock(path):
+    import contextlib
+    import fcntl
+
+    @contextlib.contextmanager
+    def held():
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise Refused('lock_held: the shared builder lock is held by another job') from None
+            yield
+        finally:
+            os.close(fd)
+    return held()
 
 
 def main(argv=None):
@@ -373,11 +524,18 @@ def main(argv=None):
     f.add_argument('--input-dir')
     f.add_argument('--bootstrap-receipt')
     s = sub.add_parser('stage')
-    s.add_argument('--input-dir', required=True)
+    s.add_argument('--input-dir', help='default: the bound input.transport directory')
     s.add_argument('--consumer', required=True)
-    r = sub.add_parser('recheck')
-    r.add_argument('--consumer', required=True)
+    sub.add_parser('recheck').add_argument('--consumer', required=True)
+    for name in ('sign', 'verify', 'stage-artifact'):
+        c = sub.add_parser(name)
+        c.add_argument('--consumer', required=True)
+        c.add_argument('--release-dir', required=True)
+        if name == 'stage-artifact':
+            c.add_argument('--artifact-dir', required=True)
+    sub.add_parser('publish').add_argument('--artifact-dir', required=True)
     args = p.parse_args(argv)
+    env = dict(os.environ)
     try:
         if args.command == 'preflight':
             receipt = json.loads(Path(args.bootstrap_receipt).read_text()) if args.bootstrap_receipt else None
@@ -386,19 +544,35 @@ def main(argv=None):
                 raise SetupMissing(missing)
             result = {'preflight': 'ready'}
         elif args.command == 'stage':
-            result = stage(args.input_dir, args.consumer)
-        else:
+            transport = config()['input'].get('transport') or {}
+            if not (args.input_dir or transport.get('directory')):
+                raise SetupMissing(['input.transport'])
+            result = stage(args.input_dir or transport['directory'], args.consumer)
+        elif args.command == 'recheck':
             _, unbound, observed = recheck(args.consumer)
             result = dict(observed, unbound=unbound)
+        elif args.command == 'sign':
+            result = sign(env, args.consumer, args.release_dir)
+        elif args.command == 'verify':
+            result = verify(env, args.consumer, args.release_dir)
+        elif args.command == 'stage-artifact':
+            result = stage_artifact(env, args.consumer, args.release_dir, args.artifact_dir)
+        else:
+            result = publish(args.artifact_dir)
     except SetupMissing as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
         return 4
     except Refused as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
         return 1
-    except (OSError, ValueError) as error:
-        print(json.dumps({'verdict': 'INVALID', 'error': type(error).__name__}), file=sys.stderr)
-        return 2
+    except Exception as error:  # noqa: BLE001 - pipeline CheckFailed/SetupMissing and adapter failures, without payloads
+        name = type(error).__name__
+        if name == 'SetupMissing' and hasattr(error, 'missing'):
+            print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
+            return 4
+        detail = str(error) if name in ('CheckFailed', 'AdapterFailed', 'PublishError') else name
+        print(json.dumps({'verdict': 'FAIL', 'error': detail}), file=sys.stderr)
+        return 1
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

@@ -203,6 +203,9 @@ class Production:
             raise SetupMissing(['PIXEL_OTA_TOKEN (minted by the publisher job; never on the builder)'])
         self.client = github_release_publisher.client_from_environment(config)
         tag = config['publication']['tag'].format(build=cand['build'])
+        if ((config['publication'].get('channels') or {}).get(cand['channel']) or {}).get('finalizePublic'):
+            # Separate-device release (OCT30-INFRA-S015): Latest is recorded first and must be unchanged after finalizing.
+            self.latest_before = self.client.latest_tag()
         if fresh and self.client.find_release(tag) is not None:
             # A freshly allocated tag must not exist at all, drafts included: never reconcile or overwrite another release.
             raise CheckFailed(f'release tag {tag} already exists in pixel-ota; the allocation is not fresh')
@@ -216,6 +219,15 @@ class Production:
         self.release, download, self.already_published = github_release_publisher.publish_release(
             self.client, tag, tag, body, manifest, directory, Path(receipt_dir).parent/f'published-{cand["build"]}')
         return download
+
+    def finalize_public(self, config, cand, draft):
+        """Public, never Latest: make_latest=false, and the repository Latest must be the release it was before."""
+        if self.already_published:
+            raise CheckFailed('a separate-device release must be fresh; an existing release is not finalized again')
+        self.client.finalize_public(self.release['id'])
+        after = self.client.latest_tag()
+        if after != self.latest_before:
+            raise CheckFailed(f'repository Latest moved from {self.latest_before} to {after} during a separate-device release')
 
     def promote(self, config, cand, draft):
         if self.already_published:
@@ -253,6 +265,10 @@ class Fake:
             (store/'notes.md').write_text(notes)
         self.log('draft uploaded')
         return draft
+
+    def finalize_public(self, config, cand, draft):
+        draft.rename(draft.parent/'public')
+        self.log('finalized public, not Latest')
 
     def promote(self, config, cand, draft):
         draft.rename(draft.parent/'latest')
@@ -1034,13 +1050,21 @@ def publish(a, config, cand, adapter):
             sha256_file(public/'avb_pkmd.bin') != config['identities']['avbPublicKeySha256']:
         raise CheckFailed('transferred public keys do not match the pins')
     notes = latest_notes(a, cand, artifact) if a.allocation else None
-    draft = adapter.publish(config, cand, public, artifact, notes=notes, fresh=bool(a.allocation))
+    draft = adapter.publish(config, cand, public, artifact, notes=notes,
+        fresh=bool(getattr(a, 'allocation', None)) or bool(channel.get('finalizePublic')))
     # Download check of the draft before any promotion; promotion only when explicitly requested.
     manifest_tool('verify-published', artifact/'manifest.json', '--dir', draft)
     promoted = bool(channel['promoteLatest'] and a.promote and device in LATEST_DEVICES)
     if promoted:
         adapter.promote(config, cand, draft)
-    return {'stage': 'publish', 'draft': 'verified', 'promoted': promoted, 'simulated': adapter.simulated}
+    # A separate-device release (never a LATEST_DEVICES member) is made public only after the same draft download check.
+    finalized = bool(channel.get('finalizePublic')) and device not in LATEST_DEVICES and not promoted
+    if finalized:
+        adapter.finalize_public(config, cand, draft)
+    report = {'stage': 'publish', 'draft': 'verified', 'promoted': promoted, 'simulated': adapter.simulated}
+    if finalized:
+        report['finalizedPublic'] = True
+    return report
 
 def latest_notes(a, cand, artifact):
     """The normal button's allocation, independently re-derived here: the candidate must be exactly the dispatch source plus
