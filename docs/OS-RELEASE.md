@@ -132,6 +132,26 @@ The mode `rango-retained` connects these steps:
 The `latest-beta` button and the Frankel modes are unchanged.
 `SUPPORTED_DEVICES` and `LATEST_DEVICES` stay `('frankel',)`.
 
+**Signing-only by default; tools proven per run (OCT30-INFRA-S017).**
+- `rango_publish` is a boolean dispatch input, default `false`. With the default, the run stops at the builder's
+  private artifact. The `rango-publisher` job runs only when `rango_publish` is true, the publisher token is never
+  minted, and `rango-retained.py publish` itself refuses without `ROSE_RANGO_PUBLISH=true`.
+- The four Fold tools come from the admitted S016 helper. `prove --proof-dir P` runs after staging and before signer
+  login, under the shared lock. `sign ... --proof-file P/fold-tool-proof.json` rechecks that same-run proof under the
+  lock before any secret, and refuses with `tool_proof_missing`, `tool_proof_binding` or `tool_proof_drift`.
+  No installed hash is trusted from source.
+- `feedChannel` and `notes` stay signing prerequisites, because they produce the signed public assets `rango-stable`
+  and `UPDATE.md` that `verify_signed` checks. The repository, tag and Latest settings are publication-only.
+- The identity authority (`signing.identityPolicy.mode`) is the genuine `fold-rango-v1` bootstrap receipt. That
+  receipt is still unbound: artifact 12961047183 is held and is never retrieved another way.
+- The first-use container contract (`identityPolicy.firstUse`) is proposed only, with `selected: false`:
+  - exactly one ENABLED version in each fixed container, created inside the bootstrap window;
+  - numeric versions pinned before access;
+  - a write-once identity binding that refuses a Frankel collision and must match on every later run.
+
+  It is implemented and tested as a contract. It refuses while unselected, and it is not yet wired into the signing
+  key derivation.
+
 What the source already does:
 - **Input.** The input receipt schema is `roseos.rango-retained-input.v1`. It
   binds:

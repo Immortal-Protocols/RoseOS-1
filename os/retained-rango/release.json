@@ -33,7 +33,20 @@
     "provenanceBasis": "Unbound: executable otatools and the release script need an approved source binding (pinned revision and content hashes), not only the artifact's self-reported hashes.",
     "sourceRoot": "/home/pixelbuild/grapheneos-2026100600",
     "lockPath": "/home/pixelbuild/frankel-build.lock",
-    "sourceBasis": "The original builder tree and the shared global lock of os/build-only/rango.json and os/release-pipeline/frankel.json."
+    "sourceBasis": "The original builder tree and the shared global lock of os/build-only/rango.json and os/release-pipeline/frankel.json.",
+    "identityPolicy": {
+      "mode": "bootstrap-receipt",
+      "modeBasis": "OCT30-INFRA-S017: the selected initial identity authority is the genuine fold-rango-v1 bootstrap public receipt (signing.bootstrapReceipt, still unbound: artifact 12961047183 is held and is never retrieved by another route).",
+      "firstUse": {
+        "selected": false,
+        "basis": "PROPOSED ONLY, not selected or enabled: the two fixed Rango containers as trust anchors; exactly one ENABLED version in each, created inside the bootstrap window, pinned by numeric id before access; identity derived in the signing operation, Frankel collision refused, written once and equal on every later run. Consistency with the completed bootstrap, not cryptographic proof that no other writer acted.",
+        "bootstrapRun": "41019390144",
+        "bootstrapRecipe": "99357a10a2e63021d5df76b962c5aee9e76216d1",
+        "windowStart": "2026-10-30T07:20:15Z",
+        "windowEnd": "2026-10-30T07:20:44Z"
+      }
+    },
+    "toolProof": "OCT30-INFRA-S017: the four Fold tools come from the same-run proof of the admitted S016 helper (os/signing-bootstrap/profiles.json fold-rango-v1.localProof), never from checked-in installed hashes."
   },
   "publication": {
     "repository": "Immortal-Protocols/pixel-ota",
@@ -44,7 +57,8 @@
     "api": "https://api.github.com",
     "uploads": "https://uploads.github.com",
     "notes": null,
-    "notesBasis": "Unbound: UPDATE.md for this build must come from an immutable reviewed commit; none names rango 2026103001."
+    "notesBasis": "Unbound: UPDATE.md for this build must come from an immutable reviewed commit; none names rango 2026103001.",
+    "selectionBasis": "OCT30-INFRA-S017: signing never publishes. Publication runs only when the workflow input rango_publish is explicitly true (default false), enforced by the job condition and by rango-retained.py publish. feedChannel and notes stay signing prerequisites because they are signed public assets (rango-stable, UPDATE.md) checked by verify_signed; repository, tag and latest are publication-only."
   },
   "verification": {
     "expected": null,

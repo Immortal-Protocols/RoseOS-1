@@ -27,6 +27,8 @@ def load(name, path):
 
 
 rr = load('rango_retained', SCRIPTS/'rango-retained.py')
+sys.path.insert(0, str(SCRIPTS/'tests'))
+import test_fold_bootstrap_proof as proof_fixtures  # noqa: E402  (the MOCK S016 helper and blob helper)
 host_sign = load('host_sign_for_rango', SCRIPTS/'host-sign.py')
 pipeline = load('release_pipeline_for_rango', SCRIPTS/'release-pipeline.py')
 CONFIG = rr.config()
@@ -83,10 +85,11 @@ class Tmp:
 
 class Config(unittest.TestCase):
     def test_checked_in_route_is_unbound_and_refuses_before_any_host(self):
+        # OCT30-INFRA-S017: the four Fold tools are proven per run by the admitted S016 helper, so no static installed
+        # hash is a prerequisite any more; everything else stays genuinely unbound.
         self.assertEqual(rr.preflight(), ['input.transport', 'input.directory', 'signing.bootstrapReceipt',
-            'signing.tools.generator.installed', 'signing.tools.decrypt-keys.installed', 'signing.tools.avbtool.installed',
-            'signing.tools.openssl.installed', 'signing.otatoolsProvenance', 'signing.releaseScriptProvenance',
-            'publication.feedChannel', 'publication.notes', 'verification.expected'])
+            'signing.otatoolsProvenance', 'signing.releaseScriptProvenance', 'publication.feedChannel', 'publication.notes',
+            'verification.expected'])
         self.assertEqual(rr.main(['preflight']), 4)
         self.assertEqual((CONFIG['target']['device'], CONFIG['target']['product'], CONFIG['target']['build']),
             ('rango', '02b21bc69f9afd281422d42e3dcf8a456e471de1', '2026103001'))
@@ -209,14 +212,15 @@ class Signer(unittest.TestCase):
             with self.assertRaisesRegex(rr.Refused, category, msg=change):
                 rr.signer_binding(bootstrap(**change))
 
-    def test_installed_tool_identities_stay_unbound_until_observed(self):
+    def test_tools_come_only_from_the_admitted_local_proof(self):
         prof = copy.deepcopy(rr.profile())
-        self.assertEqual(len(rr.tool_bindings(prof)), 4)
-        for name in rr.TOOLS:
-            prof['tools'][name]['installed'] = {'path': f'/opt/{name}', 'sha256': 'c' * 64}
-        self.assertEqual(rr.tool_bindings(prof), [])
-        prof['tools']['openssl']['installed']['sha256'] = prof['tools']['openssl'].get('sourceSha256')
-        self.assertEqual(rr.tool_bindings(prof), ['signing.tools.openssl.installed'])
+        self.assertEqual(rr.tool_bindings(prof), [])  # admitted S016 helper and a valid spec
+        self.assertTrue(all(tool['installed']['sha256'] is None for tool in prof['tools'].values()))  # never trusted statically
+        unadmitted = copy.deepcopy(prof)
+        unadmitted['localProof']['admittedBlob'] = None
+        self.assertEqual(rr.tool_bindings(unadmitted), ['signing.localProof (proof-helper-unadmitted)'])
+        unadmitted.pop('localProof')
+        self.assertEqual(rr.tool_bindings(unadmitted), ['signing.localProof'])
 
 
 class BoundSigning(unittest.TestCase):
@@ -330,7 +334,24 @@ class Route(unittest.TestCase):
         self.release, self.artifact = self.t.root/'release', self.t.root/'artifact'
         self.adapter = self.module.Fake(self.t.root/'fake')
         (self.t.root/'source-root').mkdir()
-        self.env = {'HOME': str(self.t.root), 'ROSE_RETAINED_SOURCE_ROOT': str(self.t.root/'source-root')}
+        self.env = {'HOME': str(self.t.root), 'ROSE_RETAINED_SOURCE_ROOT': str(self.t.root/'source-root'),
+            'GITHUB_SHA': 'f' * 40, 'GITHUB_RUN_ID': '41200000000', 'GITHUB_RUN_ATTEMPT': '1',
+            'ROSE_RETAINED_PROOF': str(self.t.root/'proof'/rr.PROOF_FILE)}
+        # MOCK S016 helper (agreed interface only), admitted by its own blob in a run-scoped profile copy.
+        self.helper_control = self.t.root/'helper-control.json'
+        self.helper_control.write_text('{}')
+        helper = self.t.root/'fold_tool_proof_mock.py'
+        helper.write_text(proof_fixtures.MOCK_HELPER.format(control=str(self.helper_control), lock=str(self.t.root/'mock.lock')))
+        prof = copy.deepcopy(rr.profile())
+        prof['localProof'].update(helper=str(helper), admittedBlob=proof_fixtures.blob(helper),
+            spec={'schema': 'mock.fold-tool-proof-spec', 'profile': 'fold-rango-v1'})
+        saved_profile = rr.profile
+        rr.profile = lambda cfg=None: prof
+        self.addCleanup(setattr, rr, 'profile', saved_profile)
+        self.prove()
+
+    def prove(self):
+        return rr.prove(self.env, self.t.root/'proof', lock=lambda path: contextlib.nullcontext())
 
     def mock_check(self, name, result):
         saved = getattr(self.module, name)
@@ -370,7 +391,7 @@ class Route(unittest.TestCase):
         self.assertTrue({('check_ota', 'rango'), ('check_vbmeta', 'rango')} <= set(self.checks))
         rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
         self.assertEqual(sorted(p.name for p in (self.artifact/'assets').iterdir()), sorted(self.module.public_assets('rango', '2026103001')))
-        report = rr.publish(self.artifact, adapter=self.adapter)
+        report = rr.publish(self.artifact, adapter=self.adapter, selected=True)
         self.assertEqual((report['promoted'], report.get('finalizedPublic')), (False, True))
         store = self.t.root/'fake/releases/rango-2026103001'
         self.assertEqual(sorted(p.name for p in store.iterdir()), ['public'])
@@ -393,22 +414,22 @@ class Route(unittest.TestCase):
         rr.verify(self.env, self.consumer, self.release, self.adapter)
         rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
         with self.assertRaisesRegex(rr.Refused, 'latest_refused'):
-            rr.publish(self.artifact, promote=True, adapter=self.adapter)
+            rr.publish(self.artifact, promote=True, adapter=self.adapter, selected=True)
         bindings = json.loads((self.artifact/'rango-bindings.json').read_text())
         evil = copy.deepcopy(bindings)
         evil['bootstrapReceipt']['publicIdentity']['otaCertificateSha256'] = FRANKEL['identities']['otaCertificateSha256']
         (self.artifact/'rango-bindings.json').write_text(json.dumps(evil))
         with self.assertRaisesRegex(rr.Refused, 'signer_collision'):
-            rr.publish(self.artifact, adapter=self.adapter)
+            rr.publish(self.artifact, adapter=self.adapter, selected=True)
         evil = copy.deepcopy(bindings)
         evil['inputReceipt']['device'] = 'frankel'
         (self.artifact/'rango-bindings.json').write_text(json.dumps(evil))
         with self.assertRaisesRegex(rr.Refused, 'input_foreign'):
-            rr.publish(self.artifact, adapter=self.adapter)
+            rr.publish(self.artifact, adapter=self.adapter, selected=True)
         (self.artifact/'rango-bindings.json').write_text(json.dumps(bindings))
         (self.artifact/'assets/rango-ota_update-2026103001.zip').write_bytes(b'tampered in transfer')
         with self.assertRaises(self.module.CheckFailed):
-            rr.publish(self.artifact, adapter=self.adapter)
+            rr.publish(self.artifact, adapter=self.adapter, selected=True)
         self.assertFalse((self.t.root/'fake/releases').exists())
 
     def test_drift_after_staging_refuses_before_signing(self):
@@ -453,6 +474,117 @@ class UnboundRoute(unittest.TestCase):
                 step()
         self.assertEqual(called, [])
         self.assertEqual(rr.main(['stage', '--consumer', str(t.root/'c2')]), 4)
+
+
+class SigningOnly(Route):
+    """OCT30-INFRA-S017: signing never publishes; the same-run tool proof gates every secret."""
+
+    def test_signing_only_route_completes_without_any_publisher(self):
+        published = []
+        saved = self.module.publish
+        self.module.publish = lambda *a, **k: published.append(a)
+        self.addCleanup(setattr, self.module, 'publish', saved)
+        result = self.sign()
+        self.assertEqual(set(result['tools']), {'generator', 'decrypt-keys', 'avbtool', 'openssl'})
+        self.assertEqual(result['tools']['openssl']['trustBasis'], 'local-proof')
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        self.assertEqual(published, [])
+        self.assertFalse((self.t.root/'fake/releases').exists())
+        for selected in (False, None, 'true', 1):
+            with self.assertRaisesRegex(rr.Refused, 'publication_unselected'):
+                rr.publish(self.artifact, adapter=self.adapter, selected=selected)
+        self.assertEqual(published, [])
+        saved_env = os.environ.get('ROSE_RANGO_PUBLISH')
+        os.environ.pop('ROSE_RANGO_PUBLISH', None)
+        self.addCleanup(lambda: os.environ.__setitem__('ROSE_RANGO_PUBLISH', saved_env) if saved_env is not None else None)
+        self.assertEqual(rr.main(['publish', '--artifact-dir', str(self.artifact)]), 1)  # absent selection refuses
+
+    def refused_before_signer(self, env, category):
+        called = []
+        with self.assertRaisesRegex(rr.Refused, category):
+            rr.sign(env, self.consumer, self.release, signer=lambda env: called.append(env), lock=lambda path: contextlib.nullcontext())
+        self.assertEqual(called, [])
+
+    def test_missing_stale_or_drifted_proof_refuses_before_any_secret(self):
+        self.refused_before_signer(dict(self.env, ROSE_RETAINED_PROOF=str(self.t.root/'absent.json')), 'tool_proof_missing')
+        shutil.rmtree(self.release, ignore_errors=True)
+        self.refused_before_signer(dict(self.env, GITHUB_RUN_ID='41200000001'), 'tool_proof_binding')
+        shutil.rmtree(self.release, ignore_errors=True)
+        self.refused_before_signer(dict(self.env, GITHUB_SHA='e' * 40), 'tool_proof_binding')
+        shutil.rmtree(self.release, ignore_errors=True)
+        binding = json.loads(Path(self.env['ROSE_RETAINED_PROOF']).read_text())
+        binding['proof']['tools']['openssl']['path'] = '/tmp/other-openssl'  # substituted proof
+        Path(self.env['ROSE_RETAINED_PROOF']).write_text(json.dumps(binding))
+        self.refused_before_signer(self.env, 'tool_proof_binding')
+
+    def test_tool_mutation_after_proof_refuses_before_any_secret(self):
+        self.helper_control.write_text(json.dumps({'recheckRefuses': 'changed_after_proof'}))
+        self.refused_before_signer(self.env, 'tool_proof_drift')
+
+    def test_refused_proof_binds_nothing(self):
+        Path(self.env['ROSE_RETAINED_PROOF']).unlink()
+        self.helper_control.write_text(json.dumps({'verifyRefuses': 'package_unavailable'}))
+        with self.assertRaisesRegex(rr.Refused, 'tool_proof_refused: package_unavailable'):
+            self.prove()
+        self.assertFalse(Path(self.env['ROSE_RETAINED_PROOF']).exists())
+
+
+class FirstUseContract(unittest.TestCase):
+    """The proposed first-use identity authority: tested here, refused until explicitly selected."""
+    CONTRACT = CONFIG['signing']['identityPolicy']['firstUse']
+
+    def metadata(self, **change):
+        rows = {'keys': [{'name': 'projects/protocols-465723/secrets/PIXEL_OS_SIGNING_KEYS_RANGO_V1/versions/1',
+                          'state': 'ENABLED', 'createTime': '2026-10-30T07:20:31.120Z'}],
+                'passphrase': [{'name': 'projects/protocols-465723/secrets/PIXEL_OS_SIGNING_PASSPHRASE_RANGO_V1/versions/1',
+                                'state': 'ENABLED', 'createTime': '2026-10-30T07:20:33Z'}]}
+        rows.update(change)
+        return rows
+
+    def test_checked_in_policy_is_the_bootstrap_receipt_and_first_use_is_unselected(self):
+        self.assertEqual(CONFIG['signing']['identityPolicy']['mode'], 'bootstrap-receipt')
+        self.assertIs(self.CONTRACT['selected'], False)
+        self.assertEqual(rr.identity_policy(CONFIG), 'bootstrap-receipt')
+        cfg = copy.deepcopy(CONFIG)
+        cfg['signing']['identityPolicy']['mode'] = 'first-use-containers'
+        with self.assertRaisesRegex(rr.Refused, 'identity_policy_unselected'):
+            rr.preflight(cfg=cfg)
+        cfg['signing']['identityPolicy']['firstUse']['selected'] = True
+        self.assertIn('signing.identityPolicy.firstUse (selected contract is not yet wired into signing)', rr.preflight(cfg=cfg))
+        cfg['signing']['identityPolicy']['mode'] = 'latest'
+        with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
+            rr.preflight(cfg=cfg)
+
+    def test_exactly_one_enabled_timely_version_per_container_is_pinned(self):
+        self.assertEqual(rr.first_use_admission(self.metadata(), self.CONTRACT), {'keys': '1', 'passphrase': '1'})
+        second = self.metadata()['keys'] + [dict(self.metadata()['keys'][0], name=self.metadata()['keys'][0]['name'][:-1] + '2')]
+        cases = [(self.metadata(keys=second), 'identity_versions_ambiguous'),
+                 (self.metadata(keys=[]), 'identity_versions_ambiguous'),
+                 (self.metadata(keys=[dict(self.metadata()['keys'][0], state='DISABLED')]), 'identity_versions_partial'),
+                 (self.metadata(keys=[dict(self.metadata()['keys'][0], state='DESTROYED')]), 'identity_versions_partial'),
+                 (self.metadata(keys=[dict(self.metadata()['keys'][0], createTime='2026-10-30T07:25:00Z')]), 'identity_versions_untimely'),
+                 (self.metadata(keys=[dict(self.metadata()['keys'][0], name='projects/protocols-465723/secrets/PIXEL_OS_SIGNING_KEYS_RANGO_V1/versions/latest')]),
+                  'identity_versions_ambiguous'),
+                 (self.metadata(passphrase=[dict(self.metadata()['passphrase'][0],
+                    name='projects/protocols-465723/secrets/PIXEL_OS_SIGNING_KEYS_V1/versions/1')]), 'identity_versions_ambiguous'),
+                 ({'keys': self.metadata()['keys']}, 'identity_metadata_incomplete')]
+        for metadata, category in cases:
+            with self.assertRaisesRegex(rr.Refused, category):
+                rr.first_use_admission(metadata, self.CONTRACT)
+
+    def test_binding_is_written_once_and_must_match_later(self):
+        t = Tmp(self)
+        binding = {'versions': {'keys': '1', 'passphrase': '1'}, 'otaCertificateSha256': 'a' * 64, 'avbPublicKeySha256': 'b' * 64,
+            'policy': 'first-use-containers', 'bootstrapRun': '41019390144'}
+        path = t.root/'rango-first-use.json'
+        self.assertEqual(rr.first_use_record(path, binding), 'enrolled')
+        self.assertEqual(rr.first_use_record(path, dict(binding)), 'matched')
+        with self.assertRaisesRegex(rr.Refused, 'identity_conflict'):
+            rr.first_use_record(path, dict(binding, otaCertificateSha256='c' * 64))
+        self.assertEqual(json.loads(path.read_text()), binding)  # never silently overwritten
+        with self.assertRaisesRegex(rr.Refused, 'signer_collision'):
+            rr.first_use_record(t.root/'other.json', dict(binding, otaCertificateSha256=FRANKEL['identities']['otaCertificateSha256']))
 
 
 class FakeClient:
@@ -515,7 +647,17 @@ class Workflow(unittest.TestCase):
             'rango-retained.py stage-artifact', 'name: rango-release-${{ github.run_id }}')]
         self.assertEqual(order, sorted(order))
         self.assertIn("      - name: Drop signer access\n        if: always()\n", builder)
-        self.assertIn("    needs: rango-builder\n    if: inputs.mode == 'rango-retained'\n", publisher)
+        # OCT30-INFRA-S017: publication only on the explicit default-false selection; signing-only stops at the builder.
+        self.assertIn("    needs: rango-builder\n    if: inputs.mode == 'rango-retained' && inputs.rango_publish\n", publisher)
+        self.assertIn('      rango_publish:\n', WORKFLOW)
+        self.assertIn('        type: boolean\n        default: false\n', WORKFLOW.split('      rango_publish:\n', 1)[1][:400])
+        self.assertIn('  ROSE_RANGO_PUBLISH: ${{ inputs.rango_publish }}\n', WORKFLOW)
+        self.assertIn('[[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]', guard)
+        self.assertNotIn('create-github-app-token', builder)  # no publisher token on the signing job
+        self.assertNotIn('PIXEL_OTA', builder)
+        order = [builder.index(s) for s in ('rango-retained.py stage --consumer', 'rango-retained.py prove --proof-dir',
+            'actions-gcp-login.py login', '--proof-file "$RUNNER_TEMP/rango-proof/fold-tool-proof.json"')]
+        self.assertEqual(order, sorted(order))
         self.assertIn('python3 scripts/rango-retained.py publish --artifact-dir "$RUNNER_TEMP/rango-artifact"', publisher)
         self.assertNotIn('--promote', publisher)
         for job in (builder, publisher):
