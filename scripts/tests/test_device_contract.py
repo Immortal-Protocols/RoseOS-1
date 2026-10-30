@@ -185,10 +185,10 @@ class BindingTest(unittest.TestCase):
 
 class AppCompatibilityTest(unittest.TestCase):
     def test_direct_app_compatibility_stays_frankel_only_and_within_delivered_builds(self):
-        # The app receipt may only declare admitted devices, and its OS floor must be a delivered frankel build; no
-        # schema-2 or client change is part of this slice.
+        # The app receipt may only declare admitted devices, and its OS floor must be a delivered frankel build. Schema 2
+        # (APP-IDSIG-1030-M005) floors at 2026103012, the first delivered build whose client reads it.
         compatibility = FRANKEL['appRelease']['compatibility']
-        self.assertEqual(compatibility['schemaVersion'], 1)
+        self.assertEqual((compatibility['schemaVersion'], compatibility['minOsBuild']), (2, '2026103012'))
         self.assertEqual(compatibility['deviceCodenames'], ['frankel'])
         self.assertTrue(set(compatibility['deviceCodenames']) <= set(pipeline.SUPPORTED_DEVICES))
         delivered = {r['build'] for r in FRANKEL['versionBaselines']['retained']}

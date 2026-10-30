@@ -198,6 +198,15 @@
           "dev.pixel.voice": 310
         },
         "basis": "Published Beta frankel-2026102901: os-release run 40974306111 (candidate 02b21bc6, BUILD_DATETIME 1793311111, apps 310/4/28) drafted it unpromoted; the owner confirmed it is pixel-ota Latest on 2026-10-30. Preserved unchanged. A newer candidate needs a higher build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 311 published). Controller 28 and Calculator 4 may stay equal"
+      },
+      {
+        "build": "2026103012",
+        "source": "920beee9453c48629e31f205e9b6d983478314fc",
+        "buildTimestamp": 1793397918,
+        "mustExceed": {
+          "dev.pixel.voice": 320
+        },
+        "basis": "Published Beta frankel-2026103012: campaign 41132175338 gen 2, os-release run 41135606390 (source 920beee, candidate 449107c3, BUILD_DATETIME 1793397918, Rose Agent 320), the first build whose Rose Agent client (App PR253) reads app receipt schema 2; recorded as the delivered floor appRelease.compatibility.minOsBuild names (APP-IDSIG-1030-M005). Not an install or phone-acceptance claim"
       }
     ]
   },
