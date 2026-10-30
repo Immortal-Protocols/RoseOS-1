@@ -7,7 +7,8 @@ Output, all self-contained (no repository needed on the VM afterwards):
   bin/            launch-online, launch-offline (render_local.py, profile a100x2-bf16-vllm-persistent),
                   start-model (verifies model storage, then picks one), tls-deploy (certbot deploy hook)
   lib/            the pinned config and the service scripts
-  edge/           nginx.conf: TLS, service-auth-v1, and the ACME webroot on :80
+  edge/           nginx.conf: TLS, service-auth-v1, and the ACME webroot on :80; acme-only.conf: challenges
+                  only on :80, used before the first certificate exists
   systemd/        muse-glimmer, models-health(.timer), models-verify-full(.timer), models-auth, models-edge
   manifest.json   sha256 of every rendered file
 """
@@ -34,6 +35,7 @@ ROOT = '/etc/rose-models'
 DATA = '/mnt/models-data'
 RUN_EDGE = '/run/rose-edge'
 ACME_WEBROOT = '/var/lib/rose-models/acme'
+RUN_ACME = '/run/rose-acme'  # the ACME-only Nginx, before the first certificate exists
 LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/https/render_proxy.py': SERVING / 'https' / 'render_proxy.py',
              **{f'lib/service/{n}': SERVING / 'service' / n
@@ -156,6 +158,9 @@ def render(out_dir, config_path=capacity.CONFIG, root=ROOT):
         os.chmod(path, 0o755 if rel.startswith('bin/') else 0o644)
         rendered[rel] = hashlib.sha256(data).hexdigest()
     rendered.update({f'edge/{k}': v for k, v in edge['files'].items()})
+    acme = render_proxy.acme_only_conf(RUN_ACME, '0.0.0.0', 80, ACME_WEBROOT).encode()
+    (out_dir / 'edge' / 'acme-only.conf').write_bytes(acme)
+    rendered['edge/acme-only.conf'] = hashlib.sha256(acme).hexdigest()
     manifest = {'schema': 'rose-models-service/1', 'profile': PROFILE, 'root': root,
                 'model': f"{config['model']['repo']}@{config['model']['revision']}",
                 'image': render_local.render_upload.profile(config, PROFILE)['runtime']['image_digest'],
