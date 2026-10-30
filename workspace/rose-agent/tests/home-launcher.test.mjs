@@ -329,6 +329,22 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
  assert.match(conversation,/int lens=ConversationPresentation\.wellWidth\(getResources\(\)\.getConfiguration\(\)\.screenWidthDp,TrayMaterial\.POCKET_DP\);/);
 });
 
+test('the overview well draws the HiFi three-bar glyph with its gradients and rings (APP-OS-VISUAL-1030)',()=>{
+ const glyph=read('../app/src/dev/pixel/voice/TrayMaterial.java').slice(read('../app/src/dev/pixel/voice/TrayMaterial.java').indexOf('static final class Overview extends Drawable'));
+ assert.match(homeTray,/setBackground\(new TrayMaterial\.Overview\(activity\.getResources\(\)\.getDisplayMetrics\(\)\.density\)\);\s*setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
+ // .overview-glyph i at ce126f56: 11-wide bars 30 tall (34 in the middle), 4 apart, 5 radius.
+ assert.match(glyph,/float width = 11 \* unit, gap = 4 \* unit/);assert.match(glyph,/float half = \(i == 1 \? 17 : 15\) \* unit/);
+ assert.match(glyph,/float radius = 5 \* unit;/);
+ const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
+ assert.match(glyph,/BAR = \{0xffffffff, 0xffe2e8f0\}, ACCENT = \{0xff6aa2ff, 0xff2f6be6\};/);
+ for(const [name,a,rgb] of [['BAR_RING',.55,'788caa'],['ACCENT_RING',.6,'1e50c8'],['BAR_SHADE',.25,'506482'],['ACCENT_LIGHT',.45,'ffffff']])
+  assert.ok(glyph.includes(`${name} = ${argb(a,rgb)}`),name);
+ // Gradients are built per size; drawing allocates nothing. Still decorative: no listener or spoken name of its own.
+ const draw=glyph.slice(glyph.indexOf('@Override public void draw'),glyph.indexOf('@Override public void setAlpha'));
+ assert.ok(!draw.includes('new '),'no allocation while drawing');
+ assert.ok(!/setOnClickListener|setContentDescription/.test(glyph));
+});
+
 test('app labels and page dots follow the HiFi type and dot treatment (APP-OS-VISUAL-1030)',()=>{
  // .app .label at ce126f56: 12.5px, weight 500, white, letter-spacing .005em, shadow 0 1px 3px rgba(8,22,45,.75) (the
  // override's middle layer; Android draws one). Inter falls back to the system UI sans; no font asset is added.
