@@ -387,7 +387,10 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
         missing.append('input.directory')
     receipt = bootstrap_receipt if bootstrap_receipt is not None else cfg['signing'].get('bootstrapReceipt')
     if identity_policy(cfg) == 'first-use-containers':  # refuses unless explicitly selected
-        missing.append('signing.identityPolicy.firstUse (selected contract is not yet wired into signing)')
+        contract = cfg['signing']['identityPolicy']['firstUse']
+        missing += [f'signing.identityPolicy.firstUse.{k}' for k in ('bootstrapRun', 'bootstrapRecipe', 'windowStart', 'windowEnd',
+            'recordDir') if not contract.get(k)]
+        # Its identity is derived later, inside the protected signing operation; nothing is required to exist before it.
     elif receipt is None:
         missing.append('signing.bootstrapReceipt')
     else:
@@ -460,26 +463,256 @@ def first_use_admission(metadata, contract, prof=None):
     return pinned
 
 
-def first_use_record(path, binding, frankel=None):
-    """The nonsecret first-use binding, written once (O_EXCL) before signing; a later run must equal it exactly. A missing
-    or conflicting record after enrolment needs explicit reconciliation, never automatic re-enrolment."""
+FIRST_USE_RECORD = 'first-use.json'
+FIRST_USE_PARTIAL = 'first-use.json.partial'
+# Long-lived identity fields compared on every later run; same-run audit fields (enrolledBy) are recorded, never compared.
+IDENTITY_FIELDS = ('policy', 'bootstrapRun', 'bootstrapRecipe', 'versions', 'otaCertificateSha256', 'avbPublicKeySha256')
+
+
+def record_dir(cfg, env):
+    return Path(env.get('ROSE_FIRST_USE_DIR') or cfg['signing']['identityPolicy']['firstUse']['recordDir'])
+
+
+def read_record(directory):
+    """The durable first-use record, or None when never enrolled. A partial write, a link or an unreadable or malformed
+    record refuses: it can never become, or hide, a binding."""
+    directory = Path(directory)
+    if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+        raise Refused('identity_record_unsafe: the record directory is not a plain directory')
+    if os.path.lexists(directory/FIRST_USE_PARTIAL):
+        raise Refused('identity_record_partial: an interrupted enrolment left a partial record; reconcile explicitly')
+    try:
+        fd = os.open(directory/FIRST_USE_RECORD, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise Refused('identity_record_unsafe: the record is not a readable regular file') from None
+    with os.fdopen(fd) as f:
+        try:
+            record = json.load(f)
+        except ValueError:
+            raise Refused('identity_record_partial: the record is not complete JSON') from None
+    if not isinstance(record, dict) or any(k not in record for k in IDENTITY_FIELDS):
+        raise Refused('identity_record_partial: the record lacks identity fields')
+    return record
+
+
+def first_use_record(directory, binding, enroll, frankel=None):
+    """Explicit enrolment writes the record once, atomically (complete file fsynced, then hard-linked into place, which
+    fails if any record exists); every later run must match its identity fields exactly. Missing after enrolment,
+    re-enrolment, partial or conflicting state refuse; nothing is ever overwritten."""
     frankel = frankel or frankel_identities()
     for key in ('otaCertificateSha256', 'avbPublicKeySha256'):
         if not HEX64.fullmatch(str(binding.get(key))):
             raise Refused(f'identity_invalid: {key} is not a sha256')
     if binding['otaCertificateSha256'] == frankel.get('otaCertificateSha256') or binding['avbPublicKeySha256'] == frankel.get('avbPublicKeySha256'):
         raise Refused('signer_collision: the derived Rango identity equals the Frankel identity')
-    path = Path(path)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    except FileExistsError:
-        existing = json.loads(path.read_text())
-        if existing != binding:
-            raise Refused('identity_conflict: the recorded first-use binding differs; explicit reconciliation is required') from None
+    directory = Path(directory)
+    existing = read_record(directory)
+    identity = {k: binding[k] for k in IDENTITY_FIELDS}
+    if existing is not None:
+        if enroll:
+            raise Refused('identity_already_enrolled: a first-use record exists; enrolment is never repeated')
+        if {k: existing[k] for k in IDENTITY_FIELDS} != identity:
+            raise Refused('identity_conflict: the recorded first-use binding differs; explicit reconciliation is required')
         return 'matched'
+    if not enroll:
+        raise Refused('identity_record_missing: no first-use record; only an explicit enrolment may create one')
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    partial = directory/FIRST_USE_PARTIAL
+    fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, 'w') as f:
         json.dump(binding, f, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        os.link(partial, directory/FIRST_USE_RECORD)
+    except FileExistsError:
+        raise Refused('identity_record_race: another enrolment completed first') from None
+    os.unlink(partial)
+    dfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
     return 'enrolled'
+
+
+def check_bootstrap_run(run, contract, repository):
+    """Permitted run metadata of the completed bootstrap: this repository, os-release.yml, the exact recipe, success."""
+    problems = []
+    if str((run or {}).get('id')) != str(contract.get('bootstrapRun')):
+        problems.append('run id')
+    if (run or {}).get('head_sha') != contract.get('bootstrapRecipe'):
+        problems.append('recipe')
+    if (run or {}).get('path') != '.github/workflows/os-release.yml' or (run or {}).get('event') != 'workflow_dispatch':
+        problems.append('workflow')
+    if (run or {}).get('status') != 'completed' or (run or {}).get('conclusion') != 'success':
+        problems.append('result')
+    if ((run or {}).get('repository') or {}).get('full_name') != repository:
+        problems.append('repository')
+    if problems:
+        raise Refused('identity_provenance: the bootstrap run is not the completed os-release recipe (' + ', '.join(problems) + ')')
+    return {'runId': str(run['id']), 'recipe': run['head_sha'], 'repository': repository}
+
+
+def github_run(env, run_id):
+    """Read-only Actions metadata of one run in this repository (hosted guard token); errors carry no token or body."""
+    import urllib.request
+    request = urllib.request.Request(f"{env.get('GITHUB_API_URL', 'https://api.github.com')}/repos/{env['GITHUB_REPOSITORY']}"
+        f"/actions/runs/{int(run_id)}", headers={'Authorization': f"Bearer {env.get('GH_TOKEN', '')}",
+        'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read(1 << 20))
+    except Exception:  # noqa: BLE001 - never echo a token-bearing error
+        raise Refused('identity_provenance: the bootstrap run metadata could not be read') from None
+
+
+RUN_READER = [github_run]
+
+
+def bootstrap_provenance(env, cfg=None):
+    """Hosted guard step: in bootstrap-receipt mode records that no check applies (no call); with first-use selected,
+    checks the permitted bootstrap run and records this run's receipt for the builder."""
+    cfg = cfg or config()
+    if identity_policy(cfg) == 'bootstrap-receipt':
+        return {'policy': 'bootstrap-receipt', 'checked': False, 'consumerRunId': env.get('GITHUB_RUN_ID')}
+    contract = cfg['signing']['identityPolicy']['firstUse']
+    checked = check_bootstrap_run(RUN_READER[0](env, contract['bootstrapRun']), contract, env.get('GITHUB_REPOSITORY'))
+    return dict(checked, policy='first-use-containers', checked=True, consumerRunId=env.get('GITHUB_RUN_ID'))
+
+
+def provenance_receipt(env, contract):
+    """The hosted guard's same-run check of the bootstrap run (the builder holds no Actions read access)."""
+    try:
+        fd = os.open(env.get('ROSE_FIRST_USE_PROVENANCE', ''), os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd) as f:
+            receipt = json.load(f)
+    except (OSError, ValueError):
+        raise Refused('identity_provenance: no same-run bootstrap provenance receipt') from None
+    if receipt.get('consumerRunId') != env.get('GITHUB_RUN_ID') or receipt.get('checked') is not True \
+            or receipt.get('runId') != str(contract.get('bootstrapRun')) or receipt.get('recipe') != contract.get('bootstrapRecipe'):
+        raise Refused('identity_provenance: the provenance receipt is not this run\'s check of the bootstrap run')
+    return receipt
+
+
+def gcloud_versions(project, secret):
+    """Complete version metadata of one fixed container (all states); no payload, stderr never echoed."""
+    import subprocess
+    try:
+        result = subprocess.run(['gcloud', 'secrets', 'versions', 'list', secret, '--project', project, '--format=json', '--quiet'],
+            capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Refused('identity_metadata_unavailable: version metadata could not be listed') from None
+    if result.returncode:
+        raise Refused('identity_metadata_unavailable: version metadata could not be listed')
+    try:
+        return [{k: v.get(k) for k in ('name', 'state', 'createTime')} for v in json.loads(result.stdout or '[]')]
+    except (ValueError, AttributeError):
+        raise Refused('identity_metadata_unavailable: version metadata is not exact') from None
+
+
+def openssl_runner(argv):
+    """Fixed-argv public-half extraction with the proven host OpenSSL (fixed PATH); only public key PEM is captured."""
+    import subprocess
+    result = subprocess.run(argv, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, stdin=subprocess.DEVNULL, capture_output=True,
+        timeout=60)
+    if result.returncode:
+        raise Refused('identity_keys_invalid: a key does not decrypt with the passphrase or is malformed')
+    return result.stdout
+
+
+# Replaceable boundaries (tests substitute synthetic metadata and a mocked OpenSSL); never secret payload readers.
+METADATA = [gcloud_versions]
+KEY_RUNNER = [openssl_runner]
+
+
+def validate_keys(key_dir, passfile, prof, runner):
+    """Inside host-sign's protected transient workspace: exact inventory, every pk8 decrypting with the passphrase to the
+    public key of its certificate, the AVB key decrypting too; then the public identity from the verified directory."""
+    key_dir = Path(key_dir)
+    inventory = prof['keyInventory']
+    present = {p.name for p in key_dir.iterdir() if p.is_file() and not p.is_symlink()}
+    if set(inventory['requiredByConsumer']) - present or present - set(inventory['requiredByConsumer']) - set(inventory.get('optionalByConsumer', [])):
+        raise Refused('identity_keys_inventory: the key set is not the fold-rango-v1 inventory')
+    passin = 'file:' + str(passfile)
+    for role in inventory.get('roles', []):
+        keys = [f for f in role.get('files', []) if f.endswith('.pk8')]
+        certs = [f for f in role.get('files', []) if f.endswith('.x509.pem')]
+        if len(keys) == 1 and len(certs) == 1:
+            private_half = runner(['openssl', 'pkey', '-inform', 'DER', '-in', str(key_dir/keys[0]), '-passin', passin, '-pubout'])
+            public_half = runner(['openssl', 'x509', '-in', str(key_dir/certs[0]), '-pubkey', '-noout'])
+            if not private_half or private_half.strip() != public_half.strip():
+                raise Refused(f'identity_keys_pair: {keys[0]} does not match {certs[0]}')
+    runner(['openssl', 'pkey', '-in', str(key_dir/'avb.pem'), '-passin', passin, '-pubout'])
+    sb = bootstrap_module()
+    return {'otaCertificateSha256': sb.certificate_sha256((key_dir/'releasekey.x509.pem').read_text()),
+        'avbPublicKeySha256': hashlib.sha256((key_dir/'avb_pkmd.bin').read_bytes()).hexdigest()}
+
+
+def first_use_signing(env, cfg):
+    """Selected first-use signing, under the signing lock and before any payload: provenance, exact version metadata
+    pinned by numeric id, record state consistent with enrol/match, metadata rechecked; returns the pinned versions and
+    the hook host-sign calls inside its transient workspace to validate keys, derive and record the identity."""
+    contract = cfg['signing']['identityPolicy']['firstUse']
+    prof = profile(cfg)
+    provenance = provenance_receipt(env, contract)
+    directory, enroll = record_dir(cfg, env), env.get('ROSE_FIRST_USE_ENROLL') == 'true'
+
+    def admitted():
+        return first_use_admission({role: METADATA[0](prof['project'], secret) for role, secret in prof['secrets'].items()},
+            contract, prof)
+    pinned = admitted()
+    existing = read_record(directory)
+    if existing is None and not enroll:
+        raise Refused('identity_record_missing: no first-use record; only an explicit enrolment may create one')
+    if existing is not None and enroll:
+        raise Refused('identity_already_enrolled: a first-use record exists; enrolment is never repeated')
+    if existing is not None and existing['versions'] != pinned:
+        raise Refused('identity_conflict: the container versions differ from the recorded binding')
+    if admitted() != pinned:
+        raise Refused('identity_versions_race: version metadata changed during admission')
+
+    def derive(extracted, passfile):
+        if admitted() != pinned:  # after the fetch, before any use
+            raise Refused('identity_versions_race: version metadata changed before use')
+        dirs = {p.parent for p in Path(extracted).rglob('releasekey.x509.pem') if p.is_file() and not p.is_symlink()}
+        if len(dirs) != 1:
+            raise Refused('identity_keys_inventory: the archive does not hold exactly one key directory')
+        identity = validate_keys(dirs.pop(), passfile, prof, KEY_RUNNER[0])
+        binding = dict(identity, policy='first-use-containers', bootstrapRun=contract['bootstrapRun'],
+            bootstrapRecipe=contract['bootstrapRecipe'], versions=pinned,
+            enrolledBy={'runId': env.get('GITHUB_RUN_ID'), 'recipe': env.get('GITHUB_SHA'), 'provenance': provenance['runId']})
+        first_use_record(directory, binding, enroll)
+        return identity
+    return pinned, derive
+
+
+def resolve_binding(env, cfg, phase='verify'):
+    """The one identity resolver: the genuine bootstrap receipt, or (selected first-use) the durable record written by
+    this policy's signing operation. Never a fabricated bootstrap receipt."""
+    if identity_policy(cfg) == 'bootstrap-receipt':
+        return signer_binding(bootstrap_receipt(env, cfg))
+    record = read_record(record_dir(cfg, env))
+    if record is None:
+        raise Refused('identity_record_missing: no first-use record; only an explicit enrolment may create one')
+    return first_use_binding(cfg, record)
+
+
+def first_use_binding(cfg, record, frankel=None):
+    contract, frankel = cfg['signing']['identityPolicy']['firstUse'], frankel or frankel_identities()
+    if record.get('policy') != 'first-use-containers' or record.get('bootstrapRun') != contract['bootstrapRun'] \
+            or record.get('bootstrapRecipe') != contract['bootstrapRecipe'] or not isinstance(record.get('versions'), dict):
+        raise Refused('identity_conflict: the first-use record does not belong to the selected contract')
+    for key in ('otaCertificateSha256', 'avbPublicKeySha256'):
+        if not HEX64.fullmatch(str(record.get(key))):
+            raise Refused('identity_record_partial: the first-use record lacks its public identity')
+    if record['otaCertificateSha256'] == frankel.get('otaCertificateSha256') or record['avbPublicKeySha256'] == frankel.get('avbPublicKeySha256'):
+        raise Refused('signer_collision: the recorded Rango identity equals the Frankel identity')
+    return {'secrets': dict(profile(cfg)['secrets']), 'versions': dict(record['versions']), 'policy': 'first-use-containers',
+        'otaCertificateSha256': record['otaCertificateSha256'], 'avbPublicKeySha256': record['avbPublicKeySha256'],
+        'record': {k: record[k] for k in IDENTITY_FIELDS}}
 
 
 def bootstrap_receipt(env, cfg):
@@ -506,16 +739,24 @@ def sign_inputs(env):
     if missing:
         raise SetupMissing(missing)
     receipt, _, _ = recheck(consumer, cfg)
-    binding = signer_binding(bootstrap)
     if env.get('BUILD_NUMBER') != cfg['target']['build'] or env.get('BUILD_DATETIME') != str(receipt['build']['timestamp']):
         raise Refused('input_foreign: the signing build number and BUILD_DATETIME are not the retained build')
-    bound = {'target': {'device': 'rango'}, 'identities': {'otaCertificateSha256': binding['otaCertificateSha256'],
-            'avbPublicKeySha256': binding['avbPublicKeySha256']},
-        'host': {'sign': {'project': profile(cfg)['project'], 'keysSecret': binding['secrets']['keys'],
-            'passphraseSecret': binding['secrets']['passphrase'], 'secretVersion': binding['versions']['keys'],
-            'passphraseSecretVersion': binding['versions']['passphrase'], 'otatools': cfg['input']['otatools'],
+    secrets = profile(cfg)['secrets']
+    if identity_policy(cfg) == 'first-use-containers':
+        versions, derive = first_use_signing(env, cfg)
+        identities = None  # derived and recorded inside host-sign's transient workspace by `derive`
+    else:
+        binding = signer_binding(bootstrap)
+        versions, derive = binding['versions'], None
+        identities = {'otaCertificateSha256': binding['otaCertificateSha256'], 'avbPublicKeySha256': binding['avbPublicKeySha256']}
+    bound = {'target': {'device': 'rango'}, 'identities': identities,
+        'host': {'sign': {'project': profile(cfg)['project'], 'keysSecret': secrets['keys'],
+            'passphraseSecret': secrets['passphrase'], 'secretVersion': versions['keys'],
+            'passphraseSecretVersion': versions['passphrase'], 'otatools': cfg['input']['otatools'],
             'javaHome': jdk_home(), 'updateNotes': cfg['publication']['notes']}},
         'publication': {'channels': {'beta': {'feedChannel': cfg['publication']['feedChannel']}}}}
+    if derive:
+        bound['deriveIdentities'] = derive
     data = Path(consumer)/'input'
     return bound, data/cfg['input']['targetFiles'], data/cfg['input']['otatools']
 
@@ -562,20 +803,21 @@ def candidate(cfg, receipt):
         'channel': 'beta', 'device': 'rango'}
 
 
-def bound(env, consumer, cfg=None):
-    """Everything bound and the consumer revalidated, or a refusal naming what is not."""
+def bound(env, consumer, cfg=None, identity=True):
+    """Everything bound and the consumer revalidated, or a refusal naming what is not. identity=False (signing) leaves a
+    first-use identity to the protected signing operation; verify and staging resolve the same recorded binding."""
     cfg = check_config(cfg or config())
     receipt = bootstrap_receipt(env, cfg)
     missing = preflight(Path(consumer)/'input', receipt, cfg)
     if missing:
         raise SetupMissing(missing)
     input_receipt, _, _ = recheck(consumer, cfg)
-    binding = signer_binding(receipt)
+    binding = resolve_binding(env, cfg) if identity or identity_policy(cfg) == 'bootstrap-receipt' else None
     apps = cfg['verification']['expected'].get('apps') or []
     rose = input_receipt['apps']['roseApk']
     if ['dev.pixel.voice', rose['versionCode']] not in [list(a) for a in apps]:
         raise Refused('input_foreign: the expected apps do not include the retained Rose Agent version')
-    return cfg, input_receipt, binding, pipeline_config(cfg, binding), candidate(cfg, input_receipt)
+    return cfg, input_receipt, binding, binding and pipeline_config(cfg, binding), candidate(cfg, input_receipt)
 
 
 class Args:
@@ -585,7 +827,7 @@ class Args:
 
 def sign(env, consumer, release_dir, signer=None, lock=None):
     """host-sign.py's retained route under the shared global lock, cwd at the original source root."""
-    cfg, input_receipt, _, _, cand = bound(env, consumer)
+    cfg, input_receipt, _, _, cand = bound(env, consumer, identity=False)
     release_dir = Path(release_dir)
     release_dir.mkdir(parents=True, exist_ok=False)
     data = Path(consumer)/'input'
@@ -618,12 +860,14 @@ def verify(env, consumer, release_dir, adapter=None):
 
 def stage_artifact(env, consumer, release_dir, artifact_dir, adapter=None):
     """release-pipeline stage_artifact plus the nonsecret bindings the hosted publisher revalidates."""
-    cfg, input_receipt, _, config, cand = bound(env, consumer)
+    cfg, input_receipt, binding, config, cand = bound(env, consumer)
     module = pipeline()
     apps = json.dumps(cfg['verification']['expected']['apps'])
     result = module.stage_artifact(Args(release_dir=str(release_dir), artifact_dir=str(artifact_dir), apps=apps), config, cand,
         adapter or module.Production())
     bindings = {'inputReceipt': input_receipt, 'bootstrapReceipt': bootstrap_receipt(env, cfg)}
+    if binding.get('policy') == 'first-use-containers':
+        bindings = {'inputReceipt': input_receipt, 'firstUseBinding': binding['record']}
     fd = os.open(Path(artifact_dir)/'rango-bindings.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, 'w') as f:
         json.dump(bindings, f, indent=2, sort_keys=True)
@@ -647,7 +891,13 @@ def publish(artifact_dir, promote=False, adapter=None, cfg=None, selected=False)
     missing += preflight(None, bindings.get('bootstrapReceipt'), cfg, inputs=False)
     if missing:
         raise SetupMissing(missing)
-    binding = signer_binding(bindings['bootstrapReceipt'])
+    if identity_policy(cfg) == 'first-use-containers':
+        record = bindings.get('firstUseBinding')
+        if not isinstance(record, dict) or any(k not in record for k in IDENTITY_FIELDS):
+            raise Refused('identity_record_partial: the artifact carries no first-use binding')
+        binding = first_use_binding(cfg, record)
+    else:
+        binding = signer_binding(bindings['bootstrapReceipt'])
     release_config, cand = pipeline_config(cfg, binding), candidate(cfg, bindings['inputReceipt'])
     module = pipeline()
     return module.publish(Args(artifact_dir=str(artifact_dir), promote=False, allocation=None), release_config, cand,
@@ -693,6 +943,7 @@ def main(argv=None):
         if name == 'sign':
             c.add_argument('--proof-file', required=True)
     sub.add_parser('publish').add_argument('--artifact-dir', required=True)
+    sub.add_parser('check-bootstrap-run').add_argument('--out', required=True)
     args = p.parse_args(argv)
     env = dict(os.environ)
     try:
@@ -716,6 +967,11 @@ def main(argv=None):
             result = sign(dict(env, ROSE_RETAINED_PROOF=args.proof_file), args.consumer, args.release_dir)
         elif args.command == 'verify':
             result = verify(env, args.consumer, args.release_dir)
+        elif args.command == 'check-bootstrap-run':
+            result = bootstrap_provenance(env)
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, 'w') as f:
+                json.dump(result, f, sort_keys=True)
         elif args.command == 'stage-artifact':
             result = stage_artifact(env, args.consumer, args.release_dir, args.artifact_dir)
         else:
@@ -731,7 +987,8 @@ def main(argv=None):
         if name == 'SetupMissing' and hasattr(error, 'missing'):
             print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
             return 4
-        detail = str(error) if name in ('CheckFailed', 'AdapterFailed', 'PublishError') else name
+        # 'Refused' here is host-sign's own copy of this module (the first-use hook); its messages carry no payload.
+        detail = str(error) if name in ('CheckFailed', 'AdapterFailed', 'PublishError', 'Refused') else name
         print(json.dumps({'verdict': 'FAIL', 'error': detail}), file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))

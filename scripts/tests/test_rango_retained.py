@@ -551,7 +551,10 @@ class FirstUseContract(unittest.TestCase):
         with self.assertRaisesRegex(rr.Refused, 'identity_policy_unselected'):
             rr.preflight(cfg=cfg)
         cfg['signing']['identityPolicy']['firstUse']['selected'] = True
-        self.assertIn('signing.identityPolicy.firstUse (selected contract is not yet wired into signing)', rr.preflight(cfg=cfg))
+        # Selected: no bootstrap receipt and no identity is required before the protected signing derivation.
+        missing = rr.preflight(cfg=cfg)
+        self.assertNotIn('signing.bootstrapReceipt', missing)
+        self.assertFalse([m for m in missing if m.startswith('signing.identityPolicy')])
         cfg['signing']['identityPolicy']['mode'] = 'latest'
         with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
             rr.preflight(cfg=cfg)
@@ -573,18 +576,308 @@ class FirstUseContract(unittest.TestCase):
             with self.assertRaisesRegex(rr.Refused, category):
                 rr.first_use_admission(metadata, self.CONTRACT)
 
-    def test_binding_is_written_once_and_must_match_later(self):
+    def test_record_is_enrolled_once_atomically_and_matched_later(self):
         t = Tmp(self)
         binding = {'versions': {'keys': '1', 'passphrase': '1'}, 'otaCertificateSha256': 'a' * 64, 'avbPublicKeySha256': 'b' * 64,
-            'policy': 'first-use-containers', 'bootstrapRun': '41019390144'}
-        path = t.root/'rango-first-use.json'
-        self.assertEqual(rr.first_use_record(path, binding), 'enrolled')
-        self.assertEqual(rr.first_use_record(path, dict(binding)), 'matched')
-        with self.assertRaisesRegex(rr.Refused, 'identity_conflict'):
-            rr.first_use_record(path, dict(binding, otaCertificateSha256='c' * 64))
-        self.assertEqual(json.loads(path.read_text()), binding)  # never silently overwritten
+            'policy': 'first-use-containers', 'bootstrapRun': '41019390144', 'bootstrapRecipe': 'r' * 40,
+            'enrolledBy': {'runId': '1'}}
+        directory = t.root/'identity'
+        with self.assertRaisesRegex(rr.Refused, 'identity_record_missing'):
+            rr.first_use_record(directory, binding, enroll=False)
+        self.assertEqual(rr.first_use_record(directory, binding, enroll=True), 'enrolled')
+        self.assertEqual(sorted(os.listdir(directory)), ['first-use.json'])  # no partial left behind
+        # A later run's own audit fields never make an unchanged identity fail.
+        self.assertEqual(rr.first_use_record(directory, dict(binding, enrolledBy={'runId': '2'}), enroll=False), 'matched')
+        with self.assertRaisesRegex(rr.Refused, 'identity_already_enrolled'):
+            rr.first_use_record(directory, binding, enroll=True)
+        for change in ({'otaCertificateSha256': 'c' * 64}, {'versions': {'keys': '2', 'passphrase': '1'}}):
+            with self.assertRaisesRegex(rr.Refused, 'identity_conflict'):
+                rr.first_use_record(directory, dict(binding, **change), enroll=False)
+        self.assertEqual(json.loads((directory/'first-use.json').read_text()), binding)  # never overwritten
+        (directory/'first-use.json.partial').write_text('{')
+        with self.assertRaisesRegex(rr.Refused, 'identity_record_partial'):
+            rr.first_use_record(directory, binding, enroll=False)
         with self.assertRaisesRegex(rr.Refused, 'signer_collision'):
-            rr.first_use_record(t.root/'other.json', dict(binding, otaCertificateSha256=FRANKEL['identities']['otaCertificateSha256']))
+            rr.first_use_record(t.root/'other', dict(binding, otaCertificateSha256=FRANKEL['identities']['otaCertificateSha256']),
+                enroll=True)
+        (t.root/'torn').mkdir()
+        (t.root/'torn/first-use.json').write_text('{"policy": "first-use-containers"')
+        with self.assertRaisesRegex(rr.Refused, 'identity_record_partial'):
+            rr.read_record(t.root/'torn')
+
+    def test_guard_provenance_is_a_no_call_in_bootstrap_mode_and_checked_when_selected(self):
+        calls = []
+        saved = rr.RUN_READER[0]
+        rr.RUN_READER[0] = lambda env, run_id: calls.append(run_id) or {'id': int(run_id), 'head_sha': self.CONTRACT['bootstrapRecipe'],
+            'path': '.github/workflows/os-release.yml', 'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'success',
+            'repository': {'full_name': 'Immortal-Protocols/RoseOS-1'}}
+        self.addCleanup(rr.RUN_READER.__setitem__, 0, saved)
+        env = {'GITHUB_RUN_ID': '42', 'GITHUB_REPOSITORY': 'Immortal-Protocols/RoseOS-1'}
+        self.assertEqual(rr.bootstrap_provenance(env, CONFIG), {'policy': 'bootstrap-receipt', 'checked': False, 'consumerRunId': '42'})
+        self.assertEqual(calls, [])
+        cfg = copy.deepcopy(CONFIG)
+        cfg['signing']['identityPolicy']['mode'] = 'first-use-containers'
+        with self.assertRaisesRegex(rr.Refused, 'identity_policy_unselected'):
+            rr.bootstrap_provenance(env, cfg)
+        self.assertEqual(calls, [])
+        cfg['signing']['identityPolicy']['firstUse']['selected'] = True
+        receipt = rr.bootstrap_provenance(env, cfg)
+        self.assertEqual(rr.provenance_receipt({'GITHUB_RUN_ID': '42', 'ROSE_FIRST_USE_PROVENANCE': self.write(receipt)},
+            cfg['signing']['identityPolicy']['firstUse'])['checked'], True)
+        with self.assertRaisesRegex(rr.Refused, 'identity_provenance'):
+            rr.bootstrap_provenance(dict(env, GITHUB_REPOSITORY='fork/RoseOS-1'), cfg)
+
+    def write(self, obj):
+        fd, path = tempfile.mkstemp(suffix='.json')
+        self.addCleanup(os.unlink, path)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(obj, f)
+        return path
+
+    def test_bootstrap_run_provenance(self):
+        run = {'id': 41019390144, 'head_sha': self.CONTRACT['bootstrapRecipe'], 'path': '.github/workflows/os-release.yml',
+            'event': 'workflow_dispatch', 'status': 'completed', 'conclusion': 'success',
+            'repository': {'full_name': 'Immortal-Protocols/RoseOS-1'}}
+        self.assertEqual(rr.check_bootstrap_run(run, self.CONTRACT, 'Immortal-Protocols/RoseOS-1')['runId'], '41019390144')
+        for change in ({'id': 1}, {'head_sha': 'f' * 40}, {'conclusion': 'failure'}, {'path': '.github/workflows/other.yml'},
+                       {'repository': {'full_name': 'fork/RoseOS-1'}}):
+            with self.assertRaisesRegex(rr.Refused, 'identity_provenance'):
+                rr.check_bootstrap_run(dict(run, **change), self.CONTRACT, 'Immortal-Protocols/RoseOS-1')
+
+
+class FirstUseRoute(Route):
+    """An EXPLICITLY SELECTED synthetic first-use policy through the real seams: admission and race recheck in the
+    retained signing route, key validation and identity derivation inside host-sign's hook, the durable record, then
+    release-pipeline verify with that same binding. Metadata, keys and OpenSSL are synthetic; no secret is read."""
+
+    def setUp(self):
+        super().setUp()
+        contract = self.cfg['signing']['identityPolicy']['firstUse']
+        self.cfg['signing']['identityPolicy']['mode'] = 'first-use-containers'
+        contract.update(selected=True, recordDir=str(self.t.root/'identity'))
+        self.cfg['signing']['bootstrapReceipt'] = None
+        self.metadata_calls, self.metadata_override, self.runner_override = [], None, None
+        saved = (rr.METADATA[0], rr.KEY_RUNNER[0])
+        rr.METADATA[0] = self.fake_metadata
+        rr.KEY_RUNNER[0] = self.fake_openssl
+        self.addCleanup(rr.METADATA.__setitem__, 0, saved[0])
+        self.addCleanup(rr.KEY_RUNNER.__setitem__, 0, saved[1])
+        (self.t.root/'provenance.json').write_text(json.dumps({'checked': True, 'consumerRunId': self.env['GITHUB_RUN_ID'],
+            'runId': contract['bootstrapRun'], 'recipe': contract['bootstrapRecipe']}))
+        self.env.update(ROSE_FIRST_USE_PROVENANCE=str(self.t.root/'provenance.json'), ROSE_FIRST_USE_ENROLL='true')
+        self.payload = []
+
+    def fake_metadata(self, project, secret):
+        self.metadata_calls.append(secret)
+        if self.metadata_override:
+            return self.metadata_override(project, secret, len(self.metadata_calls))
+        return [{'name': f'projects/{project}/secrets/{secret}/versions/1', 'state': 'ENABLED', 'createTime': '2026-10-30T07:20:30Z'}]
+
+    def fake_openssl(self, argv):
+        """MOCK OpenSSL: the 'public half' of a synthetic key or certificate is its file stem."""
+        if self.runner_override:
+            return self.runner_override(argv)
+        return b'PUBLIC ' + Path(argv[argv.index('-in') + 1]).name.split('.')[0].encode()
+
+    def signer(self, env):
+        """host-sign's retained seam with its fetch and extraction mocked: the hook runs on a synthetic key set."""
+        config, target, otatools = host_sign.retained_inputs(env, rr)
+        self.signed_with = config['host']['sign']
+        self.payload.append((self.signed_with['secretVersion'], self.signed_with['passphraseSecretVersion']))
+        extracted = Path(tempfile.mkdtemp(prefix='keys-', dir=self.t.root))
+        keys = extracted/'rango'
+        keys.mkdir()
+        for name in rr.profile()['keyInventory']['requiredByConsumer']:
+            (keys/name).write_bytes(b'SYNTHETIC ' + name.encode())
+        shutil.copyfile(self.ident/'releasekey.x509.pem', keys/'releasekey.x509.pem')
+        shutil.copyfile(self.ident/'avb_pkmd.bin', keys/'avb_pkmd.bin')
+        if getattr(self, 'drop_key', None):
+            (keys/self.drop_key).unlink()
+        passfile = self.t.root/'passphrase'
+        passfile.write_text('synthetic\n')
+        config['identities'] = config['deriveIdentities'](extracted, passfile)
+        host_sign.host_secrets.discover_key_directory(extracted, config['identities'])  # the real pin check
+        shutil.rmtree(extracted)
+        out = Path(env['ROSE_RELEASE_DIR'])
+        public = out/'public'
+        public.mkdir()
+        (out/'signed-target_files.zip').write_bytes(b'SYNTHETIC signed ' + target.read_bytes())
+        (public/'rango-ota_update-2026103001.zip').write_bytes(b'SYNTHETIC rango OTA')
+        (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango stable\n")
+        for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):
+            shutil.copyfile(self.ident/name, public/name)
+        (public/'UPDATE.md').write_text('SYNTHETIC notes for rango 2026103001\n')
+        return 0
+
+    def record(self):
+        return json.loads((self.t.root/'identity/first-use.json').read_text())
+
+    def refuse(self, category):
+        # host-sign reports a retained-route refusal raised in its seam as AdapterFailed carrying the same category.
+        with self.assertRaisesRegex((rr.Refused, host_sign.host_secrets.AdapterFailed), category):
+            self.sign()
+        self.assertFalse((self.t.root/'identity/first-use.json').exists())
+
+    def next_run(self, run_id):
+        """A later run: fresh release dir and proof, the same durable record, no enrolment."""
+        shutil.rmtree(self.release)
+        Path(self.env['ROSE_RETAINED_PROOF']).unlink()
+        self.env.update(GITHUB_RUN_ID=run_id, ROSE_FIRST_USE_ENROLL='false')
+        (self.t.root/'provenance.json').write_text(json.dumps(dict(json.loads((self.t.root/'provenance.json').read_text()),
+            consumerRunId=run_id)))
+        self.prove()
+
+    def test_bound_fixture_reaches_the_public_never_latest_release(self):
+        pass  # the bootstrap-receipt fixture's publication case; first-use publication is covered below without publishing
+
+    def refused(self, category):
+        return self.assertRaisesRegex((rr.Refused, host_sign.host_secrets.AdapterFailed), category)
+
+    def test_expected_config_cannot_carry_identities_or_publication(self):
+        self.sign()
+        binding = rr.resolve_binding(self.env, self.cfg)
+        for key, value in (('publication', {}), ('target', {}), ('identities', {'otaCertificateSha256': 'f' * 64})):
+            cfg = copy.deepcopy(self.cfg)
+            cfg['verification']['expected'][key] = value
+            with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
+                rr.pipeline_config(cfg, binding)
+
+    def test_promote_tampering_and_foreign_bindings_never_publish(self):
+        self.sign()
+        rr.verify(self.env, self.consumer, self.release, self.adapter)
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        bindings = json.loads((self.artifact/'rango-bindings.json').read_text())
+        self.assertNotIn('bootstrapReceipt', bindings)
+        self.assertEqual(bindings['firstUseBinding'], {k: self.record()[k] for k in rr.IDENTITY_FIELDS})
+        with self.assertRaisesRegex(rr.Refused, 'latest_refused'):
+            rr.publish(self.artifact, promote=True, adapter=self.adapter, selected=True)
+        for field, value, category in (('otaCertificateSha256', FRANKEL['identities']['otaCertificateSha256'], 'signer_collision'),
+                                       ('bootstrapRun', '1', 'identity'), ('policy', 'bootstrap-receipt', 'identity')):
+            evil = copy.deepcopy(bindings)
+            evil['firstUseBinding'][field] = value
+            (self.artifact/'rango-bindings.json').write_text(json.dumps(evil))
+            with self.assertRaisesRegex(rr.Refused, category):
+                rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        evil = copy.deepcopy(bindings)
+        del evil['firstUseBinding']['versions']
+        (self.artifact/'rango-bindings.json').write_text(json.dumps(evil))
+        with self.assertRaisesRegex(rr.Refused, 'identity_record_partial'):
+            rr.publish(self.artifact, adapter=self.adapter, selected=True)
+        self.assertFalse((self.t.root/'fake/releases').exists())
+
+    def test_selected_first_use_enrols_then_signs_and_verifies_with_the_same_binding(self):
+        published = []
+        saved = self.module.publish
+        self.module.publish = lambda *a, **k: published.append(a)
+        self.addCleanup(setattr, self.module, 'publish', saved)
+        self.sign()
+        self.assertEqual(self.payload, [('1', '1')])  # pinned numeric versions, never latest
+        record = self.record()
+        self.assertEqual((record['policy'], record['versions'], record['otaCertificateSha256'], record['avbPublicKeySha256']),
+            ('first-use-containers', {'keys': '1', 'passphrase': '1'}, self.ota_cert, self.avb))
+        self.assertNotIn('bootstrapReceipt', record)
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+        rr.stage_artifact(self.env, self.consumer, self.release, self.artifact, self.adapter)
+        bindings = json.loads((self.artifact/'rango-bindings.json').read_text())
+        self.assertEqual(sorted(bindings), ['firstUseBinding', 'inputReceipt'])
+        manifest = json.loads((self.artifact/'manifest.json').read_text())
+        self.assertEqual(manifest['identities']['otaCertificateSha256'], self.ota_cert)
+        self.assertEqual(published, [])
+        # A later run matches the record without enrolling again; the record is untouched.
+        before = (self.t.root/'identity/first-use.json').read_bytes()
+        self.next_run('41200000009')
+        self.sign()
+        self.assertEqual((self.t.root/'identity/first-use.json').read_bytes(), before)
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+
+    def test_unselected_policy_makes_no_metadata_or_secret_call(self):
+        self.cfg['signing']['identityPolicy']['firstUse']['selected'] = False
+        with self.assertRaisesRegex(rr.Refused, 'identity_policy_unselected'):
+            self.sign()
+        self.assertEqual((self.metadata_calls, self.payload), ([], []))
+
+    def test_wrong_or_ambiguous_version_metadata_refuses_before_any_payload(self):
+        def rows(*versions):
+            return lambda project, secret, n: [dict({'name': f'projects/{project}/secrets/{secret}/versions/1', 'state': 'ENABLED',
+                'createTime': '2026-10-30T07:20:30Z'}, **v) for v in versions]
+        for override, category in ((rows(), 'identity_versions_ambiguous'), (rows({}, {}), 'identity_versions_ambiguous'),
+                                   (rows({'state': 'DISABLED'}), 'identity_versions_partial'),
+                                   (rows({'state': 'DESTROYED'}), 'identity_versions_partial'),
+                                   (rows({'createTime': '2026-10-30T09:00:00Z'}), 'identity_versions_untimely'),
+                                   (rows({'name': 'projects/other-project/secrets/X/versions/1'}), 'identity_versions_ambiguous'),
+                                   (rows({'name': 'projects/protocols-465723/secrets/PIXEL_OS_SIGNING_KEYS_RANGO_V1/versions/latest'}),
+                                    'identity_versions_ambiguous')):
+            self.metadata_override = override
+            shutil.rmtree(self.release, ignore_errors=True)
+            self.refuse(category)
+            self.assertEqual(self.payload, [])
+
+    def test_metadata_race_refuses(self):
+        def changing(project, secret, n):
+            version = '1' if n <= 2 else '2'
+            return [{'name': f'projects/{project}/secrets/{secret}/versions/{version}', 'state': 'ENABLED',
+                'createTime': '2026-10-30T07:20:30Z'}]
+        self.metadata_override = changing
+        self.refuse('identity_versions_race')
+
+    def test_missing_or_foreign_provenance_refuses(self):
+        self.env['ROSE_FIRST_USE_PROVENANCE'] = str(self.t.root/'absent.json')
+        self.refuse('identity_provenance')
+        shutil.rmtree(self.release, ignore_errors=True)
+        (self.t.root/'provenance.json').write_text(json.dumps({'checked': True, 'consumerRunId': '1', 'runId': '41019390144',
+            'recipe': self.cfg['signing']['identityPolicy']['firstUse']['bootstrapRecipe']}))
+        self.env['ROSE_FIRST_USE_PROVENANCE'] = str(self.t.root/'provenance.json')
+        self.refuse('identity_provenance')
+
+    def test_wrong_passphrase_keypair_or_inventory_refuses_before_any_record(self):
+        def wrong_passphrase(argv):
+            if 'pkey' in argv:
+                raise rr.Refused('identity_keys_invalid: a key does not decrypt with the passphrase or is malformed')
+            return b'PUBLIC x'
+        def wrong_pair(argv):
+            name = Path(argv[argv.index('-in') + 1]).name
+            return b'PUBLIC other' if name == 'platform.pk8' else b'PUBLIC ' + name.split('.')[0].encode()
+        for runner, category in ((wrong_passphrase, 'identity_keys_invalid'), (wrong_pair, 'identity_keys_pair')):
+            self.runner_override = runner
+            shutil.rmtree(self.release, ignore_errors=True)
+            self.refuse(category)
+        self.runner_override, self.drop_key = None, 'media.pk8'
+        shutil.rmtree(self.release, ignore_errors=True)
+        self.refuse('identity_keys_inventory')
+
+    def test_frankel_collision_refuses(self):
+        saved = rr.frankel_identities
+        rr.frankel_identities = lambda: {'otaCertificateSha256': self.ota_cert, 'avbPublicKeySha256': 'f' * 64}
+        self.addCleanup(setattr, rr, 'frankel_identities', saved)
+        self.refuse('signer_collision')
+
+    def test_later_use_refuses_missing_partial_or_conflicting_state(self):
+        self.env['ROSE_FIRST_USE_ENROLL'] = 'false'
+        self.refuse('identity_record_missing')
+        shutil.rmtree(self.release, ignore_errors=True)
+        self.env['ROSE_FIRST_USE_ENROLL'] = 'true'
+        self.sign()
+        self.next_run('41200000010')
+        (self.t.root/'identity/first-use.json.partial').write_text('{')
+        with self.refused('identity_record_partial'):
+            self.sign()
+        (self.t.root/'identity/first-use.json.partial').unlink()
+        shutil.rmtree(self.release, ignore_errors=True)
+        self.metadata_override = lambda project, secret, n: [{'name': f'projects/{project}/secrets/{secret}/versions/3',
+            'state': 'ENABLED', 'createTime': '2026-10-30T07:20:30Z'}]
+        with self.refused('identity_conflict'):
+            self.sign()
+        self.metadata_override = None
+        shutil.rmtree(self.release, ignore_errors=True)
+        record = self.record()
+        (self.t.root/'identity/first-use.json').write_text(json.dumps(dict(record, otaCertificateSha256='c' * 64)))
+        with self.refused('identity_conflict'):
+            self.sign()
+        shutil.rmtree(self.release, ignore_errors=True)
+        (self.t.root/'identity/first-use.json').write_text(json.dumps(record))
+        self.env['ROSE_FIRST_USE_ENROLL'] = 'true'
+        with self.refused('identity_already_enrolled'):
+            self.sign()
 
 
 class FakeClient:
@@ -663,6 +956,19 @@ class Workflow(unittest.TestCase):
         for job in (builder, publisher):
             self.assertNotIn('actions: write', job)
             self.assertNotIn('sign-apk.py', job)
+        # OCT30-INFRA-S017-FIX001: the guard checks bootstrap-run provenance and hands it over in-run; enrolment is a
+        # default-false input refused outside this mode.
+        self.assertIn('      rango_first_use_enroll:\n', WORKFLOW)
+        self.assertIn('        type: boolean\n        default: false\n', WORKFLOW.split('      rango_first_use_enroll:\n', 1)[1][:400])
+        self.assertIn('  ROSE_FIRST_USE_ENROLL: ${{ inputs.rango_first_use_enroll }}\n', WORKFLOW)
+        self.assertIn('[[ "$MODE" == rango-retained || "${ROSE_FIRST_USE_ENROLL:-false}" == false ]]', guard)
+        self.assertLess(guard.index('rango-retained.py preflight --job guard'), guard.index('rango-retained.py check-bootstrap-run --out'))
+        self.assertIn('name: rango-first-use-provenance-${{ github.run_id }}', guard)
+        order = [builder.index(s) for s in ('name: rango-first-use-provenance-${{ github.run_id }}', 'ROSE_FIRST_USE_PROVENANCE=',
+            'actions-gcp-login.py login', 'rango-retained.py sign')]
+        self.assertEqual(order, sorted(order))
+        self.assertNotIn('run-id:', builder)  # same-run provenance only, never another run's artifact
+        self.assertNotIn('actions: read', builder)
         cleanup = re.search(r'    needs: \[([^\]]*)\]', j['cleanup'])[1].split(', ')
         self.assertTrue({'controller', 'rango-builder', 'rango-publisher'} <= set(cleanup))
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", j['cleanup'])

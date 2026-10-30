@@ -149,8 +149,18 @@ The `latest-beta` button and the Frankel modes are unchanged.
   - numeric versions pinned before access;
   - a write-once identity binding that refuses a Frankel collision and must match on every later run.
 
-  It is implemented and tested as a contract. It refuses while unselected, and it is not yet wired into the signing
-  key derivation.
+  It refuses while unselected, before any metadata or secret call. When explicitly selected (OCT30-INFRA-S017-FIX001,
+  connected in source and synthetic tests only; nothing selects it):
+  - the hosted guard checks the bootstrap run (`check-bootstrap-run`) and hands a same-run receipt to the builder,
+    because the builder has no Actions read access; bootstrap-receipt mode records `checked: false` without a call;
+  - `sign` pins both numeric versions and rechecks them under the shared lock; inside host-sign's retained seam the
+    extracted inventory and key pairs are validated with OpenSSL, the OTA/AVB identity is derived, a Frankel
+    collision is refused, the version metadata is rechecked again, and only then is the durable record written;
+  - the record (`firstUse.recordDir/first-use.json`) is written through an exclusive partial file and a hard link,
+    never followed through a symlink, never overwritten. Only `rango_first_use_enroll=true` (default false, refused
+    outside `rango-retained`) creates it. Every other run must match its identity fields. Missing, partial or
+    conflicting state refuses. Per-run audit fields (`enrolledBy`) are excluded from the comparison;
+  - `verify` and the staged `firstUseBinding` use that same record. No bootstrap receipt is fabricated or claimed.
 
 What the source already does:
 - **Input.** The input receipt schema is `roseos.rango-retained-input.v1`. It

@@ -43,7 +43,9 @@
         "bootstrapRun": "41019390144",
         "bootstrapRecipe": "99357a10a2e63021d5df76b962c5aee9e76216d1",
         "windowStart": "2026-10-30T07:20:15Z",
-        "windowEnd": "2026-10-30T07:20:44Z"
+        "windowEnd": "2026-10-30T07:20:44Z",
+        "recordDir": "/home/pixelbuild/rose-actions/rango-identity",
+        "recordBasis": "Durable first-use record on the original builder (first-use.json): written once by an explicit enrolment run (workflow rango_first_use_enroll=true), atomically and never overwritten; every later run must match its identity fields. Missing, partial or conflicting state refuses."
       }
     },
     "toolProof": "OCT30-INFRA-S017: the four Fold tools come from the same-run proof of the admitted S016 helper (os/signing-bootstrap/profiles.json fold-rango-v1.localProof), never from checked-in installed hashes."

@@ -223,6 +223,10 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
             sign.get('passphraseSecretVersion') or sign['secretVersion'], private/'passphrase', gcloud)
         extracted = host_secrets.extract_key_archive(archive, private/'keys')
         archive.unlink()
+        if config.get('deriveIdentities'):
+            # Retained Rango with an explicitly selected first-use policy only (OCT30-INFRA-S017-FIX001): keys are validated
+            # and the public identity derived and durably recorded here, inside this transient workspace, before use.
+            config['identities'] = config['deriveIdentities'](extracted, passphrase)
         key_dir = host_secrets.discover_key_directory(extracted, config['identities'])
         release_keys = releases/f'release-{device}-{build}'/'keys'
         # The wrappers hold no secret, only paths; they live on the task-owned release disk (RAM may be noexec).

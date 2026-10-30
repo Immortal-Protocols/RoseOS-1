@@ -83,6 +83,10 @@ on:
         description: rango-retained only - also publish the verified signed build as a separate public rango-{build} release (never Latest); false signs and verifies only
         type: boolean
         default: false
+      rango_first_use_enroll:
+        description: rango-retained only, and only if os/retained-rango/release.json selects the first-use identity policy (not selected) - this run enrols the durable first-use identity record; false requires an existing matching record
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -109,6 +113,7 @@ env:
   BOOTSTRAP_PROFILE: ${{ inputs.bootstrap_profile || 'none' }}
   MODELS_BOOTSTRAP_RUN: ${{ inputs.models_bootstrap_run }}
   ROSE_RANGO_PUBLISH: ${{ inputs.rango_publish }}
+  ROSE_FIRST_USE_ENROLL: ${{ inputs.rango_first_use_enroll }}
 
 jobs:
   guard:
@@ -151,6 +156,7 @@ jobs:
           [[ "$MODE" == os-release || "$ROSE_DEVICE" == frankel ]]
           # Rango publication is selectable only in its own mode.
           [[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]
+          [[ "$MODE" == rango-retained || "${ROSE_FIRST_USE_ENROLL:-false}" == false ]]
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -178,6 +184,23 @@ jobs:
       - name: Retained Rango preflight
         if: inputs.mode == 'rango-retained'
         run: python3 scripts/rango-retained.py preflight --job guard
+      # OCT30-INFRA-S017-FIX001: the builder has no Actions read access, so the permitted bootstrap run is checked here
+      # (first-use policy selected only; bootstrap-receipt mode records checked=false without any call).
+      - name: Retained Rango bootstrap-run provenance
+        if: inputs.mode == 'rango-retained'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rango-provenance"
+          python3 scripts/rango-retained.py check-bootstrap-run --out "$RUNNER_TEMP/rango-provenance/first-use-provenance.json"
+      - name: Hand the provenance receipt to the Rango builder
+        if: inputs.mode == 'rango-retained'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rango-first-use-provenance-${{ github.run_id }}
+          path: ${{ runner.temp }}/rango-provenance
+          retention-days: 1
+          if-no-files-found: error
       - name: Bootstrap preflight
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
@@ -907,6 +930,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rango-first-use-provenance-${{ github.run_id }}
+          path: ${{ runner.temp }}/rango-provenance
+      - run: echo "ROSE_FIRST_USE_PROVENANCE=$RUNNER_TEMP/rango-provenance/first-use-provenance.json" >> "$GITHUB_ENV"
       - name: Retained input, signer, tool and publication bindings (before any login)
         run: python3 scripts/rango-retained.py preflight --job builder
       - name: Stage the retained input into a fresh consumer directory
