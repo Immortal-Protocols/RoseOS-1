@@ -20,8 +20,16 @@ check their entry and time caps before each entry and report a stop as incomplet
            usage; reads vendor/adevtool and vendor/state HEADs against the contract pins; hashes the contract-required
            product files, generated vendor/google_devices/<device> files and the lunch-chain files (compared, never run;
            presence is not completeness); records factory-image presence separately from a checksum validated within
-           budget. Writes one sanitized receipt and SHA256SUMS to --evidence-dir
+           budget. Observes the fixed public signing-tool readset (OCT30-INFRA-S011, below). Writes one sanitized
+           receipt, an allowlisted signing-tools.json and SHA256SUMS to --evidence-dir, and the signing-tool table to
+           the Actions job summary
   cleanup  --run-id, --run-attempt: removes only this attempt's task root, and only when its ownership marker matches
+Signing tools (OCT30-INFRA-S011): exactly four public executables are opened with the same no-follow and secret-path
+refusal and hashed within a byte and time bound - make_key, script/decrypt-keys and jdk21 keytool under the source
+root, and /usr/bin/openssl. Only the presence of external/avb/avb_openssl beside avbtool is recorded (avbtool runs it
+instead of PATH openssl when present). Nothing is executed, searched for on PATH or read from a key or secret location.
+The trusted runtime wrapper scripts/host-decrypt-keys.py is hashed from the checked-out recipe and kept separate from
+the source helper. These are receipt-time observations; a later run must revalidate them before use.
 Exit status: 0 inspected (PARTIAL, metadata only), 1 check failed or refused, 2 invalid input, 4 setup missing.
 """
 import argparse
@@ -85,6 +93,22 @@ ADEVTOOL_REVISION = EXPECTED_PINS['vendor/adevtool'] + '\n'
 HOST_TOOLS = ('aapt2', 'apksigner', 'aprotoc', 'arsclib', 'debugfs', 'dispol', 'fsck.erofs', 'lpdump', 'lpunpack', 'lz4',
     'ota_extractor', 'simg2img', 'sqlite3', 'toybox')
 PREREQUISITE_DIRS = ('vendor/adevtool/node_modules', 'prebuilts/build-tools/path/linux-x86', 'prebuilts/jdk/jdk21/linux-x86/bin')
+# OCT30-INFRA-S011: the fixed signing-tool readset. (root, relative path); nothing else is ever opened for it.
+SIGNING_TOOLS = {'make_key': ('source', 'development/tools/make_key'), 'decrypt-keys': ('source', 'script/decrypt-keys'),
+    'keytool': ('source', 'prebuilts/jdk/jdk21/linux-x86/bin/keytool'), 'openssl': ('system', 'usr/bin/openssl')}
+AVB_OPENSSL = 'external/avb/avb_openssl'
+SIGNING_TOOL_BYTES = 64 << 20
+SIGNING_TOOL_SECONDS = 30
+# Public verification.json of the published 2026102901 release (asset sha256 below), observed on the original builder.
+PUBLIC_2901 = {'source': 'public frankel 2026102901 verification.json',
+    'assetSha256': '0c65767734ae68bff03ccbfd32cbf49387146ae7a82150a01b07b8d36e124e32',
+    'tools': {'avbtool': {'path': '/home/pixelbuild/grapheneos-2026100600/external/avb/avbtool.py',
+                          'sha256': '1aa6f2b462aa67aa3fdf488bee83ab517de8ad9d8228c7b45c35267ab2cf6781'},
+              'apksigner': {'path': '/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner',
+                            'sha256': 'e709257e0d955c26a41356985ae1624615116b77cebe0344aa0d9e3263475e5c'},
+              'aapt': {'path': '/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt',
+                       'sha256': '6e43aa75c63424213fb9131874cacc5eefd5f0a2f4e9e23453e43fca512352f8'}},
+    'note': 'receipt-time observations from that release; reused, not re-observed here; execution must revalidate'}
 RESERVE_FLOOR_BYTES = 322122547200  # availableBytes - peakAdditionalAllocation must stay at or above this per filesystem
 SAFE_VALUE = re.compile(r'[A-Za-z0-9_.,:/+=@-]{0,256}')
 SECRETISH = re.compile(r'(?i)(token|secret|passw|private|credential|authoriz|bearer|api[_-]?key|BEGIN [A-Z ]*KEY)')
@@ -522,6 +546,8 @@ class Host:
         self.runner = subprocess.run
         self.clock = time.monotonic
         self.mounts = '/proc/mounts'
+        self.system_root = Path('/')
+        self.step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
         self.head = lambda: subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
 
     @classmethod
@@ -601,6 +627,86 @@ def inspect(host, receipt, deadline, targets):
             seconds = deadline.budget(LIMITS['hashSeconds'])
             digest = hash_within(root, record['path'], seconds, host.clock) if seconds >= 1 else None
             record['checksum'] = 'unavailable' if digest is None else 'validated' if digest == record['expectedSha256'] else 'mismatch'
+    receipt['signingTools'] = signing_tools(host, deadline)
+
+def tool_record(root, rel, deadline_seconds, clock=time.monotonic):
+    """One fixed public executable: no-follow open (open_under), regular file, bounded size, sha256 within a time bound."""
+    record = {'path': str(Path(root)/rel)}
+    try:
+        fd, status = open_under(root, rel)
+    except OSError as error:
+        fd, status = None, f'unreadable ({errno.errorcode.get(error.errno, error.errno)})'
+    record['status'] = status
+    if fd is None:
+        return record
+    with os.fdopen(fd, 'rb') as f:
+        info = os.fstat(f.fileno())
+        record.update(sizeBytes=info.st_size, executable=bool(info.st_mode & 0o111))
+        if info.st_size > SIGNING_TOOL_BYTES:
+            record['status'] = 'too-large-not-hashed'
+            return record
+        digest, end, total = hashlib.sha256(), clock() + deadline_seconds, 0
+        for block in iter(lambda: f.read(1 << 20), b''):
+            total += len(block)
+            if clock() > end or total > SIGNING_TOOL_BYTES:
+                record['status'] = 'hash-unavailable'
+                return record
+            digest.update(block)
+    record['sha256'] = digest.hexdigest()
+    return record
+
+def signing_tools(host, deadline):
+    """The fixed signing-tool observation. Never executes, searches PATH or opens anything outside SIGNING_TOOLS."""
+    roots = {'source': host.source_root, 'system': host.system_root}
+    tools = {name: tool_record(roots[where], rel, deadline.budget(SIGNING_TOOL_SECONDS), host.clock)
+        for name, (where, rel) in SIGNING_TOOLS.items()}
+    try:
+        avb = open_under_status(host.source_root, AVB_OPENSSL)
+    except OSError as error:
+        avb = f'unreadable ({errno.errorcode.get(error.errno, error.errno)})'
+    wrapper = ROOT/'scripts/host-decrypt-keys.py'
+    return {'tools': tools,
+        'avbOpenssl': {'path': str(Path(host.source_root)/AVB_OPENSSL), 'status': presence(avb) if avb in ('present', 'missing') else avb,
+            'effect': 'avbtool would run this instead of PATH openssl' if avb == 'present' else
+                'avbtool would use openssl from PATH' if avb == 'missing' else 'unknown: not a plain present/missing entry',
+            'note': 'presence only; never executed or hashed'},
+        'decryptKeysRuntimeWrapper': {'path': 'scripts/host-decrypt-keys.py', 'sha256': sha256_file(wrapper),
+            'note': 'the trusted runtime wrapper from the checked-out recipe; distinct from the script/decrypt-keys source helper'},
+        'reusedPublic2901': PUBLIC_2901,
+        'note': 'metadata only: nothing executed; receipt-time observations that a later run must revalidate'}
+
+SIGNING_RECEIPT_KEYS = ('receiptType', 'schemaVersion', 'attempt', 'recipeSha', 'at', 'status', 'tools', 'avbOpenssl',
+    'decryptKeysRuntimeWrapper', 'reusedPublic2901', 'note')
+TOOL_FIELDS = ('path', 'status', 'sizeBytes', 'executable', 'sha256')
+
+def signing_receipt(receipt):
+    """The dedicated allowlisted signing-tool receipt: only fixed fields, safe values, no other inspection data."""
+    observed = receipt.get('signingTools')
+    out = {'receiptType': 'device-readiness-signing-tools', 'schemaVersion': 1, 'attempt': receipt.get('attempt'),
+        'recipeSha': receipt.get('recipeSha'), 'at': receipt.get('at'),
+        'status': 'observed' if observed else 'not-observed (' + (receipt.get('refusal') or 'inspection incomplete') + ')'}
+    if observed:
+        out['tools'] = {name: {k: v for k, v in record.items() if k in TOOL_FIELDS} for name, record in observed['tools'].items()}
+        for key in ('avbOpenssl', 'decryptKeysRuntimeWrapper', 'reusedPublic2901', 'note'):
+            out[key] = observed[key]
+    text = json.dumps(out, sort_keys=True)
+    if SECRETISH.search(text.replace('decrypt-keys', '').replace('decryptKeys', '').replace('host-decrypt-keys', '')):
+        raise CheckFailed('signing-tool receipt would contain secret-like text')
+    return {k: out[k] for k in SIGNING_RECEIPT_KEYS if k in out}
+
+def signing_summary(signing):
+    lines = ['### Signing-tool observation (metadata only, nothing executed)', '',
+        f'attempt `{signing.get("attempt")}`, recipe `{signing.get("recipeSha")}`, status **{signing["status"]}**', '']
+    if 'tools' in signing:
+        lines += ['| tool | path | status | bytes | executable | sha256 |', '| --- | --- | --- | --- | --- | --- |']
+        for name, r in signing['tools'].items():
+            lines.append(f'| {name} | `{r["path"]}` | {r["status"]} | {r.get("sizeBytes", "")} | {r.get("executable", "")} | '
+                f'`{r.get("sha256", "")}` |')
+        lines += ['', f'avb_openssl: {signing["avbOpenssl"]["status"]} ({signing["avbOpenssl"]["effect"]})',
+            f'host-decrypt-keys.py wrapper sha256: `{signing["decryptKeysRuntimeWrapper"]["sha256"]}`',
+            f'reused public 2901 ({signing["reusedPublic2901"]["assetSha256"]}): ' + ', '.join(
+                f'{t} `{v["sha256"]}`' for t, v in signing['reusedPublic2901']['tools'].items())]
+    return '\n'.join(lines) + '\n'
 
 def run(host, run_id, run_attempt, recipe_sha, evidence_dir):
     attempt = attempt_id(run_id, run_attempt)
@@ -655,7 +761,15 @@ def run(host, run_id, run_attempt, recipe_sha, evidence_dir):
         with open(evidence_dir/'device-readiness.json', 'x') as f:
             json.dump(receipt, f, indent=2, sort_keys=True)
             f.write('\n')
-        (evidence_dir/'SHA256SUMS').write_text(f'{sha256_file(evidence_dir/"device-readiness.json")}  device-readiness.json\n')
+        signing = signing_receipt(receipt)
+        with open(evidence_dir/'signing-tools.json', 'x') as f:
+            json.dump(signing, f, indent=2, sort_keys=True)
+            f.write('\n')
+        (evidence_dir/'SHA256SUMS').write_text(f'{sha256_file(evidence_dir/"device-readiness.json")}  device-readiness.json\n'
+            f'{sha256_file(evidence_dir/"signing-tools.json")}  signing-tools.json\n')
+        if host.step_summary:
+            with open(host.step_summary, 'a') as f:
+                f.write(signing_summary(signing))
     return receipt
 
 def cleanup(host, run_id, run_attempt):
