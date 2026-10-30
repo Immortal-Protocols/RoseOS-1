@@ -34,7 +34,10 @@ final class TrayMaterial {
   * rim and a dark lower rim. The drop shadow is the view's elevation, cast from this outline.
   */
  static final class Tray extends Drawable {
-  static final int[] METAL = {0xfff6f7f9, 0xffe3e7eb, 0xffcfd5db, 0xffe8ebee};
+  /** The metal as the prototype renders it, not its raw CSS stops (#f6f7f9, #e3e7eb, #cfd5db, #e8ebee): its
+   * overlay-blended brush lightens the bar, so these are measured down the tray outside the specular band in the
+   * pinned prototype's own output (Chromium, 3x DPR) and checked against host-rendered native output. */
+  static final int[] METAL = {0xfff6f7f9, 0xffe7eaee, 0xffdbe0e5, 0xffe8ebee};
   static final float[] METAL_STOPS = {0f, .38f, .62f, 1f};
   static final int[] SPECULAR = {0x00ffffff, 0x8cffffff, 0x00ffffff};
   static final float[] SPECULAR_STOPS = {.28f, .44f, .60f};
@@ -57,6 +60,9 @@ final class TrayMaterial {
    grain.setShader(new BitmapShader(grainTile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT));
   }
 
+  /** Grain alpha per shade step (shades -8..8): matched against the prototype's tray in host-rendered native output,
+   * where 3 drew the metal about 7 levels darker and twice as noisy as the reference. */
+  static final int GRAIN = 1;
   /** A 180 x 7dp tile of horizontal hairlines, light and dark by a fixed seed (CSS background-size 180px 7px). */
   static Bitmap grain(float density) {
    int w = Math.max(1, Math.round(180 * density)), h = Math.max(1, Math.round(7 * density));
@@ -67,7 +73,7 @@ final class TrayMaterial {
    for (int y = 0; y < h; y++) for (int x = 0; x < w; ) {
     seed = seed * 6364136223846793005L + 1442695040888963407L;
     int run = 6 + (int) ((seed >>> 33) % 40), shade = (int) ((seed >>> 20) % 17) - 8;
-    line.setColor(shade >= 0 ? (shade * 3) << 24 | 0xffffff : (-shade * 3) << 24 | 0x3c4b5f);
+    line.setColor(shade >= 0 ? (shade * GRAIN) << 24 | 0xffffff : (-shade * GRAIN) << 24 | 0x3c4b5f);
     canvas.drawRect(x, y, Math.min(w, x + run), y + 1, line);
     x += run;
    }
@@ -121,6 +127,7 @@ final class TrayMaterial {
     sheen = new Paint(Paint.ANTI_ALIAS_FLAG), pressedShade = new Paint(Paint.ANTI_ALIAS_FLAG),
     line = new Paint(Paint.ANTI_ALIAS_FLAG), fill = new Paint(Paint.ANTI_ALIAS_FLAG);
   final RectF lens = new RectF(), shine = new RectF(), ring = new RectF();
+  final android.graphics.Path lensPath = new android.graphics.Path();
   boolean pressed;
 
   Well(float density) {
@@ -133,6 +140,8 @@ final class TrayMaterial {
    lens.set(bounds);
    lens.inset(pocket, pocket);
    float w = lens.width(), h = lens.height();
+   lensPath.reset();
+   lensPath.addRoundRect(lens, h / 2, h / 2, android.graphics.Path.Direction.CW);
    RadialGradient light = new RadialGradient(0, 0, 1, GLASS, GLASS_STOPS, Shader.TileMode.CLAMP);
    Matrix ellipse = new Matrix();
    ellipse.setScale(1.1f * w, .8f * h);
@@ -148,7 +157,10 @@ final class TrayMaterial {
   @Override public void draw(Canvas canvas) {
    if (lens.isEmpty()) return;
    float r = lens.height() / 2, one = Math.max(1f, density);
-   // The pocket, outermost first: the lower lip, the outer line, the collar, then the lens edge.
+   // The pocket, outermost first: the lower lip, the outer line, the collar, then the lens edge. Like CSS box-shadow
+   // spreads, they paint only outside the lens, so the translucent glass shows the metal, not the pocket fills.
+   int save = canvas.save();
+   canvas.clipOutPath(lensPath);
    fill.setColor(LIP);
    ring.set(lens.left - pocket, lens.top - pocket + one, lens.right + pocket, lens.bottom + pocket);
    canvas.drawRoundRect(ring, r + pocket, r + pocket, fill);
@@ -163,6 +175,7 @@ final class TrayMaterial {
    ring.set(lens);
    ring.inset(-one, -one);
    canvas.drawRoundRect(ring, r + one, r + one, fill);
+   canvas.restoreToCount(save);
    // The glass.
    canvas.drawRoundRect(lens, r, r, glass);
    canvas.drawRoundRect(lens, r, r, shade);

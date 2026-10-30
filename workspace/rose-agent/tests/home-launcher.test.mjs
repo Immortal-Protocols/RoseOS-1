@@ -310,9 +310,14 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
  for(const [name,a,rgb] of [['INNER_EDGE',.65,'ffffff'],['LOWER_SHADE',.22,'465c7d'],['SHEEN',.85,'ffffff'],['PRESSED_SHADE',.3,'3c506e'],
    ['POCKET_EDGE',.42,'5f738e'],['COLLAR',.9,'c6ced7'],['COLLAR_LINE',.35,'78879b'],['LIP',.75,'ffffff'],['LOWER_RIM',.28,'3c4b5f']])
   assert.ok(material.includes(`${name} = ${argb(a,rgb)}`),name);
- assert.match(material,/METAL = \{0xfff6f7f9, 0xffe3e7eb, 0xffcfd5db, 0xffe8ebee\};/);assert.match(material,/METAL_STOPS = \{0f, \.38f, \.62f, 1f\};/);
+ // The tray metal is the prototype's rendered output (its overlay brush lightens the CSS stops), measured and checked
+ // in host-rendered native output (M003); the grain is weak enough not to darken it.
+ assert.match(material,/METAL = \{0xfff6f7f9, 0xffe7eaee, 0xffdbe0e5, 0xffe8ebee\};/);assert.match(material,/static final int GRAIN = 1;/);assert.match(material,/METAL_STOPS = \{0f, \.38f, \.62f, 1f\};/);
  assert.ok(material.includes(`SPECULAR = {0x00ffffff, ${argb(.55,'ffffff')}, 0x00ffffff}`));assert.match(material,/SPECULAR_STOPS = \{\.28f, \.44f, \.60f\};/);
  assert.match(material,/POCKET_DP = 5;/);assert.match(material,/RADIUS_DP = 22;/);
+ // The pocket paints only outside the lens (CSS box-shadow spreads): host-rendered native output showed the dark
+ // pocket fills through the translucent glass, 36-49 levels darker than the reference, until they were clipped out.
+ assert.match(material,/int save = canvas\.save\(\);\s*canvas\.clipOutPath\(lensPath\);[\s\S]*?canvas\.restoreToCount\(save\);\s*\/\/ The glass\./);
  // The pressed glass follows the real pressed state; the drawables are decorative (no listeners, text or names).
  assert.match(material,/if \(s == android\.R\.attr\.state_pressed\) now = true;/);
  assert.ok(!/setOnClickListener|setContentDescription|drawText/.test(material));
