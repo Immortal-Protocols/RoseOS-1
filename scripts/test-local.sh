@@ -47,6 +47,7 @@ python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
+python3 os/tests/persistent-app-experiment/test_setup_emulator.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
