@@ -26,7 +26,9 @@ ubuntu-24.04 job, 30 minutes, `contents: read`. It uploads `results.json` and sm
 - a staged same-version reinstall through `scripts/systemui-component-update.py`;
 - that tool's recovery to the image copy.
 
-These stages need only a booted emulator, not the fixture seeding. The workflow does not pass `--systemui`.
+These stages need only a booted emulator, not the fixture seeding. The workflow passes `--systemui` only when its manual
+`systemui` input is true (default false). `report.py` then writes each stage's result and reason (bounded), the
+emulator setup outcome and the cleanup check to the job summary and annotations.
 
 ## What the run does not do
 

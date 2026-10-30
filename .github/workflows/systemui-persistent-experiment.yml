@@ -1,11 +1,18 @@
 name: SystemUI persistent-app experiment
 
 # OS-COMPONENT-EXP-004: manual-only, disposable emulator experiment with a synthetic persistent fixture
-# (os/tests/persistent-app-experiment); EXP005-F1 installs the SDK emulator package first when the image lacks it. It does not touch SystemUI, a phone, a builder or a release. The fixture is
-# signed with one job-local test key created in RUNNER_TEMP and removed at the end. No licence is accepted and no host
-# ACL, SELinux or verity setting is changed: unavailable prerequisites are recorded as such.
+# (os/tests/persistent-app-experiment). EXP005-F1 installs the SDK emulator package first when the image lacks it.
+# EXP006: only with the manual systemui input (default false) does it also run the image's own SystemUI stages, and
+# report.py writes a bounded stage and cleanup summary. It never touches a phone, a builder or a release. The fixture
+# is signed with one job-local test key created in RUNNER_TEMP and removed at the end. No licence is accepted and no
+# host ACL, SELinux or verity setting is changed: unavailable prerequisites are recorded as such.
 on:
   workflow_dispatch:
+    inputs:
+      systemui:
+        description: 'Also run the opt-in SystemUI stages on the emulator image (EXP006)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,15 +33,23 @@ jobs:
         run: |
           python3 os/tests/persistent-app-experiment/test_experiment.py -v
           python3 os/tests/persistent-app-experiment/test_setup_emulator.py -v
+          python3 os/tests/persistent-app-experiment/test_report.py -v
       - name: Build v1 and v2 (job-local test key)
         run: python3 os/tests/persistent-app-experiment/experiment.py build --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx"
       - name: SDK emulator package (installed sdkmanager, already accepted licences only)
         # EXP005-F1: the runner image lacks emulator/emulator. stdin is closed, so no licence is answered; an
         # unavailable result is recorded and the experiment's environment stage still reports it.
+        id: setup
         continue-on-error: true
         run: python3 os/tests/persistent-app-experiment/setup_emulator.py --sdk "$ANDROID_HOME" --record "$RUNNER_TEMP/pfx-evidence/emulator-setup.json"
       - name: Run the experiment
-        run: python3 os/tests/persistent-app-experiment/experiment.py run --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx" --evidence "$RUNNER_TEMP/pfx-evidence"
+        id: run
+        env:
+          SYSTEMUI: ${{ inputs.systemui }}
+        run: |
+          flag=()
+          if [ "$SYSTEMUI" = "true" ]; then flag=(--systemui); fi
+          python3 os/tests/persistent-app-experiment/experiment.py run --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx" --evidence "$RUNNER_TEMP/pfx-evidence" "${flag[@]}"
       - name: Evidence (allowlist only)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -46,7 +61,16 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       - name: Remove the test key and AVD
+        id: cleanup
         if: always()
         run: |
           "$ANDROID_HOME/platform-tools/adb" -s emulator-5580 emu kill 2>/dev/null || true
           rm -rf "$RUNNER_TEMP/pfx/test-only.keystore" "$RUNNER_TEMP/pfx/avd" "$RUNNER_TEMP/pfx/emulator-home"
+      - name: Stage and cleanup summary (bounded, non-secret)
+        if: always()
+        env:
+          SYSTEMUI: ${{ inputs.systemui }}
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: python3 os/tests/persistent-app-experiment/report.py --evidence "$RUNNER_TEMP/pfx-evidence" --work "$RUNNER_TEMP/pfx" --summary "$GITHUB_STEP_SUMMARY"
