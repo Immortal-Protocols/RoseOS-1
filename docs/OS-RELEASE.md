@@ -1386,9 +1386,14 @@ proof:
 
 The helper is loaded only when its git blob equals `localProof.admittedBlob`, which is pinned to an exact tested
 merge (`admittedRevision`). The custom-crypto PR #190 blob is listed in `localProof.excluded` and refused even if
-admitted. Both admission values and `localProof.spec` stay null until the Product's corrected official managed-host
-verifier helper is merged and tested. Until then, readiness refuses with `proof-helper-excluded` or
-`proof-helper-unadmitted`.
+admitted. The admitted helper is Fold #191, the Product's minimal managed-host helper, merged as `b4e317ad` with blob
+`66f52b19`. Its suite (`scripts/tests/test_fold_tool_proof.py`) runs in Release verification. Any other helper bytes
+refuse with `proof-helper-mismatch`. `localProof.spec` (`roseos.fold-tool-proof-spec.v2`) names each script's root in
+the original builder tree; the helper checks the bytes there against the pinned blobs.
+
+The OpenSSL trust basis is the managed host's own package manager identity and integrity (`managed-host-package`). It
+is not an independent signed-package attestation; the proof says so and names the inputs such an attestation would
+need.
 
 The builder image lineage (`debian-cloud/debian-12-bookworm-v20261014`, source image `3188631002576736407`) is
 recorded as context only. The proof observes the actual guest OS and packages.

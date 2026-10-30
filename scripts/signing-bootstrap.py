@@ -887,6 +887,8 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
         for code, detail in reasons:
             receipt['reasons'].append({'code': code, 'detail': detail})
         return receipt, private
+    if profile.get('localProof') and not isinstance(proof, dict):
+        return stop('proof-missing', 'no same-run local tool proof; nothing is locked, read or created')
     journal = Path(state_dir)/f'{name}.json'
     if journal.exists() or journal.is_symlink():
         try:

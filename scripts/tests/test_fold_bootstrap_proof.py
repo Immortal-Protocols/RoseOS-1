@@ -123,19 +123,32 @@ class Harness:
 
 
 class Admission(unittest.TestCase):
-    def test_checked_in_profile_refuses_the_excluded_pr190_helper(self):
+    def test_checked_in_profile_admits_only_the_corrected_helper(self):
         local = PROFILES['profiles']['fold-rango-v1']['localProof']
-        self.assertEqual((local['helper'], local['admittedRevision'], local['admittedBlob'], local['spec']),
-            ('scripts/fold_tool_proof.py', None, None, None))
+        self.assertEqual((local['helper'], local['admittedRevision'], local['admittedBlob']),
+            ('scripts/fold_tool_proof.py', 'b4e317ad6af4a719ffa41f9deffe70f3e1d298af', '66f52b19408e50aa8520fc9b6ae1b9f72c7bfb46'))
         self.assertEqual(local['excluded'][0]['revision'], '97b23c30b0898aacb563ed7567671adf340917c0')
-        reasons = sb.readiness('fold-rango-v1', PROFILES, NOW)
-        if blob(ROOT/'scripts/fold_tool_proof.py') == local['excluded'][0]['gitBlob']:
-            self.assertEqual([c for c, _ in reasons], ['proof-helper-excluded'])
-        else:  # once the corrected helper replaces it on main, it is still unadmitted until pinned here
-            self.assertEqual([c for c, _ in reasons], ['proof-helper-unadmitted'])
+        self.assertNotEqual(local['admittedBlob'], local['excluded'][0]['gitBlob'])
+        self.assertEqual(blob(ROOT/'scripts/fold_tool_proof.py'), local['admittedBlob'])  # main carries the admitted bytes
+        self.assertEqual(sb.readiness('fold-rango-v1', PROFILES, NOW), [])
+        helper, _ = sb.load_proof_helper(PROFILES['profiles']['fold-rango-v1'])
+        self.assertEqual(helper.validate_spec(local['spec']), [])
+        # On this runner the builder tree is absent: the real helper refuses with a fixed code and nothing is bound.
         h = Harness(self)
-        self.assertEqual(sb.prove('fold-rango-v1', PROFILES, h.env, SHA, h.proof_dir, h.fixture.lock, now=NOW)[0], 'blocked')
+        status, codes = sb.prove('fold-rango-v1', PROFILES, h.env, SHA, h.proof_dir, h.fixture.lock, now=NOW)
+        self.assertEqual(status, 'refused')
+        self.assertTrue(codes and all(re.fullmatch(r'[a-z][a-z0-9_-]*', c) for c in codes), codes)
         self.assertFalse(h.proof_dir.exists())
+
+    def test_the_excluded_pr190_helper_bytes_refuse(self):
+        h = Harness(self)
+        local = h.profiles['profiles']['fold-rango-v1']['localProof']
+        pr190 = h.tmp/'pr190_fold_tool_proof.py'
+        pr190.write_bytes(__import__('subprocess').run(['git', '-C', str(ROOT), 'show',
+            '97b23c30b0898aacb563ed7567671adf340917c0:scripts/fold_tool_proof.py'], capture_output=True, check=True).stdout)
+        local.update(helper=str(pr190), admittedBlob=blob(pr190))
+        self.assertEqual(blob(pr190), PROFILES['profiles']['fold-rango-v1']['localProof']['excluded'][0]['gitBlob'])
+        self.assertEqual([c for c, _ in sb.readiness('fold-rango-v1', h.profiles, NOW)], ['proof-helper-excluded'])
 
     def test_excluded_blob_refuses_even_if_admitted(self):
         h = Harness(self)

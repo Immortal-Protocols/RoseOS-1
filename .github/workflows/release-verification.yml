@@ -74,6 +74,8 @@ on:
       - 'scripts/signing-bootstrap.py'
       - 'scripts/tests/test_signing_bootstrap.py'
       - 'scripts/tests/test_fold_bootstrap_proof.py'
+      - 'scripts/fold_tool_proof.py'
+      - 'scripts/tests/test_fold_tool_proof.py'
       - 'scripts/tests/test_models_signing_bootstrap.py'
       - 'scripts/host-models-sign.py'
       - 'scripts/models-input-ingress.py'
@@ -158,6 +160,8 @@ on:
       - 'scripts/signing-bootstrap.py'
       - 'scripts/tests/test_signing_bootstrap.py'
       - 'scripts/tests/test_fold_bootstrap_proof.py'
+      - 'scripts/fold_tool_proof.py'
+      - 'scripts/tests/test_fold_tool_proof.py'
       - 'scripts/tests/test_models_signing_bootstrap.py'
       - 'scripts/host-models-sign.py'
       - 'scripts/models-input-ingress.py'
@@ -217,6 +221,7 @@ jobs:
           python3 scripts/tests/test_blazer_preparation_preflight.py
           python3 scripts/tests/test_signing_bootstrap.py
           python3 scripts/tests/test_fold_bootstrap_proof.py
+          python3 scripts/tests/test_fold_tool_proof.py
           python3 scripts/tests/test_models_signing_bootstrap.py
           python3 scripts/tests/test_models_apk_signing.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs

@@ -537,9 +537,9 @@
       },
       "localProof": {
         "helper": "scripts/fold_tool_proof.py",
-        "admittedRevision": null,
-        "admittedBlob": null,
-        "admissionBasis": "OCT30-INFRA-S016: unbound until the Models Product's corrected official managed-host verifier helper (validate_spec, verify_local, recheck) is merged and tested; its exact merge commit and the helper's git blob are then pinned here. Checking out main is not admission.",
+        "admittedRevision": "b4e317ad6af4a719ffa41f9deffe70f3e1d298af",
+        "admittedBlob": "66f52b19408e50aa8520fc9b6ae1b9f72c7bfb46",
+        "admissionBasis": "OCT30-INFRA-S016: Fold #191 (FOLD-TOOL-PROOF-001 correction), the Models Product's minimal managed-host helper (pinned script bytes, fixed PATH resolution, host package manager identity and integrity; no custom cryptography), merged as b4e317ad. Its test suite runs in Release verification from this change; any other helper bytes refuse.",
         "excluded": [
           {
             "pr": 190,
@@ -548,8 +548,22 @@
             "basis": "Chief scope correction: the custom-crypto (pure-Python OpenPGP/RSA, ELF closure) helper is not an admitted Fold proof regardless of main ancestry or green CI"
           }
         ],
-        "spec": null,
-        "specBasis": "Unbound: the source trust spec in the corrected helper's validate_spec contract (the four fixed tools with their pinned source identities above, the fixed managed-host OpenSSL package and the official verifier). Observation-only installed fields are never needed here.",
+        "spec": {
+          "schema": "roseos.fold-tool-proof-spec.v2",
+          "profile": "fold-rango-v1",
+          "scripts": {
+            "generator": {
+              "root": "/home/pixelbuild/grapheneos-2026100600/development"
+            },
+            "decrypt-keys": {
+              "root": "/home/pixelbuild/grapheneos-2026100600/script"
+            },
+            "avbtool": {
+              "root": "/home/pixelbuild/grapheneos-2026100600/external/avb"
+            }
+          }
+        },
+        "specBasis": "The original builder source tree (os/release-pipeline/frankel.json host.sourceRoot) at each script's pinned project path (development, script, external/avb); verify_local checks the bytes there against the pinned git blob and sha256 above, so a wrong root refuses.",
         "hostImage": {
           "family": "debian-12-bookworm",
           "image": "debian-cloud/debian-12-bookworm-v20261014",
