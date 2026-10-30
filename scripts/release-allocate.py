@@ -255,13 +255,28 @@ def check_allocation(allocation):
 
 # ---------------------------------------------------------------- deterministic candidate commit
 
+def notes_path(allocation, repo=ROOT):
+    """Where the signing stage reads this build's update notes: the source pipeline's host.sign.updateNotes template."""
+    pipeline = json.loads(show(repo, allocation['sourceSha'], PIPELINE_CONFIG))
+    template = pipeline.get('host', {}).get('sign', {}).get('updateNotes')
+    if not isinstance(template, str):
+        raise Refused('config_invalid: the normal button needs a host.sign.updateNotes path template')
+    path = template.format(device=allocation['device'], build=allocation['build'])
+    if not re.fullmatch(r'os/release-notes/[\w.-]+\.md', path):
+        raise Refused(f'config_invalid: {path} is not an os/release-notes/*.md path')
+    return path
+
+
 def derive(allocation, repo=ROOT):
-    """source + exactly the allocation's manifest delta, as a commit with a fixed identity and dates: the same allocation
-    always yields the same SHA. Created only in local objects; no ref moves and nothing is pushed."""
+    """source + exactly the allocation's manifest delta + this build's generated notes (notes(), at notes_path()), as a
+    commit with a fixed identity and dates: the same allocation always yields the same SHA. The signing stage reads the
+    notes from the candidate, so every candidate, unchanged main included, is a derived commit. Created only in local
+    objects; no ref moves and nothing is pushed."""
     check_allocation(allocation)
     source = allocation['sourceSha']
-    if not allocation['delta']:
-        return source
+    path = notes_path(allocation, repo)
+    if git(repo, 'ls-tree', source, '--', path).strip():
+        raise Refused(f'notes_exist: the source already has {path}; a fresh build never reuses committed notes')
     with tempfile.TemporaryDirectory(prefix='rose-alloc-') as tmp:
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp)/'index'), **IDENTITY,
             GIT_AUTHOR_DATE=f'{allocation["buildTimestamp"]} +0000', GIT_COMMITTER_DATE=f'{allocation["buildTimestamp"]} +0000')
@@ -277,22 +292,26 @@ def derive(allocation, repo=ROOT):
             blob = git(repo, 'hash-object', '-w', '--stdin', data=after, env=env).decode().strip()
             mode = git(repo, 'ls-tree', source, '--', edit['path']).decode().split()[0]
             git(repo, 'update-index', '--cacheinfo', f'{mode},{blob},{edit["path"]}', env=env)
+        text = notes(allocation, repo).encode()
+        blob = git(repo, 'hash-object', '-w', '--stdin', data=text, env=env).decode().strip()
+        git(repo, 'update-index', '--add', '--cacheinfo', f'100644,{blob},{path}', env=env)
         tree = git(repo, 'write-tree', env=env).decode().strip()
         message = (f'Allocate {allocation["tag"]} (BUILD_DATETIME {allocation["buildTimestamp"]})\n\n'
             f'Source: {source}\nAllocation: {allocation["allocationSha256"]}\nDelta: {allocation["deltaSha256"]}\n'
-            'Version-only candidate delta derived by scripts/release-allocate.py; not pushed.\n')
+            f'Notes: {path} {hashlib.sha256(text).hexdigest()}\n'
+            'Version-only candidate delta and generated notes derived by scripts/release-allocate.py; not pushed.\n')
         return git(repo, 'commit-tree', tree, '-p', source, data=message.encode(), env=env).decode().strip()
 
 
 def check_candidate(allocation, candidate, repo=ROOT):
-    """The candidate is exactly source + delta: its only parent is the source and only the delta paths differ."""
+    """The candidate is exactly source + delta + notes: its only parent is the source and only those paths differ."""
     parents = git(repo, 'rev-list', '--parents', '-n', '1', candidate).decode().split()[1:]
     expected = derive(allocation, repo)
-    if candidate != expected or (allocation['delta'] and parents != [allocation['sourceSha']]):
+    if candidate != expected or parents != [allocation['sourceSha']]:
         raise Refused('candidate_mismatch: the candidate is not the allocation\'s deterministic commit')
     changed = git(repo, 'diff', '--name-only', allocation['sourceSha'], candidate).decode().split()
-    if sorted(changed) != sorted(e['path'] for e in allocation['delta']):
-        raise Refused('candidate_mismatch: the candidate changes more than the version delta')
+    if sorted(changed) != sorted([e['path'] for e in allocation['delta']] + [notes_path(allocation, repo)]):
+        raise Refused('candidate_mismatch: the candidate changes more than the version delta and its notes')
     return expected
 
 
@@ -317,8 +336,10 @@ def reserve(directory, allocation, candidate):
 def notes(allocation, repo=ROOT, limit=200):
     check_allocation(allocation)
     previous, source = allocation['previous'], allocation['sourceSha']
-    log = git(repo, 'log', '--no-merges', f'--max-count={limit + 1}', '--format=%h %s',
-        f'{previous["sourceSha"]}..{source}').decode().splitlines()
+    # Full hashes cut to 12 and the allocation's own app order: the text (committed into the candidate by derive) must
+    # not depend on the checkout's object count or on JSON key order, so builder and publisher derive the same bytes.
+    log = [line[:12] + line[40:] for line in git(repo, 'log', '--no-merges', f'--max-count={limit + 1}', '--format=%H %s',
+        f'{previous["sourceSha"]}..{source}').decode().splitlines()]
     lines = [f'RoseOS Pixel 10 (frankel) Beta build {allocation["build"]}', '',
         f'Source: RoseOS-1 {source} (captured at dispatch; later main changes are not included).',
         f'Changes since the previous Beta {previous["build"]} ({previous["sourceSha"][:12]}):', '']
@@ -326,7 +347,8 @@ def notes(allocation, repo=ROOT, limit=200):
     if len(log) > limit:
         lines.append(f'- ... more commits; see the source range {previous["sourceSha"][:12]}..{source[:12]}')
     lines += ['', 'Bundled apps:']
-    for name, info in allocation['packages'].items():
+    for name, _ in allocation['apps']:
+        info = allocation['packages'][name]
         state = 'changed, new version' if info['changedSinceRelease'] else 'unchanged since the previous Beta'
         lines.append(f'- {name} {info["versionCode"]} ({info["versionName"]}): {state}')
     lines += ['', f'Version-only candidate delta {allocation["deltaSha256"][:16]} over the source (allocation '

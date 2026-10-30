@@ -50,9 +50,10 @@ trigger or storage service.
        consumed (published, built, reserved, retained, earlier allocations).
 
    Only the manifests that need it change. The result is a deterministic
-   local commit: the source plus that version-only delta, with a fixed
-   identity and dates. It is never pushed, and the compiled source really
-   carries the allocated versions.
+   local commit: the source plus that version-only delta and the generated
+   `os/release-notes/frankel-{build}.md` the sign stage reads, with a fixed
+   identity and dates. Unchanged main still gets this commit. It is never
+   pushed, and the compiled source really carries the allocated versions.
 
    The allocation (source, run, clock, hashes of the observation, delta and
    allocation) is written with `O_EXCL` before the build uses it. A failed or
