@@ -84,9 +84,61 @@ file. It is written from Infra's actual image/APK receipt only after Infra
 supplies it. Never write it from source, a planned version number or another
 build's hashes. `qa/verification/expectations/README.md` describes how.
 
-## Reference: the Fold prototype
+## Reference: the selected HiFi prototype (current)
 
-The product Home implements the delivered Fold prototype:
+The product Home now implements the owner-selected HiFi prototype
+(HIFI-OCT29-001-VISUAL-03; APP-OS-VISUAL-1030):
+
+- **Prototype:** `prototypes/rose-hifi/Rose-HiFi.html` at
+  `ce126f56c8967008b0a5db889137f224ac9ad36c`, SHA-256
+  `56a18b41e98747079039e50ca6a9fbdebc062cfe19ca47ebd26bce4de72c0b76`, built
+  from the `src/` files at the same commit. Later commits on main are not a
+  new selection.
+- **Wallpaper:** `prototypes/rose-hifi/src/assets/wallpaper.jpg` at that commit
+  (1024 × 1536, Git blob `1d99a767629749ee23a08487a0352d214ef29720`), embedded
+  unchanged as the HTML's `--wallpaper`. The repo carries the same bytes as
+  `workspace/rose-agent/app/res/drawable-nodpi/rose_home_wallpaper.jpg`, SHA-256
+  `67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5`.
+  `rose-verify.py` (`REFERENCE`) and
+  `workspace/rose-agent/tests/home-launcher.test.mjs` pin it. The check is
+  equality only, so an Agent build that ships another image fails it.
+- **Status:** the owner selected this prototype as the implementation
+  reference. Its rendered and native visual acceptance remain open. Comparisons
+  below therefore mean "consistent with the selected reference", never
+  "visually accepted".
+- **Cropping:** `compare` crops the wallpaper as production Home draws it,
+  using `HomeAppLayout.cover` at `WALL_X`/`WALL_Y` from
+  `RoseHomeView.Wallpaper`. That is CSS `background-size: cover` at
+  `background-position: 62% 30%`, the HiFi `.wall`. It uses the same float
+  arithmetic and half-up rounding, and records the crop and source box as
+  `referenceCrop` in its result.
+  - It assumes the screenshot shows the area the wallpaper fills.
+  - It covers Home only. The conversation's faint 80% 20% wallpaper overlay is
+    a different composition, and `compare` does not verify it.
+  - It reports mean and 95th-percentile luminance, and the share of a 27×48
+    grid within 40 levels of the reference.
+- **Verdicts:** `black-screen`, `wallpaper-consistent` or
+  `differs-from-reference`. Overlays (status bar, Rose, app grid, tray) lower
+  coverage. Always look at the side-by-side PNG it writes.
+
+To compare a screen with the prototype itself, not just its wallpaper:
+
+1. Check out `ce126f56c8967008b0a5db889137f224ac9ad36c` (or `git archive` its
+   `prototypes/rose-hifi`) and check `Rose-HiFi.html` against the SHA-256 above.
+2. Render it in the pre-installed headless Chromium (Playwright). Its own
+   `browser-check.cjs` opens the file and drives Home, Rose, mute and the
+   switcher with real input. Record the reported renderer label (WebGL or the
+   static fallback); SwiftShader output is not device GPU evidence.
+3. Put the prototype frames side by side with the device screenshots and
+   write down what matches and what differs. That written interpretation is
+   the visual evidence; `compare` covers only the wallpaper.
+
+### Historical reference: the Fold prototype (302–308 builds, 2804, alpha)
+
+Agent builds before the HiFi wallpaper change (main `6d9c724`, App PR172) ship
+the Fold prototype's wallpaper, and the 2804/alpha records below were made
+against it. Those builds and records are unchanged and stay as they were
+recorded.
 
 - **Prototype:** `Rose-Fold-v3.html`, Library item
   `libfile_ff139fdeb5688191a918d4ca9210abe9`, version 2, 859,202 bytes, SHA-256
@@ -96,34 +148,16 @@ The product Home implements the delivered Fold prototype:
     Brief" and the Prototyper inbox.
   - A copy is attached to the OS P1 task page; retrieve it only through that
     supported attachment/Library path.
-- **Wallpaper:** its narrow Home wallpaper is the first embedded JPEG
-  (461 × 1024). The repo carries it as
-  `workspace/rose-agent/app/res/drawable-nodpi/rose_home_wallpaper.jpg`, SHA-256
-  `409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5`. That hash
-  is pinned by `workspace/rose-agent/tests/home-launcher.test.mjs`.
-- **Status:** the Fold brief records that the prototype's browser rendering and
-  visuals are *not* independently accepted. Nathan's positive feedback was
-  functional. Comparisons below therefore mean "consistent with the delivered
-  prototype", never "visually accepted".
-- **Cropping:** `compare` crops the wallpaper exactly as `RoseHomeView` does
-  (CSS `background-size: cover`, centered). It reports mean and 95th-percentile
-  luminance, and the share of a 27×48 grid within 40 levels of the reference.
-- **Verdicts:** `black-screen`, `wallpaper-consistent` or
-  `differs-from-reference`. Overlays (status bar, Rose presence, dock) lower
-  coverage. Always look at the side-by-side PNG it writes.
-
-To compare a screen with the prototype itself, not just its wallpaper:
-
-1. Retrieve `Rose-Fold-v3.html` through the supported Library flow or its
-   native Notion attachment (OS-P1-001), and check its SHA-256 first.
-2. Render it in the pre-installed headless Chromium (Playwright) with every
-   non-`file:`/`data:` request blocked and reduced motion. Use the Folded
-   layout and screenshot the `#device` phone frame. Then click
-   `#presence-hit` and screenshot the Conversation view.
-3. Record the page's renderer label (WebGL or static fallback).
-4. Put the prototype frames side by side with the device screenshots and
-   write down what matches and what differs. That written interpretation is
-   the visual evidence; `compare` covers only the wallpaper.
+- **Wallpaper:** its first embedded JPEG (461 × 1024), SHA-256
+  `409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5`.
+  - The current `rose-verify.py` reports "Reference wallpaper bytes" as fail for
+    these builds. That is accurate: they ship the Fold image, not the HiFi one.
+  - Read their checklist item 5 against the historical value below.
+- **Cropping then:** these runs, `qa/verification/rose-agent-304-infra-runtime-100.md`
+  among them, used a centered cover crop. Do not reread their comparison
+  results as HiFi or 62% 30% results.
+- **Status:** the Fold brief records that its browser rendering and visuals are
+  *not* independently accepted. Nathan's positive feedback was functional.
 
 `qa/verification/rose-agent-304-infra-runtime-100.md` is the first example.
 
@@ -177,7 +211,8 @@ records the adb serial. It marks any non-Cuttlefish device as private evidence.
      launchable and HOME activities, the full signer SHA-256 against the
      expectation's `appSignerSha256`, and bytes and version against the
      expectation.
-   - **Rose Agent:** the Fold wallpaper resource bytes, and whether
+   - **Rose Agent:** the reference wallpaper resource bytes (current: the HiFi
+     image above), and whether
      `RoseHomeView`/`RoseConversationActivity` are compiled in.
    - **HOME candidates:** every APK in `app/` and `priv-app/` whose manifest
      declares HOME. This is image content only. The role holder is decided on
@@ -341,6 +376,11 @@ other identifiers.
 Record each item as observed, failed or unavailable, with the evidence kind and
 where it came from.
 
+The Expected column records the historical 2804 and active-alpha values, which
+are unchanged. For an Agent build from main `6d9c724` on, item 5 expects the
+HiFi wallpaper `67e39754…63c5`, and item 11 compares against the selected HiFi
+prototype; see "Reference" above.
+
 | # | Item | Evidence kind | Expected (2804 / alpha) |
 | --- | --- | --- | --- |
 | 1 | Release checksums, candidate SHA, feed line, AVB key pin | artifact | All pass; candidate `ae9cfd4d` |
@@ -395,8 +435,8 @@ is never a physical frankel OTA result.
 
 - Runtime or visual results for an artifact from inspection alone.
 - Pixel results from Cuttlefish, or Cuttlefish results from a Pixel OTA.
-- Acceptance from a screenshot heuristic, or prototype acceptance that the Fold
-  brief does not record.
+- Acceptance from a screenshot heuristic, or prototype acceptance that the
+  selected HiFi reference (or, historically, the Fold brief) does not record.
 - Historical boots (`docs/upstream/`) as evidence for a current build.
 - One user's HOME, package state or screen as evidence for another user or
   profile.
