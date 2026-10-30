@@ -59,6 +59,7 @@ python3 scripts/tests/test_release_chain.py
 python3 scripts/tests/test_release_acceptance.py
 python3 scripts/tests/test_signing_job.py
 python3 scripts/tests/test_signing_acceptance.py
+python3 scripts/tests/test_os_sign_workflow.py
 python3 scripts/tests/test_rango_retained.py
 python3 scripts/tests/test_github_publisher.py
 python3 scripts/tests/test_host_adapters.py
