@@ -138,7 +138,27 @@ def tree_bytes(src, relative):
     path = Path(src)/relative
     return sha256_file(path) if path.is_file() and not path.is_symlink() else None
 
-def compile_integration(config, src, inputs_receipt):
+def recipe_head():
+    """This checkout's commit (the recipe running compile), or None outside a git checkout."""
+    result = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+def candidate_problems(inputs, record, build):
+    """RANGO-CURRENT-M001: an admitted current-main candidate (rango-local-inputs.py admit) binds this compile to its
+    build number, its recipe R (this checkout) and a reconcile receipt labelled for that build; a receipt or input set
+    from another candidate is refused. Legacy (2901 extraction) inputs carry no candidate and are unchanged."""
+    if inputs.get('mode') != 'candidate':
+        return []
+    candidate, problems = inputs.get('candidate') or {}, []
+    if str(candidate.get('build')) != str(build):
+        problems.append(f'the inputs were admitted for build {candidate.get("build")}, not {build}')
+    if record.get('label') != f'rango-{build}':
+        problems.append(f'the reconcile receipt is labelled {record.get("label")!r}, not rango-{build}')
+    if recipe_head() != candidate.get('recipe'):
+        problems.append('this checkout is not the recipe R the inputs were admitted with')
+    return problems
+
+def compile_integration(config, src, inputs_receipt, build=None):
     """(problems, facts): the latest reconcile receipt in this config's own receipt dir must describe this tree as it
     is now, have installed the exact signed APKs and policy that inputs_receipt (rango-local-inputs.py) verified, and
     come from this checkout's patcher. A receipt copied from another builder (Frankel) names other APK bytes or other
@@ -167,6 +187,9 @@ def compile_integration(config, src, inputs_receipt):
     inputs = json.loads(Path(inputs_receipt).read_text())
     facts['inputs'] = {'receipt': str(inputs_receipt), 'sha256': sha256_file(inputs_receipt),
         'release': inputs.get('release'), 'product': inputs.get('product')}
+    if inputs.get('candidate'):
+        facts['inputs']['candidate'] = inputs['candidate']
+    problems += candidate_problems(inputs, record, build)
     if inputs.get('receiptType') != 'rango-local-inputs':
         problems.append('--inputs-receipt is not a rango-local-inputs receipt')
         return problems, facts
@@ -240,7 +263,7 @@ def preflight(config, stage, build, download_dir, statvfs=os.statvfs, lock_probe
     if os.path.lexists(src/out_name) and not existing_out:
         problems.append(f'{out_name} already exists; each build needs a new OUT_DIR')
     if stage == 'compile':
-        integration, facts['roseIntegration'] = compile_integration(config, src, inputs_receipt)
+        integration, facts['roseIntegration'] = compile_integration(config, src, inputs_receipt, build)
         problems += integration
     if not lock_probe(host['lockPath']):
         problems.append('the shared builder lock is held by another job')

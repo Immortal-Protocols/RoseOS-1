@@ -99,6 +99,30 @@ writes nothing. Resolve it with the owner, never with a blanket `adopt`.
 The generate stage never regenerates an existing vendor directory. Neither stage erases
 outputs or caches.
 
+## Current-main candidate inputs (RANGO-CURRENT-M001)
+
+For a NEXT build, steps 1 and 2 are replaced by admitting the release owner's newly signed bundle; the 2901
+extraction above is unchanged and remains the legacy route. Use `rango-reconcile-next.json`, which pins no product or
+app bytes, only `candidateInputs`: the Android manifest blob `b57648423ffb…` (shared by `02b21bc6` and `8183dc55`), the
+app signer, SDK 37, `prototypeControl` false and the three roles.
+
+The bundle directory (Infra's transport) holds exactly `signed-apps/<package>.apk` and the matching `sign-apk.py`
+`.receipt.json` for the three apps, `background-policy.json` and `candidate.json` (`roseos.rango-candidate.v1`:
+`device`, `build`, `product` C, `recipe` R, `androidManifestBlob`, `apps` as the allocator's `[[package, version]]`).
+No key is involved.
+
+```bash
+python3 -I $R/scripts/rango-local-inputs.py admit --config $R/os/build-only/rango-reconcile-next.json \
+  --bundle <bundle> --out $IN --aapt <measured aapt> --apksigner <measured apksigner>
+```
+
+Run it from a checkout of R. It refuses a mismatch in any of these: R itself, C's or R's manifest blob, a receipt
+against its bytes or against apksigner/aapt (package, version, signer), the APPS versions, or the policy against the
+bundle bytes. It also refuses a missing, extra, linked or duplicate input. The checked bytes are copied unchanged to
+`$IN`, and `local-inputs.json` records mode `candidate` with C, R and build. Step 3 then uses a worktree of C, the
+NEXT config and `--label rango-$B`. Step 5 compile refuses inputs admitted for another build, a reconcile receipt
+labelled for another build, or a checkout that is not R. C itself is recorded, not re-derived from the tree.
+
 ## Resuming a compile after a natural cutoff (OS-RANGO-RESUME-005, corrected by -F1)
 
 A compile stopped by the supervisor deadline or a VM stop can continue in its own `OUT_DIR`.
