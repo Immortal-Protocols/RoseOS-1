@@ -405,6 +405,72 @@ class SignTests(Fixture):
         self.assertEqual((self.out / 'keep.txt').read_text(), 'unrelated')
 
 
+TRUE_LINES = ('Verified using v1 scheme (JAR signing): false\n'
+              'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+              'Verified using v3 scheme (APK Signature Scheme v3): true\n'
+              'Verified using v3.1 scheme (APK Signature Scheme v3.1): false\n'
+              'Verified using v4 scheme (APK Signature Scheme v4): false\n')
+# What the pinned verifier printed for a v2+v3-signed minSdk 29 APK over its default range (MODELS-SCHEME-DIAG-001).
+DEFAULT_RANGE_LINES = TRUE_LINES.replace('v2): true', 'v2): false')
+
+
+class RealInspectorTests(Fixture):
+    """MODELS-SCHEME-FIX-001: the real default inspector (not mock_inspector) against a fake apksigner whose output is
+    fixed per test. The real pinned-tool cases are in test_sign_diagnostic.RealPinnedTool."""
+
+    def apksigner(self, stdout, code=0):
+        bt = self.sdk / 'build-tools/android-15'
+        (bt / 'verify-out').write_text(stdout)
+        (bt / 'apksigner').write_text('#!/bin/sh\nd=$(dirname "$0")\nprintf \'%s\\n\' "$@" > "$d/argv"\n'
+                                      f'cat "$d/verify-out"\nexit {code}\n')
+        os.chmod(bt / 'apksigner', 0o755)
+        return bt
+
+    def signed(self, stdout, code=0, signer=FAKE_SIGNER):
+        return stdout + f'Signer #1 certificate SHA-256 digest: {signer}\n', code
+
+    def test_verifier_covers_api_24_and_reports_strict_schemes(self):
+        bt = self.apksigner(*self.signed(TRUE_LINES))
+        apk = self.tmp / 'any.apk'
+        report = ms.inspect_signed(apk, self.sdk)
+        self.assertEqual((bt / 'argv').read_text().split('\n')[:-1],
+                         ['verify', '--verbose', '--print-certs', '--min-sdk-version', '24', str(apk)])
+        self.assertEqual((report['verified'], report['signers']), (True, [FAKE_SIGNER]))
+        self.assertEqual(report['schemes'], {'v1': False, 'v2': True, 'v3': True, 'v4': False})
+        self.assertEqual(report['badging']['package'], 'dev.pixel.models')
+
+    def test_sign_refuses_every_non_affirmative_scheme_result(self):
+        v2 = 'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+        cases = {
+            'default range v2 false': ('scheme_missing: v2', DEFAULT_RANGE_LINES),
+            'v3 false': ('scheme_missing: v3', TRUE_LINES.replace('v3): true', 'v3): false')),
+            'v2 missing': ('scheme_missing: v2', TRUE_LINES.replace(v2, '')),
+            'v2 duplicate': ('scheme_missing: v2', TRUE_LINES + v2),
+            'v2 contradictory': ('scheme_missing: v2', DEFAULT_RANGE_LINES + v2),
+            'v2 wrong label': ('scheme_missing: v2', TRUE_LINES.replace('(APK Signature Scheme v2)', '(APK Signature Scheme v3)')),
+            'v2 prefixed': ('scheme_missing: v2', TRUE_LINES.replace(v2, 'Not ' + v2)),
+            'v2 suffixed': ('scheme_missing: v2', TRUE_LINES.replace('v2): true', 'v2): true (not checked)')),
+            'nonzero exit with true text': ('signature_unverified', TRUE_LINES, 1),
+        }
+        for i, (name, (category, stdout, *code)) in enumerate(cases.items()):
+            with self.subTest(name):
+                self.apksigner(*self.signed(stdout, *code))
+                out = self.tmp / f'o{i}'
+                with self.assertRaises(ms.Refused) as ctx:
+                    self.sign(inspector=ms.inspect_signed, out=out)
+                self.assertEqual(str(ctx.exception), category)
+                self.assertFalse((out / 'models-signing-receipt.json').exists())
+                self.assertFalse((out / ms.SIGNED_NAME).exists())
+
+    def test_sign_accepts_single_true_v2_and_v3_with_the_exact_signer_only(self):
+        self.apksigner(*self.signed(TRUE_LINES, signer=OTHER_SIGNER))
+        self.assertRefused('signer_mismatch', self.sign, inspector=ms.inspect_signed, out=self.tmp / 'o-signer')
+        self.apksigner(*self.signed(TRUE_LINES))
+        receipt = self.sign(inspector=ms.inspect_signed)
+        self.assertEqual(receipt['schemes'], {'v1': False, 'v2': True, 'v3': True, 'v4': False})
+        self.assertEqual(receipt['signerCertificateSha256'], FAKE_SIGNER)
+
+
 class NegativeControls(Fixture):
     """Disabling an essential check must make the matching test case pass through, which shows
     the tests above depend on that check and not on an accident."""

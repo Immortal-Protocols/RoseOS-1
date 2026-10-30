@@ -187,7 +187,9 @@ and `build-tools/android-15` tree proof.
   caller's proof.
 
 **Cases.** Each case is one `sign-apk.py --diagnostic-out` run with a certificate pin, followed by one independent
-`apksigner verify --print-certs`. The certificate digest must equal the fixture certificate, and v2 must verify.
+verification with the shared contract below: exit 0, exactly the fixture certificate, and v2 AND v3 strictly true.
+The synthetic APK has the production manifest shape: minSdk 29, targetSdk 35, versionCode 1, versionName
+`0.1.0-dev-unsigned`, with a synthetic package.
 
 - `pkcs12_shared_one_line`: the production shape, RSA-4096 PKCS12 with one single-line password file.
 - `jks_separate_files`: a key password that differs from the store password, in its own file.
@@ -226,6 +228,41 @@ and `build-tools/android-15` tree proof.
 **Evidence level.** A pass is synthetic evidence for the given tools. It is not a production signature, does not use the
 production key, and does not prove the production cause. CI runs it against the hosted runner's build-tools, accepted
 only when equal to the pinned r35 members, and the hosted Temurin 21. That run is not the pinned AOSP JDK21.
+
+## Scheme verification contract (MODELS-SCHEME-FIX-001)
+
+`inspect_signed()` and the synthetic check use one contract from `synthetic_sign_check.py`.
+
+**Command.** `apksigner verify --verbose --print-certs --min-sdk-version 24 <apk>`, one bounded start.
+
+- **Why API 24.** By default apksigner verifies from the manifest minSdk. From API 28 up it accepts v3 alone and prints
+  `Verified using v2 scheme (APK Signature Scheme v2): false` with exit 0, even when a v2 block is present. Starting the
+  range at API 24, where v2 was introduced, makes it check v2 and v3 cryptographically.
+- **Evidence.** Pinned r35 with a distro JDK, synthetic minSdk 29 (MODELS-SCHEME-DIAG-001). That is the likely cause of
+  `scheme_missing: v2` in run 41013008808; the production run itself was not repeated.
+- **Scope.** This is verifier coverage only. The APK's declared minSdk 29, targetSdk 35, version, ABI, signing arguments,
+  `requiredSchemes` and `sign-apk.py` are unchanged. It does not claim that the app supports API 24.
+
+**Parser.** A scheme counts only when exactly one output line names it and that line is exactly
+`Verified using <scheme> scheme (<label>): true`. The following all count as not verified:
+- false;
+- missing;
+- duplicate or contradictory lines;
+- a wrong label;
+- a prefixed or suffixed line.
+
+**Unchanged.** A nonzero verify exit still refuses, as does any signer other than exactly the bound one. Every later
+package, version, ABI and native check is unchanged.
+
+**Tests:**
+- `test_models_signing.RealInspectorTests` drives the real `inspect_signed` with a fake apksigner.
+- `test_synthetic_sign_check.VerificationContract` covers the parser corpus and the false line the old substring check
+  accepted.
+- `test_sign_diagnostic.RealPinnedTool` uses the real pinned apksigner. It covers a production-shaped positive (the old
+  default range reproduces the refusal), and three negatives that refuse: missing v2 (where generic verify passes),
+  missing v3, and tampered (verify fails).
+
+CI sets `MODELS_REQUIRE_PINNED_TOOLS=1`, so the real-tool cases fail rather than skip.
 
 ## Ownership and cleanup
 

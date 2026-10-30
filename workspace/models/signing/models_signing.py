@@ -41,6 +41,7 @@ def _load_sibling(name):
 
 
 DIAG = _load_sibling('sign_diagnostic')
+VERIFY = _load_sibling('synthetic_sign_check')  # the shared verifier argv and strict scheme parser
 
 PACKAGE = 'dev.pixel.models'
 ALIAS = 'rose-models'
@@ -271,15 +272,14 @@ def run_sign_apk(argv, env):
 
 
 def inspect_signed(apk, sdk_root):
-    """Default inspector: apksigner verify + aapt badging from the pinned build-tools."""
+    """Default inspector: apksigner verify + aapt badging from the pinned build-tools. Verification covers API 24 and
+    up so v2 and v3 are both checked (VERIFY.verify_argv); one bounded start, strict per-scheme result."""
     bt = Path(sdk_root) / 'build-tools/android-15'
-    v = subprocess.run([str(bt / 'apksigner'), 'verify', '--verbose', '--print-certs', str(apk)],
-                       capture_output=True, text=True)
+    v = DIAG.run_bounded(VERIFY.verify_argv(bt / 'apksigner', apk))
     b = subprocess.run([str(bt / 'aapt'), 'dump', 'badging', str(apk)], capture_output=True, text=True)
-    schemes = {s: bool(re.search(rf'^Verified using {s} scheme .*: true$', v.stdout, re.M))
-               for s in ('v1', 'v2', 'v3', 'v4')}
-    return {'verified': v.returncode == 0, 'schemes': schemes,
-            'signers': re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})$', v.stdout, re.M),
+    schemes = VERIFY.schemes(v.stdout)
+    return {'verified': v.outcome == 'ok', 'schemes': {s: schemes[s] for s in ('v1', 'v2', 'v3', 'v4')},
+            'signers': VERIFY.SIGNERS.findall(v.stdout),
             'badging': _badging(b.stdout) if b.returncode == 0 else None}
 
 
