@@ -48,7 +48,9 @@ jobs:
         run: |
           python3 --version
           python3 -m unittest -v test_models_signing
-      - name: Signing diagnostic, sign-apk.py opt-in hook and leak sentinels (fake SDK, no keys)
+      - name: Signing diagnostic, sign-apk.py opt-in hook and leak sentinels (fake SDK, no keys); real pinned apksigner scheme cases
+        env:
+          MODELS_REQUIRE_PINNED_TOOLS: '1'  # the real pinned-tool cases (incl. MODELS-SCHEME-FIX-001) fail, never skip
         run: python3 workspace/models/signing/test_sign_diagnostic.py -v
       - name: Synthetic sign check failure paths (fake JDK trees, mocks, no keys)
         run: python3 workspace/models/signing/test_synthetic_sign_check.py -v

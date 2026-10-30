@@ -706,7 +706,10 @@ class RealPinnedTool(unittest.TestCase):
         cls.bt, reason = pinned_build_tools()
         java = shutil.which('java')
         if cls.bt is None or not java:
-            raise unittest.SkipTest(reason if cls.bt is None else 'no java on PATH')
+            reason = reason if cls.bt is None else 'no java on PATH'
+            if os.environ.get('MODELS_REQUIRE_PINNED_TOOLS') == '1':  # set in CI: a missing tool fails, never skips
+                raise AssertionError(reason)
+            raise unittest.SkipTest(reason)
         jdk_bin = Path(os.path.realpath(java)).parent
         if not (jdk_bin / 'keytool').is_file():
             raise unittest.SkipTest('no keytool beside java')
@@ -834,6 +837,76 @@ class RealPinnedTool(unittest.TestCase):
         self.assertEqual((record['stage'], record['outcome'], record['category']),
                          ('invocation', 'rejected', 'invocation_rejected'))
         self.assertFalse(out.exists())
+
+    # MODELS-SCHEME-FIX-001: production-shaped synthetic APK (minSdk 29, targetSdk 35, versionCode 1,
+    # versionName 0.1.0-dev-unsigned) through the REAL inspector and the precheck contract, plus real negatives.
+    def apksigner_sign(self, name, *flags):
+        """One direct apksigner sign start of the disposable input with explicit scheme flags (negatives only)."""
+        out = self.tmp / f'neg-{name}' / 'signed.apk'
+        out.parent.mkdir(mode=0o700)
+        self.tool([str(self.bt / 'apksigner'), 'sign', '--ks', str(self.keystore), '--ks-key-alias', 'rose-models',
+                   '--ks-pass', 'file:' + str(self.one_line), *flags, '--out', str(out), str(self.tmp / 'in.apk')])
+        return out
+
+    def verify(self, apk, default_range=False):
+        argv = synthetic_sign_check.verify_argv(self.bt / 'apksigner', apk)
+        if default_range:  # the pre-FIX shape: range from the manifest minSdk
+            argv.remove('--min-sdk-version')
+            argv.remove(synthetic_sign_check.VERIFY_MIN_SDK)
+        result = subprocess.run(argv, env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=300)
+        return result.returncode, result.stdout
+
+    def test_production_shaped_positive_through_the_real_inspector_and_precheck_contract(self):
+        result, record, out = self.sign('scheme-positive', self.one_line, self.one_line)
+        self.assertEqual((result.returncode, record['stage']), (0, 'complete'))
+        signed_sha = hashlib.sha256(out.read_bytes()).hexdigest()
+        with zipfile.ZipFile(out) as apk:  # the declared manifest is the one written; the verifier setting changes none
+            self.assertEqual(apk.read('AndroidManifest.xml'), synthetic_sign_check.binary_manifest())
+        badging = subprocess.run([str(self.bt / 'aapt'), 'dump', 'badging', str(out)], env=self.env,
+                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300).stdout
+        for line in ("package: name='test.synthetic.precheck' versionCode='1' versionName='0.1.0-dev-unsigned'",
+                     "sdkVersion:'29'", "targetSdkVersion:'35'"):
+            self.assertIn(line + '\n', badging)
+        code, stdout = self.verify(out, default_range=True)  # reproduces the delivery refusal
+        self.assertEqual((code, synthetic_sign_check.schemes(stdout)['v2'], synthetic_sign_check.schemes(stdout)['v3']),
+                         (0, False, True))
+        self.assertFalse(synthetic_sign_check.accepted(code, stdout, self.cert))
+        self.assertTrue(synthetic_sign_check.accepted(*self.verify(out), self.cert))
+        with mock.patch.dict(os.environ, {'PATH': self.env['PATH']}):
+            report = ms.inspect_signed(out, self.sdk)
+        self.assertEqual((report['verified'], report['signers'], report['schemes']['v2'], report['schemes']['v3']),
+                         (True, [self.cert], True, True))
+        self.assertEqual(hashlib.sha256(out.read_bytes()).hexdigest(), signed_sha)
+
+    def test_missing_v2_missing_v3_and_tampered_apks_are_refused(self):
+        def inspect(apk):
+            with mock.patch.dict(os.environ, {'PATH': self.env['PATH']}):
+                return ms.inspect_signed(apk, self.sdk)
+        # v1 covers API 24-27, so generic verification succeeds although the v2 block is absent
+        no_v2 = self.apksigner_sign('no-v2', '--v1-signing-enabled', 'true', '--v2-signing-enabled', 'false',
+                                    '--v3-signing-enabled', 'true')
+        no_v3 = self.apksigner_sign('no-v3', '--v2-signing-enabled', 'true', '--v3-signing-enabled', 'false')
+        for apk, absent in ((no_v2, 'v2'), (no_v3, 'v3')):
+            with self.subTest(absent=absent):
+                code, stdout = self.verify(apk)
+                self.assertEqual(code, 0)  # generic verification would pass
+                self.assertFalse(synthetic_sign_check.accepted(code, stdout, self.cert))
+                report = inspect(apk)
+                self.assertEqual((report['verified'], report['signers']), (True, [self.cert]))
+                self.assertEqual({s: report['schemes'][s] for s in ('v2', 'v3')},
+                                 {'v2': absent != 'v2', 'v3': absent != 'v3'})
+        tampered = self.tmp / 'neg-tampered.apk'
+        data = bytearray(no_v3.read_bytes())
+        with zipfile.ZipFile(no_v3) as apk:
+            info = apk.getinfo('AndroidManifest.xml')
+        data[info.header_offset + 30 + len(info.filename) + len(info.extra)] ^= 0x01  # first byte of the entry data
+        tampered.write_bytes(bytes(data))
+        code, stdout = self.verify(tampered)
+        self.assertNotEqual(code, 0)
+        self.assertFalse(synthetic_sign_check.accepted(code, stdout, self.cert))
+        self.assertFalse(inspect(tampered)['verified'])
+
 
 if __name__ == '__main__':
     unittest.main()

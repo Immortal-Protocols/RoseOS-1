@@ -49,7 +49,36 @@ SIGN_SECONDS = 900  # one sign-apk.py start (its own tools are bounded at 300 s 
 BUILD_TOOLS = 'build-tools/android-15'
 REQUIRED = {'java': 'bin/java', 'keytool': 'bin/keytool'}
 REQUIRED_SDK = {'apksigner': 'apksigner', 'apksignerJar': 'lib/apksigner.jar', 'zipalign': 'zipalign'}
-DIGEST = re.compile(r'^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$', re.M)
+SIGNERS = re.compile(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})$', re.M)
+
+# Shared verification contract (MODELS-SCHEME-FIX-001), also used by models_signing.inspect_signed().
+# apksigner verify checks the range from the manifest minSdk by default. From API 28 up it accepts v3 alone and prints
+# v2 as false even when a v2 block is present (pinned r35, synthetic minSdk 29). Starting the verified range at API 24,
+# where v2 was introduced, makes it check v2 and v3 cryptographically. This is verifier coverage only: the APK's
+# declared minSdk, the signing arguments and the required schemes are unchanged, and it claims no API 24 support.
+VERIFY_MIN_SDK = '24'
+REQUIRED_SCHEMES = ('v2', 'v3')
+SCHEME_LABELS = {'v1': 'JAR signing', 'v2': 'APK Signature Scheme v2', 'v3': 'APK Signature Scheme v3',
+                 'v3.1': 'APK Signature Scheme v3.1', 'v4': 'APK Signature Scheme v4'}
+
+
+def verify_argv(apksigner, apk):
+    return [str(apksigner), 'verify', '--verbose', '--print-certs', '--min-sdk-version', VERIFY_MIN_SDK, str(apk)]
+
+
+def schemes(stdout):
+    """{scheme: bool}. True only when exactly one output line names the scheme and that line is exactly
+    'Verified using <scheme> scheme (<label>): true'. A false, missing, duplicate, contradictory, wrong-label or
+    prefixed/suffixed line gives False."""
+    lines = stdout.splitlines()
+    return {s: [line for line in lines if f'using {s} scheme' in line] == [f'Verified using {s} scheme ({label}): true']
+            for s, label in SCHEME_LABELS.items()}
+
+
+def accepted(returncode, stdout, cert):
+    """Verify exit 0, exactly one signer equal to `cert`, and every required scheme strictly true."""
+    found = schemes(stdout)
+    return returncode == 0 and SIGNERS.findall(stdout) == [cert] and all(found[s] for s in REQUIRED_SCHEMES)
 
 
 class Failed(Exception):
@@ -58,10 +87,15 @@ class Failed(Exception):
         self.category = category
 
 
-def binary_manifest(package='test.synthetic.precheck', min_sdk=29):
-    """A minimal compiled AndroidManifest.xml: <manifest package=...><uses-sdk android:minSdkVersion=.../></manifest>."""
-    strings = ['minSdkVersion', 'android', 'http://schemas.android.com/apk/res/android', 'manifest', 'uses-sdk',
-               'package', package]
+def binary_manifest(package='test.synthetic.precheck', min_sdk=29, target_sdk=35, version_code=1,
+                    version_name='0.1.0-dev-unsigned'):
+    """A minimal compiled AndroidManifest.xml in the Models production shape (minSdk 29, targetSdk 35, versionCode 1,
+    versionName 0.1.0-dev-unsigned) with a synthetic package:
+    <manifest versionCode versionName package><uses-sdk minSdkVersion targetSdkVersion/></manifest>."""
+    attributes = ('versionCode', 'versionName', 'minSdkVersion', 'targetSdkVersion')  # resource-map order
+    strings = list(attributes) + ['android', 'http://schemas.android.com/apk/res/android', 'manifest', 'uses-sdk',
+                                  'package', package, version_name]
+    index = {s: i for i, s in enumerate(strings)}
     none = 0xFFFFFFFF
     pool = b''.join(struct.pack('<H', len(s)) + s.encode('utf-16-le') + b'\0\0' for s in strings)
     pool += b'\0' * (-len(pool) % 4)
@@ -72,20 +106,27 @@ def binary_manifest(package='test.synthetic.precheck', min_sdk=29):
     head = 28 + 4 * len(strings)
     string_pool = struct.pack('<HHIIIIII', 0x0001, 28, head + len(pool), len(strings), 0, 0, head, 0)
     string_pool += struct.pack(f'<{len(offsets)}I', *offsets) + pool
-    resource_map = struct.pack('<HHII', 0x0180, 8, 12, 0x0101020C)  # string 0 is android:minSdkVersion
+    ids = (0x0101021B, 0x0101021C, 0x0101020C, 0x01010270)  # android:versionCode/versionName/minSdk/targetSdk
+    resource_map = struct.pack('<HHI', 0x0180, 8, 8 + 4 * len(ids)) + struct.pack(f'<{len(ids)}I', *ids)
+    ns = index['http://schemas.android.com/apk/res/android']
 
     def element(name, attributes):
         body = struct.pack('<IIHHHHHH', none, name, 20, 20, len(attributes), 0, 0, 0)
-        for ns, attr, raw, kind, data in attributes:
-            body += struct.pack('<IIIHBBI', ns, attr, raw, 8, 0, kind, data)
+        for a_ns, attr, raw, kind, data in attributes:
+            body += struct.pack('<IIIHBBI', a_ns, attr, raw, 8, 0, kind, data)
         return struct.pack('<HHIII', 0x0102, 16, 16 + len(body), 1, none) + body
 
     def end(name):
         return struct.pack('<HHIIIII', 0x0103, 16, 24, 1, none, none, name)
 
-    body = (string_pool + resource_map + struct.pack('<HHIIIII', 0x0100, 16, 24, 1, none, 1, 2)
-            + element(3, [(none, 5, 6, 0x03, 6)]) + element(4, [(2, 0, none, 0x10, min_sdk)]) + end(4) + end(3)
-            + struct.pack('<HHIIIII', 0x0101, 16, 24, 1, none, 1, 2))
+    manifest = [(ns, index['versionCode'], none, 0x10, version_code),
+                (ns, index['versionName'], index[version_name], 0x03, index[version_name]),
+                (none, index['package'], index[package], 0x03, index[package])]
+    uses_sdk = [(ns, index['minSdkVersion'], none, 0x10, min_sdk), (ns, index['targetSdkVersion'], none, 0x10, target_sdk)]
+    namespace = struct.pack('<HHIIIII', 0x0100, 16, 24, 1, none, index['android'], ns)
+    body = (string_pool + resource_map + namespace + element(index['manifest'], manifest)
+            + element(index['uses-sdk'], uses_sdk) + end(index['uses-sdk']) + end(index['manifest'])
+            + struct.pack('<HHIIIII', 0x0101, 16, 24, 1, none, index['android'], ns))
     return struct.pack('<HHI', 0x0003, 8, 8 + len(body)) + body
 
 
@@ -166,9 +207,8 @@ def sign_case(name, work, tools, env, f):
         record, problem = D.load(diag_dir / 'record.json', D.sha256_file(tools['apksignerJar']))
         signed = problem is None and record['stage'] == 'complete' and out.is_file()
         if signed:
-            result = run([tools['apksigner'], 'verify', '--verbose', '--print-certs', out], env, TOOL_SECONDS,
-                         'case_failed')
-            verified = DIGEST.findall(result.stdout) == [cert] and 'Verified using v2 scheme' in result.stdout
+            result = run(verify_argv(tools['apksigner'], out), env, TOOL_SECONDS, 'case_failed')
+            verified = accepted(result.returncode, result.stdout, cert)
     except Failed:
         pass
     return signed, verified
