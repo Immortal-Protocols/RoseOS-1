@@ -103,11 +103,18 @@ def profile_for(artifact, sdk, signer=FAKE_SIGNER):
 
 
 class MockSigner:
-    """Stands in for scripts/sign-apk.py. Records calls; never touches key material."""
+    """Stands in for scripts/sign-apk.py. Records calls; never touches key material. Like the real opt-in hook it
+    writes one closed diagnostic record to --diagnostic-out."""
 
-    def __init__(self, returncode=0, mutate_input=None, receipt_signers=None):
+    def __init__(self, returncode=0, mutate_input=None, receipt_signers=None, diagnostic=None):
         self.calls, self.returncode = [], returncode
-        self.mutate_input, self.receipt_signers = mutate_input, receipt_signers
+        self.mutate_input, self.receipt_signers, self.diagnostic = mutate_input, receipt_signers, diagnostic
+
+    def write_diagnostic(self, argv, default):
+        path = Path(argv[argv.index('--diagnostic-out') + 1])
+        record = self.diagnostic if self.diagnostic is not None else default
+        if record != 'absent':
+            path.write_text(record if isinstance(record, str) else json.dumps(record))
 
     def __call__(self, argv, env):
         self.calls.append((argv, env))
@@ -118,7 +125,9 @@ class MockSigner:
             self.mutate_input()
         if self.returncode:
             out.write_bytes(b'partial')
-            return SimpleNamespace(returncode=self.returncode, stderr='APK signing stopped: signing_failed\n')
+            self.write_diagnostic(argv, ms.DIAG.record('sign', ms.DIAG.Result('exit', 1, None, '', ''),
+                                                       apksigner_jar_sha256=None))
+            return SimpleNamespace(returncode=self.returncode)
         with zipfile.ZipFile(unsigned) as src, zipfile.ZipFile(out, 'w') as dst:
             for info in src.infolist():
                 dst.writestr(info, src.read(info))
@@ -127,7 +136,8 @@ class MockSigner:
         out.with_suffix('.receipt.json').write_text(json.dumps({
             'sha256': h(out.read_bytes()), 'inputSha256': h(unsigned.read_bytes()),
             'certificateSha256': self.receipt_signers or [pin]}))
-        return SimpleNamespace(returncode=0, stderr='')
+        self.write_diagnostic(argv, ms.DIAG.record('complete', category='none', apksigner_jar_sha256=None))
+        return SimpleNamespace(returncode=0)
 
 
 def mock_inspector(signers=None, schemes=None, badging_text=None):
@@ -352,7 +362,7 @@ class SignTests(Fixture):
         self.assertNoSuccess()
         failure = json.loads((self.out / 'models-signing-failure.json').read_text())
         self.assertEqual((failure['stage'], failure['category']),
-                         ('sign', 'signer_failed: APK signing stopped: signing_failed'))
+                         ('sign', 'signer_failed: stage=sign outcome=exit child_exit=1 category=unclassified wrapper_exit=1'))
         self.assertIn(ms.SIGNED_NAME, failure['removedOutputSha256'])
         self.assertFalse((self.out / 'work').exists())
         self.assertOperatorFilesIntact()

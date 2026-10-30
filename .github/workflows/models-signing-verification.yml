@@ -3,7 +3,8 @@ name: Models signing verification
 # Source tests for the Rose Models (dev.pixel.models) signing adapter: closed profile, input
 # binding, refusal order, signer/output inspection and receipts, with synthetic fixtures and a
 # mocked signer; and the isolated build-tools r35 preparation in the models-sign preflight (MODELS-SDK-PREP-001) with
-# synthetic archives and mocked transport. No keys, secrets, signing, SDK download, network or artifact access.
+# synthetic archives and mocked transport; and the closed signing diagnostic (MODELS-SIGN-DIAG-001) with a fake SDK
+# and synthetic sentinels. No keys, secrets, signing, SDK download, network or artifact access.
 on:
   pull_request:
     paths:
@@ -45,6 +46,8 @@ jobs:
         run: |
           python3 --version
           python3 -m unittest -v test_models_signing
+      - name: Signing diagnostic, sign-apk.py opt-in hook and leak sentinels (fake SDK, no keys)
+        run: python3 workspace/models/signing/test_sign_diagnostic.py -v
       - name: SDK preparation and models-sign preflight ordering (synthetic archives, mocked transport)
         run: python3 workspace/models/signing/test_models_sdk_prepare.py -v
       - name: Existing host-models-sign suite with the preparation hook
