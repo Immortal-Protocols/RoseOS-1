@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -102,6 +103,138 @@ class BoundaryTest(unittest.TestCase):
         self.assertIn('android:persistent="true"', manifest)
         for banned in ('sharedUserId', 'uses-permission'):
             self.assertNotIn(banned, manifest)
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+    def time(self):
+        return self.now
+    def sleep(self, seconds):
+        self.now += seconds
+
+class FakeChild:
+    """The owned emulator process: running until `exits_at` (fake clock), then its exit status."""
+    def __init__(self, clock, exits_at=None, code=1):
+        self.clock, self.exits_at, self.code = clock, exits_at, code
+    def poll(self):
+        return self.code if self.exits_at is not None and self.clock.now >= self.exits_at else None
+
+class FakeAdb:
+    """`adb devices`, `wait-for-device` and getprop over a fake clock; `states` maps a start time to the serial's
+    state (None: absent), `booted_at` is when sys.boot_completed becomes 1."""
+    def __init__(self, clock, states, booted_at=None):
+        self.clock, self.states, self.booted_at, self.calls = clock, states, booted_at, []
+    def state(self):
+        current = None
+        for at, value in sorted(self.states.items()):
+            if self.clock.now >= at:
+                current = value
+        return current
+    def run(self, argv, timeout=None, **kwargs):
+        args = [str(a) for a in argv[1:]]
+        self.calls.append(args)
+        if args == ['devices']:
+            line = f'{ex.SERIAL}\t{self.state()}\n' if self.state() else ''
+            return ex.subprocess.CompletedProcess(argv, 0, 'List of devices attached\n' + line, '')
+        if args[-1:] == ['wait-for-device']:
+            while self.state() != 'device':
+                if timeout is not None and self.clock.now + 1 > self.start + timeout:
+                    self.clock.now = self.start + timeout
+                    raise ex.subprocess.TimeoutExpired(argv, timeout)
+                self.clock.now += 1
+            return ex.subprocess.CompletedProcess(argv, 0, '', '')
+        if args[-2:] == ['getprop', 'sys.boot_completed']:
+            up = self.state() == 'device' and self.booted_at is not None and self.clock.now >= self.booted_at
+            return ex.subprocess.CompletedProcess(argv, 0 if self.state() == 'device' else 1, '1\n' if up else '\n', '')
+        raise AssertionError(f'unexpected adb call {args}')
+
+class BootWaitTest(unittest.TestCase):
+    """EXP006-BOOT-001: the boot wait over a fake owned child, fake adb and a fake clock; budgets unchanged."""
+    BUDGET = 480
+
+    def wait(self, states, booted_at=None, exits_at=None, code=1):
+        clock = FakeClock()
+        adb = FakeAdb(clock, states, booted_at)
+        adb.start = clock.now
+        child = FakeChild(clock, exits_at, code)
+        patches = [mock.patch.object(ex.subprocess, 'run', adb.run), mock.patch.object(ex.time, 'time', clock.time),
+            mock.patch.object(ex.time, 'sleep', clock.sleep)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        device = ex.Device('/sdk', tempfile.mkdtemp(prefix='pfx-ev-'))
+        device.child = child
+        deadline = clock.now + self.BUDGET
+        try:
+            facts = device.wait_boot(deadline)
+            return 'pass', facts, clock.now - adb.start, deadline - adb.start
+        except (ex.Failed, ex.Unavailable, ex.subprocess.TimeoutExpired) as e:
+            return ex.outcome(lambda: (_ for _ in ()).throw(e)), getattr(e, 'facts', None), clock.now - adb.start, \
+                deadline - adb.start
+
+    def test_an_exited_child_ends_the_wait_with_its_status(self):
+        record, facts, elapsed, _ = self.wait({}, exits_at=1000.0, code=1)
+        self.assertLess(elapsed, 30, 'a dead emulator must not consume the whole boot budget')
+        self.assertEqual(record['result'], 'fail')
+        self.assertEqual(facts['bootWait'], {'child': 'exited', 'childExitStatus': 1, 'serial': 'absent',
+            'serialReachedDevice': False, 'wait': 'child-exited', 'bootCompleted': False, 'seconds': 0})
+        self.assertIn('exited with status 1', record['reason'])
+
+    def test_a_child_that_exits_later_is_seen_on_the_next_round(self):
+        record, facts, elapsed, _ = self.wait({1000.0: 'offline'}, exits_at=1100.0, code=-9)
+        self.assertLess(elapsed, 110)
+        self.assertEqual((facts['bootWait']['wait'], facts['bootWait']['childExitStatus'], facts['bootWait']['serial']),
+            ('child-exited', -9, 'offline'))
+        self.assertEqual(record['result'], 'fail')
+
+    def test_serial_never_device_is_a_failure_at_the_same_budget(self):
+        for state, name in ((None, 'absent'), ('offline', 'offline'), ('unauthorized', 'unauthorized')):
+            with self.subTest(state=name):
+                record, facts, elapsed, budget = self.wait({1000.0: state} if state else {})
+                self.assertEqual(record['result'], 'fail', 'as before: the device never appeared')
+                self.assertGreaterEqual(elapsed, budget)
+                self.assertLess(elapsed, budget + 40, 'no extension of the stage budget')
+                self.assertEqual(facts['bootWait'], {'child': 'running', 'childExitStatus': None, 'serial': name,
+                    'serialReachedDevice': False, 'wait': 'timeout', 'bootCompleted': False, 'seconds': elapsed})
+                self.assertIn(f'serial {name}', record['reason'])
+                for raw in ('/sdk', 'wait-for-device', "['"):
+                    self.assertNotIn(raw, record['reason'], 'no argv in the reason')
+
+    def test_device_without_the_boot_property_stays_unavailable(self):
+        record, facts, elapsed, budget = self.wait({1000.0: 'offline', 1060.0: 'device'})
+        self.assertEqual(record['result'], 'unavailable')
+        self.assertEqual(record['reason'], 'boot did not complete within the stage budget')
+        self.assertEqual((facts['bootWait']['serial'], facts['bootWait']['serialReachedDevice'],
+            facts['bootWait']['bootCompleted'], facts['bootWait']['wait']), ('device', True, False, 'timeout'))
+        self.assertLess(elapsed, budget + 40)
+
+    def test_a_normal_boot_returns_the_facts(self):
+        record, facts, elapsed, _ = self.wait({1000.0: 'offline', 1030.0: 'device'}, booted_at=1090.0)
+        self.assertEqual(record, 'pass')
+        self.assertEqual(facts, {'child': 'running', 'childExitStatus': None, 'serial': 'device',
+            'serialReachedDevice': True, 'wait': 'boot-completed', 'bootCompleted': True, 'seconds': facts['seconds']})
+        self.assertTrue(90 <= facts['seconds'] <= 100 and elapsed <= facts['seconds'] + 5)
+
+    def test_serial_states_from_adb_devices(self):
+        head = 'List of devices attached\n'
+        self.assertEqual(ex.serial_state(head), 'absent')
+        self.assertEqual(ex.serial_state(head + 'emulator-5554\tdevice\n'), 'absent')
+        for state in ('device', 'offline', 'unauthorized', 'recovery'):
+            self.assertEqual(ex.serial_state(head + f'{ex.SERIAL}\t{state}\n'), state)
+        self.assertEqual(ex.serial_state(head + f'{ex.SERIAL}\tno permissions; see [http://x]\n'), 'other')
+
+    def test_outcome_keeps_stage_semantics_and_carries_facts(self):
+        def raises(e):
+            def fn():
+                raise e
+            return fn
+        self.assertEqual(ex.outcome(lambda: {'a': 1}), {'result': 'pass', 'a': 1})
+        self.assertEqual(ex.outcome(raises(ex.Unavailable('u'))), {'result': 'unavailable', 'reason': 'u'})
+        self.assertEqual(ex.outcome(raises(ex.Failed('f' * 700))), {'result': 'fail', 'reason': 'f' * 600})
+        self.assertEqual(ex.outcome(raises(ex.subprocess.TimeoutExpired(['x'], 5)))['result'], 'fail')
+        e = ex.Failed('f')
+        e.facts = {'bootWait': {'wait': 'timeout'}}
+        self.assertEqual(ex.outcome(raises(e)), {'result': 'fail', 'reason': 'f', 'bootWait': {'wait': 'timeout'}})
 
 @unittest.skipUnless(os.environ.get('ANDROID_HOME') or Path('/opt/roseos/android-sdk/platforms/android-35').is_dir(),
     'no Android SDK with platform 35')

@@ -147,12 +147,33 @@ def build(sdk, work):
     (work/'apks.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
 
+def serial_state(devices_output, serial=SERIAL):
+    """The adb state of `serial` in `adb devices` output (device, offline, unauthorized, ...), 'absent' when it is not
+    listed, 'other' for a state that is not a plain word; never the rest of the line."""
+    for line in devices_output.splitlines()[1:]:
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] == serial:
+            state = parts[1].strip()
+            return state if re.fullmatch(r'[a-z-]{1,20}', state) else 'other'
+    return 'absent'
+
+def outcome(fn):
+    """One stage's record: pass with its facts, unavailable or fail with a reason, plus any structured facts the
+    exception carries (the boot wait's); a stage's result is decided only here."""
+    try:
+        return {'result': 'pass', **(fn() or {})}
+    except Unavailable as e:
+        return {'result': 'unavailable', 'reason': str(e), **getattr(e, 'facts', {})}
+    except (Failed, subprocess.TimeoutExpired) as e:
+        return {'result': 'fail', 'reason': str(e)[:600], **getattr(e, 'facts', {})}
+
 # ------------------------------------------------------------------ run
 
 class Device:
     def __init__(self, sdk, evidence):
         self.adb = str(Path(sdk)/'platform-tools/adb')
         self.evidence = Path(evidence)
+        self.child = None  # the owned emulator process, once launched
 
     def sh(self, *args, timeout=120, check=False):
         result = subprocess.run([self.adb, '-s', SERIAL, *args], capture_output=True, text=True, timeout=timeout)
@@ -163,14 +184,47 @@ class Device:
     def prop(self, name):
         return self.sh('shell', 'getprop', name).stdout.strip()
 
+    def serial(self):
+        try:
+            listed = subprocess.run([self.adb, 'devices'], capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return 'adb-timeout'
+        return serial_state(listed.stdout) if listed.returncode == 0 else 'adb-error'
+
     def wait_boot(self, deadline):
-        subprocess.run([self.adb, '-s', SERIAL, 'wait-for-device'], timeout=max(1, deadline - time.time()))
-        while time.time() < deadline:
-            if self.prop('sys.boot_completed') == '1':
-                time.sleep(5)
-                return
+        """Every 5 s until the same deadline: the owned emulator child (an exit ends the wait at once with its
+        status), the serial's adb state, and once it is a device, sys.boot_completed. Never reaching device fails as
+        the old wait-for-device timeout did; device without the boot property is unavailable. The structured facts
+        (no log, argv or environment) are returned, or carried by the exception for the stage record."""
+        started = time.time()
+        facts = {'child': 'not-owned', 'childExitStatus': None, 'serial': 'absent', 'serialReachedDevice': False,
+            'wait': 'timeout', 'bootCompleted': False, 'seconds': 0}
+        def end(error, wait):
+            facts.update(wait=wait, seconds=round(time.time() - started))
+            error.facts = {'bootWait': facts}
+            return error
+        while True:
+            code = self.child.poll() if self.child else None
+            if self.child:
+                facts.update(child='running' if code is None else 'exited', childExitStatus=code)
+            facts['serial'] = self.serial()
+            if code is not None:
+                raise end(Failed(f'the emulator exited with status {code} before boot completed (serial '
+                    f'{facts["serial"]}, boot property not reached)'), 'child-exited')
+            if facts['serial'] == 'device':
+                facts['serialReachedDevice'] = True
+                if self.prop('sys.boot_completed') == '1':
+                    facts['bootCompleted'] = True
+                    time.sleep(5)
+                    facts.update(wait='boot-completed', seconds=round(time.time() - started))
+                    return facts
+            if time.time() >= deadline:
+                break
             time.sleep(5)
-        raise Unavailable('boot did not complete within the stage budget')
+        if not facts['serialReachedDevice']:
+            raise end(Failed(f'{SERIAL} never reached device state within the stage budget (child {facts["child"]}, '
+                f'serial {facts["serial"]}, boot property not reached)'), 'timeout')
+        raise end(Unavailable('boot did not complete within the stage budget'), 'timeout')
 
     def reboot(self, deadline):
         self.sh('reboot', timeout=60)
@@ -203,12 +257,7 @@ def run(sdk, work, evidence, systemui=False):
         if any(s['result'] != 'pass' for n, s in stages.items() if needs is None or n in needs):
             stages[name] = {'result': 'not-run', 'reason': 'an earlier stage did not pass'}
             return
-        try:
-            stages[name] = {'result': 'pass', **(fn() or {})}
-        except Unavailable as e:
-            stages[name] = {'result': 'unavailable', 'reason': str(e)}
-        except (Failed, subprocess.TimeoutExpired) as e:
-            stages[name] = {'result': 'fail', 'reason': str(e)[:600]}
+        stages[name] = outcome(fn)
 
     def environment():
         sdkmanager = Path(sdk)/'cmdline-tools/latest/bin/sdkmanager'
@@ -247,7 +296,8 @@ def run(sdk, work, evidence, systemui=False):
         emulator_proc = subprocess.Popen([str(Path(sdk)/'emulator/emulator'), '-avd', 'fixture', '-port', str(SERIAL_PORT),
             '-no-window', '-no-snapshot', '-no-boot-anim', '-no-audio', '-writable-system', '-gpu', 'swiftshader_indirect'],
             stdout=open(work/'emulator.log', 'w'), stderr=subprocess.STDOUT)
-        device.wait_boot(budget(8))
+        device.child = emulator_proc
+        boot_wait = device.wait_boot(budget(8))
         devices = [l.split()[0] for l in run_ok([device.adb, 'devices']).splitlines()[1:] if l.strip()]
         if devices != [SERIAL]:
             raise Failed(f'unexpected devices {devices}')
@@ -255,7 +305,7 @@ def run(sdk, work, evidence, systemui=False):
             'fingerprint': device.prop('ro.build.fingerprint'), 'sdk': device.prop('ro.build.version.sdk')}
         if facts['qemu'] != '1' or facts['debuggable'] != '1':
             raise Unavailable(f'not a debuggable emulator image: {facts}')
-        return facts
+        return {**facts, 'bootWait': boot_wait}
 
     def seed():
         verity = device.prop('ro.boot.veritymode')
