@@ -84,8 +84,9 @@ class CheckedInCandidateTest(unittest.TestCase):
     def test_source_manifests_match_the_allocated_versions(self):
         # 2805 bundled 305; 303 was delivered through the catalog and 304, 306 and 307 published on GitHub; the 2806
         # candidate bundled 308, reserved for the OS route. AGENT309-DELIVERY-001 reserved the app-only 309.
-        # FRANKEL310-ALLOC-001: the source now declares 310, the Frankel 2026102901 OS candidate's Rose Agent.
-        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 310, '310-hifi-os-beta'))
+        # FRANKEL310-ALLOC-001 gave 310 to the Frankel 2026102901 OS candidate's Rose Agent. AGENT311-APP-ONLY: the
+        # owner-requested app-only build of the APP-OS-VISUAL-1030 visuals declares 311, above every reservation.
+        self.assertEqual(manifest_version('workspace/rose-agent/app/AndroidManifest.xml'), ('dev.pixel.voice', 311, '311-hifi-visual-beta'))
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
         self.assertEqual((reserved[309]['route'], reserved[309]['versionName'], reserved[309]['candidate']), ('app-only', '309-hifi-beta', None))
         self.assertEqual((reserved[310]['route'], reserved[310]['versionName'], reserved[310]['candidate'], reserved[310]['osBuild'],
