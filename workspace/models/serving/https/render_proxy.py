@@ -49,6 +49,10 @@ RATE = '6r/m'
 BURST = 2
 DEFAULTS = {'hostname': 'models.a-list.com', 'nginx_port': 8080, 'upstream_port': 8000, 'timeout_s': 120}
 LE_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory'
+# service-auth-v1 (workspace/models/contracts/service-auth-v1.md): per-IP limits on the credential routes.
+AUTH_ROUTES = {'/v1/auth/challenge': 'authchallenge', '/v1/auth/token': 'authtoken'}
+AUTH_RATES = {'authchallenge': '20r/m', 'authtoken': '10r/m'}
+AUTH_BODY_LIMIT = '64k'
 
 
 class Invalid(Exception):
@@ -69,7 +73,81 @@ def check_inputs(hostname, runtime_dir, nginx_port, upstream_port, timeout_s):
         raise Invalid('timeout must be 1-120 seconds (120 for deployment)')
 
 
-def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls=None):
+def service_servers(nginx_port, upstream_port, tls, auth_port, acme):
+    """service-auth-v1 mode (TLS only). The public server authenticates every inference request with auth_request,
+    then forwards it to an internal loopback server that applies the global rate and in-flight limits, so only
+    authenticated requests consume them. /v1/auth/* go to the loopback auth service with per-IP limits."""
+    public, internal = [], []
+    for path, method in ROUTES.items():
+        public.append(f'''        location = {path} {{
+            if ($request_uri != "{path}") {{ return 404; }}
+            if ($request_method != {method}) {{ return 405; }}
+            auth_request /_validate;
+            proxy_set_header Authorization "";
+            proxy_pass http://127.0.0.1:{nginx_port};
+        }}''')
+        internal.append(f'''        location = {path} {{
+            limit_req zone=global burst={BURST} nodelay;
+            limit_conn inflight 1;
+            proxy_pass http://127.0.0.1:{upstream_port};
+        }}''')
+    for path, zone in AUTH_ROUTES.items():
+        public.append(f'''        location = {path} {{
+            if ($request_uri != "{path}") {{ return 404; }}
+            if ($request_method != POST) {{ return 405; }}
+            limit_req zone={zone} burst=5 nodelay;
+            client_max_body_size {AUTH_BODY_LIMIT};
+            proxy_set_header Authorization "";
+            proxy_pass http://127.0.0.1:{auth_port};
+        }}''')
+    public.append(f'''        location = /_validate {{
+            internal;
+            proxy_method GET;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_pass http://127.0.0.1:{auth_port}/_validate;
+        }}''')
+    listen = f"{tls['address']}:{tls['port']} ssl"
+    acme_server = '' if acme is None else f'''
+    # ACME HTTP-01 for renewal only: the challenge path is served from the webroot, everything else is 404.
+    server {{
+        listen {tls['address']}:{acme['port']};
+        server_name _;
+        location ^~ /.well-known/acme-challenge/ {{ root {acme['webroot']}; default_type text/plain; }}
+        location / {{ return 404; }}
+    }}
+'''
+    nl = '\n'
+    return f'''    server {{
+        listen {listen} default_server;
+        server_name _;
+        ssl_reject_handshake on;
+        return 421;
+    }}
+
+    server {{
+        listen {listen};
+        server_name {tls['hostname']};
+        ssl_certificate {tls['fullchain']};
+        ssl_certificate_key {tls['key']};
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_tickets off;
+        if ($args != "") {{ return 400; }}
+{nl.join(public)}
+        location / {{ return 404; }}
+    }}
+
+    # Internal hop: reachable on loopback only, after authentication.
+    server {{
+        listen 127.0.0.1:{nginx_port};
+        server_name _;
+{nl.join(internal)}
+        location / {{ return 404; }}
+    }}
+{acme_server}'''
+
+
+def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls=None, auth='token-map', auth_port=None, acme=None):
     locations = []
     for path, method in ROUTES.items():
         locations.append(f'''        location = {path} {{
@@ -83,7 +161,9 @@ def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls=None):
             proxy_pass http://127.0.0.1:{upstream_port};
         }}''')
     body = '\n'.join(locations)
-    if tls is None:
+    if auth == 'service':
+        servers = service_servers(nginx_port, upstream_port, tls, auth_port, acme)
+    elif tls is None:
         servers = f'''    server {{
         listen 127.0.0.1:{nginx_port};
         server_name _;
@@ -112,6 +192,15 @@ def nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls=None):
         if ($args != "") {{ return 400; }}
 {body}
         location / {{ return 404; }}
+    }}'''
+    if auth == 'service':
+        credentials = '\n'.join(f'    limit_req_zone $binary_remote_addr zone={zone}:1m rate={rate};'
+                                 for zone, rate in AUTH_RATES.items())
+    else:
+        credentials = f'''    # The only line naming the credential lives in this 0600 file, written by `token-map`.
+    map $http_authorization $auth_ok {{
+        default 0;
+        include {runtime_dir}/token.map;
     }}'''
     return f'''# Rendered by workspace/models/serving/https/render_proxy.py ({SCHEMA}). Do not edit by hand.
 worker_processes 1;
@@ -151,11 +240,7 @@ http {{
     limit_conn_status 429;
     limit_conn_log_level warn;
 
-    # The only line naming the credential lives in this 0600 file, written by `token-map`.
-    map $http_authorization $auth_ok {{
-        default 0;
-        include {runtime_dir}/token.map;
-    }}
+{credentials}
 
 {servers}
 }}
@@ -208,17 +293,33 @@ def check_tls_inputs(fullchain, key, address, port):
 
 
 def render(out_dir, hostname, runtime_dir, nginx_port, upstream_port, timeout_s, front='loopback',
-           fullchain=None, key=None, public_address='0.0.0.0', public_port=443):
+           fullchain=None, key=None, public_address='0.0.0.0', public_port=443, auth='token-map', auth_port=8090,
+           acme_webroot=None, acme_port=80):
     check_inputs(hostname, runtime_dir, nginx_port, upstream_port, timeout_s)
     if front not in ('loopback', 'tls'):
         raise Invalid('front must be tls or loopback')
+    if auth not in ('token-map', 'service') or (auth == 'service' and front != 'tls'):
+        raise Invalid('auth must be token-map, or service with the tls front')
+    acme = None
+    if auth == 'service':
+        if not 1024 <= auth_port <= 65535 or auth_port in (nginx_port, upstream_port, public_port):
+            raise Invalid('auth port must be 1024-65535 and distinct')
+        if acme_webroot is not None:
+            if not PATH_RE.match(acme_webroot) or '/../' in acme_webroot + '/':
+                raise Invalid('acme webroot must be a plain absolute path')
+            if not (acme_port == 80 or 1024 <= acme_port <= 65535) or acme_port == public_port:
+                raise Invalid('acme port must be 80 or 1024-65535 and differ from the public port')
+            acme = {'webroot': acme_webroot, 'port': acme_port}
+    elif acme_webroot is not None:
+        raise Invalid('acme webroot needs auth=service')
     out_dir.mkdir(parents=True, exist_ok=True)
     if front == 'tls':
         check_tls_inputs(fullchain, key, public_address, public_port)
         if public_port == upstream_port:
             raise Invalid('public and upstream ports must differ')
         tls = {'address': public_address, 'port': public_port, 'hostname': hostname, 'fullchain': fullchain, 'key': key}
-        files = {'nginx.conf': nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls).encode()}
+        files = {'nginx.conf': nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s, tls,
+                                          auth, auth_port, acme).encode()}
     else:
         files = {
             'nginx.conf': nginx_conf(runtime_dir, nginx_port, upstream_port, timeout_s).encode(),
@@ -246,6 +347,11 @@ def render(out_dir, hostname, runtime_dir, nginx_port, upstream_port, timeout_s,
         'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
         'token_map': f'{runtime_dir}/token.map',
     }
+    if auth == 'service':
+        manifest.pop('token_map')
+        manifest['inputs'].update(auth='service-auth-v1', auth_upstream=f'127.0.0.1:{auth_port}',
+                                  acme=None if acme is None else f"{public_address}:{acme['port']} {acme['webroot']}")
+        manifest['policy']['auth_routes'] = {path: AUTH_RATES[zone] + ' per IP' for path, zone in AUTH_ROUTES.items()}
     if tls_policy:
         manifest['policy']['tls'] = tls_policy
     else:
@@ -321,6 +427,11 @@ def main(argv=None):
     r.add_argument('--key', help='tls: private key path (0600); never read by render')
     r.add_argument('--public-address', default='0.0.0.0')
     r.add_argument('--public-port', type=int, default=443)
+    r.add_argument('--auth', choices=('token-map', 'service'), default='token-map',
+                   help='service: service-auth-v1 via the loopback auth service (tls front only)')
+    r.add_argument('--auth-port', type=int, default=8090)
+    r.add_argument('--acme-webroot', help='service: serve ACME HTTP-01 challenges from this webroot')
+    r.add_argument('--acme-port', type=int, default=80)
     c = sub.add_parser('check-tls')
     c.add_argument('--fullchain', required=True)
     c.add_argument('--key', required=True)
@@ -332,7 +443,8 @@ def main(argv=None):
     try:
         if a.cmd == 'render':
             manifest = render(a.out_dir, a.hostname, a.runtime_dir, a.nginx_port, a.upstream_port, a.timeout_seconds,
-                              a.front, a.fullchain, a.key, a.public_address, a.public_port)
+                              a.front, a.fullchain, a.key, a.public_address, a.public_port,
+                              a.auth, a.auth_port, a.acme_webroot, a.acme_port)
             print(json.dumps({'rendered': str(a.out_dir), 'files': manifest['files']}, sort_keys=True))
         elif a.cmd == 'check-tls':
             print(json.dumps(check_tls(a.fullchain, a.key, a.hostname), sort_keys=True))
