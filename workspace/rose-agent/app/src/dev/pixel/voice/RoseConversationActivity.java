@@ -43,13 +43,13 @@ public final class RoseConversationActivity extends Activity {
   final ConversationDrawing.TrayIcon icon;final TextView label;final int color;
   Control(int labelColor){super(RoseConversationActivity.this);setOrientation(VERTICAL);setGravity(Gravity.CENTER_HORIZONTAL);setClickable(true);setFocusable(true);
    color=labelColor;icon=new ConversationDrawing.TrayIcon(getContext());
-   // HiFi .well: a light glass well (radial highlight) with a fine edge, in the brushed-metal tray.
-   GradientDrawable g=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xfaffffff,0x8cffffff,0x59d6e2f0,0x80becee0});
-   g.setCornerRadius(dp(33));g.setStroke(dp(1),0x806e829e);icon.setBackground(g);icon.setElevation(dp(3));
-   icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);addView(icon,new LayoutParams(dp(92),dp(66)));
+   // HiFi .well (TrayMaterial, shared with the Home tray): a glass lens (92x66 where it fits) in its pocket; it shows the press.
+   icon.setBackground(new TrayMaterial.Well(getResources().getDisplayMetrics().density));icon.setDuplicateParentStateEnabled(true);
+   icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);int lens=ConversationPresentation.wellWidth(getResources().getConfiguration().screenWidthDp,TrayMaterial.POCKET_DP);
+   addView(icon,new LayoutParams(dp(lens+2*TrayMaterial.POCKET_DP),dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP)));
    // Icon-only like the HiFi wells; the words stay as the spoken name (content description).
    label=new TextView(getContext());label.setVisibility(GONE);
-   setPadding(dp(4),0,dp(4),0);setMinimumHeight(dp(66));}
+   setPadding(0,0,0,0);setMinimumHeight(dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP));}
   void show(ConversationPresentation.Glyph glyph,String text,String description){icon.set(glyph,color);label.setText(text);setContentDescription(description);}
   void available(boolean on){setEnabled(on);setAlpha(on?1f:.45f);}
  }
@@ -101,9 +101,8 @@ public final class RoseConversationActivity extends Activity {
   failure=new TextView(this);failure.setTextSize(14);failure.setTextColor(ink());failure.setGravity(Gravity.CENTER);
   failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);bottom.addView(failure,new LinearLayout.LayoutParams(-2,dp(28)));
   // HiFi .tray: brushed metal, three wells (microphone, end call, Rose's apps).
-  LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER);row.setPadding(dp(10),0,dp(10),0);
-  GradientDrawable tray=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xfff6f7f9,0xffe3e7eb,0xffcfd5db,0xffe8ebee});
-  tray.setCornerRadius(dp(22));tray.setStroke(dp(1),0x47506070);row.setBackground(tray);row.setElevation(dp(10));
+  LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER);row.setPadding(dp(ConversationPresentation.TRAY_PAD-TrayMaterial.POCKET_DP),0,dp(ConversationPresentation.TRAY_PAD-TrayMaterial.POCKET_DP),0);
+  row.setBackground(new TrayMaterial.Tray(getResources().getDisplayMetrics().density));row.setElevation(dp(12));
   primary=new Control(ink());primary.setOnClickListener(v->primary());row.addView(primary,new LinearLayout.LayoutParams(0,-2,1f));
   end=new Control(endInk());end.show(ConversationPresentation.Glyph.END,"End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
   // Rose's apps: the existing bound workspace view of the shown task (openWorkspace); no simulated windows.

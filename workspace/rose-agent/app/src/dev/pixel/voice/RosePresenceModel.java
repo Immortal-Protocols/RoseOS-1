@@ -12,6 +12,13 @@ final class RosePresenceModel {
  static final float GAP_JOINED=.012f,GAP_NARROW=.10f,GAP_WIDE=.38f;
  static final float RING_CLOSE=1.075f,RING_BROAD=1.55f,RING_ENERGY=.12f;
  static final int ROSE=0xfff27a87,SILVER=0xffa6bacf,LIGHT=0xffa3c4ff;
+ /** Room around the sphere that RosePresenceView keeps for the broadest ring, in radii (its onDraw divisor). */
+ static final float VIEW_RADII=RING_BROAD+RING_ENERGY+.12f;
+ /** The HiFi Home tray's Rose: a 42dp sphere (measured in the ce126f56 prototype's tray well, 3x DPR), whose
+  * 102px canvas overhangs the 66px well. */
+ static final float TRAY_SPHERE_DP=42f;
+ /** The square view size that draws a sphere of this diameter with room for the broadest ring. */
+ static int viewSizeFor(float sphereDiameter){return Math.round(sphereDiameter*VIEW_RADII);}
  /** Easing rate per second (HiFi renderer). */
  static final float RATE=5.5f;
 

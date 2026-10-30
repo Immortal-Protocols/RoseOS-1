@@ -55,6 +55,17 @@ public final class ConversationPresentationTest {
             expect(g != ConversationPresentation.Glyph.END && g != ConversationPresentation.Glyph.APPS, "The microphone well never looks like End or Rose's apps");
         }
 
+        // Call tray wells (APP-OS-VISUAL-1030): 92-wide glass where three fit, narrower but usable on small screens,
+        // and the three wells with their 5dp pockets never overflow the margined tray.
+        expect(ConversationPresentation.wellWidth(412, 5) == 92 && ConversationPresentation.wellWidth(600, 5) == 92, "Phone and wide: the reference 92");
+        for (int width : new int[]{280, 320, 360, 384, 412, 600, 900}) {
+            int lens = ConversationPresentation.wellWidth(width, 5);
+            int used = 3 * (lens + 10) + 2 * (ConversationPresentation.TRAY_PAD - 5);
+            expect(lens >= 48 && lens <= 92, "Well width stays 48..92 at " + width + ": " + lens);
+            if (width >= 320) expect(used <= width - 2 * ConversationPresentation.MARGIN, "Three wells fit the tray at " + width + ": " + used);
+        }
+        expect(ConversationPresentation.wellWidth(360, 5) < 92, "A 360dp phone narrows the wells rather than overflowing");
+
         System.out.println("ConversationPresentationTest: " + checks + " checks passed");
     }
 }
