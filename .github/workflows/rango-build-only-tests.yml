@@ -1,14 +1,24 @@
 name: Rango build-only tests
 
-# Source tests of the unsigned Rango build-only route (OS-RANGO-BUILD-001/002): scripts/rango-build-only.py and its
-# configs against a synthetic tree and a fake runner. No secrets, cloud identity, artifacts, builder or dispatch;
-# a pass says nothing about a real generation or compile.
+# Source tests of the unsigned Rango build-only route (OS-RANGO-BUILD-001/002/003): scripts/rango-build-only.py and its
+# configs against a synthetic tree and a fake runner, and scripts/rango-local-inputs.py with rango-reconcile.json
+# against synthetic OTAs, images and fake aapt/apksigner/fsck.erofs. No secrets, cloud identity, artifacts, builder,
+# network or dispatch; a pass says nothing about a real extraction, generation or compile.
 on:
   pull_request:
     paths:
       - 'scripts/rango-build-only.py'
       - 'scripts/tests/test_rango_build_only.py'
+      - 'scripts/rango-local-inputs.py'
+      - 'scripts/tests/test_rango_local_inputs.py'
+      - 'scripts/tests/test_rose_verify.py'
       - 'scripts/release_receipts.py'
+      - 'scripts/host-reconcile.py'
+      - 'scripts/rose-verify.py'
+      - 'scripts/background_apks.py'
+      - 'scripts/prepare-background-policy.py'
+      - 'scripts/apply-os-changes.py'
+      - 'scripts/integration_copy.py'
       - 'os/build-only/**'
       - 'os/devices/pixel10.json'
       - 'os/release-pipeline/frankel.json'
@@ -18,7 +28,16 @@ on:
     paths:
       - 'scripts/rango-build-only.py'
       - 'scripts/tests/test_rango_build_only.py'
+      - 'scripts/rango-local-inputs.py'
+      - 'scripts/tests/test_rango_local_inputs.py'
+      - 'scripts/tests/test_rose_verify.py'
       - 'scripts/release_receipts.py'
+      - 'scripts/host-reconcile.py'
+      - 'scripts/rose-verify.py'
+      - 'scripts/background_apks.py'
+      - 'scripts/prepare-background-policy.py'
+      - 'scripts/apply-os-changes.py'
+      - 'scripts/integration_copy.py'
       - 'os/build-only/**'
       - 'os/devices/pixel10.json'
       - 'os/release-pipeline/frankel.json'
@@ -43,3 +62,7 @@ jobs:
         run: python3 --version
       - name: Rango build-only tests (synthetic tree, fake runner)
         run: python3 scripts/tests/test_rango_build_only.py -v
+      - name: Rango local inputs and reconcile config tests (synthetic OTA, fake tools)
+        run: |
+          command -v mke2fs debugfs || ls -l /usr/sbin/mke2fs /usr/sbin/debugfs
+          python3 scripts/tests/test_rango_local_inputs.py -v

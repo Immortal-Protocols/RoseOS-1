@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-rango-reconcile",
+  "basis": "OS-RANGO-BUILD-003: host-reconcile.py --config for the isolated Rango builder (os/build-only/rango-isolated.json). Same projects, sparse paths, integration-owned roots and trusted patcher as the Frankel integration, so shadow-tree planning, owner-change conflicts, backups and immutable receipts are unchanged; nothing is adopted or reset. Differences, each deliberate: Rango paths only; no installedIdentities (Frankel 2701's expected identities describe Frankel phones, not the Fold); no --locked-control; and no Frankel updater channel. There is no published Rango channel, so the Updater is left upstream (--keep-upstream-updater): this build must not be offered as an update to an existing RoseOS phone, and the Rango channel stays an unresolved input (no URL is invented). host-reconcile.py takes no lock itself; run it under flock on host.lockPath (README.md). The inputs section pins the already downloaded public frankel 2026102901 release that rango-local-inputs.py verifies; its OTA is an app source only and is never installed on or offered to Rango.",
+  "host": {
+    "sourceRoot": "/srv/rose-rango/src",
+    "lockPath": "/srv/rose-rango/rango-build.lock",
+    "workDir": "/srv/rose-rango/work",
+    "inputsDir": "/srv/rose-rango/inputs",
+    "integrate": {
+      "reconcile": {
+        "receiptDir": "/srv/rose-rango/reconcile",
+        "projects": [
+          "frameworks/base",
+          "build/make",
+          "build/release",
+          "packages/apps/Updater",
+          "packages/modules/Permission"
+        ],
+        "integrationOwnedRoots": [
+          "packages/apps/PixelBackgroundControl",
+          "packages/apps/RosePreinstall"
+        ],
+        "sparsePaths": {
+          "frameworks/base": [
+            "core/res/res/values/config.xml"
+          ],
+          "build/make": [
+            "target/product/handheld_product.mk"
+          ],
+          "packages/apps/Updater": [
+            "res/values/config.xml"
+          ],
+          "packages/modules/Permission": [
+            "service/java/com/android/role/RoleService.java"
+          ]
+        },
+        "patcher": "trusted",
+        "applyArgs": [
+          "--background-policy",
+          "{policy}",
+          "--background-agent",
+          "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+          "--agent-tray",
+          "--keep-upstream-updater",
+          "--preinstall-apk",
+          "{signed_apps}/dev.pixel.voice.apk",
+          "--preinstall-apk",
+          "{signed_apps}/dev.pixel.calculator.agent.apk"
+        ]
+      }
+    }
+  },
+  "product": {
+    "commit": "02b21bc69f9afd281422d42e3dcf8a456e471de1",
+    "apps": {
+      "dev.pixel.voice": 310,
+      "dev.pixel.calculator.agent": 4,
+      "dev.pixel.backgroundcontrol": 28
+    },
+    "basis": "The delivered frankel 2026102901 product (PR #141 head). The recipe (this checkout's patcher) is recorded separately by hash in each reconcile receipt; product and recipe are not the same commit."
+  },
+  "unresolved": [
+    "Rango updater channel: none published; the Updater stays upstream and no URL is configured.",
+    "Fold reference display address: not measured; --reference-display-address is not passed."
+  ],
+  "inputs": {
+    "release": {
+      "id": 428513880,
+      "tag": "frankel-2026102901",
+      "build": "2026102901",
+      "baseUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/frankel-2026102901/"
+    },
+    "ota": {
+      "file": "frankel-ota_update-2026102901.zip",
+      "sizeBytes": 1678971619,
+      "sha256": "c97027f1b88d518a7f9b40d182c30795410be89df257b12c270cc6d7b3db5019",
+      "device": "frankel"
+    },
+    "verification": {
+      "file": "verification.json",
+      "sizeBytes": 4599,
+      "sha256": "0c65767734ae68bff03ccbfd32cbf49387146ae7a82150a01b07b8d36e124e32"
+    },
+    "signedTargetFilesSha256": "3c8f86fdd29919829e2abf801360e93442e6a72acce763a76434e34bcfd2cdf1",
+    "signedTargetFilesRole": "provenance only: recorded and compared with verification.json, never read or required",
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "sdk": 37,
+    "prototypeControl": false,
+    "apps": [
+      {
+        "role": "agent",
+        "package": "dev.pixel.backgroundcontrol",
+        "versionCode": 28,
+        "imagePath": "system_ext/priv-app/PixelBackgroundControl/PixelBackgroundControl.apk"
+      },
+      {
+        "role": "voice",
+        "package": "dev.pixel.voice",
+        "versionCode": 310,
+        "imagePath": "product/app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk"
+      },
+      {
+        "role": "target",
+        "package": "dev.pixel.calculator.agent",
+        "versionCode": 4,
+        "imagePath": "product/app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk"
+      }
+    ]
+  }
+}
