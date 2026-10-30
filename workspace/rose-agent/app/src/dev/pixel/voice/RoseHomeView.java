@@ -6,11 +6,14 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.provider.MediaStore;
@@ -26,24 +29,19 @@ import java.util.HashSet;
 import java.util.List;
 
 /**
- * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): the prototype wallpaper and a
- * light dock of real installed apps. Rose lives in the fixed HomeTray, drawn by App's RosePresenceView;
- * this page owns no voice state.
+ * Launcher Home page from the Rose-Fold-v3 prototype (narrow Home): a light dock of real installed apps over the
+ * prototype wallpaper. The wallpaper is one Wallpaper drawable behind the whole pager (OS-PAGING-158-M001), so it
+ * stays continuous while Home and the app pages slide over it; this page draws none of its own. Rose lives in the
+ * fixed HomeTray, drawn by App's RosePresenceView; this page owns no voice state.
  */
 final class RoseHomeView extends FrameLayout {
  static final int DOCK_SIZE = 4;
  /** Decoded once per process: MainActivity rebuilds its pages on every HOME press. */
  static Bitmap cachedWallpaper;
- final Bitmap wallpaper;
- final Rect source = new Rect(), target = new Rect();
- final Paint picture = new Paint(Paint.FILTER_BITMAP_FLAG);
 
  RoseHomeView(MainActivity activity, List<ResolveInfo> dock, Runnable openApps, View pageDots) {
   super(activity);
-  setWillNotDraw(false);
   setContentDescription("Home");
-  if (cachedWallpaper == null) cachedWallpaper = BitmapFactory.decodeResource(getResources(), R.drawable.rose_home_wallpaper);
-  wallpaper = cachedWallpaper;
   LinearLayout column = new LinearLayout(activity);
   column.setOrientation(LinearLayout.VERTICAL);
   column.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -187,23 +185,38 @@ final class RoseHomeView extends FrameLayout {
   return insets;
  }
 
- /** CSS background-size: cover, centered: scale to fill and crop the overflow equally. */
- @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
-  super.onSizeChanged(w, h, oldW, oldH);
-  target.set(0, 0, w, h);
-  if (wallpaper == null || w <= 0 || h <= 0) return;
-  int bw = wallpaper.getWidth(), bh = wallpaper.getHeight();
-  if ((long) bw * h > (long) bh * w) {
-   int cropW = Math.round(bh * (float) w / h);
-   source.set((bw - cropW) / 2, 0, (bw + cropW) / 2, bh);
-  } else {
-   int cropH = Math.round(bw * (float) h / w);
-   source.set(0, (bh - cropH) / 2, bw, (bh + cropH) / 2);
-  }
- }
+ /** The shared Home wallpaper, the same bytes and decode as before, drawn behind the pager at its scroll
+  * position. CSS background-size: cover, centered: scale to fill and crop the overflow equally. */
+ static final class Wallpaper extends Drawable {
+  final Bitmap wallpaper;
+  final Rect source = new Rect();
+  final Paint picture = new Paint(Paint.FILTER_BITMAP_FLAG);
 
- @Override protected void onDraw(Canvas canvas) {
-  if (wallpaper != null && !source.isEmpty()) canvas.drawBitmap(wallpaper, source, target, picture);
-  else canvas.drawColor(0xffdfe8e0);
+  Wallpaper(android.content.res.Resources resources) {
+   if (cachedWallpaper == null) cachedWallpaper = BitmapFactory.decodeResource(resources, R.drawable.rose_home_wallpaper);
+   wallpaper = cachedWallpaper;
+  }
+
+  @Override protected void onBoundsChange(Rect bounds) {
+   int w = bounds.width(), h = bounds.height();
+   source.setEmpty();
+   if (wallpaper == null || w <= 0 || h <= 0) return;
+   int bw = wallpaper.getWidth(), bh = wallpaper.getHeight();
+   if ((long) bw * h > (long) bh * w) {
+    int cropW = Math.round(bh * (float) w / h);
+    source.set((bw - cropW) / 2, 0, (bw + cropW) / 2, bh);
+   } else {
+    int cropH = Math.round(bw * (float) h / w);
+    source.set(0, (bh - cropH) / 2, bw, (bh + cropH) / 2);
+   }
+  }
+
+  @Override public void draw(Canvas canvas) {
+   if (wallpaper != null && !source.isEmpty()) canvas.drawBitmap(wallpaper, source, getBounds(), picture);
+   else canvas.drawColor(0xffdfe8e0);
+  }
+  @Override public void setAlpha(int alpha) {}
+  @Override public void setColorFilter(ColorFilter filter) {}
+  @Override public int getOpacity() { return PixelFormat.OPAQUE; }
  }
 }

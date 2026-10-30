@@ -51,7 +51,9 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
 
 test('Home comes first, the app pages follow it, and the legacy voice page is last (OS-HIFI-HOME-001)',()=>{
  const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
- const order=['titles.add("Home")','"Our apps"','"Preinstalled"','"Play Store"','titles.add("Widgets")','titles.add("Voice home")'].map(t=>pages.indexOf(t));
+ const order=['titles.add("Home")','HomeAppLayout.title(i,appPages)','titles.add("Widgets")','titles.add("Voice home")'].map(t=>pages.indexOf(t));
+ // The app pages hold one continuous real inventory: our apps first, then preinstalled, Play Store and other installs.
+ assert.match(pages,/for\(ArrayList<ResolveInfo> group:Arrays\.asList\(ourApps,systemApps,storeApps,otherApps\)\)launchable\.addAll\(group\);/);
  assert.deepEqual([...order].sort((a,b)=>a-b),order);
  assert.ok(order.every(i=>i>=0));
  assert.ok(pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView(')<pages.indexOf('if(number==voicePage){launcherPager.addView(page);continue;}'));
@@ -59,7 +61,53 @@ test('Home comes first, the app pages follow it, and the legacy voice page is la
  // Only the conversation page runs the voice refresh and the swipe-up gesture.
  assert.match(pages,/drawer=index!=voicePage;/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
- assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray\);\n  setContentView\(homeFrame\);/);
+ assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);/);
+});
+
+test('app pages sit on the shared wallpaper with one fixed row of dots and no drawer headings (OS-PAGING-158-M001)',()=>{
+ const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
+ // One wallpaper behind the whole pager (drawn at the scroll position), not a per-page or drawer background.
+ assert.match(pages,/launcherPager\.setBackground\(new RoseHomeView\.Wallpaper\(getResources\(\)\)\);/);
+ assert.ok(!/protected void onDraw|onSizeChanged/.test(home),'Home draws no wallpaper of its own, so it cannot slide');
+ // App pages: the measured grid, no visible heading or subtitle, the page name as its accessible name.
+ const appPage=main.slice(main.indexOf(' View appPage('),main.indexOf(' TextView appLabel('));
+ assert.match(appPage,/HomeAppPage grid=new HomeAppPage\(this,appColumns,this::appPageMeasured\);for\(ResolveInfo app:apps\)grid\.addView\(appTile\(app\)\);/);
+ assert.match(appPage,/result\.setContentDescription\(title\);/);
+ assert.match(appPage,/No other apps are installed\./);
+ for(const gone of ['setAccessibilityHeading','Your everyday apps','Included with this operating system','setBackground'])assert.ok(!appPage.includes(gone),gone);
+ for(const gone of ['suiteGrid','arrangeSuiteRows','addAppGroup','"Our apps"','GridLayout grid'])assert.ok(!main.includes(gone),gone);
+ // Columns come from the width only (HomeAppLayout), never from the longest label.
+ assert.ok(!/measureText/.test(main.slice(main.indexOf(' void planAppPages('),main.indexOf(' View appPage('))),'no label-driven columns');
+ assert.match(main,/appColumns=HomeAppLayout\.columns\(width\/density\);appPerPage=HomeAppLayout\.perPage\(width,height,cell,density\);/);
+ // Labels wrap to two lines in the measured cell; the cell height is what HomeAppLayout plans with.
+ assert.match(main,/name\.setMaxLines\(HomeAppLayout\.LABEL_LINES\);/);
+ assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
+ // One row of dots, fixed in the frame above the tray, and the pages' bottom inset clears both.
+ assert.equal((main.match(/makePageDots\(titles\)/g)||[]).length,1);
+ assert.match(homeFrame,/reserved = activity\.dp\(HomeTray\.HEIGHT_DP\) \+ 2 \* gap \+ dotsHeight;/);
+ assert.match(homeFrame,/addView\(dots, dotsParams\);/);
+ // A re-measure re-plans once, then only when the real capacity changes.
+ assert.match(main,/if\(!HomeAppLayout\.replan\(appColumns,appPerPage,width,height,cell,getResources\(\)\.getDisplayMetrics\(\)\.density\)\)return;\n  if\(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight\)return;/);
+ // Launch and return are unchanged: every tile opens its own app through WorkspaceLauncher.
+ assert.match(main,/tile\.setOnClickListener\(v->WorkspaceLauncher\.open\(this,app,label\)\);/);
+ // The pager's gesture decisions are HomePages' tested ones.
+ const pager=read('../app/src/dev/pixel/voice/LauncherPager.java');
+ assert.match(pager,/int owner=HomePages\.owner\(event\.getX\(\)-downX,event\.getY\(\)-downY,slop\);/);
+ assert.match(pager,/finishGesture\(HomePages\.settle\(downPage,dx,vx,getWidth\(\),flingThreshold,/);
+});
+
+test('Home layout, page/gesture and overview Java checks run against the production classes',()=>{
+ // Executed, not matched: compile each production helper with its Java test and run it.
+ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+ for(const name of ['HomeAppLayout','HomePages']){
+  const out=fs.mkdtempSync(path.join(os.tmpdir(),'home-java-'));
+  try{
+   execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-source','8','-target','8','-Xlint:-options','-d',out,
+    path.join(root,`app/src/dev/pixel/voice/${name}.java`),path.join(root,`app/tests/${name}Test.java`)],{stdio:'pipe'});
+   const result=execFileSync('java',['-cp',out,`dev.pixel.voice.${name}Test`],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
+   assert.match(result,new RegExp(`${name}Test: \\d+ checks passed`));
+  }finally{fs.rmSync(out,{recursive:true,force:true});}
+ }
 });
 
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
@@ -207,9 +255,11 @@ test('the wallpaper is the exact Rose-Fold-v3 narrow Home image, drawn like back
  const jpeg=fs.readFileSync(new URL('../app/res/drawable-nodpi/rose_home_wallpaper.jpg',import.meta.url));
  // First embedded JPEG of Rose-Fold-v3.html (Library v2, SHA-256 67bf7a50…05ee), 461 x 1024.
  assert.equal(crypto.createHash('sha256').update(jpeg).digest('hex'),'409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5');
- assert.match(home,/BitmapFactory\.decodeResource\(getResources\(\), R\.drawable\.rose_home_wallpaper\)/);
- // Shaders and crop are prepared on size change, not allocated per frame.
- assert.ok(!home.slice(home.lastIndexOf('protected void onDraw(')).includes('new '),'no allocation while drawing Home');
+ assert.match(home,/BitmapFactory\.decodeResource\(resources, R\.drawable\.rose_home_wallpaper\)/);
+ // The crop is prepared when the bounds change, not allocated per frame.
+ const draw=home.slice(home.indexOf('@Override public void draw(Canvas canvas)'));
+ assert.ok(!draw.slice(0,draw.indexOf('\n  }')).includes('new '),'no allocation while drawing the wallpaper');
+ assert.match(home,/@Override protected void onBoundsChange\(Rect bounds\)/);
 });
 
 test('no conversation-page check uses a literal page index',()=>{

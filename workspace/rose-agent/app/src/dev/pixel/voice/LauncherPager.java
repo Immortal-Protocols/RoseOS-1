@@ -9,7 +9,8 @@ import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.OverScroller;
 
-/** Small native pager: horizontal drags page, vertical gestures stay with the child. */
+/** Small native pager: horizontal drags page, vertical gestures stay with the child (HomePages.owner, settle).
+ * Its background is drawn at the scroll position, so the shared Home wallpaper stays put while pages slide. */
 final class LauncherPager extends ViewGroup {
  interface SwipePermission { boolean allow(MotionEvent down); }
  interface PageListener { void selected(int index); }
@@ -38,7 +39,6 @@ final class LauncherPager extends ViewGroup {
   selected=next;
   for(int i=0;i<getChildCount();i++)getChildAt(i).setImportantForAccessibility(
     i==next?IMPORTANT_FOR_ACCESSIBILITY_AUTO:IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-  setContentDescription(next==0?"Voice home":"Apps page "+next+" of "+(getChildCount()-1));
   int target=next*getWidth();
   scroller.abortAnimation();
   if(animate&&getWidth()>0){scroller.startScroll(getScrollX(),0,target-getScrollX(),0,240);postInvalidateOnAnimation();}
@@ -70,9 +70,9 @@ final class LauncherPager extends ViewGroup {
    case MotionEvent.ACTION_DOWN:begin(event);return false;
    case MotionEvent.ACTION_MOVE:
     if(!eligible||event.getPointerCount()!=1)return false;
-    float dx=Math.abs(event.getX()-downX),dy=Math.abs(event.getY()-downY);
-    if(dy>slop&&dy>dx){eligible=false;return false;}
-    if(dx>slop&&dx>dy*1.35f){
+    int owner=HomePages.owner(event.getX()-downX,event.getY()-downY,slop);
+    if(owner==HomePages.CHILD){eligible=false;return false;}
+    if(owner==HomePages.PAGER){
      dragging=true;scroller.abortAnimation();getParent().requestDisallowInterceptTouchEvent(true);return true;
     }
     return false;
@@ -93,10 +93,7 @@ final class LauncherPager extends ViewGroup {
   if(event.getActionMasked()==MotionEvent.ACTION_UP){
    float dx=event.getX()-downX,vx=0;
    if(velocity!=null){velocity.computeCurrentVelocity(1000);vx=velocity.getXVelocity();}
-   int target=Math.round((float)getScrollX()/Math.max(1,getWidth()));
-   if(Math.abs(dx)>getWidth()*.2f)target=downPage+(dx<0?1:-1);
-   else if(Math.abs(vx)>flingThreshold)target=downPage+(vx<0?1:-1);
-   finishGesture(target);return true;
+   finishGesture(HomePages.settle(downPage,dx,vx,getWidth(),flingThreshold,Math.round((float)getScrollX()/Math.max(1,getWidth())),getChildCount()));return true;
   }
   if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){finishGesture(selected);return true;}
   return true;
