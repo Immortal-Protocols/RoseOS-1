@@ -615,7 +615,7 @@ class WorkflowAppPublisherTest(unittest.TestCase):
         self.assertIn('APP_PUBLISH: ${{ inputs.app_publish }}', guard)
         self.assertIn('[[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]', guard)
         self.assertIn("    if: inputs.mode == 'emulator-alpha'\n", self.jobs['alpha-builder'])
-        self.assertIn('    needs: builder\n', self.jobs['publisher'])
+        self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
 
 if __name__ == '__main__':
     unittest.main()

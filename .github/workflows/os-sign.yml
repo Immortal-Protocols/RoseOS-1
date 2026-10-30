@@ -1,4 +1,5 @@
 name: OS signing (dedicated signer)
+run-name: OS signing ${{ inputs.request_id }}
 
 # SIGN-021/022: one hash-bound signing job on the dedicated signer host (runner group roseos-signing). os-release
 # dispatches this workflow from main naming its own run, the immutable unsigned-build artifact (id and digest) and the
@@ -21,6 +22,9 @@ on:
       manifest_sha256:
         description: sha256 of the artifact's manifest.json
         required: true
+      request_id:
+        description: <source_run>.<source_attempt>.<device>-<build>; the run-name the caller correlates on
+        required: true
 
 permissions:
   contents: read
@@ -35,6 +39,7 @@ env:
   ARTIFACT_ID: ${{ inputs.artifact_id }}
   ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
   MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+  REQUEST_ID: ${{ inputs.request_id }}
   # The approved federation for this exact workflow on main (OCT30 exact security decision); not repository variables.
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/roseos-signing/providers/github
   SIGNER_SERVICE_ACCOUNT: roseos-dedicated-signer@protocols-465723.iam.gserviceaccount.com
@@ -57,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/signing-job.py ingress --source-run "$SOURCE_RUN" --artifact-id "$ARTIFACT_ID" \
-            --artifact-digest "$ARTIFACT_DIGEST" --manifest-sha256 "$MANIFEST_SHA256" --out "$RUNNER_TEMP/ingress" --signing-root "$SIGNING_ROOT"
+            --artifact-digest "$ARTIFACT_DIGEST" --manifest-sha256 "$MANIFEST_SHA256" --out "$RUNNER_TEMP/ingress" --signing-root "$SIGNING_ROOT" --request-id "$REQUEST_ID"
       - name: Hand the validated bundle to the signing job
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -143,10 +148,34 @@ jobs:
           cp "$out/signing-receipt.json" "$RUNNER_TEMP/signed-public/"
           cp "$out"/public/* "$RUNNER_TEMP/signed-public/"
           echo "SIGNED_JOB=$(basename "$out")" >> "$GITHUB_ENV"
+          # SIGN-023: the signed target-files for the caller's signed-candidate verification, private and hash-bound to the
+          # identical receipt; never part of the public release assets.
+          mkdir "$RUNNER_TEMP/signed-target"
+          cp "$out/signing-receipt.json" "$out/signed-target_files.zip" "$RUNNER_TEMP/signed-target/"
+          python3 - "$RUNNER_TEMP/signed-target" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          d = Path(sys.argv[1])
+          receipt = json.loads((d/'signing-receipt.json').read_text())
+          digest = hashlib.sha256()
+          with open(d/'signed-target_files.zip', 'rb') as f:
+              for block in iter(lambda: f.read(8 << 20), b''):
+                  digest.update(block)
+          if sorted(p.name for p in d.iterdir()) != ['signed-target_files.zip', 'signing-receipt.json'] \
+                  or digest.hexdigest() != receipt['outputs']['signed-target_files.zip']:
+              sys.exit('the staged signed target-files differs from its receipt')
+          PY
       - name: Public outputs and receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: signed-${{ env.SIGNED_JOB }}-${{ github.run_id }}
           path: ${{ runner.temp }}/signed-public
           retention-days: 7
+          if-no-files-found: error
+      - name: Signed target-files for verification (private)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-target-${{ env.SIGNED_JOB }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/signed-target
+          retention-days: 1
           if-no-files-found: error

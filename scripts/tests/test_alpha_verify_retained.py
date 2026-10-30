@@ -187,7 +187,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('python3 scripts/alpha-verify-retained.py run --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" '
             '--run-id "$GITHUB_RUN_ID" --build-timestamp "$BUILD_TIMESTAMP" --receipt-dir "$ROSE_BASE/receipt"', job)
         self.assertIn('if: always()\n        run: test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"', job)
-        self.assertIn('alpha-verify-retained, alpha-export, app-reuse, publisher]', WORKFLOW)
+        self.assertIn('alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]', WORKFLOW)
         guard = WORKFLOW[WORKFLOW.index('  guard:'):WORKFLOW.index('  controller:')]
         self.assertIn("if: inputs.mode == 'emulator-alpha-verify-retained'\n        run: python3 scripts/emulator-alpha.py preflight --job guard", guard)
 

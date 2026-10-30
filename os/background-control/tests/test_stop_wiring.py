@@ -56,4 +56,37 @@ class StopWiringTest(unittest.TestCase):
     def test_schema_advertised(self):
         self.assertIn('.put("schemaVersion",3)', (SOURCE/'AgentProvider.java').read_text())
 
+class ActionFeedbackTest(unittest.TestCase):
+    """#225: button outcomes are shown apart from the refreshed status, and survive recreation."""
+    def test_action_notice_logic(self):
+        import shutil, subprocess, tempfile
+        out = tempfile.mkdtemp(prefix='action-notice-')
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', out, str(SOURCE/'ActionNotice.java'),
+            str(Path(__file__).resolve().parent/'ActionNoticeTest.java')], check=True)
+        result = subprocess.run(['java', '-cp', out, 'dev.pixel.backgroundcontrol.ActionNoticeTest'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_main_activity_keeps_outcomes_out_of_the_refreshed_status(self):
+        text = (SOURCE/'MainActivity.java').read_text()
+        refresh = text[text.index('final Runnable refresh'):text.index('void show()')]
+        self.assertIn('status.setText(', refresh)
+        self.assertNotIn('result.setText(', refresh, 'the 500 ms refresh never overwrites an outcome')
+        self.assertNotIn('status.setText(e', text, 'errors no longer go into the refreshed status')
+        self.assertIn('notice.consent(Controller.requestConsent(this));', text)
+        self.assertIn('notice.failed("Android consent",e);', text)
+        self.assertIn('notice.stopped(s.optString("status"),s.optString("error"));', text)
+        self.assertIn('b.putString(ActionNotice.SAVED_KEY,notice.text());', text)
+        self.assertIn('if(b!=null)notice.restore(b.getString(ActionNotice.SAVED_KEY));', text)
+
+    def test_consent_reports_none_pending_and_keeps_the_automatic_caller(self):
+        text = (SOURCE/'Controller.java').read_text()
+        self.assertIn('static boolean requestConsent(Activity a)throws Exception{IntentSender pending; '
+            'synchronized(Controller.class){pending=consent;}if(pending==null)return false;'
+            'a.startIntentSenderForResult(pending,3,null,0,0,0);return true;}', text)
+        self.assertIn('case "onSessionPending":consent=(IntentSender)args[0];status="consent_required";'
+            'Activity a=MainActivity.visible.get();if(a!=null)requestConsent(a);break;', text)
+
 if __name__ == '__main__':unittest.main()

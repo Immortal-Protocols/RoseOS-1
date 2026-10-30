@@ -23,6 +23,8 @@ rt = load('release_transport', 'scripts/release-transport.py')
 sj = load('signing_job', 'scripts/signing-job.py')
 OS_SIGN = (ROOT/'.github/workflows/os-sign.yml').read_text()
 CANDIDATE = '5dd3d54ff84ff76646a01a5dad01929d0ecf7710'
+IDENTITIES = {k: json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['identities'][k]
+              for k in ('otaCertificateSha256', 'avbPublicKeySha256')}
 
 
 class Fixture:
@@ -96,8 +98,8 @@ def signed_outputs(test, f, **receipt_change):
     for name in rt.public_assets('frankel', '2026103004'):
         (signed/name).write_bytes((f.dir/'UPDATE.md').read_bytes() if name == 'UPDATE.md' else name.encode())
     receipt = {'schema': rt.RECEIPT_SCHEMA, 'jobId': 'frankel-2026103004', 'verdict': 'signed', **{k: m[k] for k in
-        ('device', 'build', 'buildTimestamp', 'candidateSha', 'config', 'inputs')}, 'identities': {'otaCertificateSha256': 'a' * 64},
-        'outputs': {'signed-target_files.zip': 'b' * 64, **{f'public/{p.name}': rt.sha256_file(p) for p in signed.iterdir()}}}
+        ('device', 'build', 'buildTimestamp', 'candidateSha', 'config', 'inputs')}, 'identities': IDENTITIES,
+        'outputs': {'signed-target_files.zip': hashlib.sha256(b'signed target files').hexdigest(), **{f'public/{p.name}': rt.sha256_file(p) for p in signed.iterdir()}}}
     receipt.update(receipt_change)
     (signed/'signing-receipt.json').write_text(json.dumps(receipt))
     return signed
@@ -108,7 +110,7 @@ class Accept(unittest.TestCase):
         f = Fixture(self)
         f.package()
         result = rt.accept(f.out/'frankel-2026103004-41112579187', signed_outputs(self, f))
-        self.assertEqual((result['build'], result['identities']), ('2026103004', {'otaCertificateSha256': 'a' * 64}))
+        self.assertEqual((result['jobId'], result['build'], result['identities']), ('frankel-2026103004', '2026103004', IDENTITIES))
 
     def test_unbound_or_changed_outputs_refuse(self):
         f = Fixture(self)
@@ -118,7 +120,9 @@ class Accept(unittest.TestCase):
         for change, error in (({'verdict': 'FAIL'}, 'verdict'), ({'build': '2026103005'}, 'binding'),
                               ({'candidateSha': 'c' * 40}, 'binding'),
                               ({'inputs': dict(m['inputs'], otatools=dict(m['inputs']['otatools'], sha256='d' * 64))}, 'binding'),
-                              ({'schema': 'other'}, 'schema')):
+                              ({'schema': 'other'}, 'schema'),
+                              ({'jobId': 'frankel-2026103004-41112579187'}, 'job_id'),
+                              ({'identities': dict(IDENTITIES, otaCertificateSha256='0' * 64)}, 'identity')):
             signed = signed_outputs(self, f, **change)
             with self.subTest(change=list(change)), self.assertRaisesRegex(rt.Refused, error):
                 rt.accept(job, signed)
@@ -139,6 +143,63 @@ class Accept(unittest.TestCase):
         self.assertEqual(rt.main(['package', '--release-dir', str(f.dir/'release'), '--otatools', str(f.dir/'otatools.zip'),
             '--device', 'frankel', '--build', 'bad', '--timestamp', '1793390000', '--candidate', CANDIDATE, '--notes',
             str(f.dir/'UPDATE.md'), '--config', 'os/release-pipeline/frankel.json', '--job-id', 'j', '--out', str(f.out)]), 2)
+
+
+def target_artifact(f, signed, data=b'signed target files'):
+    """The private signed-target-<job>-<run> artifact: the signed target-files and the identical receipt copy."""
+    target = f.dir/'target'
+    target.mkdir()
+    (target/'signed-target_files.zip').write_bytes(data)
+    shutil.copyfile(signed/'signing-receipt.json', target/'signing-receipt.json')
+    return target
+
+
+class AcceptTarget(unittest.TestCase):
+    def setUp(self):
+        self.f = Fixture(self)
+        self.f.package()
+        self.job = self.f.out/'frankel-2026103004-41112579187'
+        self.signed = signed_outputs(self, self.f)
+
+    def test_both_artifacts_bound_to_one_receipt(self):
+        target = target_artifact(self.f, self.signed)
+        result = rt.accept(self.job, self.signed, target)
+        self.assertEqual(result['signedTargetFilesSha256'], hashlib.sha256(b'signed target files').hexdigest())
+
+    def test_tampered_missing_extra_or_unequal_receipt_refuse(self):
+        cases = [(lambda t: (t/'signed-target_files.zip').write_bytes(b'tampered'), 'differs from the signing receipt'),
+                 (lambda t: (t/'signed-target_files.zip').unlink(), 'exactly'),
+                 (lambda t: (t/'key.pem').write_text('x'), 'exactly'),
+                 (lambda t: (t/'signing-receipt.json').write_text('{}'), 'copies differ')]
+        for mutate, error in cases:
+            target = target_artifact(self.f, self.signed)
+            mutate(target)
+            with self.subTest(error=error), self.assertRaisesRegex(rt.Refused, error):
+                rt.accept(self.job, self.signed, target)
+            shutil.rmtree(target)
+
+    def test_target_in_the_public_artifact_is_pollution(self):
+        shutil.copyfile(target_artifact(self.f, self.signed)/'signed-target_files.zip', self.signed/'signed-target_files.zip')
+        with self.assertRaisesRegex(rt.Refused, 'outputs'):
+            rt.accept(self.job, self.signed, self.f.dir/'target')
+
+    def test_place_installs_exactly_what_verify_signed_reads(self):
+        target = target_artifact(self.f, self.signed)
+        release = self.f.dir/'release'
+        result = rt.place(self.job, self.signed, target, release)
+        self.assertEqual(result['signer'], 'dedicated')
+        self.assertEqual(sorted(p.name for p in (release/'public').iterdir()), sorted(rt.public_assets('frankel', '2026103004')))
+        self.assertEqual((release/'signed-target_files.zip').read_bytes(), b'signed target files')
+        self.assertEqual((release/'dedicated-signing-receipt.json').read_bytes(), (self.signed/'signing-receipt.json').read_bytes())
+        with self.assertRaisesRegex(rt.Refused, 'place_exists'):
+            rt.place(self.job, self.signed, target, release)
+
+    def test_place_never_installs_unaccepted_bytes(self):
+        target = target_artifact(self.f, self.signed, data=b'other')
+        release = self.f.dir/'release'
+        with self.assertRaises(rt.Refused):
+            rt.place(self.job, self.signed, target, release)
+        self.assertFalse((release/'public').exists() or (release/'signed-target_files.zip').exists())
 
 
 class Response:
@@ -246,14 +307,19 @@ class Request(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(rt.Invalid):
                 self.run_request(FakeActions(), inputs=dict(INPUTS, **change))
 
-    def test_signed_artifact_is_the_single_named_one(self):
-        name = 'signed-frankel-2026103004-9001'
-        gh = FakeActions(artifacts=[{'id': 77, 'name': name, 'digest': 'sha256:' + 'a' * 64, 'expired': False},
-                                    {'id': 78, 'name': 'other', 'expired': False}])
-        self.assertEqual(rt.signed_artifact(ENV, '9001', 'frankel-2026103004', opener=gh), ('77', name, 'sha256:' + 'a' * 64))
-        for artifacts in ([], [{'id': 77, 'name': name, 'expired': True}], [{'id': 1, 'name': name}, {'id': 2, 'name': name}]):
+    def test_signed_artifacts_are_the_two_canonical_ones(self):
+        public, target = 'signed-frankel-2026103004-9001', 'signed-target-frankel-2026103004-9001'
+        base = [{'id': 77, 'name': public, 'digest': 'sha256:' + 'a' * 64, 'expired': False},
+                {'id': 79, 'name': target, 'digest': 'sha256:' + 'c' * 64, 'expired': False},
+                {'id': 78, 'name': 'signed-frankel-2026103004-41115854376-9001', 'expired': False}]
+        self.assertEqual(rt.signed_artifacts(ENV, '9001', 'frankel-2026103004', opener=FakeActions(artifacts=base)),
+                         {'public': ('77', public, 'sha256:' + 'a' * 64), 'target': ('79', target, 'sha256:' + 'c' * 64)})
+        for artifacts in (base[:1], base[1:], [dict(base[0], expired=True), base[1]], base + [dict(base[1], id=80)]):
             with self.subTest(artifacts=artifacts), self.assertRaisesRegex(rt.Refused, 'artifact_missing'):
-                rt.signed_artifact(ENV, '9001', 'frankel-2026103004', opener=FakeActions(artifacts=artifacts))
+                rt.signed_artifacts(ENV, '9001', 'frankel-2026103004', opener=FakeActions(artifacts=artifacts))
+        # the run-suffixed producer directory name is never the signed job id
+        with self.assertRaises(rt.Invalid):
+            rt.signed_artifacts(ENV, '9001', 'frankel-2026103004-41115854376', opener=FakeActions(artifacts=base))
 
 
 class Workflow(unittest.TestCase):
@@ -261,13 +327,68 @@ class Workflow(unittest.TestCase):
         wf = (ROOT/'.github/workflows/os-release.yml').read_text()
         builder = wf.split('\n  builder:\n', 1)[1].split('\n  app-builder:\n', 1)[0]
         step = builder.split('      - name: Package the signing job for the dedicated signer (opt-in)\n', 1)[1].split('\n      - name:', 1)[0]
-        self.assertIn("        if: inputs.mode == 'latest-beta' && vars.ROSE_SIGNING_TRANSPORT == 'package'\n", step)
+        self.assertIn("        if: inputs.mode == 'latest-beta' && (vars.ROSE_SIGNING_TRANSPORT == 'package' || vars.ROSE_SIGNING_TRANSPORT == 'dedicated')\n", step)
         self.assertIn('python3 scripts/release-transport.py package', step)
         for forbidden in ('secrets.', 'gcp-login', 'upload-artifact', 'scp ', 'ssh ', 'curl'):
             self.assertNotIn(forbidden, step)
         order = [builder.index(n) for n in ('- name: Verify the unsigned build', '- name: Package the signing job',
                                             '- name: Signer access for OS signing', '- name: Sign\n')]
         self.assertEqual(order, sorted(order))
+
+
+class DedicatedWiring(unittest.TestCase):
+    """os-release.yml M2c: producer -> request-signing -> signed-builder -> existing publisher, default-off."""
+
+    def setUp(self):
+        wf = (ROOT/'.github/workflows/os-release.yml').read_text()
+        self.wf = wf
+        body = wf.split('\njobs:\n', 1)[1]
+        self.jobs = dict(re.findall(r'(?m)^  ([a-z][\w-]*):\n((?:(?:    .*|)\n)*)', body + '\n'))
+
+    def test_dedicated_mode_is_default_off_and_latest_beta_only(self):
+        self.assertIn("      ROSE_DEDICATED_SIGNER: ${{ inputs.mode == 'latest-beta' && vars.ROSE_SIGNING_TRANSPORT == 'dedicated' }}\n",
+                      self.jobs['builder'])
+        self.assertIn("    if: inputs.mode == 'latest-beta' && needs.builder.outputs.dedicated == 'true'\n", self.jobs['request-signing'])
+        self.assertIn("    if: inputs.mode == 'latest-beta' && needs.request-signing.result == 'success'\n", self.jobs['signed-builder'])
+
+    def test_builder_never_signs_on_the_dedicated_route(self):
+        builder = self.jobs['builder']
+        for step in ('Signer access for OS signing', 'Sign', 'Verify the signed candidate', 'Stage only public files and receipts',
+                     'Transfer'):
+            block = builder.split(f'      - name: {step}\n', 1)[1].split('\n      - ', 1)[0]
+            self.assertIn("env.ROSE_DEDICATED_SIGNER != 'true'", block.split('\n')[0], step)
+        self.assertIn('name: signing-job-${{ env.ROSE_DEVICE }}-${{ steps.candidate.outputs.build_number }}-${{ github.run_id }}', builder)
+
+    def test_request_signing_is_secret_free_and_uses_the_exact_contract(self):
+        job = self.jobs['request-signing']
+        self.assertIn('    permissions:\n      actions: write\n      contents: read\n    env:', job)
+        for forbidden in ('secrets.', 'id-token', 'gcp-login', 'self-hosted'):
+            self.assertNotIn(forbidden, job)
+        self.assertIn('--request-id "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT.$JOB_ID" --job-id "$JOB_ID"', job)
+        self.assertIn('--artifact-digest "sha256:${{ needs.builder.outputs.signing_artifact_digest }}"', job)
+        self.assertIn("      JOB_ID: ${{ inputs.device || 'frankel' }}-${{ needs.builder.outputs.build_number }}\n", job)
+        self.assertIn('--target "$RUNNER_TEMP/accepted/target"', job)
+        for key in ('public', 'target'):
+            self.assertIn(f'artifact-ids: ${{{{ steps.sign.outputs.{key}_artifact_id }}}}', job)
+        self.assertEqual(job.count('run-id: ${{ steps.sign.outputs.sign_run }}'), 2)
+
+    def test_signed_builder_places_then_runs_the_unchanged_verification(self):
+        job = self.jobs['signed-builder']
+        self.assertIn('    permissions:\n      contents: read\n    env:', job)
+        for forbidden in ('secrets.', 'id-token', 'gcp-login', 'actions: write'):
+            self.assertNotIn(forbidden, job)
+        order = [job.index(n) for n in ('sign -- \\\n            python3 scripts/release-transport.py place',
+                                        'bash scripts/os-release-stage.sh ota-verify verify-signed',
+                                        'bash scripts/os-release-stage.sh transfer stage-artifact', '      - name: Transfer')]
+        self.assertEqual(order, sorted(order))
+        self.assertIn('cmp "$SIGNING_JOB/manifest.json" "$RUNNER_TEMP/accepted/manifest.json"', job)
+
+    def test_publisher_takes_the_dedicated_route_only_after_signed_builder(self):
+        publisher = self.jobs['publisher']
+        self.assertIn('    needs: [builder, signed-builder]\n', publisher)
+        self.assertIn("(needs.signed-builder.result == 'success' || (needs.builder.outputs.dedicated != 'true' && "
+                      "needs.signed-builder.result == 'skipped'))", publisher)
+        self.assertIn('request-signing, signed-builder, publisher]', self.jobs['cleanup'])
 
 
 if __name__ == '__main__':

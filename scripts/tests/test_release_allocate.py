@@ -530,7 +530,9 @@ class Workflow(unittest.TestCase):
         self.assertIn('      build_number: ${{ steps.candidate.outputs.build_number }}\n', builder)
         self.assertIn('      CANDIDATE_SHA: ${{ needs.builder.outputs.candidate_sha }}\n', publisher)
         self.assertIn('      BUILD_NUMBER: ${{ needs.builder.outputs.build_number }}\n', publisher)
-        self.assertIn('    needs: builder\n', publisher)  # nothing publishes unless the builder verified the candidate
+        # nothing publishes unless the builder verified the candidate (or, dedicated route, signed-builder did)
+        self.assertIn('    needs: [builder, signed-builder]\n', publisher)
+        self.assertIn("    if: always() && needs.builder.result == 'success' && (needs.signed-builder.result == 'success' || (needs.builder.outputs.dedicated != 'true' && needs.signed-builder.result == 'skipped'))\n", publisher)
         self.assertIn('[[ "$MODE" != latest-beta ]] || extra=(--promote --allocation "$RUNNER_TEMP/allocation/allocation.json")', publisher)
         self.assertIn('          name: os-release-allocation-${{ github.run_id }}\n          path: ${{ runner.temp }}/allocation\n', publisher)
         self.assertIn('          fetch-depth: 0  # latest-beta re-derives', publisher)

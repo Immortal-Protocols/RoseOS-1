@@ -97,6 +97,25 @@ latest-beta reservation on the builder (`scripts/host-app-release.py`).
 verification, publication, Latest promotion and cleanup with no
 intervention. Phone update acceptance is still open.
 
+### Dedicated-signer route (RELEASE020 M2c, default-off)
+
+Set the repository variable `ROSE_SIGNING_TRANSPORT=dedicated` to sign latest-beta on the dedicated signer
+(os-sign.yml) instead of the builder. Leave it unset for the existing route. The value `package` only packages a local
+job beside the attempt.
+
+1. **Builder.** It builds and verifies the unsigned image, then packages one `roseos.signing-job.v1` job
+   (`scripts/release-transport.py package`). It uploads the artifact `signing-job-<device>-<build>-<run>` and signs
+   nothing.
+2. **`request-signing`.** A hosted job with only `actions: write` and `contents: read`, and no secrets or OIDC.
+   - It dispatches os-sign.yml@main once with `source_run`, `artifact_id`, `artifact_digest`, `manifest_sha256` and
+     `request_id` (`<run>.<attempt>.<device>-<build>`).
+   - It waits for the single run named `OS signing <request_id>`.
+   - It accepts exactly `signed-<device>-<build>-<signRun>` and `signed-target-<device>-<build>-<signRun>`. Their
+     receipts must be byte-equal, bound to the job and carry the permanent identities.
+3. **`signed-builder`.** On the builder, without credentials. Its sign stage is `release-transport.py place`, which
+   installs only the accepted bytes. The unchanged verify-signed, stage and transfer steps follow.
+4. **Publisher and cleanup.** These are unchanged.
+
 ### Back-to-back campaign (RELEASE020)
 
 Set `campaign` to `start` on a latest-beta run to begin a 24-hour campaign.

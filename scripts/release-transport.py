@@ -15,7 +15,10 @@ local directory and `accept` reads a downloaded one.
       os-sign.yml@main once with those inputs, waits for exactly one successful main workflow_dispatch run named
       'OS signing <request id>' (an existing one is awaited, never repeated; failed, duplicate, untrusted or timed-out
       refuses; an uncertain dispatch is never retried) and prints its single signed-J-<run> artifact.
-  accept --job DIR/J --signed S
+  place --job DIR/J --signed S --target T --release-dir R
+      the dedicated route's sign stage: accept (with T, the private signed-target artifact), then install the accepted
+      public files and signed target-files where verify-signed reads them; nothing is signed or verified here.
+  accept --job DIR/J --signed S [--target T]
       S is the os-sign artifact (signing-receipt.json and the public files). The receipt must name this job's device,
       build, timestamp, candidate, config and every input hash, and every public file must match its receipt hash.
 
@@ -99,24 +102,37 @@ def package(release_dir, otatools, device, build, timestamp, candidate, notes, c
     return {'jobId': job_id, 'manifestSha256': hashlib.sha256(data).hexdigest(), 'manifest': str(job/'manifest.json')}
 
 
-def accept(job, signed):
+def canonical_job(manifest):
+    """The signer's committed jobId and output name: exactly <device>-<build>, never the run-suffixed input directory."""
+    return f'{manifest["device"]}-{manifest["build"]}'
+
+
+def accept(job, signed, target=None, repo=ROOT):
+    """Accept the signer's public outputs (and, with target, its private signed target-files) for exactly this job."""
     job, signed = Path(job), Path(signed)
     try:
         manifest = json.loads((job/'manifest.json').read_text())
-        receipt = json.loads((signed/'signing-receipt.json').read_text())
+        receipt_bytes = (signed/'signing-receipt.json').read_bytes()
+        receipt = json.loads(receipt_bytes)
     except (OSError, ValueError):
         raise Refused('unreadable: the job manifest or the signing receipt is missing or not JSON') from None
     if manifest.get('schema') != SCHEMA or receipt.get('schema') != RECEIPT_SCHEMA:
         raise Refused('schema: not a signing job and its signing receipt')
     if receipt.get('verdict') not in ('signed', 'reused', 'recovered'):
         raise Refused(f'verdict: the signer did not report a signed job ({receipt.get("verdict")})')
+    if receipt.get('jobId') != canonical_job(manifest):
+        raise Refused(f'job_id: the receipt names {receipt.get("jobId")}, not {canonical_job(manifest)}')
     for key in ('device', 'build', 'buildTimestamp', 'candidateSha', 'config', 'inputs'):
         if receipt.get(key) != manifest.get(key):
             raise Refused(f'binding: the receipt {key} differs from this job')
+    cfg = json.loads((Path(repo)/manifest['config']['path']).read_bytes())
+    for key in ('otaCertificateSha256', 'avbPublicKeySha256'):
+        if (receipt.get('identities') or {}).get(key) != cfg['identities'][key]:
+            raise Refused(f'identity: the signed {key} is not the permanent {manifest["device"]} identity')
     expected = public_assets(manifest['device'], manifest['build'])
     outputs = {Path(name).name: digest for name, digest in (receipt.get('outputs') or {}).items() if name.startswith('public/')}
     present = {p.name for p in signed.iterdir() if p.is_file() and p.name != 'signing-receipt.json'}
-    if set(outputs) != expected or present != expected:
+    if set(outputs) != expected or present != expected or any(not p.is_file() for p in signed.iterdir()):
         raise Refused('outputs: the signed public files are not exactly the expected release assets')
     for name in sorted(expected):
         path = signed/name
@@ -124,8 +140,41 @@ def accept(job, signed):
             raise Refused(f'output_changed: {name} differs from the signing receipt')
     if hashlib.sha256((signed/'UPDATE.md').read_bytes()).hexdigest() != manifest['inputs']['notes']['sha256']:
         raise Refused('notes: the published UPDATE.md is not this job\'s notes')
-    return {'jobId': receipt.get('jobId'), 'build': manifest['build'], 'identities': receipt.get('identities')}
+    result = {'jobId': receipt['jobId'], 'build': manifest['build'], 'identities': receipt['identities'],
+              'receiptSha256': hashlib.sha256(receipt_bytes).hexdigest()}
+    if target is not None:
+        target = Path(target)
+        names = sorted(p.name for p in target.iterdir())
+        if names != ['signed-target_files.zip', 'signing-receipt.json'] or any(p.is_symlink() or not p.is_file()
+                                                                              for p in target.iterdir()):
+            raise Refused('target: the private artifact must hold exactly signed-target_files.zip and signing-receipt.json')
+        if (target/'signing-receipt.json').read_bytes() != receipt_bytes:
+            raise Refused('target: the two signing-receipt.json copies differ')
+        digest = sha256_file(target/'signed-target_files.zip')
+        if digest != (receipt.get('outputs') or {}).get('signed-target_files.zip'):
+            raise Refused('target: signed-target_files.zip differs from the signing receipt')
+        result['signedTargetFilesSha256'] = digest
+    return result
 
+
+def place(job, signed, target, release_dir, repo=ROOT):
+    """The dedicated route's sign stage: install the accepted signer outputs where verify-signed reads them
+    (release_dir/public and release_dir/signed-target_files.zip). Nothing is signed or verified here."""
+    accepted = accept(job, signed, target, repo)
+    release_dir = Path(release_dir)
+    public, signed_target = release_dir/'public', release_dir/'signed-target_files.zip'
+    if public.exists() or signed_target.exists():
+        raise Refused(f'place_exists: {release_dir} already holds signed outputs; nothing is replaced')
+    manifest = json.loads((Path(job)/'manifest.json').read_text())
+    public.mkdir()
+    for name in sorted(public_assets(manifest['device'], manifest['build'])):
+        shutil.copyfile(Path(signed)/name, public/name)
+    shutil.copyfile(Path(target)/'signed-target_files.zip', signed_target)
+    shutil.copyfile(Path(signed)/'signing-receipt.json', release_dir/'dedicated-signing-receipt.json')
+    if sha256_file(signed_target) != accepted['signedTargetFilesSha256']:
+        raise Refused('place_changed: the placed signed target-files differ from the accepted bytes')
+    return {'stage': 'sign', 'signer': 'dedicated', 'signedTargetFiles': accepted['signedTargetFilesSha256'],
+            'signingReceiptSha256': accepted['receiptSha256']}
 
 
 # ---------------------------------------------------------------- request and wait (os-release mid-run job, M2b)
@@ -204,17 +253,22 @@ def request(env, inputs, opener=None, clock=None, pause=None, timeout=5400, poll
         pause(poll)
 
 
-def signed_artifact(env, sign_run, job_id, opener=None):
-    """The one signed-<job>-<run> artifact of that os-sign run: (id, name, digest)."""
+def signed_artifacts(env, sign_run, job_id, opener=None):
+    """The os-sign run's two outputs for canonical job <device>-<build>: the public signed-<job>-<run> artifact and the
+    private signed-target-<job>-<run> artifact, each exactly once and unexpired: {public|target: (id, name, digest)}."""
+    if not re.fullmatch(r'[a-z][a-z0-9]{1,31}-[0-9]{10}', job_id):
+        raise Invalid('the signed job id is the canonical <device>-<build>')
     status, data = api(env, 'GET', f'/actions/runs/{sign_run}/artifacts?per_page=100', opener=opener)
     items = json.loads(data).get('artifacts') if status == 200 else None
     if not isinstance(items, list):
         raise Refused('artifacts_unreadable: cannot list the os-sign run artifacts')
-    name = f'signed-{job_id}-{sign_run}'
-    found = [a for a in items if a.get('name') == name and not a.get('expired')]
-    if len(found) != 1:
-        raise Refused(f'artifact_missing: os-sign run {sign_run} has no single {name}')
-    return str(found[0]['id']), name, found[0].get('digest')
+    found = {}
+    for key, name in (('public', f'signed-{job_id}-{sign_run}'), ('target', f'signed-target-{job_id}-{sign_run}')):
+        match = [a for a in items if a.get('name') == name and not a.get('expired')]
+        if len(match) != 1:
+            raise Refused(f'artifact_missing: os-sign run {sign_run} has no single {name}')
+        found[key] = (str(match[0]['id']), name, match[0].get('digest'))
+    return found
 
 
 def main(argv=None):
@@ -228,9 +282,13 @@ def main(argv=None):
     for name in ('source-run', 'artifact-id', 'artifact-digest', 'manifest-sha256', 'request-id', 'job-id'):
         rq.add_argument(f'--{name}', required=True)
     rq.add_argument('--timeout', type=int, default=5400)
-    ac = sub.add_parser('accept')
-    ac.add_argument('--job', required=True)
-    ac.add_argument('--signed', required=True)
+    for name in ('accept', 'place'):
+        ac = sub.add_parser(name)
+        ac.add_argument('--job', required=True)
+        ac.add_argument('--signed', required=True)
+        ac.add_argument('--target', required=name == 'place')
+        if name == 'place':
+            ac.add_argument('--release-dir', required=True)
     args = p.parse_args(argv)
     try:
         if args.command == 'package':
@@ -239,11 +297,20 @@ def main(argv=None):
         elif args.command == 'request':
             inputs = {'source_run': args.source_run, 'artifact_id': args.artifact_id, 'artifact_digest': args.artifact_digest,
                       'manifest_sha256': args.manifest_sha256, 'request_id': args.request_id}
+            if not args.request_id.endswith(f'.{args.job_id}'):
+                raise Invalid('request_id must end with the canonical <device>-<build> job id')
             sign_run = request(dict(os.environ), inputs, timeout=args.timeout)
-            artifact_id, name, digest = signed_artifact(dict(os.environ), sign_run, args.job_id)
-            result = {'signRun': sign_run, 'signedArtifactId': artifact_id, 'signedArtifact': name, 'signedDigest': digest}
+            found = signed_artifacts(dict(os.environ), sign_run, args.job_id)
+            result = {'signRun': sign_run, **{f'{k}{field}': v[i] for k, v in found.items()
+                                             for i, field in enumerate(('ArtifactId', 'Artifact', 'Digest'))}}
+            if os.environ.get('GITHUB_OUTPUT'):
+                with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                    f.write(f'sign_run={sign_run}\npublic_artifact_id={found["public"][0]}\n'
+                            f'target_artifact_id={found["target"][0]}\n')
+        elif args.command == 'place':
+            result = place(args.job, args.signed, args.target, args.release_dir)
         else:
-            result = accept(args.job, args.signed)
+            result = accept(args.job, args.signed, args.target)
         print(json.dumps(result, sort_keys=True))
         return 0
     except Invalid as error:

@@ -660,7 +660,7 @@ class WorkflowTest(unittest.TestCase):
         for absent in ('id-token', 'secrets.', 'actions-gcp-login', 'os-release-stage', 'release-pipeline.py build', 'PIXEL_OTA', 'github-token'):
             self.assertNotIn(absent, export)
         self.assertIn('          name: emulator-alpha-export-${{ github.run_id }}\n', export)
-        self.assertIn(', alpha-export, app-reuse, publisher]\n', job['cleanup'])
+        self.assertIn(', alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', job['cleanup'])
         self.assertIn('app-reuse, emulator-alpha-export]\n', RELEASE_WORKFLOW)
 
 if __name__ == '__main__':

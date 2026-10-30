@@ -35,6 +35,10 @@ class FakeHost(B.Host):
         super().__init__(prefix)
         self.calls, self.fail, self.guest = [], {}, {}
         self.install_versions = {}  # simulate the archive installing a different version than pinned
+        self.probes, self.http_override = [], {}
+        self.now, self.sleeps, self.on_sleep, self.events, self.md_reads = 0.0, 0, None, [], set()
+        self.certbot_fail = self.acme_config_bad = False
+        self.acme_cmdline = None
         self.disk = {'exists': True, 'sig': None, 'size': 500 * 10**9, 'wipefs': '', 'head': bytes(1 << 20)}
         self.mounted = False
         self.packages = {}  # package -> (version, dpkg Status field); served by the REAL dpkg-query below
@@ -153,9 +157,32 @@ class FakeHost(B.Host):
             return 0, ''
         if cmd == 'certbot':
             if argv[1] == 'certonly':
-                cur = self.path('/etc/rose-models/tls/current')
-                cur.mkdir(parents=True, exist_ok=True)
-                (cur / 'fullchain.pem').write_text('cert')
+                assert self.acme_running(), 'issuance needs the proven ACME-only nginx'
+                self.events.append(('certonly', argv))
+                if self.certbot_fail:
+                    if '--account' not in argv:  # a failed first attempt can still leave a registered account
+                        self.add_account('acct-from-failed-attempt')
+                    return 1, ''
+                if '--account' not in argv:
+                    self.add_account('acct-new')
+                self.add_lineage(issued_by='webroot')
+                self.deploy_current()
+            return 0, ''
+        if cmd == '/usr/sbin/nginx' and '/run/rose-acme' in argv:
+            pid = self.path('/run/rose-acme/nginx.pid')
+            if argv[-1] == '-t':
+                return (1, '') if self.acme_config_bad else (0, '')
+            if argv[-2:] == ['-s', 'quit']:
+                pid.unlink(missing_ok=True)
+                return 0, ''
+            pid.parent.mkdir(parents=True, exist_ok=True)
+            pid.write_text('4242\n')
+            proc = self.path('/proc/4242')
+            proc.mkdir(parents=True, exist_ok=True)
+            (proc / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in (self.acme_cmdline or argv)) + b'\0')
+            return 0, ''
+        if cmd.endswith('/bin/tls-deploy'):
+            self.deploy_current()
             return 0, ''
         raise AssertionError(f'unexpected command {argv}')
 
@@ -183,10 +210,60 @@ class FakeHost(B.Host):
         return 0, ''
 
     def metadata(self, path):
+        self.md_reads.add(path)
         return self.md.get(path)
+
+    def clock(self):
+        return self.now
+
+    def publish(self, line):
+        self.events.append(('publish', line))
+
+    def ack(self, boot=None, payload='sha'):
+        """What the operator sets with `gcloud compute instances add-metadata` after reading the proof."""
+        self.md[B.ACK_KEY] = f'{payload}:boot-{self.boot if boot is None else boot}'
 
     def put_guest_attribute(self, key, value):
         self.guest[key] = value
+
+    def acme_running(self):
+        return self.path('/run/rose-acme/nginx.pid').exists()
+
+    def http_get(self, url, host_header):
+        self.probes.append(url)
+        if not self.acme_running():
+            return 0, b''
+        path = url.split('127.0.0.1', 1)[1]
+        if path in self.http_override:
+            return self.http_override[path]
+        if path.startswith('/.well-known/acme-challenge/'):
+            f = self.path('/var/lib/rose-models/acme') / path.lstrip('/')
+            return (200, f.read_bytes()[:256]) if f.exists() else (404, b'')
+        return 404, b''
+
+    def sleep(self, seconds):
+        self.now += seconds
+        self.sleeps += 1
+        if self.on_sleep:
+            self.on_sleep(self)
+
+    def add_account(self, name):
+        self.path(f'/etc/letsencrypt/accounts/acme-v02.api.letsencrypt.org/directory/{name}').mkdir(parents=True, exist_ok=True)
+
+    def add_lineage(self, name='models.a-list.com', issued_by='webroot', complete=True):
+        renewal = self.path(f'/etc/letsencrypt/renewal/{name}.conf')
+        renewal.parent.mkdir(parents=True, exist_ok=True)
+        renewal.write_text(f'[renewalparams]\nauthenticator = {issued_by}\n')
+        live = self.path(f'/etc/letsencrypt/live/{name}')
+        live.mkdir(parents=True, exist_ok=True)
+        if complete:
+            (live / 'fullchain.pem').write_text('chain')
+            (live / 'privkey.pem').write_text('KEY-NEVER-PRINTED')
+
+    def deploy_current(self):
+        cur = self.path('/etc/rose-models/tls/current')
+        cur.mkdir(parents=True, exist_ok=True)
+        (cur / 'fullchain.pem').write_text('cert')
 
     def resolve(self, name):
         return list(self.dns)
@@ -292,6 +369,7 @@ class FirstBootToReady(Fixture):
         status, _ = self.boot()
         self.assertEqual(self.states(status)['tls'], ('waiting', 'dns_not_pointing_here'))
         self.host.dns = ['203.0.113.7']
+        self.host.ack()
         payload = self.extract(self.tmp / 'build-roots')
         status, code = self.boot(payload)
         self.assertEqual((status['result'], code), ('ready', 0), status)
@@ -305,7 +383,8 @@ class FirstBootToReady(Fixture):
                       ('systemctl', '--no-block', 'reboot'), ('python3',)):
             self.assertFalse([c for c in new if tuple(c[:len(heavy)]) == heavy], heavy)
         self.assertEqual((self.host.count('mkfs.ext4'), self.host.count('certbot', 'certonly'),
-                          self.host.count('certbot', 'reconfigure'), self.host.count('docker', 'pull')), (1, 1, 1, 1))
+                          self.host.count('certbot', 'reconfigure'), self.host.count('docker', 'pull')), (1, 1, 0, 1))
+        self.assertFalse(self.host.acme_running())  # the edge holds :80 now
 
     def test_status_is_nonsecret_and_published(self):
         self.host.driver_loaded_on_boot = 1
@@ -357,9 +436,11 @@ class Refusals(Fixture):
             (('nvidia-ctk',), 'container', 'nvidia_ctk_failed'),
             (('docker', 'pull'), 'image', 'image_pull_failed'),
             (('systemctl', 'enable', '--now', B.MODEL_UNITS[0]), 'service', 'service_enable_failed'),
-            (('certbot', 'certonly'), 'tls', 'certificate_issuance_failed'))
+            (('/usr/sbin/nginx', '-p', '/run/rose-acme', '-c', '/etc/rose-models/edge/acme-only.conf'), 'tls',
+             'acme_http_config_invalid'))
         self.host.md['attributes/rose-models-acme'] = B.ACME_FLAG
         self.host.dns = ['203.0.113.7']
+        self.host.ack()
         for prefix, stage, category in cases:
             with self.subTest(stage=stage, prefix=prefix):
                 self.host.fail = {prefix: 100}
@@ -559,6 +640,212 @@ class Image(Fixture):
         self.assertEqual(self.host.path(B.DAEMON_JSON).read_text(), '{not json')
 
 
+class Tls(Fixture):
+    """TLS-PREPARE: prepare (ACME-only nginx proven) -> issue via webroot -> install -> stop; identity reused, never
+    replaced; ambiguity refused."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.driver_loaded_on_boot = 1
+        self.host.md['attributes/rose-models-acme'] = B.ACME_FLAG
+        self.host.dns = ['203.0.113.7']
+        self.host.ack()
+        self.payload = self.extract(self.tmp / 'build-roots')
+
+    def tls(self):
+        status, code = self.boot()
+        st = status['stages']['tls']
+        return (st['state'], st['detail']), st.get('observed'), code
+
+    def certonly(self):
+        return [c for c in self.host.calls if c[:2] == ['certbot', 'certonly']]
+
+    def test_prepare_proves_acme_http_then_issues_via_webroot_registering_once(self):
+        (state, detail), _, _ = self.tls()
+        self.assertEqual((state, detail), ('ok', 'issued (account registered)'))
+        argv = self.certonly()[0]
+        self.assertEqual(argv[argv.index('-w') + 1], B.ACME_WEBROOT)
+        self.assertIn('--webroot', argv)
+        self.assertNotIn('--standalone', argv)
+        self.assertIn('--register-unsafely-without-email', argv)
+        probed = [u.split('127.0.0.1', 1)[1] for u in self.host.probes]
+        self.assertTrue(probed[0].startswith('/.well-known/acme-challenge/rose-probe-'))
+        self.assertEqual(probed[1:], list(B.ACME_404))
+        self.assertEqual(list(self.host.path(B.ACME_WEBROOT + '/.well-known/acme-challenge').iterdir()), [])
+        self.assertFalse(self.host.acme_running())
+        self.assertEqual(self.states(self.boot()[0])['edge'], ('ok', 'active'))
+        self.assertEqual(self.host.count('certbot', 'reconfigure'), 0)  # issued via webroot: renewal already works
+
+    def test_existing_single_account_is_reused_never_replaced(self):
+        self.host.add_account('acct-existing')
+        (state, detail), _, _ = self.tls()
+        self.assertEqual((state, detail), ('ok', 'issued (account reused)'))
+        argv = self.certonly()[0]
+        self.assertEqual(argv[argv.index('--account') + 1], 'acct-existing')
+        self.assertNotIn('--register-unsafely-without-email', argv)
+
+    def test_failed_first_issuance_keeps_its_account_and_the_retry_reuses_it(self):
+        self.host.certbot_fail = True
+        (state, detail), observed, code = self.tls()
+        self.assertEqual((state, detail, code), ('failed', 'certificate_issuance_failed', 1))
+        self.assertEqual((observed[0]['accounts'], observed[0]['lineages']), (1, []))
+        self.assertEqual(observed[0]['acmeHttp']['challenge'], 200)
+        self.assertFalse(self.host.acme_running())  # stopped on failure too
+        self.host.certbot_fail = False
+        (state, detail), _, _ = self.tls()  # same boot: issuance is not attempted twice
+        self.assertEqual((state, detail, len(self.certonly())), ('failed', 'acme_issuance_already_attempted_this_boot', 1))
+        self.host.reboot()  # the operator resets once more and acknowledges the new boot
+        self.host.ack()
+        (state, detail), _, _ = self.tls()
+        self.assertEqual((state, detail), ('ok', 'issued (account reused)'))
+        argv = self.certonly()[-1]
+        self.assertEqual(argv[argv.index('--account') + 1], 'acct-from-failed-attempt')
+
+    def test_issued_but_uninstalled_lineage_is_installed_not_reissued(self):
+        self.host.add_account('acct-existing')
+        self.host.add_lineage()
+        (state, detail), _, _ = self.tls()
+        self.assertEqual((state, detail, self.certonly()), ('ok', 'installed existing certificate', []))
+        self.assertFalse(self.host.probes)  # no ACME HTTP needed
+
+    def test_ambiguous_or_incomplete_identity_is_refused_without_issuance(self):
+        for label, setup, category in (
+                ('two accounts', lambda h: (h.add_account('a1'), h.add_account('a2')), 'acme_account_ambiguous'),
+                ('two lineages', lambda h: (h.add_lineage(), h.add_lineage('models.a-list.com-0001')),
+                 'certificate_lineage_ambiguous'),
+                ('only a -0001 lineage', lambda h: h.add_lineage('models.a-list.com-0001'), 'certificate_lineage_ambiguous'),
+                ('lineage without key', lambda h: h.add_lineage(complete=False), 'certificate_lineage_incomplete')):
+            with self.subTest(label):
+                shutil.rmtree(self.host.path('/etc/letsencrypt'), ignore_errors=True)
+                setup(self.host)
+                (state, detail), observed, code = self.tls()
+                self.assertEqual((state, detail, code), ('failed', category, 1))
+                self.assertEqual(self.certonly(), [])
+                self.assertNotIn('KEY-NEVER-PRINTED', json.dumps(observed))
+
+    def test_acme_http_must_be_proven_before_any_issuance(self):
+        for label, setup, category in (
+                ('config invalid', lambda h: setattr(h, 'acme_config_bad', True), 'acme_http_config_invalid'),
+                ('pid is another process', lambda h: setattr(h, 'acme_cmdline', ['/usr/sbin/nginx', '-c', '/etc/other.conf']),
+                 'acme_http_pid_unverified'),
+                ('root path answers', lambda h: h.http_override.update({'/': (200, b'')}), 'acme_http_not_ready'),
+                ('auth path answers', lambda h: h.http_override.update({'/v1/auth/token': (405, b'')}), 'acme_http_not_ready')):
+            with self.subTest(label):
+                self.host.acme_config_bad, self.host.acme_cmdline, self.host.http_override = False, None, {}
+                self.host.path('/run/rose-acme/nginx.pid').unlink(missing_ok=True)
+                setup(self.host)
+                (state, detail), _, code = self.tls()
+                self.assertEqual((state, detail, code), ('failed', category, 1))
+                self.assertEqual(self.certonly(), [])
+
+    def test_no_acme_listener_without_authorization_or_dns(self):
+        del self.host.md['attributes/rose-models-acme']
+        self.assertEqual(self.tls()[0], ('waiting', 'acme_not_authorized'))
+        self.host.md['attributes/rose-models-acme'] = B.ACME_FLAG
+        self.host.dns = ['198.51.100.1']
+        self.assertEqual(self.tls()[0], ('waiting', 'dns_not_pointing_here'))
+        self.assertFalse(self.host.acme_running())
+        self.assertEqual(self.host.count('/usr/sbin/nginx'), 0)
+
+    def test_standalone_issued_lineage_is_switched_to_webroot_at_the_edge(self):
+        self.host.add_account('acct-existing')
+        self.host.add_lineage(issued_by='standalone')
+        status, _ = self.boot()
+        self.assertEqual(self.states(status)['edge'], ('ok', 'active'))
+        self.assertEqual(self.host.count('certbot', 'reconfigure'), 1)
+
+
+class AcmeHandshake(Fixture):
+    """TLS-HANDSHAKE: the ACME-only proof is published BEFORE issuance; issuance waits (bounded) for the operator's
+    metadata acknowledgement bound to this exact payload and boot; a timeout issues nothing; one issuance per boot."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.driver_loaded_on_boot = 1
+        self.host.md['attributes/rose-models-acme'] = B.ACME_FLAG
+        self.host.dns = ['203.0.113.7']
+        self.payload = self.extract(self.tmp / 'build-roots')
+
+    def tls(self):
+        status, code = self.boot()
+        st = status['stages']['tls']
+        return (st['state'], st['detail']), st.get('observed'), code
+
+    def certonly(self):
+        return [e for e in self.host.events if e[0] == 'certonly']
+
+    def test_proof_is_published_before_waiting_and_issuance_follows_the_bound_ack(self):
+        def operator(host):  # reads the proof, restores :80 ingress, then acknowledges this payload and boot
+            if host.now >= 60 and B.ACK_KEY not in host.md:
+                proof = json.loads(host.guest['acme-proof'])
+                host.md[B.ACK_KEY] = proof['awaiting'].split('=', 1)[1]
+        self.host.on_sleep = operator
+        (state, detail), _, code = self.tls()
+        self.assertEqual((state, detail, code), ('ok', 'issued (account registered)', 0))
+        kinds = [e[0] for e in self.host.events]
+        self.assertEqual(kinds, ['publish', 'certonly'])  # proof strictly before the single issuance
+        proof = json.loads(self.host.events[0][1].split(' ', 1)[1])
+        conf = self.host.path('/etc/rose-models/edge/acme-only.conf').read_bytes()
+        self.assertEqual((proof['payloadSha256'], proof['bootId'], proof['pidVerified']), ('sha', 'boot-1', True))
+        self.assertEqual(proof['configSha256'], __import__('hashlib').sha256(conf).hexdigest())
+        self.assertEqual(proof['acmeHttp'], {'challenge': 200, **{p: 404 for p in B.ACME_404}})
+        self.assertEqual(proof['awaiting'], 'metadata rose-models-acme-ack=sha:boot-1')
+        self.assertEqual(json.loads(self.host.guest['acme-proof']), proof)
+        self.assertEqual(self.host.sleeps, 6)  # waited ~60 s for the operator, bounded polling
+
+    def test_no_ack_times_out_without_issuance(self):
+        (state, detail), observed, code = self.tls()
+        self.assertEqual((state, detail, code), ('failed', 'acme_ack_timeout', 1))
+        self.assertEqual((observed[0]['seen'], observed[0]['expectedAck']), ('absent', 'sha:boot-1'))
+        self.assertEqual(self.certonly(), [])
+        self.assertFalse(self.host.acme_running())
+        self.assertEqual(self.host.sleeps, B.ACK_TIMEOUT_S // B.ACK_POLL_S)  # bounded
+
+    def test_stale_boot_or_wrong_payload_ack_never_issues(self):
+        for label, value in (('previous boot', 'sha:boot-0'), ('other payload', 'f599a34b:boot-1'),
+                             ('bare payload', 'sha'), ('padded', 'sha:boot-1 extra')):
+            with self.subTest(label):
+                self.host.md[B.ACK_KEY] = value
+                self.host.path(B.STATE).mkdir(parents=True, exist_ok=True)
+                (state, detail), observed, _ = self.tls()
+                self.assertEqual((state, detail, observed[0]['seen']), ('failed', 'acme_ack_timeout', 'mismatch'))
+                self.assertEqual(self.certonly(), [])
+
+    def test_issuance_happens_at_most_once_per_acknowledged_boot(self):
+        self.host.ack()
+        self.host.certbot_fail = True
+        self.assertEqual(self.tls()[0], ('failed', 'certificate_issuance_failed'))
+        self.host.certbot_fail = False
+        self.assertEqual(self.tls()[0], ('failed', 'acme_issuance_already_attempted_this_boot'))
+        self.assertEqual(len(self.certonly()), 1)
+        self.host.reboot()
+        self.assertEqual(self.tls()[0], ('failed', 'acme_ack_timeout'))  # the old boot's ack is stale now
+        self.host.ack()
+        self.assertEqual(self.tls()[0], ('ok', 'issued (account reused)'))
+        self.assertEqual(len(self.certonly()), 2)
+
+    def test_the_only_operator_channel_is_existing_instance_metadata_and_reset(self):
+        self.host.ack()
+        self.boot()
+        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY,
+                                               'network-interfaces/0/access-configs/0/external-ip'}, self.host.md_reads)
+        readme = (HERE.parent / 'service/README.md').read_text()
+        section = readme[readme.index('**Operator (Mac)'):readme.index('**Impact of that one reset')]
+        commands = [block.split('\n', 1)[1].replace('\\\n', ' ') for block in section.split('```bash')[1:]]
+        commands = [c.split('```', 1)[0].strip() for c in commands]
+        self.assertTrue(commands)
+        for command in commands:
+            words = command.split()
+            self.assertEqual(words[:3], ['gcloud', 'compute', 'instances'], command)
+            self.assertIn(words[3], ('add-metadata', 'reset', 'get-serial-port-output', 'get-guest-attributes'), command)
+            self.assertNotIn('ssh', command)
+        self.assertIn('add-metadata', section)
+        self.assertIn('rose-models-acme-ack', section)
+        self.assertIn('reset', section)
+        for word in ('80', 'closed'):
+            self.assertIn(word, section)
+
+
 class Build(Fixture):
     def test_deterministic_bounded_and_complete(self):
         again = BB.build(self.tmp / 'again', source='test')
@@ -634,14 +921,14 @@ class StartupScript(Fixture):
     def test_tampered_or_missing_payload_is_refused_without_running(self):
         good = (self.tmp / 'build/rose-models-payload.b64').read_bytes()
         other = (self.tmp / 'build-roots/rose-models-payload.b64').read_bytes()
-        for label, body, reason in (('another payload', other, 'payload_digest_mismatch'),
-                                    ('not base64', b'!!!!', 'payload_decode_failed')):
+        for label, body, reasons in (('another payload', other, ('payload_size_mismatch', 'payload_digest_mismatch')),
+                                     ('not base64', b'!!!!', ('payload_decode_failed',))):
             with self.subTest(label):
                 url, _ = self.serve(body)
                 opt = self.vm / f'opt-{label.replace(" ", "-")}'
                 r = self.script(url, opt)
                 self.assertEqual(r.returncode, 1)
-                self.assertIn(f'"reason": "{reason}"', r.stdout)
+                self.assertTrue(any(f'"reason": "{reason}"' in r.stdout for reason in reasons), r.stdout)
                 self.assertNotIn('STUB', r.stdout)
                 self.assertEqual([p.name for p in opt.iterdir()], [])
         # same size, different content

@@ -15,8 +15,12 @@ run in order and are rerun-safe: each first checks whether its result is already
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   auth       secret-init once; the auth service only once attestation roots are present
-  tls        an existing certificate, or certbot standalone when the operator set rose-models-acme and DNS points here
-  edge       the Nginx edge once TLS and auth are up; renewals then switch to the edge's webroot
+  tls        an installed certificate; else an issued-but-uninstalled lineage is installed (never reissued); else, with
+             rose-models-acme set and DNS here, an ACME-only Nginx is started and proven (challenge 200, all else 404);
+             that proof is published, then the stage waits (bounded) for metadata rose-models-acme-ack equal to
+             <payload sha256>:<boot id>. Only then does certbot issue once via its webroot, reusing the single existing
+             account (ambiguity fails). A timeout issues nothing. The ACME-only Nginx is stopped either way
+  edge       the Nginx edge once TLS and auth are up; a standalone-issued lineage is switched to the webroot
 
 Every command has a time bound. Output: one nonsecret JSON line (stdout, so it reaches the serial console), the status
 file, and the guest attribute rose-models/bootstrap. Exit 0 when ready, waiting or rebooting; exit 1 when a stage failed.
@@ -32,6 +36,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 DRIVER_VERSION = '580.178.04'
@@ -121,6 +126,27 @@ class Host:
             return sorted({a[4][0] for a in socket.getaddrinfo(name, 443, socket.AF_INET)})
         except OSError:
             return []
+
+    def http_get(self, url, host_header):
+        """(status, first 256 body bytes) of one bounded loopback GET; (0, b'') when unreachable."""
+        req = urllib.request.Request(url, headers={'Host': host_header})
+        try:
+            with NO_PROXY.open(req, timeout=10) as r:
+                return r.status, r.read(256)
+        except urllib.error.HTTPError as e:
+            return e.code, b''
+        except OSError:
+            return 0, b''
+
+    def sleep(self, seconds):
+        time.sleep(seconds)
+
+    def clock(self):
+        return time.monotonic()
+
+    def publish(self, line):
+        """An interim nonsecret line on the serial console (the startup script's stdout)."""
+        print(line, flush=True)
 
     def read_head(self, device, n):
         with open(self.path(device), 'rb') as f:
@@ -408,32 +434,148 @@ def stage_auth(host, ctx):
     return 'active'
 
 
+LE = '/etc/letsencrypt'
+ACME_WEBROOT = '/var/lib/rose-models/acme'
+ACME_RUN = '/run/rose-acme'
+ACME_NGINX = ['/usr/sbin/nginx', '-p', ACME_RUN, '-c', f'{ROOT}/edge/acme-only.conf']
+ACME_404 = ('/', '/v1/models', '/v1/chat/completions', '/v1/auth/challenge', '/v1/auth/token')
+ACK_KEY = 'attributes/rose-models-acme-ack'  # existing instance metadata; the operator sets it with add-metadata
+ACK_TIMEOUT_S, ACK_POLL_S = 1800, 10
+
+
+def acme_identity(host):
+    """(account ids, lineage names for HOSTNAME) under /etc/letsencrypt: what issuance must reuse, never replace."""
+    acct_dir = host.path(f'{LE}/accounts/acme-v02.api.letsencrypt.org/directory')
+    accounts = sorted(p.name for p in acct_dir.iterdir() if p.is_dir()) if acct_dir.is_dir() else []
+    renewal = host.path(f'{LE}/renewal')
+    lineages = sorted(p.name[:-len('.conf')] for p in renewal.glob('*.conf')
+                      if p.name == f'{HOSTNAME}.conf' or p.name.startswith(f'{HOSTNAME}-')) if renewal.is_dir() else []
+    return accounts, lineages
+
+
+def pid_of(host, run_dir):
+    try:
+        pid = int(host.path(f'{run_dir}/nginx.pid').read_text().strip())
+        cmdline = host.path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'replace')
+    except (OSError, ValueError):
+        return None, ''
+    return pid, cmdline
+
+
+def prepare_acme_http(host):
+    """Start the ACME-only Nginx and prove it: the config tests, the pid file names a live process loaded with that
+    config, a synthetic challenge returns 200 with its exact content, and every other path returns 404."""
+    for sub in ('client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi'):
+        host.path(f'{ACME_RUN}/{sub}').mkdir(parents=True, exist_ok=True)
+    challenges = host.path(f'{ACME_WEBROOT}/.well-known/acme-challenge')
+    challenges.mkdir(parents=True, exist_ok=True)
+    for d in (host.path(ACME_WEBROOT), challenges.parent, challenges):
+        os.chmod(d, 0o755)  # nginx workers read the webroot unprivileged
+    must(host, [*ACME_NGINX, '-t'], 'acme_http_config_invalid', 60)
+    pid, cmdline = pid_of(host, ACME_RUN)
+    if pid is None:
+        must(host, ACME_NGINX, 'acme_http_start_failed', 60)
+        pid, cmdline = pid_of(host, ACME_RUN)
+    if pid is None or f'{ROOT}/edge/acme-only.conf' not in cmdline:
+        raise Failed('acme_http_pid_unverified')
+    token, content = 'rose-probe-' + os.urandom(8).hex(), os.urandom(16).hex()
+    probe = challenges / token
+    probe.write_text(content)
+    os.chmod(probe, 0o644)
+    try:
+        got = host.http_get(f'http://127.0.0.1/.well-known/acme-challenge/{token}', HOSTNAME)
+        codes = {'challenge': got[0], **{p: host.http_get(f'http://127.0.0.1{p}', HOSTNAME)[0] for p in ACME_404}}
+    finally:
+        probe.unlink()
+    if got != (200, content.encode()) or any(codes[p] != 404 for p in ACME_404):
+        raise Failed('acme_http_not_ready', [codes])
+    return codes
+
+
+def stop_acme_http(host):
+    pid, _ = pid_of(host, ACME_RUN)
+    if pid is None:
+        return
+    host.run([*ACME_NGINX, '-s', 'quit'], 60)
+    for _ in range(20):  # the edge takes :80 next
+        if pid_of(host, ACME_RUN)[0] is None:
+            return
+        host.sleep(0.5)
+    raise Failed('acme_http_stop_failed')
+
+
 def stage_tls(host, ctx):
     current = host.path(ROOT) / 'tls/current/fullchain.pem'
     if current.exists():
         return 'certificate present'
+    accounts, lineages = acme_identity(host)
+    identity = {'accounts': len(accounts), 'lineages': lineages}
+    if len(accounts) > 1:
+        raise Failed('acme_account_ambiguous', [identity])
+    if len(lineages) > 1 or lineages not in ([], [HOSTNAME]):
+        raise Failed('certificate_lineage_ambiguous', [identity])
+    host.path('/run/rose-edge').mkdir(parents=True, exist_ok=True)
+    deploy = f'{ROOT}/bin/tls-deploy'
+    if lineages:  # issued earlier but never installed: install that exact certificate and key, never reissue
+        live = host.path(f'{LE}/live/{HOSTNAME}')
+        if not (live / 'fullchain.pem').exists() or not (live / 'privkey.pem').exists():
+            raise Failed('certificate_lineage_incomplete', [identity])
+        if host.run([deploy], 120, {'RENEWED_LINEAGE': f'{LE}/live/{HOSTNAME}'})[0] != 0 or not current.exists():
+            raise Failed('certificate_install_failed', [identity])
+        return 'installed existing certificate'
     if (host.metadata('attributes/rose-models-acme') or '').strip() != ACME_FLAG:
         raise Waiting('acme_not_authorized')
     external = (host.metadata('network-interfaces/0/access-configs/0/external-ip') or '').strip()
     if not external or host.resolve(HOSTNAME) != [external]:
         raise Waiting('dns_not_pointing_here')
-    host.path('/run/rose-edge').mkdir(parents=True, exist_ok=True)
-    must(host, ['certbot', 'certonly', '--standalone', '-n', '--agree-tos', '--register-unsafely-without-email',
-                '-d', HOSTNAME, '--deploy-hook', f'{ROOT}/bin/tls-deploy'], 'certificate_issuance_failed', 600)
+    boot = host.boot_id()
+    attempted = host.path(STATE) / f'acme-issue-attempted-{boot}'
+    if attempted.exists():  # at most one issuance per acknowledged boot; a retry needs a new reset and acknowledgement
+        raise Failed('acme_issuance_already_attempted_this_boot', [identity])
+    try:
+        codes = prepare_acme_http(host)
+        expected_ack = f"{ctx['payloadSha256']}:{boot}"
+        conf = host.path(f'{ROOT}/edge/acme-only.conf')
+        proof = {'schema': 'rose-models-acme-proof/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': boot,
+                 'config': f'{ROOT}/edge/acme-only.conf', 'configSha256': hashlib.sha256(conf.read_bytes()).hexdigest(),
+                 'pidVerified': True, 'acmeHttp': codes, 'accounts': len(accounts), 'lineages': lineages,
+                 'awaiting': 'metadata rose-models-acme-ack=' + expected_ack, 'timeoutSeconds': ACK_TIMEOUT_S}
+        line = json.dumps(proof, sort_keys=True)
+        host.put_guest_attribute('acme-proof', line)  # published BEFORE any issuance
+        host.publish('ROSE-MODELS-ACME-PROOF ' + line)
+        deadline, seen = host.clock() + ACK_TIMEOUT_S, 'absent'
+        while True:
+            ack = (host.metadata(ACK_KEY) or '').strip()
+            if ack == expected_ack:
+                break
+            seen = 'mismatch' if ack else 'absent'  # a stale boot or payload never issues
+            if host.clock() >= deadline:
+                raise Failed('acme_ack_timeout', [{'expectedAck': expected_ack, 'seen': seen, 'acmeHttp': codes}])
+            host.sleep(ACK_POLL_S)
+        attempted.write_text(expected_ack + '\n')
+        argv = ['certbot', 'certonly', '--webroot', '-w', ACME_WEBROOT, '-n', '-d', HOSTNAME, '--deploy-hook', deploy]
+        # Exactly one existing account is reused; none means the approved first registration (no email).
+        argv += ['--account', accounts[0]] if accounts else ['--agree-tos', '--register-unsafely-without-email']
+        if host.run(argv, 600)[0] != 0:
+            after, lineages_after = acme_identity(host)
+            raise Failed('certificate_issuance_failed',
+                         [{'accounts': len(after), 'lineages': lineages_after, 'acmeHttp': codes}])
+    finally:
+        stop_acme_http(host)
     if not current.exists():
         raise Failed('certificate_not_installed')
-    return 'issued'
+    return 'issued (account ' + ('reused' if accounts else 'registered') + ')'
 
 
 def stage_edge(host, ctx):
     if ctx['results'].get('tls', ('',))[0] != 'ok' or ctx['results'].get('auth', ('',))[0] != 'ok':
         raise Waiting('needs_tls_and_auth')
     must(host, ['systemctl', 'enable', '--now', 'models-edge.service'], 'edge_enable_failed', 120)
-    marker = host.path(STATE) / 'renewal-webroot'
-    if not marker.exists():
-        must(host, ['certbot', 'reconfigure', '-n', '--cert-name', HOSTNAME, '--webroot', '-w',
-                    '/var/lib/rose-models/acme'], 'renewal_reconfigure_failed', 300)
-        marker.write_text('webroot\n')
+    renewal = host.path(f'{LE}/renewal/{HOSTNAME}.conf')
+    if renewal.exists() and 'authenticator = standalone' in renewal.read_text():
+        # A lineage issued standalone cannot renew while the edge holds :80; renew through the edge's webroot.
+        must(host, ['certbot', 'reconfigure', '-n', '--cert-name', HOSTNAME, '--webroot', '-w', ACME_WEBROOT],
+             'renewal_reconfigure_failed', 300)
     return 'active'
 
 
@@ -455,7 +597,7 @@ def run(host, payload, payload_sha256, now=time.time):
     try:
         config = json.loads((payload / 'etc-rose-models/lib/muse-glimmer-30b.json').read_text())
         runtime = next(o for o in config['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')['runtime']
-        ctx = {'payload': payload, 'runtime': runtime, 'results': {}}
+        ctx = {'payload': payload, 'runtime': runtime, 'results': {}, 'payloadSha256': payload_sha256}
         stopped = None
         for name, fn in STAGES:
             if stopped and not (stopped == 'waiting' and name in INDEPENDENT | {'edge'}):

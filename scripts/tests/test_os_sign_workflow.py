@@ -64,7 +64,9 @@ class TrustSurface(unittest.TestCase):
             'needs: ingress', 'signing-job.py stage --bundle', 'name: Validate the manifest, inputs and config (before any credential)',
             'actions-gcp-login.py login')]
         self.assertEqual(order, sorted(order))
-        for name in ('source_run', 'artifact_id', 'artifact_digest', 'manifest_sha256'):
+        self.assertIn('\nrun-name: OS signing ${{ inputs.request_id }}\n', WORKFLOW)
+        self.assertIn('--request-id "$REQUEST_ID"', ingress)
+        for name in ('source_run', 'artifact_id', 'artifact_digest', 'manifest_sha256', 'request_id'):
             self.assertIn(f'      {name}:\n', WORKFLOW)
         self.assertNotIn('      manifest:\n', WORKFLOW)
 
@@ -75,6 +77,16 @@ class TrustSurface(unittest.TestCase):
         self.assertNotIn('roseos-build-signer', WORKFLOW)
         self.assertNotIn('roseos-actions', WORKFLOW)
 
+    def test_private_signed_target_artifact_is_separate_and_after_logout(self):
+        self.assertIn('          name: signed-target-${{ env.SIGNED_JOB }}-${{ github.run_id }}\n          path: ${{ runner.temp }}/signed-target\n'
+            '          retention-days: 1\n', WORKFLOW)
+        self.assertIn('          name: signed-${{ env.SIGNED_JOB }}-${{ github.run_id }}\n          path: ${{ runner.temp }}/signed-public\n', WORKFLOW)
+        order = [WORKFLOW.index(s) for s in ('name: Drop signer access', 'signing-job.py check --output-dir', 'mkdir "$RUNNER_TEMP/signed-target"',
+            'name: Public outputs and receipt', 'name: Signed target-files for verification (private)')]
+        self.assertEqual(order, sorted(order))
+        public = step('Check the committed outputs and stage the public files and receipt').split('mkdir "$RUNNER_TEMP/signed-target"')[0]
+        self.assertNotIn('signed-target_files', public)
+
     def test_validation_precedes_access_and_access_is_always_dropped(self):
         order = [WORKFLOW.index(s) for s in ('name: Validate the manifest, inputs and config (before any credential)',
             'actions-gcp-login.py login "$SIGNER_SERVICE_ACCOUNT"', 'signing-job.py" run --manifest', 'name: Drop signer access',
@@ -84,7 +96,7 @@ class TrustSurface(unittest.TestCase):
         self.assertIn('        with:\n          persist-credentials: false\n', WORKFLOW)
         for uses in re.findall(r'uses: (\S+)', WORKFLOW):
             self.assertRegex(uses, r'@[0-9a-f]{40}$')
-        self.assertNotIn('signed-target_files', step('Check the committed outputs and stage the public files and receipt'))
+
 
 
 class LiteralSteps(fixtures.SigningJob):
@@ -164,7 +176,13 @@ class LiteralSteps(fixtures.SigningJob):
         stage = self.bash(step('Check the committed outputs and stage the public files and receipt'))
         self.assertEqual(stage.returncode, 0, stage.stderr)
         staged = sorted(p.name for p in (self.temp/'signed-public').iterdir())
-        self.assertEqual(staged, sorted(job.public_assets('frankel', fixtures.BUILD) + ['signing-receipt.json']))
+        self.assertEqual(staged, sorted(job.public_assets('frankel', fixtures.BUILD) + ['signing-receipt.json']))  # unchanged
+        target = self.temp/'signed-target'
+        self.assertEqual(sorted(p.name for p in target.iterdir()), ['signed-target_files.zip', 'signing-receipt.json'])
+        out = self.signing/f'outputs/frankel-{fixtures.BUILD}'  # canonical <device>-<build>, not the run-suffixed inbox name
+        self.assertEqual((target/'signing-receipt.json').read_bytes(), (self.temp/'signed-public/signing-receipt.json').read_bytes())
+        self.assertEqual((target/'signed-target_files.zip').read_bytes(), (out/'signed-target_files.zip').read_bytes())
+        self.assertEqual(json.loads((target/'signing-receipt.json').read_text())['jobId'], f'frankel-{fixtures.BUILD}')
         self.assertIn(f'SIGNED_JOB=frankel-{fixtures.BUILD}', self.github_env.read_text())
         (self.signing/f'outputs/frankel-{fixtures.BUILD}/public/UPDATE.md').write_text('tampered\n')
         shutil.rmtree(self.temp/'signed-public')
@@ -191,7 +209,7 @@ class Ingress(LiteralSteps):
         self.build_archive()
         self.artifact = {'id': 77, 'workflow_run': {'id': 4242}, 'expired': False}
         self.run_meta = {'path': '.github/workflows/os-release.yml', 'repository': {'full_name': 'Immortal-Protocols/RoseOS-1'},
-            'head_branch': 'main', 'status': 'in_progress', 'head_sha': 'e' * 40}
+            'head_branch': 'main', 'status': 'in_progress', 'head_sha': 'e' * 40, 'run_attempt': 1}
         self.downloaded = []
         saved = dict(job.API)
         self.addCleanup(job.API.update, saved)
@@ -219,7 +237,7 @@ class Ingress(LiteralSteps):
     def ingress(self, **changes):
         args = dict(source_run='4242', artifact_id='77', artifact_digest='sha256:' + job.sha256_file(self.archive),
             manifest_sha256=hashlib.sha256(self.manifest_bytes).hexdigest(), out=self.root/f'bundle-{len(self.downloaded)}',
-            signing_root=self.signing)
+            signing_root=self.signing, request_id=f'4242.1.frankel-{fixtures.BUILD}')
         args.update(changes)
         return job.ingress(self.env, **args)
 
@@ -227,6 +245,7 @@ class Ingress(LiteralSteps):
         shutil.rmtree(self.job_dir)  # ingress, not the caller, puts bytes on the signer
         provenance = self.ingress()
         self.assertEqual((provenance['sourceRun'], provenance['artifactId'], provenance['headSha']), ('4242', '77', 'e' * 40))
+        self.assertEqual((provenance['requestId'], provenance['sourceAttempt']), (f'4242.1.frankel-{fixtures.BUILD}', '1'))
         bundle = self.root/'bundle-0'
         self.assertEqual(sorted(p.name for p in bundle.iterdir()), ['manifest.json', 'otatools', 'provenance.json', 'unsigned.zip'])
         manifest = job.stage(bundle, self.signing)
@@ -283,6 +302,19 @@ class Ingress(LiteralSteps):
         self.build_archive(manifest=self.manifest_bytes)
         with self.assertRaisesRegex(job.Refused, 'names another source run'):
             self.ingress()
+
+    def test_request_id_must_name_the_source_run_attempt_device_and_build(self):
+        build = fixtures.BUILD
+        for request, message in ((f'4243.1.frankel-{build}', 'names another source run'),
+                                 (f'4242.2.frankel-{build}', 'another attempt of the source run'),
+                                 (f'4242.1.rango-{build}', 'another device or build'),
+                                 (f'4242.1.frankel-2026103199', 'another device or build'),
+                                 (f'4242.1.frankel-{build}-4242', 'must be <source_run>'),
+                                 ('OS signing 4242', 'must be <source_run>'), (None, 'must be <source_run>')):
+            with self.subTest(request=request), self.assertRaisesRegex(job.Refused, message):
+                self.ingress(request_id=request, out=self.root/f'r-{abs(hash(str(request)))}')
+        self.run_meta['run_attempt'] = 2
+        self.assertEqual(self.ingress(request_id=f'4242.2.frankel-{build}')['sourceAttempt'], '2')
 
     def test_symlink_and_duplicate_members_refuse(self):
         link = self.zipfile.ZipInfo('otatools')

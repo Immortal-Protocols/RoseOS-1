@@ -86,7 +86,6 @@ final class StatusGlowOverlay implements DisplayManager.DisplayListener {
 
  private final class Waves extends View {
   final StatusVoiceGlow agentGlow=new StatusVoiceGlow(),micGlow=new StatusVoiceGlow();
-  final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
   long rendered;
   Waves(){super(context);setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
   @Override protected void onDraw(Canvas canvas){
@@ -104,15 +103,10 @@ final class StatusGlowOverlay implements DisplayManager.DisplayListener {
    }
    float rightStart=holeRight+dp(6),glowWidth=Math.min(holeLeft-dp(6),getWidth()-rightStart),leftStart=0;
    if(active)agentGlow.draw(canvas,leftStart,0,glowWidth,getHeight(),fresh?state.getFloat("outputLevel"):0,now/1000f,elapsed,true);
-   else{agentGlow.clear();drawRest(canvas,leftStart,glowWidth);}
+   else agentGlow.clear(); // #224: nothing is drawn at rest (no grey rest line), as in the OS tray (PR231)
    if(active&&listening&&!muted)micGlow.draw(canvas,rightStart,0,glowWidth,getHeight(),fresh?state.getFloat("inputLevel"):0,now/1000f+1.7f,elapsed,false);
-   else{micGlow.clear();drawRest(canvas,rightStart,glowWidth);}
+   else micGlow.clear();
    if(connected||listening)postInvalidateOnAnimation();
-  }
-  private void drawRest(Canvas canvas,float start,float glowWidth){
-   paint.setShader(null);paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);
-   paint.setColor(0xff888888);paint.setStrokeWidth(dp(1.2f));
-   canvas.drawLine(start+dp(8),getHeight()/2f,start+glowWidth-dp(8),getHeight()/2f,paint);
   }
  }
 
