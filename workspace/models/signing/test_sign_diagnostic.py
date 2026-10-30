@@ -13,11 +13,13 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import models_signing as ms  # noqa: E402
+import synthetic_sign_check  # noqa: E402
 import test_models_signing as tms  # noqa: E402
 
 D = ms.DIAG
@@ -679,21 +681,18 @@ PINNED_BUILD_TOOLS = {
     'apksigner': 'b47549e373b895ce6ca620d0c7887e674d9615ffa837a86ac601dcfd04adb0f0',
     'lib/apksigner.jar': '00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7',
     'zipalign': 'a205d94a45c8522ca1b571dcbe190df145c818f0a29dfb366e4dd78eef4f56a7',
-    'aapt': '393c4c87f675f9555c50921fb53be1f3893cacd29f2270c4863e2e3f99583c39',
 }
 
 
 def pinned_build_tools():
-    """(build-tools dir, android.jar) of an installed tree matching PINNED_BUILD_TOOLS, else (None, reason)."""
+    """(build-tools dir, None) of an installed tree matching PINNED_BUILD_TOOLS, else (None, reason)."""
     roots = [os.environ.get(k) for k in ('ANDROID_SDK_ROOT', 'ANDROID_HOME')] + ['/opt/roseos/android-sdk',
                                                                                  '/usr/local/lib/android/sdk']
     for root in dict.fromkeys(filter(None, roots)):
         for name in ('android-15', '35.0.0'):
             bt = Path(root) / 'build-tools' / name
             if all((bt / f).is_file() and D.sha256_file(bt / f) == h for f, h in PINNED_BUILD_TOOLS.items()):
-                jars = sorted(Path(root).glob('platforms/android-3*/android.jar'))
-                if jars:
-                    return bt, jars[-1]
+                return bt, None
     return None, 'no installed build-tools tree equals the pinned r35 archive members (no download is attempted)'
 
 
@@ -704,10 +703,10 @@ class RealPinnedTool(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.bt, android_jar = pinned_build_tools()
+        cls.bt, reason = pinned_build_tools()
         java = shutil.which('java')
         if cls.bt is None or not java:
-            raise unittest.SkipTest(android_jar if cls.bt is None else 'no java on PATH')
+            raise unittest.SkipTest(reason if cls.bt is None else 'no java on PATH')
         jdk_bin = Path(os.path.realpath(java)).parent
         if not (jdk_bin / 'keytool').is_file():
             raise unittest.SkipTest('no keytool beside java')
@@ -743,10 +742,8 @@ class RealPinnedTool(unittest.TestCase):
         os.chmod(cls.jks, 0o600)
         cls.jks_cert = hashlib.sha256(cls.tool([str(jdk_bin / 'keytool'), '-exportcert', '-alias', 'rose-models', '-keystore',
                                                 str(cls.jks), '-storepass:file', str(cls.jks_store)]).stdout).hexdigest()
-        manifest = cls.private('AndroidManifest.xml', '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
-                               'package="test.synthetic.invoke" android:versionCode="1" android:versionName="0"><uses-sdk '
-                               'android:minSdkVersion="29"/><application android:hasCode="false"/></manifest>\n')
-        cls.tool([str(cls.bt / 'aapt'), 'package', '-f', '-M', str(manifest), '-I', str(android_jar), '-F', str(cls.tmp / 'u.apk')])
+        with zipfile.ZipFile(cls.tmp / 'u.apk', 'w', zipfile.ZIP_DEFLATED) as apk:  # no aapt or android.jar
+            apk.writestr('AndroidManifest.xml', synthetic_sign_check.binary_manifest())
         cls.tool([str(cls.bt / 'zipalign'), '-p', '-f', '4', str(cls.tmp / 'u.apk'), str(cls.tmp / 'in.apk')])
 
     @classmethod

@@ -18,7 +18,9 @@ publishes or installs; input arrives only through scripts/models-input-ingress.p
                                              reused (scripts/models-sdk-prepare.py, MODELS-SDK-PREP-001); the retained SDK
                                              archive has its pinned sha256 and its android-15 subtree equals the
                                              installed build-tools/android-15 file by file; the JDK21 tree equals the
-                                             models-v0 pin.
+                                             models-v0 pin; then, under the lock again with both proofs revalidated, a
+                                             required synthetic sign/verify through exactly those roots must pass
+                                             (workspace/models/signing/synthetic_sign_check.py, MODELS-SIGN-PRECHECK-001).
   run --receipt-dir D --output-dir O --input-dir I --ingress-receipt R
                                              builder, after signer login, under the shared lock: the same proofs again
                                              (revalidation only: no SDK preparation and no network),
@@ -371,6 +373,24 @@ def run(receipt_dir, output_dir, input_dir=None, ingress_receipt=None, home=None
     return public
 
 
+def locked_synthetic_check(lock=None, tree_fn=None):
+    """CLI preflight only (before login; preflight() and run() never call it): under the shared lock, revalidate the SDK
+    archive/tree and JDK21 proofs, then sign and independently verify with disposable synthetic keys through exactly
+    those roots. Anything but a complete pass with zero skips refuses; only a closed summary is returned."""
+    check = load('models_synthetic_sign_check', ROOT/'workspace/models/signing/synthetic_sign_check.py')
+    with (lock or shared_lock)():
+        archive_proof()
+        result = check.check(jdk_proof(tree_fn)['root'], config()['sdk']['root'])
+    if not (isinstance(result, dict) and result.get('result') == 'pass' and result.get('skipped') == 0
+            and result.get('failed') == 0 and result.get('executed') == result.get('passed') == len(check.CASES)
+            and result.get('correctedInvocation') == {'signed': True, 'verified': True}):
+        failed = isinstance(result, dict) and result.get('result') == 'fail'
+        category = result.get('category') if failed else None
+        raise Refused('synthetic_sign_check_failed: '
+                      + (category if category in check.CATEGORIES and category != 'none' else 'invalid_result'))
+    return {k: result[k] for k in ('schema', 'result', 'executed', 'passed', 'failed', 'skipped', 'correctedInvocation')}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = parser.add_subparsers(dest='command', required=True)
@@ -398,6 +418,7 @@ def main(argv=None):
             checked = preflight(args.receipt_dir, args.input_dir, args.ingress_receipt, prepare=locked_prepare)
             result = {k: checked[k] for k in ('binding', 'journalSha256', 'sdkPreparation', 'tools', 'jdk')}
             result['input'] = checked['ingress']['files']
+            result['syntheticSignCheck'] = locked_synthetic_check()
         else:
             result = run(args.receipt_dir, args.output_dir, args.input_dir, args.ingress_receipt)
     except Refused as error:

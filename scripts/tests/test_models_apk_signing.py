@@ -8,6 +8,8 @@ import contextlib
 import copy
 import hashlib
 import importlib.util
+import inspect
+import io
 import json
 import os
 from pathlib import Path
@@ -16,7 +18,9 @@ import shutil
 import stat
 import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -589,6 +593,84 @@ class Run(unittest.TestCase):
             hms.run(rdir, t.root/'out', str(t.root/'absent'), str(t.root/'absent.json'), fetch=lambda *a: fetched.append(a),
                 lock=contextlib.nullcontext)
         self.assertEqual(fetched, [])
+
+
+class SyntheticCheck(unittest.TestCase):
+    """MODELS-SIGN-PRECHECK-001: the CLI preflight (before login) runs the required synthetic sign/verify under the shared
+    lock after revalidating the SDK and JDK proofs; preflight() and run() never do. The check itself is mocked here."""
+    REAL = hms.load('synthetic_check_constants', ROOT/'workspace/models/signing/synthetic_sign_check.py')
+    PASS = {'schema': 'rose-models-synthetic-sign-check/1', 'result': 'pass', 'category': 'none', 'executed': 3,
+            'passed': 3, 'failed': 0, 'skipped': 0, 'cases': [], 'correctedInvocation': {'signed': True, 'verified': True},
+            'observedToolSha256': {'java': 'd' * 64}, 'evidence': 'synthetic'}
+
+    def cli(self, result, archive=None):
+        order, calls = [], []
+
+        @contextlib.contextmanager
+        def lock():
+            order.append('lock')
+            try:
+                yield
+            finally:
+                order.append('unlock')
+
+        def check(jdk_root, sdk_root):
+            order.append('check')
+            calls.append((jdk_root, sdk_root))
+            return result
+        fake = types.SimpleNamespace(check=check, CASES=self.REAL.CASES, CATEGORIES=self.REAL.CATEGORIES)
+        real_load = hms.load
+        checked = {'binding': {}, 'journalSha256': 'e' * 64, 'sdkPreparation': None, 'tools': {}, 'jdk': {},
+                   'ingress': {'files': {}}}
+        with mock.patch.object(hms, 'preflight', lambda *a, **k: order.append('preflight') or checked), \
+                mock.patch.object(hms, 'shared_lock', lock), \
+                mock.patch.object(hms, 'archive_proof', archive or (lambda *a: order.append('archive'))), \
+                mock.patch.object(hms, 'jdk_proof', lambda *a: order.append('jdk') or {'root': '/pinned/jdk21/linux-x86'}), \
+                mock.patch.object(hms, 'load', lambda name, path: fake if path.name == 'synthetic_sign_check.py'
+                                  else real_load(name, path)):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = hms.main(['preflight', '--receipt-dir', '/r', '--input-dir', '/i', '--ingress-receipt', '/r.json'])
+        return code, out.getvalue(), err.getvalue(), order, calls
+
+    def test_passes_only_after_revalidated_proofs_under_the_lock(self):
+        code, out, err, order, calls = self.cli(dict(self.PASS))
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(order, ['preflight', 'lock', 'archive', 'jdk', 'check', 'unlock'])
+        self.assertEqual(calls, [('/pinned/jdk21/linux-x86', hms.config()['sdk']['root'])])
+        summary = json.loads(out)['syntheticSignCheck']
+        self.assertEqual(summary, {k: self.PASS[k] for k in ('schema', 'result', 'executed', 'passed', 'failed', 'skipped',
+                                                             'correctedInvocation')})
+
+    def test_anything_but_a_complete_pass_refuses(self):
+        cases = {
+            'failed case': (dict(self.PASS, result='fail', category='case_failed', passed=2, failed=1), 'case_failed'),
+            'cleanup failed': (dict(self.PASS, result='fail', category='cleanup_failed'), 'cleanup_failed'),
+            'skipped case': (dict(self.PASS, skipped=1, passed=2), 'invalid_result'),
+            'skip with full counts': (dict(self.PASS, skipped=1), 'invalid_result'),
+            'zero cases': (dict(self.PASS, executed=0, passed=0), 'invalid_result'),
+            'corrected invocation unverified': (dict(self.PASS, correctedInvocation={'signed': True, 'verified': False}),
+                                                'invalid_result'),
+            'foreign category': (dict(self.PASS, result='fail', category='SENTINEL_TOKEN /SENTINEL-PATH'), 'invalid_result'),
+            'not a result': (None, 'invalid_result'),
+        }
+        for name, (result, category) in cases.items():
+            with self.subTest(name):
+                code, out, err, order, calls = self.cli(result)
+                self.assertEqual((code, out, err), (1, '', f'refused: synthetic_sign_check_failed: {category}\n'))
+
+    def test_failed_revalidation_refuses_before_the_check(self):
+        def drifted(*a):
+            raise hms.Refused('sdk_installed_mismatch: drift')
+        code, out, err, order, calls = self.cli(dict(self.PASS), archive=drifted)
+        self.assertEqual((code, calls, order), (1, [], ['preflight', 'lock', 'unlock']))
+        self.assertIn('sdk_installed_mismatch', err)
+
+    def test_production_paths_never_run_the_synthetic_check(self):
+        for function in (hms.preflight, hms.run):
+            self.assertNotIn('synthetic', inspect.getsource(function))
+        self.assertIn("result['syntheticSignCheck'] = locked_synthetic_check()", inspect.getsource(hms.main))
+        self.assertIn('with (lock or shared_lock)():', inspect.getsource(hms.locked_synthetic_check))
 
 
 def jobs(text):

@@ -167,6 +167,66 @@ JKS fixture is needed because keytool cannot give a PKCS12 key its own password.
 - Before any protected retry, the corrected invocation must be checked with the pinned JDK and SDK on the original
   protected route.
 
+## Required synthetic sign check before login (MODELS-SIGN-PRECHECK-001)
+
+`synthetic_sign_check.py` exercises the corrected invocation with the real tools and disposable synthetic keys:
+
+```bash
+python3 workspace/models/signing/synthetic_sign_check.py --jdk-home <checked JDK root> --sdk-root <verified SDK root>
+```
+
+**Inputs.** Pass the roots only **after** they have been independently proven: the JDK tree proof, and the SDK archive
+and `build-tools/android-15` tree proof.
+
+- **Tools:** it uses exactly `<jdk>/bin/{java,keytool}` and `<sdk>/build-tools/android-15/{apksigner,lib/apksigner.jar,zipalign}`.
+- **Environment:** the tools see only `PATH=<jdk>/bin:/usr/bin:/bin` (for the launcher's shell utilities), `JAVA_HOME`,
+  `ANDROID_SDK_ROOT`, `LC_ALL=C` and `HOME`.
+- **No fallback:** there is no tool search, no skip, and no `aapt` or `android.jar`. The synthetic APK's binary manifest
+  is generated in source.
+- **Identity:** it reports `observedToolSha256` for the tools it used and verifies none of them. Identity remains the
+  caller's proof.
+
+**Cases.** Each case is one `sign-apk.py --diagnostic-out` run with a certificate pin, followed by one independent
+`apksigner verify --print-certs`. The certificate digest must equal the fixture certificate, and v2 must verify.
+
+- `pkcs12_shared_one_line`: the production shape, RSA-4096 PKCS12 with one single-line password file.
+- `jks_separate_files`: a key password that differs from the store password, in its own file.
+- `jks_shared_two_lines`: the same two passwords as two lines of one shared file.
+
+**Bounds and cleanup.**
+
+- Each tool start goes through `run_bounded`: 300 s per tool, 900 s for `sign-apk.py`.
+- The fixture directory is created with `tempfile`; it must lie outside the repository, otherwise the check fails with
+  `temp_inside_repository`.
+- That directory is removed on success, failure and interruption (SIGTERM or Ctrl-C).
+- A failed removal is reported as `cleanup_failed` and never counts as a pass.
+
+**Result.** One JSON line on stdout. Exit 0 only for `pass`; exit 1 otherwise.
+
+```json
+{"schema": "rose-models-synthetic-sign-check/1", "result": "pass|fail", "category": "...", "executed": 3, "passed": 3,
+ "failed": 0, "skipped": 0, "cases": [{"name": "...", "signed": true, "verified": true}],
+ "correctedInvocation": {"signed": true, "verified": true}, "observedToolSha256": {"java": "...", ...}, "evidence": "..."}
+```
+
+- `category` is one of `none`, `invalid_roots`, `tool_missing`, `temp_inside_repository`, `fixture_failed`,
+  `case_failed`, `cleanup_failed`, `interrupted` or `internal_error`.
+- No password, key, path, tool output or environment value appears in the result.
+
+**Integration** (`scripts/host-models-sign.py`, under Infra's narrow release of its CLI `preflight` branch):
+
+- `host-models-sign.py preflight` first runs the existing proofs, including SDK preparation under the lock. Then
+  `locked_synthetic_check()` takes the shared lock again, revalidates the SDK archive and tree proof and the JDK21 tree
+  proof, and runs this check with the checked JDK root and the configured Models SDK root.
+- Anything but a complete pass refuses the preflight with `synthetic_sign_check_failed: <category>`. A complete pass
+  means 3 of 3 executed and passed, 0 failed, 0 skipped, and the corrected invocation signed and verified.
+- Only the closed summary is added to the preflight output, as `syntheticSignCheck`.
+- `preflight()` and the production `run()` never call the check, so it always happens before login.
+
+**Evidence level.** A pass is synthetic evidence for the given tools. It is not a production signature, does not use the
+production key, and does not prove the production cause. CI runs it against the hosted runner's build-tools, accepted
+only when equal to the pinned r35 members, and the hosted Temurin 21. That run is not the pinned AOSP JDK21.
+
 ## Ownership and cleanup
 
 The adapter owns only the new `--output` directory. It deletes its own `work/` (input copy and

@@ -372,7 +372,8 @@ class Integration(Case):
         transport = Transport(self.payload)
         with mock.patch.object(hms, 'prepare_sdk', lambda: order.append('prepare') or
                                prep.prepare(self.cfg, transport=transport, pins=self.pins, shared=str(self.shared))), \
-                mock.patch.object(hms, 'shared_lock', lock):
+                mock.patch.object(hms, 'shared_lock', lock), \
+                mock.patch.object(hms, 'locked_synthetic_check', lambda: order.append('synthetic') or {'result': 'pass'}):
             real_proof = hms.archive_proof
             with mock.patch.object(hms, 'archive_proof', lambda cfg=None: order.append('revalidate') or real_proof(self.cfg)):
                 out = io.StringIO()
@@ -380,7 +381,7 @@ class Integration(Case):
                     code = hms.main(['preflight', '--receipt-dir', str(self.tmp), '--input-dir', str(self.tmp),
                                      '--ingress-receipt', str(self.tmp/'r.json')])
         self.assertEqual(code, 0)
-        self.assertEqual(order, ['lock', 'prepare', 'unlock', 'revalidate'])
+        self.assertEqual(order, ['lock', 'prepare', 'unlock', 'revalidate', 'synthetic'])  # PRECHECK-001 last
         self.assertEqual(json.loads(out.getvalue())['sdkPreparation']['state'], 'prepared')
         self.assertEqual(len(transport.calls), 1)
 
@@ -418,6 +419,7 @@ class Integration(Case):
     def test_production_preflight_wiring(self):
         source = inspect.getsource(hms.main)
         self.assertIn('prepare=locked_prepare', source)
+        self.assertLess(source.index('prepare=locked_prepare'), source.index('locked_synthetic_check()'))
         self.assertIn('with (lock or shared_lock)():', inspect.getsource(hms.locked_prepare))
         self.assertNotIn('shared_lock', inspect.getsource(hms.preflight))  # run() already holds it: never nested
 
