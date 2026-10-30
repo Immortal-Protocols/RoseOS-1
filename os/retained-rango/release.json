@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.retained-rango-release",
+  "note": "OCT30-INFRA-S015: signing, verification and separate (never Latest) publication of one retained, already-compiled Rango (Pixel 10 Pro Fold) build by scripts/rango-retained.py, reusing the Frankel primitives (host-sign.py, host_secrets.py, release-pipeline.py checks, github_release_publisher.py). No compile, app rebuild, key generation or bootstrap. Every null below is an unbound real input: the route refuses before any controller, login or secret access while any is null. Values are never copied from Frankel or guessed.",
+  "target": {
+    "device": "rango",
+    "product": "02b21bc69f9afd281422d42e3dcf8a456e471de1",
+    "build": "2026103001",
+    "deviceContract": "os/devices/pixel10.json",
+    "buildOnlyConfig": "os/build-only/rango.json"
+  },
+  "input": {
+    "receiptSchema": "roseos.rango-retained-input.v1",
+    "receiptFile": "rango-retained-input.json",
+    "targetFiles": "rango-target_files.zip",
+    "otatools": "rango-otatools.zip",
+    "limits": {
+      "targetFilesBytes": 21474836480,
+      "otatoolsBytes": 4294967296
+    },
+    "transport": null,
+    "transportBasis": "Unbound: no supported transport moves the Mac operator's retained outputs to the original builder. The validated local interface is a directory holding exactly the receipt, target-files and otatools; it is staged into a fresh task-owned consumer directory and revalidated before secrets."
+  },
+  "signing": {
+    "bootstrapProfile": "fold-rango-v1",
+    "bootstrapReceipt": null,
+    "bootstrapReceiptBasis": "Unbound: the public receipt of a genuine completed fold-rango-v1 bootstrap names the committed secret versions and the OTA certificate and AVB public key identities. No bootstrap has run.",
+    "otatoolsProvenance": null,
+    "releaseScriptProvenance": null,
+    "provenanceBasis": "Unbound: executable otatools and the release script need an approved source binding (pinned revision and content hashes), not only the artifact's self-reported hashes."
+  },
+  "publication": {
+    "repository": "Immortal-Protocols/pixel-ota",
+    "tag": "rango-{build}",
+    "feedChannel": null,
+    "feedBasis": "Unbound: automatic Rango OTA discovery is not established by a GitHub tag and no Rango channel routing is configured; the feed line asset needs a selected channel.",
+    "latest": false,
+    "api": "https://api.github.com",
+    "uploads": "https://uploads.github.com",
+    "notes": null,
+    "notesBasis": "Unbound: UPDATE.md for this build must come from an immutable reviewed commit; none names rango 2026103001."
+  },
+  "verification": {
+    "expected": null,
+    "basis": "Unbound: Rango-specific expected APK/APEX/image/updater identities for the release-pipeline checks; Frankel's updater, framework and feed identities are never claimed for Rango."
+  }
+}

@@ -183,8 +183,23 @@ def prepare_release_dir(source_root, device, build, sha, archive=None):
         marker.write_text(json.dumps(owner, sort_keys=True) + '\n')
     return releases
 
+def retained_inputs(env):
+    """OCT30-INFRA-S015 retained Rango route (ROSE_RETAINED_INPUT): the config bound from a genuine bootstrap receipt and
+    the staged consumer inputs, revalidated now, before any secret; scripts/rango-retained.py refuses anything unbound."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('rango_retained', ROOT/'scripts/rango-retained.py')
+    retained = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(retained)
+    try:
+        return retained.sign_inputs(env)
+    except retained.SetupMissing as error:
+        raise AdapterSetupMissing(error.missing) from None
+    except retained.Refused as error:
+        raise AdapterFailed(str(error)) from None
+
 def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud'):
-    config = json.loads(Path(config_path).read_text())
+    retained = retained_inputs(env) if env.get('ROSE_RETAINED_INPUT') else None
+    config = retained[0] if retained else json.loads(Path(config_path).read_text())
     missing = missing_inputs(config)
     if missing:
         raise AdapterSetupMissing(missing)
@@ -195,15 +210,16 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     if build.encode() not in notes:
         raise AdapterFailed(f'release notes in candidate {sha[:12]} do not name build {build}')
     releases = prepare_release_dir(source_root, device, build, sha, env.get('ROSE_SIGN_RESUME_ARCHIVE') or None)
-    copy_fresh(release_dir/'unsigned-target_files.zip', releases/f'{device}-target_files.zip')
-    copy_fresh(source_root/env['OUT_DIR']/sign['otatools'], releases/f'{device}-otatools.zip')
+    unsigned, otatools = retained[1:] if retained else (release_dir/'unsigned-target_files.zip', source_root/env['OUT_DIR']/sign['otatools'])
+    copy_fresh(unsigned, releases/f'{device}-target_files.zip')
+    copy_fresh(otatools, releases/f'{device}-otatools.zip')
     original = (source_root/'script/generate-release.sh').read_bytes()
     public = release_dir/'public'
     public.mkdir()
     with host_secrets.private_directory('rose-os-signing-') as private:
         archive = host_secrets.fetch_secret(sign['project'], sign['keysSecret'], sign['secretVersion'], private/'keys.tar.gz', gcloud)
-        passphrase = host_secrets.fetch_secret(sign['project'], sign['passphraseSecret'], sign['secretVersion'],
-            private/'passphrase', gcloud)
+        passphrase = host_secrets.fetch_secret(sign['project'], sign['passphraseSecret'],
+            sign.get('passphraseSecretVersion') or sign['secretVersion'], private/'passphrase', gcloud)
         extracted = host_secrets.extract_key_archive(archive, private/'keys')
         archive.unlink()
         key_dir = host_secrets.discover_key_directory(extracted, config['identities'])
