@@ -217,8 +217,9 @@ class CheckedInCandidateTest(unittest.TestCase):
         # 321, controller 28 and Calculator 4 unchanged) moves past all of them and past the published app-only 311.
         nxt, nxt_apps = {'build': '2026103101', 'timestamp': '1793500000'}, [['dev.pixel.voice', 321], *APPS[1:]]
         pipeline.check_version_baselines(CONFIG, nxt, nxt_apps)
-        with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 320 must exceed retained 2026103012 versionCode 320'
-                '.*must exceed retained 2026103012 \\(1793397918\\)'):
+        # 3012 demands only a newer build and BUILD_DATETIME: an unchanged Rose Agent keeps its published 320.
+        with self.assertRaisesRegex(pipeline.CheckFailed, '^build number and BUILD_DATETIME must exceed retained 2026103012 '
+                '\\(1793397918\\)$'):
             pipeline.check_version_baselines(CONFIG, {'build': '2026103012', 'timestamp': '1793397918'}, [['dev.pixel.voice', 320], *APPS[1:]])
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
         self.assertEqual((reserved[310]['osBuild'], reserved[310]['buildTimestamp']), ('2026102901', 1793311111))
@@ -258,6 +259,32 @@ class CheckedInCandidateTest(unittest.TestCase):
         without = {k: v for k, v in CONFIG.items() if k != 'versionBaselines'}
         with self.assertRaises(pipeline.SetupMissing):
             pipeline.check_version_baselines(without, DRAFT, APPS)
+
+    def test_unchanged_apps_since_the_published_latest_pass_the_baselines(self):
+        # Campaign 41132175338 gen 5 (run 41144465393, unchanged Rose Agent since 2026103012): the allocator keeps an
+        # unchanged package's published version, so no retained row may demand exceeding the version the newest
+        # published Beta carries. Latest is modelled from this checkout (every package unchanged) with the newest
+        # retained build's delivered apps (3012 and 3014: Rose Agent 320, Calculator 4, controller 28).
+        spec = importlib.util.spec_from_file_location('release_allocate', SCRIPTS/'release-allocate.py')
+        allocate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(allocate)
+        head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], check=True, capture_output=True,
+            text=True).stdout.strip()
+        newest = max(CONFIG['versionBaselines']['retained'], key=lambda r: int(r['build']))
+        latest = str(int(newest['build']) + 2)
+        apps = [['dev.pixel.voice', 320], ['dev.pixel.calculator.agent', 4], ['dev.pixel.backgroundcontrol', 28]]
+        observation = {'schema': allocate.OBSERVATION_SCHEMA,
+            'releases': {'complete': True, 'includesDrafts': True, 'items': [
+                {'tag': f'frankel-{b}', 'draft': False, 'prerelease': False} for b in (newest['build'], latest)]},
+            'attempts': {'complete': True, 'items': []},
+            'reservations': {'complete': True, 'items': [{'schema': allocate.SCHEMA, 'build': latest, 'sourceSha': head,
+                'buildTimestamp': newest['buildTimestamp'] + 3600, 'apps': apps}]}}
+        now = newest['buildTimestamp'] + 7200
+        allocation = allocate.allocate(head, observation, now, 1, 1, repo=ROOT)
+        self.assertEqual(allocation['apps'], apps)
+        self.assertFalse(any(p['changedSinceRelease'] for p in allocation['packages'].values()))
+        pipeline.check_version_baselines(CONFIG, {'build': allocation['build'],
+            'timestamp': str(allocation['buildTimestamp'])}, allocation['apps'])
 
 class BuilderControlTest(unittest.TestCase):
     """Fake gcloud: describe pops the next status from a queue (repeating the last); start/stop exit as configured."""
