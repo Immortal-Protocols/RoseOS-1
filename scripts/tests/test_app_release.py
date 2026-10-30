@@ -346,7 +346,8 @@ class CheckedInAppReleaseTest(unittest.TestCase):
              {'route': 'public GitHub prerelease rose-agent-307', 'at': '2026-10-28T20:40Z', 'publicRelease': True}))
         self.assertEqual([(r['versionCode'], r['versionName'], r['route'], r['candidate']) for r in app['reserved']],
             [(305, '305-home-beta', 'os-release', '7fb94ae6ed535066d50879a99b7c8e427da8e853'), (308, '308-home-tray-beta', 'os-release', '93ad1c2bd7094d6b65c695ba239d05d272b87c57'),
-             (309, '309-hifi-beta', 'app-only', None), (310, '310-hifi-os-beta', 'os-release', None)])
+             (309, '309-hifi-beta', 'app-only', None), (310, '310-hifi-os-beta', 'os-release', '02b21bc69f9afd281422d42e3dcf8a456e471de1'),
+             (311, '311-hifi-visual-beta', 'app-only', 'd4bb0fd23741ef472689e3878e6d3aa4f6331d23')])
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
             {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()

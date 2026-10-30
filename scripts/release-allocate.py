@@ -122,7 +122,9 @@ def known_identities(observation, pipeline, tag_pattern):
         if tag.startswith(prefix) and tag.endswith(suffix):
             builds.add(tag[len(prefix):len(tag) - len(suffix)])
     for attempt in observation['attempts']['items']:
-        match = re.fullmatch(re.escape(prefix) + r'(\d{10})(-resume-\d+)?', str(attempt))
+        # -attemptN-<run> is the earlier hand-dispatched naming (frankel-2026102802-attempt1-40634711221); its build
+        # stays consumed like any other attempt.
+        match = re.fullmatch(re.escape(prefix) + r'(\d{10})(-resume-\d+|-attempt\d+-\d+)?', str(attempt))
         if not match:
             raise Refused(f'state_unavailable: unrecognised attempt directory {str(attempt)[:60]!r}')
         builds.add(match[1])
