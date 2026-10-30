@@ -218,3 +218,48 @@ Run both as the ordinary build owner. No root, sudo or other privilege is used o
 
 A successful incremental compile is only a compile. It is not signing, verification or
 device acceptance.
+
+## Collecting the completed compile outputs (OS-RANGO-COLLECT-006)
+
+`scripts/rango-collect.py` locates, validates and hashes the four unsigned outputs of a
+finished compile. It reads only fixed paths under `O=SRC/out-rango-B` and writes one new
+receipt outside `O`:
+
+| Artifact | Path under `O` | Checked as |
+|---|---|---|
+| `vendorBootImage` | `target/product/rango/vendor_boot.img` | Vendor boot header (`VNDRBOOT`) |
+| `vendorKernelBootImage` | `target/product/rango/vendor_kernel_boot.img` | Vendor boot header (`VNDRBOOT`) |
+| `otatools` | `host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/otatools-packagelinux_glibc_x86_64` | Extensionless ZIP with `bin/` and `releasetools/` |
+| `targetFiles` | The single `rango-target_files*.zip` in `target/product/rango/obj/PACKAGING/target_files_intermediates/` | ZIP with `META/misc_info.txt` and `SYSTEM/` |
+
+**Where the otatools path comes from.** It is the `otatools-package` output that
+`os/release-pipeline/frankel.json` (`host.sign.otatools`) pins and `scripts/host-sign.py`
+copies. That path was observed in the successful P1 signing run on the same retained tree
+(commit `6ae44fa`). It is not a Rango observation. Aliases such as `host/linux-x86/otatools.zip`
+and `dist/otatools.zip` are never consulted.
+
+**What the collector never does.**
+- It lists only the target-files directory: no tree or disk scan and no fallback.
+- It follows no links: every path component must be an ordinary directory, and every file
+  is opened with no-follow.
+- It neither extracts nor executes anything.
+- It never renames, deletes or writes an output.
+
+**How each file is checked.**
+- Size and sha256 come from one streaming read, and the file must not change during it.
+- ZIP checks read only the central directory and every entry's CRC.
+
+**The receipt.** Each artifact gets one state: `collected`, `missing`, `unreadable`,
+`invalid`, `ambiguous` (more than one target-files ZIP) or `uninspected` (`O` itself is
+unusable). The verdict is `complete` only when all four are collected. A partial result is
+still written.
+
+```bash
+python3 -I $R/scripts/rango-collect.py --out-root /srv/rose-rango/src --build-number $B \
+  --receipt /srv/rose-rango/receipts/$B-collect-1.json
+```
+
+The exit code is 0 when the collection is complete, 1 when the receipt is written but
+incomplete, and 2 for invalid usage, in which case nothing is written. A collected artifact
+records only its existence, format and hash. It is not signing, verification or acceptance,
+and a compile exit code of 0 alone never implies it.
