@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
@@ -83,13 +84,19 @@ class Tmp:
         return d
 
 
+def signed_target_files(out, target):
+    """SYNTHETIC signed target-files: a real archive (so the real upstream Updater check reads it) without any Updater."""
+    with zipfile.ZipFile(out/'signed-target_files.zip', 'w') as z:
+        z.writestr('SYNTHETIC/signed-from-target-files', target.read_bytes())
+
+
 class Config(unittest.TestCase):
     def test_checked_in_route_is_unbound_and_refuses_before_any_host(self):
         # OCT30-INFRA-S017: the four Fold tools are proven per run by the admitted S016 helper, so no static installed
         # hash is a prerequisite any more; everything else stays genuinely unbound.
         self.assertEqual(rr.preflight(), ['input.transport', 'input.directory', 'signing.bootstrapReceipt',
             'signing.otatoolsProvenance', 'signing.releaseScriptProvenance', 'publication.feedChannel', 'publication.notes',
-            'verification.expected'])
+            'verification.expected', 'verification.updater.included'])
         self.assertEqual(rr.main(['preflight']), 4)
         self.assertEqual((CONFIG['target']['device'], CONFIG['target']['product'], CONFIG['target']['build']),
             ('rango', '02b21bc69f9afd281422d42e3dcf8a456e471de1', '2026103001'))
@@ -233,6 +240,7 @@ class BoundSigning(unittest.TestCase):
         cfg['signing'].update(otatoolsProvenance={'revision': 'r'}, releaseScriptProvenance={'revision': 's'})
         cfg['publication'].update(feedChannel='stable', notes='os/release-notes/{device}-{build}.md')
         cfg['verification']['expected'] = {'apps': []}
+        cfg['verification']['updater']['included'] = False
         saved = (rr.config, rr.tool_bindings)
         rr.config = lambda: cfg
         rr.tool_bindings = lambda prof=None: []
@@ -311,6 +319,8 @@ class Route(unittest.TestCase):
             'avbPublicKeySha256': self.avb, 'members': []}), otatoolsProvenance={'synthetic': True},
             releaseScriptProvenance={'synthetic': True})
         cfg['publication'].update(feedChannel='stable', notes='os/release-notes/{device}-{build}.md')
+        # OCT30-INFRA-S018: the complete SYNTHETIC upstream contract (absence); the real check_updater runs on the signed zip.
+        cfg['verification']['updater']['included'] = False
         cfg['verification']['expected'] = {'variant': 'user', 'apps': [['dev.pixel.voice', 311]],
             'identities': {'appSignerSha256': '6' * 64}, 'host': {'tools': {}}}
         for name in ('apksigner', 'aapt'):  # SYNTHETIC tool paths; the tool-running checks are mocked
@@ -324,7 +334,7 @@ class Route(unittest.TestCase):
         self.addCleanup(setattr, rr, 'tool_bindings', saved[1])
         self.module = rr.pipeline()
         self.checks = []
-        for name in ('check_build_identity', 'check_apps', 'check_updater', 'check_image_bytes', 'check_ota', 'check_payload',
+        for name in ('check_build_identity', 'check_apps', 'check_image_bytes', 'check_ota', 'check_payload',
                      'check_vbmeta'):
             self.mock_check(name, [])
         for name in ('check_permission_apex', 'check_systemui_tray'):
@@ -371,7 +381,7 @@ class Route(unittest.TestCase):
         out = Path(env['ROSE_RELEASE_DIR'])
         public = out/'public'
         public.mkdir()
-        (out/'signed-target_files.zip').write_bytes(b'SYNTHETIC signed ' + target.read_bytes())
+        signed_target_files(out, target)
         (public/'rango-ota_update-2026103001.zip').write_bytes(b'SYNTHETIC rango OTA')
         (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango {config['publication']['channels']['beta']['feedChannel']}\n")
         for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):
@@ -432,6 +442,23 @@ class Route(unittest.TestCase):
             rr.publish(self.artifact, adapter=self.adapter, selected=True)
         self.assertFalse((self.t.root/'fake/releases').exists())
 
+    def test_upstream_updater_is_verified_and_recorded_without_rose_discovery(self):
+        """OCT30-INFRA-S018: the real check_updater runs on the signed target-files with the upstream contract."""
+        self.sign()
+        self.assertEqual(rr.verify(self.env, self.consumer, self.release, self.adapter)['verdict'], 'PASS')
+        receipt = json.loads((self.release/'public/verification.json').read_text())
+        self.assertEqual({k: receipt['updater'][k] for k in ('mode', 'roseDiscovery', 'included', 'recipe')},
+            {'mode': 'upstream', 'roseDiscovery': False, 'included': False, 'recipe': '--keep-upstream-updater'})
+        self.assertIn('upstream Updater absence (keep-upstream recipe, no Rose discovery)', receipt['checks'])
+
+    def test_an_updater_in_the_image_fails_the_absence_contract(self):
+        self.sign()
+        with zipfile.ZipFile(self.release/'signed-target_files.zip', 'a') as z:
+            z.writestr('SYSTEM/priv-app/Updater/Updater.apk', b'SYNTHETIC upstream updater')
+        with self.assertRaisesRegex(self.module.CheckFailed, 'upstream Updater expected absent'):
+            rr.verify(self.env, self.consumer, self.release, self.adapter)
+        self.assertFalse((self.release/'public/verification.json').exists())
+
     def test_drift_after_staging_refuses_before_signing(self):
         (self.consumer/'input/rango-background-policy.json').write_bytes(b'{"tampered": true}')
         called = []
@@ -458,6 +485,44 @@ class Route(unittest.TestCase):
         with self.assertRaisesRegex(rr.Refused, 'lock_held'):
             rr.sign(self.env, self.consumer, self.release, signer=lambda env: called.append(env))
         self.assertEqual(called, [])
+
+
+class UpdaterContract(unittest.TestCase):
+    """OCT30-INFRA-S018: verification.updater is the upstream contract of the keep-upstream-updater recipe, bound to the
+    pinned reconcile file by hash; unbound fields are named, contradictions refuse."""
+
+    def cfg(self, **changes):
+        cfg = copy.deepcopy(CONFIG)
+        cfg['verification']['updater'].update(changes)
+        return cfg
+
+    def test_checked_in_contract_is_bound_to_the_retained_recipe_and_unbound_on_presence(self):
+        spec = CONFIG['verification']['updater']
+        self.assertEqual((spec['mode'], spec['included']), ('upstream', None))
+        self.assertEqual(hashlib.sha256((SCRIPTS.parent/spec['recipe']['path']).read_bytes()).hexdigest(), spec['recipe']['sha256'])
+        self.assertEqual(rr.updater_contract(CONFIG, check=True), ['updater.included'])
+        contract = rr.updater_contract(self.cfg(included=False))
+        self.assertIn('--keep-upstream-updater', contract['recipeApplyArgs'])
+        self.assertNotIn('--updater-url', contract['recipeApplyArgs'])
+        self.assertEqual(rr.updater_contract(self.cfg(included=True), check=True), ['updater.signer', 'updater.resources'])
+        self.assertEqual(rr.updater_contract(self.cfg(included=True, signer='a' * 64, resources={'string/channel_default': 'x'}),
+            check=True), ['updater.resources.string/url'])
+
+    def test_wrong_mode_recipe_or_contradictory_contract_refuses(self):
+        pixel10 = hashlib.sha256((SCRIPTS.parent/'os/devices/pixel10.json').read_bytes()).hexdigest()
+        for changes, message in (({'mode': 'rose'}, 'must be the upstream contract'), ({'mode': None}, 'must be the upstream contract'),
+                                 ({'recipe': {'path': 'os/build-only/rango-reconcile.json', 'sha256': '0' * 64}}, 'differs from its pinned'),
+                                 ({'recipe': {'path': '../etc/passwd', 'sha256': '0' * 64}}, 'must name a repository file'),
+                                 ({'recipe': {'path': 'os/devices/pixel10.json', 'sha256': pixel10}}, 'not a readable reconcile config'),
+                                 ({'included': 'yes'}, 'must be true or false'),
+                                 ({'included': False, 'signer': 'a' * 64}, 'conflicting upstream contract'),
+                                 ({'channelDefault': 'prod'}, 'hybrid')):
+            with self.subTest(message=message), self.assertRaisesRegex(rr.Refused, 'config_invalid: .*' + re.escape(message)):
+                rr.updater_contract(self.cfg(**changes))
+        cfg = self.cfg(included=False)
+        cfg['verification']['expected'] = {'variant': 'user', 'updater': {'mode': 'rose'}}
+        with self.assertRaisesRegex(rr.Refused, 'config_invalid'):
+            rr.pipeline_config(cfg, {'otaCertificateSha256': 'a' * 64, 'avbPublicKeySha256': 'b' * 64})
 
 
 class UnboundRoute(unittest.TestCase):
@@ -701,7 +766,7 @@ class FirstUseRoute(Route):
         out = Path(env['ROSE_RELEASE_DIR'])
         public = out/'public'
         public.mkdir()
-        (out/'signed-target_files.zip').write_bytes(b'SYNTHETIC signed ' + target.read_bytes())
+        signed_target_files(out, target)
         (public/'rango-ota_update-2026103001.zip').write_bytes(b'SYNTHETIC rango OTA')
         (public/'rango-stable').write_text(f"2026103001 {env['BUILD_DATETIME']} rango stable\n")
         for name in ('releasekey.x509.pem', 'avb_pkmd.bin'):

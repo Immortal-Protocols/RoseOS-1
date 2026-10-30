@@ -162,6 +162,24 @@ The `latest-beta` button and the Frankel modes are unchanged.
     conflicting state refuses. Per-run audit fields (`enrolledBy`) are excluded from the comparison;
   - `verify` and the staged `firstUseBinding` use that same record. No bootstrap receipt is fabricated or claimed.
 
+**Upstream Updater verification (OCT30-INFRA-S018).** The retained Rango build was compiled with
+`--keep-upstream-updater`, so it has no Rose channel. The owner approved its first Beta for manual installation
+without Rose on-device discovery (13:32:59 UTC); Rose Updater integration follows separately.
+- `release-pipeline.py` has an allowlisted `updater.mode`. `rose`, the default and every Frankel build, is unchanged:
+  the Rose channel Updater from `--updater-url`, with RoseChannels code and signer. A Rose config without
+  `--updater-url` now refuses instead of crashing.
+- `upstream` is refused for a Latest device. It requires the `--keep-upstream-updater` recipe with no Rose channel
+  argument, and refuses Rose-only keys (a hybrid). Its contract is explicit and evidence-bound:
+  - `included: false`: no Updater APK anywhere and none of its supporting XML files;
+  - `included: true`: exactly the expected privileged APK, package and XML; readable dex without the Rose channel
+    code; every expected compiled value (`resources`, `string/url` required); one exact signer on signed files.
+- `verification.json` records `updater` with `mode` and `roseDiscovery` (true only for `rose`). A public GitHub Beta
+  is not on-device discovery.
+- `os/retained-rango/release.json` `verification.updater` binds the recipe as the pinned `rango-reconcile.json`
+  path and sha256. `included` stays null until the bounded index of the actual target-files says whether the
+  Updater is there. The source expectation is absent: upstream `media_system.mk` adds it only with
+  `OFFICIAL_BUILD=true`, and the patcher only with `--updater-url`.
+
 What the source already does:
 - **Input.** The input receipt schema is `roseos.rango-retained-input.v1`. It
   binds:

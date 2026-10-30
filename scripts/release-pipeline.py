@@ -126,7 +126,7 @@ def preflight(job, config, env, adapter):
         missing += [f'host.tools.{k}' for k, v in config['host']['tools'].items() if not v]
         if not config.get('versionBaselines'):
             missing.append('versionBaselines')
-        missing += [f'updater.{key}' for key in UPDATER_REQUIRED if not (config.get('updater') or {}).get(key)]
+        missing += updater_missing(config)
         missing += permission_apex.missing(config.get('permissionApex'))
         missing += [f'systemUiTray.{key}' for key in SYSTEMUI_TRAY_REQUIRED if not (config.get('systemUiTray') or {}).get(key)]
     if job == 'builder':
@@ -576,10 +576,76 @@ UPDATER_REQUIRED = ('apkPath', 'signer', 'requiredFiles')
 # The RoseOS channel code the patcher copies into the Updater (os/overlays/.../RoseChannels.java), as a dex type.
 ROSE_CHANNELS_DEX = b'Lapp/seamlessupdate/client/RoseChannels;'
 
+# OCT30-INFRA-S018. 'rose' (the default, every Frankel build): the Rose channel Updater the patcher configures from
+# --updater-url. 'upstream': a retained non-Latest build compiled with --keep-upstream-updater, verified against its own
+# evidenced upstream contract; it never claims Rose discovery. Anything else refuses.
+UPDATER_MODES = ('rose', 'upstream')
+UPDATER_UPSTREAM_INCLUDED = ('apkPath', 'packageName', 'requiredFiles', 'signer', 'resources')
+UPDATER_UPSTREAM_KEYS = ('mode', 'recipeApplyArgs', 'included', 'apkPath', 'packageName', 'requiredFiles', 'signer', 'resources')
+UPDATER_RESOURCE = re.compile(r'(string|array|bool)/[a-z][a-z0-9_]*')
+
+def updater_mode(config):
+    """The allowlisted Updater verification mode; upstream only with the keep-upstream recipe and no Rose setting."""
+    spec = config.get('updater') or {}
+    mode = spec.get('mode', 'rose')
+    if mode not in UPDATER_MODES:
+        raise InvalidInput(f'updater.mode {mode!r} is not one of {list(UPDATER_MODES)}')
+    if mode == 'rose':
+        return mode
+    if config['target']['device'] in LATEST_DEVICES:
+        raise InvalidInput('updater.mode upstream is only for a retained non-Latest product, never ' + config['target']['device'])
+    unknown = sorted(set(spec) - set(UPDATER_UPSTREAM_KEYS))
+    if unknown:
+        raise InvalidInput(f'updater.mode upstream does not take {unknown} (a Rose/upstream hybrid)')
+    args = spec.get('recipeApplyArgs')
+    if not isinstance(args, list) or '--keep-upstream-updater' not in args \
+            or any(a in args for a in ('--updater-url', '--updater-published-channel')):
+        raise InvalidInput('updater.mode upstream needs the --keep-upstream-updater recipe without any Rose channel argument')
+    integrate = ((config.get('host') or {}).get('integrate') or {}).get('reconcile', {}).get('applyArgs')
+    if integrate is not None and integrate != args:
+        raise InvalidInput('updater.recipeApplyArgs differ from the reconcile applyArgs')
+    return mode
+
+def updater_missing(config):
+    """Unbound Updater expectations by name (values never printed); a contradictory upstream contract refuses."""
+    spec = config.get('updater') or {}
+    if updater_mode(config) == 'rose':
+        return [f'updater.{key}' for key in UPDATER_REQUIRED if not spec.get(key)]
+    included = spec.get('included')
+    if included is None:
+        return ['updater.included']
+    if not isinstance(included, bool):
+        raise InvalidInput('updater.included must be true or false, from the retained artifact index')
+    if not included:
+        extra = [k for k in ('signer', 'resources') if spec.get(k) is not None]
+        if extra:
+            raise InvalidInput(f'updater.included is false but {extra} are set (conflicting upstream contract)')
+        return [f'updater.{key}' for key in ('apkPath', 'requiredFiles') if not spec.get(key)]
+    missing = [f'updater.{key}' for key in UPDATER_UPSTREAM_INCLUDED if not spec.get(key)]
+    resources = spec.get('resources')
+    if resources and (not isinstance(resources, dict) or not all(isinstance(k, str) and UPDATER_RESOURCE.fullmatch(k) for k in resources)):
+        raise InvalidInput('updater.resources must map kind/name (string, array or bool) to the expected compiled value')
+    if resources and 'string/url' not in resources:
+        missing.append('updater.resources.string/url')
+    return missing
+
+def updater_record(config):
+    """The nonsecret verification result for verification.json: which contract was verified, and whether the image
+    carries Rose on-device discovery (only the Rose channel Updater does)."""
+    spec = config.get('updater') or {}
+    mode = updater_mode(config)
+    record = {'mode': mode, 'roseDiscovery': mode == 'rose', 'packageName': spec.get('packageName')}
+    if mode == 'upstream':
+        record.update(included=spec.get('included'), recipe='--keep-upstream-updater',
+            expectedResources=spec.get('resources') if spec.get('included') else None)
+    return record
+
 def updater_expected(config):
     """Compiled values the Updater must carry, derived from the checked-in recipe: the reconcile applyArgs pass
     --updater-url (and any --updater-published-channel); os/patches/updater-rose-channels.patch fixes the rest."""
     args = config['host']['integrate']['reconcile']['applyArgs']
+    if '--updater-url' not in args:
+        raise InvalidInput('updater.mode rose needs --updater-url in the reconcile applyArgs')
     published = [args[i + 1] for i, arg in enumerate(args) if arg == '--updater-published-channel'] or ['stable']
     return {('string', 'url'): args[args.index('--updater-url') + 1], ('string', 'channel_default'): config['updater']['channelDefault'],
         ('array', 'channel_published'): sorted(set(published)), ('array', 'channel_values'): config['updater']['channelValues']}
@@ -599,9 +665,11 @@ def check_updater(path, config, aapt, apksigner=None):
     configured privileged APK, its package identity, the supporting XML it requires, its compiled channel config and,
     on signed target-files, its signer."""
     spec = config.get('updater') or {}
-    missing = [f'updater.{key}' for key in UPDATER_REQUIRED if not spec.get(key)]
+    missing = updater_missing(config)
     if missing:
         raise SetupMissing(missing)
+    if updater_mode(config) == 'upstream':
+        return check_upstream_updater(path, config, aapt, apksigner)
     failures = []
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
@@ -633,6 +701,59 @@ def check_updater(path, config, aapt, apksigner=None):
             failures.append(f'Updater package is {package.group(1) if package else None}, expected {spec["packageName"]}')
         dump = subprocess.run([aapt, 'dump', '--values', 'resources', str(extracted)], capture_output=True, text=True, check=True).stdout
         failures += updater_failures(dump, updater_expected(config))
+        if apksigner:
+            want = config['identities']['otaCertificateSha256'] if spec['signer'] == 'otaCertificate' else spec['signer']
+            certs = subprocess.run([apksigner, 'verify', '--print-certs', str(extracted)], capture_output=True, text=True)
+            digests = re.findall(r'certificate SHA-256 digest: ([0-9a-f]{64})', certs.stdout)
+            if certs.returncode or digests != [want.lower()]:
+                failures.append('Updater is not signed by the expected certificate')
+    finally:
+        extracted.unlink()
+    return failures
+
+def check_upstream_updater(path, config, aapt, apksigner=None):
+    """OCT30-INFRA-S018: a --keep-upstream-updater build against its evidenced contract. included=false: no Updater
+    APK anywhere and none of its supporting XML. included=true: exactly the expected privileged APK, package, XML,
+    readable dex without the Rose channel code, every expected upstream compiled value and, signed, one exact signer."""
+    spec = config['updater']
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        found = sorted(n for n in names if re.search(r'(^|/)priv-app/Updater/[^/]+\.apk$', n))
+        if not spec['included']:
+            present = [n for n in [spec['apkPath'], *spec['requiredFiles']] if n in names]
+            return ([f'upstream Updater expected absent, but the target-files has {sorted(set(found + present))}']
+                if found or present else [])
+        if spec['apkPath'] not in names:
+            return [f'Updater APK {spec["apkPath"]} is absent from the target-files'
+                + (f' (found {found})' if found else ' (no Updater APK anywhere)')]
+        failures = [f'more than one Updater APK in the target-files: {found}'] if found != [spec['apkPath']] else []
+        for required in spec['requiredFiles']:
+            if required not in names:
+                failures.append(f'Updater supporting file {required} is absent')
+            elif spec['packageName'] not in archive.read(required).decode(errors='replace'):
+                failures.append(f'Updater supporting file {required} does not name {spec["packageName"]}')
+        data = archive.read(spec['apkPath'])
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as apk:
+            dexes = [n for n in apk.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+            if not dexes:
+                failures.append('Updater APK has no dex')
+            elif any(ROSE_CHANNELS_DEX in apk.read(n) for n in dexes):
+                failures.append('Updater dex has the Rose channel code in an upstream-mode build (Rose/upstream hybrid)')
+    except zipfile.BadZipFile:
+        return failures + ['Updater APK is not a readable APK archive']
+    extracted = Path(os.environ.get('RUNNER_TEMP', '/tmp'))/f'updater-{os.getpid()}.apk'
+    extracted.write_bytes(data)
+    try:
+        badging = subprocess.run([aapt, 'dump', 'badging', str(extracted)], capture_output=True, text=True)
+        package = re.search(r"^package: name='([^']+)'", badging.stdout, re.M)
+        if badging.returncode or not package or package.group(1) != spec['packageName']:
+            failures.append(f'Updater package is {package.group(1) if package else None}, expected {spec["packageName"]}')
+        dump = subprocess.run([aapt, 'dump', '--values', 'resources', str(extracted)], capture_output=True, text=True)
+        if dump.returncode:
+            failures.append('Updater resources are not readable')
+        else:
+            failures += updater_failures(dump.stdout, {tuple(k.split('/', 1)): v for k, v in spec['resources'].items()})
         if apksigner:
             want = config['identities']['otaCertificateSha256'] if spec['signer'] == 'otaCertificate' else spec['signer']
             certs = subprocess.run([apksigner, 'verify', '--print-certs', str(extracted)], capture_output=True, text=True)
@@ -757,10 +878,17 @@ def verify_build(a, config, cand, adapter):
     if failures:
         raise CheckFailed('; '.join(failures))
     return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
-        'Updater presence/identity/supporting XML/compiled channel config',
+        updater_check_label(config, signed=False),
         'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers',
         'SystemUI Agent tray lifecycle code in dex'],
-        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray}
+        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray, 'updater': updater_record(config)}
+
+def updater_check_label(config, signed):
+    if updater_mode(config) == 'rose':
+        return 'Updater presence/identity/config/signer' if signed else 'Updater presence/identity/supporting XML/compiled channel config'
+    if not (config.get('updater') or {}).get('included'):
+        return 'upstream Updater absence (keep-upstream recipe, no Rose discovery)'
+    return 'upstream Updater presence/identity/config' + ('/signer' if signed else '') + ' (keep-upstream recipe, no Rose discovery)'
 
 def cert_sha256(pem):
     body = pem.split('-----BEGIN CERTIFICATE-----')[1].split('-----END CERTIFICATE-----')[0]
@@ -978,11 +1106,12 @@ def verify_signed(a, config, cand, adapter):
     receipt = {'receiptType': 'candidate-verification', 'candidate': cand, 'simulated': adapter.simulated,
         'signedTargetFilesSha256': signed_sha256, 'published': False,
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
-            'Updater presence/identity/config/signer',
+            updater_check_label(config, signed=True),
             'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
             'SystemUI Agent tray lifecycle code in dex', 'image-embedded app/framework/Permission APEX/SystemUI bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
-        'permissionApex': apex, 'systemUiTray': tray, 'imageTools': image_tools, 'verifierTools': verifier_tools}
+        'permissionApex': apex, 'systemUiTray': tray, 'imageTools': image_tools, 'verifierTools': verifier_tools,
+        'updater': updater_record(config)}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)
     return {'stage': 'ota-verify', 'verdict': 'PASS', 'simulated': adapter.simulated}

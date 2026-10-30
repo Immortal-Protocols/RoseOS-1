@@ -404,6 +404,7 @@ def preflight(input_dir=None, bootstrap_receipt=None, cfg=None, inputs=True):
             missing.append(f'publication.{key}')
     if cfg['verification'].get('expected') is None:
         missing.append('verification.expected')
+    missing += ['verification.' + name for name in updater_contract(cfg, check=True)]
     return list(dict.fromkeys(missing))
 
 
@@ -763,7 +764,7 @@ def sign_inputs(env):
 
 # ---------------------------------------------------------------- connected route (existing pipeline functions)
 
-PIPELINE_SECTIONS_FORBIDDEN = ('target', 'publication', 'fixture')
+PIPELINE_SECTIONS_FORBIDDEN = ('target', 'publication', 'fixture', 'updater')
 
 
 _PIPELINE = []
@@ -780,6 +781,35 @@ def pipeline():
     return _PIPELINE[0]
 
 
+def updater_contract(cfg, check=False):
+    """OCT30-INFRA-S018: verification.updater for release-pipeline, mode upstream only. The retained build was compiled
+    with --keep-upstream-updater, so its recipe evidence is the pinned reconcile file's own applyArgs (path and sha256),
+    never a typed-in argument list. check=True returns the unbound names instead of the contract."""
+    spec = cfg['verification'].get('updater')
+    if not isinstance(spec, dict) or spec.get('mode') != 'upstream':
+        raise Refused('config_invalid: verification.updater must be the upstream contract of the keep-upstream-updater build')
+    recipe = spec.get('recipe') or {}
+    path = str(recipe.get('path', ''))
+    if not re.fullmatch(r'[\w.-]+(/[\w.-]+)*', path) or '..' in path.split('/') or not HEX64.fullmatch(str(recipe.get('sha256'))):
+        raise Refused('config_invalid: verification.updater.recipe must name a repository file and its sha256')
+    try:
+        data = (ROOT/path).read_bytes()
+        args = json.loads(data)['host']['integrate']['reconcile']['applyArgs']
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Refused('config_invalid: verification.updater.recipe is not a readable reconcile config') from None
+    if hashlib.sha256(data).hexdigest() != recipe['sha256']:
+        raise Refused('config_invalid: verification.updater.recipe differs from its pinned sha256')
+    contract = {k: v for k, v in spec.items() if k not in ('recipe', 'basis')}
+    contract['recipeApplyArgs'] = args
+    module = pipeline()
+    probe = {'target': {'device': 'rango'}, 'updater': contract}
+    try:
+        missing = module.updater_missing(probe)
+    except module.InvalidInput as error:
+        raise Refused(f'config_invalid: {error}') from None
+    return missing if check else contract
+
+
 def pipeline_config(cfg, binding):
     """A release-pipeline config for Rango built only from bound values: the verification expectations, the OTA and AVB
     identities of the genuine bootstrap, and the fixed rango-{build} never-Latest publication."""
@@ -789,6 +819,7 @@ def pipeline_config(cfg, binding):
         raise Refused('config_invalid: verification.expected must not carry target, publication or OTA/AVB identities')
     config = json.loads(json.dumps(expected))
     config['target'] = {'device': 'rango', 'variant': expected['variant']}
+    config['updater'] = updater_contract(cfg)
     config['identities'] = dict(expected.get('identities') or {}, otaCertificateSha256=binding['otaCertificateSha256'],
         avbPublicKeySha256=binding['avbPublicKeySha256'])
     publication = cfg['publication']
@@ -988,7 +1019,7 @@ def main(argv=None):
             print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
             return 4
         # 'Refused' here is host-sign's own copy of this module (the first-use hook); its messages carry no payload.
-        detail = str(error) if name in ('CheckFailed', 'AdapterFailed', 'PublishError', 'Refused') else name
+        detail = str(error) if name in ('CheckFailed', 'AdapterFailed', 'PublishError', 'Refused', 'InvalidInput') else name
         print(json.dumps({'verdict': 'FAIL', 'error': detail}), file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
