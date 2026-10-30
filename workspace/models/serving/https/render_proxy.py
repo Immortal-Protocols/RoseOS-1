@@ -247,6 +247,48 @@ http {{
 '''
 
 
+def acme_only_conf(runtime_dir, address, port, webroot):
+    """A standalone Nginx serving ONLY ACME HTTP-01 challenges, run before the first certificate exists (the TLS edge
+    cannot start without one). Every other path and method returns 404; nothing is proxied."""
+    for name, path in (('runtime dir', runtime_dir), ('acme webroot', webroot)):
+        if not PATH_RE.match(path) or '/../' in path + '/' or path.endswith('/'):
+            raise Invalid(f'{name} must be a plain absolute path')
+    if address not in ('0.0.0.0', '127.0.0.1') and not IPV4_RE.match(address):
+        raise Invalid('acme address must be an IPv4 address')
+    if not (port == 80 or 1024 <= port <= 65535):
+        raise Invalid('acme port must be 80 or 1024-65535')
+    return f'''# Rendered by workspace/models/serving/https/render_proxy.py ({SCHEMA}, acme-only). Do not edit by hand.
+worker_processes 1;
+pid {runtime_dir}/nginx.pid;
+error_log stderr crit;
+
+events {{ worker_connections 64; }}
+
+http {{
+    access_log off;
+    log_not_found off;
+    server_tokens off;
+    client_body_temp_path {runtime_dir}/client_body;
+    proxy_temp_path {runtime_dir}/proxy;
+    fastcgi_temp_path {runtime_dir}/fastcgi;
+    uwsgi_temp_path {runtime_dir}/uwsgi;
+    scgi_temp_path {runtime_dir}/scgi;
+    client_max_body_size 1k;
+
+    server {{
+        listen {address}:{port} default_server;
+        server_name _;
+        location ^~ /.well-known/acme-challenge/ {{
+            limit_except GET {{ deny all; }}
+            root {webroot};
+            default_type text/plain;
+        }}
+        location / {{ return 404; }}
+    }}
+}}
+'''
+
+
 def caddy_json(hostname, nginx_port):
     return {
         'admin': {'disabled': True},

@@ -68,8 +68,8 @@ These stages are rerun-safe and each command has a time bound.
 | `nginx` | checks the binary's sha256 and disables the distro unit |
 | `service` | installs the units and starts vLLM, health and verification. The first start downloads the model once and records the receipt |
 | `auth` | initializes the server secret once; starts the auth service when roots are present |
-| `tls` | runs certbot standalone only when instance metadata `rose-models-acme=agree-tos-no-email` is set **and** `models.a-list.com` resolves to this VM |
-| `edge` | starts Nginx, then switches renewals to the webroot |
+| `tls` | prepare, issue, install; see §4. Nothing listens on :80 until metadata `rose-models-acme=agree-tos-no-email` is set **and** `models.a-list.com` resolves to this VM |
+| `edge` | starts Nginx (:443 and challenge-only :80); a lineage issued standalone is switched to the webroot |
 
 **Status:** one nonsecret JSON line, `ROSE-MODELS-BOOTSTRAP {...}`:
 
@@ -91,8 +91,35 @@ gcloud compute instances get-guest-attributes models-glimmer-01 --project=$P --z
 
 ## 4. TLS and auth
 
-The bootstrap covers both: certbot standalone, `tls-deploy`, the secret, roots, auth and the edge, then the renewal
-webroot.
+The bootstrap covers both.
+
+**TLS stage, in order:**
+1. **Installed certificate:** done.
+2. **Issued-but-uninstalled lineage:** a lineage for `models.a-list.com` that was issued earlier is installed with
+   `tls-deploy`. It is never reissued, so its account and key identity are kept.
+3. **Prepare:** start the ACME-only Nginx (`edge/acme-only.conf`, :80) and prove all of the following:
+   - `nginx -t` passes;
+   - the pid file names a live process loaded with that config;
+   - a synthetic challenge returns 200 with its exact content;
+   - `/`, `/v1/models`, `/v1/chat/completions` and `/v1/auth/*` return 404.
+4. **Issue:** `certbot certonly --webroot`. It reuses the single existing ACME account (`--account`); with none, it
+   registers the approved no-email account once. The deploy hook installs the result. The ACME-only Nginx is then
+   stopped on success and on failure, and the edge takes over :80 and :443.
+5. **Refusals, all without issuing:**
+   - more than one account (`acme_account_ambiguous`);
+   - a second or renamed lineage (`certificate_lineage_ambiguous`);
+   - a lineage without its key (`certificate_lineage_incomplete`);
+   - any failed proof (`acme_http_*`).
+   A failed issuance reports the account count, lineages and ACME probe codes. It never reports keys.
+
+**Operator (Mac):**
+1. Restore the approved :80 ingress for the VM's tag.
+2. Confirm `rose-models-acme` and DNS.
+3. Replace the payload metadata.
+4. Reset the VM once.
+
+**Impact of that one reset:** vLLM reloads from the verified data disk, a few minutes without inference. The auth
+secret, device registry, image and packages are kept and verified, not regenerated.
 - `certbot.timer` renews the certificate.
 - `tls-deploy` checks the new chain (`render_proxy.py check-tls`), switches atomically, runs `nginx -t`, and then
   reloads. On any failure it rolls back to the previous chain.
