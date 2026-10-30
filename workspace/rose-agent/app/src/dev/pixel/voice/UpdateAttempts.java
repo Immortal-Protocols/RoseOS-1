@@ -59,7 +59,10 @@ final class UpdateAttempts {
     try { installer.abandonSession(s.getSessionId()); } catch (SecurityException ignored) {}
    }
   }
-  if (UpdateRecovery.deleteDownload(a)) new File(c.getCacheDir(), UpdateRecovery.DOWNLOAD).delete();
+  if (UpdateRecovery.deleteDownload(a)) {
+   new File(c.getCacheDir(), UpdateRecovery.DOWNLOAD).delete();
+   new File(c.getCacheDir(), UpdateRecovery.DOWNLOAD_SIGNATURE).delete();
+  }
   return a;
  }
 

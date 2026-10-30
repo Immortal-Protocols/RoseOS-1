@@ -78,8 +78,22 @@ test('APP-GITHUB-002: self-update discovery and download use public GitHub only,
  const self=delivery.slice(delivery.indexOf('static void installSelf('),delivery.indexOf('static DirectUpdate.Device localDevice('));
  const at=s=>{const i=self.indexOf(s);assert.ok(i>0,s);return i;};
  assert.match(self,/static void installSelf\(VoiceService a,DirectUpdate\.Offer offer\)/,'the installer takes the validated GitHub offer');
- assert.ok(!/endpoint|\bssl\b|manifest\(|\/apps\/|idsig/.test(self),'no PixelVoice endpoint, pinned connection, catalog manifest or sidecar route');
- assert.ok(at('PublicApkDownload.fetch(new PublicHttp(),offer.apkUrl,out,offer.sha256,offer.size,')<at('SelfUpdate.verify('),'bytes from the offer, bound to its hash and size, then verified');
+ assert.ok(!/endpoint|\bssl\b|manifest\(|\/apps\//.test(self),'no PixelVoice endpoint, pinned connection, catalog manifest or catalog sidecar route');
+ // APP-IDSIG-1030-M004 (#202): the v4 signature comes only from the offer's canonical GitHub sidecar, bound by its own
+ // hash and size; without one nothing is downloaded; both files go into the SAME session before commit; both owned
+ // temp files are deleted on every path, and recovery deletes both.
+ assert.ok(at('if(!offer.hasIdsig())throw new IOException(')<at('PublicApkDownload.fetch('),'an offer without a sidecar is refused before any download');
+ assert.ok(at('PublicApkDownload.fetch(http,offer.apkUrl,')<at('PublicApkDownload.fetchSignature(http,offer.idsigUrl,out,offer.idsigSha256,offer.idsigSize,DirectUpdate.MAX_IDSIG)'),'the sidecar is fetched bound to the offer');
+ assert.ok(at('PublicApkDownload.fetchSignature(')<at('createSession'),'both files are verified before a session exists');
+ assert.match(self,/params\.setSize\(size\+signatureSize\);/,'the session accounts for both files');
+ assert.match(self,/try\(PackageInstaller\.Session session=pi\.openSession\(sessionId\)\)\{stage\(session,file,"base\.apk"\);stage\(session,signature,"base\.apk\.idsig"\);\}/,'exactly base.apk and base.apk.idsig, in one session');
+ assert.ok(at('stage(session,signature,"base.apk.idsig")')<at('session.commit('),'staged before commit');
+ assert.match(self,/finally\{file\.delete\(\);signature\.delete\(\);\}/,'both owned temp files are deleted on every path');
+ assert.match(self,/new File\(a\.getCacheDir\(\),UpdateRecovery\.DOWNLOAD\),signature=new File\(a\.getCacheDir\(\),UpdateRecovery\.DOWNLOAD_SIGNATURE\)/,'the temp files are the names recovery owns');
+ const attempts=src('UpdateAttempts.java');
+ assert.match(attempts,/new File\(c\.getCacheDir\(\), UpdateRecovery\.DOWNLOAD\)\.delete\(\);\s*new File\(c\.getCacheDir\(\), UpdateRecovery\.DOWNLOAD_SIGNATURE\)\.delete\(\);/,'recovery deletes both owned temp files');
+ assert.match(src('UpdateRecovery.java'),/DOWNLOAD = "self-update\.apk", DOWNLOAD_SIGNATURE = "self-update\.apk\.idsig"/);
+ assert.ok(at('PublicApkDownload.fetch(http,offer.apkUrl,out,offer.sha256,offer.size,')<at('SelfUpdate.verify('),'bytes from the offer, bound to its hash and size, then verified');
  assert.match(self,/offer\.signerSha256\.equals\(signerSha256\(archive\)\)/,'the archive signer must equal the receipt signer');
  assert.ok(at('DirectUpdate.incompatibility(offer,localDevice(a))')<at('session.commit('),'compatibility is rechecked right before commit');
  assert.ok(at('SelfUpdate.beforeCommit(version,a.selfVersion(),a.voiceBusy())')<at('session.commit('),'voice and version are rechecked right before commit');
