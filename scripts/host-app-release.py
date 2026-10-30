@@ -94,6 +94,23 @@ def requested_version(config, apps, sha=None):
         raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed the reserved {max(r["versionCode"] for r in reserved)}')
     return version
 
+def allocated_floor(home):
+    """OCT30-INFRA-S014: the newest Rose Agent the latest-beta button reserved on this builder (never committed to main).
+    An app-only version must exceed it, so one version never names two different APKs."""
+    directory = Path(home)/'rose-actions/allocations'
+    if not directory.exists():
+        return 0
+    newest = 0
+    for path in sorted(directory.iterdir()):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                record = json.load(f)
+            newest = max([newest] + [int(v) for p, v in record['apps'] if p == PACKAGE])
+        except (OSError, ValueError, KeyError, TypeError):
+            raise AdapterFailed(f'unreadable latest-beta reservation {path.name[:40]}; app versions cannot be checked') from None
+    return newest
+
 def apk_facts(aapt, apk, candidate):
     """What the public receipt's compatibility derives from the signed APK itself: its minSdk (aapt sdkVersion, which
     must equal the candidate source's uses-sdk minSdkVersion) and the ABIs of its native libraries (lib/<abi>/*.so,
@@ -148,6 +165,9 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
     tools = config['host']['tools']
     sha, work = env['ROSE_CANDIDATE_SHA'], Path(env['ROSE_RELEASE_DIR'])
     version = requested_version(config, json.loads(env.get('APPS', '[]')), sha)
+    floor = allocated_floor(env.get('HOME', ''))
+    if version <= floor:
+        raise AdapterFailed(f'{PACKAGE} versionCode {version} must exceed {floor}, reserved by a latest-beta candidate on this builder')
     aapt, apksigner = (str(host_path(config, tools[k])) for k in ('aapt', 'apksigner'))
     artifact = Path(artifact_dir)
     if artifact.exists():
