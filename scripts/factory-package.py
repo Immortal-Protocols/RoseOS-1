@@ -1,50 +1,69 @@
 #!/usr/bin/env python3
-"""FLAVOR001: classify an install artifact against an OS flavor contract and package a complete factory archive.
+"""FLAVOR001/FLAVOR002: classify an install artifact against an OS flavor contract and package a verified factory archive.
 
   factory-package.py contract --flavor F
-  factory-package.py classify ARCHIVE --flavor F [--target-files TF] [--build B] [--avb-public-key-sha256 H]
-  factory-package.py package  ARCHIVE --flavor F --target-files TF --out NEW_DIR [--build B] [--avb-public-key-sha256 H]
+  factory-package.py observe  TARGET_FILES --flavor F --build B --source TEXT --out NEW.json
+  factory-package.py classify ARCHIVE --flavor F [evidence...]
+  factory-package.py package  ARCHIVE --flavor F --out NEW_DIR [evidence...]
+evidence: --target-files TF --target-files-observation OBS.json --firmware-observation FW.json
+          --otatools ZIP --otatools-sha256 H [--ssh-keygen PATH] [--work-dir DIR] [--max-work-bytes N]
+          [--build B] [--avb-public-key-sha256 H] [--first-use-binding FIRST_USE.json]
 
-F is os/flavors/F.json (frankel or rango). The contract is cross-checked against os/devices/pixel10.json and the pinned
-adevtool android-info.txt on every load. ARCHIVE is any candidate: an OTA ({device}-ota_update-{build}.zip), a
-target-files, an img zip, or the factory install archive that generate-release.sh produces with fastboot
-optimize-factory-image ({device}-install-{build}.zip). Only the last can be factory-ready, and only when:
-- every ZIP member name is safe and unique, every CRC checks, and nothing is a link;
-- android-info.txt names the flavor board, bootloader and baseband, and exactly the matching bootloader-/radio-
-  images are present (no other firmware versions);
-- the inventory derived from the given signed target-files (META/ab_partitions.txt, META/misc_info.txt,
-  OTA/android-info.txt, IMAGES/, RADIO/) is covered: each non-dynamic A/B image byte-equal, firmware byte-equal to
-  RADIO/bootloader.img and RADIO/radio.img, dynamic partitions by contiguous sparse super_N.img segments, and no
-  unexpected image;
-- avb_pkmd.bin equals the flavor's AVB public key and the flash script declares the data wipe of a first install.
-Nothing is extracted, executed, flashed or published; images are read in memory-bounded streams. Factory-ready means
-complete and consistent offline. It is not a signature verification of the archive, relock safety or phone acceptance.
+F is os/flavors/F.json (frankel or rango), cross-checked against os/devices/pixel10.json and the pinned adevtool
+android-info.txt on every load. ARCHIVE is any candidate: an OTA, a target-files, an img zip, or the factory install
+archive {device}-install-{build}.zip that generate-release.sh produces with fastboot optimize-factory-image. Only the
+last can be factory-ready. Three separate tiers are reported:
 
-package copies a factory-ready ARCHIVE (and ARCHIVE.sig when present) into NEW_DIR with factory-package.json; the
-generator itself is the established generate-release.sh tail, never reimplemented here.
-Exit status: 0 factory-ready / packaged / contract valid, 3 refused (the JSON names every missing input and problem),
-2 invalid usage or contract.
+structurallyComplete  ZIP members safe, unique, link-free with valid CRCs; android-info.txt and exactly the matching
+                      bootloader-/radio- images; every non-dynamic A/B partition either an IMAGES/ image present
+                      byte-equal or listed as carried by the bootloader/radio image in a firmware observation bound to
+                      those images' sha256 (never inferred from absence); contiguous sparse super_N.img segments for
+                      the dynamic partitions; avb_pkmd.bin equal to the flavor AVB key; flash script declares the wipe.
+contentVerified       the super segments rebuilt with simg2img and unpacked with lpunpack, both run from the hash-pinned
+                      otatools archive (never from the candidate) in a bounded job-owned directory that is removed on
+                      success and failure; the unpacked dynamic partition set and every logical image byte-equal to the
+                      signed target-files, which matches the release-delivered names-only observation.
+signatureVerified     ARCHIVE.sig verified by ssh-keygen -Y verify against the flavor's pinned factory-signing principal,
+                      public key and namespace "factory images" (generate-release.sh). Never an adjacent key; presence
+                      alone is nothing. AVB key equality is a separate check.
+factoryReady = all three with no missing input or problem. It is still not relock safety, first boot or phone acceptance.
+package copies a factory-ready ARCHIVE and ARCHIVE.sig into NEW_DIR with factory-package.json binding the archive,
+signed target-files, tool identities and observed inventory. observe writes the names-only target-files observation
+(no image bytes) that the release owner delivers through its normal receipt path.
+Exit status: 0 ready / packaged / observed / contract valid, 3 refused (the JSON names every missing input and
+problem), 2 invalid usage or contract.
 """
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat as statmod
+import subprocess
 import sys
+import tempfile
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release_receipts import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = 'roseos.factory-package.v1'
+SCHEMA = 'roseos.factory-package.v2'
+OBSERVATION = 'roseos.target-files-observation.v1'
+FIRMWARE = 'roseos.factory-firmware-observation.v1'
+NAMESPACE = 'factory images'
 CHUNK = 1 << 20
 MAGIC = {'boot': b'ANDROID!', 'init_boot': b'ANDROID!', 'vendor_boot': b'VNDRBOOT', 'vendor_kernel_boot': b'VNDRBOOT'}
 VBMETA_MAGIC = b'AVB0'
 SPARSE_MAGIC = b'\x3a\xff\x26\xed'
 SUPER = re.compile(r'super_(\d+)\.img')
+HEX64 = re.compile(r'[0-9a-f]{64}')
+OBSERVED_PREFIXES = ('META/', 'IMAGES/', 'RADIO/', 'OTA/')
+TOOLS = ('bin/simg2img', 'bin/lpunpack')
+DEFAULT_MAX_WORK = 64 << 30
+TOOL_TIMEOUT = 3600
 
 class ContractError(Exception):
     pass
@@ -92,21 +111,37 @@ def load_flavor(name, root=ROOT):
     checks['android-info baseband'] = (info.get('version-baseband'), [flavor['firmware']['baseband']])
     checks['android-info partition-exists'] = (info.get('partition-exists'), flavor['firmware']['partitionExists'])
     script = root/flavor['provenance']['releaseScript']['fixture']
-    checks['releaseScript sha256'] = (hashlib.sha256(script.read_bytes()).hexdigest(),
+    script_bytes = script.read_bytes()
+    checks['releaseScript sha256'] = (hashlib.sha256(script_bytes).hexdigest(),
         flavor['provenance']['releaseScript']['generate-release.sh'])
+    signing = flavor['factorySigning']
+    checks['factorySigning.namespace'] = (signing['namespace'], NAMESPACE)
+    checks['releaseScript namespace'] = (f'ssh-keygen -Y sign -n "{NAMESPACE}"'.encode() in script_bytes, True)
     drift = [key for key, (have, want) in checks.items() if have != want]
     if drift:
         raise ContractError(f'{name}: contract disagrees with its sources: {", ".join(drift)}')
+    if (signing['principal'] is None) != (signing['publicKey'] is None) or (
+            signing['publicKey'] is not None and not (re.fullmatch(r'[\w.@+-]+', signing['principal'])
+            and re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]+=*', signing['publicKey']))):
+        raise ContractError(f'{name}: factorySigning needs both a plain principal and one ssh-ed25519 public key, or neither')
     factory = flavor['artifacts']['factory']
     if not (factory['dataWipe'] and factory['requiresUnlockedBootloader']) or flavor['artifacts']['ota']['dataWipe']:
         raise ContractError(f'{name}: install-mode declarations must be factory wipe+unlock, OTA no wipe')
+    pinned = pinned_avb_key(flavor, root)
+    if pinned is not None and not HEX64.fullmatch(pinned):
+        raise ContractError(f'{name}: pinned avbPublicKeySha256 is not a sha256')
+    if name != 'frankel' and pinned is not None and pinned == pinned_avb_key(load_flavor('frankel', root), root):
+        raise ContractError(f'{name}: signer_collision: the pinned AVB key equals the Frankel key')
     return flavor
 
 def pinned_avb_key(flavor, root=ROOT):
-    source = flavor['identity']['avbPublicKeySha256From']
-    match = re.fullmatch(r'(os/[\w./-]+\.json) ([\w.]+)', source)
+    """A literal pin with its provenance, or a pointer 'FILE dotted.field' read from a checked-in source."""
+    identity = flavor['identity']
+    if identity.get('avbPublicKeySha256'):
+        return identity['avbPublicKeySha256']
+    match = re.fullmatch(r'(os/[\w./-]+\.json) ([\w.]+)', identity.get('avbPublicKeySha256From') or '')
     if not match:
-        return None  # runtime-only identity (rango first-use): the caller must pass it
+        return None
     value = json.loads((root/match.group(1)).read_text())
     for key in match.group(2).split('.'):
         value = value[key]
@@ -170,17 +205,76 @@ def role_of(names):
         return 'img-zip'
     return 'unknown'
 
-def target_inventory(path, flavor, build, result):
+def read_json(path, label, result):
+    try:
+        path = Path(path)
+        if path.is_symlink() or not path.is_file():
+            raise OSError
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        result['missing'].append(f'{label}:{Path(path).name} (unreadable or not JSON)')
+        return None
+
+def misc_info(archive):
+    return dict(line.split('=', 1) for line in archive.read('META/misc_info.txt').decode().splitlines() if '=' in line)
+
+def observe(target_files, flavor_name, build, source, root=ROOT):
+    """Names-only observation of a signed target-files: its digest, member names under META/ IMAGES/ RADIO/ OTA/ and
+    the partition metadata the classifier reads. No image bytes leave the archive."""
+    flavor = load_flavor(flavor_name, root)
+    result = {'problems': [], 'missing': []}
+    archive = open_checked(target_files, 'target-files', result)
+    if archive is None:
+        raise ContractError('target-files refused: ' + ', '.join(result['problems']))
+    with archive:
+        names = archive.namelist()
+        if 'META/misc_info.txt' not in names or 'META/ab_partitions.txt' not in names:
+            raise ContractError('not a target-files: META/misc_info.txt and META/ab_partitions.txt are required')
+        misc = misc_info(archive)
+        ab = archive.read('META/ab_partitions.txt').decode().split()
+    return {'schema': OBSERVATION, 'device': flavor['device']['codename'], 'build': build, 'source': source,
+            'synthetic': False, 'targetFiles': {'file': Path(target_files).name, 'sha256': sha256_file(target_files),
+            'size': Path(target_files).stat().st_size},
+            'members': sorted(n for n in names if n.startswith(OBSERVED_PREFIXES) and not n.endswith('/')),
+            'abPartitions': ab, 'misc': {k: misc.get(k) for k in ('ab_update', 'use_dynamic_partitions',
+            'dynamic_partition_list', 'virtual_ab', 'virtual_ab_compression')}}
+
+def check_observation(obs, tf_path, names, flavor, build, result, allow_synthetic):
+    if obs is None:
+        result['missing'].append(f'target-files-observation (release: `factory-package.py observe` of the signed '
+                                 f'{flavor["device"]["codename"]} target-files through its normal receipt path)')
+        return False
+    ok = True
+    def bad(code):
+        nonlocal ok
+        result['problems'].append(code)
+        ok = False
+    if obs.get('schema') != OBSERVATION or obs.get('device') != flavor['device']['codename']:
+        bad('observation-mismatch:schema or device')
+    if build and obs.get('build') != build:
+        bad(f'observation-mismatch:build {obs.get("build")}')
+    if obs.get('synthetic') and not allow_synthetic:
+        bad('target-files-observation-synthetic:a synthetic observation is never release evidence')
+    if (obs.get('targetFiles') or {}).get('sha256') != result['inventory'].get('targetFilesSha256'):
+        bad('observation-mismatch:target-files sha256')
+    if obs.get('members') != sorted(n for n in names if n.startswith(OBSERVED_PREFIXES) and not n.endswith('/')):
+        bad('observation-mismatch:member names')
+    result['evidence']['targetFilesObservation'] = {'source': obs.get('source'), 'synthetic': bool(obs.get('synthetic'))}
+    return ok
+
+def target_inventory(path, flavor, build, result, observation, allow_synthetic):
     archive = open_checked(path, 'target-files', result)
     if archive is None:
         return None
+    result['inventory']['targetFilesSha256'] = sha256_file(path)
     with archive:
         names = set(archive.namelist())
         need = [n for n in ('META/ab_partitions.txt', 'META/misc_info.txt', 'OTA/android-info.txt') if n not in names]
         result['missing'] += [f'target-files:{n}' for n in need]
         if need:
             return None
-        misc = dict(line.split('=', 1) for line in archive.read('META/misc_info.txt').decode().splitlines() if '=' in line)
+        check_observation(observation, path, archive.namelist(), flavor, build, result, allow_synthetic)
+        misc = misc_info(archive)
         ab = archive.read('META/ab_partitions.txt').decode().split()
         info = android_info(archive.read('OTA/android-info.txt').decode())
         if info.get('board') != [flavor['device']['board']]:
@@ -201,20 +295,55 @@ def target_inventory(path, flavor, build, result):
         if stray:
             result['problems'].append(f'install-semantics:dynamic partitions outside ab_partitions {stray}')
         inventory = {'abPartitions': sorted(set(ab)), 'dynamic': sorted(set(dynamic)), 'virtualAb': misc.get('virtual_ab') == 'true',
-                     'images': {}, 'firmwareCarried': [], 'firmware': {}}
+                     'images': {}, 'withoutImage': [], 'firmware': {}}
         for part in sorted(set(ab) - set(dynamic)):
             if f'IMAGES/{part}.img' in names:
                 inventory['images'][part] = member_digest(archive, f'IMAGES/{part}.img')[0]
             else:
-                inventory['firmwareCarried'].append(part)
+                inventory['withoutImage'].append(part)
+        for part in inventory['dynamic']:
+            if f'IMAGES/{part}.img' not in names:
+                result['missing'].append(f'target-files:IMAGES/{part}.img (dynamic)')
         for kind in ('bootloader', 'radio'):
             if f'RADIO/{kind}.img' in names:
                 inventory['firmware'][kind] = member_digest(archive, f'RADIO/{kind}.img')[0]
-            elif inventory['firmwareCarried'] or kind == 'bootloader':
+            else:
                 result['missing'].append(f'target-files:RADIO/{kind}.img')
         return inventory
 
-def check_factory(archive, names, flavor, build, inventory, avb_key, result):
+def check_firmware_carried(fw, inventory, factory_firmware, flavor, build, result, allow_synthetic):
+    """A/B partitions without an IMAGES/ entry count as carried only when a firmware observation, bound to the exact
+    bootloader/radio image digests in this archive, lists them. Absence alone never qualifies."""
+    if not inventory['withoutImage']:
+        return
+    if fw is None:
+        result['missing'].append('firmware-observation for A/B partitions without an IMAGES/ image: '
+                                 + ' '.join(inventory['withoutImage']) + ' (signing: factory generator firmware inventory)')
+        return
+    if fw.get('schema') != FIRMWARE or fw.get('device') != flavor['device']['codename'] or (build and fw.get('build') != build):
+        result['problems'].append('firmware-observation-mismatch:schema, device or build')
+        return
+    if fw.get('synthetic') and not allow_synthetic:
+        result['problems'].append('firmware-observation-synthetic:a synthetic observation is never release evidence')
+        return
+    carried = {}
+    for kind in ('bootloader', 'radio'):
+        entry = fw.get(kind) or {}
+        if entry.get('sha256') != factory_firmware.get(kind):
+            result['problems'].append(f'firmware-observation-mismatch:{kind} sha256')
+            return
+        for part in entry.get('partitions') or []:
+            carried.setdefault(part, []).append(kind)
+    uncovered = [p for p in inventory['withoutImage'] if p not in carried]
+    twice = [p for p in inventory['withoutImage'] if len(carried.get(p, [])) > 1]
+    if uncovered:
+        result['missing'].append('firmware-carried evidence for ' + ' '.join(uncovered))
+    if twice:
+        result['problems'].append('firmware-observation-mismatch:partition in both images ' + ' '.join(twice))
+    result['inventory']['firmwareCarried'] = {p: carried[p][0] for p in inventory['withoutImage'] if p in carried}
+    result['evidence']['firmwareObservation'] = {'source': fw.get('source'), 'synthetic': bool(fw.get('synthetic'))}
+
+def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result, allow_synthetic):
     device = flavor['device']['codename']
     top = names[0].split('/', 1)[0]
     match = re.fullmatch(r'([a-z0-9]+)-install-(\d+)', top)
@@ -258,11 +387,13 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, result):
     for rel in images:
         if head(archive, files[rel], 1) == b'':
             result['problems'].append(f'corrupt-image:{rel} empty')
+    supers = sorted((int(SUPER.fullmatch(rel).group(1)), files[rel]) for rel in images if SUPER.fullmatch(rel))
+    result['superMembers'] = [name for _, name in supers]
     if inventory is None:
         result['missing'].append('target-files inventory (--target-files: the signed target-files this archive came from)')
         return
+    factory_firmware = {kind: member_digest(archive, files[rel])[0] for kind, rel in firmware.items() if rel in files}
     expected = {f'{part}.img' for part in inventory['images']}
-    supers = sorted((int(SUPER.fullmatch(rel).group(1)), rel) for rel in images if SUPER.fullmatch(rel))
     for rel in images:
         if rel not in expected and not SUPER.fullmatch(rel):
             result['problems'].append(f'unexpected-image:{rel}')
@@ -277,34 +408,213 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, result):
         elif member_digest(archive, files[rel])[0] != digest:
             result['problems'].append(f'image-mismatch:{rel} differs from target-files IMAGES/{rel}')
     for kind, rel in firmware.items():
-        if rel in files and kind in inventory['firmware'] and member_digest(archive, files[rel])[0] != inventory['firmware'][kind]:
+        if kind in factory_firmware and kind in inventory['firmware'] and factory_firmware[kind] != inventory['firmware'][kind]:
             result['problems'].append(f'mixed-firmware:{rel} differs from target-files RADIO/{kind}.img')
+    check_firmware_carried(fw, inventory, factory_firmware, flavor, build, result, allow_synthetic)
     if inventory['dynamic']:
         if not supers:
             result['missing'].append(f'factory:super_1.img.. (dynamic partitions {" ".join(inventory["dynamic"])})')
         elif [n for n, _ in supers] != list(range(1, len(supers) + 1)):
             result['problems'].append(f'corrupt-image:super segments not contiguous {[n for n, _ in supers]}')
-        for _, rel in supers:
-            if head(archive, files[rel], 4) != SPARSE_MAGIC:
-                result['problems'].append(f'corrupt-image:{rel} not an Android sparse image')
+        for _, name in supers:
+            if head(archive, name, 4) != SPARSE_MAGIC:
+                result['problems'].append(f'corrupt-image:{PurePosixPath(name).name} not an Android sparse image')
     elif supers:
         result['problems'].append('unexpected-image:super segments without dynamic partitions')
     result['inventory'].update({'abPartitions': inventory['abPartitions'], 'dynamic': inventory['dynamic'],
-        'virtualAb': inventory['virtualAb'], 'firmwareCarried': inventory['firmwareCarried'],
-        'images': sorted(expected), 'superSegments': len(supers), 'dynamicContents': 'not decomposed offline (needs otatools lpunpack)'})
+        'virtualAb': inventory['virtualAb'], 'withoutImage': inventory['withoutImage'],
+        'images': sorted(expected), 'superSegments': len(supers)})
 
-def classify(path, flavor_name, target_files=None, build=None, avb_key=None, root=ROOT):
-    flavor = load_flavor(flavor_name, root)
+def copy_member(archive, name, target, budget):
+    with archive.open(name) as source, open(target, 'xb') as out:
+        for block in iter(lambda: source.read(CHUNK), b''):
+            budget.spend(len(block))
+            out.write(block)
+
+class Budget:
+    def __init__(self, limit):
+        self.limit, self.used = limit, 0
+    def spend(self, count):
+        self.used += count
+        if self.used > self.limit:
+            raise OverflowError(f'job directory would exceed --max-work-bytes {self.limit}')
+
+def run_tool(argv, env, label, result):
+    try:
+        done = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE, timeout=TOOL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        result['problems'].append(f'content-tool-failed:{label} {type(error).__name__}')
+        return False
+    if done.returncode:
+        result['problems'].append(f'content-tool-failed:{label} exit {done.returncode}')
+        return False
+    return True
+
+def verify_content(archive_path, target_files, inventory_dynamic, super_members, otatools, otatools_sha256, work_dir,
+                   max_work_bytes, result):
+    """Rebuild super from its sparse segments with the pinned otatools simg2img, unpack it with lpunpack and compare
+    each logical partition with the signed target-files image. Every byte lives in one job-owned directory that is
+    removed on success and failure."""
+    if not inventory_dynamic:
+        result['content'] = {'dynamic': {}, 'note': 'no dynamic partitions'}
+        return True
+    if not otatools or not otatools_sha256:
+        result['missing'].append('otatools (--otatools ZIP --otatools-sha256 H: the pinned otatools-package of this build)')
+        return False
+    if sha256_file(otatools) != otatools_sha256:
+        result['problems'].append('tool-identity-mismatch:otatools sha256')
+        return False
+    tools = {'otatools': {'file': Path(otatools).name, 'sha256': otatools_sha256}}
+    budget = Budget(max_work_bytes)
+    job = Path(tempfile.mkdtemp(prefix='factory-package-', dir=work_dir))
+    try:
+        with zipfile.ZipFile(otatools) as zt:
+            names = set(zt.namelist())
+            absent = [t for t in TOOLS if t not in names]
+            if absent:
+                result['missing'] += [f'otatools:{t}' for t in absent]
+                return False
+            tool_dir = job/'otatools'
+            for name in list(TOOLS) + sorted(n for n in names if n.startswith('lib64/') and not n.endswith('/')):
+                if '..' in PurePosixPath(name).parts or name.startswith('/'):
+                    result['problems'].append(f'unsafe-path:otatools:{name}')
+                    return False
+                (tool_dir/name).parent.mkdir(parents=True, exist_ok=True)
+                copy_member(zt, name, tool_dir/name, budget)
+            for name in TOOLS:
+                os.chmod(tool_dir/name, 0o700)
+                tools[name.split('/')[1]] = {'member': name, 'sha256': sha256_file(tool_dir/name)}
+        env = {'PATH': '/usr/bin:/bin', 'LD_LIBRARY_PATH': str(tool_dir/'lib64'), 'LC_ALL': 'C'}
+        segments = []
+        with zipfile.ZipFile(archive_path) as za:
+            for index, name in enumerate(super_members, 1):
+                segments.append(job/f'super_{index}.img')
+                copy_member(za, name, segments[-1], budget)
+        raw = job/'super.raw'
+        if not run_tool([str(tool_dir/'bin/simg2img'), *map(str, segments), str(raw)], env, 'simg2img super', result):
+            return False
+        for segment in segments:
+            segment.unlink()
+        budget.spend(raw.stat().st_size)
+        parts = job/'partitions'
+        parts.mkdir()
+        if not run_tool([str(tool_dir/'bin/lpunpack'), str(raw), str(parts)], env, 'lpunpack super', result):
+            return False
+        raw.unlink()
+        unpacked, ok = {}, True
+        for item in sorted(parts.iterdir()):
+            match = re.fullmatch(r'([a-z0-9_]+?)(_[ab])?\.img', item.name)
+            if not match or item.is_symlink() or not item.is_file():
+                result['problems'].append(f'dynamic-unexpected:{item.name}')
+                ok = False
+                continue
+            budget.spend(item.stat().st_size)
+            if match.group(2) == '_b':
+                if item.stat().st_size:
+                    result['problems'].append(f'mixed-partition:{item.name} is not empty in a factory super')
+                    ok = False
+                continue
+            if match.group(1) in unpacked:
+                result['problems'].append(f'duplicate-partition:super {match.group(1)}')
+                ok = False
+            unpacked[match.group(1)] = item
+        for name in sorted(set(inventory_dynamic) - set(unpacked)):
+            result['problems'].append(f'dynamic-missing:{name}')
+            ok = False
+        for name in sorted(set(unpacked) - set(inventory_dynamic)):
+            result['problems'].append(f'dynamic-extra:{name}')
+            ok = False
+        observed = {}
+        with zipfile.ZipFile(target_files) as zf:
+            for name in sorted(set(inventory_dynamic) & set(unpacked)):
+                expected = job/f'expected-{name}.img'
+                copy_member(zf, f'IMAGES/{name}.img', expected, budget)
+                with open(expected, 'rb') as f:
+                    sparse = f.read(4) == SPARSE_MAGIC
+                if sparse:
+                    flat = job/f'expected-{name}.raw'
+                    if not run_tool([str(tool_dir/'bin/simg2img'), str(expected), str(flat)], env, f'simg2img IMAGES/{name}.img', result):
+                        return False
+                    budget.spend(flat.stat().st_size)
+                    expected.unlink()
+                    expected = flat
+                actual = {'sha256': sha256_file(unpacked[name]), 'size': unpacked[name].stat().st_size}
+                want = {'sha256': sha256_file(expected), 'size': expected.stat().st_size}
+                expected.unlink()
+                observed[name] = actual
+                if actual != want:
+                    result['problems'].append(f'image-mismatch:dynamic {name} differs from target-files IMAGES/{name}.img')
+                    ok = False
+        result['content'] = {'dynamic': observed, 'tools': tools, 'workBytes': budget.used}
+        return ok
+    except OverflowError as error:
+        result['problems'].append(f'work-space:{error}')
+        return False
+    except (OSError, zipfile.BadZipFile, KeyError) as error:
+        result['problems'].append(f'content-check-failed:{type(error).__name__}')
+        return False
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+
+def verify_signature(path, flavor, ssh_keygen, work_dir, result):
+    """ssh-keygen -Y verify against the contract's pinned principal and key, namespace "factory images"."""
+    signing, device = flavor['factorySigning'], flavor['device']['codename']
+    sig = Path(str(path) + '.sig')
+    result['signature'] = {'file': sig.name, 'namespace': NAMESPACE, 'principal': signing['principal']}
+    if signing['publicKey'] is None:
+        result['missing'].append(f'factory-signing identity: pinned principal and ssh-ed25519 public key for {device}, '
+                                 f'namespace "{NAMESPACE}" ({signing["owner"]}; never generated here)')
+        return False
+    if sig.is_symlink() or not sig.is_file():
+        result['missing'].append(f'factory:{sig.name} (detached signature)')
+        return False
+    tool = ssh_keygen or shutil.which('ssh-keygen')
+    if not tool:
+        result['missing'].append('ssh-keygen (OpenSSH verifier)')
+        return False
+    result['signature']['verifier'] = {'path': str(tool), 'sha256': sha256_file(tool)}
+    with tempfile.TemporaryDirectory(prefix='factory-signers-', dir=work_dir) as job:
+        signers = Path(job)/'allowed_signers'
+        signers.write_text(f'{signing["principal"]} namespaces="{NAMESPACE}" {signing["publicKey"]}\n')
+        with open(path, 'rb') as stream:
+            try:
+                done = subprocess.run([str(tool), '-Y', 'verify', '-f', str(signers), '-I', signing['principal'],
+                                       '-n', NAMESPACE, '-s', str(sig)], stdin=stream, capture_output=True, timeout=600)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                result['problems'].append(f'signature-invalid:verifier {type(error).__name__}')
+                return False
+    if done.returncode:
+        result['problems'].append('signature-invalid:ssh-keygen -Y verify refused the detached signature')
+        return False
+    result['signature']['sha256'] = sha256_file(sig)
+    return True
+
+def resolve_avb_key(flavor, avb_key, first_use_binding, root, result):
     pinned = pinned_avb_key(flavor, root)
     if pinned and avb_key and avb_key != pinned:
         raise ContractError(f'--avb-public-key-sha256 differs from the pinned {flavor["identity"]["avbPublicKeySha256From"]}')
-    avb_key = pinned or avb_key
+    if first_use_binding:
+        binding = read_json(first_use_binding, 'first-use-binding', result) or {}
+        value = binding.get('avbPublicKeySha256')
+        if not HEX64.fullmatch(str(value)):
+            raise ContractError('first-use binding has no avbPublicKeySha256')
+        if (pinned or avb_key) and value != (pinned or avb_key):
+            raise ContractError('identity_conflict: the signer first-use binding differs from the pinned published AVB key')
+        avb_key = avb_key or value
+    return pinned or avb_key
+
+def classify(path, flavor_name, target_files=None, build=None, avb_key=None, root=ROOT, *, target_files_observation=None,
+             firmware_observation=None, otatools=None, otatools_sha256=None, ssh_keygen=None, first_use_binding=None,
+             work_dir=None, max_work_bytes=DEFAULT_MAX_WORK, allow_synthetic=False):
+    flavor = load_flavor(flavor_name, root)
     device = flavor['device']['codename']
     path = Path(path)
     result = {'schema': SCHEMA, 'flavor': flavor_name, 'device': device, 'artifact': path.name, 'build': build,
-              'role': 'unknown', 'factoryReady': False, 'otaApplicable': False, 'missing': [], 'problems': [], 'inventory': {},
-              'installMode': None, 'limits': {'phoneValidated': False, 'archiveSignatureVerified': False,
-              'relockSafe': 'not claimed', 'firstBoot': 'not claimed'}}
+              'role': 'unknown', 'structurallyComplete': False, 'contentVerified': False, 'signatureVerified': False,
+              'factoryReady': False, 'otaApplicable': False, 'missing': [], 'problems': [], 'inventory': {}, 'evidence': {},
+              'installMode': None, 'limits': {'phoneValidated': False, 'relockSafe': 'not claimed', 'firstBoot': 'not claimed'}}
+    avb_key = resolve_avb_key(flavor, avb_key, first_use_binding, root, result)
     if not path.is_file() or path.is_symlink():
         result['missing'].append(f'artifact:{path.name}')
         return result
@@ -325,30 +635,38 @@ def classify(path, flavor_name, target_files=None, build=None, avb_key=None, roo
             result['otaApplicable'] = not result['problems']
             result['installMode'] = flavor['artifacts']['ota']
             result['problems'].append('not-factory:ota-update is an in-place update, never a first-install package')
-        elif role == 'factory-install':
-            inventory = target_inventory(Path(target_files), flavor, build, result) if target_files else None
-            result['installMode'] = flavor['artifacts']['factory']
-            check_factory(archive, names, flavor, build, inventory, avb_key, result)
-        else:
+            return result
+        if role != 'factory-install':
             result['problems'].append(f'not-factory:{role} is not a {flavor["artifacts"]["factory"]["file"]} install archive')
-    result['factoryReady'] = role == 'factory-install' and not result['missing'] and not result['problems']
+            return result
+        obs = read_json(target_files_observation, 'target-files-observation', result) if target_files_observation else None
+        fw = read_json(firmware_observation, 'firmware-observation', result) if firmware_observation else None
+        inventory = target_inventory(Path(target_files), flavor, build, result, obs, allow_synthetic) if target_files else None
+        result['installMode'] = flavor['artifacts']['factory']
+        check_factory(archive, names, flavor, build, inventory, avb_key, fw, result, allow_synthetic)
+    result['structurallyComplete'] = not result['missing'] and not result['problems']
+    if result['structurallyComplete']:
+        result['contentVerified'] = verify_content(path, target_files, inventory['dynamic'], result['superMembers'], otatools,
+            otatools_sha256, work_dir, max_work_bytes, result)
+    result['signatureVerified'] = verify_signature(path, flavor, ssh_keygen, work_dir, result)
+    result['factoryReady'] = all(result[k] for k in ('structurallyComplete', 'contentVerified', 'signatureVerified')) \
+        and not result['missing'] and not result['problems']
     return result
 
-def package(path, flavor_name, target_files, out, build=None, avb_key=None, root=ROOT):
-    result = classify(path, flavor_name, target_files, build, avb_key, root)
+def package(path, flavor_name, target_files, out, build=None, avb_key=None, root=ROOT, **evidence):
+    result = classify(path, flavor_name, target_files, build, avb_key, root, **evidence)
     if not result['factoryReady']:
         raise Refused(result)
     path, out = Path(path), Path(out)
     out.mkdir(parents=True, exist_ok=False)
     copied = {}
     for source in (path, path.with_name(path.name + '.sig')):
-        if source.is_file() and not source.is_symlink():
-            shutil.copyfile(source, out/source.name)
-            copied[source.name] = sha256_file(out/source.name)
-    if copied[path.name] != result['sha256']:
-        raise Refused(dict(result, factoryReady=False, problems=['identity-mismatch:archive changed while packaging']))
-    receipt = dict(result, files=copied, signaturePresent=len(copied) == 2,
-                   targetFilesSha256=sha256_file(target_files))
+        shutil.copyfile(source, out/source.name)
+        copied[source.name] = sha256_file(out/source.name)
+    if copied[path.name] != result['sha256'] or copied[path.name + '.sig'] != result['signature']['sha256']:
+        shutil.rmtree(out)
+        raise Refused(dict(result, factoryReady=False, problems=['identity-mismatch:archive or signature changed while packaging']))
+    receipt = dict(result, files=copied)
     (out/'factory-package.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     return receipt
 
@@ -356,13 +674,19 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('contract').add_argument('--flavor', required=True)
+    o = sub.add_parser('observe')
+    o.add_argument('target_files')
+    for flag in ('--flavor', '--build', '--source', '--out'):
+        o.add_argument(flag, required=True)
     for name in ('classify', 'package'):
         p = sub.add_parser(name)
         p.add_argument('archive')
         p.add_argument('--flavor', required=True)
         p.add_argument('--target-files', required=name == 'package')
-        p.add_argument('--build')
-        p.add_argument('--avb-public-key-sha256')
+        for flag in ('--build', '--avb-public-key-sha256', '--target-files-observation', '--firmware-observation',
+                     '--otatools', '--otatools-sha256', '--ssh-keygen', '--first-use-binding', '--work-dir'):
+            p.add_argument(flag)
+        p.add_argument('--max-work-bytes', type=int, default=DEFAULT_MAX_WORK)
         if name == 'package':
             p.add_argument('--out', required=True)
     args = parser.parse_args(argv)
@@ -372,14 +696,27 @@ def main(argv=None):
             return 0
         if args.build and not re.fullmatch(r'\d{10}', args.build):
             raise ContractError('--build must be a ten-digit build number')
-        if args.avb_public_key_sha256 and not re.fullmatch(r'[0-9a-f]{64}', args.avb_public_key_sha256):
-            raise ContractError('--avb-public-key-sha256 must be 64 lowercase hex digits')
+        if args.command == 'observe':
+            if Path(args.out).exists():
+                raise ContractError(f'--out {args.out} already exists')
+            document = observe(args.target_files, args.flavor, args.build, args.source)
+            with open(args.out, 'x') as f:
+                f.write(json.dumps(document, indent=2, sort_keys=True) + '\n')
+            print(json.dumps({'observed': args.out, 'members': len(document['members'])}))
+            return 0
+        for flag in ('avb_public_key_sha256', 'otatools_sha256'):
+            if getattr(args, flag) and not HEX64.fullmatch(getattr(args, flag)):
+                raise ContractError(f'--{flag.replace("_", "-")} must be 64 lowercase hex digits')
+        evidence = dict(target_files_observation=args.target_files_observation, firmware_observation=args.firmware_observation,
+            otatools=args.otatools, otatools_sha256=args.otatools_sha256, ssh_keygen=args.ssh_keygen,
+            first_use_binding=args.first_use_binding, work_dir=args.work_dir, max_work_bytes=args.max_work_bytes)
         if args.command == 'classify':
-            result = classify(args.archive, args.flavor, args.target_files, args.build, args.avb_public_key_sha256)
+            result = classify(args.archive, args.flavor, args.target_files, args.build, args.avb_public_key_sha256, **evidence)
         else:
             if Path(args.out).exists():
                 raise ContractError(f'--out {args.out} already exists')
-            result = package(args.archive, args.flavor, args.target_files, args.out, args.build, args.avb_public_key_sha256)
+            result = package(args.archive, args.flavor, args.target_files, args.out, args.build, args.avb_public_key_sha256,
+                             **evidence)
     except ContractError as error:
         print(f'factory-package: {error}', file=sys.stderr)
         return 2
