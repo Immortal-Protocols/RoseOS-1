@@ -1166,13 +1166,18 @@ The run's Actions artifact is not downloaded by this mode.
 apksigner verifies as that APK's v4 signature. The receipt and SHA256SUMS bind it.
 
 `appRelease.compatibility.schemaVersion` selects the public receipt:
-- **1, the current value.** Unchanged; the sidecar is never published.
-- **2.** Publishes the APK, `<apk>.idsig`, the receipt and SHA256SUMS. The receipt
-  carries `v4Signature: {asset, size, sha256}`.
+- **2, selected for future app-only outputs (APP-IDSIG-1030-M005).** Publishes the
+  APK, `<apk>.idsig`, the receipt and SHA256SUMS. The receipt carries
+  `v4Signature: {asset, size, sha256}`. Its `minOsBuild` is 2026103012, the first
+  OS whose Rose Agent client (App PR253) reads schema 2 and stages the sidecar.
+- **1.** Every release published before this change. It is never rewritten. The
+  client still parses it but does not install from it, because it has no sidecar.
 
 A schema 2 artifact without a sidecar refuses. This includes every app-reuse
-artifact, because no sidecar is ever synthesized or re-signed. Switch to 2 only
-after the app's matching client is released.
+artifact, because no sidecar is ever synthesized or re-signed.
+`test_app_release_publisher.py` runs the app's own `DirectUpdate.check()` and
+download code against the generated release. Those are synthetic bytes, not
+phone acceptance.
 
 **The public receipt is the phone's update manifest** (INFRA-APP-102,
 APP-GITHUB-002-SCHEMA-001). Rose Agent from App #74 (`DirectUpdate`) reads it

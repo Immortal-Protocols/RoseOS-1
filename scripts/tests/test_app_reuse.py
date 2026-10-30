@@ -190,8 +190,14 @@ class AppReuseTest(unittest.TestCase):
         text = json.dumps(receipt)
         for private in (str(self.root), 'rose-actions', 'background-policy'):
             self.assertNotIn(private, text)
-        # The hosted publisher's offline checks accept this artifact in reuse mode only.
+        # The hosted publisher's offline checks accept this artifact in reuse mode only, and only on the schema 1 route:
+        # a reuse artifact never carries a v4 sidecar, so the checked-in schema 2 (APP-IDSIG-1030-M005) refuses it.
         config = json.loads(self.config.read_text())
+        self.assertEqual(config['appRelease']['compatibility']['schemaVersion'], 2)
+        with self.assertRaisesRegex(publisher.CheckFailed, "schemaVersion 2 needs this APK's retained v4 signature"):
+            publisher.verify_artifact(artifact, config, HEAD, [['dev.pixel.voice', 308]],
+                {'build': BUILD, 'timestamp': STAMP, 'binding': self.binding})
+        config['appRelease']['compatibility']['schemaVersion'] = 1
         checked, _ = publisher.verify_artifact(artifact, config, HEAD, [['dev.pixel.voice', 308]],
             {'build': BUILD, 'timestamp': STAMP, 'binding': self.binding})
         self.assertEqual(checked['sha256'], sha(self.apk))

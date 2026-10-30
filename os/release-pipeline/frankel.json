@@ -198,6 +198,15 @@
           "dev.pixel.voice": 310
         },
         "basis": "Published Beta frankel-2026102901: os-release run 40974306111 (candidate 02b21bc6, BUILD_DATETIME 1793311111, apps 310/4/28) drafted it unpromoted; the owner confirmed it is pixel-ota Latest on 2026-10-30. Preserved unchanged. A newer candidate needs a higher build number and BUILD_DATETIME, and its Rose Agent must also exceed every app-only version (appRelease: 311 published). Controller 28 and Calculator 4 may stay equal"
+      },
+      {
+        "build": "2026103012",
+        "source": "920beee9453c48629e31f205e9b6d983478314fc",
+        "buildTimestamp": 1793397918,
+        "mustExceed": {
+          "dev.pixel.voice": 320
+        },
+        "basis": "Published Beta frankel-2026103012: campaign 41132175338 gen 2, os-release run 41135606390 (source 920beee, candidate 449107c3, BUILD_DATETIME 1793397918, Rose Agent 320), the first build whose Rose Agent client (App PR253) reads app receipt schema 2; recorded as the delivered floor appRelease.compatibility.minOsBuild names (APP-IDSIG-1030-M005). Not an install or phone-acceptance claim"
       }
     ]
   },
@@ -277,13 +286,13 @@
       "controller": 28
     },
     "compatibility": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "deviceCodenames": [
         "frankel"
       ],
-      "minOsBuild": "2026102804",
+      "minOsBuild": "2026103012",
       "minControllerVersion": 28,
-      "basis": "INFRA-APP-102 / APP-GITHUB-002-SCHEMA-001: declared support policy for the public receipt's compatibility, a conservative floor on the published Beta and its controller (frankel 2026102804, controller 28), not inferred from minimumTestedOs and not a claim of phone acceptance. Signed 2804 OTA metadata: pre-device=frankel, post-build-incremental=2026102804; the app compares Build.DEVICE and Build.VERSION.INCREMENTAL. minSdk and abis are measured from each signed APK by the publisher"
+      "basis": "APP-IDSIG-1030-M005: schemaVersion 2 (the APK's v4 signature .idsig published beside it, which RoseOS self-update needs) for future app-only outputs; minOsBuild 2026103012, the first OS whose Rose Agent client (App PR253) reads schema 2, is the conservative floor for this install path, not a claim that 2804 supports it. Earlier: INFRA-APP-102 / APP-GITHUB-002-SCHEMA-001: declared support policy for the public receipt's compatibility, a conservative floor on the published Beta and its controller (frankel 2026102804, controller 28), not inferred from minimumTestedOs and not a claim of phone acceptance. Signed 2804 OTA metadata: pre-device=frankel, post-build-incremental=2026102804; the app compares Build.DEVICE and Build.VERSION.INCREMENTAL. minSdk and abis are measured from each signed APK by the publisher"
     },
     "basis": "App-only route (os-release.yml mode app-only). The signed Rose Agent 302 bytes are immutable and installed from build 2026102804; an app-only release needs a versionCode above every built or published one (303 delivered through the authenticated catalog, 304 published on GitHub and catalog-delivered, 306 published on GitHub as the first direct-GitHub client, 307 published on GitHub) and outside other routes' reservations (305 is the 2026102805 OS candidate's, 308 the 2026102806 OS candidate's), and exactly the pinned app signer. minimumTestedOs is the newest OS build and controller version the app was built against; it is provenance only, never an eligibility rule",
     "publication": {

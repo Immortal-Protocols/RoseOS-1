@@ -382,7 +382,7 @@ class CheckedInAppReleaseTest(unittest.TestCase):
              (309, '309-hifi-beta', 'app-only', None), (310, '310-hifi-os-beta', 'os-release', '02b21bc69f9afd281422d42e3dcf8a456e471de1'),
              (311, '311-hifi-visual-beta', 'app-only', 'd4bb0fd23741ef472689e3878e6d3aa4f6331d23')])
         self.assertEqual({k: v for k, v in app['compatibility'].items() if k != 'basis'},
-            {'schemaVersion': 1, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026102804', 'minControllerVersion': 28})
+            {'schemaVersion': 2, 'deviceCodenames': ['frankel'], 'minOsBuild': '2026103012', 'minControllerVersion': 28})
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
         # FRANKEL310-ALLOC-001 reserved 310 for the os-release route; 309 stays app-only and 308 the app-reuse binding.
         # AGENT311-APP-ONLY: the source declares 311 for the owner-requested app-only build, above every reservation.

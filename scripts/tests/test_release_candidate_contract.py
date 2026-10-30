@@ -212,11 +212,14 @@ class CheckedInCandidateTest(unittest.TestCase):
             '/home/pixelbuild/grapheneos-2026100600/releases/2026102801/release-frankel-2026102801/bin/fsck.erofs')
 
     def test_version_baselines_admit_the_draft_and_refuse_older_candidates(self):
-        # 2806/308 and 2901/310 are delivered, retained baselines (FAM-02-INFRA-S001, AGENT311-APP-ONLY): dispatching
-        # either again is refused. A next candidate (2026103001 at 1793377800, Rose Agent 312, controller 28 and
-        # Calculator 4 unchanged) moves past both and past the published app-only 311.
-        nxt, nxt_apps = {'build': '2026103001', 'timestamp': '1793377800'}, [['dev.pixel.voice', 312], *APPS[1:]]
+        # 2806/308, 2901/310 and 3012/320 are delivered, retained baselines (FAM-02-INFRA-S001, AGENT311-APP-ONLY,
+        # APP-IDSIG-1030-M005): dispatching any again is refused. A next candidate (2026103101 at 1793500000, Rose Agent
+        # 321, controller 28 and Calculator 4 unchanged) moves past all of them and past the published app-only 311.
+        nxt, nxt_apps = {'build': '2026103101', 'timestamp': '1793500000'}, [['dev.pixel.voice', 321], *APPS[1:]]
         pipeline.check_version_baselines(CONFIG, nxt, nxt_apps)
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 320 must exceed retained 2026103012 versionCode 320'
+                '.*must exceed retained 2026103012 \\(1793397918\\)'):
+            pipeline.check_version_baselines(CONFIG, {'build': '2026103012', 'timestamp': '1793397918'}, [['dev.pixel.voice', 320], *APPS[1:]])
         reserved = {row['versionCode']: row for row in CONFIG['appRelease']['reserved']}
         self.assertEqual((reserved[310]['osBuild'], reserved[310]['buildTimestamp']), ('2026102901', 1793311111))
         with self.assertRaisesRegex(pipeline.CheckFailed, 'versionCode 310 must exceed retained 2026102901 versionCode 310'
