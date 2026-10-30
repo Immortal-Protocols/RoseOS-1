@@ -813,10 +813,14 @@ jobs:
           persist-credentials: false
       - name: Profile, tool and access preflight (before any login)
         run: python3 scripts/signing-bootstrap.py preflight --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA"
+      # OCT30-INFRA-S016: profiles with a localProof (Fold) prove their four tools on this host under the shared lock with
+      # the admitted helper, before any login; the bounded proof is bound to this run. Fixed summary codes only.
+      - name: Local tool proof (before any login)
+        run: python3 scripts/signing-bootstrap.py prove --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA" --proof-dir "$RUNNER_TEMP/signing-bootstrap-proof"
       - name: Signer access for the bootstrap only
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Bootstrap under the shared lock
-        run: python3 scripts/signing-bootstrap.py run --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA" --state-dir "$HOME/rose-signing-bootstrap" --receipt-dir "$RUNNER_TEMP/signing-bootstrap"
+        run: python3 scripts/signing-bootstrap.py run --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA" --state-dir "$HOME/rose-signing-bootstrap" --receipt-dir "$RUNNER_TEMP/signing-bootstrap" --proof-file "$RUNNER_TEMP/signing-bootstrap-proof/fold-tool-proof.json"
       - name: Drop signer access
         if: always()
         run: python3 scripts/actions-gcp-login.py logout

@@ -205,7 +205,9 @@ class ReceiptAndSummary(unittest.TestCase):
     def test_unknown_identity_still_refuses_bootstrap(self):
         from datetime import datetime, timezone
         reasons = dict(bootstrap.readiness('fold-rango-v1', bootstrap.load_profiles(), datetime.now(timezone.utc)))
-        self.assertIn('tool-unapproved', reasons)  # an observation receipt alone binds nothing
+        # An observation receipt alone binds nothing: the Fold tools need the same-run local proof of an admitted helper
+        # (OCT30-INFRA-S016), which no observation provides.
+        self.assertTrue({'proof-helper-excluded', 'proof-helper-unadmitted'} & set(reasons), reasons)
 
 
 class Wiring(unittest.TestCase):
