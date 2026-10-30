@@ -38,10 +38,12 @@ jobs:
         run: python3 os/tests/persistent-app-experiment/experiment.py build --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx"
       - name: SDK emulator package (installed sdkmanager, already accepted licences only)
         # EXP005-F1: the runner image lacks emulator/emulator. stdin is closed, so no licence is answered; an
-        # unavailable result is recorded and the experiment's environment stage still reports it.
+        # unavailable result is recorded and the experiment's environment stage still reports it. EXP006: a library
+        # the emulator cannot load (libpulse.so.0 on ubuntu-24.04) comes from its official Ubuntu package, fetched
+        # with apt-get download and unpacked under RUNNER_TEMP (no root, nothing installed system-wide).
         id: setup
         continue-on-error: true
-        run: python3 os/tests/persistent-app-experiment/setup_emulator.py --sdk "$ANDROID_HOME" --record "$RUNNER_TEMP/pfx-evidence/emulator-setup.json"
+        run: python3 os/tests/persistent-app-experiment/setup_emulator.py --sdk "$ANDROID_HOME" --record "$RUNNER_TEMP/pfx-evidence/emulator-setup.json" --library-dir "$RUNNER_TEMP/emulator-libs" --github-env "$GITHUB_ENV"
       - name: Run the experiment
         id: run
         env:
