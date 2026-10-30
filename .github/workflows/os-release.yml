@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); models-sign signs the retained unsigned Models APK with the protected models-v0 bootstrap identity (candidate_sha = this workflow commit, models_bootstrap_run = the bootstrap run; no build, OS signing or publication; refuses input_unavailable until an admitted retained input exists)
         type: choice
-        options: [os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
+        options: [os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
         default: os-release
       device:
         description: Device to build and publish; only admitted devices are offered (FAM-02-INFRA-S001; frankel only)
@@ -70,6 +70,10 @@ on:
         type: choice
         options: [none, fold-rango-v1, models-v0]
         default: none
+      models_bootstrap_run:
+        description: models-sign only - run id of the completed protected models-v0 bootstrap whose public receipt binds the signer
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -94,6 +98,7 @@ env:
   RESUME_SIGNED_SHA256: ${{ inputs.resume_signed_sha256 }}
   REUSE_BINDING: ${{ inputs.reuse_binding }}
   BOOTSTRAP_PROFILE: ${{ inputs.bootstrap_profile || 'none' }}
+  MODELS_BOOTSTRAP_RUN: ${{ inputs.models_bootstrap_run }}
 
 jobs:
   guard:
@@ -137,6 +142,9 @@ jobs:
           # signing-bootstrap: bound to this workflow recipe; a bootstrap profile exists only in that mode.
           [[ "$MODE" != signing-bootstrap || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
           [[ ( "$MODE" == signing-bootstrap && "${BOOTSTRAP_PROFILE:-none}" != none ) || ( "$MODE" != signing-bootstrap && "${BOOTSTRAP_PROFILE:-none}" == none ) ]]
+          # models-sign: bound to this workflow recipe and one numeric bootstrap run; the run input exists only there.
+          [[ "$MODE" != models-sign || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
+          [[ ( "$MODE" == models-sign && "${MODELS_BOOTSTRAP_RUN:-}" =~ ^[1-9][0-9]{0,19}$ ) || ( "$MODE" != models-sign && -z "${MODELS_BOOTSTRAP_RUN:-}" ) ]]
           [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
           # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
           [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
@@ -184,6 +192,26 @@ jobs:
           APP_PUBLISH: ${{ inputs.app_publish }}
           ALPHA_RECOVER: ${{ inputs.alpha_recover }}
         run: python3 scripts/signing-bootstrap.py guard
+      # models-sign: the public receipt of the named bootstrap run, fetched by the job token and checked before the builder.
+      - name: Fetch the Models bootstrap public receipt
+        if: inputs.mode == 'models-sign'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signing-bootstrap-${{ inputs.models_bootstrap_run }}-1
+          run-id: ${{ inputs.models_bootstrap_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/models-bootstrap
+      - name: Check the Models bootstrap receipt
+        if: inputs.mode == 'models-sign'
+        run: python3 scripts/host-models-sign.py check-receipt --receipt-dir "$RUNNER_TEMP/models-bootstrap" --run-id "$MODELS_BOOTSTRAP_RUN"
+      - name: Hand the checked receipt to the signing job
+        if: inputs.mode == 'models-sign'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: models-bootstrap-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/models-bootstrap
+          retention-days: 3
+          if-no-files-found: error
       - name: Fetch the original verification receipt (run 40777816699)
         if: inputs.mode == 'emulator-alpha-export'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -727,8 +755,51 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  # OCT30-INFRA-S013: sign the retained unsigned Models APK with the protected models-v0 identity through the PR #149
+  # adapter (scripts/host-models-sign.py). Preflight (input, bootstrap journal, SDK archive and JDK tree proofs) runs
+  # before any login; signer access exists only around the run. No build, OS signing or publisher job runs in this mode
+  # and no publisher credential reaches the builder. Only the signed APK and nonsecret receipts leave, privately.
+  models-signer:
+    needs: controller
+    if: inputs.mode == 'models-sign'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: models-bootstrap-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/models-bootstrap
+      - name: Input, journal, SDK archive and JDK proofs (before any login)
+        run: python3 scripts/host-models-sign.py preflight --receipt-dir "$RUNNER_TEMP/models-bootstrap"
+      - name: Signer access for Models signing only
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Sign under the shared lock
+        run: python3 scripts/host-models-sign.py run --receipt-dir "$RUNNER_TEMP/models-bootstrap" --output-dir "$RUNNER_TEMP/models-signed"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Private signed APK and receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: models-signed-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/models-signed/rose-models-signed.apk
+            ${{ runner.temp }}/models-signed/models-signing-receipt.json
+            ${{ runner.temp }}/models-signed/models-sign-receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
   cleanup:
-    needs: [controller, device-readiness, builder, signing-bootstrap, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]
+    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

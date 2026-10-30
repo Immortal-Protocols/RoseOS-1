@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.models-apk-signing",
+  "note": "OCT30-INFRA-S013: protected signing of the retained unsigned Models APK by scripts/host-models-sign.py through the PR #149 adapter. Nothing here generates or imports keys; it reads the exact secret versions the protected models-v0 bootstrap committed.",
+  "adapterProfile": "workspace/models/signing/profile.json",
+  "input": {
+    "admittedDirectory": null,
+    "basis": "Input ingress is a separate admission: only an explicitly admitted retained directory on the original builder is accepted. While this is null every run refuses input_unavailable before any host or secret access; no download or alternate route exists here."
+  },
+  "sdk": {
+    "root": "/home/pixelbuild/rose-actions/tools/android-sdk",
+    "archive": "/home/pixelbuild/rose-actions/tools/android-sdk/downloads/build-tools_r35_linux.zip",
+    "archiveSha256": "bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88",
+    "archivePrefix": "android-15",
+    "installedDirectory": "build-tools/android-15",
+    "members": ["lib/apksigner.jar", "aapt"],
+    "basis": "scripts/setup-android-sdk.sh pins Google's build-tools_r35_linux.zip; the retained archive is rehashed and its android-15 subtree must equal the installed build-tools/android-15 tree file by file"
+  },
+  "bootstrap": {
+    "profile": "models-v0",
+    "journal": "rose-signing-bootstrap/models-v0.json",
+    "receiptFile": "signing-bootstrap-receipt.json",
+    "receiptArtifact": "signing-bootstrap-{run}-1"
+  },
+  "limits": {"timeoutMinutes": 20, "archiveBytes": 268435456, "archiveMembers": 4000, "memberBytes": 134217728}
+}
