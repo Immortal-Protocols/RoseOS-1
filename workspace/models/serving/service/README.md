@@ -112,11 +112,29 @@ The bootstrap covers both.
    - any failed proof (`acme_http_*`).
    A failed issuance reports the account count, lineages and ACME probe codes. It never reports keys.
 
-**Operator (Mac):**
-1. Restore the approved :80 ingress for the VM's tag.
-2. Confirm `rose-models-acme` and DNS.
-3. Replace the payload metadata.
-4. Reset the VM once.
+**Operator (Mac).** Only the existing channels are used: instance metadata and one reset. No SSH, no new guest
+channel.
+1. With **:80 still closed**, confirm `rose-models-acme=agree-tos-no-email` and DNS, replace the payload metadata, and
+   reset once.
+2. Read the proof published **before** any issuance, from the serial line `ROSE-MODELS-ACME-PROOF {...}` or the guest
+   attribute `rose-models/acme-proof`. It must show:
+   - this payload's sha256 and the boot ID;
+   - the `acme-only.conf` sha256;
+   - `pidVerified`;
+   - challenge 200;
+   - 404 for `/`, inference and auth.
+3. Restore the already-approved ACME :80 ingress.
+4. Acknowledge exactly that payload and boot. The helper then issues once; the ACK is not a permission gate.
+
+```bash
+gcloud compute instances add-metadata models-glimmer-01 --zone us-central1-f --project protocols-465723 \
+  --metadata=rose-models-acme-ack=<payloadSha256>:<bootId>
+```
+
+**ACK rules:**
+- The wait is bounded to 30 minutes. A timeout issues nothing and stops the ACME-only Nginx; reset again to retry.
+- A stale boot or another payload never matches.
+- Issuance is attempted at most once per acknowledged boot.
 
 **Impact of that one reset:** vLLM reloads from the verified data disk, a few minutes without inference. The auth
 secret, device registry, image and packages are kept and verified, not regenerated.
