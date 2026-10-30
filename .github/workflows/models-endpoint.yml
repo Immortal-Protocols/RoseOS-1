@@ -1,12 +1,18 @@
 name: Models HTTPS edge and conformance
 
 # Runs the Rose Models HTTPS edge tests against a real nginx binary on loopback, with a fixture
-# backend and fake credentials, plus the offline envelope-conformance fixtures. No ACME, DNS,
-# cloud, live endpoint or secret is used.
+# backend and fake credentials, the persistent-service source tests (service-auth-v1 with synthetic
+# attestation chains, health/recovery, model storage, renewal, rendered units), plus the offline
+# envelope-conformance fixtures. No ACME, DNS, cloud, live endpoint, GPU, model or secret is used.
 on:
   pull_request:
     paths:
       - 'workspace/models/serving/https/**'
+      - 'workspace/models/serving/service/**'
+      - 'workspace/models/serving/tests/test_service_*.py'
+      - 'workspace/models/serving/muse-glimmer-30b.json'
+      - 'workspace/models/serving/render_local.py'
+      - 'workspace/models/contracts/service-auth-v1.md'
       - 'workspace/models/serving/conformance/**'
       - 'workspace/models/rose-chat-core/examples/conformance.rs'
       - 'workspace/models/rose-chat-core/tests/conformance.rs'
@@ -15,6 +21,11 @@ on:
     branches: [main]
     paths:
       - 'workspace/models/serving/https/**'
+      - 'workspace/models/serving/service/**'
+      - 'workspace/models/serving/tests/test_service_*.py'
+      - 'workspace/models/serving/muse-glimmer-30b.json'
+      - 'workspace/models/serving/render_local.py'
+      - 'workspace/models/contracts/service-auth-v1.md'
       - 'workspace/models/serving/conformance/**'
       - 'workspace/models/rose-chat-core/examples/conformance.rs'
       - 'workspace/models/rose-chat-core/tests/conformance.rs'
@@ -56,6 +67,33 @@ jobs:
         run: |
           openssl version
           python3 -I workspace/models/serving/https/tests/test_tls.py -v
+      - name: service-auth-v1 through real nginx (auth_request, post-auth limits, ACME webroot; synthetic attestation)
+        env:
+          ROSE_REQUIRE_NGINX: '1'
+        run: |
+          sudo apt-get install -y -qq python3-cryptography
+          /usr/bin/python3 -c 'import cryptography; print("cryptography", cryptography.__version__)'
+          /usr/bin/python3 -I workspace/models/serving/https/tests/test_service_edge.py -v
+
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Distro cryptography (the version the VM installs)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq python3-cryptography
+          /usr/bin/python3 -c 'import cryptography; print("cryptography", cryptography.__version__)'
+      - name: Persistent-service source tests (synthetic; no systemd, Docker, GPU, model or network)
+        run: |
+          for t in test_service_auth test_service_ops test_service_tls_deploy test_service_render \
+                   test_serving_config test_local_profile; do
+            /usr/bin/python3 -I workspace/models/serving/tests/$t.py -v
+          done
+      - name: Render the service tree
+        run: /usr/bin/python3 -I workspace/models/serving/service/render_service.py --out "$RUNNER_TEMP/rose-models"
 
   conformance:
     runs-on: ubuntu-24.04

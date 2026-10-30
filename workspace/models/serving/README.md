@@ -14,6 +14,7 @@ Each fact below is labeled **verified** (read from a pinned file, registry manif
 - `render_upload.py`: renders the Model upload request body offline (see Upload renderer).
 - `render_local.py`, `scratch_inventory.py`: the H100 local-guest launch script and the scratch-disk inventory (see H100 local-guest profile).
 - `tests/`: offline checks for the config and guard, part of `scripts/test-local.sh`.
+- `service/`: the persistent service (supervision, loaded-model readiness, bounded recovery, verified storage, service-auth-v1, renewal) and Infra's operator packet; see `service/README.md`.
 
 ## Model (verified)
 
