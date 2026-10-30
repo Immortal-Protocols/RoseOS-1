@@ -161,6 +161,48 @@ public final class PublicApkDownloadTest {
         messages.add(fails(brokenBody, GOOD, id, size));
         for (String m : messages) expect(m != null && !m.contains("SECRET") && !m.contains("http") && !m.contains("?"), "Message is free of URLs and queries: " + m);
 
+        // APP-IDSIG-1030-M004: the v4 signature file (.apk.idsig) uses the same boundary under its own name pattern,
+        // bound by its own hash and size, and the APK and signature boundaries never stand in for each other.
+        String sig = "https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-312/dev.pixel.voice-312.apk.idsig";
+        String apk = "https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-312/dev.pixel.voice-312.apk";
+        byte[] SIG = "fixture v4 signature bytes, not a real idsig".getBytes();
+        String sigSha = sha(SIG); long sigSize = SIG.length;
+        expect(PublicApkDownload.initialSignature(sig) == null && PublicApkDownload.initial(sig) != null && PublicApkDownload.initialReceipt(sig) != null,
+                "Only the signature boundary accepts an .apk.idsig");
+        expect(PublicApkDownload.initialSignature(apk) != null && PublicApkDownload.initialSignature(apk + ".idsig.apk") != null
+                && PublicApkDownload.initialSignature(sig.replace(".apk.idsig", ".idsig")) != null, "The signature boundary accepts nothing else");
+        for (String u : new String[] {sig.replace("Immortal-Protocols/pixel-ota", "evil/pixel-ota"), sig.replace("https://github.com", "https://evil.example"),
+                sig.replace("https:", "http:"), sig + "?x=1", sig.replace("rose-agent-312", "latest"), sig.replace("https://", "https://user@"),
+                sig.replace("github.com", "github.com:8443")})
+            expect(PublicApkDownload.initialSignature(u) != null, "Outside the signature boundary: " + u);
+        Script sigDirect = new Script().answer(sig, 200, null, SIG);
+        ByteArrayOutputStream sigOut = new ByteArrayOutputStream();
+        expect(PublicApkDownload.fetchSignature(sigDirect, sig, sigOut, sigSha, sigSize, 1 << 20) == sigSize && java.util.Arrays.equals(sigOut.toByteArray(), SIG)
+                && sigDirect.headers.get(0).isEmpty(), "The signature downloads exactly, anonymously");
+        Script sigCdn = new Script().answer(sig, 302, CDN + SECRET_QUERY, null).answer(CDN + SECRET_QUERY, 200, null, SIG);
+        expect(PublicApkDownload.fetchSignature(sigCdn, sig, new ByteArrayOutputStream(), sigSha, sigSize, 1 << 20) == sigSize, "The signature via the approved CDN redirect");
+        String[][] sigFails = {
+            {"hash", null}, {"size", null}, {"oversize", null}, {"redirect", null}, {"double", null}, {"status", null}, {"apk-url", null}, {"empty", null},
+        };
+        for (String[] f : sigFails) {
+            String why;
+            try {
+                switch (f[0]) {
+                    case "hash": PublicApkDownload.fetchSignature(new Script().answer(sig, 200, null, SIG), sig, new ByteArrayOutputStream(), id, sigSize, 1 << 20); break;
+                    case "size": PublicApkDownload.fetchSignature(new Script().answer(sig, 200, null, SIG), sig, new ByteArrayOutputStream(), sigSha, sigSize + 1, 1 << 20); break;
+                    case "oversize": PublicApkDownload.fetchSignature(new Script().answer(sig, 200, null, SIG), sig, new ByteArrayOutputStream(), sigSha, (1 << 20) + 1, 1 << 20); break;
+                    case "redirect": PublicApkDownload.fetchSignature(new Script().answer(sig, 302, "https://evil.example/x.idsig", null), sig, new ByteArrayOutputStream(), sigSha, sigSize, 1 << 20); break;
+                    case "double": PublicApkDownload.fetchSignature(new Script().answer(sig, 302, CDN, null).answer(CDN, 302, CDN, null), sig, new ByteArrayOutputStream(), sigSha, sigSize, 1 << 20); break;
+                    case "status": PublicApkDownload.fetchSignature(new Script().answer(sig, 404, null, null), sig, new ByteArrayOutputStream(), sigSha, sigSize, 1 << 20); break;
+                    case "apk-url": PublicApkDownload.fetchSignature(new Script().answer(apk, 200, null, SIG), apk, new ByteArrayOutputStream(), sigSha, sigSize, 1 << 20); break;
+                    default: PublicApkDownload.fetchSignature(new Script().answer(sig, 200, null, null), sig, new ByteArrayOutputStream(), sigSha, sigSize, 1 << 20);
+                }
+                why = null;
+            } catch (IOException e) { why = e.getMessage(); }
+            expect(why != null && !why.contains("SECRET") && !why.contains("http"), "Signature download refused without leaking an address: " + f[0]);
+        }
+        expect(fails(new Script().answer(sig, 200, null, BYTES), sig, id, size) != null, "The APK fetch never accepts a signature address");
+
         System.out.println("PublicApkDownloadTest: " + checks + " checks passed");
     }
 }

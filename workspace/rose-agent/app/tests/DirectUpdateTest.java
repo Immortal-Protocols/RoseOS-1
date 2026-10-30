@@ -18,6 +18,7 @@ public final class DirectUpdateTest {
     }
     static final String SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
     static final String SIGNER = "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb";
+    static final String SIG_SHA = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
     static final String CDN = "https://release-assets.githubusercontent.com/github-production-release-asset/1430356511/dc8dfae4-58f4-44d1-b98d-0879fbb4cbda";
 
     static class Server implements PublicApkDownload.Http {
@@ -35,11 +36,18 @@ public final class DirectUpdateTest {
         for (String n : assets) a.append(a.length() == 0 ? "" : ",").append("{\"name\":\"").append(n).append("\",\"state\":\"uploaded\",\"browser_download_url\":\"https://evil.example/").append(n).append("\"}");
         return "{\"tag_name\":\"" + tag + "\",\"draft\":" + draft + ",\"prerelease\":" + pre + ",\"assets\":[" + a + "]}";
     }
-    static String app(long n) { return release("rose-agent-" + n, false, true, "dev.pixel.voice-" + n + ".apk", "dev.pixel.voice-" + n + ".receipt.json", "SHA256SUMS"); }
+    static String app(long n) { return release("rose-agent-" + n, false, true, "dev.pixel.voice-" + n + ".apk", "dev.pixel.voice-" + n + ".receipt.json", "dev.pixel.voice-" + n + ".apk.idsig", "SHA256SUMS"); }
+    /** A release as the current (schema 1) producer publishes it: no .idsig asset. */
+    static String appWithoutIdsig(long n) { return release("rose-agent-" + n, false, true, "dev.pixel.voice-" + n + ".apk", "dev.pixel.voice-" + n + ".receipt.json", "SHA256SUMS"); }
+    static String v4(long n) { return ",\"v4Signature\":{\"asset\":\"dev.pixel.voice-" + n + ".apk.idsig\",\"size\":2048,\"sha256\":\"" + SIG_SHA + "\"}"; }
     static String compat(String inner) { return "\"compatibility\":{" + inner + "}"; }
     static final String GOOD_COMPAT = "\"deviceCodenames\":[\"frankel\"],\"abis\":[\"arm64-v8a\"],\"minSdk\":36,\"minOsBuild\":\"2026102805\",\"minControllerVersion\":28";
-    static String receipt(long n, String extra, String compatibility) {
-        return "{\"receiptType\":\"app-publication\",\"schemaVersion\":1,\"packageName\":\"dev.pixel.voice\",\"versionCode\":" + n + ",\"versionName\":\"" + n + "-app-beta\","
+    /** Schema 2 (APP-IDSIG-1030-M004): schema 1 plus the required v4Signature for the same release. */
+    static String receipt(long n, String extra, String compatibility) { return receipt(2, n, v4(n) + extra, compatibility); }
+    /** Schema 1, the current producer's shape: readable, but never offered for a Rose OS self-install. */
+    static String receipt1(long n, String extra, String compatibility) { return receipt(1, n, extra, compatibility); }
+    static String receipt(int schema, long n, String extra, String compatibility) {
+        return "{\"receiptType\":\"app-publication\",\"schemaVersion\":" + schema + ",\"packageName\":\"dev.pixel.voice\",\"versionCode\":" + n + ",\"versionName\":\"" + n + "-app-beta\","
             + "\"size\":4096,\"sha256\":\"" + SHA + "\",\"signerSha256\":\"" + SIGNER + "\",\"candidate\":\"0000000000000000000000000000000000000000\","
             + "\"minimumTestedOs\":{\"build\":\"2026102805\",\"controller\":28},\"repository\":\"Immortal-Protocols/pixel-ota\",\"tag\":\"rose-agent-" + n + "\","
             + "\"asset\":\"dev.pixel.voice-" + n + ".apk\",\"apkUrl\":\"https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-" + n + "/dev.pixel.voice-" + n + ".apk\","
@@ -67,6 +75,10 @@ public final class DirectUpdateTest {
         expect(r.state == DirectUpdate.State.AVAILABLE && r.offer != null && r.offer.versionCode == 306, "Newest published app release offered: " + r.message);
         expect(r.offer.sha256.equals(SHA) && r.offer.size == 4096 && r.offer.signerSha256.equals(SIGNER)
                 && r.offer.apkUrl.equals("https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-306/dev.pixel.voice-306.apk"), "The offer binds hash, size, signer and the canonical APK URL");
+        expect(r.offer.hasIdsig() && r.offer.idsigSha256.equals(SIG_SHA) && r.offer.idsigSize == 2048
+                && r.offer.idsigUrl.equals("https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-306/dev.pixel.voice-306.apk.idsig"),
+                "The offer binds the v4 signature's hash, size and canonical URL in the same release");
+        expect(!s.requested.contains(r.offer.idsigUrl) && !s.requested.contains(r.offer.apkUrl), "Checking downloads neither the APK nor its signature");
         for (String u : s.requested) expect(u.startsWith("https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases?") || u.startsWith("https://github.com/Immortal-Protocols/pixel-ota/"), "Only GitHub is contacted: " + u);
         expect(s.headers.get(0).size() == 1 && "application/vnd.github+json".equals(s.headers.get(0).get("Accept")), "The API request carries only an Accept header");
         expect(s.headers.get(1).isEmpty(), "The receipt request carries no headers");
@@ -128,10 +140,24 @@ public final class DirectUpdateTest {
         r = check(published(304, v304shape), 303);
         expect(r.state == DirectUpdate.State.UNAVAILABLE && r.offer == null, "A receipt without the direct-discovery schema is unavailable: " + r.message);
         String[][] bad = {
-            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"schemaVersion\":1", "\"schemaVersion\":2"), "schema 2"},
-            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"schemaVersion\":1,", ""), "no schema"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"schemaVersion\":2", "\"schemaVersion\":3"), "schema 3"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"schemaVersion\":2,", ""), "no schema"},
             {receipt(306, "", compat(GOOD_COMPAT)).replace("app-publication", "app-release"), "receipt type"},
-            {receipt(306, ",\"v4Signature\":{\"size\":1}", compat(GOOD_COMPAT)), "unknown sidecar field"},
+            {receipt1(306, v4(306), compat(GOOD_COMPAT)), "a v4Signature on a schema 1 receipt"},
+            {receipt(2, 306, "", compat(GOOD_COMPAT)), "schema 2 without v4Signature"},
+            {receipt(2, 306, ",\"v4Signature\":null", compat(GOOD_COMPAT)), "v4Signature null"},
+            {receipt(2, 306, ",\"v4Signature\":\"dev.pixel.voice-306.apk.idsig\"", compat(GOOD_COMPAT)), "v4Signature not an object"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("dev.pixel.voice-306.apk.idsig", "dev.pixel.voice-305.apk.idsig"), "sidecar for another version"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("dev.pixel.voice-306.apk.idsig", "dev.pixel.voice-306.idsig"), "sidecar name"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("dev.pixel.voice-306.apk.idsig", "dev.pixel.voice-306.apk"), "sidecar naming the APK"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"asset\":\"dev.pixel.voice-306.apk.idsig\"", "\"asset\":\"https://evil.example/dev.pixel.voice-306.apk.idsig\""), "sidecar as a URL"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"size\":2048", "\"size\":0"), "sidecar size 0"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"size\":2048", "\"size\":" + (DirectUpdate.MAX_IDSIG + 1)), "sidecar too large"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"size\":2048", "\"size\":\"2048\""), "sidecar size string"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace(SIG_SHA, SIG_SHA.toUpperCase()), "sidecar sha case"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace(SIG_SHA, SIG_SHA.substring(1)), "sidecar sha length"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"sha256\":\"" + SIG_SHA + "\"}", "\"sha256\":\"" + SIG_SHA + "\",\"url\":\"https://evil.example/x\"}"), "sidecar url field"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace(",\"sha256\":\"" + SIG_SHA + "\"", ""), "sidecar without hash"},
             {receipt(306, "", compat(GOOD_COMPAT)).replace("\"packageName\":\"dev.pixel.voice\"", "\"packageName\":\"dev.pixel.other\""), "package"},
             {receipt(307, "", compat(GOOD_COMPAT)), "version differs from tag"},
             {receipt(306, "", compat(GOOD_COMPAT)).replace("\"repository\":\"Immortal-Protocols/pixel-ota\"", "\"repository\":\"evil/pixel-ota\""), "repository"},
@@ -155,7 +181,7 @@ public final class DirectUpdateTest {
             {receipt(306, "", compat(GOOD_COMPAT.replace("\"2026102805\"", "\"2805\""))), "short OS build"},
             {receipt(306, "", compat(GOOD_COMPAT.replace("\"2026102805\"", "2026102805"))), "numeric OS build"},
             {receipt(306, "", compat(GOOD_COMPAT.replace("\"minControllerVersion\":28", "\"minControllerVersion\":0"))), "controller 0"},
-            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"schemaVersion\":1", "\"schemaVersion\":1,\"schemaVersion\":1"), "duplicate key"},
+            {receipt(306, "", compat(GOOD_COMPAT)).replace("\"schemaVersion\":2", "\"schemaVersion\":2,\"schemaVersion\":2"), "duplicate key"},
         };
         for (String[] b : bad) expect(unusable(b[0], 306) != null, "Unusable receipt: " + b[1]);
         for (String[] b : bad) {
@@ -164,6 +190,33 @@ public final class DirectUpdateTest {
         }
         expect(unusable(receipt(306, "", compat(GOOD_COMPAT.replace("\"minControllerVersion\":28", "\"minControllerVersion\":null"))), 306) == null, "An explicit null controller requirement is allowed");
         expect(unusable(receipt(306, "", compat(GOOD_COMPAT.replace("[\"arm64-v8a\"]", "[\"universal\"]"))), 306) == null, "The explicit universal ABI marker alone is allowed");
+
+        expect(DirectUpdate.MAX_IDSIG == 1024 * 1024 && unusable(receipt(306, "", compat(GOOD_COMPAT)).replace("\"size\":2048", "\"size\":" + DirectUpdate.MAX_IDSIG), 306) == null,
+                "A sidecar of exactly the 1 MiB bound is accepted");
+
+        // #202: schema 1 (today's producer) still parses, but is never offered for a Rose OS self-install.
+        String schema1 = receipt1(306, "", compat(GOOD_COMPAT));
+        DirectUpdate.Offer legacy = DirectUpdate.offer(MiniJson.parse(schema1), 306);
+        expect(!legacy.hasIdsig() && legacy.idsigUrl == null && DirectUpdate.incompatibility(legacy, device(305)) == null,
+                "A schema 1 receipt parses and is otherwise compatible (published receipts stay readable)");
+        for (Server x : new Server[] {published(306, schema1), new Server().on(DirectUpdate.apiUrl(1), 200, null, list(OS, appWithoutIdsig(306))).on(receiptUrl(306), 200, null, schema1)}) {
+            r = check(x, 305);
+            expect(r.state == DirectUpdate.State.UNAVAILABLE && r.offer == null && r.message.contains("signature file") && r.message.contains("306"),
+                    "Schema 1 is visibly unavailable for self-install, never an APK-only install: " + r.message);
+        }
+        expect(check(published(306, schema1), 306).state == DirectUpdate.State.NO_UPDATE, "...while an equal version is still up to date");
+        // A schema 2 receipt whose release does not list the .idsig asset as uploaded is unavailable too.
+        r = check(new Server().on(DirectUpdate.apiUrl(1), 200, null, list(OS, appWithoutIdsig(306))).on(receiptUrl(306), 200, null, receipt(306, "", compat(GOOD_COMPAT))), 305);
+        expect(r.state == DirectUpdate.State.UNAVAILABLE && r.offer == null && r.message.contains("isn’t in the release"), "Missing sidecar asset: unavailable: " + r.message);
+        String unfinished = "{\"tag_name\":\"rose-agent-306\",\"draft\":false,\"prerelease\":true,\"assets\":[{\"name\":\"dev.pixel.voice-306.apk\",\"state\":\"uploaded\"},"
+                + "{\"name\":\"dev.pixel.voice-306.receipt.json\",\"state\":\"uploaded\"},{\"name\":\"dev.pixel.voice-306.apk.idsig\",\"state\":\"starter\"}]}";
+        r = check(new Server().on(DirectUpdate.apiUrl(1), 200, null, list(OS, unfinished)).on(receiptUrl(306), 200, null, receipt(306, "", compat(GOOD_COMPAT))), 305);
+        expect(r.state == DirectUpdate.State.UNAVAILABLE && r.offer == null, "An unfinished sidecar upload is not a sidecar");
+        // The sidecar belongs to the newest release only: an older release's .idsig does not stand in.
+        r = check(new Server().on(DirectUpdate.apiUrl(1), 200, null, list(OS, app(305), appWithoutIdsig(306))).on(receiptUrl(306), 200, null, receipt(306, "", compat(GOOD_COMPAT))), 304);
+        expect(r.state == DirectUpdate.State.UNAVAILABLE && r.offer == null, "An older release's sidecar is never substituted");
+        expect(!DirectUpdate.uploaded(MiniJson.parse(app(306).replace("306.apk.idsig", "307.apk.idsig")), "dev.pixel.voice-306.apk.idsig")
+                && DirectUpdate.uploaded(MiniJson.parse(app(306)), "dev.pixel.voice-306.apk.idsig"), "Asset presence is by exact canonical name");
 
         // This phone's eligibility.
         DirectUpdate.Offer o = DirectUpdate.offer(MiniJson.parse(receipt(306, "", compat(GOOD_COMPAT))), 306);

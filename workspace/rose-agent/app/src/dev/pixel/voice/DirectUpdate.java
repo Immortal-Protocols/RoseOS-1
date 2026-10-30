@@ -24,6 +24,12 @@ import java.util.regex.Pattern;
  *  - Schema (proposed APP-GITHUB-002-IFACE-001, pending Infra's ACK): the publisher's app-publication receipt
  *    plus schemaVersion 1 and a required compatibility object. Anything missing, unknown or contradictory is
  *    unavailable, never eligible.
+ *  - v4 signature (APP-IDSIG-1030-M004, #202): RoseOS (GrapheneOS) refuses a system-app update without fs-verity,
+ *    which needs the APK's v4 signature file staged beside it. schemaVersion 2 is schema 1 plus a required
+ *    v4Signature {asset, size, sha256}: asset is exactly dev.pixel.voice-N.apk.idsig in the same rose-agent-N release
+ *    (its URL is derived here, never read from the receipt), size is 1..MAX_IDSIG bytes and sha256 is lowercase hex.
+ *    Schema 1 still parses (published receipts are immutable), but the check offers an install only for a schema 2
+ *    receipt whose idsig asset is uploaded in that release; anything else is visibly unavailable for self-install.
  *  - Eligibility: strictly newer integral version, signer equal to the installed signer, exact device codename,
  *    a supported ABI, minimum SDK, minimum Rose OS build and (when required) minimum controller version.
  *  - Channels: Beta is the rose-agent-N prerelease stream above and the only configured channel. Alpha and Prod
@@ -32,19 +38,24 @@ final class DirectUpdate {
  static final String SELF="dev.pixel.voice",REPOSITORY="Immortal-Protocols/pixel-ota";
  static final String API="https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases?per_page=";
  static final int PER_PAGE=100,MAX_PAGES=3,MAX_PAGE_BYTES=2*1024*1024,MAX_RECEIPT=64*1024;
- static final long MAX_APK=150L*1024*1024;
+ static final long MAX_APK=150L*1024*1024,MAX_IDSIG=1024*1024;
  static final String UNIVERSAL="universal";
  static final Set<String> ABIS=new HashSet<>(Arrays.asList("arm64-v8a","armeabi-v7a","x86_64","x86"));
  private static final Pattern TAG=Pattern.compile("rose-agent-([1-9][0-9]{0,8})");
  private static final Pattern HEX64=Pattern.compile("[0-9a-f]{64}"),CODENAME=Pattern.compile("[a-z0-9_]{1,32}"),OS_BUILD=Pattern.compile("[0-9]{10}");
  private static final Set<String> RECEIPT_KEYS=new HashSet<>(Arrays.asList("receiptType","schemaVersion","packageName","versionCode","versionName","size","sha256",
   "signerSha256","candidate","minimumTestedOs","repository","tag","asset","apkUrl","prerelease","compatibility"));
+ /** Schema 2 is exactly schema 1 plus v4Signature, which has exactly these keys. */
+ private static final Set<String> RECEIPT_KEYS_2=new HashSet<>(RECEIPT_KEYS);
+ static{RECEIPT_KEYS_2.add("v4Signature");}
+ private static final Set<String> V4_KEYS=new HashSet<>(Arrays.asList("asset","size","sha256"));
  private static final Set<String> COMPATIBILITY_KEYS=new HashSet<>(Arrays.asList("deviceCodenames","abis","minSdk","minOsBuild","minControllerVersion"));
 
  static String apiUrl(int page){return API+PER_PAGE+"&page="+page;}
  static String tag(long n){return "rose-agent-"+n;}
  static String apkAsset(long n){return SELF+"-"+n+".apk";}
  static String receiptAsset(long n){return SELF+"-"+n+".receipt.json";}
+ static String idsigAsset(long n){return SELF+"-"+n+".apk.idsig";}
  static String download(long n,String asset){return "https://github.com/"+REPOSITORY+"/releases/download/"+tag(n)+"/"+asset;}
 
  /** The phone, as observed locally. osBuild is the Rose build number (e.g. 2026102805), or null when it can't
@@ -57,9 +68,17 @@ final class DirectUpdate {
  /** A validated update offer: everything the installer binds the download to. */
  static final class Offer {
   final long versionCode,size,minSdk,minController;final String versionName,sha256,signerSha256,apkUrl,minOsBuild;final List<String> codenames,abis;
+  /** The v4 signature file bound by the receipt (schema 2): its canonical URL, exact size and SHA-256. Null for schema 1. */
+  final String idsigUrl,idsigSha256;final long idsigSize;
   Offer(long versionCode,String versionName,long size,String sha256,String signerSha256,String apkUrl,List<String> codenames,List<String> abis,long minSdk,String minOsBuild,long minController){
+   this(versionCode,versionName,size,sha256,signerSha256,apkUrl,codenames,abis,minSdk,minOsBuild,minController,null,0,null);}
+  Offer(long versionCode,String versionName,long size,String sha256,String signerSha256,String apkUrl,List<String> codenames,List<String> abis,long minSdk,String minOsBuild,long minController,
+    String idsigUrl,long idsigSize,String idsigSha256){
    this.versionCode=versionCode;this.versionName=versionName;this.size=size;this.sha256=sha256;this.signerSha256=signerSha256;this.apkUrl=apkUrl;
-   this.codenames=codenames;this.abis=abis;this.minSdk=minSdk;this.minOsBuild=minOsBuild;this.minController=minController;}
+   this.codenames=codenames;this.abis=abis;this.minSdk=minSdk;this.minOsBuild=minOsBuild;this.minController=minController;
+   this.idsigUrl=idsigUrl;this.idsigSize=idsigSize;this.idsigSha256=idsigSha256;}
+  /** Whether this offer carries the v4 signature a RoseOS self-install needs. */
+  boolean hasIdsig(){return idsigUrl!=null;}
  }
  enum State { NO_UPDATE, AVAILABLE, UNAVAILABLE, ERROR }
  /** The update stream to check. Only BETA has a published route. */
@@ -79,9 +98,13 @@ final class DirectUpdate {
  }
 
  /** Newest candidate version on the list pages, and whether the list was read to its end. */
- static final class Discovery { final long newest;final boolean complete; Discovery(long newest,boolean complete){this.newest=newest;this.complete=complete;} }
+ static final class Discovery {
+  final long newest;final boolean complete,newestHasIdsig;
+  Discovery(long newest,boolean complete){this(newest,complete,false);}
+  Discovery(long newest,boolean complete,boolean newestHasIdsig){this.newest=newest;this.complete=complete;this.newestHasIdsig=newestHasIdsig;}
+ }
  static Discovery discover(PublicApkDownload.Http http)throws IOException{
-  long newest=-1;
+  long newest=-1;boolean idsig=false;
   for(int page=1;page<=MAX_PAGES;page++){
    PublicApkDownload.Response r;
    try{r=http.get(apiUrl(page),Collections.singletonMap("Accept","application/vnd.github+json"));}
@@ -92,10 +115,10 @@ final class DirectUpdate {
    try{list=MiniJson.parse(read(r.body,MAX_PAGE_BYTES));}catch(IllegalArgumentException e){throw new IOException("GitHub’s release list couldn’t be read.");}
    if(!(list instanceof List))throw new IOException("GitHub’s release list couldn’t be read.");
    List<?> releases=(List<?>)list;
-   for(Object o:releases)newest=Math.max(newest,candidate(o));
-   if(releases.size()<PER_PAGE)return new Discovery(newest,true);
+   for(Object o:releases){long n=candidate(o);if(n>newest){newest=n;idsig=uploaded(o,idsigAsset(n));}}
+   if(releases.size()<PER_PAGE)return new Discovery(newest,true,idsig);
   }
-  return new Discovery(newest,false);
+  return new Discovery(newest,false,idsig);
  }
  /** N for a published rose-agent-N prerelease with both canonical assets uploaded, else -1. */
  static long candidate(Object o){
@@ -114,13 +137,23 @@ final class DirectUpdate {
   return apk&&receipt?n:-1;
  }
 
+ /** Whether release o lists asset name as uploaded. */
+ static boolean uploaded(Object o,String name){
+  if(!(o instanceof Map)||!(((Map<?,?>)o).get("assets") instanceof List))return false;
+  for(Object a:(List<?>)((Map<?,?>)o).get("assets"))
+   if(a instanceof Map&&"uploaded".equals(((Map<?,?>)a).get("state"))&&name.equals(((Map<?,?>)a).get("name")))return true;
+  return false;
+ }
+
  /** The receipt for release n as a validated Offer; IllegalArgumentException names why it is unusable. */
  static Offer offer(Object json,long n){
   if(!(json instanceof Map))throw new IllegalArgumentException("The release’s update information couldn’t be read.");
   Map<?,?> r=(Map<?,?>)json;
-  if(!"app-publication".equals(r.get("receiptType"))||!Long.valueOf(1).equals(r.get("schemaVersion")))
+  Object schema=r.get("schemaVersion");
+  boolean two=Long.valueOf(2).equals(schema);
+  if(!"app-publication".equals(r.get("receiptType"))||!(Long.valueOf(1).equals(schema)||two))
    throw new IllegalArgumentException("This release doesn’t carry update information this version of Rose Agent understands.");
-  for(Object k:r.keySet())if(!RECEIPT_KEYS.contains(k))throw new IllegalArgumentException("This release’s update information has fields this version doesn’t understand.");
+  for(Object k:r.keySet())if(!(two?RECEIPT_KEYS_2:RECEIPT_KEYS).contains(k))throw new IllegalArgumentException("This release’s update information has fields this version doesn’t understand.");
   if(!SELF.equals(r.get("packageName"))||!Long.valueOf(n).equals(r.get("versionCode")))throw new IllegalArgumentException("The release’s update information names a different app or version.");
   if(!REPOSITORY.equals(r.get("repository"))||!tag(n).equals(r.get("tag"))||!apkAsset(n).equals(r.get("asset"))||!download(n,apkAsset(n)).equals(r.get("apkUrl"))||!Boolean.TRUE.equals(r.get("prerelease")))
    throw new IllegalArgumentException("The release’s update information doesn’t match where it was published.");
@@ -139,7 +172,14 @@ final class DirectUpdate {
   Object os=c.get("minOsBuild");if(!(os instanceof String)||!OS_BUILD.matcher((String)os).matches())throw new IllegalArgumentException("This release doesn’t give its minimum Rose OS build.");
   Object ctl=c.get("minControllerVersion");long minController=ctl==MiniJson.NULL?0:whole(ctl);
   if(ctl!=MiniJson.NULL&&minController<1)throw new IllegalArgumentException("This release’s controller requirement is invalid.");
-  return new Offer(n,(String)name,size,sha,signer,download(n,apkAsset(n)),codenames,abis,minSdk,(String)os,minController);
+  if(!two)return new Offer(n,(String)name,size,sha,signer,download(n,apkAsset(n)),codenames,abis,minSdk,(String)os,minController);
+  if(!(r.get("v4Signature") instanceof Map))throw new IllegalArgumentException("This release doesn’t describe its signature file.");
+  Map<?,?> v4=(Map<?,?>)r.get("v4Signature");
+  if(!v4.keySet().equals(V4_KEYS))throw new IllegalArgumentException("This release’s signature file description isn’t one this version understands.");
+  if(!idsigAsset(n).equals(v4.get("asset")))throw new IllegalArgumentException("This release’s signature file isn’t the one for this version.");
+  long idsigSize=whole(v4.get("size"));if(idsigSize<=0||idsigSize>MAX_IDSIG)throw new IllegalArgumentException("This release’s signature file size is missing or too large.");
+  String idsigSha=hex(v4.get("sha256"));if(idsigSha==null)throw new IllegalArgumentException("This release’s signature file integrity details are missing.");
+  return new Offer(n,(String)name,size,sha,signer,download(n,apkAsset(n)),codenames,abis,minSdk,(String)os,minController,download(n,idsigAsset(n)),idsigSize,idsigSha);
  }
  /** null when this phone may install the offer, otherwise the truthful reason it may not. */
  static String incompatibility(Offer o,Device d){
@@ -179,6 +219,10 @@ final class DirectUpdate {
   catch(IllegalArgumentException e){return new Result(State.UNAVAILABLE,e.getMessage()==null||e.getMessage().length()<12?"The release’s update information couldn’t be read.":e.getMessage(),null);}
   String why=incompatibility(o,d);
   if(why!=null)return new Result(State.UNAVAILABLE,"Version "+o.versionCode+" was published, but it can’t be installed: "+why,null);
+  // #202: on RoseOS the installer needs the v4 signature file staged beside the APK, so only a release that
+  // publishes it can be installed from here. Older-format releases stay readable but are not offered.
+  if(!o.hasIdsig())return new Result(State.UNAVAILABLE,"Version "+o.versionCode+" was published, but it can’t be installed from Rose Agent: its release has no signature file (.idsig), which Rose OS needs to update Rose Agent.",null);
+  if(!found.newestHasIdsig)return new Result(State.UNAVAILABLE,"Version "+o.versionCode+" was published, but its signature file (.idsig) isn’t in the release, so it can’t be installed from Rose Agent.",null);
   return new Result(State.AVAILABLE,"Version "+o.versionCode+" is available (installed "+d.installed+").",o);
  }
 

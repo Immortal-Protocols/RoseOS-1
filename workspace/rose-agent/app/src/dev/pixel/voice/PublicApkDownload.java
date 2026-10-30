@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
 final class PublicApkDownload {
  static final String INITIAL_HOST="github.com",CDN_HOST="release-assets.githubusercontent.com";
  static final String RELEASES="/Immortal-Protocols/pixel-ota/releases/download/",CDN_PATH="/github-production-release-asset/1430356511/";
- private static final Pattern TAG=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}"),ASSET=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.apk"),RECEIPT=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.receipt\\.json"),ASSET_ID=Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+ private static final Pattern TAG=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}"),ASSET=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.apk"),RECEIPT=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.receipt\\.json"),IDSIG=Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,150}\\.apk\\.idsig"),ASSET_ID=Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
  /** One anonymous GET without following redirects; status, Location (for a redirect) and the body. */
  interface Http { Response get(String url,Map<String,String> headers)throws IOException; }
@@ -38,6 +38,8 @@ final class PublicApkDownload {
  static String initial(String url){return initial(url,ASSET);}
  /** The same boundary for a release's .receipt.json update metadata (DirectUpdate). */
  static String initialReceipt(String url){return initial(url,RECEIPT);}
+ /** The same boundary for a release's .apk.idsig v4 signature file (APP-IDSIG-1030-M004). */
+ static String initialSignature(String url){return initial(url,IDSIG);}
  private static String initial(String url,Pattern asset){
   URI u=parse(url);if(u==null)return "The update’s download address is invalid.";
   if(!"https".equals(u.getScheme())||!INITIAL_HOST.equals(u.getRawAuthority()==null?null:host(u)))return "The update isn’t published on the expected GitHub repository.";
@@ -72,6 +74,14 @@ final class PublicApkDownload {
   * expectedSha and the size equals expectedSize. Every failure message is free of URLs and queries. */
  static long fetch(Http http,String url,OutputStream out,String expectedSha,long expectedSize,long maximum)throws IOException{
   String bad=initial(url);if(bad!=null)throw new IOException(bad);
+  return bound(http,url,out,expectedSha,expectedSize,maximum);
+ }
+ /** The APK's v4 signature file (.apk.idsig) under the same boundary, bound by its own SHA-256 and exact size. */
+ static long fetchSignature(Http http,String url,OutputStream out,String expectedSha,long expectedSize,long maximum)throws IOException{
+  String bad=initialSignature(url);if(bad!=null)throw new IOException(bad);
+  return bound(http,url,out,expectedSha,expectedSize,maximum);
+ }
+ private static long bound(Http http,String url,OutputStream out,String expectedSha,long expectedSize,long maximum)throws IOException{
   if(expectedSize<=0||expectedSize>maximum)throw new IOException("The update’s size is missing or too large.");
   Response r=open(http,url);
   MessageDigest digest;try{digest=MessageDigest.getInstance("SHA-256");}catch(Exception e){throw new IOException("SHA-256 unavailable");}

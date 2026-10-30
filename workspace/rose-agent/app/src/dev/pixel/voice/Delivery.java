@@ -28,25 +28,30 @@ public class Delivery {
   * installed app and to the receipt's signer) and this phone's compatibility must all agree, and voice must still be
   * idle at commit. Android's installer confirmation and signature enforcement are unchanged. */
  static void installSelf(VoiceService a,DirectUpdate.Offer offer){
-  int sessionId=-1;File file=new File(a.getCacheDir(),"self-update.apk");
+  int sessionId=-1;File file=new File(a.getCacheDir(),UpdateRecovery.DOWNLOAD),signature=new File(a.getCacheDir(),UpdateRecovery.DOWNLOAD_SIGNATURE);
   String self=a.getPackageName();long version=offer.versionCode;
   UpdateAttempts.record(a,version,"downloading"); // timestamped (UpdateRecovery: interrupted vs in progress)
   try{
-   long size;try(OutputStream out=new FileOutputStream(file)){size=PublicApkDownload.fetch(new PublicHttp(),offer.apkUrl,out,offer.sha256,offer.size,DirectUpdate.MAX_APK);} // throws unless SHA-256 and size match
+   // #202: Rose OS installs a system-app update only with its v4 signature (fs-verity), so an offer without one is
+   // refused here as well as in the check, before anything is downloaded or a session exists.
+   if(!offer.hasIdsig())throw new IOException("This release has no signature file (.idsig), which Rose OS needs to update Rose Agent. Nothing was installed.");
+   PublicHttp http=new PublicHttp();
+   long size;try(OutputStream out=new FileOutputStream(file)){size=PublicApkDownload.fetch(http,offer.apkUrl,out,offer.sha256,offer.size,DirectUpdate.MAX_APK);} // throws unless SHA-256 and size match
+   long signatureSize;try(OutputStream out=new FileOutputStream(signature)){signatureSize=PublicApkDownload.fetchSignature(http,offer.idsigUrl,out,offer.idsigSha256,offer.idsigSize,DirectUpdate.MAX_IDSIG);}
    android.content.pm.PackageManager pm=a.getPackageManager();
    android.content.pm.PackageInfo archive=pm.getPackageArchiveInfo(file.getPath(),android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
    android.content.pm.PackageInfo installed=pm.getPackageInfo(self,android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
    String reason=SelfUpdate.verify(offer.sha256,version,self,installed.getLongVersionCode(),offer.sha256,offer.sha256,self,Long.valueOf(version),Long.valueOf(offer.size),
     offer.sha256,size,archive==null?null:archive.packageName,archive==null?-1:archive.getLongVersionCode(),sameSigners(archive,installed)&&offer.signerSha256.equals(signerSha256(archive)));
    if(reason!=null)throw new IOException(reason);
-   PackageInstaller pi=pm.getPackageInstaller();PackageInstaller.SessionParams params=new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);params.setSize(size);params.setAppPackageName(self);if(android.os.Build.VERSION.SDK_INT>=31)params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);sessionId=pi.createSession(params);
-   try(PackageInstaller.Session session=pi.openSession(sessionId)){stage(session,file,"base.apk");}
+   PackageInstaller pi=pm.getPackageInstaller();PackageInstaller.SessionParams params=new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);params.setSize(size+signatureSize);params.setAppPackageName(self);if(android.os.Build.VERSION.SDK_INT>=31)params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);sessionId=pi.createSession(params);
+   try(PackageInstaller.Session session=pi.openSession(sessionId)){stage(session,file,"base.apk");stage(session,signature,"base.apk.idsig");} // the same session; Android verifies the pair
    String late=SelfUpdate.beforeCommit(version,a.selfVersion(),a.voiceBusy());
    if(late==null)late=DirectUpdate.incompatibility(offer,localDevice(a));
    if(late!=null)throw new IOException(late);
    Intent callback=new Intent(a,InstallReceiver.class).putExtra(InstallReceiver.SELF_TARGET,version);PendingIntent result=PendingIntent.getBroadcast(a,sessionId,callback,PendingIntent.FLAG_UPDATE_CURRENT|(android.os.Build.VERSION.SDK_INT>=31?PendingIntent.FLAG_MUTABLE:0));
    UpdateAttempts.record(a,version,"committed");try(PackageInstaller.Session session=pi.openSession(sessionId)){session.commit(result.getIntentSender());}sessionId=-1;
-  }catch(Exception e){UpdateAttempts.record(a,version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();}
+  }catch(Exception e){UpdateAttempts.record(a,version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();signature.delete();}
  }
  /** This phone as DirectUpdate needs it, read locally. osBuild is Build.VERSION.INCREMENTAL only when it has the
   * ten-digit Rose build shape (proposed observation, APP-GITHUB-002-IFACE-001); otherwise unknown. */
