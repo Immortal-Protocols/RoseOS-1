@@ -87,8 +87,8 @@ class WorkflowTest(unittest.TestCase):
         builder, publisher = JOBS['builder'], JOBS['publisher']
         self.assertIn('          base="$HOME/rose-actions/$ROSE_DEVICE-$BUILD_NUMBER"\n', builder)
         self.assertIn('--source-revision "$CANDIDATE_SHA" --device "$ROSE_DEVICE" --build-number "$BUILD_NUMBER"', builder)
-        self.assertIn('          name: os-release-${{ env.ROSE_DEVICE }}-${{ inputs.build_number }}\n', builder)
-        self.assertIn('          name: os-release-${{ env.ROSE_DEVICE }}-${{ inputs.build_number }}\n', publisher)
+        self.assertIn('          name: os-release-${{ env.ROSE_DEVICE }}-${{ steps.candidate.outputs.build_number }}\n', builder)
+        self.assertIn('          name: os-release-${{ env.ROSE_DEVICE }}-${{ needs.builder.outputs.build_number }}\n', publisher)
         self.assertIn('python3 scripts/release-pipeline.py publish --device "$ROSE_DEVICE" ', publisher)
         self.assertNotIn('frankel-$BUILD_NUMBER', WORKFLOW)
         self.assertIn('  group: os-release-frankel\n', WORKFLOW)

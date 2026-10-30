@@ -7,6 +7,7 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
+      - 'scripts/release-allocate.py'
       - 'scripts/actions-gcp-login.py'
       - 'scripts/github_release_publisher.py'
       - 'scripts/host-integrate.py'
@@ -33,6 +34,7 @@ on:
       - 'scripts/sign-apk.py'
       - 'scripts/prepare-background-policy.py'
       - 'os/release-pipeline/**'
+      - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
       - 'scripts/tests/test_release_*.py'
       - 'scripts/tests/test_github_publisher.py'
@@ -86,6 +88,7 @@ on:
       - 'scripts/release-stage.py'
       - 'scripts/release_receipts.py'
       - 'scripts/release-pipeline.py'
+      - 'scripts/release-allocate.py'
       - 'scripts/actions-gcp-login.py'
       - 'scripts/github_release_publisher.py'
       - 'scripts/host-integrate.py'
@@ -112,6 +115,7 @@ on:
       - 'scripts/sign-apk.py'
       - 'scripts/prepare-background-policy.py'
       - 'os/release-pipeline/**'
+      - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
       - 'scripts/tests/test_release_*.py'
       - 'scripts/tests/test_github_publisher.py'
@@ -189,6 +193,7 @@ jobs:
           python3 scripts/tests/test_release_pipeline.py
           python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
+          python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py
           python3 os/tests/test_apply_os_changes.py

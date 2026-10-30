@@ -30,8 +30,10 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # sha256 of the builder and publisher job blocks at ae9cfd4 (2804 candidate), without the added mode condition.
 # The builder and publisher jobs as of FAM-02-INFRA-S001, whose only change is the admitted device in the attempt
 # directory, stage receipt, artifact name and publish call (exact lines pinned in test_device_contract.py).
-OS_JOBS_AT_BASE = {'builder': 'd3852bc970faf2c075b4597844711da32630b22eaf7be86b7eaeac5ee1e1b5eb',
-    'publisher': '3b7854d721b62851d5fc013c60c0122cdfe0dd6ce9ecbf5bd90cb78445e2c7dd'}
+# OCT30-INFRA-S014 moved both jobs once: the builder allocates the latest-beta candidate and exports its identity, and
+# the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
+OS_JOBS_AT_BASE = {'builder': '357a468def35ece2735b2879f73ed5adb05e1111d7da5c595e7fcd4a313dad93',
+    'publisher': '7712e43e8ed4940f1656cd1e38e3ef8a877cc2a0fb6b6218d14437f9ce3c1ef4'}
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))
@@ -377,14 +379,14 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         self.jobs = jobs(WORKFLOW)
 
     def test_os_jobs_are_unchanged_apart_from_their_mode_condition(self):
-        self.assertIn("    if: inputs.mode == 'os-release'\n", self.jobs['builder'])
+        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
         for name, digest in OS_JOBS_AT_BASE.items():
-            block = self.jobs[name].replace("    if: inputs.mode == 'os-release'\n", '')
+            block = self.jobs[name].replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: builder\n', self.jobs['publisher'])  # skipped whenever builder is skipped
         self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export\]\n        default: os-release\n")
+        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export\]\n        default: latest-beta\n")
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']

@@ -9,6 +9,100 @@ Do not use the imported Mustang (Pixel 10 Pro XL) scripts as Frankel instruction
 This is the release procedure and its remaining gates, not a claim that a new
 OS release has already been built. Refer to [VALIDATION.md](VALIDATION.md).
 
+## Build & publish latest Pixel 10 (the normal button)
+
+OCT30-INFRA-S014. Source and tests are in place; **no run of this button has
+happened yet**, so its first real run is still an acceptance step (see the end
+of this section).
+
+**Click sequence:** GitHub → Actions → **Build & publish latest Pixel 10** →
+**Run workflow** → branch `main` → leave every field at its default (mode
+`latest-beta`) → **Run workflow**.
+
+What one run does, in the existing `os-release.yml` path. The workflow
+identity, controller, builder, signer, publisher, lock, logout and always-STOP
+cleanup are unchanged, and the button adds no permission, credential, runner,
+trigger or storage service.
+
+1. **Guard.** Refuses any explicit pin, a channel other than `beta`, a device
+   other than `frankel`, a resume or a promote input. It also requires the
+   dispatch commit (`GITHUB_SHA`) to be on main. That commit is the captured
+   source; later main changes never reach the run.
+2. **Builder allocation, before any identity is used.**
+   `scripts/release-allocate.py latest` runs under the shared builder lock. It
+   reads every identity already consumed:
+   - the public pixel-ota releases, read anonymously;
+   - this builder's `frankel-<build>[-resume-<run>]` attempt directories;
+   - earlier reservations in `$HOME/rose-actions/allocations`;
+   - the committed retained baselines and app reservations in
+     `os/release-pipeline/frankel.json`.
+
+   From these it allocates:
+   - **Build number** `YYYYMMDDNN`: the UTC day of the run, above every known
+     build. It refuses past `NN=99` and when a known build is dated after
+     today.
+   - **`BUILD_DATETIME`**: above every known timestamp.
+   - **App versions**, per package in `os/latest-beta/allocation.json`:
+     - a package whose source paths did not change since the current Beta
+       Latest keeps that release's version (Calculator and controller are not
+       bumped needlessly);
+     - a changed package gets a fresh versionCode above every version ever
+       consumed (published, built, reserved, retained, earlier allocations).
+
+   Only the manifests that need it change. The result is a deterministic
+   local commit: the source plus that version-only delta, with a fixed
+   identity and dates. It is never pushed, and the compiled source really
+   carries the allocated versions.
+
+   The allocation (source, run, clock, hashes of the observation, delta and
+   allocation) is written with `O_EXCL` before the build uses it. A failed or
+   cancelled attempt therefore stays consumed, and the next click allocates
+   afresh.
+
+   Missing or unreadable state refuses; it is never guessed. This covers the
+   storage, the release listing (or one longer than scanned), a stray file in
+   the reservation directory, an unrecorded previous release source and a
+   malformed manifest.
+3. **Build, sign and verify:** the existing stages and checks, unchanged.
+4. **Publisher**, only after the builder succeeded:
+   - It re-derives the candidate from the captured source and the allocation,
+     and requires exactly the allocated apps in the verified image.
+   - With its pixel-ota token it lists every release, drafts included, and
+     refuses if the tag already exists. An older release or draft is never
+     reconciled or overwritten.
+   - It uploads a draft with truthful notes: the captured source, commits
+     since the previous Beta, bundled app versions, the delta, and the
+     evidence limits (no phone runtime acceptance is claimed).
+   - It download-checks the draft, then publishes it as a **public**,
+     non-prerelease release and makes it the **Beta Latest**.
+
+   This is the Beta channel, not production; Alpha and Prod are not offered.
+   Every earlier release stays for rollback.
+
+Clicks are serialized by the existing non-cancelling `os-release-frankel`
+concurrency group. GitHub keeps one pending run per group, so a newer click
+replaces an older *pending* one before it starts. A replaced run has consumed
+nothing. Each run that starts allocates afresh past every reservation.
+
+A latest-beta attempt is not resumed. Click again, which allocates a fresh
+candidate. The advanced explicit `os-release` mode and its resume inputs are
+unchanged.
+
+The app-only route also refuses a Rose Agent version at or below any
+latest-beta reservation on the builder (`scripts/host-app-release.py`).
+
+**Remaining real acceptance**, open until a genuine run:
+- the first real run's allocation, build, signing, verification, publication
+  and Latest promotion;
+- confirming that the builder step's `GITHUB_ENV` export reaches the existing
+  stages. If it does not, they fail closed on an empty candidate;
+- phone update acceptance.
+
+Allocations are not written back to main; they live on the builder and in
+pixel-ota. Drafts made outside this workflow must stay recorded as retained
+baselines in `frankel.json`. The publisher's authenticated tag check is the
+final guard.
+
 ## 1. Inspect the existing builder
 
 Project `protocols-465723`, instance `immortal-os-builder`, zone `us-west2-a`.

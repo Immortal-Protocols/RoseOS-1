@@ -13,6 +13,7 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -197,15 +198,20 @@ class Production:
         steps.append(f'm -j{int(host["makeJobs"])} ' + ' '.join(host_token(g) for g in host['makeGoals']))
         subprocess.run(['bash', '-euo', 'pipefail', '-c', ' && '.join(steps)], cwd=host['sourceRoot'], env=env, check=True)
 
-    def publish(self, config, cand, directory, receipt_dir):
+    def publish(self, config, cand, directory, receipt_dir, notes=None, fresh=False):
         if not os.environ.get('PIXEL_OTA_TOKEN'):
             raise SetupMissing(['PIXEL_OTA_TOKEN (minted by the publisher job; never on the builder)'])
         self.client = github_release_publisher.client_from_environment(config)
         tag = config['publication']['tag'].format(build=cand['build'])
+        if fresh and self.client.find_release(tag) is not None:
+            # A freshly allocated tag must not exist at all, drafts included: never reconcile or overwrite another release.
+            raise CheckFailed(f'release tag {tag} already exists in pixel-ota; the allocation is not fresh')
         run = os.environ.get('GITHUB_SERVER_URL', '') + '/' + os.environ.get('GITHUB_REPOSITORY', '') + \
             '/actions/runs/' + os.environ.get('GITHUB_RUN_ID', '')
         body = (f'RoseOS {config["target"]["device"]} build {cand["build"]} from RoseOS-1 {cand["sha"]}, '
             f'channel {cand["channel"]}. Verified and published by {run}.')
+        if notes:
+            body = notes + f'\nVerified and published by {run}.\n'
         manifest = json.loads((Path(receipt_dir)/'manifest.json').read_text())
         self.release, download, self.already_published = github_release_publisher.publish_release(
             self.client, tag, tag, body, manifest, directory, Path(receipt_dir).parent/f'published-{cand["build"]}')
@@ -237,12 +243,14 @@ class Fake:
         self.log('make')
         subprocess.run(config['host']['fakeMake'], env=env, check=True)
 
-    def publish(self, config, cand, directory, receipt_dir):
+    def publish(self, config, cand, directory, receipt_dir, notes=None, fresh=False):
         store = self.state/'releases'/config['publication']['tag'].format(build=cand['build'])
         if store.exists():
             raise CheckFailed('release tag already exists in the fake store')
         draft = store/'draft'
         shutil.copytree(directory, draft)
+        if notes:
+            (store/'notes.md').write_text(notes)
         self.log('draft uploaded')
         return draft
 
@@ -1025,13 +1033,36 @@ def publish(a, config, cand, adapter):
     if cert_sha256((public/'releasekey.x509.pem').read_text()) != config['identities']['otaCertificateSha256'] or \
             sha256_file(public/'avb_pkmd.bin') != config['identities']['avbPublicKeySha256']:
         raise CheckFailed('transferred public keys do not match the pins')
-    draft = adapter.publish(config, cand, public, artifact)
+    notes = latest_notes(a, cand, artifact) if a.allocation else None
+    draft = adapter.publish(config, cand, public, artifact, notes=notes, fresh=bool(a.allocation))
     # Download check of the draft before any promotion; promotion only when explicitly requested.
     manifest_tool('verify-published', artifact/'manifest.json', '--dir', draft)
     promoted = bool(channel['promoteLatest'] and a.promote and device in LATEST_DEVICES)
     if promoted:
         adapter.promote(config, cand, draft)
     return {'stage': 'publish', 'draft': 'verified', 'promoted': promoted, 'simulated': adapter.simulated}
+
+def latest_notes(a, cand, artifact):
+    """The normal button's allocation, independently re-derived here: the candidate must be exactly the dispatch source plus
+    the allocated version delta, the image must carry exactly the allocated apps, and only a promoted Beta is allowed."""
+    spec = importlib.util.spec_from_file_location('release_allocate', Path(__file__).resolve().parent/'release-allocate.py')
+    allocate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(allocate)
+    try:
+        allocation = allocate.check_allocation(json.loads(Path(a.allocation).read_text()))
+        if (allocation['build'], str(allocation['buildTimestamp']), allocation['channel'], allocation['device']) != \
+                (cand['build'], cand['timestamp'], cand['channel'], cand['device']):
+            raise CheckFailed('the allocation does not name this build, timestamp, channel and device')
+        if allocate.derive(allocation, ROOT) != cand['sha'] or allocation.get('candidateSha') != cand['sha']:
+            raise CheckFailed('the candidate is not the allocation\'s deterministic source + version delta')
+        expected = json.loads((artifact/'expected-identities.json').read_text())
+        if [[row['packageName'], row['versionCode']] for row in expected['apps']] != allocation['apps']:
+            raise CheckFailed('the verified image apps are not the allocated apps')
+        if not a.promote:
+            raise CheckFailed('the normal button publishes the verified Beta as Latest; --promote is required')
+        return allocate.notes(allocation, ROOT)
+    except allocate.Refused as error:
+        raise CheckFailed(f'allocation refused: {error}') from None
 
 # ---------------------------------------------------------------- command line
 
@@ -1052,6 +1083,7 @@ def main(argv=None):
     p.add_argument('--artifact-dir')
     p.add_argument('--apps', default='[]', help='JSON list of [package, versionCode] expected in this candidate')
     p.add_argument('--promote', action='store_true')
+    p.add_argument('--allocation', help='normal button only: the reserved allocation record of this candidate')
     a = p.parse_args(argv)
     try:
         if a.adapter == 'fake' and not a.fake_state:

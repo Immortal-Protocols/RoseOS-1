@@ -48,6 +48,7 @@ python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
 python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
+python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_github_publisher.py
 python3 scripts/tests/test_host_adapters.py
 python3 scripts/tests/test_host_build_reconcile.py

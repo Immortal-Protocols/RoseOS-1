@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.latest-candidate-allocation",
+  "note": "OCT30-INFRA-S014: inputs of scripts/release-allocate.py, which derives the one fresh Pixel 10 (frankel) Beta candidate of a 'Build & publish latest Pixel 10' dispatch from its captured source. Each package lists every candidate-relative path its APK is built from; a package whose paths are unchanged since the previous release keeps its version (existing contract: unchanged Calculator and controller may stay equal), any change allocates a fresh versionCode above every consumed one. Over-inclusion only costs a version bump; a missing path would let changed bytes keep an old version, so paths are listed generously.",
+  "device": "frankel",
+  "channel": "beta",
+  "tagPattern": "frankel-{build}",
+  "buildSequenceMax": 99,
+  "packages": [
+    {
+      "packageName": "dev.pixel.voice",
+      "manifest": "workspace/rose-agent/app/AndroidManifest.xml",
+      "sources": ["workspace/rose-agent", "workspace/pixel-clipboard", "workspace/experiments", "scripts/host-app-build.py"],
+      "versionNamePattern": "{code}-os-beta-{build}"
+    },
+    {
+      "packageName": "dev.pixel.calculator.agent",
+      "manifest": "workspace/pixel-calculator-agent/AndroidManifest.xml",
+      "sources": ["workspace/pixel-calculator-agent", "scripts/host-app-build.py"],
+      "versionNamePattern": null
+    },
+    {
+      "packageName": "dev.pixel.backgroundcontrol",
+      "manifest": "os/background-control/agent-pip/AndroidManifest.xml",
+      "sources": ["os/background-control/agent-pip", "scripts/build-background-agent.py", "scripts/host-app-build.py"],
+      "versionNamePattern": null
+    }
+  ]
+}

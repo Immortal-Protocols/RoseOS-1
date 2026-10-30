@@ -86,7 +86,7 @@ def wiring_failures(text):
 class WorkflowTest(unittest.TestCase):
     def test_the_mode_reuses_the_existing_trust_and_runs_nothing_else(self):
         self.assertEqual(wiring_failures(WORKFLOW), [])
-        self.assertIn('        options: [os-release, device-readiness, app-only, emulator-alpha,', WORKFLOW)
+        self.assertIn('        options: [latest-beta, os-release, device-readiness, app-only, emulator-alpha,', WORKFLOW)
         job = JOBS['device-readiness']
         self.assertIn('python3 scripts/device-readiness.py run --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" '
             '--recipe-sha "$GITHUB_SHA" --evidence-dir "$RUNNER_TEMP/device-readiness"', job)
@@ -108,7 +108,7 @@ class WorkflowTest(unittest.TestCase):
             'readiness job with an id token': WORKFLOW.replace(READINESS_JOB, READINESS_JOB.replace('      contents: read\n',
                 '      contents: read\n      id-token: write\n')),
             'readiness job with more time': WORKFLOW.replace(READINESS_JOB, READINESS_JOB.replace('timeout-minutes: 20', 'timeout-minutes: 720')),
-            'builder in readiness mode': WORKFLOW.replace("    if: inputs.mode == 'os-release'\n", "    if: inputs.mode == 'os-release' || inputs.mode == 'device-readiness'\n"),
+            'builder in readiness mode': WORKFLOW.replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", "    if: inputs.mode == 'os-release' || inputs.mode == 'device-readiness'\n"),
             'unbound candidate': WORKFLOW.replace('[[ "$MODE" != device-readiness || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]', 'true'),
             'secret in the readiness job': WORKFLOW.replace("      - name: Inspect the retained tree", "      - env:\n          K: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}\n        name: Inspect the retained tree"),
         }
