@@ -129,4 +129,26 @@ public class RosePresenceRenderTest {
         assertNotEquals(backdrop, tile.getPixel(tile.getWidth() / 2, tile.getHeight() / 4));
         assertNotEquals(backdrop, tray.getPixel(tray.getWidth() / 2, tray.getHeight() / 2));
     }
+
+    /** The production Tray with both production Wells where HomeTray places them (glass 22dp in from the ends, the
+     * 92dp bar's height centred), on one canvas, so the translucent glass is seen over the real metal. */
+    @Test public void composedHomeTrayRenders() throws Exception {
+        float density = RuntimeEnvironment.getApplication().getResources().getDisplayMetrics().density;
+        int w = Math.round(336 * density), h = Math.round(92 * density);
+        Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(0xff6f8fb0);
+        Canvas canvas = new Canvas(bitmap);
+        TrayMaterial.Tray tray = new TrayMaterial.Tray(density);
+        tray.setBounds(0, 0, w, h);
+        tray.draw(canvas);
+        int pocket = TrayMaterial.POCKET_DP, ww = Math.round((104 + 2 * pocket) * density), wh = Math.round((66 + 2 * pocket) * density);
+        int top = (h - wh) / 2, left = Math.round((22 - pocket) * density);
+        for (int x : new int[]{left, w - left - ww}) {
+            TrayMaterial.Well well = new TrayMaterial.Well(density);
+            well.setBounds(x, top, x + ww, top + wh);
+            well.draw(canvas);
+        }
+        save(bitmap, "home-tray-composed");
+        assertNotEquals(0xff6f8fb0, bitmap.getPixel(w / 2, h / 2));
+    }
 }
