@@ -99,8 +99,9 @@ passes `--diagnostic-out <new owner-only file>` (Infra released this narrow opt-
 - `category` is one of a fixed list (`keystore_password_incorrect`, `key_password_incorrect`, `alias_not_found`,
   `keystore_unreadable`, `password_file_unreadable`, `java_runtime_error`, `apk_input_rejected`,
   `output_write_failed`, `signature_not_verified`, `certificate_pin_mismatch`, `tool_missing`, `timeout`,
-  `output_oversized`, `invocation_rejected`, `unclassified`, `none`). A match is an observation of the tool's message,
-  not proof of the underlying defect.
+  `output_oversized`, `invocation_rejected`, `password_file_exhausted`, `unclassified`, `none`). A match is an
+  observation of the tool's message, not proof of the underlying defect. The record schema keeps its name: producer
+  and consumer are this one file at one revision, and the record's fields are unchanged.
 - `childExit`/`childSignal` are the inner tool's; the wrapper's own exit (`sign-apk.py`, 1 on any failure) is
   recorded separately by the adapter as `signerWrapperExit`.
 
@@ -112,6 +113,35 @@ tool identity. On failure the refusal reads, for example,
 `malformed`, `oversized`, `tool_identity_mismatch`). A zero wrapper exit without a valid `complete` record is
 refused (`signer_diagnostic_invalid`). The independent signer/scheme/identity/native checks are unchanged and still
 decide success. The record file lives in the adapter's `work/` and is removed with it.
+
+## Exit 2 and the shared password file (MODELS-SIGN-INVOKE-001)
+
+Protected run 41004494974 reported `stage=sign outcome=exit child_exit=2 category=unclassified wrapper_exit=1`. Local
+investigation used the installed build-tools tree, proven file by file equal to the pinned `build-tools_r35_linux.zip`
+(`apksigner.jar` `00ef9948…`). It ran on a non-pinned distro OpenJDK 21, because the pinned AOSP JDK21 tree is not
+available locally.
+
+- **Tool fact (bytecode):** apksigner exits 2 only when `getSignerConfig` cannot load the signer
+  (`Failed to load signer "…"`). Option parsing errors exit 1.
+- **Tool fact (`apksigner sign --help`):** a file named for several passwords is read one line per password, keystore
+  password first, then key password.
+- **Invocation fact:** the adapter sets `storePasswordFile` and `keyPasswordFile` to the same `--password-file`, so
+  `sign-apk.py` passes `--ks-pass file:X --key-pass file:X`. The models-v0 bootstrap writes that passphrase as one line.
+- **Reproduced:** a synthetic RSA-4096 PKCS12 fixture (alias `rose-models`, one single-line passphrase for store and key)
+  signed through the real `sign-apk.py` returns exactly the production token. Separate files, the same file with two
+  lines, and the tool run without `--key-pass` all sign and verify. A wrong alias also exited 2 with `unclassified`, so
+  the production token alone does not prove which of these happened.
+
+The classifier now names these observed messages: `password_file_exhausted` (the key-password read hits end of file),
+the tool's `entry "…" does not contain a key` wording as `alias_not_found`, and a `FileNotFoundException` raised from
+apksigner's `PasswordRetriever` as `password_file_unreadable` (previously misread as `output_write_failed`).
+`RealPinnedTool` in `test_sign_diagnostic.py` replays these cases with the real tool when an installed tree equal to
+the pinned archive members is present, and skips with its reason otherwise.
+
+The invocation itself is not changed here. The narrow fix lies in Infra-owned `scripts/sign-apk.py`: give
+`--key-pass` only when the key password file differs from the store password file. That fix is handed to Infra as an
+exact hunk. Until it lands, the adapter's single-passphrase signing is expected to refuse with
+`password_file_exhausted`.
 
 ## Ownership and cleanup
 

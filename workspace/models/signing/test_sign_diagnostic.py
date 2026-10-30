@@ -46,6 +46,11 @@ if [ "$cmd" = sign ]; then
     signal) leak >&2; kill -9 $$;;
     big) leak >&2; head -c 400000 /dev/zero | tr '\0' 'A' >&2; exit 1;;
     flood) echo $$ > "$d/apksigner.pid"; while :; do leak; leak >&2; done;;
+    eof) echo 'Failed to load signer "signer #1"' >&2
+         echo "java.io.IOException: Failed to read Key \"rose-models\" password for signer #1 : end of file reached in $pw" >&2
+         leak >&2; exit 2;;
+    noalias) leak >&2; echo "Failed to load signer \"signer #1\": $pw.p12 entry \"SENTINEL_TOKEN\" does not contain a key" >&2; exit 2;;
+    pwunreadable) leak >&2; printf 'Failed to load signer "signer #1"\njava.io.FileNotFoundException: %s (Permission denied)\n\tat java.base/java.io.FileInputStream.open0(Native Method)\n\tat com.android.apksigner.PasswordRetriever.getPasswords(PasswordRetriever.java:170)\n' "$pw" >&2; exit 2;;
   esac
 fi
 if [ "$cmd" = verify ]; then
@@ -156,6 +161,9 @@ class SignApkHook(SentinelCase):
             'big': ('sign', 'oversized', None, None, 'output_oversized'),
             'flood': ('sign', 'oversized', None, None, 'output_oversized'),
             'badalign': ('alignment', 'exit', 1, None, 'unclassified'),
+            'eof': ('sign', 'exit', 2, None, 'password_file_exhausted'),
+            'noalias': ('sign', 'exit', 2, None, 'alias_not_found'),
+            'pwunreadable': ('sign', 'exit', 2, None, 'password_file_unreadable'),
         }
         for mode, (stage, outcome, child_exit, child_signal, category) in cases.items():
             with self.subTest(mode):
@@ -276,6 +284,42 @@ class Schema(unittest.TestCase):
         path = tmp / 'good.json'
         path.write_text(json.dumps(record))
         return path
+
+    def test_pinned_tool_messages_classify(self):
+        """Wording observed from build-tools r35 apksigner on synthetic fixtures (MODELS-SIGN-INVOKE-001); the variable
+        parts carry sentinels, which must never reach a record or summary."""
+        p = '/SENTINEL-PATH/SENTINEL_PASSWORD_7c1e'
+        frames = ('\tat com.android.apksigner.SignerParams.loadPrivateKeyAndCertsFromKeyStore(SignerParams.java:354)\n'
+                  '\tat com.android.apksigner.ApkSignerTool.main(ApkSignerTool.java:94)\n')
+        messages = {
+            'password_file_exhausted': 'Failed to load signer "signer #1"\njava.io.IOException: Failed to read Key '
+                                       f'"SENTINEL_TOKEN" password for signer #1 : end of file reached in {p}\n'
+                                       '\tat com.android.apksigner.PasswordRetriever.getPasswords(PasswordRetriever.java:175)\n'
+                                       + frames,
+            'alias_not_found': f'Failed to load signer "signer #1": {p}.p12 entry "SENTINEL_TOKEN" does not contain a key\n',
+            'password_file_unreadable': f'Failed to load signer "signer #1"\njava.io.FileNotFoundException: {p} '
+                                        '(Permission denied)\n\tat java.base/java.io.FileInputStream.open0(Native Method)\n'
+                                        '\tat java.base/java.io.FileInputStream.open(FileInputStream.java:213)\n'
+                                        '\tat java.base/java.io.FileInputStream.<init>(FileInputStream.java:152)\n'
+                                        '\tat com.android.apksigner.PasswordRetriever.getPasswords(PasswordRetriever.java:170)\n'
+                                        + frames,
+            'keystore_password_incorrect': 'Failed to load signer "signer #1"\njava.io.IOException: keystore password was '
+                                           'incorrect\n\tat java.base/sun.security.pkcs12.PKCS12KeyStore.engineLoad('
+                                           'PKCS12KeyStore.java:2112)\n' + frames,
+            # an output-side permission failure, not from PasswordRetriever, keeps its own category
+            'output_write_failed': f'java.nio.file.AccessDeniedException: {p}/signed.apk\n'
+                                   '\tat java.base/sun.nio.fs.UnixException.translateToIOException(UnixException.java:90)\n',
+        }
+        for category, text in messages.items():
+            with self.subTest(category):
+                result = D.Result('exit', 2, None, '', text)
+                self.assertEqual(D.classify(result), category)
+                record = D.record('sign', result, apksigner_jar_sha256='a' * 64)
+                self.assertIsNone(D.validate(record))
+                for sentinel in SENTINELS:
+                    self.assertNotIn(sentinel, json.dumps(record) + D.summary(record, None, 1))
+        self.assertIn('password_file_exhausted', D.CATEGORIES)
+        self.assertEqual(D.classify(D.Result('exit', 2, None, '', 'Failed to load signer "signer #1"\n')), 'unclassified')
 
     def test_classifier_is_fixed_and_bounded(self):
         r = D.Result('exit', 1, None, '', 'java.security.UnrecoverableKeyException: Cannot recover key')
@@ -575,6 +619,134 @@ class CaptureBounds(unittest.TestCase):
                 self.run_child('flood')
         pid = int((self.state / 'starts').read_text().split()[0])
         self.assertRaises(ProcessLookupError, os.kill, pid, 0)
+
+
+# build-tools_r35_linux.zip (SHA-256 bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88) member hashes. The
+# real-tool cases run only against an already installed tree whose files equal these; nothing is downloaded or substituted.
+PINNED_BUILD_TOOLS = {
+    'apksigner': 'b47549e373b895ce6ca620d0c7887e674d9615ffa837a86ac601dcfd04adb0f0',
+    'lib/apksigner.jar': '00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7',
+    'zipalign': 'a205d94a45c8522ca1b571dcbe190df145c818f0a29dfb366e4dd78eef4f56a7',
+    'aapt': '393c4c87f675f9555c50921fb53be1f3893cacd29f2270c4863e2e3f99583c39',
+}
+
+
+def pinned_build_tools():
+    """(build-tools dir, android.jar) of an installed tree matching PINNED_BUILD_TOOLS, else (None, reason)."""
+    roots = [os.environ.get(k) for k in ('ANDROID_SDK_ROOT', 'ANDROID_HOME')] + ['/opt/roseos/android-sdk',
+                                                                                 '/usr/local/lib/android/sdk']
+    for root in dict.fromkeys(filter(None, roots)):
+        for name in ('android-15', '35.0.0'):
+            bt = Path(root) / 'build-tools' / name
+            if all((bt / f).is_file() and D.sha256_file(bt / f) == h for f, h in PINNED_BUILD_TOOLS.items()):
+                jars = sorted(Path(root).glob('platforms/android-3*/android.jar'))
+                if jars:
+                    return bt, jars[-1]
+    return None, 'no installed build-tools tree equals the pinned r35 archive members (no download is attempted)'
+
+
+class RealPinnedTool(unittest.TestCase):
+    """MODELS-SIGN-INVOKE-001: the real pinned apksigner through scripts/sign-apk.py with a disposable synthetic PKCS12
+    fixture (models-v0 recipe shape: RSA-4096, alias rose-models, one single-line passphrase for store and key). The
+    JVM is whatever `java` is on PATH, NOT the pinned AOSP JDK21 tree. A synthetic signature is test evidence only."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bt, android_jar = pinned_build_tools()
+        java = shutil.which('java')
+        if cls.bt is None or not java:
+            raise unittest.SkipTest(android_jar if cls.bt is None else 'no java on PATH')
+        jdk_bin = Path(os.path.realpath(java)).parent
+        if not (jdk_bin / 'keytool').is_file():
+            raise unittest.SkipTest('no keytool beside java')
+        cls.tmp = Path(tempfile.mkdtemp(prefix='invoke-SENTINEL-PATH-'))
+        os.chmod(cls.tmp, 0o700)
+        cls.sdk = cls.tmp / 'sdk'
+        (cls.sdk / 'build-tools').mkdir(parents=True)
+        (cls.sdk / 'build-tools/android-15').symlink_to(cls.bt)  # sign-apk.py's fixed layout
+        cls.env = {'PATH': f'{jdk_bin}:/usr/bin:/bin', 'LC_ALL': 'C', 'HOME': str(cls.tmp), 'ANDROID_SDK_ROOT': str(cls.sdk),
+                   'SENTINEL_ENV': 'SENTINEL_ENV_VALUE'}
+        cls.phrase = 'SENTINEL_PASSWORD_7c1e-' + os.urandom(18).hex()
+        cls.one_line = cls.private('pass-one-line', cls.phrase + '\n')
+        cls.key_line = cls.private('pass-key', cls.phrase + '\n')
+        cls.keystore = cls.tmp / 'ks.p12'
+        cls.tool([str(jdk_bin / 'keytool'), '-genkeypair', '-keystore', str(cls.keystore), '-storetype', 'PKCS12',
+                  '-alias', 'rose-models', '-keyalg', 'RSA', '-keysize', '4096', '-sigalg', 'SHA256withRSA',
+                  '-dname', 'CN=Synthetic Test Fixture Not Rose Models', '-validity', '1',
+                  '-storepass:file', str(cls.one_line), '-keypass:file', str(cls.one_line), '-noprompt'])
+        os.chmod(cls.keystore, 0o600)
+        pem = cls.tool([str(jdk_bin / 'keytool'), '-exportcert', '-alias', 'rose-models', '-keystore', str(cls.keystore),
+                        '-storetype', 'PKCS12', '-storepass:file', str(cls.one_line)]).stdout
+        cls.cert = hashlib.sha256(pem).hexdigest()
+        manifest = cls.private('AndroidManifest.xml', '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                               'package="test.synthetic.invoke" android:versionCode="1" android:versionName="0"><uses-sdk '
+                               'android:minSdkVersion="29"/><application android:hasCode="false"/></manifest>\n')
+        cls.tool([str(cls.bt / 'aapt'), 'package', '-f', '-M', str(manifest), '-I', str(android_jar), '-F', str(cls.tmp / 'u.apk')])
+        cls.tool([str(cls.bt / 'zipalign'), '-p', '-f', '4', str(cls.tmp / 'u.apk'), str(cls.tmp / 'in.apk')])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    @classmethod
+    def private(cls, name, text, mode=0o600):
+        path = cls.tmp / name
+        path.write_text(text)
+        os.chmod(path, mode)
+        return path
+
+    @classmethod
+    def tool(cls, argv):
+        result = subprocess.run(argv, env=cls.env, stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
+        if result.returncode:
+            raise AssertionError(f'fixture step failed: {Path(argv[0]).name}')
+        return result
+
+    def sign(self, name, store, key, alias='rose-models'):
+        config = self.private(f'config-{name}.json', json.dumps({'keyAlias': alias, 'storePasswordFile': str(store),
+                                                                 'keyPasswordFile': str(key)}))
+        diag = self.tmp / f'diag-{name}'
+        diag.mkdir(mode=0o700)
+        out = self.tmp / f'out-{name}' / 'signed.apk'
+        result = subprocess.run([sys.executable, '-I', str(SIGN_APK), str(self.tmp / 'in.apk'), '--keystore', str(self.keystore),
+                                 '--config', str(config), '--output', str(out), '--diagnostic-out', str(diag / 'r.json')],
+                                env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+        record = json.loads((diag / 'r.json').read_text())
+        self.assertIsNone(D.validate(record))
+        self.assertEqual(record['apksignerJarSha256'], PINNED_BUILD_TOOLS['lib/apksigner.jar'])
+        for text in (result.stdout, result.stderr, json.dumps(record)):
+            for sentinel in SENTINELS + (self.phrase, str(self.tmp)):
+                self.assertNotIn(sentinel, text)
+        return result, record, out
+
+    def assertRefused(self, name, store, key, category, alias='rose-models'):
+        result, record, out = self.sign(name, store, key, alias)
+        self.assertEqual((result.returncode, result.stderr), (1, 'APK signing stopped: signing_failed\n'))
+        self.assertEqual((record['stage'], record['outcome'], record['childExit'], record['category']),
+                         ('sign', 'exit', 2, category))
+        self.assertFalse(out.exists())
+
+    def test_production_shape_one_line_file_for_store_and_key_is_password_file_exhausted(self):
+        # apksigner reads a file named by both --ks-pass and --key-pass one line per password (its sign --help).
+        self.assertRefused('same-file', self.one_line, self.one_line, 'password_file_exhausted')
+
+    def test_separate_password_files_sign_and_verify(self):
+        result, record, out = self.sign('separate', self.one_line, self.key_line)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((record['stage'], record['outcome'], record['category']), ('complete', 'ok', 'none'))
+        self.assertEqual(json.loads(result.stdout)['certificateSha256'], [self.cert])
+        verify = subprocess.run([str(self.bt / 'apksigner'), 'verify', str(out)], env=self.env, stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=300)
+        self.assertEqual(verify.returncode, 0)
+
+    def test_missing_alias_is_alias_not_found(self):
+        self.assertRefused('alias', self.one_line, self.key_line, 'alias_not_found', alias='SENTINEL_TOKEN')
+
+    def test_unreadable_password_file_is_password_file_unreadable(self):
+        if os.geteuid() == 0:
+            self.skipTest('root reads a mode-000 file')
+        unreadable = self.private('pass-unreadable', self.phrase + '\n', 0o000)
+        self.assertRefused('unreadable', unreadable, unreadable, 'password_file_unreadable')
 
 
 if __name__ == '__main__':
