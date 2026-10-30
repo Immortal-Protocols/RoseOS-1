@@ -83,6 +83,10 @@ on:
         description: rango-retained only - also publish the verified signed build as a separate public rango-{build} release (never Latest); false signs and verifies only
         type: boolean
         default: false
+      rango_recover_run:
+        description: rango-retained only - packaging-only recovery of this earlier run's already signed and verified outputs (no signer login, signing, enrolment or verification); empty for a normal run
+        required: false
+        default: ''
       rango_first_use_enroll:
         description: rango-retained only, and only if os/retained-rango/release.json selects the first-use identity policy (not selected) - this run enrols the durable first-use identity record; false requires an existing matching record
         type: boolean
@@ -114,6 +118,7 @@ env:
   MODELS_BOOTSTRAP_RUN: ${{ inputs.models_bootstrap_run }}
   ROSE_RANGO_PUBLISH: ${{ inputs.rango_publish }}
   ROSE_FIRST_USE_ENROLL: ${{ inputs.rango_first_use_enroll }}
+  ROSE_RECOVER_RUN: ${{ inputs.rango_recover_run }}
 
 jobs:
   guard:
@@ -157,6 +162,7 @@ jobs:
           # Rango publication is selectable only in its own mode.
           [[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]
           [[ "$MODE" == rango-retained || "${ROSE_FIRST_USE_ENROLL:-false}" == false ]]
+          [[ -z "${ROSE_RECOVER_RUN:-}" || ( "$MODE" == rango-retained && "$ROSE_RECOVER_RUN" =~ ^[1-9][0-9]{0,19}$ && "${ROSE_FIRST_USE_ENROLL:-false}" == false ) ]]
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -193,6 +199,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/rango-provenance"
           python3 scripts/rango-retained.py check-bootstrap-run --out "$RUNNER_TEMP/rango-provenance/first-use-provenance.json"
+          if [[ -n "${ROSE_RECOVER_RUN:-}" ]]; then
+            python3 scripts/rango-retained.py check-recovery-run --run-id "$ROSE_RECOVER_RUN" --out "$RUNNER_TEMP/rango-provenance/recovery-evidence.json"
+          fi
       - name: Hand the provenance receipt to the Rango builder
         if: inputs.mode == 'rango-retained'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -935,25 +944,36 @@ jobs:
         with:
           name: rango-first-use-provenance-${{ github.run_id }}
           path: ${{ runner.temp }}/rango-provenance
-      - run: echo "ROSE_FIRST_USE_PROVENANCE=$RUNNER_TEMP/rango-provenance/first-use-provenance.json" >> "$GITHUB_ENV"
+      - run: |
+          echo "ROSE_FIRST_USE_PROVENANCE=$RUNNER_TEMP/rango-provenance/first-use-provenance.json" >> "$GITHUB_ENV"
+          echo "ROSE_RECOVERY_EVIDENCE=$RUNNER_TEMP/rango-provenance/recovery-evidence.json" >> "$GITHUB_ENV"
+          echo "RANGO_RELEASE_DIR=$RUNNER_TEMP/${ROSE_RECOVER_RUN:+rango-recovery-}rango-release" >> "$GITHUB_ENV"
       - name: Retained input, signer, tool and publication bindings (before any login)
         run: python3 scripts/rango-retained.py preflight --job builder
       - name: Stage the retained input into a fresh consumer directory
         run: python3 scripts/rango-retained.py stage --consumer "$RUNNER_TEMP/rango-consumer"
       # OCT30-INFRA-S017: the admitted S016 helper proves the four Fold tools under the shared lock, before any login.
       - name: Local tool proof (before any login)
+        if: inputs.rango_recover_run == ''
         run: python3 scripts/rango-retained.py prove --proof-dir "$RUNNER_TEMP/rango-proof"
       - name: Signer access for Rango OS signing only
+        if: inputs.rango_recover_run == ''
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Sign under the shared lock
+        if: inputs.rango_recover_run == ''
         run: python3 scripts/rango-retained.py sign --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RUNNER_TEMP/rango-release" --proof-file "$RUNNER_TEMP/rango-proof/fold-tool-proof.json"
       - name: Drop signer access
         if: always()
         run: python3 scripts/actions-gcp-login.py logout
       - name: Verify the signed candidate
+        if: inputs.rango_recover_run == ''
         run: python3 scripts/rango-retained.py verify --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RUNNER_TEMP/rango-release"
+      # Packaging-only recovery: the named run's durable signed outputs, matched to the signed marker and first-use identity.
+      - name: Recover the already signed and verified outputs (no login, signing or verification)
+        if: inputs.rango_recover_run != ''
+        run: python3 scripts/rango-retained.py recover --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RANGO_RELEASE_DIR"
       - name: Stage only public files and receipts
-        run: python3 scripts/rango-retained.py stage-artifact --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RUNNER_TEMP/rango-release" --artifact-dir "$RUNNER_TEMP/rango-artifact"
+        run: python3 scripts/rango-retained.py stage-artifact --consumer "$RUNNER_TEMP/rango-consumer" --release-dir "$RANGO_RELEASE_DIR" --artifact-dir "$RUNNER_TEMP/rango-artifact"
       - name: Transfer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

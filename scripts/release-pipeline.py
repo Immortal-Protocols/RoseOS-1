@@ -1148,7 +1148,8 @@ def stage_artifact(a, config, cand, adapter):
     write_identities(config, artifact/'expected-identities.json', apps)
     resolved = release_dir/'resolved-manifest.xml'
     manifest_tool('create', '--source-revision', cand['sha'], '--resolved-manifest', resolved, '--device', device,
-        '--variant', config['target']['variant'], '--channel', cand['channel'], '--build-number', build,
+        '--variant', config['target']['variant'], '--channel', cand['channel'],
+        '--feed-channel', config['publication']['channels'][cand['channel']]['feedChannel'], '--build-number', build,
         '--build-timestamp', cand['timestamp'], '--identities', artifact/'expected-identities.json',
         '--output', artifact/'manifest.json', *[x for n in sorted(os.listdir(assets)) for x in ('--asset', assets/n)])
     release_receipts.write_once(artifact/'pipeline-receipt.json', {'receiptType': 'builder-transfer', 'candidate': cand,
