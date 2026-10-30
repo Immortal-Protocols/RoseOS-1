@@ -296,11 +296,13 @@ class Retained(unittest.TestCase):
         report = assess(obs, now='2026-10-29T06:40:00Z')
         self.assertEqual(report['verdict'], 'BLOCKED')
         got = set(codes(report))
+        # binding-contract: the retained receipt names the contract as it was then; os/devices/pixel10.json has since
+        # declared packages/apps/Launcher3 (#156), so the old binding is truthfully stale. Its hash is not rebound.
         for code in ('operation-all-devices', 'operation-device-arg', 'binding-recipe', 'binding-source-root',
                 'factory-absent', 'collision-unknown', 'tool-usability-unknown', 'node-unknown', 'manifest-mismatch',
-                'space-estimate-proxy'):
+                'space-estimate-proxy', 'binding-contract'):
             self.assertIn(code, got)
-        for code in ('pin-mismatch', 'pin-unknown', 'deps-revision-mismatch', 'collision-occupied', 'binding-contract',
+        for code in ('pin-mismatch', 'pin-unknown', 'deps-revision-mismatch', 'collision-occupied',
                 'binding-inconsistent', 'space-free-not-available', 'tool-not-executable', 'manifest-pin-stale'):
             self.assertNotIn(code, got)
         self.assertEqual(report['tools'], {'expected': 14, 'executableMetadata': 14, 'usabilityDemonstrated': 0})
