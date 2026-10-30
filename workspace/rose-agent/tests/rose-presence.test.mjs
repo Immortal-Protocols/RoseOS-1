@@ -37,8 +37,9 @@ test('the renderer is visual only and suspends when not visible',()=>{
 });
 
 test('voice, results, Watch/Stop, notices and Update Rose Agent are unchanged',()=>{
- assert.match(activity,/primary\.show\(state\.muted\?"🔇":"🎙",state\.muted\?"Unmute":"Mute"/);
- assert.match(activity,/primary\.show\("🎙","Speak","Start voice conversation"\)/);assert.match(activity,/end\.available\(state\.canEnd\(\)\)/);
+ assert.match(activity,/ConversationPresentation\.Glyph glyph=ConversationPresentation\.primary\(state\);/);
+ assert.match(activity,/primary\.show\(glyph,state\.muted\?"Unmute":"Mute",state\.muted\?"Microphone muted\. Unmute":"Microphone on\. Mute"\)/);
+ assert.match(activity,/primary\.show\(glyph,"Speak","Start voice conversation"\)/);assert.match(activity,/primary\.show\(glyph,"Cancel","Cancel voice connection"\)/);assert.match(activity,/end\.available\(state\.canEnd\(\)\)/);
  assert.match(activity,/setOnClickListener\(v->openWorkspace\(\)\)/);assert.match(activity,/setPositiveButton\("Stop task",\(d,w\)->sendStop\(id\)\)/);
  assert.match(activity,/add\("Update Rose Agent"\)\.setOnMenuItemClickListener\(i->\{checkForUpdate\(\);return true;\}\)/);
  assert.match(activity,/presentedScroll\.setVisibility\(t\.visible\?View\.VISIBLE:View\.GONE\)/,'results stay empty when absent');
@@ -48,10 +49,24 @@ test('voice, results, Watch/Stop, notices and Update Rose Agent are unchanged',(
 test('HiFi composition: header, caption, results type and the three-well tray with the real workspace route',()=>{
  assert.match(activity,/head\.setText\("Rose"\);head\.setAccessibilityHeading\(true\)/);
  assert.match(activity,/caption\.setImportantForAccessibility\(View\.IMPORTANT_FOR_ACCESSIBILITY_NO\)/,'the caption is not a notice or a second announcement');
- assert.match(activity,/int size=dp\(t\.visible\?88:220\)/,'Rose is large without a result and compact beside its caption with one');
- assert.match(activity,/taskTitle=presentedText\(40,ink\(\)/);assert.match(activity,/taskBody=presentedText\(20,ink2\(\)/);
- assert.match(activity,/agents\.show\("▦","Rose's apps","View this task's background workspace"\);agents\.setOnClickListener\(v->openWorkspace\(\)\);agents\.available\(false\)/,
+ assert.match(activity,/ConversationPresentation\.of\([^;]*,t\.visible,cfg\.fontScale\)/,'Rose is large without a result and compact beside its caption with one (ConversationPresentationTest)');
+ assert.match(activity,/taskTitle=presentedText\(ConversationPresentation\.TITLE_SP,ink\(\)/);assert.match(activity,/taskBody=presentedText\(ConversationPresentation\.BODY_SP,ink2\(\)/);
+ assert.match(activity,/agents\.show\(ConversationPresentation\.Glyph\.APPS,"Rose's apps","View this task's background workspace"\);agents\.setOnClickListener\(v->openWorkspace\(\)\);agents\.available\(false\)/,
   'Rose\'s apps opens the existing bound workspace route and starts disabled');
  assert.match(activity,/agents\.available\(canWatch\)/);assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";agents\.available\(false\);return;\}/,'enabled only for a watchable shown task');
  assert.ok(!/Interrupt|EditText/.test(activity),'no composer or Interrupt in the tray');
+});
+
+test('#159: ivory reading surface, shared layout decisions and legible drawn tray glyphs',()=>{
+ const drawing=source('ConversationDrawing.java'),presentation=source('ConversationPresentation.java');
+ assert.match(activity,/if\(ivory\)root\.setBackground\(new ConversationDrawing\.IvoryBackground\(this\)\);else root\.setBackgroundColor\(paper\(\)\);/,'HiFi ivory surface in light mode, dark unchanged');
+ assert.match(drawing,/0xfff7f9fc,0xffeef3f9/,'HiFi .ivory-bg gradient');assert.match(drawing,/R\.drawable\.rose_home_wallpaper/,'existing wallpaper reused read-only, not duplicated');
+ assert.match(activity,/ConversationPresentation lay=ConversationPresentation\.of\(/,'stage and type come from the tested layout');
+ assert.match(activity,/int size=dp\(lay\.stage\)/);assert.match(activity,/taskTitle\.setTextSize\(lay\.titleSp\);taskBody\.setTextSize\(lay\.bodySp\);/);
+ assert.match(activity,/cp\.bottomMargin=dp\(ConversationPresentation\.reservedBottom\(\)\)/,'results end above the tray');
+ assert.match(activity,/end\.show\(ConversationPresentation\.Glyph\.END,"End call","End voice conversation"\)/);
+ assert.ok(![...activity.matchAll(/(?:primary|end|agents)\.show\(([^,]+),/g)].some(m=>/"/.test(m[1])),'tray wells take a drawn glyph, never an emoji string');
+ for(const g of ['MIC','MIC_OFF','END','CANCEL','APPS'])assert.match(drawing,new RegExp('case '+g+'[:,]'),g+' is drawn');
+ assert.match(drawing,/setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\)/,'icons are decorative; wells keep their spoken names');
+ assert.match(presentation,/HEAD_SP=30,TITLE_SP=44,BODY_SP=21,CAPTION_SP=15/);
 });
