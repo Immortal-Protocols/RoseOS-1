@@ -11,6 +11,12 @@ package dev.pixel.voice;
  * close the overview it just opened. One request is in flight until Home leaves the foreground (onPause:
  * the overview covered Home) or, if the system accepted it but nothing happened, until SETTLE_MS passes.
  * One instance lives as long as its MainActivity; tray rebuilds keep it, a recreated activity starts clear.
+ *
+ * #156: an accepted request that leaves Home showing used to say nothing. Each accepted request now has a token;
+ * SETTLE_MS later, if that same request is still the one in flight and Home never left, the owner gets one truthful
+ * notice that the overview was not confirmed. Home leaving (pause), the activity going away (cancel) or a newer
+ * request make the old token stale, so it says nothing. Not leaving Home is not proof of why: the notice claims
+ * only what this app observed, and nothing is retried, toggled, enabled or opened instead.
  * Pure logic, no Android types. */
 final class HomeOverview {
  static final long SETTLE_MS = 1500;
@@ -22,7 +28,7 @@ final class HomeOverview {
 
  enum Result { REQUESTED, IN_FLIGHT, UNAVAILABLE, FAILED }
 
- private long requestedAt = Long.MIN_VALUE;
+ private long requestedAt = Long.MIN_VALUE, token;
  private boolean inFlight;
 
  Result request(long nowMs, Route route) {
@@ -33,13 +39,35 @@ final class HomeOverview {
   if (!accepted) return Result.FAILED;
   inFlight = true;
   requestedAt = nowMs;
+  token++;
   return Result.REQUESTED;
  }
 
- /** Home left the foreground; the next tap after returning is a new request. */
+ /** The token of the request just made (valid after REQUESTED): hand it to the SETTLE_MS check. */
+ long token() {
+  return token;
+ }
+
+ /** SETTLE_MS after the request with this token: the one notice if it is still in flight and Home never left,
+  * else null. It is said at most once per request, and it ends that request so the next tap is a new one. */
+ String unconfirmed(long requestToken, long nowMs) {
+  if (!inFlight || requestToken != token || nowMs - requestedAt < SETTLE_MS) return null;
+  inFlight = false;
+  return UNCONFIRMED;
+ }
+
+ /** Home left the foreground; the next tap after returning is a new request, and a pending check says nothing. */
  void homeLeft() {
   inFlight = false;
  }
+
+ /** The activity is going away: nothing pending may speak. */
+ void cancel() {
+  inFlight = false;
+  token++;
+ }
+
+ static final String UNCONFIRMED = "The overview didn’t open here. Home is still showing.";
 
  /** What the overview well says: the action when the route is available, the reason when it is not. */
  static String describe(boolean available) {

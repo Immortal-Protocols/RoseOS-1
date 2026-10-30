@@ -516,7 +516,11 @@ public class MainActivity extends Activity {
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
  // The tray's overview well: the system task overview through the owner-enabled phone-controls service only (HomeOverview).
  static boolean overviewAvailable(){return PhoneAccessibility.active!=null;}
- void openOverview(){String notice=HomeOverview.notice(homeOverview.request(SystemClock.elapsedRealtime(),()->{PhoneAccessibility a=PhoneAccessibility.active;return a==null?null:a.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS);}));if(notice!=null)Toast.makeText(this,notice,Toast.LENGTH_SHORT).show();}
+ void openOverview(){HomeOverview.Result result=homeOverview.request(SystemClock.elapsedRealtime(),()->{PhoneAccessibility a=PhoneAccessibility.active;return a==null?null:a.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS);});String notice=HomeOverview.notice(result);if(notice!=null)Toast.makeText(this,notice,Toast.LENGTH_SHORT).show();if(result==HomeOverview.Result.REQUESTED)checkOverviewLater(homeOverview.token());}
+ /** #156: SETTLE_MS after an accepted request, one notice if that request is still pending and Home never left
+  * (HomeOverview.unconfirmed). Pause, destroy or a newer request make it say nothing; it never retries. */
+ Runnable overviewCheck;
+ void checkOverviewLater(long token){if(overviewCheck!=null)handler.removeCallbacks(overviewCheck);overviewCheck=()->{overviewCheck=null;if(isFinishing()||isDestroyed())return;String n=homeOverview.unconfirmed(token,SystemClock.elapsedRealtime());if(n!=null)Toast.makeText(this,n,Toast.LENGTH_SHORT).show();};handler.postDelayed(overviewCheck,HomeOverview.SETTLE_MS);}
  /** HOME shows Rose Home; the app icon also opens the Rose conversation over it (HomeEntry). Never changes the HOME choice or voice. */
  /** #223: the legacy voice controls (composer, Mac screen, visual cards and the Home options) are not a Home page.
   * They open over Home only on request, from the Home options or the conversation's Settings; Back or HOME closes
@@ -557,7 +561,7 @@ public class MainActivity extends Activity {
   if(macPanel!=null){macPanel.destroy();macPanel=null;}
   if(screenDetail!=null&&screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
  }
- @Override protected void onDestroy(){if(homeTray!=null)homeTray.release();if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
+ @Override protected void onDestroy(){if(homeTray!=null)homeTray.release();homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}
