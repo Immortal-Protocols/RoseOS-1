@@ -11,6 +11,10 @@ final class AuthMessages {
                 return "This phone's sign-in was revoked. Settings → Reset sign-in to enroll again.";
             case "auth_refused":
                 return "The Muse Glimmer service is not accepting this phone right now. Settings → Reset sign-in to try again.";
+            case "auth_invite_needed":
+                return "Scan the sign-in QR code from your admin to connect this phone.";
+            case "auth_invite_invalid":
+                return "That sign-in code was not accepted (used, expired or unknown). Scan a new code.";
             case "auth_rate_limited":
                 return "The service is busy signing in phones. Try again shortly.";
             case "auth_unavailable":
