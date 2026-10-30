@@ -11,6 +11,9 @@ on:
       - 'scripts/release-chain.py'
       - 'scripts/signing-job.py'
       - 'scripts/tests/test_signing_*.py'
+      - '.github/workflows/os-sign.yml'
+      - 'scripts/tests/test_os_sign_workflow.py'
+      - '.github/actionlint.yaml'
       - 'scripts/rango-retained.py'
       - 'os/retained-rango/**'
       - 'scripts/actions-gcp-login.py'
@@ -101,6 +104,9 @@ on:
       - 'scripts/release-chain.py'
       - 'scripts/signing-job.py'
       - 'scripts/tests/test_signing_*.py'
+      - '.github/workflows/os-sign.yml'
+      - 'scripts/tests/test_os_sign_workflow.py'
+      - '.github/actionlint.yaml'
       - 'scripts/rango-retained.py'
       - 'os/retained-rango/**'
       - 'scripts/actions-gcp-login.py'
@@ -217,6 +223,7 @@ jobs:
           python3 scripts/tests/test_release_acceptance.py
           python3 scripts/tests/test_signing_job.py
           python3 scripts/tests/test_signing_acceptance.py
+          python3 scripts/tests/test_os_sign_workflow.py
           python3 scripts/tests/test_rango_retained.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py

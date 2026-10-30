@@ -4,3 +4,5 @@ self-hosted-runner:
     - roseos-frankel-builder
     # Proposed runtime runner on pixel-os-smoke-20261023-a, group roseos-alpha-runtime (INFRA-ALPHA-120; not registered).
     - roseos-cuttlefish-runtime
+    # Dedicated signer runner, group roseos-signing (SIGN-021 .github/workflows/os-sign.yml).
+    - roseos-dedicated-signer

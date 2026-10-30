@@ -216,5 +216,18 @@ class Workflow(unittest.TestCase):
         self.assertIn('  CAMPAIGN: ${{ inputs.campaign }}\n', WORKFLOW)
 
 
+class RunnerLabels(unittest.TestCase):
+    def test_every_self_hosted_label_is_declared_for_actionlint(self):
+        declared = set(re.findall(r'(?m)^    - ([\w-]+)$', (ROOT/'.github/actionlint.yaml').read_text()))
+        builtin = {'self-hosted', 'linux', 'x64', 'ubuntu-24.04'}
+        used = set()
+        for path in (ROOT/'.github/workflows').glob('*.yml'):
+            text = path.read_text()
+            for flow in re.findall(r'runs-on: \[([^\]]+)\]', text) + re.findall(r'labels: \[([^\]]+)\]', text):
+                used |= {label.strip() for label in flow.split(',')}
+        self.assertIn('roseos-dedicated-signer', used)
+        self.assertEqual(used - builtin - declared, set())
+
+
 if __name__ == '__main__':
     unittest.main()
