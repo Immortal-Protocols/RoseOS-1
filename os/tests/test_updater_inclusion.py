@@ -63,6 +63,9 @@ class UpdaterInclusionTest(unittest.TestCase):
         (root/'os/pinned-manifest.xml').write_text(manifest)
         (root/'os/patches/frameworks-base.patch').write_text(
             'diff --git a/stub.txt b/stub.txt\n--- a/stub.txt\n+++ b/stub.txt\n@@ -1 +1 @@\n-upstream\n+patched\n')
+        # The framework self-update patch (#202) is covered by test_rose_agent_self_update.py; stub it here the same way.
+        (root/'os/patches/rose-agent-self-update-frameworks-base.patch').write_text(
+            'diff --git a/stub.txt b/stub.txt\n--- a/stub.txt\n+++ b/stub.txt\n@@ -1 +1 @@\n-patched\n+patched self-update\n')
         # Keep only the real channel patch's config.xml hunk; its Java and other resources are covered elsewhere.
         channels = (ROOT/'os/patches/updater-rose-channels.patch').read_text()
         config = 'diff --git a/res/values/config.xml' + channels.split('diff --git a/res/values/config.xml', 1)[1].split('\ndiff --git ', 1)[0] + '\n'
