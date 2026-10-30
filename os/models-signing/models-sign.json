@@ -4,8 +4,14 @@
   "note": "OCT30-INFRA-S013: protected signing of the retained unsigned Models APK by scripts/host-models-sign.py through the PR #149 adapter. Nothing here generates or imports keys; it reads the exact secret versions the protected models-v0 bootstrap committed.",
   "adapterProfile": "workspace/models/signing/profile.json",
   "input": {
-    "admittedDirectory": null,
-    "basis": "Input ingress is a separate admission: only an explicitly admitted retained directory on the original builder is accepted. While this is null every run refuses input_unavailable before any host or secret access; no download or alternate route exists here."
+    "ingress": "guard",
+    "workflowPath": ".github/workflows/models-android.yml",
+    "artifactName": "rose-models-unsigned-{source12}-run{run}-{attempt}",
+    "archiveBytes": 742487,
+    "archiveSha256": "237923ba305e9b17d2276be95ed0d947926a7638cb028400935ce36b151fe1ef",
+    "handoffArtifact": "models-input-{run}",
+    "limits": {"memberBytes": 67108864, "totalBytes": 134217728},
+    "basis": "S013 selected ingress: only the original unsigned input the PR #149 profile pins (source, push/main, run, attempt), read by the hosted guard with its existing actions: read job token, validated by scripts/models-input-ingress.py before the controller starts, handed to the signing job as a same-run artifact and rechecked there before any secret access. No other run, artifact, URL, credential or permission is accepted."
   },
   "sdk": {
     "root": "/home/pixelbuild/rose-actions/tools/android-sdk",

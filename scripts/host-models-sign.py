@@ -3,20 +3,24 @@
 
 Signs dev.pixel.models only through the PR #149 adapter (workspace/models/signing/models_signing.py) with the
 dedicated identity the protected models-v0 bootstrap committed. It never generates or imports keys, downloads input,
-publishes or installs.
+publishes or installs; input arrives only through scripts/models-input-ingress.py.
 
   check-receipt --receipt-dir D --run-id N   hosted guard: the bootstrap run's public receipt must record a complete
                                              models-v0 bootstrap: committed numeric version of each Models secret,
                                              public certificate, alias and contract, pinned JDK tree proof, cleanup
                                              done, no recovery needed, and a recipe on main.
-  preflight --receipt-dir D                  builder, before any login: the admitted input directory holds exactly the
-                                             six pinned files (else input_unavailable); the on-host bootstrap journal
+  preflight --receipt-dir D --input-dir I --ingress-receipt R
+                                             builder, before any login: the guard-verified input handed to this run
+                                             holds exactly the six pinned files equal to the profile and the guard's
+                                             ingress receipt (else input_unavailable); the on-host bootstrap journal
                                              agrees with the receipt (versions, certificate, alias); the retained SDK
                                              archive has its pinned sha256 and its android-15 subtree equals the
                                              installed build-tools/android-15 file by file; the JDK21 tree equals the
                                              models-v0 pin.
-  run --receipt-dir D --output-dir O         builder, after signer login, under the shared lock: the same proofs again,
-                                             then exactly the committed secret versions into owner-only RAM, the
+  run --receipt-dir D --output-dir O --input-dir I --ingress-receipt R
+                                             builder, after signer login, under the shared lock: the same proofs again,
+                                             the adapter's input binding with the proven aapt, then exactly the
+                                             committed secret versions into owner-only RAM, the
                                              keystore certificate (pinned keytool, password file) must equal the
                                              bootstrap certificate before signing, then the adapter signs with an
                                              ephemeral profile bound only from these proofs and checks the final signer
@@ -161,23 +165,14 @@ def check_journal(home, binding):
 
 # ---------------------------------------------------------------- input and tool proofs
 
-def check_input(adapter_profile, cfg=None):
-    """Exactly the six retained files with the profile's hashes, in the admitted directory; else input_unavailable."""
-    cfg = cfg or config()
-    directory = cfg['input']['admittedDirectory']
-    if not directory:
-        raise Refused('input_unavailable: no admitted retained input directory is configured')
-    base = Path(directory)
-    if not base.is_absolute() or os.path.realpath(base) != str(base) or not base.is_dir():
-        raise Refused('input_unavailable: the admitted directory is missing or not a plain directory')
-    if sorted(os.listdir(base)) != sorted(INPUT_FILES):
-        raise Refused('input_unavailable: the admitted directory does not hold exactly the six retained files')
-    expected = adapter_profile['expectedInput']
-    for name, key in INPUT_FILES.items():
-        digest = sha256_file(base/name)
-        if key and digest != expected[key]:
-            raise Refused(f'input_changed: {name} differs from the bound input')
-    return base
+def check_input(input_dir, ingress_receipt, consumer_run=None):
+    """The guard-verified original input, rechecked after the same-run handoff: exactly the six files, each equal to
+    the profile and to the guard's ingress receipt for this run; else input_unavailable / input_changed."""
+    ingress = load('models_input_ingress', ROOT/'scripts/models-input-ingress.py')
+    try:
+        return ingress.recheck(input_dir, ingress_receipt, consumer_run or os.environ.get('GITHUB_RUN_ID'))
+    except ingress.Refused as error:
+        raise Refused(str(error)) from None
 
 
 def _member_link(info):
@@ -266,15 +261,15 @@ def java_environment(jdk_home):
     return {k: os.environ[k] for k in ('PATH', 'JAVA_HOME', 'LC_ALL')}
 
 
-def preflight(receipt_dir, home=None, tree_fn=None):
+def preflight(receipt_dir, input_dir=None, ingress_receipt=None, home=None, tree_fn=None):
     adapter = json.loads((ROOT/config()['adapterProfile']).read_text())
     binding = check_receipt(receipt_dir, os.environ.get('MODELS_BOOTSTRAP_RUN', 'unrecorded'))
-    directory = check_input(adapter)
+    ingress = check_input(input_dir, ingress_receipt)
     journal = check_journal(home or os.environ['HOME'], binding)
     tools = archive_proof()
     jdk = jdk_proof(tree_fn)
-    return {'adapterProfile': adapter, 'binding': binding, 'input': str(directory), 'journalSha256': journal,
-        'tools': tools, 'jdk': jdk}
+    return {'adapterProfile': adapter, 'binding': binding, 'input': ingress['directory'], 'ingress': ingress,
+        'journalSha256': journal, 'tools': tools, 'jdk': jdk}
 
 
 # ---------------------------------------------------------------- run
@@ -312,14 +307,22 @@ def shared_lock():
         os.close(fd)
 
 
-def run(receipt_dir, output_dir, home=None, tree_fn=None, fetch=host_secrets.fetch_secret, keytool_runner=subprocess.run,
-        adapter=None, lock=shared_lock, private_directory=host_secrets.private_directory):
+def run(receipt_dir, output_dir, input_dir=None, ingress_receipt=None, home=None, tree_fn=None, fetch=host_secrets.fetch_secret,
+        keytool_runner=subprocess.run, adapter=None, lock=shared_lock, private_directory=host_secrets.private_directory,
+        run_tool=subprocess.run):
     with lock():
-        checked = preflight(receipt_dir, home, tree_fn)
+        checked = preflight(receipt_dir, input_dir, ingress_receipt, home, tree_fn)
         bootstrap = models_profile()
         binding, tools = checked['binding'], checked['tools']
         adapter = adapter or load('models_signing_adapter', ROOT/'workspace/models/signing/models_signing.py')
         env = java_environment(checked['jdk']['root'])
+        profile = bound_profile(checked['adapterProfile'], binding, tools)
+        # Before any secret: the adapter's own input binding, now with the archive-proven aapt (badging included).
+        try:
+            adapter.verify_input(profile, checked['input'], run_tool=run_tool,
+                aapt=Path(config()['sdk']['root'])/config()['sdk']['installedDirectory']/'aapt')
+        except adapter.Refused as error:
+            raise Refused(f'input_binding: {error}')
         with private_directory('rose-models-sign-') as private:
             keystore = fetch(bootstrap['project'], bootstrap['secrets']['keys'], binding['versions']['keys'], private/'keystore.p12')
             password = fetch(bootstrap['project'], bootstrap['secrets']['passphrase'], binding['versions']['passphrase'],
@@ -328,12 +331,13 @@ def run(receipt_dir, output_dir, home=None, tree_fn=None, fetch=host_secrets.fet
                 keytool_runner)
             if observed != binding['certificateSha256']:
                 raise Refused('signer_mismatch: the fetched keystore is not the bootstrap certificate')
-            profile = bound_profile(checked['adapterProfile'], binding, tools)
             try:
                 receipt = adapter.sign(profile, checked['input'], output_dir, keystore, password, config()['sdk']['root'])
             except adapter.Refused as error:
                 raise Refused(f'adapter_refused: {error}')
     public = {'schema': 'roseos.models-sign-receipt.v1', 'adapterReceipt': receipt,
+        'input': {'ingressReceiptSha256': checked['ingress']['receiptSha256'], 'files': checked['ingress']['files'],
+            'original': checked['ingress']['original']},
         'bootstrap': {'runId': binding['runId'], 'recipeSha': binding['recipeSha'], 'receiptSha256': binding['receiptSha256'],
             'journalSha256': checked['journalSha256'], 'versions': binding['versions'], 'certificateSha256': binding['certificateSha256'],
             'alias': binding['alias']},
@@ -357,6 +361,9 @@ def main(argv=None):
     r = sub.add_parser('run')
     r.add_argument('--receipt-dir', required=True)
     r.add_argument('--output-dir', required=True)
+    for command in (p, r):
+        command.add_argument('--input-dir')
+        command.add_argument('--ingress-receipt')
     args = parser.parse_args(argv)
     try:
         if args.command == 'check-receipt':
@@ -367,10 +374,11 @@ def main(argv=None):
                 capture_output=True).returncode == 0
             result = check_receipt(args.receipt_dir, args.run_id, is_on_main=on_main)
         elif args.command == 'preflight':
-            checked = preflight(args.receipt_dir)
+            checked = preflight(args.receipt_dir, args.input_dir, args.ingress_receipt)
             result = {k: checked[k] for k in ('binding', 'journalSha256', 'tools', 'jdk')}
+            result['input'] = checked['ingress']['files']
         else:
-            result = run(args.receipt_dir, args.output_dir)
+            result = run(args.receipt_dir, args.output_dir, args.input_dir, args.ingress_receipt)
     except Refused as error:
         print(f'refused: {error}', file=sys.stderr)
         return 1

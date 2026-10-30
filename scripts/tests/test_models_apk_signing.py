@@ -2,7 +2,8 @@
 
 Synthetic, non-secret fixtures only: a hand-made zip stands in for the Google build-tools archive, input files are
 placeholder bytes, the bootstrap receipt and journal are synthetic, keytool, secret fetching and the PR #149 adapter
-are mocked. No key, signature, host, secret, API or network use."""
+are mocked, and the Actions API answers and archive download of the original-input ingress are mocked. No key,
+signature, host, secret, API or network use."""
 import contextlib
 import copy
 import hashlib
@@ -128,44 +129,245 @@ class Receipt(unittest.TestCase):
             hms.check_journal(home, binding)
 
 
-class Input(unittest.TestCase):
-    def setup(self):
-        t = Tmp(self)
-        d = t.root/'admitted'
-        d.mkdir()
-        profile = json.loads((ROOT/'workspace/models/signing/profile.json').read_text())
+sys.path.insert(0, str(ROOT/'workspace/models/signing'))
+import test_models_signing as adapter_fixtures  # noqa: E402  (PR #149 synthetic artifact shape)
+ispec = importlib.util.spec_from_file_location('models_input_ingress', SCRIPTS/'models-input-ingress.py')
+ingress = importlib.util.module_from_spec(ispec)
+ispec.loader.exec_module(ingress)
+REPO = 'Immortal-Protocols/RoseOS-1'
+TOKEN = 'ghs_synthetic_job_token_placeholder'
+NOW = __import__('datetime').datetime(2026, 10, 30, 3, 0, tzinfo=__import__('datetime').timezone.utc)
+BLOB = 'https://productionresultssa0.blob.core.windows.net/actions-results/synthetic?sig=placeholder'
+
+
+def archive_bytes(files, extra=(), link=None, duplicate=None):
+    buf = __import__('io').BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        for name, body in list(files.items()) + list(extra):
+            z.writestr(zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0)), body)
+        if link:
+            info = zipfile.ZipInfo(link, (2026, 1, 1, 0, 0, 0))
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            z.writestr(info, 'rose-models-unsigned.apk')
+        if duplicate:
+            with __import__('warnings').catch_warnings():
+                __import__('warnings').simplefilter('ignore')
+                z.writestr(zipfile.ZipInfo(duplicate, (2026, 1, 1, 0, 0, 0)), b'again')
+    return buf.getvalue()
+
+
+class Original:
+    """A synthetic original: the PR #149 artifact shape, a profile pinned to it and mocked Actions API answers."""
+
+    def __init__(self, test):
+        self.t = Tmp(test)
+        art = adapter_fixtures.make_artifact(self.t.root/'original')
+        self.files = {p.name: p.read_bytes() for p in art.iterdir()}
+        fields = adapter_fixtures.ms._receipt_fields(art/'artifact-receipt.txt')
+        self.profile = json.loads((ROOT/'workspace/models/signing/profile.json').read_text())
+        exp = self.profile['expectedInput']
+        for key, field in adapter_fixtures.ms.RECEIPT_BINDING.items():
+            exp[field] = fields[key]
         for name, key in hms.INPUT_FILES.items():
-            (d/name).write_bytes(f'synthetic {name}'.encode())
             if key:
-                profile['expectedInput'][key] = hashlib.sha256(f'synthetic {name}'.encode()).hexdigest()
-        cfg = copy.deepcopy(hms.config())
-        cfg['input']['admittedDirectory'] = str(d)
-        return d, profile, cfg
+                exp[key] = hashlib.sha256(self.files[name]).hexdigest()
+        self.data = archive_bytes(self.files)
+        self.cfg = copy.deepcopy(hms.config())
+        self.cfg['input'].update(archiveBytes=len(self.data), archiveSha256=hashlib.sha256(self.data).hexdigest())
+        self.want = ingress.original(self.cfg, self.profile)
+        self.run = {'id': int(exp['runId']), 'run_attempt': 1, 'head_sha': exp['sourceSha'], 'event': 'push', 'head_branch': 'main',
+            'path': '.github/workflows/models-android.yml', 'status': 'completed', 'conclusion': 'success',
+            'repository': {'id': 7, 'full_name': REPO}, 'head_repository': {'id': 7, 'full_name': REPO}}
+        self.artifact = {'id': 99, 'name': self.want['artifactName'], 'expired': False, 'expires_at': '2026-11-05T21:44:00Z',
+            'size_in_bytes': len(self.data), 'digest': 'sha256:' + hashlib.sha256(self.data).hexdigest(),
+            'workflow_run': {'id': int(exp['runId']), 'head_sha': exp['sourceSha'], 'repository_id': 7, 'head_repository_id': 7}}
+        self.calls, self.downloads = [], []
 
-    def test_exact_six_files_pass_and_drift_refuses(self):
-        d, profile, cfg = self.setup()
-        self.assertEqual(hms.check_input(profile, cfg), d)
-        (d/'librose_chat_android.so').write_bytes(b'drifted')
-        with self.assertRaisesRegex(hms.Refused, 'input_changed'):
-            hms.check_input(profile, cfg)
+    def http(self, path, token, api_url):
+        self.calls.append((path, token == TOKEN, api_url))
+        base = f'/repos/{REPO}/actions'
+        if path == f"{base}/runs/{self.want['runId']}":
+            return 200, {}, json.dumps(self.run).encode()
+        if path.startswith(f"{base}/runs/{self.want['runId']}/artifacts?"):
+            return 200, {}, json.dumps({'artifacts': [self.artifact]}).encode()
+        if path == f"{base}/artifacts/{self.artifact['id']}/zip":
+            return 302, {'Location': BLOB}, b''
+        return 404, {}, b''
 
-    def test_missing_or_unadmitted_input_is_unavailable(self):
-        self.assertIsNone(hms.config()['input']['admittedDirectory'])
-        with self.assertRaisesRegex(hms.Refused, 'input_unavailable'):
-            hms.check_input(json.loads((ROOT/'workspace/models/signing/profile.json').read_text()))
-        d, profile, cfg = self.setup()
-        (d/'extra.txt').write_text('x')
-        with self.assertRaisesRegex(hms.Refused, 'input_unavailable'):
-            hms.check_input(profile, cfg)
-        (d/'extra.txt').unlink()
-        (d/'SHA256SUMS').unlink()
-        with self.assertRaisesRegex(hms.Refused, 'input_unavailable'):
-            hms.check_input(profile, cfg)
+    def download(self, location, limit):
+        self.downloads.append(location)
+        return self.data
+
+    def fetch(self, out=None, **change):
+        kwargs = dict(token=TOKEN, repository=REPO, api_url='https://api.github.com', consumer={'runId': '555', 'runAttempt': '1',
+            'job': 'guard'}, now=NOW, http=self.http, download=self.download, cfg=self.cfg, profile=self.profile)
+        kwargs.update(change)
+        return ingress.fetch(out or self.t.root/'consumer', **kwargs)
+
+
+class Ingress(unittest.TestCase):
+    def test_original_input_verified_and_receipted(self):
+        o = Original(self)
+        receipt = o.fetch()
+        out = o.t.root/'consumer'
+        self.assertEqual(sorted(os.listdir(out/'input')), sorted(hms.INPUT_FILES))
+        on_disk = json.loads((out/ingress.RECEIPT_NAME).read_text())
+        self.assertEqual(on_disk, receipt)
+        self.assertEqual(receipt['original']['archiveSha256'], o.cfg['input']['archiveSha256'])
+        self.assertEqual(receipt['original']['runId'], o.profile['expectedInput']['runId'])
+        self.assertEqual(receipt['files']['rose-models-unsigned.apk'], o.profile['expectedInput']['apkSha256'])
+        self.assertIn('not the original archive digest', receipt['transport'])
+        text = json.dumps(receipt)
+        self.assertNotIn(TOKEN, text)
+        self.assertNotIn('blob.core.windows.net', text)
+        self.assertTrue(all(sent for _, sent, _ in o.calls))  # the job token goes only to the API
+        self.assertEqual(o.downloads, [BLOB])
+
+    def test_committed_identity_is_the_pinned_original(self):
+        want = ingress.original()
+        exp = json.loads((ROOT/'workspace/models/signing/profile.json').read_text())['expectedInput']
+        self.assertEqual((want['sourceSha'], want['runId'], want['runAttempt'], want['event'], want['ref']),
+            ('8ff67d6bcfabad015dae7d370325cf8bf21690d2', '40960062067', '1', 'push', 'refs/heads/main'))
+        self.assertEqual(want['sourceSha'], exp['sourceSha'])
+        self.assertEqual((want['archiveBytes'], want['archiveSha256']),
+            (742487, '237923ba305e9b17d2276be95ed0d947926a7638cb028400935ce36b151fe1ef'))
+        self.assertEqual(want['artifactName'], 'rose-models-unsigned-8ff67d6bcfab-run40960062067-1')
+        self.assertEqual(want['workflowPath'], '.github/workflows/models-android.yml')
+
+    def test_wrong_run_refuses_before_any_download(self):
+        for key, value in (('head_sha', 'b' * 40), ('event', 'pull_request'), ('head_branch', 'feature'), ('run_attempt', 2),
+                           ('conclusion', 'failure'), ('status', 'in_progress'), ('path', '.github/workflows/other.yml'),
+                           ('id', 1), ('head_repository', {'id': 8, 'full_name': 'fork/RoseOS-1'})):
+            o = Original(self)
+            o.run[key] = value
+            with self.assertRaisesRegex(ingress.Refused, 'original_run_mismatch', msg=key):
+                o.fetch()
+            self.assertEqual(o.downloads, [], key)
+            self.assertFalse((o.t.root/'consumer').exists(), key)
+
+    def test_wrong_artifact_refuses_before_any_download(self):
+        for key, value in (('expired', True), ('expires_at', '2026-10-30T02:00:00Z'), ('size_in_bytes', 1), ('digest', 'sha256:' + '0' * 64),
+                           ('workflow_run', {'id': 1, 'head_sha': 'a' * 40, 'repository_id': 7, 'head_repository_id': 7}),
+                           ('workflow_run', {'id': 424242, 'head_sha': 'a' * 40, 'repository_id': 8, 'head_repository_id': 8})):
+            o = Original(self)
+            o.artifact[key] = value
+            with self.assertRaisesRegex(ingress.Refused, 'original_artifact_mismatch', msg=key):
+                o.fetch()
+            self.assertEqual(o.downloads, [], key)
+        o = Original(self)
+        o.artifact['name'] = 'rose-models-unsigned-other'
+        with self.assertRaisesRegex(ingress.Refused, 'original_artifact_missing'):
+            o.fetch()
+        o = Original(self)
+        with self.assertRaisesRegex(ingress.Refused, 'original_run_unavailable: HTTP 404'):
+            o.fetch(repository='someone/else')
+
+    def test_archive_bytes_must_be_the_original(self):
+        o = Original(self)
+        o.data = o.data[:-1] + b'x'
+        with self.assertRaisesRegex(ingress.Refused, 'archive_mismatch'):
+            o.fetch()
+        self.assertFalse((o.t.root/'consumer').exists())
+        with self.assertRaisesRegex(ingress.Refused, 'artifact_location_unexpected'):
+            ingress.fetch_location('http://example.invalid/archive', 10)
+        with self.assertRaisesRegex(ingress.Refused, 'artifact_location_unexpected'):
+            ingress.fetch_location('https://attacker.example/x.blob.core.windows.net', 10)
+
+    def unsafe(self, data, category):
+        o = Original(self)
+        o.data = data
+        o.cfg['input'].update(archiveBytes=len(data), archiveSha256=hashlib.sha256(data).hexdigest())
+        o.artifact.update(size_in_bytes=len(data), digest='sha256:' + hashlib.sha256(data).hexdigest())
+        o.want = ingress.original(o.cfg, o.profile)
+        with self.assertRaisesRegex(ingress.Refused, category):
+            o.fetch()
+        self.assertFalse((o.t.root/'consumer').exists())
+
+    def test_corrupt_traversal_link_duplicate_extra_and_oversize_entries_refuse(self):
+        files = Original(self).files
+        self.unsafe(b'not a zip at all', 'archive_corrupt')
+        self.unsafe(archive_bytes(files, extra=[('../escape', b'x')]), 'archive_unsafe: path')
+        self.unsafe(archive_bytes(files, extra=[('/abs', b'x')]), 'archive_unsafe: path')
+        self.unsafe(archive_bytes(files, extra=[('sub/file', b'x')]), 'archive_unsafe: path')
+        self.unsafe(archive_bytes(files, extra=[('extra.txt', b'x')]), 'archive_inventory')
+        self.unsafe(archive_bytes({k: v for k, v in files.items() if k != 'SHA256SUMS'}), 'archive_inventory')
+        self.unsafe(archive_bytes(files, duplicate='SHA256SUMS'), 'archive_unsafe: duplicate')
+        linked = {k: v for k, v in files.items() if k != 'librose_chat_android.so'}
+        self.unsafe(archive_bytes(linked, link='librose_chat_android.so'), 'archive_unsafe: librose_chat_android.so is not a regular')
+        o = Original(self)
+        o.cfg['input']['limits'] = {'memberBytes': 10, 'totalBytes': 10}
+        with self.assertRaisesRegex(ingress.Refused, 'archive_oversize'):
+            o.fetch()
+
+    def test_six_file_drift_and_binding_refuse(self):
+        files = Original(self).files
+        drifted = dict(files, **{'librose_chat_android.so': b'drifted library'})
+        self.unsafe(archive_bytes(drifted), 'input_changed: librose_chat_android.so')
+        sums = dict(files, SHA256SUMS=files['SHA256SUMS'] + b'0' * 64 + b'  extra.txt\n')
+        self.unsafe(archive_bytes(sums), 'input_changed: SHA256SUMS')
+        o = Original(self)
+        o.profile['expectedInput']['githubRef'] = 'refs/heads/other'  # receipt source binding (adapter verify_input)
+        o.want = ingress.original(o.cfg, o.profile)
+        o.run['head_branch'] = 'other'
+        with self.assertRaisesRegex(ingress.Refused, 'input_binding: source_binding: github_ref'):
+            o.fetch()
+
+    def test_destination_must_be_fresh(self):
+        o = Original(self)
+        (o.t.root/'consumer').mkdir()
+        with self.assertRaisesRegex(ingress.Refused, 'ingress_destination_exists'):
+            o.fetch()
+
+
+class Handoff(unittest.TestCase):
+    def setup(self):
+        o = Original(self)
+        o.fetch()
+        out = o.t.root/'consumer'
+        return o, out/'input', out/ingress.RECEIPT_NAME
+
+    def recheck(self, o, d, r, run='555'):
+        return ingress.recheck(str(d), str(r), run, cfg=o.cfg, profile=o.profile)
+
+    def test_same_run_handoff_rechecks(self):
+        o, d, r = self.setup()
+        result = self.recheck(o, d, r)
+        self.assertEqual(result['files']['librose_chat_android.so'], o.profile['expectedInput']['nativeSha256'])
+
+    def test_tampered_handoff_refuses(self):
+        o, d, r = self.setup()
+        with self.assertRaisesRegex(ingress.Refused, 'not produced by this run'):
+            self.recheck(o, d, r, run='556')
+        (d/'librose_chat_android.so').write_bytes(b'tampered')
+        with self.assertRaisesRegex(ingress.Refused, 'input_changed: librose_chat_android.so'):
+            self.recheck(o, d, r)
+        o, d, r = self.setup()
+        (d/'SHA256SUMS').write_bytes(b'tampered manifest')
+        with self.assertRaisesRegex(ingress.Refused, 'differ from the guard receipt'):
+            self.recheck(o, d, r)
+        o, d, r = self.setup()
+        receipt = json.loads(r.read_text())
+        receipt['original']['runId'] = '1'
+        r.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(ingress.Refused, 'ingress_receipt_mismatch'):
+            self.recheck(o, d, r)
+        o, d, r = self.setup()
+        (d/'extra').write_text('x')
+        with self.assertRaisesRegex(ingress.Refused, 'input_unavailable'):
+            self.recheck(o, d, r)
+        o, d, r = self.setup()
         link = d.parent/'alias'
         os.symlink(d, link)
-        cfg['input']['admittedDirectory'] = str(link)
+        with self.assertRaisesRegex(ingress.Refused, 'input_unavailable'):
+            self.recheck(o, link, r)
+        with self.assertRaisesRegex(ingress.Refused, 'input_unavailable'):
+            self.recheck(o, None, r)
+        with self.assertRaisesRegex(ingress.Refused, 'ingress_receipt_missing'):
+            self.recheck(o, d, d.parent/'missing.json')
+
+    def test_host_wrapper_requires_the_handoff(self):
         with self.assertRaisesRegex(hms.Refused, 'input_unavailable'):
-            hms.check_input(profile, cfg)
+            hms.check_input(None, None, '555')
 
 
 def zip_member(archive, name, data, mode=0o644, link=False):
@@ -260,8 +462,13 @@ class FakeAdapter:
     class Refused(Exception):
         pass
 
-    def __init__(self, fail=False):
-        self.calls, self.fail = [], fail
+    def __init__(self, fail=False, input_fail=False):
+        self.calls, self.fail, self.input_fail, self.verified = [], fail, input_fail, []
+
+    def verify_input(self, profile, artifact, run_tool=None, aapt=None):
+        self.verified.append((profile['tool'], str(aapt)))
+        if self.input_fail:
+            raise self.Refused('input_verifier_failed: apk-metadata.txt is not the APK badging')
 
     def sign(self, profile, artifact, output, keystore, password, sdk_root):
         self.calls.append((profile, artifact, output, Path(keystore).name, Path(password).name, sdk_root, dict(os.environ)))
@@ -278,6 +485,8 @@ class Run(unittest.TestCase):
         binding = hms.check_receipt(rdir, '40990434375', is_on_main=lambda sha: True)
         checked = {'adapterProfile': json.loads((ROOT/'workspace/models/signing/profile.json').read_text()), 'binding': binding,
             'input': str(t.root/'admitted'), 'journalSha256': 'e' * 64,
+            'ingress': {'directory': str(t.root/'admitted'), 'files': {'SHA256SUMS': 'f' * 64}, 'receiptSha256': '9' * 64,
+                        'original': {'runId': '40960062067'}},
             'tools': {'apksignerSha256': '1' * 64, 'aaptSha256': '2' * 64, 'archiveSha256': hms.config()['sdk']['archiveSha256']},
             'jdk': {'root': '/jdk/linux-x86', 'treeId': TRUST['treeId'], 'revision': TRUST['revision']}}
         self.fetched, self.private_dirs = [], []
@@ -337,6 +546,16 @@ class Run(unittest.TestCase):
         self.assertNotIn('synthetic secret placeholder', text)
         self.assertEqual(public['bootstrap']['versions'], {'keys': '1', 'passphrase': '1'})
         self.assertTrue((out/'models-sign-receipt.json').exists())
+        self.assertEqual(public['input']['ingressReceiptSha256'], '9' * 64)
+        self.assertEqual(adapter.verified[0][1], hms.config()['sdk']['root'] + '/build-tools/android-15/aapt')
+        self.assertEqual(adapter.verified[0][0]['status'], 'bound')
+
+    def test_input_binding_with_proven_aapt_refuses_before_any_secret(self):
+        rdir, out, adapter, kwargs = self.setup(adapter=FakeAdapter(input_fail=True))
+        with self.assertRaisesRegex(hms.Refused, 'input_binding: input_verifier_failed'):
+            hms.run(rdir, out, **kwargs)
+        self.assertEqual(self.fetched, [])
+        self.assertEqual(adapter.calls, [])
 
     def test_certificate_mismatch_refuses_before_signing(self):
         rdir, out, adapter, kwargs = self.setup(cert='d' * 64)
@@ -366,6 +585,9 @@ class Run(unittest.TestCase):
         fetched = []
         with self.assertRaisesRegex(hms.Refused, 'input_unavailable'):
             hms.run(rdir, t.root/'out', fetch=lambda *a: fetched.append(a), lock=contextlib.nullcontext)
+        with self.assertRaisesRegex(hms.Refused, 'input_unavailable'):
+            hms.run(rdir, t.root/'out', str(t.root/'absent'), str(t.root/'absent.json'), fetch=lambda *a: fetched.append(a),
+                lock=contextlib.nullcontext)
         self.assertEqual(fetched, [])
 
 
@@ -393,13 +615,32 @@ class Workflow(unittest.TestCase):
             condition = re.search(r'    if: ([^\n]*(?:\n      [^\n]*)*)\n', body)
             self.assertNotIn("'models-sign'", condition[1] if condition else '', name)
         self.assertIn('host-models-sign.py check-receipt', j['guard'])
+        guard = j['guard']
+        steps = ('host-models-sign.py check-receipt', 'models-input-ingress.py fetch --out "$RUNNER_TEMP/models-input"',
+                 'name: models-input-${{ github.run_id }}')
+        self.assertEqual([guard.index(s) for s in steps], sorted(guard.index(s) for s in steps))
+        fetch_step = guard[guard.index('Fetch and verify the original Models input'):guard.index('Hand the verified input')]
+        self.assertIn("        if: inputs.mode == 'models-sign'\n        env:\n          GH_TOKEN: ${{ github.token }}\n", fetch_step)
+        self.assertIn('      actions: read  #', guard)
+        self.assertNotIn('actions: read', job)  # no cross-run permission on the self-hosted signing job
+        self.assertNotIn('run-id:', job)
+        self.assertNotIn('github.token', job)
+        order = [job.index(s) for s in ('test ! -e "$RUNNER_TEMP/models-input"', 'name: models-input-${{ github.run_id }}',
+                 'host-models-sign.py preflight', 'actions-gcp-login.py login')]
+        self.assertEqual(order, sorted(order))
+        for command in ('host-models-sign.py preflight', 'host-models-sign.py run'):
+            line = next(l for l in job.splitlines() if command in l)
+            self.assertIn('--input-dir "$RUNNER_TEMP/models-input/input" --ingress-receipt "$RUNNER_TEMP/models-input/models-input-receipt.json"', line)
+        self.assertIn("    needs: guard\n", j['controller'])
+        self.assertNotIn('continue-on-error', guard)  # a failed ingress fails guard, so no controller, host or signer
         self.assertIn('[[ "$MODE" != models-sign || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]', j['guard'])
 
     def test_actual_ci_runs_this_suite(self):
         ci = (ROOT/'.github/workflows/release-verification.yml').read_text()
         self.assertIn('          python3 scripts/tests/test_models_apk_signing.py\n', ci)
         self.assertIn('python3 scripts/tests/test_models_apk_signing.py\n', (ROOT/'scripts/test-local.sh').read_text())
-        for path in ('scripts/host-models-sign.py', 'scripts/tests/test_models_apk_signing.py', 'os/models-signing/**'):
+        for path in ('scripts/host-models-sign.py', 'scripts/models-input-ingress.py', 'scripts/tests/test_models_apk_signing.py',
+                     'os/models-signing/**'):
             self.assertEqual(ci.count(f"      - '{path}'\n"), 2, path)
 
 
