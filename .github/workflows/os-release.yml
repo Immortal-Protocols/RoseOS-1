@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); models-sign signs the retained unsigned Models APK with the protected models-v0 bootstrap identity (candidate_sha = this workflow commit, models_bootstrap_run = the bootstrap run; no build, OS signing or publication; refuses input_unavailable until an admitted retained input exists)
+        description: os-release builds the whole candidate; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); models-sign signs the retained unsigned Models APK with the protected models-v0 bootstrap identity (candidate_sha = this workflow commit, models_bootstrap_run = the bootstrap run; no build, OS signing or publication; the hosted guard first reads and verifies the original pinned unsigned input with its own token; any ingress failure stops before a host starts)
         type: choice
         options: [os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
         default: os-release
@@ -107,7 +107,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read  # emulator-alpha-export only: the original verification receipt is fetched from its own run's artifact
+      actions: read  # emulator-alpha-export and models-sign only: fixed original artifacts are read from their own runs
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -211,6 +211,21 @@ jobs:
           name: models-bootstrap-receipt-${{ github.run_id }}
           path: ${{ runner.temp }}/models-bootstrap
           retention-days: 3
+          if-no-files-found: error
+      # models-sign: only the original unsigned input the PR #149 profile pins, read with this job's token and fully
+      # verified here, before the controller starts any host or anyone gains signer access.
+      - name: Fetch and verify the original Models input
+        if: inputs.mode == 'models-sign'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/models-input-ingress.py fetch --out "$RUNNER_TEMP/models-input"
+      - name: Hand the verified input to the signing job
+        if: inputs.mode == 'models-sign'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: models-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/models-input
+          retention-days: 1
           if-no-files-found: error
       - name: Fetch the original verification receipt (run 40777816699)
         if: inputs.mode == 'emulator-alpha-export'
@@ -756,7 +771,7 @@ jobs:
           if-no-files-found: warn
 
   # OCT30-INFRA-S013: sign the retained unsigned Models APK with the protected models-v0 identity through the PR #149
-  # adapter (scripts/host-models-sign.py). Preflight (input, bootstrap journal, SDK archive and JDK tree proofs) runs
+  # adapter (scripts/host-models-sign.py). Preflight (guard-verified input recheck, bootstrap journal, SDK archive and JDK tree proofs) runs
   # before any login; signer access exists only around the run. No build, OS signing or publisher job runs in this mode
   # and no publisher credential reaches the builder. Only the signed APK and nonsecret receipts leave, privately.
   models-signer:
@@ -778,12 +793,18 @@ jobs:
         with:
           name: models-bootstrap-receipt-${{ github.run_id }}
           path: ${{ runner.temp }}/models-bootstrap
-      - name: Input, journal, SDK archive and JDK proofs (before any login)
-        run: python3 scripts/host-models-sign.py preflight --receipt-dir "$RUNNER_TEMP/models-bootstrap"
+      - name: Fresh consumer directory for the verified input
+        run: test ! -e "$RUNNER_TEMP/models-input"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: models-input-${{ github.run_id }}
+          path: ${{ runner.temp }}/models-input
+      - name: Input recheck, journal, SDK archive and JDK proofs (before any login)
+        run: python3 scripts/host-models-sign.py preflight --receipt-dir "$RUNNER_TEMP/models-bootstrap" --input-dir "$RUNNER_TEMP/models-input/input" --ingress-receipt "$RUNNER_TEMP/models-input/models-input-receipt.json"
       - name: Signer access for Models signing only
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Sign under the shared lock
-        run: python3 scripts/host-models-sign.py run --receipt-dir "$RUNNER_TEMP/models-bootstrap" --output-dir "$RUNNER_TEMP/models-signed"
+        run: python3 scripts/host-models-sign.py run --receipt-dir "$RUNNER_TEMP/models-bootstrap" --output-dir "$RUNNER_TEMP/models-signed" --input-dir "$RUNNER_TEMP/models-input/input" --ingress-receipt "$RUNNER_TEMP/models-input/models-input-receipt.json"
       - name: Drop signer access
         if: always()
         run: python3 scripts/actions-gcp-login.py logout
