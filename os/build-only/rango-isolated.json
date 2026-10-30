@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "rose-build-only",
-  "basis": "OS-RANGO-BUILD-002: the rango build-only inputs of os/build-only/rango.json bound to the isolated builder immortal-os-rango-builder-20261029 (protocols-465723/us-west2-a, n2-standard-32, 128 GiB, Debian 12). Paths are operator-chosen proposals under /srv/rose-rango and do not exist until the operator stages them; none is shared with the Frankel builder (source root, lock, reconcile receipts). makeJobs 32 = the VM's vCPUs. Allowances stay null until measured on this VM under Infra's selected policy: preflight fails closed while any is null.",
+  "basis": "OS-RANGO-BUILD-002: the rango build-only inputs of os/build-only/rango.json bound to the isolated builder immortal-os-rango-builder-20261029 (protocols-465723/us-west2-a, n2-standard-32, 128 GiB, Debian 12). Paths are operator-chosen proposals under /srv/rose-rango and do not exist until the operator stages them; none is shared with the Frankel builder (source root, lock, reconcile receipts). makeJobs 32 = the VM's vCPUs. Allowances stay null until measured on this VM; nothing is estimated. OS-RANGO-BUILD-003: on this isolated host (allowanceRequired false) a null allowance is recorded as unmeasured and preflight requires only available >= reserve; a measured allowance, once set, is subtracted as before. Compile also needs the local Rose integration (os/build-only/rango-reconcile.json, README.md).",
   "device": "rango",
   "lunch": "rango-cur-user",
   "deviceContract": "os/devices/pixel10.json",
@@ -46,8 +46,9 @@
   },
   "capacity": {
     "reserveBytes": 322122547200,
+    "allowanceRequired": false,
     "generateAllowanceBytes": null,
     "compileAllowanceBytes": null,
-    "basis": "A - P >= reserve on the filesystem holding the source tree and download dir. P per stage must be measured (FAM-BLAZER-PREP: download + unpack + generated vendor; compile: OUT_DIR); never estimated here."
+    "basis": "A - P >= reserve on the filesystem holding the source tree and download dir. P per stage must be measured (FAM-BLAZER-PREP: download + unpack + generated vendor; compile: OUT_DIR); never estimated here. Isolated host: allowanceRequired false records an unmeasured P as null and checks A >= reserve; it never substitutes a guessed P."
   }
 }
