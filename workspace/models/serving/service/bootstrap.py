@@ -8,8 +8,10 @@ run in order and are rerun-safe: each first checks whether its result is already
              Then it is mounted at /mnt/models-data
   packages   pinned Ubuntu and NVIDIA-repository versions (NVIDIA key fingerprint checked), then apt-mark hold
   driver     nvidia-smi reports DRIVER_VERSION on GPU_COUNT GPUs; otherwise at most ONE reboot, then failure
-  container  the docker nvidia runtime (nvidia-ctk)
-  image      the pinned vLLM image digest; the local image ID must equal the pinned config ID
+  container  the docker nvidia runtime (nvidia-ctk) and Docker's classic overlay2 image store (containerd-snapshotter
+             off), where .Id is the config digest
+  image      pull by the pinned manifest digest; .Id must equal the pinned config ID, RepoDigests must hold the
+             pinned reference, and the platform must be linux/amd64
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   auth       secret-init once; the auth service only once attestation roots are present
@@ -258,32 +260,94 @@ def stage_driver(host, ctx):
     raise Reboot('reboot_requested_for_driver')
 
 
+DAEMON_JSON = '/etc/docker/daemon.json'
+HEX64 = __import__('re').compile(r'^sha256:[0-9a-f]{64}$')
+
+
+def docker_store(host):
+    """{'driver', 'snapshotter', 'version'} from three named docker info fields (no full info dump), or None."""
+    rc, out = host.run(['docker', 'info', '--format', '{{.Driver}}|{{json .DriverStatus}}|{{.ServerVersion}}'], 60)
+    parts = out.strip().split('|') if rc == 0 else []
+    if len(parts) != 3:
+        return None
+    return {'driver': parts[0][:32], 'snapshotter': 'io.containerd.snapshotter' in parts[1], 'version': parts[2][:32]}
+
+
+def classic(store):
+    """Docker's classic overlay2 store, where an image's .Id is its config digest (the pinned image_id). Docker 29
+    defaults new installs to the containerd image store, where .Id is the manifest or index digest instead."""
+    return bool(store) and store['driver'] == 'overlay2' and not store['snapshotter']
+
+
 def stage_container(host, ctx):
     def has_runtime():
         rc, out = host.run(['docker', 'info', '--format', '{{json .Runtimes}}'], 60)
         return rc == 0 and '"nvidia"' in out
-    if has_runtime():
-        return 'nvidia runtime'
-    must(host, ['nvidia-ctk', 'runtime', 'configure', '--runtime=docker'], 'nvidia_ctk_failed', 120)
-    must(host, ['systemctl', 'restart', 'docker'], 'docker_restart_failed', 300)
+    changed = False
+    if not has_runtime():
+        must(host, ['nvidia-ctk', 'runtime', 'configure', '--runtime=docker'], 'nvidia_ctk_failed', 120)
+        changed = True
+    if not classic(docker_store(host)) or changed:
+        daemon = host.path(DAEMON_JSON)
+        try:
+            config = json.loads(daemon.read_text()) if daemon.exists() else {}
+        except ValueError:
+            raise Failed('docker_daemon_json_invalid') from None
+        if not isinstance(config, dict):
+            raise Failed('docker_daemon_json_invalid')
+        if config.get('features', {}).get('containerd-snapshotter') is not False:
+            config.setdefault('features', {})['containerd-snapshotter'] = False
+            daemon.parent.mkdir(parents=True, exist_ok=True)
+            tmp = daemon.with_name(daemon.name + '.tmp')
+            tmp.write_text(json.dumps(config, indent=2, sort_keys=True) + '\n')
+            os.replace(tmp, daemon)
+            changed = True
+        if changed:
+            must(host, ['systemctl', 'restart', 'docker'], 'docker_restart_failed', 300)
     if not has_runtime():
         raise Failed('nvidia_runtime_missing')
-    return 'configured'
+    store = docker_store(host)
+    if not classic(store):
+        raise Failed('docker_image_store_not_classic', [{'store': store}])
+    return f"nvidia runtime; {store['driver']} store" + ('; configured' if changed else '')
+
+
+def image_identity(host, ref):
+    """(facts, None) from one bounded docker image inspect, or (None, failure category)."""
+    rc, out = host.run(['docker', 'image', 'inspect', '--format',
+                        '{{.Id}}|{{json .RepoDigests}}|{{.Os}}|{{.Architecture}}', ref], 60)
+    if rc != 0:
+        return None, 'image_not_present' if rc == 1 else 'image_inspect_failed'
+    parts = out.strip().split('|')
+    try:
+        if len(parts) != 4 or not HEX64.match(parts[0]):
+            raise ValueError
+        digests = json.loads(parts[1])
+        if not isinstance(digests, list) or not all(isinstance(d, str) for d in digests):
+            raise ValueError
+    except ValueError:
+        return None, 'image_inspect_malformed'
+    return {'id': parts[0], 'repoDigests': sorted(d[:160] for d in digests)[:4],
+            'platform': f'{parts[2][:16]}/{parts[3][:16]}'}, None
 
 
 def stage_image(host, ctx):
     runtime = ctx['runtime']
     ref = f"vllm/vllm-openai@{runtime['image_digest']}"
 
-    def image_id():
-        rc, out = host.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', ref], 60)
-        return out.strip() if rc == 0 else None
-    if image_id() == runtime['image_id']:
+    def verified(facts):
+        return (facts is not None and facts['id'] == runtime['image_id'] and ref in facts['repoDigests']
+                and facts['platform'] == 'linux/amd64')
+    facts, _ = image_identity(host, ref)
+    if verified(facts):
         return 'present'
     must(host, ['docker', 'pull', ref], 'image_pull_failed', 3600)
-    if image_id() != runtime['image_id']:
-        raise Failed('image_id_mismatch')
-    return 'pulled'
+    facts, failure = image_identity(host, ref)
+    if verified(facts):
+        return 'pulled'
+    observed = {'expectedId': runtime['image_id'], 'expectedRepoDigest': ref, 'expectedPlatform': 'linux/amd64',
+                'observed': facts, 'store': docker_store(host)}
+    raise Failed(failure or 'image_id_mismatch', [observed])
 
 
 def stage_nginx(host, ctx):

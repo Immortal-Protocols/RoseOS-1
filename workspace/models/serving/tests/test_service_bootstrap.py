@@ -46,7 +46,11 @@ class FakeHost(B.Host):
         self.driver_loaded_on_boot = 2  # the driver loads after this boot number
         self.boot = 1
         self.gpus, self.driver = 2, B.DRIVER_VERSION
-        self.runtimes, self.image = '{"runc":{}}', None
+        # Docker 29 as installed: containerd image store by default; daemon.json is read on (re)start.
+        self.loaded = {'nvidia': False, 'snapshotter': True}
+        self.images = {}  # store -> (id, repo digests, os, arch)
+        self.wrong_platform = False
+        self.inspect_override = None
         self.enabled = {'nginx.service'}
         self.md = {'network-interfaces/0/access-configs/0/external-ip': '203.0.113.7'}
         self.dns = []
@@ -115,15 +119,32 @@ class FakeHost(B.Host):
         if cmd == 'systemctl':
             return self.systemctl(argv[1:])
         if cmd == 'docker':
+            store = 'containerd' if self.loaded['snapshotter'] else 'classic'
+            if argv[1] == 'info' and '{{json .Runtimes}}' in argv:
+                return 0, '{"nvidia":{},"runc":{}}' if self.loaded['nvidia'] else '{"runc":{}}'
             if argv[1] == 'info':
-                return 0, self.runtimes
+                if self.loaded['snapshotter']:
+                    return 0, 'overlayfs|[["driver-type","io.containerd.snapshotter.v1"]]|29.1.3\n'
+                return 0, 'overlay2|[["Backing Filesystem","extfs"],["Supports d_type","true"]]|29.1.3\n'
             if argv[1] == 'pull':
-                self.image = self.pulled_id
+                ref = argv[2]
+                # containerd store: .Id is the pulled manifest digest; classic store: .Id is the config digest
+                image_id = ref.split('@')[1] if store == 'containerd' else self.pulled_id
+                self.images[store] = (image_id, [ref], 'linux', 'arm64' if self.wrong_platform else 'amd64')
                 return 0, ''
             if argv[1:3] == ['image', 'inspect']:
-                return (0, self.image + '\n') if self.image else (1, '')
+                if self.inspect_override:
+                    return self.inspect_override
+                if store not in self.images:
+                    return 1, ''
+                i, digests, os_, arch = self.images[store]
+                return 0, f'{i}|{json.dumps(digests)}|{os_}|{arch}\n'
         if cmd == 'nvidia-ctk':
-            self.runtimes = '{"nvidia":{},"runc":{}}'
+            daemon = self.path(B.DAEMON_JSON)
+            daemon.parent.mkdir(parents=True, exist_ok=True)
+            config = json.loads(daemon.read_text()) if daemon.exists() else {}
+            config.setdefault('runtimes', {})['nvidia'] = {'path': 'nvidia-container-runtime'}
+            daemon.write_text(json.dumps(config))
             return 0, ''
         if cmd == 'python3' and argv[-1] == 'secret-init':
             p = self.path('/var/lib/rose-models/auth/secret.json')
@@ -149,6 +170,12 @@ class FakeHost(B.Host):
             return 0, ''
         if args[0] == 'enable':
             self.enabled |= set(args[2:])
+            return 0, ''
+        if args == ['restart', 'docker']:
+            daemon = self.path(B.DAEMON_JSON)
+            config = json.loads(daemon.read_text()) if daemon.exists() else {}
+            self.loaded = {'nvidia': 'nvidia' in config.get('runtimes', {}),
+                           'snapshotter': config.get('features', {}).get('containerd-snapshotter', True) is not False}
             return 0, ''
         if args[:2] == ['--no-block', 'reboot']:
             self.reboot_requested = True
@@ -352,7 +379,7 @@ class Refusals(Fixture):
         self.host.pulled_id = 'sha256:' + '0' * 64
         self.assertStopsAt('image', 'image_id_mismatch')
         self.host.pulled_id = RUNTIME['image_id']
-        self.host.image = None
+        self.host.images = {}
         self.host.path('/usr/sbin/nginx').write_bytes(b'other build')
         self.assertStopsAt('nginx', 'nginx_binary_hash_mismatch')
         self.host.path('/usr/sbin/nginx').write_bytes(NGINX_BYTES)
@@ -457,6 +484,79 @@ class Packages(Fixture):
         self.assertEqual([o['package'] for o in observed], ['docker.io'])
         self.assertLessEqual(len(json.dumps(status)), 8192)
         self.assertEqual(json.loads(self.host.guest['bootstrap']), status)
+
+
+class Image(Fixture):
+    """IMAGE-FIX-001: Docker 29's default containerd image store reports the manifest digest as .Id. The bootstrap pins the
+    classic store, then requires exactly the pinned config ID, the pinned repo digest and linux/amd64."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.driver_loaded_on_boot = 1
+
+    def image_stage(self):
+        status, code = self.boot()
+        st = status['stages']
+        return self.states(status)['container'], self.states(status)['image'], st['image'].get('observed'), code
+
+    def test_containerd_default_is_switched_to_classic_then_the_pinned_config_id_matches(self):
+        container, image, observed, _ = self.image_stage()
+        self.assertEqual((container[0], image, observed), ('ok', ('ok', 'pulled'), None))
+        self.assertIn('overlay2 store; configured', container[1])
+        daemon = json.loads(self.host.path(B.DAEMON_JSON).read_text())
+        self.assertEqual((daemon['features'], 'nvidia' in daemon['runtimes']), ({'containerd-snapshotter': False}, True))
+        restarts = self.host.count('systemctl', 'restart', 'docker')
+        _, image, _, _ = self.image_stage()  # rerun: nothing restarted, nothing pulled again
+        self.assertEqual((image, self.host.count('systemctl', 'restart', 'docker'), self.host.count('docker', 'pull')),
+                         (('ok', 'present'), restarts, 1))
+
+    def test_model_of_the_hypothesis_containerd_store_reports_the_manifest_digest_as_id(self):
+        self.host.loaded = {'nvidia': True, 'snapshotter': True}
+        ref = f"vllm/vllm-openai@{RUNTIME['image_digest']}"
+        self.host.run(['docker', 'pull', ref])
+        rc, out = self.host.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', ref])
+        self.assertNotEqual(out.split('|')[0], RUNTIME['image_id'])  # .Id is the manifest digest there
+        self.assertEqual(out.split('|')[0], RUNTIME['image_digest'])
+
+    def test_store_that_stays_containerd_is_refused_with_observed_store(self):
+        def restart_ignores_features(args, original=self.host.systemctl):
+            return (0, '') if args == ['restart', 'docker'] else original(args)
+        self.host.systemctl = restart_ignores_features
+        self.host.loaded['nvidia'] = True
+        container, _, _, code = self.image_stage()
+        self.assertEqual((container[0], container[1], code), ('failed', 'docker_image_store_not_classic', 1))
+
+    def test_wrong_image_platform_or_missing_digest_is_refused_with_bounded_observed_identity(self):
+        for label, setup, category in (
+                ('genuinely different image', lambda h: setattr(h, 'pulled_id', 'sha256:' + 'ab' * 32), 'image_id_mismatch'),
+                ('wrong platform', lambda h: setattr(h, 'wrong_platform', True), 'image_id_mismatch'),
+                ('pinned repo digest missing', lambda h: setattr(h, 'inspect_override',
+                    (0, f"{RUNTIME['image_id']}|[]|linux|amd64\n")), 'image_id_mismatch'),
+                ('malformed inspect output', lambda h: setattr(h, 'inspect_override', (0, 'not-an-id\n')),
+                 'image_inspect_malformed'),
+                ('inspect fails', lambda h: setattr(h, 'inspect_override', (125, '')), 'image_inspect_failed')):
+            with self.subTest(label):
+                self.host.images, self.host.wrong_platform, self.host.inspect_override = {}, False, None
+                self.host.pulled_id = RUNTIME['image_id']
+                setup(self.host)
+                _, (state, got), observed, code = self.image_stage()
+                self.assertEqual((state, got, code), ('failed', category, 1))
+                o = observed[0]
+                self.assertEqual((o['expectedId'], o['expectedPlatform']), (RUNTIME['image_id'], 'linux/amd64'))
+                self.assertEqual(o['store']['driver'], 'overlay2')
+                self.assertLessEqual(len(json.dumps(o)), 2048)
+                if category == 'image_id_mismatch':
+                    self.assertTrue(o['observed']['id'].startswith('sha256:'))
+                else:
+                    self.assertIsNone(o['observed'])
+
+    def test_invalid_daemon_json_is_refused_not_overwritten(self):
+        self.host.path(B.DAEMON_JSON).parent.mkdir(parents=True, exist_ok=True)
+        self.host.path(B.DAEMON_JSON).write_text('{not json')
+        self.host.loaded['nvidia'] = True
+        container, _, _, _ = self.image_stage()
+        self.assertEqual(container, ('failed', 'docker_daemon_json_invalid'))
+        self.assertEqual(self.host.path(B.DAEMON_JSON).read_text(), '{not json')
 
 
 class Build(Fixture):
