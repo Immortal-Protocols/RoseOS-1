@@ -3,7 +3,9 @@
 A synthetic root → intermediate → leaf chain carries a hand-built Key Description extension. It stands in for a
 Google-rooted Android attestation; it is not one. The HTTP test drives the real loopback server."""
 import base64
+import contextlib
 import datetime
+import io
 import json
 import os
 from pathlib import Path
@@ -59,7 +61,7 @@ def explicit(tag, inner):
     return der(tag, inner, True, cls=2)
 
 
-BOOT_KEY = b'\x11' * 32  # the pinned SelfSigned verified-boot key in these fixtures
+BOOT_KEY = b'\x11' * 32  # an optionally pinned SelfSigned verified-boot key in these fixtures
 
 
 def key_description(challenge, package=A.PACKAGE, signer=A.SIGNER_SHA256, level=1, boot=1, app_in_software=True,
@@ -119,9 +121,15 @@ class Fixture(unittest.TestCase):
     def signature(self, challenge, key=None):
         return base64.b64encode((key or self.device).sign(challenge.encode(), ec.ECDSA(hashes.SHA256()))).decode()
 
-    def enroll(self, key=None, **kw):
+    def invite(self, label='test-device', ttl=3600):
+        return self.store.create_invite(label, ttl, self.now)
+
+    def enroll(self, key=None, invite=True, **kw):
         c = self.svc.challenge()['challenge']
-        return self.svc.token({'challenge': c, 'attestation': self.chain(c, key, **kw), 'signature': self.signature(c, key)})
+        body = {'challenge': c, 'attestation': self.chain(c, key, **kw), 'signature': self.signature(c, key)}
+        if invite:
+            body['invite'] = self.invite() if invite is True else invite
+        return self.svc.token(body)
 
     def refused(self, status, category, fn, *args):
         with self.assertRaises(A.Refused) as ctx:
@@ -158,7 +166,11 @@ class Protocol(Fixture):
                     self.enroll(**kw)
                 self.assertEqual((ctx.exception.status, ctx.exception.category), (status, category))
         self.assertEqual(self.store.registry()['keys'], {})
+        self.policy.update(maxKeys=10, enrollPerDay=10)
         self.enroll(app_in_software=False)  # attestationApplicationId accepted in either list
+        self.policy['selfSignedBootKeys'] = set()  # no pin configured: any locked SelfSigned boot is accepted
+        self.enroll(key=ec.generate_private_key(ec.SECP256R1()), boot_key=b'\x55' * 32)
+        self.policy['selfSignedBootKeys'] = {BOOT_KEY.hex()}
         self.enroll(key=ec.generate_private_key(ec.SECP256R1()), boot=0, boot_key=b'\x44' * 32)  # Verified: any key
 
     def test_chain_challenge_and_signature_refusals(self):
@@ -246,7 +258,7 @@ class ClosedContract(Fixture):
 
     def test_challenge_is_single_use_even_after_a_restart(self):
         c = self.svc.challenge()['challenge']
-        body = {'challenge': c, 'attestation': self.chain(c), 'signature': self.signature(c)}
+        body = {'challenge': c, 'attestation': self.chain(c), 'signature': self.signature(c), 'invite': self.invite()}
         t = self.svc.token(body)
         self.refused(401, 'challenge_reused', self.svc.token, body)
         restarted = A.Service(A.Store(self.tmp), self.policy, clock=lambda: self.now)
@@ -307,6 +319,66 @@ class ClosedContract(Fixture):
         self.refused(403, 'key_revoked', self.svc.validate, 'Bearer ' + t['access_token'])  # persisted revocation
 
 
+class Invites(Fixture):
+    """Admin-issued, single-use QR enrollment codes (Nathan, 17:38): only a scanned code admits a new device."""
+
+    def test_new_devices_need_a_fresh_unexpired_unused_code(self):
+        self.refused(403, 'invite_required', self.enroll, None, False)
+        self.refused(403, 'invite_invalid', self.enroll, None, 'rgi1.' + 'A' * 43)
+        code = self.invite(label='nathan-pixel')
+        t = self.enroll(invite=code)
+        self.assertEqual(self.store.registry()['keys'][t['key_id']]['label'], 'nathan-pixel')
+        self.enroll(invite=False)  # the same install enrolling again needs no second code
+        other = ec.generate_private_key(ec.SECP256R1())
+        self.refused(403, 'invite_invalid', self.enroll, other, code)  # single use
+        stale = self.invite(ttl=60)
+        self.now += 61
+        self.refused(403, 'invite_invalid', self.enroll, other, stale)
+        c = self.svc.challenge()['challenge']
+        self.refused(400, 'malformed', self.svc.token, {'challenge': c, 'attestation': self.chain(c, other),
+                                                        'signature': self.signature(c, other), 'invite': 7})
+        self.assertEqual(len(self.store.registry()['keys']), 1)
+        stored = json.dumps(self.store.registry())
+        self.assertNotIn(code, stored)  # only the hash is kept
+        self.assertIn(A.hashlib.sha256(code.encode()).hexdigest(), stored)
+
+    def test_a_refused_attestation_does_not_spend_the_code(self):
+        code = self.invite()
+        c = self.svc.challenge()['challenge']
+        self.refused(401, 'boot_state', self.svc.token, {'challenge': c, 'attestation': self.chain(c, boot=2),
+                                                         'signature': self.signature(c), 'invite': code})
+        self.enroll(invite=code)
+
+
+class InviteCli(unittest.TestCase):
+    def test_admin_issues_lists_and_revokes_by_label(self):
+        tmp = Path(tempfile.mkdtemp(prefix='auth-invite-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        args = ['--state-dir', str(tmp / 'state')]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(A.main(['invite', '--label', 'nathan-pixel', '--ttl-hours', '2', *args]), 0)
+            self.assertEqual(A.main(['invite', '--uri-only', *args]), 0)
+            self.assertEqual(A.main(['invites', *args]), 0)
+        lines = out.getvalue().splitlines()
+        first = json.loads(lines[0])
+        self.assertRegex(first['uri'], r'^dev\.pixel\.models://enroll\?invite=rgi1\.[A-Za-z0-9_-]{43}$')
+        self.assertRegex(lines[1], r'^dev\.pixel\.models://enroll\?invite=rgi1\.[A-Za-z0-9_-]{43}$')
+        listed = [json.loads(line) for line in lines[2:]]
+        self.assertEqual(sorted(o['label'] for o in listed), ['', 'nathan-pixel'])
+        self.assertNotIn('rgi1.', ''.join(lines[2:]))  # listings never show a code
+        self.assertEqual(A.main(['invite', '--ttl-hours', '0', *args]), 1)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(A.main(['revoke', 'nathan-pixel', *args]), 0)  # unused code withdrawn
+        store = A.Store(tmp / 'state')
+        svc = A.Service(store, {'roots': set(), 'revoked': set, 'selfSignedBootKeys': set(), 'maxKeys': 5,
+                                'enrollPerDay': 5})
+        code = first['uri'].split('=', 1)[1]
+        offer = store.registry()['invites'][A.hashlib.sha256(code.encode()).hexdigest()]
+        self.assertLessEqual(offer['expiresAt'], 0)
+        self.assertEqual(A.main(['revoke', 'nobody', *args]), 1)
+
+
 class Http(Fixture):
     def test_loopback_server_endpoints(self):
         server = A.ThreadingHTTPServer(('127.0.0.1', 0), A.handler(self.svc))
@@ -330,7 +402,7 @@ class Http(Fixture):
         status, c = call('/v1/auth/challenge', {})
         self.assertEqual(status, 200)
         status, t = call('/v1/auth/token', {'challenge': c['challenge'], 'attestation': self.chain(c['challenge']),
-                                            'signature': self.signature(c['challenge'])})
+                                            'signature': self.signature(c['challenge']), 'invite': self.invite()})
         self.assertEqual(status, 200)
         self.assertEqual(call('/_validate', headers={'Authorization': 'Bearer ' + t['access_token']}), (204, None))
         self.assertEqual(call('/_validate'), (401, None))

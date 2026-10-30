@@ -112,7 +112,8 @@ class ServiceEdgeTest(SA.Fixture):
         status, c = e.post('/v1/auth/challenge', {})
         self.assertEqual(status, 200)
         c = c['challenge']
-        status, t = e.post('/v1/auth/token', {'challenge': c, 'attestation': self.chain(c), 'signature': self.signature(c)})
+        status, t = e.post('/v1/auth/token', {'challenge': c, 'attestation': self.chain(c), 'signature': self.signature(c),
+                                              'invite': self.invite()})
         self.assertEqual(status, 200, t)
         return t
 

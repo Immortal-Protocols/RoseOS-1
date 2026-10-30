@@ -4,12 +4,17 @@
 Nginx proxies POST /v1/auth/challenge and /v1/auth/token here with per-IP limits, and asks GET /_validate
 (auth_request) before every inference request. 204 = valid, 401 = missing/expired/invalid, 403 = key revoked.
 
-  serve | secret-init | rotate-secret | revoke KEY_ID | close-enrollment | open-enrollment | status
+  serve | secret-init | rotate-secret | invite [--label L] [--ttl-hours H] [--uri-only] | invites
+  revoke KEY_ID|LABEL | close-enrollment | open-enrollment | status
+
+Enrollment needs an admin-issued, single-use invite (shown once as a dev.pixel.models://enroll URI for a QR code; only
+its sha256 is stored) as well as the attestation. Renewal needs neither.
 
 State (owner-only, under --state-dir): secret.json {current, previous}, registry.json {keys, enrollmentOpen, days}.
 Trusted roots: every *.pem/*.der in --roots (Google hardware attestation roots, installed by the operator).
 Revocation: Google's attestation status JSON at --revocation-status, refreshed by the operator's timer; enrollment
-refuses (503) while it is missing or stale. SelfSigned boots need a pinned verifiedBootKey (--self-signed-boot-keys).
+refuses (503) while it is missing or stale. SelfSigned (custom OS, locked) boots are accepted; listing keys in
+--self-signed-boot-keys optionally restricts them to those verifiedBootKey values.
 Nothing secret is logged; the request log is disabled.
 """
 import argparse
@@ -38,6 +43,8 @@ SIGNER_SHA256 = '066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108d
 BOOT_STATES = {0: 'Verified', 1: 'SelfSigned', 2: 'Unverified', 3: 'Failed'}
 TEE_LEVELS = {1, 2}  # TrustedEnvironment, StrongBox
 TOKEN_TTL_S, CHALLENGE_TTL_S = 3600, 60
+INVITE_TTL_S = 24 * 3600
+INVITE_URI = 'dev.pixel.models://enroll?invite='  # the app keeps its built-in origin; a QR never changes it
 MAX_BODY = 64 * 1024
 
 
@@ -199,8 +206,9 @@ def verify_attestation(chain_b64, challenge, policy, now):
         raise Refused(401, 'device_unlocked')
     if desc['bootState'] == 'Verified':
         pass
-    elif desc['bootState'] == 'SelfSigned' and desc['bootKey'] in policy['selfSignedBootKeys']:
-        pass  # a custom OS (RoseOS) only with its approved, pinned verified-boot key
+    elif desc['bootState'] == 'SelfSigned' and (not policy['selfSignedBootKeys']
+                                                 or desc['bootKey'] in policy['selfSignedBootKeys']):
+        pass  # a custom OS (RoseOS) with a locked bootloader; optionally pinned to approved boot keys (Nathan, 17:45)
     else:
         raise Refused(401, 'boot_state')
     return key, [format(c.serial_number, 'x') for c in chain]
@@ -243,7 +251,15 @@ class Store:
         return [bytes.fromhex(s['current'])] + ([bytes.fromhex(s['previous'])] if s.get('previous') else [])
 
     def registry(self):
-        return self._read(self.registry_path, {'keys': {}, 'enrollmentOpen': True, 'days': {}})
+        return self._read(self.registry_path, {'keys': {}, 'enrollmentOpen': True, 'days': {}, 'invites': {}})
+
+    def create_invite(self, label, ttl_s, now):
+        """One single-use enrollment code. Only its sha256 is stored; the code itself is shown once to the admin."""
+        code = 'rgi1.' + b64u(os.urandom(32))
+        self.update_registry(lambda reg: reg.setdefault('invites', {}).update({
+            hashlib.sha256(code.encode()).hexdigest(): {'label': label, 'createdAt': int(now),
+                                                        'expiresAt': int(now + ttl_s), 'usedBy': None}}))
+        return code
 
     def update_registry(self, fn):
         """fn's changes are written even when it refuses: a consumed challenge or an automatic revocation stays."""
@@ -306,9 +322,9 @@ class Service:
         opened_challenge = opened(self.store.secrets(), 'rgc1', challenge, now)
         if opened_challenge is None:
             raise Refused(401, 'challenge_invalid')
-        serials = None
+        serials, invite = None, body.get('invite')
         if 'attestation' in body:
-            if not isinstance(body['attestation'], list):
+            if not isinstance(body['attestation'], list) or not (invite is None or isinstance(invite, str)):
                 raise Refused(400, 'malformed')
             public_key, serials = verify_attestation(body['attestation'], challenge, self.policy, now)
             der = spki(public_key)
@@ -328,11 +344,12 @@ class Service:
         except (InvalidSignature, ValueError):
             raise Refused(401, 'signature_invalid') from None
         revoked = None if serials is not None else self.policy['revoked']()
-        self.store.update_registry(lambda reg: self._commit(reg, opened_challenge, key_id, der, serials, revoked, now))
+        self.store.update_registry(lambda reg: self._commit(reg, opened_challenge, key_id, der, serials, revoked, now,
+                                                            invite))
         token = sign(self.store.secrets()[0], 'rgm1', {'k': key_id, 'e': int(now) + TOKEN_TTL_S})
         return {'access_token': token, 'token_type': 'Bearer', 'expires_in': TOKEN_TTL_S, 'key_id': key_id}
 
-    def _commit(self, reg, challenge, key_id, der, serials, revoked, now):
+    def _commit(self, reg, challenge, key_id, der, serials, revoked, now, invite=None):
         """Under the registry lock: consume the challenge once (persisted, so a restart cannot replay it), then
         enroll or check the key."""
         used = {n: e for n, e in reg.setdefault('usedChallenges', {}).items() if e > now}
@@ -349,15 +366,21 @@ class Service:
         if entry is not None:
             if entry['revoked']:
                 raise Refused(403, 'key_revoked')
-            return  # the same install enrolling again
+            return  # the same install enrolling again; its invite was spent the first time
+        if invite is None:
+            raise Refused(403, 'invite_required')
+        offer = reg.setdefault('invites', {}).get(hashlib.sha256(invite.encode()).hexdigest())
+        if offer is None or offer['usedBy'] is not None or offer['expiresAt'] <= now:
+            raise Refused(403, 'invite_invalid')
         day = time.strftime('%Y-%m-%d', time.gmtime(now))
         reg['days'] = {day: reg['days'].get(day, 0)}
         if (not reg['enrollmentOpen'] or len(reg['keys']) >= self.policy['maxKeys']
                 or reg['days'][day] >= self.policy['enrollPerDay']):
             raise Refused(403, 'enrollment_closed')
         reg['days'][day] += 1
+        offer.update(usedBy=key_id, usedAt=int(now))
         reg['keys'][key_id] = {'spki': base64.b64encode(der).decode(), 'enrolledAt': int(now), 'revoked': False,
-                               'serials': serials}
+                               'serials': serials, 'label': offer['label']}
 
     def validate(self, authorization):
         now = self.clock()
@@ -452,14 +475,17 @@ def policy_from(a):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('serve', 'secret-init', 'rotate-secret', 'revoke', 'close-enrollment',
-                                       'open-enrollment', 'status'))
-    p.add_argument('key_id', nargs='?')
+    p.add_argument('command', choices=('serve', 'secret-init', 'rotate-secret', 'invite', 'invites', 'revoke',
+                                       'close-enrollment', 'open-enrollment', 'status'))
+    p.add_argument('key_id', nargs='?', help='revoke: a key_id, or a label (all its devices and unused codes)')
+    p.add_argument('--label', default='', help='invite: who or what this code is for, e.g. nathan-pixel')
+    p.add_argument('--ttl-hours', type=float, default=INVITE_TTL_S / 3600)
+    p.add_argument('--uri-only', action='store_true', help='invite: print only the URI, for `| qrencode -t ansiutf8`')
     p.add_argument('--state-dir', type=Path, default=Path('/var/lib/rose-models/auth'))
     p.add_argument('--roots', type=Path, default=Path('/etc/rose-models/attestation-roots'))
     p.add_argument('--revocation-status', type=Path, default=Path('/var/lib/rose-models/attestation-status.json'))
     p.add_argument('--self-signed-boot-keys', type=Path, default=Path('/etc/rose-models/self-signed-boot-keys.txt'),
-                   help='approved verifiedBootKey values (hex), one per line; SelfSigned boots need one')
+                   help='optional: approved verifiedBootKey values (hex), one per line; if any, SelfSigned must match')
     p.add_argument('--max-keys', type=int, default=200)
     p.add_argument('--enroll-per-day', type=int, default=50)
     p.add_argument('--port', type=int, default=8090)
@@ -477,11 +503,28 @@ def main(argv=None):
             ThreadingHTTPServer(('127.0.0.1', a.port), handler(Service(store, policy))).serve_forever()
         elif a.command in ('secret-init', 'rotate-secret'):
             store.init_secret(rotate=a.command == 'rotate-secret')
+        elif a.command == 'invite':
+            if not 0 < a.ttl_hours <= 24 * 7 or len(a.label) > 64:
+                raise Refused(400, 'invite_options')
+            now = time.time()
+            code = store.create_invite(a.label, a.ttl_hours * 3600, now)
+            print(INVITE_URI + code if a.uri_only else json.dumps(
+                {'uri': INVITE_URI + code, 'label': a.label, 'expiresAt': int(now + a.ttl_hours * 3600)}))
+            return 0
+        elif a.command == 'invites':
+            for offer in store.registry().get('invites', {}).values():
+                print(json.dumps({k: offer.get(k) for k in ('label', 'createdAt', 'expiresAt', 'usedBy')}))
+            return 0
         elif a.command == 'revoke':
             def revoke(reg):
-                if a.key_id not in reg['keys']:
+                hits = [k for k, e in reg['keys'].items() if a.key_id in (k, e.get('label'))]
+                spent = [o for o in reg.get('invites', {}).values() if a.key_id and o['label'] == a.key_id]
+                if not hits and not spent:
                     raise Refused(404, 'key_unknown')
-                reg['keys'][a.key_id]['revoked'] = True
+                for k in hits:
+                    reg['keys'][k]['revoked'] = True
+                for o in spent:
+                    o['expiresAt'] = min(o['expiresAt'], 0)
             store.update_registry(revoke)
         elif a.command in ('close-enrollment', 'open-enrollment'):
             store.update_registry(lambda reg: reg.update(enrollmentOpen=a.command == 'open-enrollment'))
