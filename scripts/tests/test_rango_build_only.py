@@ -82,6 +82,27 @@ class ConfigTest(Fixture):
                 rb.load(path)
             self.assertIn(expect, str(caught.exception))
 
+class IsolatedConfigTest(unittest.TestCase):
+    def test_the_isolated_config_binds_the_same_target_and_shares_nothing_with_frankel(self):
+        shared = rb.load()
+        isolated = rb.load(SCRIPTS.parent/'os/build-only/rango-isolated.json')
+        frankel = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['host']
+        for key in ('device', 'lunch', 'factory', 'adevtool', 'deviceContract'):
+            self.assertEqual(isolated[key], shared[key], key)
+        host = isolated['host']
+        self.assertEqual(host['makeGoals'], frankel['makeGoals'])
+        self.assertEqual(host['makeJobs'], 32)
+        for key in ('sourceRoot', 'lockPath'):
+            self.assertNotEqual(host[key], frankel[key], key)
+        self.assertNotEqual(host['reconcileReceiptDir'], frankel['integrate']['reconcile']['receiptDir'])
+        for path in (host['sourceRoot'], host['lockPath'], host['reconcileReceiptDir']):
+            self.assertTrue(path.startswith('/srv/rose-rango/'), path)
+        self.assertIsNone(isolated['capacity']['generateAllowanceBytes'])
+        self.assertIsNone(isolated['capacity']['compileAllowanceBytes'])
+        self.assertEqual(rb.commands(isolated, BUILD, '/srv/rose-rango/dl')['compile']['argv'][2],
+            'source build/envsetup.sh && lunch rango-cur-user && m -j32 vendorbootimage vendorkernelbootimage '
+            'target-files-package otatools-package')
+
 class CommandTest(Fixture):
     def test_commands_are_rango_scoped_and_unsigned(self):
         cmds = rb.commands(self.config, BUILD, self.dl)
