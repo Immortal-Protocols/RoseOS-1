@@ -33,6 +33,15 @@ class TrayContractTest(unittest.TestCase):
         self.controls = (SHELL/'AgentStatusControls.java').read_text()
         self.link = (SHELL/'AgentTrayLink.java').read_text()
 
+    def test_the_tray_draws_nothing_at_rest(self):
+        # #224: the idle grey lines across the status bar read as artifacts and are not in the HiFi design.
+        waves = self.tray[self.tray.index('private final class Waves'):]
+        for banned in ('drawRest', 'drawLine', '0xff888888'):
+            self.assertNotIn(banned, waves, banned)
+        self.assertIn('} else agentGlow.clear();', waves)
+        self.assertIn('} else micGlow.clear();', waves)
+        self.assertIn('if (active) {\n                agentGlow.draw(', waves)
+
     def test_message_codes_match(self):
         codes = dict((name, int(value)) for name, value in
             re.findall(r'\b(REGISTER|UNREGISTER|START|MUTE|UNMUTE|END|STATE)=(\d+)', self.service))

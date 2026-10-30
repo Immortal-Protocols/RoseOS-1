@@ -13,7 +13,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.graphics.Canvas;
-import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
@@ -233,7 +232,6 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private final class Waves extends View {
         final StatusVoiceGlow agentGlow = new StatusVoiceGlow();
         final StatusVoiceGlow micGlow = new StatusVoiceGlow();
-        final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         long rendered;
         float leftStart, rightStart, glowWidth;
         int targetAt(float x) {
@@ -266,24 +264,17 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
             rightStart = holeRight + dp(6);
             glowWidth = Math.min(holeLeft-dp(6), getWidth()-rightStart);
             leftStart = 0;
+            // At rest nothing is drawn (#224): the idle grey lines read as screen artifacts and are not in
+            // the selected HiFi design. Only an active session shows its glows.
             if (active) {
                 agentGlow.draw(canvas,leftStart,0,glowWidth,getHeight(),
                         fresh ? output : 0,now/1000f,elapsed,true);
-            } else { agentGlow.clear(); drawRest(canvas,leftStart); }
+            } else agentGlow.clear();
             if (active && listening && !muted) {
                 micGlow.draw(canvas,rightStart,0,glowWidth,getHeight(),
                         fresh ? input : 0,now/1000f+1.7f,elapsed,false);
-            } else { micGlow.clear(); drawRest(canvas,rightStart); }
+            } else micGlow.clear();
             if (connected || listening) postInvalidateOnAnimation();
-        }
-        private void drawRest(Canvas canvas,float start) {
-            paint.setShader(null);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setColor(0xff888888);
-            paint.setStrokeWidth(dp(1.2f));
-            canvas.drawLine(start+dp(8),getHeight()/2f,
-                    start+glowWidth-dp(8),getHeight()/2f,paint);
         }
     }
 
