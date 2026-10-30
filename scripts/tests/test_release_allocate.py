@@ -3,6 +3,7 @@
 Synthetic git repositories and observations only: no network, release, builder or dispatch."""
 import calendar
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -48,7 +49,7 @@ class Repo:
         self.write('os/background-control/agent-pip/AndroidManifest.xml', manifest('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
         self.write('README.md', 'rose\n')
         self.r1 = self.commit('Release 2806 source')
-        self.pipeline = {'versionBaselines': {'installedEvidence': {'build': '2026102701'}, 'retained': [
+        self.pipeline = {'host': {'sign': {'updateNotes': 'os/release-notes/{device}-{build}.md'}}, 'versionBaselines': {'installedEvidence': {'build': '2026102701'}, 'retained': [
                 {'build': '2026102806', 'source': self.r1, 'buildTimestamp': 1793220605, 'mustExceed': {'dev.pixel.voice': 308}}]},
             'appRelease': {'packageName': 'dev.pixel.voice', 'mustExceed': 307, 'published': {'versionCode': 302},
                 'built': [{'versionCode': v} for v in (303, 304, 306, 307)],
@@ -115,7 +116,8 @@ class Allocation(unittest.TestCase):
         self.assertEqual(c1, c2)
         self.assertEqual(ra.check_candidate(a, c1, repo.path), c1)
         self.assertEqual(repo.git('rev-list', '--parents', '-n', '1', c1).split()[1:], [repo.source])
-        self.assertEqual(repo.git('diff', '--name-only', repo.source, c1), 'workspace/rose-agent/app/AndroidManifest.xml')
+        self.assertEqual(repo.git('diff', '--name-only', repo.source, c1).split(),
+            ['os/release-notes/frankel-2026103001.md', 'workspace/rose-agent/app/AndroidManifest.xml'])
         self.assertIn('android:versionCode="311" android:versionName="311-os-beta-2026103001"',
             repo.git('show', f'{c1}:workspace/rose-agent/app/AndroidManifest.xml'))
         self.assertEqual(repo.git('rev-parse', 'main'), repo.source)  # no ref moved, nothing pushed
@@ -227,6 +229,46 @@ class Allocation(unittest.TestCase):
             ra.check_candidate(a, repo.source, repo.path)
 
 
+class CandidateNotes(unittest.TestCase):
+    """host-sign reads os/release-notes/{device}-{build}.md from the candidate (run 41092991450 refused at sign without it)."""
+
+    def test_candidate_carries_the_generated_notes_for_its_build(self):
+        repo = Repo(self)
+        a = allocate(repo)
+        candidate = ra.derive(a, repo.path)
+        text = repo.git('show', f'{candidate}:os/release-notes/frankel-2026103001.md') + '\n'
+        self.assertEqual(text, ra.notes(a, repo.path))
+        self.assertIn('2026103001', text)
+        self.assertIn(f'Notes: os/release-notes/frankel-2026103001.md {hashlib.sha256(text.encode()).hexdigest()}',
+            repo.git('cat-file', '-p', candidate))
+
+    def test_repeat_dispatch_of_unchanged_main_gets_fresh_notes(self):
+        repo = Repo(self)
+        first = allocate(repo)
+        published = dict(first, candidateSha=ra.derive(first, repo.path))
+        again = allocate(repo, observation(reservations=[published]), run='778')
+        candidate = ra.derive(again, repo.path)
+        self.assertNotEqual(candidate, repo.source)
+        self.assertEqual(ra.check_candidate(again, candidate, repo.path), candidate)
+        self.assertIn(again['build'], repo.git('show', f'{candidate}:os/release-notes/frankel-{again["build"]}.md'))
+
+    def test_same_candidate_in_another_checkout(self):
+        repo = Repo(self)
+        a = allocate(repo)
+        candidate = ra.derive(a, repo.path)
+        clone = Path(tempfile.mkdtemp(prefix='rose-alloc-clone-'))
+        self.addCleanup(shutil.rmtree, clone, True)
+        subprocess.run(['git', 'clone', '-q', str(repo.path), str(clone/'r')], check=True)
+        self.assertEqual(ra.derive(json.loads(json.dumps(a, sort_keys=True)), clone/'r'), candidate)
+
+    def test_committed_notes_for_the_build_refuse(self):
+        repo = Repo(self)
+        repo.write('os/release-notes/frankel-2026103001.md', 'hand written 2026103001\n')
+        repo.source = repo.commit('Notes for 2026103001')
+        with self.assertRaisesRegex(ra.Refused, 'notes_exist'):
+            ra.derive(allocate(repo), repo.path)
+
+
 class Reservation(unittest.TestCase):
     def test_concurrent_or_repeated_reservation_of_one_build_refuses(self):
         repo = Repo(self)
@@ -293,7 +335,7 @@ def builder_repo(test):
     home = repo.path.parent/(repo.path.name + '-home')
     (home/'rose-actions'/'frankel-2026102806').mkdir(parents=True)
     test.addCleanup(shutil.rmtree, home, True)
-    record['host'] = {'lockPath': str(home/'frankel-build.lock')}
+    record['host'] = dict(record['host'], lockPath=str(home/'frankel-build.lock'))
     record['publication'] = {'repository': 'Immortal-Protocols/pixel-ota', 'api': 'https://api.github.com'}
     repo.write(ra.PIPELINE_CONFIG, json.dumps(record))
     repo.source = repo.commit('Pipeline host record')
