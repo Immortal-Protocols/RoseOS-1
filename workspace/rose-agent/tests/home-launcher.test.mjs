@@ -269,11 +269,18 @@ test('Home labels are the app pages\' labels: whole names over two lines, never 
  assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
 });
 
-test('the wallpaper is drawn like the HiFi .wall: cover at 62% 30%; its bytes stay the verified reference (APP-OS-VISUAL-1030)',()=>{
+test('the wallpaper is the selected HiFi image, drawn like its .wall: cover at 62% 30% (APP-OS-VISUAL-1030-M002)',()=>{
  const jpeg=fs.readFileSync(new URL('../app/res/drawable-nodpi/rose_home_wallpaper.jpg',import.meta.url));
- // First embedded JPEG of Rose-Fold-v3.html (Library v2, SHA-256 67bf7a50…05ee), 461 x 1024. scripts/rose-verify.py
- // (Infra) pins these bytes as its reference; swapping in the HiFi's own wallpaper.jpg is a separately coordinated hunk.
- assert.equal(crypto.createHash('sha256').update(jpeg).digest('hex'),'409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5');
+ const sha=crypto.createHash('sha256').update(jpeg).digest('hex');
+ // Exact bytes of prototypes/rose-hifi/src/assets/wallpaper.jpg at ce126f56 (Git blob 1d99a767…9720), which Rose-HiFi.html
+ // embeds unchanged as --wallpaper; scripts/rose-verify.py pins the same fixed SHA-256. 1024 x 1536, 286252 bytes.
+ assert.equal(sha,'67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5');
+ assert.notEqual(sha,'409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5','not the earlier Rose-Fold-v3 image');
+ assert.equal(jpeg.length,286252);
+ const sof=jpeg.indexOf(Buffer.from([0xff,0xc0]));assert.ok(sof>0);
+ assert.deepEqual([jpeg.readUInt16BE(sof+7),jpeg.readUInt16BE(sof+5)],[1024,1536],'width x height');
+ assert.match(read('../../../scripts/rose-verify.py'),/'wallpaperSha256': '67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5'/);
+ // One resource, same name: Home and the reading surface share it; no owner wallpaper preference exists to reset.
  assert.match(home,/BitmapFactory\.decodeResource\(resources, R\.drawable\.rose_home_wallpaper\)/);
  assert.match(home,/HomeAppLayout\.cover\(wallpaper\.getWidth\(\), wallpaper\.getHeight\(\), bounds\.width\(\), bounds\.height\(\),\s+HomeAppLayout\.WALL_X, HomeAppLayout\.WALL_Y\);/);
  assert.match(layout,/WALL_X = \.62f, WALL_Y = \.30f, IVORY_X = \.80f, IVORY_Y = \.20f;/);

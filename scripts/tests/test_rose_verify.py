@@ -141,6 +141,48 @@ class ParseTests(unittest.TestCase):
                          hashlib.sha256((rv.ROOT/rv.WALLPAPER).read_bytes()).hexdigest())
 
 
+class WallpaperReferenceTests(unittest.TestCase):
+    """APP-OS-VISUAL-1030-M002: the reference is the selected HiFi wallpaper, a fixed expectation; equality only."""
+    SELECTED = '67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5'
+    FOLD_V3 = '409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5'
+    FOLD_V3_BLOB = '0d46158cb03c5add4d16ad0125add805e649cce3'
+
+    def check_with(self, data):
+        real = rv.git_show
+        with mock.patch.object(rv, 'git_show', side_effect=lambda rev, path: data if path == rv.WALLPAPER else real(rev, path)):
+            r = rv.source('HEAD')
+        return r['wallpaperSha256'], next(c for c in r['checks'] if c['check'] == 'Reference wallpaper bytes')['result']
+
+    def test_fixed_expectation_and_resource_bytes(self):
+        # A literal, not computed from the asset under test.
+        self.assertEqual(rv.REFERENCE['wallpaperSha256'], self.SELECTED)
+        data = (rv.ROOT/rv.WALLPAPER).read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), self.SELECTED)
+        self.assertEqual(len(data), 286252)
+        self.assertIn('ce126f56c8967008b0a5db889137f224ac9ad36c', rv.REFERENCE['prototype'])
+        self.assertIn('1d99a767629749ee23a08487a0352d214ef29720', rv.REFERENCE['wallpaperBasis'])
+        self.assertIn(self.FOLD_V3, rv.REFERENCE['wallpaperBasis'])
+
+    def test_selected_bytes_pass(self):
+        digest, result = self.check_with((rv.ROOT/rv.WALLPAPER).read_bytes())
+        self.assertEqual((digest, result), (self.SELECTED, 'pass'))
+
+    def test_tampered_bytes_fail(self):
+        data = bytearray((rv.ROOT/rv.WALLPAPER).read_bytes())
+        data[len(data) // 2] ^= 1
+        digest, result = self.check_with(bytes(data))
+        self.assertNotEqual(digest, self.SELECTED)
+        self.assertEqual(result, 'fail')
+
+    def test_previous_fold_v3_image_fails(self):
+        p = subprocess.run(['git', '-C', str(rv.ROOT), 'cat-file', 'blob', self.FOLD_V3_BLOB], capture_output=True)
+        if p.returncode:
+            self.skipTest('shallow checkout without the previous wallpaper blob')
+        self.assertEqual(hashlib.sha256(p.stdout).hexdigest(), self.FOLD_V3)
+        digest, result = self.check_with(p.stdout)
+        self.assertEqual((digest, result), (self.FOLD_V3, 'fail'))
+
+
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
