@@ -79,14 +79,25 @@ class AppReleaseTest(unittest.TestCase):
         # The signer's own apksigner (used by sign-apk.py) and the independent one (host.tools.apksigner).
         self.signer_cert = self.root/'signer-cert'
         self.signer_cert.write_text(PIN)
+        # Signing with --v4-signing-enabled also writes <out>.idsig; this stand-in binds it to the APK's bytes.
+        self.idsig_override = self.root/'idsig-override'
         script(sdk/'apksigner', f'''
-            import shutil, sys; a = sys.argv[1:]
-            if a[0] == 'sign': shutil.copy(a[-1], a[a.index('--out') + 1])
+            import hashlib, os, shutil, sys; a = sys.argv[1:]
+            if a[0] == 'sign':
+                out = a[a.index('--out') + 1]; shutil.copy(a[-1], out)
+                if a[a.index('--v4-signing-enabled') + 1] == 'true':
+                    data = open({str(self.idsig_override)!r}, 'rb').read() if os.path.exists({str(self.idsig_override)!r}) \
+                        else b'v4:' + hashlib.sha256(open(out, 'rb').read()).hexdigest().encode()
+                    if data != b'none': open(out + '.idsig', 'wb').write(data)
             else: print('Signer #1 certificate SHA-256 digest: ' + open({str(self.signer_cert)!r}).read())''')
         script(sdk/'zipalign', 'pass')
         self.verify_cert = self.root/'verify-cert'
         self.verify_cert.write_text(PIN)
         apksigner = script(tools/'apksigner', f'''
+            import hashlib, sys; a = sys.argv[1:]
+            if '--v4-signature-file' in a:  # v4 pairing: the sidecar must be this APK's
+                idsig = open(a[a.index('--v4-signature-file') + 1], 'rb').read()
+                sys.exit(0 if idsig == b'v4:' + hashlib.sha256(open(a[-1], 'rb').read()).hexdigest().encode() else 1)
             print('Signer #1 certificate SHA-256 digest: ' + open({str(self.verify_cert)!r}).read())''')
         # aapt dump badging over a stand-in APK (a ZIP whose 'identity' entry names package:version): the identity line,
         # sdkVersion (from self.sdk_file) and native-code for its lib/<abi>/ entries (or self.native_file when written).
@@ -163,7 +174,12 @@ class AppReleaseTest(unittest.TestCase):
 
     def test_only_the_signed_apk_receipt_and_checksums_leave_the_builder(self):
         receipt = self.run_release()
-        self.assertEqual(sorted(p.name for p in self.artifact.iterdir()), ['SHA256SUMS', 'app-release-receipt.json', 'dev.pixel.voice-306.apk'])
+        self.assertEqual(sorted(p.name for p in self.artifact.iterdir()), ['SHA256SUMS', 'app-release-receipt.json',
+            'dev.pixel.voice-306.apk', 'dev.pixel.voice-306.apk.idsig'])
+        idsig = self.artifact/'dev.pixel.voice-306.apk.idsig'
+        self.assertEqual(receipt['v4Signature'], {'asset': idsig.name, 'size': idsig.stat().st_size,
+            'sha256': hashlib.sha256(idsig.read_bytes()).hexdigest()})
+        self.assertIn('v4 signature (.idsig) verified by the independent apksigner for this APK', receipt['checks'])
         apk = self.artifact/'dev.pixel.voice-306.apk'
         self.assertEqual(receipt, json.loads((self.artifact/'app-release-receipt.json').read_text()))
         self.assertEqual({k: receipt[k] for k in ('receiptType', 'simulated', 'candidate', 'packageName', 'versionCode', 'versionName',
@@ -174,7 +190,7 @@ class AppReleaseTest(unittest.TestCase):
              'minimumTestedOs': {'build': '2026102804', 'controller': 28}, 'apkFacts': {'minSdk': 29, 'nativeAbis': []}})
         self.assertIn('independent apksigner verification: exactly the pinned signer', receipt['checks'])
         sums = dict(reversed(l.split('  ')) for l in (self.artifact/'SHA256SUMS').read_text().splitlines())
-        self.assertEqual(sorted(sums), ['app-release-receipt.json', apk.name])
+        self.assertEqual(sorted(sums), ['app-release-receipt.json', apk.name, idsig.name])
         for name, digest in sums.items():
             self.assertEqual(hashlib.sha256((self.artifact/name).read_bytes()).hexdigest(), digest)
         artifact_bytes = b''.join(p.read_bytes() for p in self.artifact.iterdir())
@@ -183,6 +199,22 @@ class AppReleaseTest(unittest.TestCase):
         self.assertEqual([(c['voice_only'], c['candidate']) for c in self.calls], [(True, self.work/'candidate')])
         self.assertEqual(len(self.fetched()), 4)
         self.assert_clean()
+
+    def test_missing_empty_oversize_or_unpaired_v4_signature_fails_and_leaves_nothing(self):
+        for data, error in ((b'none', 'missing'), (b'', 'outside 1..'), (b'x' * (release.V4_MAX_BYTES + 1), 'outside 1..'),
+                            (b'v4:' + b'0' * 64, 'does not verify as the v4 signature')):
+            self.idsig_override.write_bytes(data)
+            with self.subTest(error=error), self.assertRaisesRegex(release.AdapterFailed, error):
+                self.run_release()
+            self.assertFalse(self.artifact.exists(), 'no partial artifact')
+            self.assert_clean()
+
+    def test_symlinked_v4_signature_fails(self):
+        target = self.root/'elsewhere.idsig'
+        target.write_text('x')
+        (self.root/'link.idsig').symlink_to(target)
+        with self.assertRaisesRegex(release.AdapterFailed, 'missing or not a regular file'):
+            release.v4_signature('apksigner', self.root/'a.apk', self.root/'link.idsig')
 
     def test_wrong_signer_fails_at_signing_and_at_independent_verification(self):
         self.signer_cert.write_text(OTHER)
