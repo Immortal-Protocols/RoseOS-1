@@ -68,7 +68,7 @@ source = Path(a.source).resolve()
 bundle = Path(__file__).resolve().parents[1]/'os'
 manifest = ET.parse(bundle/'pinned-manifest.xml')
 revisions = {n.get('path', n.get('name')): n.get('revision') for n in manifest.findall('project')}
-projects = {'frameworks/base': ['frameworks-base.patch']}
+projects = {'frameworks/base': ['frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch']}
 if a.agent_tray:projects['build/make'] = ['agent-tray-build-make.patch']
 if a.emulator:projects['device/generic/goldfish'] = ['goldfish.patch']
 # Upstream Updater polls GrapheneOS; a differently signed build must name its own channel.
