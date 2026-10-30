@@ -213,9 +213,15 @@ and `build-tools/android-15` tree proof.
   `case_failed`, `cleanup_failed`, `interrupted` or `internal_error`.
 - No password, key, path, tool output or environment value appears in the result.
 
-**Integration (Infra-owned, not released here).** The `host-models-sign.py` preflight would run this command after the
-existing SDK and JDK proofs and before any login, with the checked JDK root and the configured Models SDK root (for
-example `/home/pixelbuild/rose-actions/tools/models-sdk-r35`). It would fail the preflight on a nonzero exit.
+**Integration** (`scripts/host-models-sign.py`, under Infra's narrow release of its CLI `preflight` branch):
+
+- `host-models-sign.py preflight` first runs the existing proofs, including SDK preparation under the lock. Then
+  `locked_synthetic_check()` takes the shared lock again, revalidates the SDK archive and tree proof and the JDK21 tree
+  proof, and runs this check with the checked JDK root and the configured Models SDK root.
+- Anything but a complete pass refuses the preflight with `synthetic_sign_check_failed: <category>`. A complete pass
+  means 3 of 3 executed and passed, 0 failed, 0 skipped, and the corrected invocation signed and verified.
+- Only the closed summary is added to the preflight output, as `syntheticSignCheck`.
+- `preflight()` and the production `run()` never call the check, so it always happens before login.
 
 **Evidence level.** A pass is synthetic evidence for the given tools. It is not a production signature, does not use the
 production key, and does not prove the production cause. CI runs it against the hosted runner's build-tools, accepted
