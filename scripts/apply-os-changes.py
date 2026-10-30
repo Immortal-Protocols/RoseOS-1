@@ -28,6 +28,9 @@ p.add_argument('--updater-url',
 p.add_argument('--updater-published-channel', action='append', default=[],
     help='Wire channel with published DEVICE-channel metadata under --updater-url (repeatable; default: stable, '
     'the existing Pixel Beta feed). Other choices show as not available and are never fetched')
+p.add_argument('--updater-release-index',
+    help='GitHub release list of the --updater-url repository, for a device published as separate releases '
+    '(Rango): each check resolves one eligible DEVICE-N release and reads its metadata and OTA from it')
 p.add_argument('--keep-upstream-updater', action='store_true',
     help='Deliberately leave the Updater polling GrapheneOS (not for a build that updates an existing RoseOS phone)')
 p.add_argument('--preinstall-apk', type=Path, action='append', default=[],
@@ -56,6 +59,13 @@ if a.updater_published_channel and not a.updater_url:
 if any(not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,31}', c) for c in a.updater_published_channel):
     p.error('--updater-published-channel must be a lowercase channel token such as stable')
 published_channels = sorted(set(a.updater_published_channel or ['stable']))
+# A per-release device: --updater-url is the repository's .../releases/download/ prefix and the index its release list.
+RELEASE_REPO = re.compile(r'https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/releases/download/')
+if a.updater_release_index:
+    repo = RELEASE_REPO.fullmatch(a.updater_url or '')
+    if not repo or a.updater_release_index != f'https://api.github.com/repos/{repo[1]}/releases':
+        p.error('--updater-release-index must be https://api.github.com/repos/OWNER/REPO/releases with --updater-url '
+            'https://github.com/OWNER/REPO/releases/download/ of the same repository')
 if a.updater_url and a.keep_upstream_updater:
     p.error('--updater-url and --keep-upstream-updater are mutually exclusive')
 # A product build that keeps the upstream URL moves the installed phone to GrapheneOS's channel,
@@ -77,6 +87,10 @@ UPDATER_MARKER = '    <string name="url" translatable="false">https://releases.g
 # RoseOS channel choices (Prod/Beta/Alpha, Beta = existing "stable" feed) ride on the same Updater change.
 UPDATER_PUBLISHED = '    <string-array name="channel_published" translatable="false">\n        <item>stable</item>\n    </string-array>\n'
 if a.updater_url:projects['packages/apps/Updater'] = ['updater-rose-channels.patch']
+# Release discovery rides after the channels; without --updater-release-index the Updater is byte-identical.
+if a.updater_release_index:projects['packages/apps/Updater'].append('updater-rose-releases.patch')
+UPDATER_RELEASES = 'packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java'
+UPDATER_INDEX = '    <string name="release_index" translatable="false"></string>'
 # Upstream lists the Updater module only for OFFICIAL_BUILD (media_system.mk), so a RoseOS build omitted it.
 # Include it exactly when its channel is set; a --keep-upstream-updater build ships none.
 if a.updater_url:projects.setdefault('build/make', []).append('updater-product-build-make.patch')
@@ -147,6 +161,7 @@ for file in (bundle/'overlays').rglob('*'):
     relative = file.relative_to(bundle/'overlays')
     if is_background_overlay(relative) and policy is None:continue
     if is_updater_overlay(relative) and not a.updater_url:continue
+    if str(relative) == UPDATER_RELEASES and not a.updater_release_index:continue
     copies.append((file, source/relative))
 if policy:copies.append((a.background_agent, source/'packages/apps/PixelBackgroundControl/Agent.apk'))
 generated = []
@@ -186,6 +201,11 @@ if a.updater_url:
     config.write_text(text.replace(UPDATER_MARKER,
         f'    <string name="url" translatable="false">{a.updater_url}</string>').replace(UPDATER_PUBLISHED,
         '    <string-array name="channel_published" translatable="false">\n' + items + '    </string-array>\n'))
+    if a.updater_release_index:
+        text = config.read_text()
+        if text.count(UPDATER_INDEX) != 1:raise SystemExit('Updater release index setting not found as expected')
+        config.write_text(text.replace(UPDATER_INDEX,
+            f'    <string name="release_index" translatable="false">{a.updater_release_index}</string>'))
 if policy:
     config = source/'frameworks/base/core/res/res/values/config.xml'
     text = config.read_text()

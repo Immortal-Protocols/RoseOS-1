@@ -42,6 +42,7 @@ python3 os/tests/test_tray_contract.py
 python3 os/tests/test_installed_precedence.py
 python3 os/tests/test_updater_channels.py
 python3 os/tests/test_updater_inclusion.py
+python3 os/tests/test_updater_releases.py
 python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 scripts/tests/test_release_manifest.py
@@ -110,6 +111,9 @@ java -cp "$JAVA_TESTS/AgentTrayLink" com.android.wm.shell.AgentTrayLinkTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseChannels" \
  os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java os/tests/RoseChannelsTest.java
 java -cp "$JAVA_TESTS/RoseChannels" app.seamlessupdate.client.RoseChannelsTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseReleases" \
+ os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java os/tests/RoseReleasesTest.java
+java -cp "$JAVA_TESTS/RoseReleases" app.seamlessupdate.client.RoseReleasesTest
 # Pure Rose Agent app logic, compiled the same way.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
@@ -162,6 +166,11 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java workspace/rose-agent/app/tests/DirectUpdateTest.java \
  workspace/rose-agent/app/tests/DirectUpdateChannelTest.java
 java -cp "$JAVA_TESTS/DirectUpdateChannel" dev.pixel.voice.DirectUpdateChannelTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/UpdateRecovery" \
+ workspace/rose-agent/app/src/dev/pixel/voice/UpdateRecovery.java workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/PublicApkDownload.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
+ workspace/rose-agent/app/tests/UpdateRecoveryTest.java
+java -cp "$JAVA_TESTS/UpdateRecovery" dev.pixel.voice.UpdateRecoveryTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TaskPresentation" \
  workspace/rose-agent/app/src/dev/pixel/voice/TaskPresentation.java workspace/rose-agent/app/tests/TaskPresentationTest.java
 java -cp "$JAVA_TESTS/TaskPresentation" dev.pixel.voice.TaskPresentationTest
