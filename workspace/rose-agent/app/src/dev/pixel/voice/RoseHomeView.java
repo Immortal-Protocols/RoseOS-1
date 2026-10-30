@@ -88,8 +88,9 @@ final class RoseHomeView extends FrameLayout {
   return insets;
  }
 
- /** The shared Home wallpaper (rose_home_wallpaper, the verified reference bytes) drawn behind the pager as the
-  * selected HiFi's .wall: background-size: cover at background-position 62% 30%. */
+ /** The shared Home wallpaper: the selected HiFi's own image (prototypes/rose-hifi/src/assets/wallpaper.jpg at
+  * ce126f56, the same bytes as rose_home_wallpaper) drawn behind the pager as its .wall: background-size: cover at
+  * background-position 62% 30%. */
  static final class Wallpaper extends Drawable {
   final Bitmap wallpaper;
   final Rect source = new Rect();
