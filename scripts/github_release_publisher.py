@@ -137,6 +137,11 @@ class GitHubReleases:
             self._request('GET', location, 'public release asset storage', headers={'Accept': 'application/octet-stream'},
                 authenticated=False, stream_to=destination, limit=size)
 
+    def finalize_public(self, release_id):
+        """Publish a verified draft as a public release that never becomes Latest (separate-device releases)."""
+        return self._request('PATCH', f'{self.api}/repos/{self.repository}/releases/{int(release_id)}', 'finalize public release',
+            body={'draft': False, 'prerelease': False, 'make_latest': 'false'})[2]
+
     def promote(self, release_id):
         return self._request('PATCH', f'{self.api}/repos/{self.repository}/releases/{int(release_id)}', 'promote release',
             body={'draft': False, 'make_latest': 'true'})[2]

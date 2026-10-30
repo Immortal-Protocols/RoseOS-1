@@ -103,6 +103,70 @@ pixel-ota. Drafts made outside this workflow must stay recorded as retained
 baselines in `frankel.json`. The publisher's authenticated tag check is the
 final guard.
 
+## Retained Rango signing and separate release (source only, not selected)
+
+This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
+has been bootstrapped, transferred, signed or published, and no runtime is
+selected for it. The mode `rango-retained` runs only on the hosted guard. It
+runs `python3 scripts/rango-retained.py preflight --job guard`, which exits 4
+and lists every unbound value in `os/retained-rango/release.json`. A later
+guard step then fails unconditionally because the runtime is not selected.
+No controller, builder, login, secret, signing or publication job exists for
+this mode. The `latest-beta` button and the Frankel modes are unchanged.
+`SUPPORTED_DEVICES` and `LATEST_DEVICES` stay `('frankel',)`.
+
+What the source already does:
+- **Input.** The input receipt schema is `roseos.rango-retained-input.v1`. It
+  binds:
+  - device `rango`, product `02b21bc6…`, build `2026103001` and its
+    timestamp;
+  - the source manifest, overlays, config and compile receipt, with compile
+    exit 0;
+  - target-files and otatools, each by name, size and sha256;
+  - the signed Rose Agent and its policy;
+  - the `rango-build-only` producer.
+
+  A missing value stays explicitly unbound. Wrong devices, products, builds or
+  producers are refused, as are traversal, links, extra or missing files, and
+  size or hash drift. The only input interface is a local directory holding
+  exactly the receipt, target-files and otatools.
+  `rango-retained.py stage --input-dir D --consumer C` copies it into a fresh
+  owner-only consumer directory. `recheck --consumer C` revalidates that
+  copy, and host-sign runs the recheck again before any secret.
+- **Signing.** `scripts/host-sign.py` signs with `ROSE_RETAINED_INPUT` (the
+  consumer directory) and `ROSE_RETAINED_BOOTSTRAP_RECEIPT` set. Everything
+  else is the same Frankel primitive. Only
+  `PIXEL_OS_SIGNING_KEYS_RANGO_V1` and `PIXEL_OS_SIGNING_PASSPHRASE_RANGO_V1`
+  are used. Their exact per-secret versions, and the OTA certificate and AVB
+  identities, come from a genuine completed `fold-rango-v1` bootstrap
+  receipt, which must differ from the Frankel identity. The four installed
+  tool identities, and the otatools and release-script provenance, must be
+  bound; while any is null, signing refuses before any secret fetch.
+- **Publication.** `rango-retained.py` publishes to tag `rango-{build}` with
+  rango-prefixed assets.
+  - It refuses an existing tag.
+  - It uploads a draft and download-checks it. Only then does it make the
+    release public with `make_latest=false`, using
+    `GitHubReleases.finalize_public`.
+  - It checks that Latest is the same release before and after.
+  - An explicit promote or a config with `latest: true` refuses.
+  - Earlier releases are never touched.
+
+  A GitHub tag does not establish automatic Rango OTA discovery, and no
+  channel routing is configured.
+
+Unbound, in the order the guard lists them:
+
+| Value | What it needs |
+|---|---|
+| `input.transport` | A supported transport from the Mac operator to the original builder |
+| `input.directory` | The retained input itself |
+| `signing.bootstrapReceipt` | A genuine `fold-rango-v1` bootstrap |
+| Four `signing.tools.*.installed` | Observed installed tool identities |
+| `signing.otatoolsProvenance`, `signing.releaseScriptProvenance` | Approved source bindings |
+| `publication.feedChannel`, `publication.notes` | A selected channel and reviewed notes |
+| `verification.expected` | Rango-specific release-pipeline expectations |
+
 ## 1. Inspect the existing builder
 
 Project `protocols-465723`, instance `immortal-os-builder`, zone `us-west2-a`.
