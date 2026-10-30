@@ -78,6 +78,10 @@ jobs:
         env:
           ROSE_REQUIRE_NGINX: '1'
         run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_acme_start.py -v
+      - name: Rendered certbot deploy hook installs a retained lineage (real nginx -t, synthetic chain; no CA)
+        env:
+          ROSE_REQUIRE_NGINX: '1'
+        run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_tls_install.py -v
 
   service:
     runs-on: ubuntu-24.04
