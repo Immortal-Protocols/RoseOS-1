@@ -9,13 +9,13 @@ Identity checks compare against one explicit candidate expectation (--expect FIL
 default: a build is checked against exactly the identities Infra recorded for it. Runtime observations are bound to
 one recorded tested user (--user, default the current foreground user, resolved and recorded).
 
-  expected  print the repository's pinned identities and the Fold prototype reference; --expect FILE validates and
+  expected  print the repository's pinned identities and the selected HiFi reference; --expect FILE validates and
             prints an expectation
   release   DIR: a downloaded pixel-ota release directory. Checks SHA256SUMS for every file present,
             verification.json, the feed line and the AVB key pin, and reads OTA metadata. --extract-apps DIR (needs
             --expect) also extracts the expected apps' partitions from payload.bin (every operation and partition
             hash checked), copies those APKs out of the ext4/erofs images and inspects them like `apk`
-  apk       APK...: sha256, package/version/SDK/ABI, launchable and HOME activities, signer, Fold wallpaper resource
+  apk       APK...: sha256, package/version/SDK/ABI, launchable and HOME activities, signer, reference wallpaper resource
             and Home/conversation classes; with --expect, also bytes/version/signer against the expectation
   source    [REV]: the manifest and Home routing of a source revision (git show; no build)
   runtime   --serial S --handback REF --expect FILE --out DIR [--user ID]: read-only properties, the tested user's
@@ -23,7 +23,7 @@ one recorded tested user (--user, default the current foreground user, resolved 
             --interactive (tested user must be the foreground user) also drives the system HOME key, a labeled
             explicit Rose HOME launch, Rose -> conversation -> Back, the launcher-icon entry and HOME again, with
             screenshots, UI dumps and (where Pillow is installed) a comparison of each Home screenshot
-  compare   SCREENSHOT --out DIR: a screenshot against the reference wallpaper (cover crop), black-screen detection
+  compare   SCREENSHOT --out DIR: a screenshot against the reference wallpaper (Home cover crop at 62% 30%), black-screen detection
             and a side-by-side image for human review
 Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
 
@@ -38,6 +38,7 @@ import bz2
 import hashlib
 import json
 import lzma
+import math
 import os
 from pathlib import Path
 import re
@@ -747,16 +748,39 @@ def source(rev):
 
 # ---------- screenshot comparison ----------
 
+# Home's wallpaper crop: HomeAppLayout.cover at WALL_X/WALL_Y (RoseHomeView.Wallpaper), the selected HiFi's .wall
+# background-position. The conversation's 80% 20% ivory overlay is another composition; compare never claims it.
+HOME_CROP = {'x': .62, 'y': .30, 'source': 'workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java '
+             'cover(..., WALL_X, WALL_Y) as drawn by RoseHomeView.Wallpaper'}
+
+
+def _f32(v):
+    return struct.unpack('f', struct.pack('f', v))[0]
+
+
+def _java_round(v):
+    """Java Math.round(float): round half up (not Python's half-to-even)."""
+    return math.floor(v + .5)
+
+
+def cover_box(bw, bh, width, height, x=HOME_CROP['x'], y=HOME_CROP['y']):
+    """The source box HomeAppLayout.cover returns, in its own float arithmetic: CSS background-size: cover at
+    background-position x% y%. (left, top, right, bottom); empty for an empty bitmap or area."""
+    if bw <= 0 or bh <= 0 or width <= 0 or height <= 0:
+        return (0, 0, 0, 0)
+    fx, fy, w, h = _f32(x), _f32(y), _f32(width), _f32(height)
+    if bw * h > bh * w:
+        crop = max(1, _java_round(_f32(_f32(bh * w) / h)))
+        left = _java_round(_f32((bw - crop) * fx))
+        return (left, 0, left + crop, bh)
+    crop = max(1, _java_round(_f32(_f32(bw * h) / w)))
+    top = _java_round(_f32((bh - crop) * fy))
+    return (0, top, bw, top + crop)
+
+
 def cover_crop(image, width, height):
-    """RoseHomeView.onSizeChanged: CSS background-size: cover, centered."""
-    bw, bh = image.size
-    if bw * height > bh * width:
-        crop = round(bh * width / height)
-        box = ((bw - crop) // 2, 0, (bw + crop) // 2, bh)
-    else:
-        crop = round(bw * height / width)
-        box = (0, (bh - crop) // 2, bw, (bh + crop) // 2)
-    return image.crop(box).resize((width, height))
+    """The Home wallpaper as RoseHomeView draws it over a width x height area (cover_box), resized to that area."""
+    return image.crop(cover_box(image.width, image.height, width, height)).resize((width, height))
 
 
 def compare(screenshot, out, reference=None, label='screenshot'):
@@ -766,7 +790,9 @@ def compare(screenshot, out, reference=None, label='screenshot'):
         raise Fail('screenshot comparison needs Pillow', 4)
     ref_path = Path(reference) if reference else ROOT/WALLPAPER
     shot = Image.open(screenshot).convert('RGB')
-    ref = cover_crop(Image.open(ref_path).convert('RGB'), *shot.size)
+    with Image.open(ref_path) as source:
+        reference_image = source.convert('RGB')
+    ref = cover_crop(reference_image, *shot.size)
     grid = (27, 48)
     small_shot = shot.resize(grid, Image.BOX)
     small_ref = ref.resize(grid, Image.BOX)
@@ -793,6 +819,8 @@ def compare(screenshot, out, reference=None, label='screenshot'):
     side.save(side_path)
     return {'kind': 'screenshot-comparison', 'screenshot': str(screenshot), 'screenshotSha256': sha256(screenshot),
             'size': list(shot.size), 'reference': str(ref_path), 'referenceSha256': sha256(ref_path),
+            'referenceCrop': {'kind': 'cover', 'x': HOME_CROP['x'], 'y': HOME_CROP['y'], 'source': HOME_CROP['source'],
+                              'box': list(cover_box(*reference_image.size, *shot.size))},
             'meanLuminance': round(mean_lum, 1), 'p95Luminance': round(p95, 1),
             'wallpaperCellCoverage': round(coverage, 3), 'verdict': verdict, 'sideBySide': str(side_path),
             'note': 'Heuristic over a 27x48 grid (cells within 40 levels of the cover-cropped wallpaper); '

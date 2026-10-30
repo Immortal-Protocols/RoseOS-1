@@ -183,6 +183,73 @@ class WallpaperReferenceTests(unittest.TestCase):
         self.assertEqual((digest, result), (self.FOLD_V3, 'fail'))
 
 
+class HomeCropTests(unittest.TestCase):
+    """APP-OS-VISUAL-1030-M004: compare crops the wallpaper as production Home draws it (HomeAppLayout.cover at
+    62% 30%, Java float arithmetic and Math.round), not centred. Expected boxes come from hand calculation, a
+    coordinate-coded image and the production Java itself, never from the helper under test."""
+
+    def test_known_boxes(self):
+        # Portrait phone over the 1024 x 1536 HiFi image: crop 1536*1080/2400 = 691.2 -> 691 wide,
+        # left (1024-691)*.62 = 206.46 -> 206.
+        self.assertEqual(rv.cover_box(1024, 1536, 1080, 2400), (206, 0, 897, 1536))
+        # Landscape: crop 1024*1080/2400 = 460.8 -> 461 tall, top (1536-461)*.30 = 322.5(+) -> 323.
+        self.assertEqual(rv.cover_box(1024, 1536, 2400, 1080), (0, 323, 1024, 784))
+        # Equal aspect: the whole image.
+        self.assertEqual(rv.cover_box(1024, 1536, 512, 768), (0, 0, 1024, 1536))
+        # Rounding-sensitive: 15 * .3f = 4.5000002 rounds half up to 5 (Python's round(15 * .3) would give 4).
+        self.assertEqual(rv.cover_box(20, 35, 20, 20), (0, 5, 20, 25))
+        # Odd sizes: 11 * 7 / 9 = 8.56 -> 9 wide, left (13-9)*.62 = 2.48 -> 2.
+        self.assertEqual(rv.cover_box(13, 11, 7, 9), (2, 0, 11, 11))
+        self.assertEqual(rv.cover_box(0, 0, 1080, 2400), (0, 0, 0, 0))
+        self.assertEqual(rv.HOME_CROP['x'], .62)
+        self.assertEqual(rv.HOME_CROP['y'], .30)
+
+    def test_centred_crop_is_not_home(self):
+        # Negative control: the previous centred crop puts the portrait band at 166, not Home's 206.
+        bw, bh, w, h = 1024, 1536, 1080, 2400
+        crop = round(bh * w / h)
+        self.assertNotEqual(rv.cover_box(bw, bh, w, h)[0], (bw - crop) // 2)
+
+    def test_constants_match_production_home(self):
+        layout = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java').read_text()
+        self.assertIn('WALL_X = .62f, WALL_Y = .30f', layout)
+        home = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/RoseHomeView.java').read_text()
+        self.assertIn('HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y', home)
+
+    @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
+    def test_coordinate_coded_image_crops_at_the_home_origin(self):
+        from PIL import Image
+        bw, bh = 64, 96
+        image = Image.new('RGB', (bw, bh))
+        image.putdata([(x, y, 0) for y in range(bh) for x in range(bw)])
+        for (w, h), origin in {(43, 96): (13, 0), (64, 29): (0, 20), (64, 96): (0, 0)}.items():
+            # Areas equal to the crop size, so resizing is the identity and each pixel still names its source.
+            out = rv.cover_crop(image, w, h)
+            self.assertEqual(out.getpixel((0, 0))[:2], origin, (w, h))
+            self.assertEqual(out.getpixel((w - 1, h - 1))[:2], (origin[0] + w - 1, origin[1] + h - 1), (w, h))
+
+    @unittest.skipUnless(shutil.which('javac') and shutil.which('java'), 'needs a JDK')
+    def test_matches_production_java(self):
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out)
+        driver = out/'dev/pixel/voice/CoverDriver.java'
+        driver.parent.mkdir(parents=True)
+        driver.write_text('package dev.pixel.voice;\npublic class CoverDriver { public static void main(String[] a) {\n'
+                          ' for (int i = 0; i < a.length; i += 4) { int[] b = HomeAppLayout.cover(Integer.parseInt(a[i]),'
+                          ' Integer.parseInt(a[i + 1]), Float.parseFloat(a[i + 2]), Float.parseFloat(a[i + 3]),'
+                          ' HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y);\n'
+                          '  System.out.println(b[0] + " " + b[1] + " " + b[2] + " " + b[3]); } } }\n')
+        subprocess.run(['javac', '-d', str(out), str(rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java'),
+                        str(driver)], check=True, capture_output=True)
+        cases = [(bw, bh, w, h) for bw, bh in ((1024, 1536), (461, 1024), (13, 11), (20, 35), (1, 1), (999, 1001))
+                 for w, h in ((1080, 2400), (2400, 1080), (1440, 3120), (2208, 1840), (7, 9), (20, 20), (411, 914), (1, 3))]
+        args = [str(v) for case in cases for v in case]
+        lines = subprocess.run(['java', '-cp', str(out), 'dev.pixel.voice.CoverDriver', *args], check=True,
+                               capture_output=True, text=True).stdout.split('\n')
+        for case, line in zip(cases, lines):
+            self.assertEqual(rv.cover_box(*case), tuple(int(v) for v in line.split()), case)
+
+
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
