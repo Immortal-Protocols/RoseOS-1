@@ -98,3 +98,93 @@ writes nothing. Resolve it with the owner, never with a blanket `adopt`.
 
 The generate stage never regenerates an existing vendor directory. Neither stage erases
 outputs or caches.
+
+## Resuming a compile after a natural cutoff (OS-RANGO-RESUME-005)
+
+A compile stopped by the supervisor deadline or a VM stop can continue in its own `OUT_DIR`.
+The incremental cache is reused, and nothing is renamed, deleted, cleaned, regenerated or
+re-synced. `resume` is not an allow-existing switch. Fresh `run` still refuses an existing
+`OUT_DIR`.
+
+### What `resume` requires
+
+`resume-check` runs these checks read-only. `resume` repeats all of them while holding the
+same nonblocking isolated lock, before it runs anything.
+
+1. **The attempt chain.** The chain is the original `--receipt-dir` (`R`), followed by
+   `R.resume-1`, `R.resume-2` and so on. Only the latest attempt is judged:
+
+   | Latest attempt | Result |
+   |---|---|
+   | Completed with returncode 0 | Already completed: a no-op that runs nothing |
+   | Never started | Refused |
+   | Ordinary failure | Refused |
+   | Malformed receipts, or a gap in the chain | Refused |
+   | Started and never completed, or ended by a signal | Resumable only with a bound cutoff proof |
+
+   A missing completion, exit 143/137, or a free lock does not prove a cutoff on its own.
+
+2. **`CUT.json` (`rango-compile-cutoff`), written by the operator at the stop.**
+   - It is bound to the latest attempt's `started.json` and `preflight.json` sha256, its build
+     number and its `OUT_DIR`.
+   - The cause is `supervisor-deadline` or `vm-stop`.
+   - `stoppedAt` falls after the start, and `observedAt` falls after the stop.
+   - At least one evidence file is listed. The helper re-hashes each one and requires the
+     quoted line to appear exactly.
+   - `writer` gives the boot id of the host during the compile, and the writer pid.
+
+3. **`PROV.json` (`rango-compile-provenance`), bound to the original `started.json`.** It
+   supplies what an old-format start never recorded, each with a recorded source:
+   - the config sha256, which must equal the `--config` file now;
+   - the recipe (base and overlays);
+   - the Android project pins: a snapshot recorded before the start, and a read-only snapshot
+     taken now. The two must be byte-identical;
+   - the `OUT_DIR` owner uid.
+
+   A missing field is reported and refused. Nothing is invented.
+
+4. **The same identity.**
+   - Every attempt's `started.json` ran exactly the command, cwd, `OUT_DIR` and `BUILD_NUMBER`
+     this config gives now.
+   - The original preflight's `OUT_DIR`, reconcile receipt (name and hash), and local-inputs
+     (path, hash, release and product) are unchanged.
+   - Every compile preflight check still passes, including integration, adevtool, vendor and
+     the isolated reserve-only capacity check.
+
+5. **Output.**
+   - `SRC/out-rango-B` is an existing ordinary directory directly inside `SRC`, with no linked
+     component.
+   - It is owned by the recorded uid, and no receipt or proof path lies inside it.
+   - Links inside the build are neither walked nor refused.
+
+6. **No writer.**
+   - The cutoff's boot id differs from the current one, or the recorded pid is gone.
+   - No process has its cwd or an open file in `OUT_DIR`, and no ninja, soong or kati process
+     runs in `SRC`.
+
+### What `resume` writes
+
+`resume` creates the next `R.resume-N` (write-once):
+
+- `preflight.json` holds the admission report.
+- `started.json` holds the unchanged command and `resumeOf`: the prior receipts' hashes, the
+  cutoff and provenance hashes, and the helper's hash.
+- `completed.json` holds the returncode, with `incremental: true`, `signed: false` and
+  `releaseReady: false`.
+
+Earlier receipts are never modified. A later cutoff needs a new proof bound to that
+`R.resume-N`.
+
+### Commands
+
+```bash
+python3 $R/scripts/rango-build-only.py resume-check --config $R/os/build-only/rango-isolated.json \
+  --build-number $B --download-dir /srv/rose-rango/dl-$B --inputs-receipt $IN/local-inputs.json \
+  --prior-receipt-dir /srv/rose-rango/receipts/$B-compile --cutoff-proof CUT.json --provenance PROV.json
+python3 $R/scripts/rango-build-only.py resume --config $R/os/build-only/rango-isolated.json \
+  --build-number $B --download-dir /srv/rose-rango/dl-$B --inputs-receipt $IN/local-inputs.json \
+  --prior-receipt-dir /srv/rose-rango/receipts/$B-compile --cutoff-proof CUT.json --provenance PROV.json
+```
+
+A successful incremental compile is only a compile. It is not signing, verification or
+device acceptance.

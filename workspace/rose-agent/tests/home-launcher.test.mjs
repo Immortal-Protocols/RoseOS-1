@@ -195,8 +195,11 @@ test('the Home tray stays fixed over the swiping pages, above system insets (OS-
  for(const src of [homeFrame,homeTray])for(const hide of ['SYSTEM_UI_FLAG','hide(WindowInsets','setDecorFitsSystemWindows','FLAG_FULLSCREEN'])assert.ok(!src.includes(hide),hide);
  // The selected HiFi composition (ce126f56): a 92dp bar with 22dp corners and two 104x66dp wells at its ends.
  assert.match(homeTray,/static final int HEIGHT_DP = 92, GAP_DP = 16, SIDE_DP = 24, WELL_W_DP = 104, WELL_H_DP = 66;/);
- assert.match(homeTray,/metal\.setCornerRadius\(activity\.dp\(22\)\);/);
- assert.equal((homeTray.match(/new LayoutParams\(activity\.dp\(WELL_W_DP\), activity\.dp\(WELL_H_DP\)\)/g)||[]).length,2);
+ // APP-OS-VISUAL-1030: the shared TrayMaterial (22dp-corner brushed tray); each well view is its 104x66 glass plus
+ // the pocket on every side, and the end padding keeps the glass 22dp from the tray's ends (.tray.two).
+ assert.match(homeTray,/setBackground\(new TrayMaterial\.Tray\(activity\.getResources\(\)\.getDisplayMetrics\(\)\.density\)\);/);
+ assert.match(homeTray,/setPadding\(activity\.dp\(22 - TrayMaterial\.POCKET_DP\), 0, activity\.dp\(22 - TrayMaterial\.POCKET_DP\), 0\);/);
+ assert.equal((homeTray.match(/new LayoutParams\(activity\.dp\(WELL_W_DP \+ 2 \* TrayMaterial\.POCKET_DP\), activity\.dp\(WELL_H_DP \+ 2 \* TrayMaterial\.POCKET_DP\)\)/g)||[]).length,2);
  assert.match(homeTray,/addView\(new View\(activity\), new LayoutParams\(0, 1, 1\)\);/);
  assert.ok(!home.includes('sessionMark')&&!home.includes('showSession')&&!home.includes('RoseMark'));
 });
@@ -266,11 +269,18 @@ test('Home labels are the app pages\' labels: whole names over two lines, never 
  assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
 });
 
-test('the wallpaper is drawn like the HiFi .wall: cover at 62% 30%; its bytes stay the verified reference (APP-OS-VISUAL-1030)',()=>{
+test('the wallpaper is the selected HiFi image, drawn like its .wall: cover at 62% 30% (APP-OS-VISUAL-1030-M002)',()=>{
  const jpeg=fs.readFileSync(new URL('../app/res/drawable-nodpi/rose_home_wallpaper.jpg',import.meta.url));
- // First embedded JPEG of Rose-Fold-v3.html (Library v2, SHA-256 67bf7a50…05ee), 461 x 1024. scripts/rose-verify.py
- // (Infra) pins these bytes as its reference; swapping in the HiFi's own wallpaper.jpg is a separately coordinated hunk.
- assert.equal(crypto.createHash('sha256').update(jpeg).digest('hex'),'409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5');
+ const sha=crypto.createHash('sha256').update(jpeg).digest('hex');
+ // Exact bytes of prototypes/rose-hifi/src/assets/wallpaper.jpg at ce126f56 (Git blob 1d99a767…9720), which Rose-HiFi.html
+ // embeds unchanged as --wallpaper; scripts/rose-verify.py pins the same fixed SHA-256. 1024 x 1536, 286252 bytes.
+ assert.equal(sha,'67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5');
+ assert.notEqual(sha,'409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5','not the earlier Rose-Fold-v3 image');
+ assert.equal(jpeg.length,286252);
+ const sof=jpeg.indexOf(Buffer.from([0xff,0xc0]));assert.ok(sof>0);
+ assert.deepEqual([jpeg.readUInt16BE(sof+7),jpeg.readUInt16BE(sof+5)],[1024,1536],'width x height');
+ assert.match(read('../../../scripts/rose-verify.py'),/'wallpaperSha256': '67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5'/);
+ // One resource, same name: Home and the reading surface share it; no owner wallpaper preference exists to reset.
  assert.match(home,/BitmapFactory\.decodeResource\(resources, R\.drawable\.rose_home_wallpaper\)/);
  assert.match(home,/HomeAppLayout\.cover\(wallpaper\.getWidth\(\), wallpaper\.getHeight\(\), bounds\.width\(\), bounds\.height\(\),\s+HomeAppLayout\.WALL_X, HomeAppLayout\.WALL_Y\);/);
  assert.match(layout,/WALL_X = \.62f, WALL_Y = \.30f, IVORY_X = \.80f, IVORY_Y = \.20f;/);
@@ -281,6 +291,37 @@ test('the wallpaper is drawn like the HiFi .wall: cover at 62% 30%; its bytes st
  const draw=home.slice(home.indexOf('@Override public void draw(Canvas canvas)'));
  assert.ok(!draw.slice(0,draw.indexOf('\n  }')).includes('new '),'no allocation while drawing the wallpaper');
  assert.match(home,/@Override protected void onBoundsChange\(Rect bounds\)/);
+});
+
+test('one tray material for Home and the conversation, and the HiFi-sized tray Rose (APP-OS-VISUAL-1030)',()=>{
+ const material=read('../app/src/dev/pixel/voice/TrayMaterial.java');
+ const conversation=read('../app/src/dev/pixel/voice/RoseConversationActivity.java');
+ // Both trays and every well use the one material; no hand-rolled gradients are left behind.
+ assert.match(homeTray,/well\.setBackground\(new TrayMaterial\.Well\(activity\.getResources\(\)\.getDisplayMetrics\(\)\.density\)\);/);
+ assert.match(conversation,/icon\.setBackground\(new TrayMaterial\.Well\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);icon\.setDuplicateParentStateEnabled\(true\);/);
+ assert.match(conversation,/row\.setBackground\(new TrayMaterial\.Tray\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);row\.setElevation\(dp\(12\)\);/);
+ assert.ok(!/GradientDrawable/.test(homeTray),'HomeTray draws no private gradient');
+ assert.ok(!/0xfaffffff,0x8cffffff|0xfff6f7f9,0xffe3e7eb/.test(conversation),'the conversation has no copy of the material');
+ // Effective style.css values at ce126f56 (review overrides applied): alpha x 255, rounded.
+ const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
+ assert.ok(material.includes(`GLASS = {${argb(.98,'ffffff')}, ${argb(.55,'ffffff')}, ${argb(.35,'d6e2f0')}, ${argb(.5,'becee0')}}`),'well glass');
+ assert.match(material,/GLASS_STOPS = \{0f, \.34f, \.68f, 1f\};/);
+ assert.match(material,/ellipse\.setScale\(1\.1f \* w, \.8f \* h\);/);assert.match(material,/ellipse\.postTranslate\(lens\.left \+ \.32f \* w, lens\.top \+ \.18f \* h\);/);
+ for(const [name,a,rgb] of [['INNER_EDGE',.65,'ffffff'],['LOWER_SHADE',.22,'465c7d'],['SHEEN',.85,'ffffff'],['PRESSED_SHADE',.3,'3c506e'],
+   ['POCKET_EDGE',.42,'5f738e'],['COLLAR',.9,'c6ced7'],['COLLAR_LINE',.35,'78879b'],['LIP',.75,'ffffff'],['LOWER_RIM',.28,'3c4b5f']])
+  assert.ok(material.includes(`${name} = ${argb(a,rgb)}`),name);
+ assert.match(material,/METAL = \{0xfff6f7f9, 0xffe3e7eb, 0xffcfd5db, 0xffe8ebee\};/);assert.match(material,/METAL_STOPS = \{0f, \.38f, \.62f, 1f\};/);
+ assert.ok(material.includes(`SPECULAR = {0x00ffffff, ${argb(.55,'ffffff')}, 0x00ffffff}`));assert.match(material,/SPECULAR_STOPS = \{\.28f, \.44f, \.60f\};/);
+ assert.match(material,/POCKET_DP = 5;/);assert.match(material,/RADIUS_DP = 22;/);
+ // The pressed glass follows the real pressed state; the drawables are decorative (no listeners, text or names).
+ assert.match(material,/if \(s == android\.R\.attr\.state_pressed\) now = true;/);
+ assert.ok(!/setOnClickListener|setContentDescription|drawText/.test(material));
+ // The tray Rose is sized from the measured HiFi sphere through the shared renderer's own geometry.
+ assert.match(homeTray,/int roseSize = activity\.dp\(RosePresenceModel\.viewSizeFor\(RosePresenceModel\.TRAY_SPHERE_DP\)\);/);
+ assert.match(homeTray,/rose\.addView\(roseView, new FrameLayout\.LayoutParams\(roseSize, roseSize, Gravity\.CENTER\)\);/);
+ assert.match(read('../app/src/dev/pixel/voice/RosePresenceView.java'),/float r=Math\.min\(getWidth\(\),getHeight\(\)\)\/\(2f\*RosePresenceModel\.VIEW_RADII\);/);
+ // The conversation's wells keep the reference 92x66 where they fit and narrow on a small screen (ConversationPresentation).
+ assert.match(conversation,/int lens=ConversationPresentation\.wellWidth\(getResources\(\)\.getConfiguration\(\)\.screenWidthDp,TrayMaterial\.POCKET_DP\);/);
 });
 
 test('app tiles are the HiFi frosted glass, on Home and the app pages alike (APP-OS-VISUAL-1030)',()=>{

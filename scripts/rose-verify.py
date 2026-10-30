@@ -56,13 +56,17 @@ CONTRACT = ROOT/'os/alpha/cuttlefish-product-contract.json'
 PIPELINE = ROOT/'os/release-pipeline/frankel.json'
 WALLPAPER = 'workspace/rose-agent/app/res/drawable-nodpi/rose_home_wallpaper.jpg'
 REFERENCE = {
-    'prototype': 'Rose-Fold-v3.html, Library item libfile_ff139fdeb5688191a918d4ca9210abe9 version 2 '
-                 '(SHA-256 67bf7a50...05ee, ROS-PROTOTYPE-FOLD-003-DELIVERY-001)',
-    'status': 'Delivered prototype that the product Home implements; the Fold brief records its browser rendering '
-              'and visuals as not independently accepted',
+    'prototype': 'Rose-HiFi.html at ce126f56c8967008b0a5db889137f224ac9ad36c/prototypes/rose-hifi '
+                 '(built HTML SHA-256 56a18b41e98747079039e50ca6a9fbdebc062cfe19ca47ebd26bce4de72c0b76; '
+                 'HIFI-OCT29-001-VISUAL-03, APP-OS-VISUAL-1030-M002)',
+    'status': 'Owner-selected implementation reference (Nathan, 2026-10-29 20:12Z) that the product Home implements; '
+              'rendered and native visual acceptance remain open',
     'wallpaperPath': WALLPAPER,
-    'wallpaperSha256': '409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5',
-    'wallpaperBasis': 'First embedded JPEG of Rose-Fold-v3.html, 461 x 1024 (workspace/rose-agent/tests/home-launcher.test.mjs)',
+    'wallpaperSha256': '67e3975453b7caa1fc344b12f1f82088747c3aa5730621af72b7ecf02d0463c5',
+    'wallpaperBasis': 'prototypes/rose-hifi/src/assets/wallpaper.jpg at ce126f56 (Git blob '
+                      '1d99a767629749ee23a08487a0352d214ef29720), 1024 x 1536, 286252 bytes, embedded unchanged as '
+                      'Rose-HiFi.html --wallpaper. Earlier Agent builds ship the Rose-Fold-v3 image (461 x 1024, '
+                      '409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5) and fail this check truthfully',
 }
 # Image paths of the contract apps (os/alpha/cuttlefish-product-contract.json imageExpectations, docs/OS-RELEASE.md).
 APP_PATHS = {
@@ -319,7 +323,7 @@ def inspect_apk(tools, apk, expectation=None):
     if badging['packageName'] == 'dev.pixel.voice':
         result['wallpaper'] = wallpaper_entry(tools, apk)
         result['dex'] = dex_markers(apk)
-        result['checks'].append(check('Fold reference wallpaper bytes', None if result['wallpaper'] is None else
+        result['checks'].append(check('Reference wallpaper bytes', None if result['wallpaper'] is None else
                                       result['wallpaper']['sha256'] == REFERENCE['wallpaperSha256'], result['wallpaper']))
         result['checks'].append(check('RoseHomeView and RoseConversationActivity compiled in',
                                       result['dex']['classes']['RoseHomeView'] and result['dex']['classes']['RoseConversationActivity']))
@@ -734,7 +738,7 @@ def source(rev):
             if 'if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class))' in main else None,
         },
         'wallpaperSha256': wallpaper,
-        'checks': [check('Fold reference wallpaper bytes', wallpaper == REFERENCE['wallpaperSha256']),
+        'checks': [check('Reference wallpaper bytes', wallpaper == REFERENCE['wallpaperSha256']),
                    check('MainActivity declares HOME', f'{package}.MainActivity' in with_category(activities, HOME))],
         'runtime': {'performed': False, 'reason': 'source inspection only; no build or device'},
     }

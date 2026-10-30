@@ -83,6 +83,16 @@ public final class RosePresenceModelTest {
         for (int i = 0; i < 400; i++) talking.step(.016f);
         expect(talking.step(.016f), "Speaking keeps the surround moving");
 
+        // Tray size (APP-OS-VISUAL-1030): the view is sized so the drawn sphere matches the HiFi tray's 42dp, and the
+        // broadest speaking ring still fits inside it. The old fixed 64dp view drew a sphere about 15% small.
+        int tray = RosePresenceModel.viewSizeFor(RosePresenceModel.TRAY_SPHERE_DP);
+        float sphere = 2f * tray / (2f * RosePresenceModel.VIEW_RADII);
+        expect(Math.abs(sphere - 42f) < 0.6f, "The tray view draws a 42dp sphere: " + sphere);
+        expect(tray <= 66 + 2 * 5, "and fits the well with its pocket (76dp): " + tray);
+        float ringRadius = (RosePresenceModel.RING_BROAD + RosePresenceModel.RING_ENERGY) * sphere / 2f;
+        expect(ringRadius < tray / 2f, "The broadest ring stays inside the view");
+        expect(2f * 64 / (2f * RosePresenceModel.VIEW_RADII) < 42f * .87f, "The previous 64dp view drew a smaller sphere");
+
         System.out.println("RosePresenceModelTest: " + checks + " checks passed");
     }
 }

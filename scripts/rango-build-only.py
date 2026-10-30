@@ -11,6 +11,7 @@ preflight and the shared builder lock:
 
   plan       prints both stages' exact commands and the preflight report; runs nothing
   preflight  the report alone (exit 0 ready, 1 not ready)
+  resume-check / resume   OS-RANGO-RESUME-005: compile only, after a proven natural cutoff (see resume below)
 
 Preflight refuses, before any write or command, when:
   * the target, pin or factory hash differs from the contract;
@@ -29,6 +30,12 @@ this tree, the exact signed APKs and policy, and this checkout's patcher.
 --receipt-dir receives write-once preflight.json, then started.json just before the command runs (the start event),
 then completed.json with its exit status. Unsigned test-keys output only: this module reaches no signer, secret or
 publisher, and the unsigned build is not release-ready.
+
+resume continues an interrupted compile in its own OUT_DIR. It is not an allow-existing switch: the prior attempt
+(--prior-receipt-dir, then any PRIOR.resume-N after it) must have started and never completed, an operator cutoff
+proof must bind that exact start to a supervisor deadline or VM stop, and supplemental provenance supplies what an
+old-format started.json lacks. Under the same lock it re-checks everything, then writes PRIOR.resume-N (write-once)
+and runs the same command. A completed prior attempt is a no-op; an ordinary failure is never resumed.
 Exit status: 0 ready/success, 1 not ready or command failed, 2 invalid input.
 """
 import argparse
@@ -183,8 +190,10 @@ def compile_integration(config, src, inputs_receipt):
                 problems.append(f'{POLICY_CONFIG} does not carry the local policy pin for {row["packageName"]}')
     return problems, facts
 
-def preflight(config, stage, build, download_dir, statvfs=os.statvfs, lock_probe=lock_free, inputs_receipt=None):
-    """{'ready': bool, 'problems': [...], 'facts': {...}} for one stage. Reads only; writes and runs nothing."""
+def preflight(config, stage, build, download_dir, statvfs=os.statvfs, lock_probe=lock_free, inputs_receipt=None,
+        existing_out=False):
+    """{'ready': bool, 'problems': [...], 'facts': {...}} for one stage. Reads only; writes and runs nothing.
+    existing_out is resume's alone: the existing OUT_DIR is then checked by resume_admission instead of refused."""
     if stage not in STAGES:
         raise InvalidInput(f'stage must be one of {STAGES}')
     out_name = out_dir_name(config, build)
@@ -227,7 +236,7 @@ def preflight(config, stage, build, download_dir, statvfs=os.statvfs, lock_probe
         if not check.is_file() or config['adevtool']['revision'] not in check.read_text():
             problems.append('the generated vendor module is not from the pinned adevtool revision')
     facts['frankelVendorPresent'] = (src/'vendor/google_devices/frankel').is_dir()
-    if os.path.lexists(src/out_name):
+    if os.path.lexists(src/out_name) and not existing_out:
         problems.append(f'{out_name} already exists; each build needs a new OUT_DIR')
     if stage == 'compile':
         integration, facts['roseIntegration'] = compile_integration(config, src, inputs_receipt)
@@ -274,21 +283,296 @@ def run(config, stage, build, download_dir, receipt_dir, runner=subprocess.run, 
             'signed': False, 'releaseReady': False, 'at': stamp(now)})
     return 0 if result.returncode == 0 else 1
 
+CUTOFF_CAUSES = ('supervisor-deadline', 'vm-stop')
+SIGNALLED = (-15, -9, 143, 137)
+BUILD_PROCESSES = ('ninja', 'soong_ui', 'soong_build', 'ckati', 'kati', 'make')
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+def attempt_chain(prior):
+    """[PRIOR, PRIOR.resume-1, ...]: the original attempt and every resume after it, in order. A gap is malformed."""
+    prior = Path(prior)
+    found = sorted(int(m[1]) for p in prior.parent.glob(prior.name + '.resume-*')
+        for m in [re.fullmatch(re.escape(prior.name) + r'\.resume-([1-9][0-9]*)', p.name)] if m)
+    if found != list(range(1, len(found) + 1)):
+        raise InvalidInput(f'{prior}.resume-N attempts are not 1..{len(found)}: {found}')
+    return [prior] + [Path(f'{prior}.resume-{n}') for n in found]
+
+def classify(attempt):
+    """(state, why) of one attempt directory from its own write-once receipts only."""
+    attempt = Path(attempt)
+    if attempt.is_symlink() or not attempt.is_dir():
+        return 'malformed', f'{attempt} is not a receipt directory'
+    files = {name: attempt/f'{name}.json' for name in ('preflight', 'started', 'completed')}
+    docs = {name: read_json(path) if path.exists() else None for name, path in files.items()}
+    broken = [name for name, path in files.items() if path.exists() and (path.is_symlink() or not isinstance(docs[name], dict))]
+    if broken:
+        return 'malformed', f'unreadable or linked receipts: {broken}'
+    preflight_doc, started, completed = docs['preflight'], docs['started'], docs['completed']
+    if preflight_doc is None:
+        return 'malformed', 'no preflight.json'
+    if started is None:
+        if preflight_doc.get('ready') is not True or (completed or {}).get('started') is False:
+            return 'never-started', 'preflight refused or the lock was taken; the command never ran'
+        return 'never-started', 'preflight passed but no started.json: the command never ran'
+    if preflight_doc.get('ready') is not True or started.get('stage') != 'compile' or started.get('device') != DEVICE \
+            or started.get('signed') is not False or not isinstance(started.get('command'), dict):
+        return 'malformed', 'started.json is not an unsigned rango compile after a ready preflight'
+    if completed is None:
+        return 'interrupted', 'started without completion; resumable only with a bound cutoff proof'
+    if completed.get('stage') != 'compile' or not isinstance(completed.get('returncode'), int):
+        return 'malformed', 'completed.json has no compile returncode'
+    if completed['returncode'] == 0:
+        return 'completed', 'the compile already completed with returncode 0'
+    if completed['returncode'] in SIGNALLED:
+        return 'interrupted', f'terminated by signal ({completed["returncode"]}); resumable only with a bound cutoff proof'
+    return 'failed', f'ordinary failure, returncode {completed["returncode"]}; never resumed'
+
+def check_cutoff(proof, attempt, started, build, out_name):
+    """Problems with the operator's cutoff proof for exactly this attempt; [] when it binds."""
+    if not isinstance(proof, dict) or proof.get('receiptType') != 'rango-compile-cutoff' or proof.get('schemaVersion') != 1:
+        return ['the cutoff proof is not a rango-compile-cutoff schemaVersion 1 document']
+    problems, prior = [], proof.get('prior') if isinstance(proof.get('prior'), dict) else {}
+    if Path(str(prior.get('receiptDir'))) != Path(attempt) or prior.get('startedSha256') != sha256_file(Path(attempt)/'started.json') \
+            or prior.get('preflightSha256') != sha256_file(Path(attempt)/'preflight.json'):
+        problems.append(f'the cutoff proof is not bound to {attempt} (receiptDir, startedSha256, preflightSha256)')
+    if proof.get('build') != {'buildNumber': str(build), 'outDir': out_name}:
+        problems.append('the cutoff proof names another build or OUT_DIR')
+    if proof.get('cause') not in CUTOFF_CAUSES:
+        problems.append(f'cutoff cause {proof.get("cause")!r} is not one of {CUTOFF_CAUSES}; a failure is not a cutoff')
+    stopped, observed, start = (str(x or '') for x in (proof.get('stoppedAt'), proof.get('observedAt'), started.get('at')))
+    if not all(re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', t) for t in (stopped, observed, start)) \
+            or not start < stopped <= observed:
+        problems.append('the cutoff must be stamped after the attempt started and observed after it stopped')
+    evidence = proof.get('evidence')
+    if not isinstance(evidence, list) or not evidence:
+        problems.append('the cutoff proof carries no supervisor or VM stop evidence')
+    for item in evidence if isinstance(evidence, list) else []:
+        item = item if isinstance(item, dict) else {}
+        path = Path(str(item.get('path')))
+        if not path.is_absolute() or path.is_symlink() or not path.is_file() or sha256_file(path) != item.get('sha256'):
+            problems.append(f'stop evidence {path} is missing, linked or not the recorded bytes')
+        elif not item.get('line') or item['line'] not in path.read_text(errors='replace').splitlines():
+            problems.append(f'stop evidence {path} does not contain the quoted line')
+    if not proof.get('observedBy'):
+        problems.append('the cutoff proof names no observer')
+    return problems
+
+def check_provenance(provenance, original, config_path):
+    """Problems with the supplemental provenance for fields an old-format started.json never recorded."""
+    if not isinstance(provenance, dict) or provenance.get('receiptType') != 'rango-compile-provenance' \
+            or provenance.get('schemaVersion') != 1:
+        return ['the provenance is not a rango-compile-provenance schemaVersion 1 document'], {}
+    problems, missing = [], [k for k in ('configSha256', 'recipe', 'projects', 'output', 'sources') if not provenance.get(k)
+        or (k in ('recipe', 'projects', 'output', 'sources') and not isinstance(provenance[k], dict))]
+    if missing:
+        return [f'supplemental provenance is missing {missing}; resume refused rather than inventing them'], {}
+    if not isinstance(provenance.get('prior'), dict) or provenance['prior'].get('startedSha256') != sha256_file(Path(original)/'started.json'):
+        problems.append(f'the provenance is not bound to {original}/started.json')
+    sources = provenance['sources']
+    unsourced = [k for k in ('configSha256', 'projects', 'output') if not sources.get(k)]
+    if unsourced:
+        problems.append(f'provenance fields without a recorded source: {unsourced}')
+    if provenance['configSha256'] != sha256_file(config_path):
+        problems.append('the config differs from the one recorded at the original start')
+    projects = provenance['projects']
+    paths = [Path(str(projects.get(k))) for k in ('recordedPath', 'currentPath')]
+    if any(not p.is_absolute() or p.is_symlink() or not p.is_file() for p in paths) or paths[0] == paths[1]:
+        problems.append('the Android project pin snapshots (recorded at start, taken now) must be two existing files')
+    elif not sha256_file(paths[0]) == projects.get('recordedSha256') == sha256_file(paths[1]):
+        problems.append('the Android project pins now differ from those recorded at the original start')
+    uid = provenance['output'].get('uid')
+    if not isinstance(uid, int) or isinstance(uid, bool):
+        problems.append('provenance output.uid is not a recorded owner uid')
+    return problems, {'uid': uid, 'projectsSha256': projects.get('recordedSha256'), 'recipe': provenance['recipe']}
+
+def check_output(src, out_name, uid, receipt_paths):
+    """The existing OUT_DIR must be this build's own ordinary directory directly in SRC; its insides are not walked."""
+    src, out = Path(src), Path(src)/out_name
+    problems = []
+    if any(Path(*src.parts[:i]).is_symlink() for i in range(2, len(src.parts) + 1)):
+        problems.append(f'{src} has a linked component')
+    if out.is_symlink() or not out.is_dir():
+        return problems + [f'{out} is not an existing ordinary directory: nothing to resume'], {}
+    if out.resolve().parent != src.resolve():
+        problems.append(f'{out} is not directly inside the source root')
+    stat = os.stat(out, follow_symlinks=False)
+    if stat.st_uid != uid:
+        problems.append(f'{out} is owned by uid {stat.st_uid}, not the recorded {uid}')
+    for path in receipt_paths:
+        resolved = Path(path).resolve()
+        if resolved == out.resolve() or out.resolve() in resolved.parents or resolved in out.resolve().parents:
+            problems.append(f'receipt path {path} collides with {out}')
+    return problems, {'path': str(out), 'uid': stat.st_uid, 'device': stat.st_dev, 'inode': stat.st_ino}
+
+def live_writers(src, out_dir, proc='/proc'):
+    """[(pid, why)] for processes that may still write the build: cwd or an open file in OUT_DIR, or a build tool with
+    its cwd in SRC. A parent that disappeared without completion.json can leave these behind."""
+    found, src, out_dir = [], os.path.realpath(src), os.path.realpath(out_dir)
+    def inside(path, root):
+        return path == root or path.startswith(root + '/')
+    for entry in Path(proc).glob('[0-9]*'):
+        if int(entry.name) == os.getpid():
+            continue
+        try:
+            cwd = os.readlink(entry/'cwd')
+            if inside(cwd, out_dir):
+                found.append((int(entry.name), f'cwd {cwd}'))
+                continue
+            argv0 = os.path.basename((entry/'cmdline').read_bytes().split(b'\0')[0].decode(errors='replace'))
+            if argv0 in BUILD_PROCESSES and inside(cwd, src):
+                found.append((int(entry.name), f'{argv0} in {cwd}'))
+                continue
+            for fd in (entry/'fd').iterdir():
+                target = os.readlink(fd)
+                if inside(target, out_dir):
+                    found.append((int(entry.name), f'open {target}'))
+                    break
+        except (OSError, ValueError):
+            continue
+    return found
+
+def boot_id():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+def resume_admission(config, config_path, build, download_dir, prior, cutoff, provenance, inputs_receipt,
+        writers=live_writers, current_boot=boot_id, pid_alive=lambda pid: Path(f'/proc/{pid}').exists(), **probes):
+    """{'state', 'admitted', 'problems', 'facts'}: reads only. The caller holds the lock when it acts on the result."""
+    out_name = out_dir_name(config, build)
+    chain = attempt_chain(prior)
+    states = [classify(a) for a in chain]
+    latest, (state, why) = chain[-1], states[-1]
+    facts = {'attempts': [{'receiptDir': str(a), 'state': s, 'why': w} for a, (s, w) in zip(chain, states)],
+        'latest': str(latest), 'outDir': out_name, 'buildNumber': str(build)}
+    report = {'state': state, 'admitted': False, 'problems': [], 'facts': facts}
+    earlier = [s for s, _ in states[:-1]]
+    if any(s != 'interrupted' for s in earlier):
+        report['state'], report['problems'] = 'malformed', ['an earlier attempt in the chain was not interrupted']
+        return report
+    if state != 'interrupted':
+        report['problems'] = [why]
+        return report
+    started = read_json(latest/'started.json')
+    original_started, original_preflight = read_json(chain[0]/'started.json'), read_json(chain[0]/'preflight.json')
+    problems = check_cutoff(read_json(cutoff), latest, started, build, out_name)
+    if problems:
+        report['state'] = 'interrupted-unproven'
+    prov_problems, prov = check_provenance(read_json(provenance), chain[0], config_path)
+    problems += prov_problems
+    command = commands(config, build, download_dir)['compile']
+    for attempt in chain:
+        if read_json(attempt/'started.json').get('command') != command:
+            problems.append(f'{attempt}/started.json ran another command, cwd or env than this config gives now')
+    ready = preflight(config, 'compile', build, download_dir, inputs_receipt=inputs_receipt, existing_out=True,
+        lock_probe=lambda path: True, **probes)
+    problems += ready['problems']
+    then = (original_preflight.get('facts') or {}).get('roseIntegration') or {}
+    now = ready['facts'].get('roseIntegration') or {}
+    if (original_preflight.get('facts') or {}).get('outDir') != out_name:
+        problems.append('the original preflight recorded another OUT_DIR')
+    for key in ('receipt', 'sha256'):
+        if then.get(key) != now.get(key):
+            problems.append(f'the reconcile receipt {key} differs from the original start')
+    for key in ('receipt', 'sha256', 'release', 'product'):
+        if (then.get('inputs') or {}).get(key) != (now.get('inputs') or {}).get(key):
+            problems.append(f'the local-inputs {key} differs from the original start')
+    out_problems, facts['output'] = check_output(config['host']['sourceRoot'], out_name, prov.get('uid'),
+        [prior, f'{prior}.resume-{len(chain)}', cutoff, provenance])
+    problems += out_problems
+    writer = (read_json(cutoff) or {}).get('writer')
+    writer = writer if isinstance(writer, dict) else {}
+    same_boot = writer.get('bootId') == current_boot()
+    pid = writer.get('pid')
+    if not writer.get('bootId') or (same_boot and (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+            or pid_alive(pid))):
+        problems.append('the prior writer is not proven gone (same boot and its pid is alive or unrecorded)')
+    if 'path' in facts['output']:
+        active = writers(config['host']['sourceRoot'], facts['output']['path'])
+        if active:
+            problems.append(f'a process may still write the build: {active[:3]}')
+    facts.update(sameBoot=same_boot, preflight=ready, provenance=prov,
+        cutoffSha256=sha256_file(cutoff) if Path(cutoff).is_file() else None,
+        provenanceSha256=sha256_file(provenance) if Path(provenance).is_file() else None,
+        helperSha256=sha256_file(Path(__file__).resolve()))
+    report['problems'] = problems
+    if not problems:
+        report['state'], report['admitted'] = 'resumable', True
+    return report
+
+def resume(config, config_path, build, download_dir, prior, cutoff, provenance, inputs_receipt,
+        runner=subprocess.run, now=time.time, **probes):
+    """Under the same nonblocking lock: re-admit, write PRIOR.resume-N, run the unchanged compile in the same OUT_DIR."""
+    with open(config['host']['lockPath'], 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(json.dumps({'verdict': 'NOT-ADMITTED', 'problems': ['the isolated builder lock is held']}), file=sys.stderr)
+            return 1
+        report = resume_admission(config, config_path, build, download_dir, prior, cutoff, provenance,
+            inputs_receipt, **probes)
+        if report['state'] == 'completed':
+            print(json.dumps({'verdict': 'ALREADY-COMPLETED', 'latest': report['facts']['latest'], 'executed': False}))
+            return 0
+        if not report['admitted']:
+            print(json.dumps({'verdict': 'NOT-ADMITTED', 'state': report['state'], 'problems': report['problems']},
+                indent=2), file=sys.stderr)
+            return 1
+        attempt = Path(f'{prior}.resume-{len(report["facts"]["attempts"])}')
+        attempt.mkdir()  # never exists: attempt_chain counted every resume-N before it
+        latest = Path(report['facts']['latest'])
+        resume_of = {'receiptDir': str(latest), 'original': str(prior),
+            'receipts': {p.name: sha256_file(p) for p in sorted(latest.glob('*.json'))},
+            'cutoffSha256': report['facts']['cutoffSha256'], 'provenanceSha256': report['facts']['provenanceSha256'],
+            'helperSha256': report['facts']['helperSha256']}
+        release_receipts.write_once(attempt/'preflight.json', {**report['facts']['preflight'], 'ready': True,
+            'resume': {k: report['facts'][k] for k in ('attempts', 'output', 'provenance', 'sameBoot')},
+            'at': stamp(now)})
+        command = commands(config, build, download_dir)['compile']
+        release_receipts.write_once(attempt/'started.json', {'stage': 'compile', 'device': DEVICE, 'command': command,
+            'signed': False, 'resumeOf': resume_of, 'at': stamp(now)})
+        result = runner(command['argv'], cwd=command['cwd'], env={**os.environ, **command['env']})
+        release_receipts.write_once(attempt/'completed.json', {'stage': 'compile', 'returncode': result.returncode,
+            'incremental': True, 'signed': False, 'releaseReady': False, 'at': stamp(now)})
+    return 0 if result.returncode == 0 else 1
+
 def stamp(now):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now()))
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['plan', 'preflight', 'run'])
+    p.add_argument('command', choices=['plan', 'preflight', 'run', 'resume-check', 'resume'])
     p.add_argument('--stage', choices=STAGES)
     p.add_argument('--config', default=str(CONFIG))
     p.add_argument('--build-number', required=True)
     p.add_argument('--download-dir', required=True)
     p.add_argument('--receipt-dir')
     p.add_argument('--inputs-receipt', help='compile: local-inputs.json from scripts/rango-local-inputs.py')
+    p.add_argument('--prior-receipt-dir', help='resume: the original compile --receipt-dir')
+    p.add_argument('--cutoff-proof', help='resume: the operator rango-compile-cutoff document')
+    p.add_argument('--provenance', help='resume: the operator rango-compile-provenance document')
     a = p.parse_args(argv)
     try:
         config = load(a.config)
+        if a.command in ('resume-check', 'resume'):
+            if a.stage not in (None, 'compile') or a.receipt_dir or not (a.prior_receipt_dir and a.cutoff_proof
+                    and a.provenance and a.inputs_receipt) or not Path(a.prior_receipt_dir).is_absolute():
+                raise InvalidInput(f'{a.command} is compile-only and needs an absolute --prior-receipt-dir, '
+                    '--cutoff-proof, --provenance and --inputs-receipt (its attempt directory is derived, never given)')
+            args = (config, a.config, a.build_number, a.download_dir, Path(a.prior_receipt_dir), a.cutoff_proof,
+                a.provenance, a.inputs_receipt)
+            if a.command == 'resume':
+                return resume(*args)
+            report = resume_admission(*args)
+            try:  # an observation only; resume itself takes the lock and re-checks everything while holding it
+                report['facts']['lockFreeNow'] = lock_free(config['host']['lockPath'])
+            except OSError as error:
+                report['facts']['lockFreeNow'] = f'unobserved: {error.strerror}'
+            print(json.dumps({**report, 'executed': False}, indent=2, sort_keys=True))
+            return 0 if report['admitted'] or report['state'] == 'completed' else 1
         if a.command == 'plan':
             plan = {'commands': commands(config, a.build_number, a.download_dir),
                 'preflight': {s: preflight(config, s, a.build_number, a.download_dir, inputs_receipt=a.inputs_receipt)

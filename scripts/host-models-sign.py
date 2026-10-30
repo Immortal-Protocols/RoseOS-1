@@ -13,12 +13,15 @@ publishes or installs; input arrives only through scripts/models-input-ingress.p
                                              builder, before any login: the guard-verified input handed to this run
                                              holds exactly the six pinned files equal to the profile and the guard's
                                              ingress receipt (else input_unavailable); the on-host bootstrap journal
-                                             agrees with the receipt (versions, certificate, alias); the retained SDK
+                                             agrees with the receipt (versions, certificate, alias); then, under the
+                                             shared lock, the isolated pinned build-tools r35 cache is prepared or
+                                             reused (scripts/models-sdk-prepare.py, MODELS-SDK-PREP-001); the retained SDK
                                              archive has its pinned sha256 and its android-15 subtree equals the
                                              installed build-tools/android-15 file by file; the JDK21 tree equals the
                                              models-v0 pin.
   run --receipt-dir D --output-dir O --input-dir I --ingress-receipt R
-                                             builder, after signer login, under the shared lock: the same proofs again,
+                                             builder, after signer login, under the shared lock: the same proofs again
+                                             (revalidation only: no SDK preparation and no network),
                                              the adapter's input binding with the proven aapt, then exactly the
                                              committed secret versions into owner-only RAM, the
                                              keystore certificate (pinned keytool, password file) must equal the
@@ -261,15 +264,33 @@ def java_environment(jdk_home):
     return {k: os.environ[k] for k in ('PATH', 'JAVA_HOME', 'LC_ALL')}
 
 
-def preflight(receipt_dir, input_dir=None, ingress_receipt=None, home=None, tree_fn=None):
+def prepare_sdk(cfg=None, transport=None):
+    """Prepare or reuse the isolated pinned build-tools r35 cache (scripts/models-sdk-prepare.py). The CLI preflight is
+    its only caller, before any login; run() never reaches it, so the signed run cannot touch the network."""
+    prep = load('models_sdk_prepare', ROOT/'scripts/models-sdk-prepare.py')
+    try:
+        return prep.prepare(cfg or config(), **({'transport': transport} if transport else {}))
+    except prep.Refused as error:
+        raise Refused(str(error)) from None
+
+
+def locked_prepare(lock=None, prepare_fn=None):
+    with (lock or shared_lock)():
+        return (prepare_fn or prepare_sdk)()
+
+
+def preflight(receipt_dir, input_dir=None, ingress_receipt=None, home=None, tree_fn=None, prepare=None):
+    """`prepare` is passed only by the CLI preflight (before login); run() calls this without it, so the signed run
+    only revalidates the committed SDK cache and refuses if it is absent or corrupt."""
     adapter = json.loads((ROOT/config()['adapterProfile']).read_text())
     binding = check_receipt(receipt_dir, os.environ.get('MODELS_BOOTSTRAP_RUN', 'unrecorded'))
     ingress = check_input(input_dir, ingress_receipt)
     journal = check_journal(home or os.environ['HOME'], binding)
+    prepared = prepare() if prepare else None
     tools = archive_proof()
     jdk = jdk_proof(tree_fn)
     return {'adapterProfile': adapter, 'binding': binding, 'input': ingress['directory'], 'ingress': ingress,
-        'journalSha256': journal, 'tools': tools, 'jdk': jdk}
+        'journalSha256': journal, 'sdkPreparation': prepared, 'tools': tools, 'jdk': jdk}
 
 
 # ---------------------------------------------------------------- run
@@ -374,8 +395,8 @@ def main(argv=None):
                 capture_output=True).returncode == 0
             result = check_receipt(args.receipt_dir, args.run_id, is_on_main=on_main)
         elif args.command == 'preflight':
-            checked = preflight(args.receipt_dir, args.input_dir, args.ingress_receipt)
-            result = {k: checked[k] for k in ('binding', 'journalSha256', 'tools', 'jdk')}
+            checked = preflight(args.receipt_dir, args.input_dir, args.ingress_receipt, prepare=locked_prepare)
+            result = {k: checked[k] for k in ('binding', 'journalSha256', 'sdkPreparation', 'tools', 'jdk')}
             result['input'] = checked['ingress']['files']
         else:
             result = run(args.receipt_dir, args.output_dir, args.input_dir, args.ingress_receipt)

@@ -19,6 +19,14 @@ final class ConversationPresentation {
  private ConversationPresentation(int stage,boolean compact,int titleSp,int bodySp){this.stage=stage;this.compact=compact;this.titleSp=titleSp;this.bodySp=bodySp;}
 
  /** heightDp: the activity's content height without the status inset; fontScale: the system font scale. */
+ /** The HiFi call tray (.tray, three .well of 92x66, padding 14): the inner padding and widest lens. */
+ static final int TRAY_PAD=14,WELL=92,WELL_HEIGHT=66;
+ /** Each well's glass width for a screen width (dp) when every well view also carries a pocket of pocketDp on each
+  * side: the reference 92 where three fit in the margined tray, narrower on a small screen, never under 48. */
+ static int wellWidth(int screenWidthDp,int pocketDp){
+  int cell=(screenWidthDp-2*MARGIN-2*(TRAY_PAD-pocketDp))/3;
+  return Math.max(48,Math.min(WELL,cell-2*pocketDp));
+ }
  static ConversationPresentation of(int heightDp,boolean result,float fontScale){
   int available=Math.max(0,heightDp-reservedTop()-reservedBottom());
   boolean tight=heightDp<640||fontScale>1.3f;
