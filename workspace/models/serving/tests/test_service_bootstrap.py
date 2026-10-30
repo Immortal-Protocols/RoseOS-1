@@ -711,8 +711,12 @@ class Tls(Fixture):
         self.assertEqual(probed[1:], list(B.ACME_404))
         self.assertEqual(list(self.host.path(B.ACME_WEBROOT + '/.well-known/acme-challenge').iterdir()), [])
         self.assertFalse(self.host.acme_running())
-        self.assertEqual(self.states(self.boot()[0])['edge'], ('ok', 'active'))
+        status = self.boot()[0]
+        self.assertEqual(self.states(status)['edge'], ('ok', 'active'))
         self.assertEqual(self.host.count('certbot', 'reconfigure'), 0)  # issued via webroot: renewal already works
+        self.assertTrue({'certbot.timer', 'models-renewal-status.timer'} <= self.host.enabled)
+        self.assertEqual(self.host.count('systemctl', 'start', '--no-block', 'models-renewal-status.service'), 2)  # per boot
+        self.assertEqual(status['bootId'], self.host.boot_id())  # status and health receipts name their boot
 
     def test_existing_single_account_is_reused_never_replaced(self):
         self.host.add_account('acct-existing')

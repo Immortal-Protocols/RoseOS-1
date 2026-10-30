@@ -94,6 +94,20 @@ def check(cache, model, receipt_path, full=False):
     return receipt
 
 
+def write_result(path, out):
+    """The outcome as a small nonsecret file the health receipt publishes: result, full, at (no paths or reasons).
+    Telemetry only: a write failure never changes the exit code, so it can never block or allow a model start."""
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(path) + '.tmp')
+        tmp.write_text(json.dumps({'result': out['result'], 'full': bool(out.get('full')), 'at': int(time.time())}) + '\n')
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('action', choices=('record', 'check'))
@@ -101,22 +115,27 @@ def main(argv=None):
     p.add_argument('--cache', type=Path, required=True)
     p.add_argument('--receipt', type=Path, required=True)
     p.add_argument('--full', action='store_true')
+    p.add_argument('--result', type=Path, help='also write the outcome here (for the health receipt)')
     a = p.parse_args(argv)
     model = json.loads(a.config.read_text())['model']
     try:
         if a.action == 'record':
             r = record(a.cache, model, a.receipt)
         elif not a.receipt.exists():
-            print(json.dumps({'result': 'no_receipt'}))
+            out = {'result': 'no_receipt', 'full': a.full}
+            write_result(a.result, out)
+            print(json.dumps(out))
             return EXIT_NO_RECEIPT
         else:
             r = check(a.cache, model, a.receipt, a.full)
     except (Mismatch, OSError, ValueError, KeyError) as e:
+        write_result(a.result, {'result': 'mismatch', 'full': a.full})
         print(json.dumps({'result': 'mismatch', 'reason': str(e) if isinstance(e, Mismatch) else type(e).__name__}))
         return EXIT_MISMATCH
-    print(json.dumps({'result': 'verified', 'files': len(r['files']), 'revision': r['revision'], 'full': a.full or a.action == 'record'}))
+    out = {'result': 'verified', 'files': len(r['files']), 'revision': r['revision'], 'full': a.full or a.action == 'record'}
+    write_result(a.result, out)
+    print(json.dumps(out))
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main())

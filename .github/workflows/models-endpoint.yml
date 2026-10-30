@@ -82,6 +82,10 @@ jobs:
         env:
           ROSE_REQUIRE_NGINX: '1'
         run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_tls_install.py -v
+      - name: Renewal evidence (timer/config/expiry facts; CURRENT ACME proof through the running rendered edge)
+        env:
+          ROSE_REQUIRE_NGINX: '1'
+        run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_renewal.py -v
 
   service:
     runs-on: ubuntu-24.04
