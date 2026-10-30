@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic test fixture (OS-COMPONENT-EXP-004). versionCode/versionName are set at build time by experiment.py
+     (aapt2 version-code and version-name options). No shared UID, no permissions, no privileged requests. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.roseos.test.persistentfixture">
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+    <application
+        android:name=".FixtureApp"
+        android:label="PersistentFixture"
+        android:persistent="true"
+        android:allowBackup="false" />
+</manifest>
