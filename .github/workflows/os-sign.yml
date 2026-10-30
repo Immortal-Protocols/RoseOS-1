@@ -1,0 +1,105 @@
+name: OS signing (dedicated signer)
+
+# SIGN-021: one hash-bound signing job on the dedicated signer host (runner group roseos-signing). The caller (release
+# transport) stages a roseos.signing-job.v1 manifest and its inputs under $SIGNING_ROOT/inbox/<job>/ and dispatches this
+# workflow from main with the manifest's sha256. Everything is validated before any credential exists; signing runs in
+# scripts/signing-job.py (isolated workspace, signing-only lock, durable outputs and receipt). No publishing authority.
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: Absolute path of the staged manifest, $SIGNING_ROOT/inbox/<job>/manifest.json on the signer host
+        required: true
+      manifest_sha256:
+        description: sha256 of that manifest file as the caller wrote it
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roseos-signing
+  cancel-in-progress: false
+
+env:
+  SIGNING_ROOT: /srv/rose-signing
+  MANIFEST: ${{ inputs.manifest }}
+  MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+  # The approved federation for this exact workflow on main (OCT30 exact security decision); not repository variables.
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/roseos-signing/providers/github
+  SIGNER_SERVICE_ACCOUNT: roseos-dedicated-signer@protocols-465723.iam.gserviceaccount.com
+
+jobs:
+  sign:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on:
+      group: roseos-signing
+      labels: [self-hosted, linux, x64, roseos-dedicated-signer]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate the manifest, inputs and config (before any credential)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, importlib.util, json, os, re, sys
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('signing_job', 'scripts/signing-job.py')
+          job = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(job)
+          root, manifest, digest = Path(os.environ['SIGNING_ROOT']), os.environ['MANIFEST'], os.environ['MANIFEST_SHA256']
+          inbox = root/'inbox'
+          if not re.fullmatch(r'[0-9a-f]{64}', digest):
+              sys.exit('manifest_sha256 must be a sha256')
+          if not re.fullmatch(re.escape(str(inbox)) + r'/[A-Za-z0-9._-]+/manifest\.json', manifest) or '..' in manifest.split('/'):
+              sys.exit('the manifest must be $SIGNING_ROOT/inbox/<job>/manifest.json')
+          path = Path(manifest)
+          if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+              sys.exit('the manifest is missing or differs from manifest_sha256')
+          for name in ('jobs', 'outputs', 'src'):
+              if not (root/name).is_dir():
+                  sys.exit(f'signer host setup missing: {root/name}')
+          try:
+              m = job.load_manifest(path)
+              for key, spec_ in m['inputs'].items():
+                  real = os.path.realpath(spec_['path'])
+                  if not real.startswith(str(path.parent) + '/') or real != spec_['path']:
+                      sys.exit(f'inputs.{key} must be a plain file in the manifest directory')
+              job.load_config(m)
+              job.check_inputs(m)
+          except (job.Refused, job.SetupMissing) as error:
+              sys.exit(str(error))
+          print(json.dumps({'validated': f"{m['device']}-{m['build']}", 'manifestSha256': digest}))
+          PY
+      - name: Signer access (dedicated signer service account)
+        run: python3 scripts/actions-gcp-login.py login "$SIGNER_SERVICE_ACCOUNT"
+      - name: Sign in an isolated job workspace under the signing lock
+        run: |
+          set -euo pipefail
+          cd "$SIGNING_ROOT/src"
+          python3 "$GITHUB_WORKSPACE/scripts/signing-job.py" run --manifest "$MANIFEST" \
+            --jobs-root "$SIGNING_ROOT/jobs" --out-root "$SIGNING_ROOT/outputs" | tee "$RUNNER_TEMP/signing-result.json"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Check the committed outputs and stage the public files and receipt
+        run: |
+          set -euo pipefail
+          out=$(python3 -c 'import json, os; print(json.load(open(os.environ["RUNNER_TEMP"] + "/signing-result.json"))["outputDir"])')
+          python3 scripts/signing-job.py check --output-dir "$out" > /dev/null
+          mkdir "$RUNNER_TEMP/signed-public"
+          cp "$out/signing-receipt.json" "$RUNNER_TEMP/signed-public/"
+          cp "$out"/public/* "$RUNNER_TEMP/signed-public/"
+          echo "SIGNED_JOB=$(basename "$out")" >> "$GITHUB_ENV"
+      - name: Public outputs and receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-${{ env.SIGNED_JOB }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/signed-public
+          retention-days: 7
+          if-no-files-found: error
