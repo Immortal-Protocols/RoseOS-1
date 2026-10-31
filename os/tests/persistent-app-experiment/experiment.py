@@ -228,6 +228,70 @@ def avd_descriptor(path):
     except OSError:
         return 'unknown'
 
+# EXP006-AVD-004: the AVD home and emulator home are new directories of this run, created before avdmanager, and the
+# descriptor avdmanager writes is checked before any emulator is spawned. Nothing here writes a descriptor.
+AVD_NAME = 'fixture'
+DESCRIPTOR_CAP = 4096
+
+def prepare_homes(work):
+    """Create WORK/avd and WORK/emulator-home as new real directories (never an existing path or a link)."""
+    for name in ('avd', 'emulator-home'):
+        try:
+            os.mkdir(Path(work)/name, 0o700)
+        except OSError:
+            raise Failed(f'the task-local {name} directory already exists or cannot be created; nothing was launched')
+
+def avd_binding(avd_home, name=AVD_NAME):
+    """(ready, facts) for the descriptor AVD_HOME/<name>.ini: a regular non-symlink file of at most DESCRIPTOR_CAP
+    bytes whose absolute path= is this AVD home's own <name>.avd, a real directory holding a regular config.ini.
+    The facts are fixed words only, never a path or a value from the file."""
+    avd_home = Path(os.path.abspath(avd_home))
+    facts = {'descriptor': 'absent', 'binding': 'unchecked', 'data': 'unchecked'}
+    ini = avd_home/f'{name}.ini'
+    try:
+        info = os.lstat(ini)
+    except FileNotFoundError:
+        return False, facts
+    except OSError:
+        return False, {**facts, 'descriptor': 'unreadable'}
+    if stat.S_ISLNK(info.st_mode):
+        return False, {**facts, 'descriptor': 'symlink'}
+    if not stat.S_ISREG(info.st_mode):
+        return False, {**facts, 'descriptor': 'not-regular'}
+    if info.st_size > DESCRIPTOR_CAP:
+        return False, {**facts, 'descriptor': 'oversized'}
+    try:
+        fd = os.open(ini, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            text = os.read(fd, DESCRIPTOR_CAP + 1).decode('utf-8')
+        finally:
+            os.close(fd)
+    except (OSError, UnicodeDecodeError):
+        return False, {**facts, 'descriptor': 'unreadable'}
+    facts['descriptor'] = 'present'
+    paths = [line.split('=', 1)[1].strip() for line in text.splitlines() if line.split('=', 1)[0].strip() == 'path']
+    expected = avd_home/f'{name}.avd'
+    if len(paths) != 1:
+        facts['binding'] = 'missing' if not paths else 'ambiguous'
+        return False, facts
+    if not os.path.isabs(paths[0]) or os.path.realpath(paths[0]) != os.path.realpath(expected):
+        facts['binding'] = 'mismatch'
+        return False, facts
+    facts['binding'] = 'match'
+    try:
+        data = os.lstat(expected)
+    except OSError:
+        return False, {**facts, 'data': 'absent'}
+    if stat.S_ISLNK(data.st_mode) or not stat.S_ISDIR(data.st_mode):
+        return False, {**facts, 'data': 'symlink' if stat.S_ISLNK(data.st_mode) else 'not-directory'}
+    try:
+        config = os.lstat(expected/'config.ini')
+    except OSError:
+        return False, {**facts, 'data': 'config-missing'}
+    if not stat.S_ISREG(config.st_mode):
+        return False, {**facts, 'data': 'config-not-regular'}
+    return True, {**facts, 'data': 'present'}
+
 # ------------------------------------------------------------------ run
 
 class Device:
@@ -354,10 +418,17 @@ def run(sdk, work, evidence, systemui=False, startup_diagnostic=False):
     def boot():
         nonlocal emulator_proc, owned_log
         avd = work/'avd'
+        prepare_homes(work)
         os.environ['ANDROID_AVD_HOME'] = str(avd)
         os.environ['ANDROID_EMULATOR_HOME'] = str(work/'emulator-home')
-        run_ok([Path(sdk)/'cmdline-tools/latest/bin/avdmanager', 'create', 'avd', '-n', 'fixture', '-k', IMAGE,
-            '-d', 'pixel', '-p', avd/'fixture.avd'], input='no\n')
+        run_ok([Path(sdk)/'cmdline-tools/latest/bin/avdmanager', 'create', 'avd', '-n', AVD_NAME, '-k', IMAGE,
+            '-d', 'pixel', '-p', avd/f'{AVD_NAME}.avd'], input='no\n')
+        ready, prepared = avd_binding(avd)
+        if not ready:
+            error = Failed(f'avdmanager left no usable {AVD_NAME} descriptor in the task AVD home (descriptor '
+                f'{prepared["descriptor"]}, binding {prepared["binding"]}, data {prepared["data"]}); nothing was launched')
+            error.facts = {'avdPrepare': prepared}
+            raise error
         if startup_diagnostic:
             # A new file of this run only (never an existing file or a link); its descriptor is kept for the read.
             try:
@@ -379,7 +450,7 @@ def run(sdk, work, evidence, systemui=False, startup_diagnostic=False):
             'fingerprint': device.prop('ro.build.fingerprint'), 'sdk': device.prop('ro.build.version.sdk')}
         if facts['qemu'] != '1' or facts['debuggable'] != '1':
             raise Unavailable(f'not a debuggable emulator image: {facts}')
-        return {**facts, 'bootWait': boot_wait}
+        return {**facts, 'avdPrepare': prepared, 'bootWait': boot_wait}
 
     def seed():
         verity = device.prop('ro.boot.veritymode')
