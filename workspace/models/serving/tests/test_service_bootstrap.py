@@ -48,6 +48,8 @@ class FakeHost(B.Host):
         self.gpu_listens = self.gpu_deadline = False
         self.probe_container = self.probe_timeout = False
         self.probe_rc, self.probe_out = 0, ''
+        self.cloud_container = self.cloud_timeout = False
+        self.cloud_rc, self.cloud_out = 0, ''
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -165,7 +167,8 @@ class FakeHost(B.Host):
                     return self.ps_results.pop(0)
                 names = [n for n, alive in (('muse-glimmer', self.model_container),
                                             ('muse-glimmer-validate', self.validate_container),
-                                            ('muse-glimmer-hfprobe', self.probe_container)) if alive]
+                                            ('muse-glimmer-hfprobe', self.probe_container),
+                                            ('rose-cloud-preflight', self.cloud_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -176,7 +179,17 @@ class FakeHost(B.Host):
                     self.model_container = self.port_open = False
                 if argv[3] == 'muse-glimmer-hfprobe' and not self.rm_fails:
                     self.probe_container = False
+                if argv[3] == 'rose-cloud-preflight' and not self.rm_fails:
+                    self.cloud_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-preflight' in argv:
+                self.events.append(('cloudpreflight', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists()))
+                self.cloud_container = True
+                if self.cloud_timeout:
+                    return 124, ''  # Host.run killed the CLI at the deadline; the container is still there
+                self.cloud_container = self.leave_container
+                return self.cloud_rc, self.cloud_out
             if argv[1] == 'run' and 'muse-glimmer-hfprobe' in argv:
                 self.events.append(('hfprobe', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists()))
@@ -1443,6 +1456,162 @@ class HfProbeOnce(DiagnosticFixture):
         self.host.path(B.MODEL_HOLD).unlink()
         self.host.model_active = self.host.model_container = True
         self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+
+
+class CloudPreflightOnce(DiagnosticFixture):
+    """cloud-preflight-once (MODELS-ROSE-CLOUD-003): one offline preflight in the cached image, the data disk
+    read-only, fixed tokens only. The probe line is produced by running the payload's own preflight.py as a real
+    subprocess (empty staging dir, fixture cpuinfo); the container itself is FakeHost's."""
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-preflight-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        manifest['stagingRoot'] = str(self.tmp / 'staging-empty')
+        (self.tmp / 'cpuinfo').write_text('flags : avx avx2 bmi1 bmi2 f16c fma abm movbe xsave\n')
+        manifest['probe']['cpuinfo'] = str(self.tmp / 'cpuinfo')
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'preflight.py').read_text(),
+                                  json.dumps(manifest)], 60)
+        self.assertEqual(code, 0)
+        return 'image warning on stdout\n' + out
+
+    def model_started(self):
+        return [c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart', 'enable')
+                and 'muse-glimmer.service' in c]
+
+    def test_exact_offline_argv_hold_and_receipt(self):
+        status, code = self.probe('pass', cloud_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'][0], code, list(status['stages'])), ('ok', 0, ['diagnostic']))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual({k: r[k] for k in ('check', 'exitCode', 'timedOut', 'cleanup', 'prerequisite', 'modelHeld')},
+                         {'check': 'cloud-preflight-once', 'exitCode': 0, 'timedOut': False, 'cleanup': 'removed',
+                          'prerequisite': None, 'modelHeld': True})
+        self.assertEqual(r['probe']['filesComplete'], {'qwen': False, 'phonon': False, 'voices': False,
+                                                       'ptts': False})
+        self.assertEqual(r['probe']['files']['qwen']['missing'], 54)
+        self.assertEqual(r['probe']['cpu']['x8664v3'], True)
+        _, argv, active, container, held = next(e for e in self.host.events if e[0] == 'cloudpreflight')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                                '--name', 'rose-cloud-preflight', '-v', '/mnt/models-data:/mnt/models-data:ro',
+                                '--entrypoint', 'python3', RUNTIME['image_id'], '-c',
+                                (lib / 'preflight.py').read_text(), (lib / 'manifest.json').read_text()])
+        rose_cloud = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        self.assertEqual((lib / 'preflight.py').read_text(), (rose_cloud / 'preflight.py').read_text())
+        self.assertEqual((lib / 'manifest.json').read_text(), (rose_cloud / 'manifest.json').read_text())
+        for forbidden in ('--gpus', '--privileged', '--mount', '-e', 'HF_TOKEN', '--network=host'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if ':' in a and a.startswith('/')], ['/mnt/models-data:/mnt/models-data:ro'])
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'cloudpreflight', 'rm')],
+                         ['stop', 'cloudpreflight', 'rm'])
+        self.assertTrue(self.host.path(B.MODEL_HOLD).exists())
+        self.assertEqual(self.model_started(), [])
+        self.assertNoProvisioning()
+
+    def test_hostile_oversized_and_missing_lines(self):
+        marker = 'ROSE-CLOUD-PREFLIGHT '
+        for attempt, out in (('hostile', marker + json.dumps({'python': '3.12 SECRET /root', 'packages': {
+                                 'vllm': 'SECRET'}, 'ptts': {'apiFrom': '/root/.cache/SECRET'}}) + '\n'),
+                             ('huge', marker + '{"python": "' + 'x' * 10000 + '"}\n'),
+                             ('garbled', marker + '{not json SECRET\n'), ('none', 'Traceback SECRET\n'),
+                             ('list', marker + '[1, 2]\n')):
+            with self.subTest(attempt):
+                status, _ = self.probe(attempt, cloud_out=out, cloud_rc=1 if attempt != 'hostile' else 0)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertNotIn('/root', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                if attempt == 'hostile':
+                    r = self.published()['probe']
+                    self.assertEqual((r['python'], r['packages']['vllm'], r['ptts']['apiFrom']), ('other', 'other', None))
+                else:
+                    self.assertIsNone(self.published()['probe'])
+                    self.assertEqual(self.states(status)['diagnostic'],
+                                     ('ok', 'inference held; cloud preflight gave no result'))
+                self.host.model_active = self.host.model_container = True
+
+    def test_timeout_and_cleanup_outcomes(self):
+        status, _ = self.probe('slow', cloud_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['probe'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; cloud preflight timed out'))
+        self.assertEqual(B.CLOUD_SECONDS, 120)
+        self.assertFalse(self.host.cloud_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', cloud_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+
+    def test_unknown_cleanup_is_reported_not_assumed(self):
+        real = self.host.run
+
+        def run(argv, *a, **k):
+            if argv[:3] == ['docker', 'ps', '--all'] and 'name=rose-cloud-preflight' in argv:
+                return 1, ''  # docker did not answer the absence check
+            return real(argv, *a, **k)
+        self.host.run = run
+        status, code = self.probe('psfail', cloud_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'unknown')
+
+    def test_refusals(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                status, code = self.probe(attempt, **flags)
+                self.assertEqual((self.states(status)['diagnostic'], code),
+                                 (('failed', 'diagnostic_prerequisite_missing'), 1))
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+                self.assertNoProvisioning()
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        saved = {k: v for k, v in self.host.images.items()}
+        for attempt, change, category in (('digest', lambda i: (i[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *i[2:]),
+                                           'image_digest_mismatch'),
+                                          ('platform', lambda i: (*i[:3], 'arm64'), 'image_digest_mismatch')):
+            with self.subTest(attempt):
+                self.host.images.update({k: change(v) for k, v in saved.items()})
+                self.probe(attempt)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+                self.host.images.update(saved)
+                self.host.model_active = self.host.model_container = True
+        self.host.images.clear()
+        self.probe('noimage')
+        self.assertEqual(self.published()['prerequisite'], 'image_missing')
+
+    def test_once_per_id_and_default_boots_unchanged(self):
+        self.probe('once', cloud_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual(code, 0)
+        self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'not requested'))
+
+    def test_mode_value_is_exact(self):
+        for value in (f'cloud-preflight-once:{SHA}:a1', f'hf-probe-once:{SHA}:a1'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(value))
+        for value in (f'cloud-preflight:{SHA}:a1', f'cloud-preflight-once:{SHA[:-1]}:a1',
+                      f'cloud-preflight-once:{SHA}:A1', f'cloud-preflight-once:{SHA}:a1 x'):
+            self.assertIsNone(B.DIAG_VALUE.fullmatch(value))
 
 
 class HostValidate(unittest.TestCase):
