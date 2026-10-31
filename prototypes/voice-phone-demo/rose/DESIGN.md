@@ -73,8 +73,12 @@ uvicorn on 127.0.0.1:8091). The dashboard is served at `/`.
 
 ### Brain (`rose/brain.py`)
 
-- Loads Qwen3.6-35B-A3B via `mlx_vlm.load`, uses the text language model
-  directly (no vision in the talker path).
+- Loads Qwen3.6-35B-A3B via `mlx_vlm.load` and drives its language model
+  directly. Images go in with `Sequence.append_image`: the vision tower runs in
+  groups of blocks and the merged embeddings prefill in 32-token chunks, each
+  unit under ~60 ms. Qwen's M-RoPE gives image patches 3-D positions, so a
+  `Sequence` keeps its own next position (`pos`, saved in marks), which falls
+  behind the token count after an image.
 - `Sequence`: a cache list for one conversation. `prefill(tokens)` (chunked
   generator), `decode(sampler, max_tokens)` (generator of token ids),
   `snapshot()` / `restore(snap)` (KV caches trimmed by offset, linear-attention
@@ -174,7 +178,8 @@ State: `listening | user_speaking | thinking | speaking`, plus background tasks.
 ### Background tasks (`rose/tasks.py`)
 
 - Phone agent: forks a pre-filled agent sequence (system prompt + action
-  tools), observes the compact UI tree (text; no screenshots by default),
+  tools), observes the compact UI tree plus, on the real phone, a screenshot
+  (vision; `tap_point` for things the tree lacks),
   acts with `open_app`, `tap`, `type_text`, `back`, `home`, `finish(summary)`;
   several actions per step allowed. P3 priority, prompt cache across steps.
   Taps are animated on the dashboard phone (~250 ms each).

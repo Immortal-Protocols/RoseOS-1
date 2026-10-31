@@ -10,14 +10,29 @@ direct intents (set_alarm, set_timer, directions, search_places, play_music, med
 tapping.
 
 ``RealPhone`` has the surface of ``rose.phone.Phone`` that the task agent, the conductor and the
-dashboard use. Reads (``ui_tree``, ``element``, ``screen``) come from each session's last
-observation and never wait; actions block on the phone, so the task agent runs them off the MLX
-thread (``RealSession.blocking``).
+dashboard use. Reads (``ui_tree``, ``element``, ``screen``, ``RealSession.look``) come from each
+session's last observation and never wait; actions block on the phone, so the task agent runs them
+off the MLX thread (``RealSession.blocking``).
+
+Vision (``RealPhone.vision``, on by default): every observation is the UI tree plus Rose Agent's
+``screenshot`` of the same screen, so a step's image and tree match. Each action reads the tree
+again, but the screenshot is taken lazily, once, when the next observation is built
+(``RealSession.ensure_image``): calls written in one reply do not each pay for a screenshot the
+model never sees. ``RealPhone.look()`` takes a fresh screenshot (blocking: call it off the MLX
+thread). All screenshots go through ``RealPhone.capture``, which serialises them and keeps them
+``SHOT_GAP_S`` apart: Android refuses a second accessibility screenshot within ~333 ms
+(``ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT``), so the talker's look and an agent step would
+otherwise collide; a refusal for that reason is retried once.
+``RealSession.tap_point`` taps a point the model picked in the screenshot (0-1000 relative
+coordinates) through Rose Agent's ``touch_point``, for controls the tree lacks. Screenshots stay
+in memory: they are decoded here, given only to the local model, and never written or logged.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import concurrent.futures
 import io
 import json
@@ -34,6 +49,13 @@ from .phone import ActionResult, Element, Screen, W, H, _parse_time
 MAX_ELEMENTS = 70   # rows shown to the agent per screen
 SETTLE_S = 0.35     # after an action, before reading the screen again
 CALL_TIMEOUT_S = 25.0
+POINT_SCALE = 1000  # tap_point coordinates: 0..1000 across the screenshot (Qwen's grounding scale)
+SHOT_GAP_S = 0.35   # between screenshots: Android throttles takeScreenshot to one per 333 ms
+SHOT_REUSE_S = 0.3  # look() reuses a screenshot this fresh instead of taking another
+ERROR_INTERVAL_TIME_SHORT = 3  # AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
+SHOT_WHY = {"locked": "the phone is locked", "secure_window": "this screen blocks screenshots",
+            "accessibility_disabled": "Rose Agent phone controls are off",
+            "offline": "the phone is not connected", "unsupported": "this Android version cannot take one"}
 
 
 class PhoneLink:
@@ -129,6 +151,9 @@ class RealSession:
         self.screen = Screen("phone", "Phone (not read yet)", [])
         self._nodes: dict[int, dict] = {}   # mark -> node
         self._by_mark: dict[int, Element] = {}
+        self.image: Image.Image | None = None  # the screenshot taken with obs (vision on)
+        self.shot: dict = {}  # its status and sizes: width, height (image), displayWidth, displayHeight
+        self._stale = False  # obs changed since the screenshot: ensure_image takes a new one
 
     # ----- reads (never wait) ------------------------------------------
     @property
@@ -148,21 +173,63 @@ class RealSession:
         except (TypeError, ValueError):
             return None
 
+    def look(self) -> Image.Image | None:
+        """The screenshot that goes with the current UI tree (None without vision or when refused).
+
+        Never waits: call ``ensure_image`` (off the MLX thread) first to take it."""
+
+        return None if self._stale else self.image
+
+    def no_image_reason(self) -> str:
+        """Why there is no screenshot of this screen, for the agent's prompt."""
+
+        status = self.shot.get("status") or "not taken"
+        return SHOT_WHY.get(status, f"the capture failed ({status})")
+
     # ----- actions (wait on the phone) ---------------------------------
     def refresh(self) -> dict:
         r = self.phone.link.call("inspect_ui")
         self._observe(r)
+        self._capture()
         return r
+
+    def _observed(self, r: dict) -> None:
+        """Take an action's returned observation, or read the screen again."""
+
+        if isinstance(r.get("observation"), dict):
+            self._observe(r["observation"])
+            self._capture()
+        else:
+            self.refresh()
+
+    def _capture(self) -> None:
+        """The screen was just inspected: its screenshot is now due (taken by ``ensure_image``)."""
+
+        self.image, self.shot = None, {}
+        self._stale = bool(self.phone.vision)
+
+    def ensure_image(self) -> Image.Image | None:
+        """Take the screenshot of the screen last inspected, if it is due (blocking).
+
+        Called once per observation, right before the model reads it, so a step's image and
+        tree match and earlier calls of the same reply cost no screenshot. Vision on and the
+        screen readable only; otherwise ``shot`` says why there is none."""
+
+        if not self._stale:
+            return self.image
+        self._stale = False
+        if self.obs.get("status") != "ok":
+            self.shot = {"status": self.obs.get("status") or "unreadable"}
+            return None
+        self.image, self.shot = self.phone.capture()
+        return self.image
 
     def open_app(self, app: str) -> ActionResult:
         pkg, label = self.phone.resolve_app(app)
         if pkg is None:
             return ActionResult(False, f"No app called {app} on this phone.")
         r = self.phone.link.call("open_app", packageName=pkg)
-        if isinstance(r.get("observation"), dict):
-            self._observe(r["observation"])
-        else:
-            self.refresh()
+        self._observed(r)
         ok = r.get("status") in ("opened", "launch_unverified")
         return ActionResult(ok, f"Opened {label}." if ok else _why(r), changed=ok)
 
@@ -178,7 +245,12 @@ class RealSession:
                 r = self.phone.link.call("tap", snapshotId=self.obs.get("snapshotId"), nodeId=node["target"])
         else:
             r = self.phone.link.call("tap", snapshotId=self.obs.get("snapshotId"), nodeId=node["target"])
-        return self._after(r, f"Tapped {el.label or '[' + str(mark) + ']'}.")
+        res = self._after(r, f"Tapped {el.label or '[' + str(mark) + ']'}.")
+        if self.phone.vision:
+            # Android accepting a click is not the outcome: with screenshots, the agent checks
+            # the next one before it may finish (tasks._defer_finish looks at ``changed``).
+            res.changed = False
+        return res
 
     def type_text(self, mark, text: str) -> ActionResult:
         el, node = self.element(mark), self._nodes.get(_int(mark))
@@ -209,9 +281,55 @@ class RealSession:
 
         r = self.phone.link.call(action, **args)
         if isinstance(r.get("observation"), dict):
-            self._observe(r["observation"])
+            self._observed(r)
         ok = r.get("status") in ("started", "action_accepted")
         return ActionResult(ok, "Done; the screen now shows the result." if ok else _why(r), changed=ok)
+
+    def tap_point(self, x: float, y: float, target: str = "") -> ActionResult:
+        """Tap a point of the screenshot: ``x``, ``y`` from 0 to 1000 (left to right, top to bottom).
+
+        For something the screenshot shows but the tree lacks. The point is mapped from the
+        screenshot (``width`` x ``height``) to display pixels (``displayWidth`` x
+        ``displayHeight``), and sent as Rose Agent's ``touch_point`` with the smallest enabled
+        node of this snapshot that contains it (Rose Agent only taps inside an observed node's
+        visible bounds, and never on a password field). Android only queues the touch, so the
+        result is unverified (``changed`` False): the next screenshot shows what it did.
+        """
+
+        self.ensure_image()  # an earlier call of this reply changed the screen: map through the new one
+        shot = self.shot
+        if self.image is None or not shot.get("width") or not shot.get("displayWidth"):
+            return ActionResult(False, "There is no screenshot of this screen to point at; use an [id].")
+        if not (0 <= x <= POINT_SCALE and 0 <= y <= POINT_SCALE):
+            return ActionResult(False, f"x and y go from 0 to {POINT_SCALE} across the screenshot.")
+        px = display_point(x, y, shot)
+        node = self._node_at(*px)
+        if node is None:
+            return ActionResult(False, "Nothing of this app is at that point; tap something inside the app.")
+        if node.get("password"):
+            return ActionResult(False, "That is a password field; the user types passwords directly on the phone.")
+        r = self.phone.link.call("touch_point", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"],
+                                 x=px[0], y=px[1])
+        what = f"Touched {target.strip() or 'the point'}"
+        res = self._after(r, f"{what}; check the new screenshot to see whether it worked.")
+        return ActionResult(res.ok, res.message, changed=False)
+
+    def _node_at(self, x: int, y: int) -> dict | None:
+        """The smallest enabled node of the last observation whose bounds contain (x, y)."""
+
+        best, area = None, None
+        for n in self.obs.get("nodes", []) if self.obs.get("status") == "ok" else []:
+            b = n.get("bounds") or ()
+            if len(b) != 4 or n.get("visible") is False or n.get("enabled") is False:
+                continue
+            if not (b[0] <= x < b[2] and b[1] <= y < b[3]):
+                continue
+            if n.get("password"):
+                return n  # refused by the caller: never touch inside a password field
+            a = (b[2] - b[0]) * (b[3] - b[1])
+            if area is None or a < area:
+                best, area = n, a
+        return best
 
     def _after(self, r: dict, done: str) -> ActionResult:
         ok = r.get("status") in ("action_accepted", "gesture_dispatched")
@@ -273,6 +391,7 @@ class RealPhone:
     """The real phone behind Rose Agent, with the fake ``Phone``'s surface."""
 
     real = True
+    vision = True  # observations carry a screenshot; the agent may tap points in it
 
     def __init__(self, bus=None):
         self.bus = bus
@@ -285,6 +404,10 @@ class RealPhone:
         self._apps: list[dict] = []
         self._apps_at = 0.0
         self._lock = threading.RLock()
+        self.look_status = ""
+        self._shot_lock = threading.Lock()  # one screenshot at a time, SHOT_GAP_S apart
+        self._shot_at = float("-inf")  # monotonic time the last screenshot call returned
+        self._last_shot: tuple[float, Image.Image | None, dict] = (float("-inf"), None, {})
 
     # ----- the fake Phone's surface ------------------------------------
     def session(self, name: str) -> RealSession:
@@ -313,7 +436,8 @@ class RealPhone:
         where = f"the user's real {self.link.model or 'Android'} phone" + ("" if self.link.connected else
                                                                            " (not connected right now)")
         return (f"Phone: {where}, controlled through Rose Agent. Rose cannot read its contacts, "
-                "calendar or messages yet; to find out what is on it, start a phone task.")
+                "calendar or messages yet; for those, start a phone task. To see what is on its "
+                "screen, use look_at_screen.")
 
     def snapshot(self) -> dict:
         s = self._shown
@@ -342,6 +466,69 @@ class RealPhone:
         return buf.getvalue()
 
     png = screenshot_png
+
+    def look(self, view: str | None = None) -> Image.Image | None:
+        """A fresh screenshot of the phone's screen, or None (locked, secure screen, offline).
+
+        Blocking (it waits on the phone): call it off the MLX thread. ``view`` is accepted for
+        the fake Phone's surface; the real phone has one screen. ``look_status`` says why the
+        last call returned None. A screenshot another caller (a task step) took within
+        ``SHOT_REUSE_S`` is reused rather than asking Android for another one. The image is only
+        kept in memory.
+        """
+
+        with self._shot_lock:
+            at, image, shot = self._last_shot
+            if image is not None and time.monotonic() - at <= SHOT_REUSE_S:
+                self.look_status = shot.get("status", "")
+                return image
+        image, shot = self.capture()
+        self.look_status = shot.get("status", "")
+        return image
+
+    def capture(self) -> tuple[Image.Image | None, dict]:
+        """(image, info) from Rose Agent's ``screenshot``; info has the status and sizes, never the bytes.
+
+        Blocking. Calls are serialised and spaced ``SHOT_GAP_S`` apart, because Android refuses an
+        accessibility screenshot within ~333 ms of the last one; if it refuses anyway (another
+        screenshot on the phone, e.g. Rose Agent's own), the call waits out the interval and
+        retries once."""
+
+        with self._shot_lock:
+            r = self._screenshot()
+            if r.get("status") == "capture_failed" and r.get("errorCode") == ERROR_INTERVAL_TIME_SHORT:
+                r = self._screenshot()
+            image, info = self._decode(r)
+            self._last_shot = (self._shot_at, image, info)
+            return image, info
+
+    def _screenshot(self) -> dict:
+        """One ``screenshot`` call, at least SHOT_GAP_S after the last one returned (lock held)."""
+
+        wait = SHOT_GAP_S - (time.monotonic() - self._shot_at)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            return self.link.call("screenshot")
+        finally:
+            self._shot_at = time.monotonic()
+
+    @staticmethod
+    def _decode(r: dict) -> tuple[Image.Image | None, dict]:
+        info = {k: r.get(k) for k in ("status", "errorCode", "width", "height", "displayWidth",
+                                       "displayHeight", "packageName") if k in r}
+        if r.get("status") != "ok":
+            return None, info
+        try:
+            with Image.open(io.BytesIO(base64.b64decode(r.get("imageBase64") or "", validate=True))) as img:
+                image = img.convert("RGB")
+        except (binascii.Error, OSError, ValueError):
+            return None, {**info, "status": "undecodable"}
+        info.setdefault("width", image.width)
+        info.setdefault("height", image.height)
+        if image.size != (info["width"], info["height"]):
+            info["width"], info["height"] = image.size
+        return image, info
 
     def notify(self, app: str, title: str, text: str) -> None:
         pass  # real notifications come from the phone (not read yet)
@@ -412,6 +599,20 @@ def alarm_time(raw: str) -> tuple[int, int] | None:
     return None
 
 
+def display_point(x: float, y: float, shot: dict) -> tuple[int, int]:
+    """0-1000 screenshot coordinates -> display pixels.
+
+    The point is first placed on the screenshot (``width`` x ``height``, which Rose Agent may have
+    scaled down to 1600 px), then scaled by ``displayWidth / width`` and ``displayHeight / height``
+    to the display, and kept inside it.
+    """
+
+    w, h = shot["width"], shot["height"]
+    dw, dh = shot.get("displayWidth") or w, shot.get("displayHeight") or h
+    ix, iy = x / POINT_SCALE * w, y / POINT_SCALE * h
+    return (min(dw - 1, max(0, round(ix * dw / w))), min(dh - 1, max(0, round(iy * dh / h))))
+
+
 def _why(r: dict) -> str:
     status = r.get("status") or "error"
     message = r.get("message") or r.get("reason") or ""
@@ -419,6 +620,8 @@ def _why(r: dict) -> str:
             "accessibility_disabled": "Rose Agent phone controls are off on the phone.",
             "stale_screen": "The screen changed before this action; check it again.",
             "label_not_found": "That control is not on the screen any more.",
+            "target_not_visible": "Nothing visible is at that spot.",
+            "password_field": "That is a password field; the user types passwords directly on the phone.",
             "offline": message or "The phone is not connected."}.get(status, f"Failed ({status}). {message}".strip())
 
 

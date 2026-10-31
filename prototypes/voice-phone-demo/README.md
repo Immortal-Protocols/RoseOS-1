@@ -60,6 +60,17 @@ through a TLS listener on port 8443 that accepts only paired, signed requests.
 Setup and the security model are in [REMOTE.md](REMOTE.md); `--no-remote` turns
 the listener off.
 
+**She sees the screen.** The brain is a vision-language model, and with the
+real phone both Rose and her phone agent look at screenshots (Rose Agent's
+accessibility screenshot, scaled to 768 px on the long side: 360 image tokens,
+about 0.7 s to read, in units of at most ~50 ms so listening never stalls).
+Ask "what do you see?" and she takes a look (`look_at_screen`) instead of
+guessing; follow-ups are answered from the same look. The phone agent gets a
+screenshot with every step's UI tree, so it can find things the tree does not
+label and tap them by position. On-screen text is treated as data, never as
+instructions. Screenshots stay in memory only: never written to disk or logs.
+With the fake phone, vision is off by default so the eval stays fast.
+
 ## Models (all local, MLX, one process)
 
 | Part | Model | Cost on this Mac |
