@@ -40,7 +40,9 @@ class FakeHost(B.Host):
         self.now, self.sleeps, self.on_sleep, self.events, self.md_reads = 0.0, 0, None, [], set()
         self.certbot_fail = self.acme_config_bad = False
         self.model_active = self.model_container = self.model_stuck = False
-        self.validate_output, self.validate_rc, self.diag_image_missing = b'', 1, False
+        self.validate_output, self.validate_rc = b'', 1
+        self.validate_container = self.leave_container = self.rm_fails = self.docker_down = self.no_runc = False
+        self.ps_results = []  # queued (exit code, output) for `docker ps --all` (daemon errors, timeouts)
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -130,7 +132,10 @@ class FakeHost(B.Host):
         if cmd == 'docker':
             store = 'containerd' if self.loaded['snapshotter'] else 'classic'
             if argv[1] == 'info' and '{{json .Runtimes}}' in argv:
-                return 0, '{"nvidia":{},"runc":{}}' if self.loaded['nvidia'] else '{"runc":{}}'
+                if self.docker_down:
+                    return 1, ''
+                runtimes = {**({'nvidia': {}} if self.loaded['nvidia'] else {}), **({} if self.no_runc else {'runc': {}})}
+                return 0, json.dumps(runtimes)
             if argv[1] == 'info':
                 if self.loaded['snapshotter']:
                     return 0, 'overlayfs|[["driver-type","io.containerd.snapshotter.v1"]]|29.1.3\n'
@@ -148,13 +153,20 @@ class FakeHost(B.Host):
                     return 1, ''
                 i, digests, os_, arch = self.images[store]
                 if argv[-2] == '{{.Id}}':
-                    return (1, '') if self.diag_image_missing else (0, i)
+                    return 0, i
                 return 0, f'{i}|{json.dumps(digests)}|{os_}|{arch}\n'
-            if argv[1:4] == ['inspect', '--type', 'container']:
-                return (0, '{}') if self.model_container else (1, '')
+            if argv[1:3] == ['ps', '--all']:
+                if self.ps_results:
+                    return self.ps_results.pop(0)
+                names = [n for n, alive in (('muse-glimmer', self.model_container),
+                                            ('muse-glimmer-validate', self.validate_container)) if alive]
+                wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
+                return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
                 self.events.append(('rm', argv[3]))
-                return 0, ''
+                if argv[3] == 'muse-glimmer-validate' and not self.rm_fails:
+                    self.validate_container = False
+                return (1, '') if self.rm_fails else (0, '')
         if cmd == 'nvidia-ctk':
             daemon = self.path(B.DAEMON_JSON)
             daemon.parent.mkdir(parents=True, exist_ok=True)
@@ -195,6 +207,7 @@ class FakeHost(B.Host):
                             self.path(B.MODEL_HOLD).exists()))
         for i in range(0, len(self.validate_output), 65536):
             capture.feed(self.validate_output[i:i + 65536])
+        self.validate_container = self.leave_container  # e.g. a CLI killed at the deadline
         return self.validate_rc, 3.5
 
     def start_daemon(self, argv, timeout=30):
@@ -1029,7 +1042,8 @@ class Diagnostic(Fixture):
         self.host.reboot()
         self.host.model_active = self.host.model_container = True  # systemd starts the enabled model at boot
         self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)  # /run is empty after a reboot
-        self.expected = ['docker', 'run', '--rm', '--pull=never', '--network', 'none', '--name', 'muse-glimmer-validate',
+        self.expected = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                         '--name', 'muse-glimmer-validate',
                          '-e', 'HF_HUB_OFFLINE=1', '--entrypoint', 'vllm', RUNTIME['image_id'], 'serve',
                          *next(o for o in CONFIG['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')
                          ['container_spec']['args']]
@@ -1044,14 +1058,23 @@ class Diagnostic(Fixture):
     def published(self):
         return json.loads(self.host.guest['diagnostic'])
 
+    PROVISIONING = (('apt-get',), ('apt-mark',), ('gpg',), ('docker', 'pull'), ('nvidia-ctk',), ('mkfs.ext4',),
+                    ('mount',), ('certbot',), ('systemctl', 'restart'), ('systemctl', 'enable'),
+                    ('systemctl', 'disable'), ('systemctl', 'daemon-reload'), ('systemctl', '--no-block', 'reboot'))
+
+    def assertNoProvisioning(self):
+        made = [c for c in self.host.calls for p in self.PROVISIONING if tuple(c[:len(p)]) == p]
+        self.assertEqual(made, [])
+        self.assertFalse(getattr(self.host, 'reboot_requested', False))
+
     def test_requested_check_holds_and_stops_the_model_first_then_runs_once(self):
         self.host.validate_output = (b'INFO starting\nusage: vllm serve\nvllm serve: error: argument --tool-call-parser:'
                                      b' invalid choice: SECRET-TEXT\n')
         self.host.validate_rc = 2
         status, code = self.boot(f'offline-validate:{SHA}:first')
         self.assertEqual(self.states(status)['diagnostic'][0], 'ok')
-        self.assertIn(['systemctl', 'enable', *B.MODEL_UNITS], self.host.calls)  # enabled for later boots, not started
-        self.assertNotIn(['systemctl', 'enable', '--now', *B.MODEL_UNITS], self.host.calls)
+        self.assertEqual(list(status['stages']), ['diagnostic'])  # no ordinary stage runs on a diagnostic boot
+        self.assertNoProvisioning()
         kinds = [e[0] for e in self.host.events if e[0] in ('stop', 'validate', 'rm')]
         self.assertEqual(kinds, ['stop', 'validate', 'rm'])
         _, argv, active, container, held = next(e for e in self.host.events if e[0] == 'validate')
@@ -1066,7 +1089,9 @@ class Diagnostic(Fixture):
                           'imagePresent': True, 'exitCode': 2, 'firstCategory': 'argument_rejected',
                           'categories': ['argument_rejected'], 'limitReached': None, 'modelHeld': True})
         self.assertNotIn('SECRET', self.host.guest['diagnostic'])
-        self.assertEqual(self.states(status)['edge'], ('ok', 'active'))  # HTTPS continues; the certificate is kept
+        self.assertEqual((result['cleanup'], result['prerequisite']), ('removed', None))
+        self.assertFalse([c for c in self.host.calls if 'models-edge.service' in c or c[0] == 'certbot'])  # HTTPS untouched
+        self.assertTrue(self.host.path('/etc/rose-models/tls/current/fullchain.pem').exists())  # certificate kept
         self.assertTrue(self.host.path(B.MODEL_HOLD).exists())
         # the same value never runs again
         self.host.reboot()
@@ -1098,13 +1123,63 @@ class Diagnostic(Fixture):
         self.assertLessEqual(self.host.sleeps, B.DIAG_STOP_S // 2 + 1)  # bounded wait
         self.assertTrue((self.host.path(B.STATE) / 'diagnostic-stuck').exists())  # the attempt is spent
 
-    def test_missing_image_is_reported_without_running(self):
-        self.host.diag_image_missing = True  # the exact image ID is not in the local store
-        status, _ = self.boot(f'offline-validate:{SHA}:noimage')
-        self.assertNotIn('validate', [e[0] for e in self.host.events])
-        result = self.published()
-        self.assertEqual((result['imagePresent'], result['firstCategory'], result['exitCode']),
-                         (False, 'image_missing', None))
+    def test_absent_or_mismatched_prerequisites_are_refused_without_provisioning(self):
+        daemon = self.host.path(B.DAEMON_JSON)
+        before = daemon.read_bytes() if daemon.exists() else None
+        cases = (
+            ('image genuinely absent', lambda h: h.images.clear(), 'image_missing', False),
+            ('another store reports another ID', lambda h: h.images.update(
+                {k: ('sha256:' + 'e' * 64, *v[1:]) for k, v in h.images.items()}), 'image_mismatch', False),
+            ('no runc runtime', lambda h: setattr(h, 'no_runc', True), 'runc_unavailable', True),
+            ('docker daemon down', lambda h: setattr(h, 'docker_down', True), 'docker_unavailable', True))
+        for i, (label, setup, category, image_present) in enumerate(cases):
+            with self.subTest(label):
+                saved = dict(self.host.images)
+                setup(self.host)
+                self.host.events.clear()
+                status, code = self.boot(f'offline-validate:{SHA}:pre{i}')
+                self.assertEqual((self.states(status)['diagnostic'], code),
+                                 (('failed', 'diagnostic_prerequisite_missing'), 1))
+                result = self.published()
+                self.assertEqual((result['prerequisite'], result['imagePresent'], result['exitCode']),
+                                 (category, image_present, None))
+                self.assertNotIn('validate', [e[0] for e in self.host.events])
+                self.assertNoProvisioning()
+                self.assertEqual(daemon.read_bytes() if daemon.exists() else None, before)
+                self.host.images.clear()
+                self.host.images.update(saved)
+                self.host.no_runc = self.host.docker_down = False
+                self.host.model_active = self.host.model_container = True
+
+    def test_container_state_must_be_positively_absent(self):
+        for i, (label, answer) in enumerate((('daemon error', (1, '')), ('query timed out', (124, '')))):
+            with self.subTest(label):
+                self.host.ps_results = [answer]
+                self.host.events.clear()
+                status, code = self.boot(f'offline-validate:{SHA}:state{i}')
+                self.assertEqual(self.states(status)['diagnostic'], ('failed', 'diagnostic_container_state_unknown'))
+                self.assertNotIn('validate', [e[0] for e in self.host.events])
+                self.host.model_active = self.host.model_container = True
+        self.host.model_container = True
+        self.host.model_stuck = True  # the unit stops but its container survives
+        status, _ = self.boot(f'offline-validate:{SHA}:survivor')
+        self.assertEqual(self.states(status)['diagnostic'], ('failed', 'diagnostic_model_not_stopped'))
+
+    def test_cleanup_is_verified(self):
+        self.host.leave_container, self.host.rm_fails = True, True  # killed CLI; removal fails; container survives
+        status, code = self.boot(f'offline-validate:{SHA}:rmfail')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual((self.published()['cleanup'], self.published()['cleanupRemoveExit']), ('failed', 1))
+        self.host.rm_fails, self.host.validate_container = False, False
+        self.host.model_active = self.host.model_container = True
+        self.host.ps_results = [(0, ''), (124, '')]  # absent before the check; the post-removal query times out
+        status, _ = self.boot(f'offline-validate:{SHA}:rmunknown')
+        self.assertEqual(self.states(status)['diagnostic'], ('failed', 'diagnostic_cleanup_failed'))
+        self.assertEqual(self.published()['cleanup'], 'unknown')
+        self.host.leave_container = False
+        self.host.model_active = self.host.model_container = True
+        self.boot(f'offline-validate:{SHA}:rmok')
+        self.assertEqual(self.published()['cleanup'], 'removed')
 
     def test_output_is_inspected_only_to_the_bound(self):
         self.host.validate_output = b'z' * (3 << 20) + b' OutOfMemoryError'

@@ -14,10 +14,12 @@ run in order and are rerun-safe: each first checks whether its result is already
              pinned reference, and the platform must be linux/amd64
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
-  diagnostic only with metadata rose-models-diagnostic=offline-validate:<payload sha256>:<id>, once per id: the model
-             is held (MODEL_HOLD, set before any stage), stopped and its container gone; then one offline CLI check
-             of the exact serve command (pinned local image, --pull=never, no network, GPU or mounts, 120 s); fixed
-             categories published as rose-models/diagnostic. The model stays held for this boot only
+  diagnostic only with metadata rose-models-diagnostic=offline-validate:<payload sha256>:<id>, once per id, and then
+             INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
+             is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
+             the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
+             runc, no network, GPU or mounts, 120 s); verified removal; fixed categories published as
+             rose-models/diagnostic. The model stays held for this boot only
   auth       secret-init once; the auth service only once attestation roots are present
   tls        an installed certificate; else an issued-but-uninstalled lineage is installed (never reissued); else, with
              rose-models-acme set and DNS here, an ACME-only Nginx is started and proven (challenge 200, all else 404);
@@ -804,11 +806,36 @@ def diagnostic_request(host, ctx):
     return ('requested', m.group(2))
 
 
+def container_names(host, name):
+    """Containers named exactly `name` (running or not), or None when docker did not answer (error, timeout, access):
+    absence must be positive."""
+    rc, out = host.run(['docker', 'ps', '--all', '--filter', f'name={name}', '--format', '{{.Names}}'], 30)
+    return None if rc != 0 else [n for n in out.split() if n == name]
+
+
+def diagnostic_prerequisites(host, image):
+    """Read-only: None, or the category that refuses the check. Nothing is pulled, installed or reconfigured."""
+    rc, out = host.run(['docker', 'info', '--format', '{{json .Runtimes}}'], 60)
+    if rc != 0:
+        return 'docker_unavailable'
+    try:
+        if 'runc' not in json.loads(out):
+            return 'runc_unavailable'
+    except (ValueError, TypeError):
+        return 'runc_unavailable'
+    rc, out = host.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image], 60)
+    if rc != 0:
+        return 'image_missing'
+    return None if out.strip() == image else 'image_mismatch'
+
+
 def stage_diagnostic(host, ctx):
     """The offline CLI check of the exact serve command: the pinned image already in the local store (--pull=never),
-    `vllm serve` with the deployed arguments, no network, no GPU, no mounts, HF_HUB_OFFLINE=1, at most 120 s and 2 MiB
-    inspected. It runs only after the model service is stopped and its container is gone, and the model stays held
-    for the rest of this boot. It proves only where the CLI stopped (fixed categories), not that serving works."""
+    `vllm serve` with the deployed arguments under runc, no network, no GPU, no mounts, HF_HUB_OFFLINE=1, at most 120 s
+    and 2 MiB inspected. A diagnostic boot runs only this stage: missing prerequisites are refused, never provisioned.
+    It runs only after the model service is stopped and its container is positively absent, and the model stays held
+    for the rest of this boot. Its container's removal is verified. It proves only where the CLI stopped (fixed
+    categories), not that serving works."""
     request = ctx.get('diagnostic')
     if request is None:
         return 'not requested'
@@ -821,32 +848,43 @@ def stage_diagnostic(host, ctx):
     deadline = host.clock() + DIAG_STOP_S
     while True:
         _, out = host.run(['systemctl', 'is-active', 'muse-glimmer.service'], 30)
-        stopped = out.strip() in ('inactive', 'failed', 'unknown')
-        gone = host.run(['docker', 'inspect', '--type', 'container', 'muse-glimmer'], 30)[0] != 0
-        if stopped and gone:
+        stopped = out.strip() in ('inactive', 'failed')
+        names = container_names(host, 'muse-glimmer')
+        if names is None:
+            raise Failed('diagnostic_container_state_unknown')
+        if stopped and not names:
             break
         if host.clock() >= deadline:
-            raise Failed('diagnostic_model_not_stopped', [{'stopped': stopped, 'containerGone': gone}])
+            raise Failed('diagnostic_model_not_stopped', [{'stopped': stopped, 'containerGone': not names}])
         host.sleep(2)
     image = ctx['runtime']['image_id']
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
-    if host.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image], 60)[1].strip() != image:
-        result.update(imagePresent=False, exitCode=None, elapsedS=0, firstCategory='image_missing',
-                      categories=['image_missing'], bytesInspected=0, limitReached=None)
+    refused = diagnostic_prerequisites(host, image)
+    if refused:
+        result.update(prerequisite=refused, imagePresent=refused not in ('image_missing', 'image_mismatch'),
+                      exitCode=None, elapsedS=0, firstCategory=None, categories=[], bytesInspected=0,
+                      limitReached=None, cleanup=None)
     else:
         guard = load_guard(ctx['payload'])
         capture = guard.Capture(DIAG_BYTES, DIAG_SECONDS)
-        argv = ['docker', 'run', '--rm', '--pull=never', '--network', 'none', '--name', DIAG_CONTAINER,
+        argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none', '--name', DIAG_CONTAINER,
                 '-e', 'HF_HUB_OFFLINE=1', '--entrypoint', 'vllm', image, 'serve', *ctx['serveArgs']]
         try:
             code, elapsed = host.validate(argv, DIAG_SECONDS, capture)
         finally:
-            host.run(['docker', 'rm', '-f', DIAG_CONTAINER], 30)  # a killed CLI leaves its container running
-        result.update(imagePresent=True, exitCode=code, elapsedS=elapsed, **capture.summary())
+            removed = host.run(['docker', 'rm', '-f', DIAG_CONTAINER], 30)[0]  # a killed CLI leaves its container
+            left = container_names(host, DIAG_CONTAINER)
+        cleanup = 'unknown' if left is None else 'failed' if left else 'removed'
+        result.update(prerequisite=None, imagePresent=True, exitCode=code, elapsedS=elapsed, cleanup=cleanup,
+                      cleanupRemoveExit=removed, **capture.summary())
     line = json.dumps(result, sort_keys=True)
     host.put_guest_attribute('diagnostic', line)
     host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    if refused:
+        raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
+    if result['cleanup'] != 'removed':
+        raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
     return f"model held; offline CLI check {result['firstCategory'] or 'no_category'} (exit {result['exitCode']})"
 
 
@@ -861,6 +899,7 @@ STAGES = (('disk', stage_disk), ('packages', stage_packages), ('driver', stage_d
           ('container', stage_container), ('image', stage_image), ('nginx', stage_nginx),
           ('service', stage_service), ('diagnostic', stage_diagnostic), ('auth', stage_auth), ('tls', stage_tls),
           ('edge', stage_edge))
+DIAGNOSTIC_STAGES = (('diagnostic', stage_diagnostic),)  # a diagnostic boot provisions nothing
 INDEPENDENT = {'tls'}  # may still run while auth waits
 
 
@@ -890,7 +929,8 @@ def run(host, payload, payload_sha256, now=time.time):
             host.path(MODEL_HOLD).parent.mkdir(parents=True, exist_ok=True)
             host.path(MODEL_HOLD).write_text(ctx['diagnostic'][1] + '\n')
         stopped = None
-        for name, fn in STAGES:
+        requested = ctx['diagnostic'] and ctx['diagnostic'][0] == 'requested'
+        for name, fn in DIAGNOSTIC_STAGES if requested else STAGES:
             if stopped and not (stopped == 'waiting' and name in INDEPENDENT | {'edge'}):
                 ctx['results'][name] = ('skipped', stopped, 0.0)
                 continue
