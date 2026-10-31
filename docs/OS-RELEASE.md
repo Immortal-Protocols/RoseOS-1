@@ -436,8 +436,13 @@ from `prepare-background-policy.py` now do).
 Substitute actual artifact paths and the target OS's SDK number. Confirm the
 policy's final allowlist before applying. RoseOS's product baseline calls for a
 pinned app allowlist and explicit owner approval for installs, messages,
-purchases and account changes. The imported `--prototype-control` and
-`--locked-control` switches are historical capabilities, not release defaults.
+purchases and account changes. Since OCT31 the Frankel release enables
+`--prototype-control` for exactly the signed controller: `framework.prototypeAgents`
+in `frankel.json` names only `dev.pixel.backgroundcontrol`, and the verifier requires
+the compiled PrototypeAgents array to be exactly that package pinned to the app
+signer. That controller can then drive any app in its workspace, including installer
+screens; install consent, Stop and the locked-session switch are unchanged.
+`--locked-control` remains a historical capability, not a release default.
 Every build with a background policy still applies
 `locked-control-frameworks-base.patch`. It adds the locked-session resources,
 their symbols and the owner-gated guards, with

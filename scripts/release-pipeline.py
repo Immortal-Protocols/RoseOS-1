@@ -62,6 +62,28 @@ class SetupMissing(Exception):
         super().__init__('setup missing: ' + ', '.join(missing))
         self.missing = missing
 
+# OCT31 "control any app": a release may compile at most one prototype agent, the signed Background Control
+# controller, pinned to the release app signer. The framework then lets that controller (and only it) drive any app in
+# its workspace; the per-target allowlist no longer limits it, while install consent, Stop and the locked-session
+# switch stay as they are. No other package can be named.
+PROTOTYPE_CONTROLLER = 'dev.pixel.backgroundcontrol'
+
+def prototype_agents(framework):
+    """The packages the compiled PrototypeAgents array must pin: [] for `prototypeAgentsEmpty: true`, or exactly
+    [PROTOTYPE_CONTROLLER] for `prototypeAgents`. Both, neither or any other value refuses."""
+    if not isinstance(framework, dict):
+        raise InvalidInput('framework must be an object')
+    listed, empty = 'prototypeAgents' in framework, 'prototypeAgentsEmpty' in framework
+    if listed == empty:
+        raise InvalidInput('framework needs exactly one of prototypeAgents or prototypeAgentsEmpty')
+    if empty:
+        if framework['prototypeAgentsEmpty'] is not True:
+            raise InvalidInput('framework.prototypeAgentsEmpty must be true; name the controller in prototypeAgents instead')
+        return []
+    if framework['prototypeAgents'] != [PROTOTYPE_CONTROLLER]:
+        raise InvalidInput(f'framework.prototypeAgents may only be [{PROTOTYPE_CONTROLLER!r}]')
+    return [PROTOTYPE_CONTROLLER]
+
 def load_config(path):
     try:
         config = json.loads(Path(path).read_text())
@@ -69,6 +91,8 @@ def load_config(path):
         raise InvalidInput(f'cannot read pipeline config: {error.__class__.__name__}')
     if config.get('schemaVersion') != 1 or not isinstance(config.get('host'), dict):
         raise InvalidInput('unsupported pipeline config')
+    if 'framework' in config:
+        prototype_agents(config['framework'])
     return config
 
 def resolve_device(value):
@@ -560,11 +584,16 @@ def framework_failures(dump, expected, signer):
             any(t.split(':', 1)[-1].lower() != signer.lower() for t in targets):
         failures.append(f'compiled computer-control targets are {targets}')
     prototype, problem = default_value(dump, 'array', 'config_pixelComputerControlPrototypeAgents')
+    agents = prototype_agents(expected)
     # A missing or unreadable array means the dump was not understood; fail closed rather than read it as empty.
     if problem:
         failures.append(problem)
-    elif expected['prototypeAgentsEmpty'] and prototype:
+    elif not agents and prototype:
         failures.append('compiled prototype agents are not empty')
+    elif agents and [p.lower() for p in prototype] != [f'{agent}:{signer}'.lower() for agent in agents]:
+        # Exactly one entry per named controller, pinned to the release app signer: no other package, certificate
+        # or extra entry.
+        failures.append(f'compiled prototype agents are {prototype}, not exactly {agents} pinned to the app signer')
     locked, problem = default_value(dump, 'bool', 'config_pixelComputerControlLockedSessions')
     if problem:
         failures.append(problem)

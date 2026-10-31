@@ -192,6 +192,63 @@ class FrameworkDumpTest(unittest.TestCase):
         empty = FRAMEWORK_DUMP.replace('Count=1\n          #0 (Key=0x01000001): (string8) "dev.pixel.calculator.agent:650D47F91B7F5AF3C530FEF53FE92018AA4521EFBA065BCB1D6FC9B699060BFB"\n', 'Count=0\n')
         self.assertEqual(self.failures(empty), ['compiled computer-control targets are []'])
 
+    # OCT31 "control any app": the exact signed controller as the sole prototype agent, pinned to the app signer.
+    CONTROLLER = {**{k: v for k, v in EXPECTED.items() if k != 'prototypeAgentsEmpty'},
+        'prototypeAgents': ['dev.pixel.backgroundcontrol']}
+
+    def prototype_dump(self, *entries):
+        items = ''.join(f'          #{i} (Key=0x01000001): (string8) "{e}"\n' for i, e in enumerate(entries))
+        return FRAMEWORK_DUMP.replace('Count=0\n', f'Count={len(entries)}\n' + items, 1)
+
+    def test_the_exact_controller_pinned_to_the_app_signer_passes(self):
+        pinned = self.prototype_dump('dev.pixel.backgroundcontrol:' + REAL_SIGNER.upper())
+        self.assertEqual(self.failures(pinned, self.CONTROLLER), [])
+        self.assertEqual(self.failures(pinned), ['compiled prototype agents are not empty'], 'the empty form is unchanged')
+
+    def test_any_other_compiled_prototype_agent_is_refused(self):
+        controller = 'dev.pixel.backgroundcontrol:' + REAL_SIGNER.upper()
+        for label, dump in (
+                ('none compiled', FRAMEWORK_DUMP),
+                ('another package', self.prototype_dump('dev.pixel.voice:' + REAL_SIGNER.upper())),
+                ('another signer', self.prototype_dump('dev.pixel.backgroundcontrol:' + 'B' * 64)),
+                ('an extra agent', self.prototype_dump(controller, 'com.example.other:' + REAL_SIGNER.upper())),
+                ('a second certificate', self.prototype_dump(controller, 'dev.pixel.backgroundcontrol:' + 'C' * 64)),
+                ('a duplicate', self.prototype_dump(controller, controller)),
+                ('no certificate', self.prototype_dump('dev.pixel.backgroundcontrol'))):
+            with self.subTest(label):
+                failures = self.failures(dump, self.CONTROLLER)
+                self.assertEqual(len(failures), 1, failures)
+                self.assertIn('not exactly', failures[0])
+        # The targets and locked-session checks are unchanged under the controller form.
+        locked_on = self.prototype_dump(controller).replace('(boolean) false', '(boolean) true', 1)
+        self.assertEqual(self.failures(locked_on, self.CONTROLLER), ['compiled locked-session switch differs from config'])
+        self.assertIn('compiled computer-control targets are',
+            self.failures(self.prototype_dump(controller), self.CONTROLLER, signer='b' * 64)[0])
+
+    def test_the_framework_schema_names_only_the_controller(self):
+        agents = release_pipeline.prototype_agents
+        self.assertEqual(agents({'prototypeAgentsEmpty': True}), [])
+        self.assertEqual(agents({'prototypeAgents': ['dev.pixel.backgroundcontrol']}), ['dev.pixel.backgroundcontrol'])
+        for bad in ({}, {'prototypeAgentsEmpty': True, 'prototypeAgents': ['dev.pixel.backgroundcontrol']},
+                {'prototypeAgentsEmpty': False}, {'prototypeAgents': []}, {'prototypeAgents': ['dev.pixel.voice']},
+                {'prototypeAgents': ['dev.pixel.backgroundcontrol', 'dev.pixel.voice']},
+                {'prototypeAgents': 'dev.pixel.backgroundcontrol'}, None):
+            with self.subTest(bad=bad), self.assertRaises(release_pipeline.InvalidInput):
+                agents(bad)
+
+    def test_the_frankel_release_names_exactly_the_controller(self):
+        config = release_pipeline.load_config(SCRIPTS.parent/'os/release-pipeline/frankel.json')
+        self.assertEqual(release_pipeline.prototype_agents(config['framework']), ['dev.pixel.backgroundcontrol'])
+        self.assertEqual((config['framework']['lockedSessions'], config['framework']['computerControlTargets']),
+            (False, ['dev.pixel.calculator.agent']))
+        self.assertNotIn('--locked-control', config['host']['integrate']['reconcile']['applyArgs'])
+        integrate = (SCRIPTS/'host-integrate.py').read_text()
+        self.assertEqual(integrate.count("'--prototype-control'"), 1)
+        self.assertIn("*(['--prototype-control'] if (config.get('framework') or {}).get('prototypeAgents') else [])",
+            integrate)
+        retained = json.loads((SCRIPTS.parent/'os/retained-rango/release.json').read_text())
+        self.assertIn('"prototypeAgentsEmpty": true', json.dumps(retained), 'the retained Rango release is unchanged')
+
     def test_missing_malformed_or_overridden_values_fail_closed(self):
         lines = FRAMEWORK_DUMP.splitlines(keepends=True)
         without_value = ''.join(l for l in lines if 'resource 0x01110330' not in l or 'spec resource' in l).replace(
@@ -420,6 +477,30 @@ class PipelineTest(unittest.TestCase):
         failed, result = self.run_builder_job()
         self.assertEqual(failed, 'bytes-verify')
         self.assertIn('computer-control targets', result.stderr)
+
+    def use_controller_form(self):
+        config = json.loads(self.config.read_text())
+        config['framework'] = {k: v for k, v in config['framework'].items() if k != 'prototypeAgentsEmpty'}
+        config['framework']['prototypeAgents'] = ['dev.pixel.backgroundcontrol']
+        self.config.write_text(json.dumps(config))
+
+    def test_the_controller_form_accepts_only_the_exact_compiled_controller(self):
+        self.use_controller_form()
+        self.addCleanup(os.environ.pop, 'FAKE_PROTOTYPE', None)
+        os.environ['FAKE_PROTOTYPE'] = 'dev.pixel.backgroundcontrol:' + SIGNER
+        failed, result = self.run_builder_job()
+        self.assertIsNone(failed, result.stdout + result.stderr)
+
+    def test_the_controller_form_refuses_none_or_a_wrong_compiled_agent(self):
+        self.use_controller_form()
+        self.addCleanup(os.environ.pop, 'FAKE_PROTOTYPE', None)
+        for value in ('', 'dev.pixel.voice:' + SIGNER, 'dev.pixel.backgroundcontrol:' + 'B' * 64):
+            with self.subTest(value=value):
+                os.environ['FAKE_PROTOTYPE'] = value
+                shutil.rmtree(self.base, ignore_errors=True)
+                failed, result = self.run_builder_job()
+                self.assertEqual(failed, 'bytes-verify', result.stdout + result.stderr)
+                self.assertIn('not exactly', result.stderr)
 
     def test_compiled_prototype_agent_fails(self):
         os.environ['FAKE_PROTOTYPE'] = 'dev.pixel.backgroundcontrol:AAAA'

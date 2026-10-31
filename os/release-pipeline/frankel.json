@@ -391,7 +391,9 @@
     "computerControlTargets": [
       "dev.pixel.calculator.agent"
     ],
-    "prototypeAgentsEmpty": true,
+    "prototypeAgents": [
+      "dev.pixel.backgroundcontrol"
+    ],
     "lockedSessions": false
   },
   "publication": {
