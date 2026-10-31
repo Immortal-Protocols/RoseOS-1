@@ -52,6 +52,8 @@ python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
 python3 os/tests/persistent-app-experiment/test_report.py
+# Isolated SystemUI trial: exact installed SDK revisions against the QA manifest pins (parses given tables, installs nothing).
+python3 os/tests/persistent-app-experiment/test_sdk_revisions.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
