@@ -126,4 +126,37 @@ test('leaving Rose keeps the call; returning does not reconnect', () => {
 test('reset restores the initial state', () => {
   assert.deepStrictEqual(run(working(), { type: 'reset' }), M.initialState());
 });
+// Rose's voice (output) mute: independent of microphone, call, speech, results and tasks.
+test("voice (output) mute toggles only voiceMuted", () => {
+  const before = run(working(), { type: 'speak' }, { type: 'result', value: 'saturday' });
+  const r = M.transition(before, { type: 'voiceMute' });
+  assert.strictEqual(r.state.voiceMuted, true);
+  for (const k of ['muted', 'connection', 'speaking', 'result', 'view', 'pendingStop']) assert.deepStrictEqual(r.state[k], before[k], k);
+  assert.deepStrictEqual(r.state.tasks, before.tasks);
+  assert.deepStrictEqual(r.effects, [], 'no cue, no endVoice, no stopAck');
+  assert.strictEqual(run(r.state, { type: 'voiceMute' }).voiceMuted, false);
+});
+test("voice mute works without a call and survives end call, navigation and layout", () => {
+  let s = run(fresh(), { type: 'voiceMute' });
+  assert.ok(s.voiceMuted); assert.strictEqual(s.connection, 'disconnected'); assert.ok(!s.muted);
+  s = run(s, { type: 'openRose' }, { type: 'connected' }, { type: 'speak' }, { type: 'endCall' }, { type: 'switcher' }, { type: 'layout', value: 'unfolded' }, { type: 'home' });
+  assert.ok(s.voiceMuted);
+});
+test("microphone mute never changes voice mute (and vice versa)", () => {
+  const s = run(connected(), { type: 'voiceMute' }, { type: 'mute' });
+  assert.ok(s.voiceMuted && s.muted);
+  const t = run(s, { type: 'mute' }, { type: 'voiceMute' });
+  assert.ok(!t.voiceMuted && !t.muted);
+  assert.deepStrictEqual(M.rendererSignals(run(connected(), { type: 'voiceMute' })), M.rendererSignals(connected()), 'renderer mapping unchanged');
+});
+test("voice mute does not stop, confirm or cancel work", () => {
+  const s = run(working(), { type: 'askStop', id: 'reply' }, { type: 'voiceMute' });
+  assert.strictEqual(s.pendingStop, 'reply'); assert.strictEqual(s.tasks.reply.state, 'running');
+  const t = run(working(), { type: 'voiceMute' }, { type: 'tick' });
+  for (const id of Object.keys(M.TASKS)) assert.strictEqual(t.tasks[id].state, 'running');
+});
+test("locked phone ignores the voice control; reset clears it", () => {
+  assert.ok(!run(fresh(), { type: 'lock' }, { type: 'voiceMute' }).voiceMuted);
+  assert.ok(!run(run(fresh(), { type: 'voiceMute' }), { type: 'reset' }).voiceMuted);
+});
 console.log('\n' + passed + ' model checks passed');

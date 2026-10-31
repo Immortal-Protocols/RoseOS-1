@@ -66,7 +66,8 @@ function initialState() {
     app: null,
     window: null,
     connection: 'disconnected', // disconnected | connecting | connected
-    muted: false,
+    muted: false,            // microphone (input) mute — only the call's mic control changes it
+    voiceMuted: false,       // Rose's voice (output/speaker) mute — independent of mic, call, speech and tasks
     speaking: false,
     result: null,            // id of formatted result shown in Rose
     tasks,
@@ -142,6 +143,10 @@ function transition(previous, event) {
       break;
     case 'connected':
       if (s.connection === 'connecting') { s.connection = 'connected'; notice('cue', 'Connected'); }
+      break;
+    case 'voiceMute':
+      // Output only: never touches mic mute, connection, speaking, results or tasks; no conversation cue.
+      s.voiceMuted = typeof event.value === 'boolean' ? event.value : !s.voiceMuted;
       break;
     case 'mute':
       if (s.connection === 'connected') { s.muted = !s.muted; notice('cue', s.muted ? 'Muted' : 'Unmuted'); }

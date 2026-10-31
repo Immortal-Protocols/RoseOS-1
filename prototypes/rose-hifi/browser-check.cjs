@@ -308,6 +308,46 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   const scrolled = await page.evaluate(() => document.getElementById('screen').scrollTop + document.getElementById('screen').scrollLeft);
   check('phone surface never scrolls under focus', scrolled === 0);
 
+  // ---------- Rose's voice (output) mute on Home's tray ----------
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.locator('#h-folded').click();
+  await page.locator('#h-reset').click(); await settle(500);
+  if (process.env.ROSE_TRAY) {
+    const vbox = await page.evaluate(() => { const b = document.getElementById('tray-voice'); const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const r = b.getBoundingClientRect(); return { w: r.width / k, h: r.height / k, pressed: b.getAttribute('aria-pressed'), name: b.getAttribute('aria-label') }; });
+    check('voice control on Home tray, ≥44 px, unpressed, named', vbox.w >= 43.5 && vbox.h >= 43.5 && vbox.pressed === 'false' && /Rose's voice/.test(vbox.name), JSON.stringify(vbox));
+    await page.locator('#h-tasks').click();
+    await page.locator('#tray-rose').click();
+    await page.waitForFunction(() => window.__rose.getState().connection === 'connected');
+    await page.locator('#home-bar').click(); await settle(500);
+    const pre = await st();
+    const noticesBefore = pre.notices.map((n) => n.id).join();
+    await page.locator('#tray-voice').click(); await settle(300);
+    let v = await st();
+    check('tap mutes Rose’s voice only (mic, call, speech, tasks untouched)', v.voiceMuted && !v.muted && v.connection === 'connected' && v.speaking === pre.speaking && v.view === 'home' && JSON.stringify(Object.values(v.tasks).map((t) => t.state)) === JSON.stringify(Object.values(pre.tasks).map((t) => t.state)) && !v.pendingStop, JSON.stringify({ voiceMuted: v.voiceMuted, muted: v.muted, connection: v.connection }));
+    check('voice mute adds no conversation notice', v.notices.filter((n) => !noticesBefore.split(',').includes(String(n.id))).every((n) => n.kind === 'task'));
+    const shown = await page.evaluate(() => ({ pressed: document.getElementById('tray-voice').getAttribute('aria-pressed'), flag: document.getElementById('tray-voice').dataset.voiceMuted, announce: document.getElementById('announcer').textContent }));
+    check('muted state is exposed (aria-pressed, visual flag, announcement)', shown.pressed === 'true' && shown.flag === 'true' && /muted/i.test(shown.announce), JSON.stringify(shown));
+    await shot('40-home-voice-muted');
+    await page.locator('#tray-rose').click(); await settle(700);
+    await page.evaluate(() => window.__rose.dispatch({ type: 'speak', ms: 4000 })); await settle(300);
+    check('Rose caption reflects muted voice while speaking', /voice muted/.test(await page.locator('#rose-caption').textContent()));
+    await page.locator('#rose-mic').click(); await settle(300);
+    v = await st();
+    check('microphone mute is separate from voice mute', v.muted && v.voiceMuted);
+    await page.locator('#home-bar').click(); await settle(500);
+    await page.locator('#tray-voice').focus();
+    await page.keyboard.press('Enter'); await settle(300);
+    v = await st();
+    check('keyboard unmutes Rose’s voice; mic stays muted; call continues', !v.voiceMuted && v.muted && v.connection === 'connected' && await page.locator('#tray-voice').getAttribute('aria-pressed') === 'false');
+    await page.locator('#h-lock').click(); await settle(200);
+    await page.evaluate(() => window.__rose.dispatch({ type: 'voiceMute' }));
+    check('locked phone ignores the voice control', !(await st()).voiceMuted);
+    await page.locator('#unlock').click(); await settle(200);
+  } else {
+    const hidden = await page.evaluate(() => getComputedStyle(document.getElementById('tray-voice')).display === 'none' && [...document.querySelectorAll('#home-tray .well')].filter((w) => w.getBoundingClientRect().width).length === 2);
+    check('default tray unchanged: two controls, voice control hidden', hidden);
+  }
+
   r = await rs();
   const f = r.frames.slice().sort((a, b) => a - b);
   const env = await page.evaluate(() => ({ ua: navigator.userAgent, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight }));

@@ -761,6 +761,29 @@ span.well{cursor:default}
 .screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg.solid{width:31px;height:31px}
 .screen[data-tray] #home-tray .overview-glyph{transform:scale(.68)}
 
+/* ---------- Rose's voice (output) mute on Home's tray — options 1–10 only ----------
+   Speaker/output mute, distinct from the microphone (input) mute, End call and Stop.
+   The untouched default keeps its two-control tray, so the control is hidden there. */
+.screen:not([data-tray]) #tray-voice{display:none}
+#tray-voice .voice-state{display:none}
+.screen[data-tray] #tray-voice svg{width:28px;height:28px}
+.screen[data-tray] #home-tray #tray-voice[data-voice-muted=true]{color:#c23d55;
+  background-color:rgba(232,80,100,.14);box-shadow:inset 0 0 0 1.5px rgba(200,60,85,.55)}
+.screen[data-tray] #home-tray #tray-voice[data-voice-muted=true]::after{display:block;content:'';position:absolute;left:auto;right:9px;top:7px;width:8px;height:8px;
+  border-radius:50%;background:#e0445f;box-shadow:0 0 0 2px rgba(255,255,255,.85)}
+/* Glass-lens and frame options keep their own surfaces under the muted tint. */
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]{box-shadow:inset 0 0 0 1.6px rgba(200,60,85,.7),inset 0 -6px 8px -4px rgba(255,255,255,.7),0 0 0 1px rgba(75,90,112,.5),3px 7px 10px rgba(15,30,55,.3)}
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]::after{left:auto;right:10px;top:8px;width:8px;height:8px;border-radius:50%;background:#e0445f}
+/* Dark inset strip (2): light symbol for contrast. */
+.screen[data-tray="2"] #home-tray #tray-voice{color:#fff}
+.screen[data-tray="2"] #home-tray #tray-voice[data-voice-muted=true]{color:#ffb4c2;background-color:rgba(232,80,100,.24)}
+/* Split wings (6): the voice control floats in the open middle, like Rose's end-call. */
+.screen[data-tray="6"] #home-tray .well:nth-child(2){width:56px;height:56px;border-radius:50%;padding:0;
+  background:radial-gradient(70% 60% at 50% 40%,#fff,#f3f5f8);box-shadow:inset 0 0 0 1px rgba(255,255,255,.9),0 0 0 .8px rgba(70,85,105,.35),0 6px 14px rgba(10,28,55,.2)}
+.screen[data-tray="6"] #home-tray #tray-voice[data-voice-muted=true]{background:radial-gradient(70% 60% at 50% 40%,#fff4f6,#fbe3e8);box-shadow:inset 0 0 0 1.5px rgba(200,60,85,.6),0 6px 14px rgba(10,28,55,.2)}
+/* Continuous glass (7): separators stay visible next to the tinted control. */
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]{box-shadow:-1px 0 0 rgba(255,255,255,.45),inset 0 0 0 1.5px rgba(200,60,85,.5)}
+
 </style></head>
 <body>
 <div class="page">
@@ -779,6 +802,7 @@ span.well{cursor:default}
      <nav class="page-dots" id="page-dots" aria-label="Home page"></nav>
      <div class="tray two" id="home-tray" role="toolbar" aria-label="Persistent tray">
       <button class="well" id="tray-rose" aria-label="Open Rose"><div class="rose-slot" id="slot-tray"></div></button>
+      <button class="well" id="tray-voice" aria-pressed="false" aria-label="Mute Rose's voice"></button>
       <button class="well" id="tray-overview" aria-label="Open system switcher"><span class="overview-glyph" aria-hidden="true"><i></i><i></i><i></i></span></button>
      </div>
     </section>
@@ -920,7 +944,8 @@ function initialState() {
     app: null,
     window: null,
     connection: 'disconnected', // disconnected | connecting | connected
-    muted: false,
+    muted: false,            // microphone (input) mute — only the call's mic control changes it
+    voiceMuted: false,       // Rose's voice (output/speaker) mute — independent of mic, call, speech and tasks
     speaking: false,
     result: null,            // id of formatted result shown in Rose
     tasks,
@@ -996,6 +1021,10 @@ function transition(previous, event) {
       break;
     case 'connected':
       if (s.connection === 'connecting') { s.connection = 'connected'; notice('cue', 'Connected'); }
+      break;
+    case 'voiceMute':
+      // Output only: never touches mic mute, connection, speaking, results or tasks; no conversation cue.
+      s.voiceMuted = typeof event.value === 'boolean' ? event.value : !s.voiceMuted;
       break;
     case 'mute':
       if (s.connection === 'connected') { s.muted = !s.muted; notice('cue', s.muted ? 'Muted' : 'Unmuted'); }
@@ -1332,6 +1361,9 @@ void main(){
   const UI = {
     // Tray glyphs are solid and dimensional, like the plan's reference tray.
     mic: '<svg viewBox="0 0 24 24" aria-hidden="true" class="solid"><rect x="8.6" y="2.5" width="6.8" height="12.5" rx="3.4" fill="currentColor"/><path d="M5.6 10.8a6.4 6.4 0 0 0 12.8 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M12 17.4V20.6M8.8 20.8h6.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    // Rose's voice (output). Distinct from the microphone glyphs above.
+    voice: '<svg viewBox="0 0 24 24" aria-hidden="true" class="solid"><path d="M4 9.2h3.4L12 5v14l-4.6-4.2H4z" fill="currentColor"/><path d="M15.2 9a4.2 4.2 0 0 1 0 6M17.8 6.4a8 8 0 0 1 0 11.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    voiceOff: '<svg viewBox="0 0 24 24" aria-hidden="true" class="solid"><path d="M4 9.2h3.4L12 5v14l-4.6-4.2H4z" fill="currentColor"/><path d="M15.4 9.4l5.2 5.2M20.6 9.4l-5.2 5.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>',
     micOff: '<svg viewBox="0 0 24 24" aria-hidden="true" class="solid"><rect x="8.6" y="2.5" width="6.8" height="12.5" rx="3.4" fill="currentColor" opacity=".55"/><path d="M5.6 10.8a6.4 6.4 0 0 0 12.8 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" opacity=".55"/><path d="M12 17.4V20.6M8.8 20.8h6.4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" opacity=".55"/><path d="M4.5 3.5l15 17" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/><path d="M4.5 3.5l15 17" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     end: ui('<path d="M6.2 6.2l11.6 11.6M17.8 6.2L6.2 17.8"/>', 2.6),
     grid: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="2.2"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="2.2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="2.2"/><rect x="13" y="13" width="7.5" height="7.5" rx="2.2"/></svg>',
@@ -2062,6 +2094,12 @@ void main(){
     [...$('page-dots').children].forEach((d, i) => d.setAttribute('aria-current', String(i === state.homePage)));
     const callLive = state.connection !== 'disconnected';
     $('tray-rose').setAttribute('aria-label', callLive ? 'Return to Rose call' : 'Open Rose');
+    // Rose's voice (output) mute: stable name + aria-pressed, icon and a visible "muted" mark.
+    const vb = $('tray-voice');
+    vb.innerHTML = (state.voiceMuted ? I.UI.voiceOff : I.UI.voice) + '<span class="voice-state" aria-hidden="true">' + (state.voiceMuted ? 'Muted' : '') + '</span>';
+    vb.setAttribute('aria-pressed', String(state.voiceMuted));
+    vb.dataset.voiceMuted = String(state.voiceMuted);
+    vb.title = state.voiceMuted ? "Rose's voice is muted — tap to unmute" : "Mute Rose's voice";
 
     // Rose
     const mic = $('rose-mic');
@@ -2073,7 +2111,7 @@ void main(){
     $('rose-end').innerHTML = '<span class="end">' + I.UI.end + '</span>';
     $('rose-end').disabled = !callLive;
     $('rose-agents').innerHTML = I.UI.grid;
-    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? 'Rose speaking' : state.muted ? 'Microphone muted' : 'Listening') : '';
+    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? (state.voiceMuted ? 'Rose speaking · voice muted' : 'Rose speaking') : state.muted ? 'Microphone muted' : 'Listening') : '';
     $('rose-caption').textContent = caption;
     renderResult();
     renderNotices();
@@ -2158,6 +2196,11 @@ void main(){
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
+  $('tray-voice').addEventListener('click', () => {
+    dispatch({ type: 'voiceMute' });
+    // Screen-reader confirmation only; not a visual conversation cue.
+    $('announcer').textContent = state.voiceMuted ? "Rose's voice muted." : "Rose's voice on.";
+  });
   $('rose-mic').addEventListener('click', () => dispatch({ type: 'mute' }));
   $('rose-end').addEventListener('click', () => { dispatch({ type: 'endCall' }); if (state.view === 'home') $('tray-rose').focus({ preventScroll: true }); });
   $('rose-agents').addEventListener('click', () => dispatch({ type: 'agents' }));

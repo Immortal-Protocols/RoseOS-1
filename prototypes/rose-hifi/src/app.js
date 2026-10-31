@@ -298,6 +298,12 @@
     [...$('page-dots').children].forEach((d, i) => d.setAttribute('aria-current', String(i === state.homePage)));
     const callLive = state.connection !== 'disconnected';
     $('tray-rose').setAttribute('aria-label', callLive ? 'Return to Rose call' : 'Open Rose');
+    // Rose's voice (output) mute: stable name + aria-pressed, icon and a visible "muted" mark.
+    const vb = $('tray-voice');
+    vb.innerHTML = (state.voiceMuted ? I.UI.voiceOff : I.UI.voice) + '<span class="voice-state" aria-hidden="true">' + (state.voiceMuted ? 'Muted' : '') + '</span>';
+    vb.setAttribute('aria-pressed', String(state.voiceMuted));
+    vb.dataset.voiceMuted = String(state.voiceMuted);
+    vb.title = state.voiceMuted ? "Rose's voice is muted — tap to unmute" : "Mute Rose's voice";
 
     // Rose
     const mic = $('rose-mic');
@@ -309,7 +315,7 @@
     $('rose-end').innerHTML = '<span class="end">' + I.UI.end + '</span>';
     $('rose-end').disabled = !callLive;
     $('rose-agents').innerHTML = I.UI.grid;
-    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? 'Rose speaking' : state.muted ? 'Microphone muted' : 'Listening') : '';
+    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? (state.voiceMuted ? 'Rose speaking · voice muted' : 'Rose speaking') : state.muted ? 'Microphone muted' : 'Listening') : '';
     $('rose-caption').textContent = caption;
     renderResult();
     renderNotices();
@@ -394,6 +400,11 @@
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
+  $('tray-voice').addEventListener('click', () => {
+    dispatch({ type: 'voiceMute' });
+    // Screen-reader confirmation only; not a visual conversation cue.
+    $('announcer').textContent = state.voiceMuted ? "Rose's voice muted." : "Rose's voice on.";
+  });
   $('rose-mic').addEventListener('click', () => dispatch({ type: 'mute' }));
   $('rose-end').addEventListener('click', () => { dispatch({ type: 'endCall' }); if (state.view === 'home') $('tray-rose').focus({ preventScroll: true }); });
   $('rose-agents').addEventListener('click', () => dispatch({ type: 'agents' }));

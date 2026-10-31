@@ -113,3 +113,26 @@
 .screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg{width:28px;height:28px}
 .screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg.solid{width:31px;height:31px}
 .screen[data-tray] #home-tray .overview-glyph{transform:scale(.68)}
+
+/* ---------- Rose's voice (output) mute on Home's tray — options 1–10 only ----------
+   Speaker/output mute, distinct from the microphone (input) mute, End call and Stop.
+   The untouched default keeps its two-control tray, so the control is hidden there. */
+.screen:not([data-tray]) #tray-voice{display:none}
+#tray-voice .voice-state{display:none}
+.screen[data-tray] #tray-voice svg{width:28px;height:28px}
+.screen[data-tray] #home-tray #tray-voice[data-voice-muted=true]{color:#c23d55;
+  background-color:rgba(232,80,100,.14);box-shadow:inset 0 0 0 1.5px rgba(200,60,85,.55)}
+.screen[data-tray] #home-tray #tray-voice[data-voice-muted=true]::after{display:block;content:'';position:absolute;left:auto;right:9px;top:7px;width:8px;height:8px;
+  border-radius:50%;background:#e0445f;box-shadow:0 0 0 2px rgba(255,255,255,.85)}
+/* Glass-lens and frame options keep their own surfaces under the muted tint. */
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]{box-shadow:inset 0 0 0 1.6px rgba(200,60,85,.7),inset 0 -6px 8px -4px rgba(255,255,255,.7),0 0 0 1px rgba(75,90,112,.5),3px 7px 10px rgba(15,30,55,.3)}
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]::after{left:auto;right:10px;top:8px;width:8px;height:8px;border-radius:50%;background:#e0445f}
+/* Dark inset strip (2): light symbol for contrast. */
+.screen[data-tray="2"] #home-tray #tray-voice{color:#fff}
+.screen[data-tray="2"] #home-tray #tray-voice[data-voice-muted=true]{color:#ffb4c2;background-color:rgba(232,80,100,.24)}
+/* Split wings (6): the voice control floats in the open middle, like Rose's end-call. */
+.screen[data-tray="6"] #home-tray .well:nth-child(2){width:56px;height:56px;border-radius:50%;padding:0;
+  background:radial-gradient(70% 60% at 50% 40%,#fff,#f3f5f8);box-shadow:inset 0 0 0 1px rgba(255,255,255,.9),0 0 0 .8px rgba(70,85,105,.35),0 6px 14px rgba(10,28,55,.2)}
+.screen[data-tray="6"] #home-tray #tray-voice[data-voice-muted=true]{background:radial-gradient(70% 60% at 50% 40%,#fff4f6,#fbe3e8);box-shadow:inset 0 0 0 1.5px rgba(200,60,85,.6),0 6px 14px rgba(10,28,55,.2)}
+/* Continuous glass (7): separators stay visible next to the tinted control. */
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]{box-shadow:-1px 0 0 rgba(255,255,255,.45),inset 0 0 0 1.5px rgba(200,60,85,.5)}
