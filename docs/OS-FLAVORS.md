@@ -1,6 +1,6 @@
 # OS flavors and install artifacts
 
-FLAVOR001 and FLAVOR002. A flavor is one device build of RoseOS with its own install-artifact
+FLAVOR001, FLAVOR002 and FOLD-FACTORY-003. A flavor is one device build of RoseOS with its own install-artifact
 contract: `os/flavors/frankel.json` (Pixel 10) and `os/flavors/rango.json` (Pixel 10 Pro Fold).
 `scripts/factory-package.py` loads a contract, decides what a candidate artifact is, verifies a
 factory install archive in three separate tiers, and packages it only when all three pass.
@@ -33,13 +33,34 @@ publication receipt.
 ## Three tiers; `factoryReady` needs all of them
 
 `classify` assigns one of these roles: `ota-update`, `target-files`, `img-zip`,
-`factory-install` or `unknown`. Only `factory-install` can be ready.
+`factory-install`, `factory-intermediate` or `unknown`. Only `factory-install` can be ready.
+
+**Generator layout (pinned).** `scripts/tests/fixtures/factory-package/device_common-1f5ba267/` holds
+device/common `generate-factory-images-common.sh` and `clear-factory-images-variables.sh`,
+byte-identical to upstream (blob ids in `PROVENANCE.json`). They are read as text and never executed.
+Every layout claim in `artifacts.factory.generatorMembers` must appear verbatim in them, or the
+contract is refused. With the variables `generate-release.sh` sets for rango and frankel, the
+generator does the following:
+- copies `RADIO/bootloader.img` → `bootloader-{device}-{bootloader}.img`;
+- copies `RADIO/radio.img` → `radio-{device}-{baseband}.img`;
+- copies `$AVB_PKMD` → `avb_pkmd.bin`;
+- copies every `VENDOR/firmware/dauntless/*` (GSC firmware) into the top directory;
+- writes `flash-all.sh`/`.bat` (product check, both-slot bootloader, radio, `avb_custom_key`,
+  `oem uart disable`, `dpm` erase, `fastboot -w --skip-reboot update`);
+- zips the result as `{device}-factory-{build}.zip`. That intermediate is refused: only the
+  `optimize-factory-image` install archive is signed and shipped.
+
+The install-only members (`android-info.txt`, `script.txt`, per-partition images, `super_N.img`)
+come from `fastboot optimize-factory-image`, whose source is not pinned, so they stay historical
+(mustang verifier).
 
 1. **`structurallyComplete`**
    - ZIP hygiene: names unique and relative, no `..`, no links, CRCs valid, one
      `{device}-install-{build}/` directory.
    - `android-info.txt` and exactly the matching `bootloader-`/`radio-` images, byte-equal to
      target-files `RADIO/`.
+   - Every `VENDOR/firmware/dauntless/` file present byte-equal under the same name. No other
+     top-level member is allowed (`flash-all.bat` is optional).
    - Inventory derived from the signed target-files (`META/ab_partitions.txt`, `misc_info.txt`
      with `ab_update=true`, `OTA/android-info.txt`). Every non-dynamic A/B image appears byte-equal
      with a sane header.
@@ -47,9 +68,9 @@ publication receipt.
      `roseos.factory-firmware-observation.v1` lists them. That observation must be bound to the
      archive's exact bootloader/radio digests; absence alone never counts.
    - Contiguous sparse `super_1..N.img`; `avb_pkmd.bin` equal to the flavor key; the build number
-     matches; the flash script declares `erase userdata`.
+     matches; the install flash script declares `erase userdata` (historical optimized layout).
    - The signed target-files must match the release-delivered
-     `roseos.target-files-observation.v1` (digest and member names).
+     `roseos.target-files-observation.v2` (digest and member names, now including `VENDOR/firmware/`).
 2. **`contentVerified`**
    - Inputs: `--otatools ZIP --otatools-sha256 H`, the pinned otatools-package of that build.
      `bin/simg2img`, `bin/lpunpack` and `lib64/` are taken from that archive, never from the
@@ -135,7 +156,8 @@ Optional flags: `--ssh-keygen PATH`, `--max-work-bytes N`, `--avb-public-key-sha
   already-needed admitted signed-output operation, and list the receipt in `inventory.observed`.
 - **Shared harness and CI. Owner: release.** Add the test to `scripts/test-local.sh` and an
   offline CI path. The runner needs `ssh-keygen`; `android-sdk-libsparse-utils` is optional.
-- **Generator fixtures. Owner: Chief.** device/common `1f5ba267` `generate-factory-images-common.sh`
-  and `clear-factory-images-variables.sh`, to confirm member naming.
+- **optimize-factory-image source. Owner: Chief (upstream fixture scope).** Pin GrapheneOS
+  platform_system_core fastboot at the manifest revision to confirm the install-only members. The
+  device/common generator fixtures are now pinned (FOLD-FACTORY-003).
 - **Physical first-install acceptance. Owner: QA, with a device handback.** This comes only after
   a ready archive exists.

@@ -15,7 +15,8 @@ archive {device}-install-{build}.zip that generate-release.sh produces with fast
 last can be factory-ready. Three separate tiers are reported:
 
 structurallyComplete  ZIP members safe, unique, link-free with valid CRCs; android-info.txt and exactly the matching
-                      bootloader-/radio- images; every non-dynamic A/B partition either an IMAGES/ image present
+                      bootloader-/radio- images and the VENDOR/firmware/dauntless/ GSC files the pinned generator copies
+                      (device_common 1f5ba267 fixture), byte-equal to the target-files, and no other member; every non-dynamic A/B partition either an IMAGES/ image present
                       byte-equal or listed as carried by the bootloader/radio image in a firmware observation bound to
                       those images' sha256 (never inferred from absence); contiguous sparse super_N.img segments for
                       the dynamic partitions; avb_pkmd.bin equal to the flavor AVB key; flash script declares the wipe.
@@ -51,7 +52,7 @@ from release_receipts import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 'roseos.factory-package.v2'
-OBSERVATION = 'roseos.target-files-observation.v1'
+OBSERVATION = 'roseos.target-files-observation.v2'
 FIRMWARE = 'roseos.factory-firmware-observation.v1'
 NAMESPACE = 'factory images'
 CHUNK = 1 << 20
@@ -60,7 +61,7 @@ VBMETA_MAGIC = b'AVB0'
 SPARSE_MAGIC = b'\x3a\xff\x26\xed'
 SUPER = re.compile(r'super_(\d+)\.img')
 HEX64 = re.compile(r'[0-9a-f]{64}')
-OBSERVED_PREFIXES = ('META/', 'IMAGES/', 'RADIO/', 'OTA/')
+OBSERVED_PREFIXES = ('META/', 'IMAGES/', 'RADIO/', 'OTA/', 'VENDOR/firmware/')
 TOOLS = ('bin/simg2img', 'bin/lpunpack')
 DEFAULT_MAX_WORK = 64 << 30
 TOOL_TIMEOUT = 3600
@@ -117,6 +118,9 @@ def load_flavor(name, root=ROOT):
     signing = flavor['factorySigning']
     checks['factorySigning.namespace'] = (signing['namespace'], NAMESPACE)
     checks['releaseScript namespace'] = (f'ssh-keygen -Y sign -n "{NAMESPACE}"'.encode() in script_bytes, True)
+    factory = flavor['artifacts']['factory']
+    if pinned_layout(flavor):
+        check_generator_layout(name, flavor, script_bytes, root, checks)
     drift = [key for key, (have, want) in checks.items() if have != want]
     if drift:
         raise ContractError(f'{name}: contract disagrees with its sources: {", ".join(drift)}')
@@ -124,15 +128,39 @@ def load_flavor(name, root=ROOT):
             signing['publicKey'] is not None and not (re.fullmatch(r'[\w.@+-]+', signing['principal'])
             and re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/]+=*', signing['publicKey']))):
         raise ContractError(f'{name}: factorySigning needs both a plain principal and one ssh-ed25519 public key, or neither')
-    factory = flavor['artifacts']['factory']
     if not (factory['dataWipe'] and factory['requiresUnlockedBootloader']) or flavor['artifacts']['ota']['dataWipe']:
         raise ContractError(f'{name}: install-mode declarations must be factory wipe+unlock, OTA no wipe')
     pinned = pinned_avb_key(flavor, root)
     if pinned is not None and not HEX64.fullmatch(pinned):
         raise ContractError(f'{name}: pinned avbPublicKeySha256 is not a sha256')
-    if name != 'frankel' and pinned is not None and pinned == pinned_avb_key(load_flavor('frankel', root), root):
+    # Only Frankel's pinned value is needed here; Frankel's own contract is validated whenever it is loaded.
+    frankel = json.loads((root/'os/flavors/frankel.json').read_text())
+    if name != 'frankel' and pinned is not None and pinned == pinned_avb_key(frankel, root):
         raise ContractError(f'{name}: signer_collision: the pinned AVB key equals the Frankel key')
     return flavor
+
+def pinned_layout(flavor):
+    """True when the contract anchors its layout in the pinned device_common generator fixture. A contract without it
+    (an older shape) still loads, but no factory archive classified under it can be structurally complete."""
+    return 'generatorMembers' in flavor['artifacts']['factory']
+
+def check_generator_layout(name, flavor, script_bytes, root, checks):
+    factory, generator = flavor['artifacts']['factory'], flavor['inventory']['generatorFixture']
+    texts = {}
+    for file, digest in generator['files'].items():
+        data = (root/generator['fixture']/file).read_bytes()
+        checks[f'generatorFixture {file} sha256'] = (hashlib.sha256(data).hexdigest(), digest)
+        texts[file] = data.decode()
+    members = factory['generatorMembers']
+    for anchor in members['anchors']:
+        checks[f'generator anchor {anchor!r}'] = (anchor in texts['generate-factory-images-common.sh'], True)
+    checks['requiredMembers'] = (sorted(factory['requiredMembers']),
+        sorted(members['members'] + factory['optimizeMembers']['members']))
+    # GSCFIRMWARESRC: generate-release.sh overrides the generator default only for its epic device list.
+    epic = re.search(r'if \[\[ \$DEVICE == @\(([\w|]+)\) \]\]; then\n\s+GSCFIRMWARESRC="(\w+)"', script_bytes.decode())
+    default = re.search(r'^\s+GSCFIRMWARESRC=(\w+)$', texts['generate-factory-images-common.sh'], re.M)
+    gsc = epic.group(2) if epic and name in epic.group(1).split('|') else (default.group(1) if default else None)
+    checks['gscFirmware.source'] = (members['gscFirmware']['source'], f'VENDOR/firmware/{gsc}/')
 
 def pinned_avb_key(flavor, root=ROOT):
     """A literal pin with its provenance, or a pointer 'FILE dotted.field' read from a checked-in source."""
@@ -201,6 +229,8 @@ def role_of(names):
     tops = {n.split('/', 1)[0] for n in names}
     if len(tops) == 1 and all('/' in n for n in names) and re.fullmatch(r'[a-z0-9]+-install-\d+', next(iter(tops))):
         return 'factory-install'
+    if len(tops) == 1 and all('/' in n for n in names) and re.fullmatch(r'[a-z0-9]+-factory-\d+', next(iter(tops))):
+        return 'factory-intermediate'
     if 'android-info.txt' in names and any(n.endswith('.img') and '/' not in n for n in names):
         return 'img-zip'
     return 'unknown'
@@ -295,7 +325,7 @@ def target_inventory(path, flavor, build, result, observation, allow_synthetic):
         if stray:
             result['problems'].append(f'install-semantics:dynamic partitions outside ab_partitions {stray}')
         inventory = {'abPartitions': sorted(set(ab)), 'dynamic': sorted(set(dynamic)), 'virtualAb': misc.get('virtual_ab') == 'true',
-                     'images': {}, 'withoutImage': [], 'firmware': {}}
+                     'images': {}, 'withoutImage': [], 'firmware': {}, 'gsc': {}}
         for part in sorted(set(ab) - set(dynamic)):
             if f'IMAGES/{part}.img' in names:
                 inventory['images'][part] = member_digest(archive, f'IMAGES/{part}.img')[0]
@@ -309,6 +339,19 @@ def target_inventory(path, flavor, build, result, observation, allow_synthetic):
                 inventory['firmware'][kind] = member_digest(archive, f'RADIO/{kind}.img')[0]
             else:
                 result['missing'].append(f'target-files:RADIO/{kind}.img')
+        if not pinned_layout(flavor):
+            return inventory
+        # The generator copies VENDOR/firmware/$GSCFIRMWARESRC/* (cp -r) into the archive top directory.
+        source = flavor['artifacts']['factory']['generatorMembers']['gscFirmware']['source']
+        gsc = sorted(n for n in names if n.startswith(source) and not n.endswith('/'))
+        if not gsc:
+            result['missing'].append(f'target-files:{source}* (GSC firmware the generator copies)')
+        for name in gsc:
+            rel = name[len(source):]
+            if '/' in rel:
+                result['problems'].append(f'gsc-firmware-nested:{name} (nested GSC firmware is not modelled)')
+            else:
+                inventory['gsc'][rel] = member_digest(archive, name)[0]
         return inventory
 
 def check_firmware_carried(fw, inventory, factory_firmware, flavor, build, result, allow_synthetic):
@@ -357,6 +400,9 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
     if any('/' in rel for rel in files):
         result['problems'] += [f'unexpected-member:{n}' for rel, n in sorted(files.items()) if '/' in rel]
     factory = flavor['artifacts']['factory']
+    if not pinned_layout(flavor):
+        result['missing'].append(f'contract:{flavor["flavor"]} pinned generator layout (artifacts.factory.generatorMembers '
+                                 'anchored in the device_common 1f5ba267 fixture)')
     expand = lambda s: s.format(device=device, build=build, **{k: flavor['firmware'][k] for k in ('bootloader', 'baseband')})
     required = [expand(m) for m in factory['requiredMembers']]
     result['missing'] += [f'factory:{m}' for m in required if m not in files]
@@ -383,7 +429,8 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
     script = b''.join(archive.read(files[s]) for s in ('flash-all.sh', 'script.txt') if s in files)
     if script and factory['dataWipeMarker'].encode() not in script:
         result['problems'].append('install-mode:flash script declares no data wipe for a first install')
-    images = sorted(rel for rel in files if rel.endswith('.img') and rel not in firmware.values())
+    gsc = inventory['gsc'] if inventory else {}
+    images = sorted(rel for rel in files if rel.endswith('.img') and rel not in firmware.values() and rel not in gsc)
     for rel in images:
         if head(archive, files[rel], 1) == b'':
             result['problems'].append(f'corrupt-image:{rel} empty')
@@ -410,6 +457,17 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
     for kind, rel in firmware.items():
         if kind in factory_firmware and kind in inventory['firmware'] and factory_firmware[kind] != inventory['firmware'][kind]:
             result['problems'].append(f'mixed-firmware:{rel} differs from target-files RADIO/{kind}.img')
+    for rel, digest in gsc.items():
+        if rel not in files:
+            result['missing'].append(f'factory:{rel} (GSC firmware from target-files)')
+        elif member_digest(archive, files[rel])[0] != digest:
+            source = factory['generatorMembers']['gscFirmware']['source']
+            result['problems'].append(f'mixed-firmware:{rel} differs from target-files {source}{rel}')
+    if pinned_layout(flavor):
+        allowed = set(required) | set(factory['generatorMembers']['optional']) | set(images) | set(gsc)
+        for rel in sorted(files):
+            if '/' not in rel and rel not in allowed:
+                result['problems'].append(f'unexpected-member:{rel}')
     check_firmware_carried(fw, inventory, factory_firmware, flavor, build, result, allow_synthetic)
     if inventory['dynamic']:
         if not supers:
@@ -423,7 +481,7 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
         result['problems'].append('unexpected-image:super segments without dynamic partitions')
     result['inventory'].update({'abPartitions': inventory['abPartitions'], 'dynamic': inventory['dynamic'],
         'virtualAb': inventory['virtualAb'], 'withoutImage': inventory['withoutImage'],
-        'images': sorted(expected), 'superSegments': len(supers)})
+        'images': sorted(expected), 'gscFirmware': sorted(gsc), 'superSegments': len(supers)})
 
 def copy_member(archive, name, target, budget):
     with archive.open(name) as source, open(target, 'xb') as out:
@@ -635,6 +693,10 @@ def classify(path, flavor_name, target_files=None, build=None, avb_key=None, roo
             result['otaApplicable'] = not result['problems']
             result['installMode'] = flavor['artifacts']['ota']
             result['problems'].append('not-factory:ota-update is an in-place update, never a first-install package')
+            return result
+        if role == 'factory-intermediate':
+            result['problems'].append('not-factory:factory-intermediate is the generator output {device}-factory-{build}.zip; '
+                                      'only the optimize-factory-image install archive is signed and shipped')
             return result
         if role != 'factory-install':
             result['problems'].append(f'not-factory:{role} is not a {flavor["artifacts"]["factory"]["file"]} install archive')
