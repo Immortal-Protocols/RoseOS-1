@@ -1,0 +1,80 @@
+{
+  "repository": "https://github.com/GrapheneOS/platform_system_core",
+  "revision": "322ff5129d865a5e8d958667e6c63ac943449493",
+  "route": "FOLD-FACTORY-005: add_repo read (owner-approved 2026-10-31 21:48:34 UTC) -> session git proxy anonymous read; git fetch --depth 1 --filter=blob:none of this revision; only the listed fastboot/ blobs were read; nothing executed",
+  "license": "fastboot/LICENSE (BSD-style), copied unchanged; excerpts keep upstream line numbers",
+  "files": [
+    {
+      "path": "fastboot/fastboot.cpp",
+      "gitBlob": "ae4916db79606f8e38d3e4dfb68166176a3610f8",
+      "sha256": "f22bfbee80af4bab95e754bfe104a4aa177d174654c6475b0d706591ec93c97b",
+      "lines": 3296,
+      "excerpt": [
+        "117-174",
+        "585-586",
+        "1525-1553",
+        "1597-1604",
+        "1862-1925",
+        "1969-1991",
+        "2455-2462",
+        "2529-2545",
+        "2807-2918",
+        "2920-3103",
+        "3105-3220"
+      ]
+    },
+    {
+      "path": "fastboot/fastboot.h",
+      "gitBlob": "9940caf0efb031dd3aad58b406eabb94258c2863",
+      "sha256": "c15cd11e1ca95aecae20aca15d2aba7a6cadbfc6a21439cdde5192e19665edbc",
+      "lines": 285,
+      "excerpt": [
+        "203-285"
+      ]
+    },
+    {
+      "path": "fastboot/task.cpp",
+      "gitBlob": "89740c376752940c35abd18eedb717bba8a89d0d",
+      "sha256": "14b3fe15cc312aa227d81c62ad1a96bd79a992cbc4e7fc055c983f9801ae6bd7",
+      "lines": 508,
+      "excerpt": [
+        "278-298",
+        "355-368",
+        "483-491"
+      ]
+    },
+    {
+      "path": "fastboot/fastboot_driver.cpp",
+      "gitBlob": "31f8edc5c4a7b3861b48f21d852b425b974cba56",
+      "sha256": "13c4828b58c43b2dc8bda096a3be8a7e9b3bb53e476208d2a627e6b47349cd84",
+      "lines": 683,
+      "excerpt": [
+        "95-115",
+        "150-175",
+        "278-290",
+        "605-615"
+      ]
+    },
+    {
+      "path": "fastboot/super_flash_helper.cpp",
+      "gitBlob": "b617ce8f24aa86c08723b1a7540c29ec01d5f678",
+      "sha256": "cf7db7deb7a0546992430e4bb4e5672abfb212e4cfce54ceb550ecacad964ded",
+      "lines": 125,
+      "use": "read for scope; not relied on"
+    },
+    {
+      "path": "fastboot/Android.bp",
+      "gitBlob": "c0f1bdf8f60a0c28cbdf6b4366af17a60e2bb092",
+      "sha256": "74080a2f1ed2386c87db93d194bf7bef2cf53f90ade85f8ead157b07af04799c",
+      "lines": 456,
+      "use": "build/version: version comes from generated header platform_tools_version and libbuildversion, defined outside fastboot/ (not read)"
+    },
+    {
+      "path": "fastboot/LICENSE",
+      "gitBlob": "f0a0e52d6731182150cce115cc76c7b122288cce",
+      "sha256": "1bc6c8aff995afb8905dce226367c3e564eb68e4969bfe491229b8b50f19ebe1",
+      "lines": 23,
+      "fixture": "LICENSE (full copy)"
+    }
+  ]
+}

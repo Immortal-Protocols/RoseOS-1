@@ -1,6 +1,6 @@
 # OS flavors and install artifacts
 
-FLAVOR001, FLAVOR002, FOLD-FACTORY-003 and -004. A flavor is one device build of RoseOS with its own install-artifact
+FLAVOR001, FLAVOR002 and FOLD-FACTORY-003 to -005. A flavor is one device build of RoseOS with its own install-artifact
 contract: `os/flavors/frankel.json` (Pixel 10) and `os/flavors/rango.json` (Pixel 10 Pro Fold).
 `scripts/factory-package.py` loads a contract, decides what a candidate artifact is, verifies a
 factory install archive in three separate tiers, and packages it only when all three pass.
@@ -68,9 +68,33 @@ generator does the following:
 - zips the result as `{device}-factory-{build}.zip`. That intermediate is refused: only the
   `optimize-factory-image` install archive is signed and shipped.
 
-The install-only members (`android-info.txt`, `script.txt`, per-partition images, `super_N.img`)
-come from `fastboot optimize-factory-image`, whose source is not pinned, so they stay historical
-(mustang verifier).
+**Optimizer layout (pinned, FOLD-FACTORY-005).**
+`scripts/tests/fixtures/factory-package/platform_system_core-322ff512/` holds a line-numbered excerpt
+of GrapheneOS platform_system_core `fastboot/`, with blob ids, sha256 and the BSD `LICENSE`. It is
+read only and never executed. The loader checks the excerpt digest, every `optimizeMembers` anchor,
+the `fastbootImages` table and `max-download-size` (`0x10000000` from `generate-release.sh`).
+`FlashCapturer::Run` (`fastboot -S <max> optimize-factory-image FACTORY.zip OUTER`) works like this:
+- **Input checks.** The factory zip needs exactly one stored `image-<product>-*.zip`, plus
+  `flash-all.sh` and `.bat` with their `PROLOG_END` markers. No other script except `flash-base.sh`
+  is allowed.
+- **Flat copy.** Every other member is copied flat by basename into `OUTER/`.
+- **Script conversion.** The `flash-all.sh` commands become `script.txt`:
+  - `check-var product`;
+  - `check-var slot-count 2`;
+  - exactly two other-slot bootloader flashes;
+  - then `check-var max-download-size`, `run-cmd set_active:a` and `check-var current-slot a`.
+- **Update replay.** The update zip is replayed through flashall:
+  - `android-info.txt`, plus a generated `android-info.zip` holding exactly that file, and
+    `check-requirements`;
+  - `snapshot-update cancel`;
+  - each non-logical `fastbootImages` partition as `{p}.img`, raw or Android sparse when large.
+    `.sig` files are fatal;
+  - `super` as split sparse `super_1..N.img`, each flashed in order;
+  - `erase` lines only from `fastboot-info.txt` `if-wipe` entries.
+- **Script regeneration.** `flash-all.sh` and `.bat` are regenerated with the prolog kept.
+
+A target-files image whose partition is not in `fastbootImages` is never flashed by the install
+archive, so it needs the same firmware observation as a partition without an image.
 
 1. **`structurallyComplete`**
    - ZIP hygiene: names unique and relative, no `..`, no links, CRCs valid, one
@@ -78,7 +102,7 @@ come from `fastboot optimize-factory-image`, whose source is not pinned, so they
    - `android-info.txt` and exactly the matching `bootloader-`/`radio-` images, byte-equal to
      target-files `RADIO/`.
    - Every `VENDOR/firmware/dauntless/` file present byte-equal under the same name. No other
-     top-level member is allowed (`flash-all.bat` is optional).
+     top-level member is allowed.
    - Inventory derived from the signed target-files (`META/ab_partitions.txt`, `misc_info.txt`
      with `ab_update=true`, `OTA/android-info.txt`). Every non-dynamic A/B image appears byte-equal
      with a sane header.
@@ -86,7 +110,7 @@ come from `fastboot optimize-factory-image`, whose source is not pinned, so they
      `roseos.factory-firmware-observation.v1` lists them. That observation must be bound to the
      archive's exact bootloader/radio digests; absence alone never counts.
    - Contiguous sparse `super_1..N.img`; `avb_pkmd.bin` equal to the flavor key; the build number
-     matches; the install flash script declares `erase userdata` (historical optimized layout).
+     matches; the install flash script declares `erase userdata` (WipeTask capture; the `if-wipe` source is not pinned).
    - The signed target-files must match the release-delivered
      `roseos.target-files-observation.v2` (digest and member names, now including `VENDOR/firmware/`).
 2. **`contentVerified`**
@@ -174,8 +198,8 @@ Optional flags: `--ssh-keygen PATH`, `--max-work-bytes N`, `--avb-public-key-sha
   already-needed admitted signed-output operation, and list the receipt in `inventory.observed`.
 - **Shared harness and CI. Owner: release.** Add the test to `scripts/test-local.sh` and an
   offline CI path. The runner needs `ssh-keygen`; `android-sdk-libsparse-utils` is optional.
-- **optimize-factory-image source. Owner: Chief (upstream fixture scope).** Pin GrapheneOS
-  platform_system_core fastboot at the manifest revision to confirm the install-only members. The
-  device/common generator fixtures are now pinned (FOLD-FACTORY-003).
+- **Update-zip content. Owner: release, via a names-only observation.** `img_from_target_files`
+  output and `fastboot-info.txt` (build/make) are not pinned. The generator (FOLD-FACTORY-003) and
+  optimizer (FOLD-FACTORY-005) are.
 - **Physical first-install acceptance. Owner: QA, with a device handback.** This comes only after
   a ready archive exists.

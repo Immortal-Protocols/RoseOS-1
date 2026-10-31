@@ -36,6 +36,7 @@ problem), 2 invalid usage or contract.
 """
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -204,6 +205,29 @@ def check_generator_layout(name, flavor, script_bytes, root, checks):
     default = re.search(r'^\s+GSCFIRMWARESRC=(\w+)$', texts['generate-factory-images-common.sh'], re.M)
     gsc = epic.group(2) if epic and name in epic.group(1).split('|') else (default.group(1) if default else None)
     checks['gscFirmware.source'] = (members['gscFirmware']['source'], f'VENDOR/firmware/{gsc}/')
+    if 'optimizeFixture' in flavor['inventory']:
+        check_optimize_layout(name, flavor, script_bytes, root, checks)
+
+IMAGE_ROW = re.compile(r'\{\s*"(\w*)",\s*"(\w+)\.img",\s*"\w+\.sig",\s*"(\w+)",\s*(true|false),\s*ImageType::(\w+)\s*\}')
+
+def check_optimize_layout(name, flavor, script_bytes, root, checks):
+    """The install-archive rules come from the pinned fastboot optimize-factory-image excerpt, never from memory."""
+    factory, pin = flavor['artifacts']['factory'], flavor['inventory']['optimizeFixture']
+    raw = (root/pin['excerpt']).read_bytes()
+    checks['optimizeFixture excerpt sha256'] = (hashlib.sha256(raw).hexdigest(), pin['excerptSha256'])
+    provenance = json.loads((root/pin['provenance']).read_text())
+    checks['optimizeFixture revision'] = (provenance['revision'], pin['revision'])
+    checks['optimizeFixture files'] = ({e['path']: e['sha256'] for e in provenance['files'] if 'excerpt' in e}, pin['files'])
+    files = json.loads(raw)['files']
+    text = '\n'.join(line for lines in files.values() for line in lines.values())
+    for anchor in factory['optimizeMembers']['anchors']:
+        checks[f'optimize anchor {anchor!r}'] = (anchor in text, True)
+    table = ' '.join(line for number, line in files['fastboot/fastboot.cpp'].items() if 117 <= int(number) <= 174)
+    flashed = sorted({part for nick, _, part, _, kind in IMAGE_ROW.findall(table) if nick and kind in ('BootCritical', 'Normal')})
+    checks['fastbootImages'] = (factory['fastbootImages'], flashed)
+    sizes = re.search(r'elif \[\[ \$DEVICE == @\(([\w|]+)\) \]\]; then\n\s+MAX_DOWNLOAD_SIZE=(0x[0-9a-f]+)', script_bytes.decode())
+    checks['scriptChecks.maxDownloadSize'] = (factory['scriptChecks']['maxDownloadSize'],
+        sizes.group(2) if sizes and name in sizes.group(1).split('|') else None)
 
 def pinned_avb_key(flavor, root=ROOT):
     """A literal pin with its provenance, or a pointer 'FILE dotted.field' read from a checked-in source; None is unknown."""
@@ -413,14 +437,15 @@ def target_inventory(path, flavor, build, result, observation, allow_synthetic):
                 inventory['gsc'][rel] = member_digest(archive, name)[0]
         return inventory
 
-def check_firmware_carried(fw, inventory, factory_firmware, flavor, build, result, allow_synthetic):
-    """A/B partitions without an IMAGES/ entry count as carried only when a firmware observation, bound to the exact
-    bootloader/radio image digests in this archive, lists them. Absence alone never qualifies."""
-    if not inventory['withoutImage']:
+def check_firmware_carried(fw, needed, factory_firmware, flavor, build, result, allow_synthetic):
+    """A/B partitions without an IMAGES/ entry, or with one that fastboot flashall never flashes, count as carried only
+    when a firmware observation, bound to the exact bootloader/radio image digests in this archive, lists them. Absence
+    alone never qualifies."""
+    if not needed:
         return
     if fw is None:
-        result['missing'].append('firmware-observation for A/B partitions without an IMAGES/ image: '
-                                 + ' '.join(inventory['withoutImage']) + ' (signing: factory generator firmware inventory)')
+        result['missing'].append('firmware-observation for A/B partitions without an install image: '
+                                 + ' '.join(needed) + ' (signing: factory generator firmware inventory)')
         return
     if fw.get('schema') != FIRMWARE or fw.get('device') != flavor['device']['codename'] or (build and fw.get('build') != build):
         result['problems'].append('firmware-observation-mismatch:schema, device or build')
@@ -436,13 +461,13 @@ def check_firmware_carried(fw, inventory, factory_firmware, flavor, build, resul
             return
         for part in entry.get('partitions') or []:
             carried.setdefault(part, []).append(kind)
-    uncovered = [p for p in inventory['withoutImage'] if p not in carried]
-    twice = [p for p in inventory['withoutImage'] if len(carried.get(p, [])) > 1]
+    uncovered = [p for p in needed if p not in carried]
+    twice = [p for p in needed if len(carried.get(p, [])) > 1]
     if uncovered:
         result['missing'].append('firmware-carried evidence for ' + ' '.join(uncovered))
     if twice:
         result['problems'].append('firmware-observation-mismatch:partition in both images ' + ' '.join(twice))
-    result['inventory']['firmwareCarried'] = {p: carried[p][0] for p in inventory['withoutImage'] if p in carried}
+    result['inventory']['firmwareCarried'] = {p: carried[p][0] for p in needed if p in carried}
     result['evidence']['firmwareObservation'] = {'source': fw.get('source'), 'synthetic': bool(fw.get('synthetic'))}
 
 def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result, allow_synthetic):
@@ -499,17 +524,24 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
         result['missing'].append('target-files inventory (--target-files: the signed target-files this archive came from)')
         return
     factory_firmware = {kind: member_digest(archive, files[rel])[0] for kind, rel in firmware.items() if rel in files}
-    expected = {f'{part}.img' for part in inventory['images']}
+    evidenced = 'fastbootImages' in factory
+    # fastboot flashall writes only its images[] table partitions; other non-dynamic images need firmware evidence.
+    install = {p: d for p, d in inventory['images'].items() if not evidenced or p in factory['fastbootImages']}
+    not_flashed = sorted(set(inventory['images']) - set(install))
+    expected = {f'{part}.img' for part in install}
     for rel in images:
         if rel not in expected and not SUPER.fullmatch(rel):
             result['problems'].append(f'unexpected-image:{rel}')
-    for part, digest in inventory['images'].items():
+    sparse_members = {}
+    for part, digest in install.items():
         rel = f'{part}.img'
         if rel not in files:
             result['missing'].append(f'factory:{rel}')
             continue
         magic = MAGIC.get(part, VBMETA_MAGIC if part.startswith('vbmeta') else None)
-        if magic and head(archive, files[rel], len(magic)) != magic:
+        if evidenced and head(archive, files[rel], 4) == SPARSE_MAGIC:
+            sparse_members[part] = files[rel]  # resparsed by fastboot above the limit: compared flattened in contentVerified
+        elif magic and head(archive, files[rel], len(magic)) != magic:
             result['problems'].append(f'corrupt-image:{rel} header')
         elif member_digest(archive, files[rel])[0] != digest:
             result['problems'].append(f'image-mismatch:{rel} differs from target-files IMAGES/{rel}')
@@ -527,7 +559,10 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
         for rel in sorted(files):
             if '/' not in rel and rel not in allowed:
                 result['problems'].append(f'unexpected-member:{rel}')
-    check_firmware_carried(fw, inventory, factory_firmware, flavor, build, result, allow_synthetic)
+    check_firmware_carried(fw, inventory['withoutImage'] + not_flashed, factory_firmware, flavor, build, result, allow_synthetic)
+    result['sparseMembers'] = sparse_members
+    if evidenced:
+        check_install_scripts(archive, files, flavor, build, supers, result)
     if inventory['dynamic']:
         if not supers:
             result['missing'].append(f'factory:super_1.img.. (dynamic partitions {" ".join(inventory["dynamic"])})')
@@ -539,8 +574,45 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
     elif supers:
         result['problems'].append('unexpected-image:super segments without dynamic partitions')
     result['inventory'].update({'abPartitions': inventory['abPartitions'], 'dynamic': inventory['dynamic'],
-        'virtualAb': inventory['virtualAb'], 'withoutImage': inventory['withoutImage'],
-        'images': sorted(expected), 'gscFirmware': sorted(gsc), 'superSegments': len(supers)})
+        'virtualAb': inventory['virtualAb'], 'withoutImage': inventory['withoutImage'], 'notFlashedByFastboot': not_flashed,
+        'images': sorted(expected), 'sparseImages': sorted(sparse_members), 'gscFirmware': sorted(gsc), 'superSegments': len(supers)})
+
+def check_install_scripts(archive, files, flavor, build, supers, result):
+    """The FlashCapturer output (pinned optimize-factory-image excerpt): android-info.zip holds exactly the
+    android-info.txt, and script.txt carries the product/slot/max-download-size checks, the two other-slot bootloader
+    flashes, check-requirements and one `flash super super_N.img` per segment, and names only archive members."""
+    factory, device = flavor['artifacts']['factory'], flavor['device']['codename']
+    checks = factory['scriptChecks']
+    fields = dict(device=device, build=build, maxDownloadSize=checks['maxDownloadSize'],
+                  **{k: flavor['firmware'][k] for k in ('bootloader', 'baseband')})
+    if 'android-info.zip' in files and 'android-info.txt' in files:
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive.read(files['android-info.zip']))) as inner:
+                same = inner.namelist() == ['android-info.txt'] and \
+                    inner.read('android-info.txt') == archive.read(files['android-info.txt'])
+        except (zipfile.BadZipFile, OSError, KeyError):
+            same = False
+        if not same:
+            result['problems'].append('install-script:android-info.zip is not exactly the archive android-info.txt')
+    if 'script.txt' not in files:
+        return
+    lines = [line.strip() for line in archive.read(files['script.txt']).decode(errors='replace').splitlines()]
+    commands = [line for line in lines if line and not line.startswith('#')]
+    for template in checks['required']:
+        if template.format(**fields) not in commands:
+            result['problems'].append(f'install-script:script.txt lacks `{template.format(**fields)}`')
+    bootloader = checks['bootloaderOtherSlot'].format(**fields)
+    if commands.count(bootloader) != checks['bootloaderOtherSlotCount']:
+        result['problems'].append(f'install-script:script.txt has {commands.count(bootloader)} `{bootloader}`, expected '
+                                  f'{checks["bootloaderOtherSlotCount"]}')
+    flashed_super = [line for line in commands if line.startswith('flash super ')]
+    wanted = [f'flash super super_{index}.img' for index in range(1, len(supers) + 1)]
+    if flashed_super != wanted:
+        result['problems'].append(f'install-script:script.txt super flashes {flashed_super} do not match segments {wanted}')
+    for line in commands:
+        words = line.split()
+        if words[0] == 'flash' and len(words) in (3, 4) and words[2] not in files:
+            result['problems'].append(f'install-script:script.txt flashes absent member {words[2]}')
 
 def copy_member(archive, name, target, budget):
     with archive.open(name) as source, open(target, 'xb') as out:
@@ -568,13 +640,28 @@ def run_tool(argv, env, label, result):
         return False
     return True
 
+def flat_copy(archive, member, base, tool_dir, env, budget, result, label):
+    """Copy one member into the job directory, flattened with the pinned simg2img when it is Android sparse."""
+    copied = base.with_suffix('.img')
+    copy_member(archive, member, copied, budget)
+    with open(copied, 'rb') as f:
+        if f.read(4) != SPARSE_MAGIC:
+            return copied
+    flat = base.with_suffix('.raw')
+    if not run_tool([str(tool_dir/'bin/simg2img'), str(copied), str(flat)], env, label, result):
+        return None
+    budget.spend(flat.stat().st_size)
+    copied.unlink()
+    return flat
+
 def verify_content(archive_path, target_files, inventory_dynamic, super_members, otatools, otatools_sha256, work_dir,
-                   max_work_bytes, result):
+                   max_work_bytes, result, sparse_members=None):
     """Rebuild super from its sparse segments with the pinned otatools simg2img, unpack it with lpunpack and compare
     each logical partition with the signed target-files image. Every byte lives in one job-owned directory that is
     removed on success and failure."""
-    if not inventory_dynamic:
-        result['content'] = {'dynamic': {}, 'note': 'no dynamic partitions'}
+    sparse_members = sparse_members or {}
+    if not inventory_dynamic and not sparse_members:
+        result['content'] = {'dynamic': {}, 'note': 'no dynamic partitions or sparse images'}
         return True
     if not otatools or not otatools_sha256:
         result['missing'].append('otatools (--otatools ZIP --otatools-sha256 H: the pinned otatools-package of this build)')
@@ -603,67 +690,83 @@ def verify_content(archive_path, target_files, inventory_dynamic, super_members,
                 os.chmod(tool_dir/name, 0o700)
                 tools[name.split('/')[1]] = {'member': name, 'sha256': sha256_file(tool_dir/name)}
         env = {'PATH': '/usr/bin:/bin', 'LD_LIBRARY_PATH': str(tool_dir/'lib64'), 'LC_ALL': 'C'}
-        segments = []
-        with zipfile.ZipFile(archive_path) as za:
-            for index, name in enumerate(super_members, 1):
-                segments.append(job/f'super_{index}.img')
-                copy_member(za, name, segments[-1], budget)
-        raw = job/'super.raw'
-        if not run_tool([str(tool_dir/'bin/simg2img'), *map(str, segments), str(raw)], env, 'simg2img super', result):
-            return False
-        for segment in segments:
-            segment.unlink()
-        budget.spend(raw.stat().st_size)
-        parts = job/'partitions'
-        parts.mkdir()
-        if not run_tool([str(tool_dir/'bin/lpunpack'), str(raw), str(parts)], env, 'lpunpack super', result):
-            return False
-        raw.unlink()
-        unpacked, ok = {}, True
-        for item in sorted(parts.iterdir()):
-            match = re.fullmatch(r'([a-z0-9_]+?)(_[ab])?\.img', item.name)
-            if not match or item.is_symlink() or not item.is_file():
-                result['problems'].append(f'dynamic-unexpected:{item.name}')
-                ok = False
-                continue
-            budget.spend(item.stat().st_size)
-            if match.group(2) == '_b':
-                if item.stat().st_size:
-                    result['problems'].append(f'mixed-partition:{item.name} is not empty in a factory super')
+        observed, ok = {}, True
+        if inventory_dynamic:
+            segments = []
+            with zipfile.ZipFile(archive_path) as za:
+                for index, name in enumerate(super_members, 1):
+                    segments.append(job/f'super_{index}.img')
+                    copy_member(za, name, segments[-1], budget)
+            raw = job/'super.raw'
+            if not run_tool([str(tool_dir/'bin/simg2img'), *map(str, segments), str(raw)], env, 'simg2img super', result):
+                return False
+            for segment in segments:
+                segment.unlink()
+            budget.spend(raw.stat().st_size)
+            parts = job/'partitions'
+            parts.mkdir()
+            if not run_tool([str(tool_dir/'bin/lpunpack'), str(raw), str(parts)], env, 'lpunpack super', result):
+                return False
+            raw.unlink()
+            unpacked = {}
+            for item in sorted(parts.iterdir()):
+                match = re.fullmatch(r'([a-z0-9_]+?)(_[ab])?\.img', item.name)
+                if not match or item.is_symlink() or not item.is_file():
+                    result['problems'].append(f'dynamic-unexpected:{item.name}')
                     ok = False
-                continue
-            if match.group(1) in unpacked:
-                result['problems'].append(f'duplicate-partition:super {match.group(1)}')
+                    continue
+                budget.spend(item.stat().st_size)
+                if match.group(2) == '_b':
+                    if item.stat().st_size:
+                        result['problems'].append(f'mixed-partition:{item.name} is not empty in a factory super')
+                        ok = False
+                    continue
+                if match.group(1) in unpacked:
+                    result['problems'].append(f'duplicate-partition:super {match.group(1)}')
+                    ok = False
+                unpacked[match.group(1)] = item
+            for name in sorted(set(inventory_dynamic) - set(unpacked)):
+                result['problems'].append(f'dynamic-missing:{name}')
                 ok = False
-            unpacked[match.group(1)] = item
-        for name in sorted(set(inventory_dynamic) - set(unpacked)):
-            result['problems'].append(f'dynamic-missing:{name}')
-            ok = False
-        for name in sorted(set(unpacked) - set(inventory_dynamic)):
-            result['problems'].append(f'dynamic-extra:{name}')
-            ok = False
-        observed = {}
-        with zipfile.ZipFile(target_files) as zf:
-            for name in sorted(set(inventory_dynamic) & set(unpacked)):
-                expected = job/f'expected-{name}.img'
-                copy_member(zf, f'IMAGES/{name}.img', expected, budget)
-                with open(expected, 'rb') as f:
-                    sparse = f.read(4) == SPARSE_MAGIC
-                if sparse:
-                    flat = job/f'expected-{name}.raw'
-                    if not run_tool([str(tool_dir/'bin/simg2img'), str(expected), str(flat)], env, f'simg2img IMAGES/{name}.img', result):
-                        return False
-                    budget.spend(flat.stat().st_size)
+            for name in sorted(set(unpacked) - set(inventory_dynamic)):
+                result['problems'].append(f'dynamic-extra:{name}')
+                ok = False
+            with zipfile.ZipFile(target_files) as zf:
+                for name in sorted(set(inventory_dynamic) & set(unpacked)):
+                    expected = job/f'expected-{name}.img'
+                    copy_member(zf, f'IMAGES/{name}.img', expected, budget)
+                    with open(expected, 'rb') as f:
+                        sparse = f.read(4) == SPARSE_MAGIC
+                    if sparse:
+                        flat = job/f'expected-{name}.raw'
+                        if not run_tool([str(tool_dir/'bin/simg2img'), str(expected), str(flat)], env, f'simg2img IMAGES/{name}.img', result):
+                            return False
+                        budget.spend(flat.stat().st_size)
+                        expected.unlink()
+                        expected = flat
+                    actual = {'sha256': sha256_file(unpacked[name]), 'size': unpacked[name].stat().st_size}
+                    want = {'sha256': sha256_file(expected), 'size': expected.stat().st_size}
                     expected.unlink()
-                    expected = flat
-                actual = {'sha256': sha256_file(unpacked[name]), 'size': unpacked[name].stat().st_size}
-                want = {'sha256': sha256_file(expected), 'size': expected.stat().st_size}
-                expected.unlink()
-                observed[name] = actual
-                if actual != want:
-                    result['problems'].append(f'image-mismatch:dynamic {name} differs from target-files IMAGES/{name}.img')
+                    observed[name] = actual
+                    if actual != want:
+                        result['problems'].append(f'image-mismatch:dynamic {name} differs from target-files IMAGES/{name}.img')
+                        ok = False
+        sparse = {}
+        with zipfile.ZipFile(archive_path) as za, zipfile.ZipFile(target_files) as zf:
+            # A non-logical image fastboot wrote as Android sparse (larger than the limit) is compared flattened.
+            for part, member in sorted(sparse_members.items()):
+                got = flat_copy(za, member, job/f'install-{part}', tool_dir, env, budget, result, f'simg2img {PurePosixPath(member).name}')
+                want = got and flat_copy(zf, f'IMAGES/{part}.img', job/f'expected-{part}', tool_dir, env, budget, result,
+                                         f'simg2img IMAGES/{part}.img')
+                if not (got and want):
+                    return False
+                sparse[part] = {'sha256': sha256_file(got), 'size': got.stat().st_size}
+                if sparse[part] != {'sha256': sha256_file(want), 'size': want.stat().st_size}:
+                    result['problems'].append(f'image-mismatch:{part}.img (sparse) differs from target-files IMAGES/{part}.img')
                     ok = False
-        result['content'] = {'dynamic': observed, 'tools': tools, 'workBytes': budget.used}
+                got.unlink()
+                want.unlink()
+        result['content'] = {'dynamic': observed, 'sparseImages': sparse, 'tools': tools, 'workBytes': budget.used}
         return ok
     except OverflowError as error:
         result['problems'].append(f'work-space:{error}')
@@ -768,7 +871,7 @@ def classify(path, flavor_name, target_files=None, build=None, avb_key=None, roo
     result['structurallyComplete'] = not result['missing'] and not result['problems']
     if result['structurallyComplete']:
         result['contentVerified'] = verify_content(path, target_files, inventory['dynamic'], result['superMembers'], otatools,
-            otatools_sha256, work_dir, max_work_bytes, result)
+            otatools_sha256, work_dir, max_work_bytes, result, result.pop('sparseMembers', {}))
     result['signatureVerified'] = verify_signature(path, flavor, ssh_keygen, work_dir, result)
     result['factoryReady'] = all(result[k] for k in ('structurallyComplete', 'contentVerified', 'signatureVerified')) \
         and not result['missing'] and not result['problems']
