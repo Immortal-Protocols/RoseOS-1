@@ -1,0 +1,36 @@
+{
+  "apk": {
+    "abi": "arm64-v8a",
+    "bytes": 971360,
+    "certificateSha256": "066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da",
+    "nativeLibraryPath": "lib/arm64-v8a/librose_chat_android.so",
+    "nativeLibrarySha256": "f3aad0226f99a8b0853663d08bd0e623559741338dd54915443f1daac811d060",
+    "package": "dev.pixel.models",
+    "path": "publication-inputs/rose-models-2/rose-models-signed.apk",
+    "requiredSchemes": [
+      "v2",
+      "v3"
+    ],
+    "sha256": "998d63d2d23cce93cb7341ced3e3d028f58f48d06907222787d3606e66f86aee",
+    "versionCode": 2,
+    "versionName": "0.2.0"
+  },
+  "destination": {
+    "assetName": "rose-models-signed.apk",
+    "makeLatest": false,
+    "prerelease": true,
+    "releaseId": 429690780,
+    "repository": "Immortal-Protocols/pixel-ota",
+    "tag": "rose-models-2"
+  },
+  "producer": {
+    "runId": 41106159024,
+    "sourceSha": "5bc2d03fbc77a3f3569b0536a6ca87949a166837"
+  },
+  "provenance": "Owner-supplied extracted APK; independently verified. Original output ZIP not verified.",
+  "schema": "rose-models-publication-input/1",
+  "signing": {
+    "recipeSha": "32a0cf8f42b73a29517818d0d6c1761eec818518",
+    "runId": 41159629239
+  }
+}
