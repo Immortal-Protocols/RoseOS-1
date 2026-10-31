@@ -103,7 +103,39 @@ PHONE_TOOLS = [
     _tool("finish", "End the task.", summary=("string", "One short sentence Rose says to the user"),
           success=("boolean", "Whether the goal was done")),
 ]
-TOOL_PARAMS = {t["function"]["name"]: list(t["function"]["parameters"]["properties"]) for t in PHONE_TOOLS}
+# The real phone (rose.realphone): Android apps through Rose Agent, plus intents that skip tapping.
+REAL_PHONE_SYSTEM = """You control the user's real Android phone to complete one goal for Rose, their voice assistant. Be fast and exact.
+
+Each turn shows the current screen as a UI tree. Elements you can act on have an [id], like [3] button "Send"; lines starting with text are only for reading. Ids change with every screen.
+
+Rules:
+- Reply with tool calls only.
+- Use a direct tool when one fits; it is faster and surer than tapping: set_alarm, set_timer, directions, search_places, play_music, media. Then check the screen it returns and finish.
+- Otherwise open_app works from any screen; act only on the screen you see now, with its ids. A call that changes the screen (open_app, a tap that opens something, back) must be the last call of the reply; then you see the new screen. type_text then a tap on the same screen may share a reply.
+- A list may hold more than the screen shows: scroll it to see more.
+- Never send a message, place a call, buy, delete, or change security or account settings. For a text: open the conversation (or start one), type the message, do not tap Send, and finish with success true saying it is ready for the user to send.
+- Write messages with the user's words, from the user's point of view. Add nothing.
+- finish ends the task. On success: success true and one short sentence Rose will say to the user, in the past tense and calling the user "you", like "Your alarm is set for 6:30." When the goal was to find something, give what you found with the details from the screen.
+- If the screen shows the goal is already done, finish at once and say so.
+- If the phone is locked or its controls are off, finish with success false and say so. Never ask questions. If the goal is impossible or unclear, finish with success false and a short reason Rose can say.
+- If a result says an action failed, read the screen and do something different. Never repeat an action that did not work."""
+
+REAL_PHONE_TOOLS = PHONE_TOOLS[:5] + [
+    _tool("scroll", "Scroll a list on the current screen.", id=("integer", "The list's [id]"),
+          direction=("string", "forward (down) or backward (up)")),
+    _tool("set_alarm", "Set an alarm in the Clock app.", time=("string", "Like 6:30 AM"),
+          label=("string", "The alarm's label, or empty")),
+    _tool("set_timer", "Start a timer.", minutes=("number", "Length in minutes"),
+          label=("string", "The timer's label, or empty")),
+    _tool("directions", "Start navigation in Google Maps.", destination=("string", "Place or address"),
+          mode=("string", "walking, driving, transit or bicycling")),
+    _tool("search_places", "Search Google Maps, e.g. pharmacy or coffee near me.", query=("string", "What to find")),
+    _tool("play_music", "Play a song, artist, album or playlist.", query=("string", "What to play")),
+    _tool("media", "Control what is playing.", key=("string", "pause, play, next or previous")),
+    PHONE_TOOLS[5],
+]
+TOOL_PARAMS = {t["function"]["name"]: list(t["function"]["parameters"]["properties"])
+               for t in PHONE_TOOLS + REAL_PHONE_TOOLS}
 
 
 @dataclass
@@ -256,7 +288,9 @@ class TaskManager:
     def _prepare(self) -> Iterator[None]:
         if self._agent is None:
             seq = self.brain.sequence("phone-agent")
-            yield from seq.append_text(self.brain.system_prefix(PHONE_SYSTEM, PHONE_TOOLS))
+            real = getattr(self.phone, "real", False)
+            yield from seq.append_text(self.brain.system_prefix(REAL_PHONE_SYSTEM if real else PHONE_SYSTEM,
+                                                                REAL_PHONE_TOOLS if real else PHONE_TOOLS))
             self._agent = seq
         if self._thinker is None:
             seq = self.brain.sequence("thinker")
@@ -269,6 +303,8 @@ class TaskManager:
             yield from self._prepare()
         seq = self._agent.fork(_view(task))
         session = self.phone.session(_view(task))
+        if getattr(session, "blocking", False):
+            yield from _off_thread(session.refresh)
         seen: set[tuple] = set()
         turn: _Turn | None = None
         idle = 0
@@ -294,7 +330,8 @@ class TaskManager:
         if turn is None:
             contacts = ", ".join(self.phone.data["contacts"])
             now = time.strftime("%A %-I:%M %p")
-            return user_segment(f"Goal: {task.goal}\nNow: {now}. Contacts: {contacts}.{notes}"
+            known = f" Contacts: {contacts}." if contacts else ""
+            return user_segment(f"Goal: {task.goal}\nNow: {now}.{known}{notes}"
                                 f"\n\n{screen}") + GEN_FAST + CALL_PREFIX
         tail = "\n" if turn.closed else IM_END + "\n"
         if not turn.actions:
@@ -373,7 +410,10 @@ class TaskManager:
                 turn.stop = "screen changed"
                 break
             route = session.route
-            turn.actions.append(_execute(session, call))
+            if getattr(session, "blocking", False):
+                turn.actions.append((yield from _off_thread(lambda: _execute(session, call))))
+            else:
+                turn.actions.append(_execute(session, call))
             last_action = time.monotonic()
             mark = seq.mark()
             if not turn.actions[-1]["ok"]:
@@ -554,6 +594,10 @@ def _execute(session: PhoneSession, call: ToolCall) -> dict:
             r = session.back()
         elif name == "home":
             r = session.home()
+        elif name == "scroll" and hasattr(session, "scroll"):
+            r = session.scroll(_arg_id(a), str(a.get("direction", "forward")))
+        elif name in DIRECT and hasattr(session, "direct"):
+            r = _direct(session, name, a)
         else:
             r = ActionResult(False, f"Unknown tool {name}. Use open_app, tap, type_text, back, home or finish.")
     except Exception as exc:  # a bad argument must not end the task
@@ -562,6 +606,60 @@ def _execute(session: PhoneSession, call: ToolCall) -> dict:
     if label:
         out["label"] = label
     return out
+
+
+DIRECT = ("set_alarm", "set_timer", "directions", "search_places", "play_music", "media")
+
+
+def _direct(session, name: str, a: dict) -> ActionResult:
+    """A real-phone intent tool (rose.realphone)."""
+
+    from .realphone import alarm_time
+
+    label = str(a.get("label", "")).strip()
+    if name == "set_alarm":
+        hm = alarm_time(str(a.get("time", "")))
+        if hm is None:
+            return ActionResult(False, "Give the time like 6:30 AM.")
+        return session.direct("set_alarm", hour=hm[0], minute=hm[1], label=label)
+    if name == "set_timer":
+        try:
+            seconds = round(float(a.get("minutes", 0)) * 60)
+        except (TypeError, ValueError):
+            seconds = 0
+        if seconds <= 0:
+            return ActionResult(False, "Give the timer length in minutes.")
+        return session.direct("set_timer", seconds=seconds, label=label)
+    if name == "directions":
+        return session.direct("directions", destination=str(a.get("destination", "")),
+                              mode=str(a.get("mode", "driving")).lower())
+    if name == "search_places":
+        return session.direct("search_places", query=str(a.get("query", "")))
+    if name == "play_music":
+        return session.direct("play_music", query=str(a.get("query", "")))
+    return session.direct("media_key", key=str(a.get("key", "")).lower())
+
+
+def _off_thread(fn: Callable[[], Any]) -> Iterator[Any]:
+    """Run ``fn`` (it waits on the real phone) on a worker thread; step aside until it is done."""
+
+    box: dict = {}
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the job
+            box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name="phone-action", daemon=True).start()
+    while not done.is_set():
+        yield Sleep(0.02)
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def _finish_args(call: ToolCall) -> tuple[str, str]:
@@ -587,6 +685,10 @@ def _what(actions: list[dict]) -> str:
             parts.append("went back")
         elif name == "home":
             parts.append("went home")
+        elif name == "scroll":
+            parts.append(f"scrolled {args.get('direction', 'forward')}")
+        elif name in DIRECT:
+            parts.append(f"{name.replace('_', ' ')} {_short(' '.join(str(v) for v in args.values()), 30)}".strip())
         elif name == "finish":
             parts.append("finished" if a["ok"] else "finish deferred")
             continue

@@ -2,10 +2,13 @@
 
     .venv/bin/python -m rose.app [--port 8091] [--voice zoey] [--local-audio]
                                  [--no-browser-audio] [--ui-only] [--no-keepalive]
+                                 [--phone real] [--remote-port 8443 | --no-remote]
 
 FastAPI on 127.0.0.1 carries the dashboard, the browser's audio socket and
 the event stream; the MLX runtime thread runs every model; the conductor
-thread decides who speaks. The server comes up first and the models load
+thread decides who speaks. A second listener in the same event loop (TLS on
+0.0.0.0:8443, rose/remote.py) lets a paired phone reach the same websockets
+over Wi-Fi or Tailscale; it serves nothing else (see REMOTE.md). The server comes up first and the models load
 behind it, reporting progress as ``status`` events, so the page is never dead.
 
 Spoken input without a microphone (``POST /api/say``) goes through macOS
@@ -37,6 +40,7 @@ import json
 import math
 import queue
 import random
+import signal
 import subprocess
 import tempfile
 import threading
@@ -54,6 +58,9 @@ from fastapi.responses import FileResponse, Response
 from .bus import Bus
 from .local_audio import MIC_FRAME, MIC_RATE, LocalTransport, SilentTransport
 from .phone import Phone
+from .realphone import RealPhone
+from .remote import (DEFAULT_REMOTE_PORT, REMOTE_CONCURRENCY, LoopbackOnly, Remote, add_pairing_api,
+                     bind_socket, build_remote_app, remote_http_protocol)
 
 WEB = Path(__file__).parent / "web"
 FRAME_S = MIC_FRAME / MIC_RATE
@@ -794,7 +801,8 @@ class Server:
         self.args = args
         self.mode = "ui-only" if args.ui_only else "live"
         self.bus = Bus()
-        self.phone = Phone(bus=self.bus)
+        # --phone real: the user's Android phone through Rose Agent (rose/realphone.py), not the fake one.
+        self.phone = RealPhone(bus=self.bus) if getattr(args, "phone", "fake") == "real" else Phone(bus=self.bus)
         self.mic = MicFeed(self.bus)
         self.voice = args.voice
         self.ready = False
@@ -1075,6 +1083,16 @@ class Server:
                     await self.transport.serve(ws)
                     return
 
+    async def serve_phone(self, ws: WebSocket, authenticated: bool = False) -> None:
+        """Rose Agent's command link. ``authenticated``: it came through the remote listener's
+        signature check (an unauthenticated USB link never replaces such a link)."""
+
+        if not isinstance(self.phone, RealPhone):
+            await ws.accept()
+            await ws.close(code=4003, reason="Rose is using the fake phone (start with --phone real)")
+            return
+        await self.phone.link.serve(ws, authenticated=authenticated)
+
     async def serve_events(self, ws: WebSocket) -> None:
         await ws.accept()
         q = self.bus.subscribe_queue()
@@ -1107,14 +1125,20 @@ def _json(payload: Any, status: int = 200) -> Response:
                     headers=NO_STORE)
 
 
-def build_app(server: Server) -> FastAPI:
+def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         server.start(asyncio.get_running_loop())
+        seen = asyncio.create_task(remote.keep_seen()) if remote is not None else None
         yield
+        if seen is not None:
+            seen.cancel()
         server.shutdown()
 
     app = FastAPI(title="Rose", lifespan=lifespan)
+    # No login on the dashboard: loopback Host and Origin only, so a web page cannot use it.
+    app.add_middleware(LoopbackOnly, port=server.args.port)
+    add_pairing_api(app, remote, server.args.port)  # /api/pair/*: QR invites and paired devices
 
     def static(name: str, media_type: str) -> Callable[[], FileResponse]:
         def route() -> FileResponse:
@@ -1169,6 +1193,33 @@ def build_app(server: Server) -> FastAPI:
     async def ws_audio(ws: WebSocket) -> None:
         await server.serve_audio(ws)
 
+    @app.get("/api/realphone")
+    def phone_status(look: str = "") -> Response:
+        """Real phone link status; look=apps|screen adds a read-only observation (never an action)."""
+
+        if not isinstance(server.phone, RealPhone):
+            return _json({"real": False})
+        link = server.phone.link
+        out: dict = {"real": True, "connected": link.connected, "model": link.model}
+        if link.connected:
+            out["control"] = link.call("control_status", timeout=8)
+            if look == "apps":
+                out["apps"] = link.call("list_apps", timeout=8)
+            elif look == "screen":
+                out["screen"] = link.call("inspect_ui", timeout=8)
+        return _json(out)
+
+    @app.websocket("/ws/phone")
+    async def ws_phone(ws: WebSocket) -> None:
+        # The unauthenticated USB path. A paired phone never uses it (it signs in on the remote
+        # port), so while one is paired and the listener is up this path stays shut.
+        if remote is not None and remote.listening and remote.devices.has_active():
+            await ws.accept()
+            await ws.close(code=PAIRED_ONLY, reason="a phone is paired: it connects over Wi-Fi or Tailscale "
+                                                    "(remove it under Pair phone to use USB)")
+            return
+        await server.serve_phone(ws)
+
     @app.websocket("/ws/events")
     async def ws_events(ws: WebSocket) -> None:
         await server.serve_events(ws)
@@ -1176,7 +1227,73 @@ def build_app(server: Server) -> FastAPI:
     return app
 
 
-def main(argv: list[str] | None = None) -> None:
+# SIGHUP too: closing the terminal should stop Rose cleanly (main's finally saves lastSeen).
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+PAIRED_ONLY = 4009  # /ws/phone close code on the dashboard while a phone is paired
+
+
+class _Uvicorn(uvicorn.Server):
+    """A uvicorn server that leaves signals to ``serve_all`` (two servers share one loop)."""
+
+    @contextlib.contextmanager
+    def capture_signals(self):
+        yield
+
+
+def build_servers(server: Server, args: argparse.Namespace,
+                  remote: Remote | None) -> list[tuple[uvicorn.Server, list | None]]:
+    """The dashboard server and, unless disabled or its port is busy, the remote TLS listener."""
+
+    dash = uvicorn.Config(build_app(server, remote), host="127.0.0.1", port=args.port, log_level=args.log_level)
+    servers: list[tuple[uvicorn.Server, list | None]] = [(_Uvicorn(dash), None)]
+    if remote is not None:
+        try:
+            sock = bind_socket(args.remote_port)
+        except OSError as exc:
+            print(f"[rose] remote listener off: port {args.remote_port} unavailable ({exc.strerror}); "
+                  "phones can still use USB", flush=True)
+        else:
+            cfg = uvicorn.Config(build_remote_app(server, remote), host="0.0.0.0", port=args.remote_port,
+                                 ssl_keyfile=str(remote.identity.key_path),
+                                 ssl_certfile=str(remote.identity.cert_path),
+                                 lifespan="off", proxy_headers=False, server_header=False,
+                                 access_log=False, log_level=args.log_level,
+                                 http=remote_http_protocol(), limit_concurrency=REMOTE_CONCURRENCY)
+            servers.append((_Uvicorn(cfg), [sock]))
+            remote.listening = True
+    return servers
+
+
+async def serve_all(servers: list[tuple[uvicorn.Server, list | None]]) -> None:
+    """Run the servers on this loop until a signal (or one of them stops), then stop them all."""
+
+    loop = asyncio.get_running_loop()
+
+    def on_signal() -> None:
+        for s, _ in servers:
+            if s.should_exit:
+                s.force_exit = True
+            s.should_exit = True
+
+    for sig in STOP_SIGNALS:
+        with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):  # not the main thread
+            loop.add_signal_handler(sig, on_signal)
+    tasks = [asyncio.create_task(s.serve(sockets=socks)) for s, socks in servers]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for s, _ in servers:
+            s.should_exit = True
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for sig in STOP_SIGNALS:
+            with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
+                loop.remove_signal_handler(sig)
+    for r in results:
+        if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError):
+            raise r
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python -m rose.app", description="Rose v3 voice assistant server.")
     p.add_argument("--port", type=int, default=8091)
     p.add_argument("--voice", default="zoey", help="Phonon voice name (see /api/state voices)")
@@ -1189,11 +1306,33 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--keepalive", action=argparse.BooleanOptionalAction, default=True,
                    help="keep the GPU queue warm while idle (default on)")
     p.add_argument("--ui-only", action="store_true", help="no models: replay a scripted demo session")
+    p.add_argument("--phone", choices=("fake", "real"), default="fake",
+                   help="real: control the Android phone running Rose Agent (USB: adb reverse tcp:8091 tcp:8091)")
+    p.add_argument("--remote-port", type=int, default=DEFAULT_REMOTE_PORT,
+                   help="TLS listener on 0.0.0.0 for phones paired by QR code (Wi-Fi/Tailscale)")
+    p.add_argument("--no-remote", dest="remote", action="store_false",
+                   help="no remote listener: the phone can only use USB (adb reverse)")
     p.add_argument("--log-level", default="warning")
-    args = p.parse_args(argv)
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     server = Server(args)
+    remote = Remote(port=args.remote_port) if args.remote else None
+    servers = build_servers(server, args, remote)
     print(f"[rose] dashboard: http://127.0.0.1:{args.port}  (mode: {server.mode})", flush=True)
-    uvicorn.run(build_app(server), host="127.0.0.1", port=args.port, log_level=args.log_level)
+    if remote is not None and remote.listening:
+        print(f"[rose] remote: https://0.0.0.0:{args.remote_port} for paired phones "
+              f"(server id {remote.identity.server_id}; pair with the dashboard's Pair phone button "
+              "or python -m rose.pair)", flush=True)
+    try:
+        asyncio.run(serve_all(servers))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if remote is not None:
+            remote.flush()
 
 
 if __name__ == "__main__":

@@ -174,7 +174,33 @@
    return handle;
   }catch(error){await close();throw error;}
  }
- const providers={elevenlabs:eleven,openai};
+ // Local Rose: the models run on the Mac, reached over Wi-Fi or Tailscale once paired by QR code, or over
+ // USB before that (LocalRoseConnection). The native LocalRoseLink does the audio
+ // (voice-call capture with Android's echo canceller; a player that reports what was actually heard)
+ // and Rose listens, decides, speaks and drives the phone herself, so this maps its events onto the contract.
+ function local(o){
+  return new Promise((resolve,reject)=>{
+   let input=0,output=0,live=false,closed=false;const seen=new Set();
+   const handle={close:async()=>{closed=true;root.localRoseEvent=null;root.Native?.localRoseStop();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
+   const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
+   const unpaired='Not paired: open the menu and choose Pair with Mac';
+   const timer=setTimeout(()=>fail('Rose on the Mac is not reachable. Check that Rose is running on the Mac and this phone is on the same Wi-Fi or Tailscale (or USB).'),8000);
+   root.localRoseEvent=m=>{
+    if(closed)return;
+    if(m.type==='level'){input=Math.min(1,m.input*3);output=Math.min(1,m.output*3);}
+    else if(m.type==='status'&&m.status==='live'&&!live){live=true;clearTimeout(timer);o.onSession?.({provider:'local'});o.onConversationCreated?.(handle);o.onConnect?.();resolve(handle);}
+    else if(m.type==='status'&&m.status==='reconnecting'&&live)o.onError?.('Reconnecting to Rose on the Mac…');
+    else if(m.type==='status'&&m.status==='clock'){const clock='The Mac refused this phone\'s time. Turn on automatic date and time in Settings.';if(!live)fail(clock);else o.onError?.(clock);}
+    else if(m.type==='status'&&m.status==='unpaired'){if(!live)fail(unpaired);else{o.onError?.(unpaired);void handle.close();o.onDisconnect?.({reason:'unpaired'});}}
+    else if(m.type==='mode')o.onModeChange?.({mode:m.mode});
+    else if(m.type==='message'&&m.text){const key=m.role+':'+m.id+':'+m.text;if(!seen.has(key)){seen.add(key);o.onMessage?.({role:m.role==='user'?'user':'agent',message:m.text});}}
+    else if(m.type==='closed'){void handle.close();o.onDisconnect?.({reason:'replaced'});}
+    else if(m.type==='error')fail(m.message);
+   };
+   root.Native.localRoseStart(!!o.initialMuted);
+  });
+ }
+ const providers={elevenlabs:eleven,openai,local};
  root.VoiceProviders={createInputHandoff,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
  if(typeof module!=='undefined')module.exports=root.VoiceProviders;
 })(typeof window!=='undefined'?window:globalThis);

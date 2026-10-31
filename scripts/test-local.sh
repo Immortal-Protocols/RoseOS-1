@@ -7,6 +7,7 @@ cd "$ROOT"
 node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent/tests/app-delivery.test.mjs workspace/rose-agent/tests/task-continuity.test.mjs workspace/rose-agent/tests/spoken-progress.test.mjs workspace/rose-agent/tests/renderer-recovery.test.mjs
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
 node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
+node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.

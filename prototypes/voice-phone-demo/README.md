@@ -48,6 +48,18 @@ Things to try:
 - "Text Mom I'll call her tonight", then "actually, make that tomorrow."
 - The **Simulate incoming text** buttons: Rose mentions the text at the next quiet moment.
 
+## The real phone, over USB, Wi-Fi or Tailscale
+
+`--phone real` replaces the fake phone with an Android phone running Rose Agent
+(`workspace/rose-agent/`; protocol in `rose/realphone.py`). Over USB the phone
+reaches Rose through `adb reverse tcp:8091 tcp:8091`. Without a cable, click
+**Pair phone** in the dashboard (or run `.venv/bin/python -m rose.pair`) and
+scan the QR code from Rose Agent's **Pair with Mac** menu item. After that the
+phone reconnects over the same Wi-Fi or from anywhere on your Tailscale network,
+through a TLS listener on port 8443 that accepts only paired, signed requests.
+Setup and the security model are in [REMOTE.md](REMOTE.md); `--no-remote` turns
+the listener off.
+
 ## Models (all local, MLX, one process)
 
 | Part | Model | Cost on this Mac |
@@ -170,6 +182,8 @@ Module tests: `python -m rose.tests.test_listener`, `test_speaker`,
 `test_tasks`, `test_conductor` (each loads the models it needs; the
 listener and conductor tests start with quick checks of the text rules that
 once went wrong).
+`test_realphone`, `test_remote` and `test_qr` need no models (`test_qr` decodes with ZXing
+and needs `java`).
 
 ## Not verified
 
@@ -196,6 +210,8 @@ once went wrong).
 - `rose/conductor.py`: turn taking, barge-in, tools, announcements, memory
 - `rose/tasks.py`, `rose/phone.py`: phone agent, deep thinking, the fake phone
 - `rose/app.py`, `rose/web/`: server and dashboard (`--ui-only` replays a scripted demo without models)
+- `rose/realphone.py`: the real phone (Rose Agent) behind the fake phone's interface
+- `rose/remote.py`, `rose/qr.py`, `rose/pair.py`: Wi-Fi/Tailscale listener, QR pairing, pairing CLI ([REMOTE.md](REMOTE.md))
 - `rose/eval/`: end-to-end scenarios and metrics; `rose/tests/`: module tests
 - `scripts/rose.sh`, `scripts/setup.sh`, `scripts/bench_*.py`, `scripts/eval_talker.py`, `scripts/rose_drive.py`,
   `scripts/ws_client_test.py` (talks to a running server like the browser does), `scripts/long_session.py`
