@@ -21,7 +21,9 @@ Pinned frameworks/base 84183aff decides the route:
 Stages (each recorded in NEW_DIR/result.json as pass, fail or not-run with a reason):
   preflight  emulator only (ro.kernel.qemu or ro.boot.qemu = 1), booted, no staged session pending, the installed
              SystemUI matches INST (versionCode) and runs
-  stage      adb install --staged APK; exactly one ready staged session for com.android.systemui
+  stage      adb install --staged APK; exactly one new staged session for com.android.systemui, and it is ready
+             (`pm get-stagedsessions` read strictly in the AOSP layout; unreadable state fails, never reads as false;
+             any session this run created that is not applied is abandoned when the stage fails)
   activate   reboot, boot completed within the budget
   verify     /data codePath, UPDATED_SYSTEM_APP, versionCode of CAND, a SystemUI process, the session applied
   recover    only after a failed activate or verify: pm uninstall-system-updates com.android.systemui, reboot, then the
@@ -90,18 +92,40 @@ def package_state(dumpsys):
     return {'codePath': field('codePath'), 'versionCode': int(code) if code and code.isdigit() else None,
         'flags': flags[1].split() if flags else []}
 
+class SessionStateError(ValueError):
+    """`pm get-stagedsessions` output that is not exactly the AOSP layout: no state is guessed from it."""
+
+# frameworks/base PackageManagerShellCommand.printSession (android15-release) prints one line per staged session:
+# "sessionId = N; appPackageName = P; isStaged = B; isReady = B; isApplied = B; isFailed = B; errorMsg = M;"
+SESSION_LINE = re.compile(r'sessionId = (\d+); appPackageName = ([^;\s]+); isStaged = (true|false); '
+    r'isReady = (true|false); isApplied = (true|false); isFailed = (true|false); errorMsg = [^\n]*;')
+
 def staged_sessions(output):
-    """[{sessionId, package, ready, applied, failed}] from `pm get-stagedsessions`."""
-    sessions = []
-    for chunk in re.split(r'(?=sessionId = )', output):
-        found = re.match(r'sessionId = (\d+)', chunk)
-        if not found:
+    """[{sessionId, package, ready, applied, failed}] from `pm get-stagedsessions`. Every non-empty line must be one
+    whole AOSP session line of a staged session with a unique id; anything else raises SessionStateError, so a
+    missing, malformed or duplicated state is never read as false. The error message text is not kept."""
+    sessions, seen = [], set()
+    for line in output.splitlines():
+        if not line.strip():
             continue
-        get = lambda name: (re.search(rf'{name} = ([^;\s]+)', chunk) or [None, None])[1]
-        sessions.append({'sessionId': int(found[1]), 'package': get('appPackageName'),
-            'ready': get('isStagedSessionReady') == 'true', 'applied': get('isStagedSessionApplied') == 'true',
-            'failed': get('isStagedSessionFailed') == 'true'})
+        found = SESSION_LINE.fullmatch(line.strip())
+        if not found:
+            raise SessionStateError('pm get-stagedsessions printed a line that is not an AOSP session record')
+        session_id = int(found[1])
+        if session_id in seen:
+            raise SessionStateError(f'pm get-stagedsessions printed session {session_id} twice')
+        if found[3] != 'true':
+            raise SessionStateError(f'pm get-stagedsessions listed session {session_id} as not staged')
+        seen.add(session_id)
+        sessions.append({'sessionId': session_id, 'package': found[2], 'ready': found[4] == 'true',
+            'applied': found[5] == 'true', 'failed': found[6] == 'true'})
     return sessions
+
+def created_unapplied(before, after, package=PACKAGE):
+    """Sessions of package in `after` whose ids were not in `before` (created since) and not applied: ready,
+    pending or failed alike. An applied session is never in it."""
+    known = {s['sessionId'] for s in before}
+    return [s for s in after if s['sessionId'] not in known and s['package'] == package and not s['applied']]
 
 class Device:
     def __init__(self, adb, serial, runner=subprocess.run, sleep=time.sleep, clock=time.monotonic):
@@ -141,6 +165,13 @@ class Device:
     def state(self):
         return package_state(self.shell('dumpsys', 'package', PACKAGE)[1])
 
+    def sessions(self):
+        """staged_sessions of the device, or raises SessionStateError (also when pm itself fails)."""
+        code, out = self.shell('pm', 'get-stagedsessions')
+        if code != 0:
+            raise SessionStateError(f'pm get-stagedsessions exited {code}')
+        return staged_sessions(out)
+
     def running(self):
         code, out = self.shell('pidof', PACKAGE, timeout=30)
         return code == 0 and bool(out.strip())
@@ -158,9 +189,13 @@ def apply(device, apk, decision, evidence, boot_budget=600):
         stages['preflight'] = {'result': 'fail', 'reason': 'not an emulator; this tool never acts on a phone'}
         return finish('refused')
     before = device.state()
-    pending = [s for s in staged_sessions(device.shell('pm', 'get-stagedsessions')[1])
-        if not s['applied'] and not s['failed']]
     problems = []
+    try:
+        existing = device.sessions()
+    except SessionStateError as error:
+        existing = None
+        problems.append(f'staged session state unreadable: {error}')
+    pending = [s for s in existing or [] if not s['applied'] and not s['failed']]
     if device.prop('sys.boot_completed') != '1':
         problems.append('device not booted')
     if pending:
@@ -174,23 +209,31 @@ def apply(device, apk, decision, evidence, boot_budget=600):
         return finish('refused')
     stages['preflight'] = {'result': 'pass', 'state': before}
     code, out = device.run('install', '--staged', str(apk), timeout=300)
-    ready = [s for s in staged_sessions(device.shell('pm', 'get-stagedsessions')[1])
-        if s['package'] == PACKAGE and s['ready'] and not s['applied'] and not s['failed']]
-    if code != 0 or 'Success' not in out or len(ready) != 1:
+    try:
+        created = created_unapplied(existing, device.sessions())
+    except SessionStateError as error:
+        # The sessions this run created cannot be told apart, so none is abandoned blindly; the stage fails.
+        stages['stage'] = {'result': 'fail', 'reason': f'staged session state unreadable after the install (exit '
+            f'{code}): {error}', 'sessionState': 'unreadable'}
+        return finish('refused')
+    ready = [s for s in created if s['ready'] and not s['failed']]
+    if code != 0 or 'Success' not in out or len(ready) != 1 or len(created) != 1:
         stages['stage'] = {'result': 'fail', 'reason': f'staged install refused or not ready (exit {code}): '
-            + out.strip()[-300:]}
-        for session in ready:
-            device.shell('pm', 'install-abandon', str(session['sessionId']))
+            + out.strip()[-300:], 'abandonedSessions': abandon(device, created)}
         return finish('refused')
     session = ready[0]['sessionId']
     stages['stage'] = {'result': 'pass', 'sessionId': session}
     if not device.reboot(boot_budget):
         stages['activate'] = {'result': 'fail', 'reason': f'boot not completed within {boot_budget}s'}
-        return recover(device, decision, stages, boot_budget, finish)
+        return recover(device, decision, stages, boot_budget, finish, existing)
     stages['activate'] = {'result': 'pass'}
     after = device.state()
-    applied = [s for s in staged_sessions(device.shell('pm', 'get-stagedsessions')[1]) if s['sessionId'] == session]
     problems = []
+    try:
+        applied = [s for s in device.sessions() if s['sessionId'] == session]
+    except SessionStateError as error:
+        applied = []
+        problems.append(f'staged session state unreadable after activation: {error}')
     if not after or not str(after['codePath']).startswith('/data/app/'):
         problems.append(f'codePath {after and after["codePath"]} is not an update under /data/app')
     if after and after['versionCode'] != decision['candidate']['versionCode']:
@@ -203,16 +246,38 @@ def apply(device, apk, decision, evidence, boot_budget=600):
         problems.append(f'staged session {session} not applied')
     if problems:
         stages['verify'] = {'result': 'fail', 'reason': '; '.join(problems), 'state': after}
-        return recover(device, decision, stages, boot_budget, finish)
+        return recover(device, decision, stages, boot_budget, finish, existing)
     stages['verify'] = {'result': 'pass', 'state': after}
     return finish('verified')
 
-def recover(device, decision, stages, boot_budget, finish):
-    # A session that has not applied yet would otherwise apply at the recovery reboot.
-    abandoned = [s['sessionId'] for s in staged_sessions(device.shell('pm', 'get-stagedsessions')[1])
-        if s['package'] == PACKAGE and not s['applied'] and not s['failed']]
-    for session in abandoned:
-        device.shell('pm', 'install-abandon', str(session))
+def abandon(device, sessions):
+    """install-abandon each given session (created by this run and not applied); returns their ids."""
+    for session in sessions:
+        device.shell('pm', 'install-abandon', str(session['sessionId']))
+    return [s['sessionId'] for s in sessions]
+
+def recover(device, decision, stages, boot_budget, finish, existing=None):
+    """Return to the image copy. A session this run created (absent from `existing`) that has not applied would
+    otherwise apply at the recovery reboot, so it is abandoned first; sessions that existed before and applied
+    sessions are never abandoned. Without `existing` (the experiment's restore stage) nothing is abandoned, and an
+    unapplied SystemUI session stops recovery before any uninstall or reboot, as does unreadable session state."""
+    try:
+        sessions = device.sessions()
+    except SessionStateError as error:
+        stages['recover'] = {'result': 'fail', 'state': None, 'abandonedSessions': [],
+            'reason': f'staged session state unreadable before recovery: {error}; nothing uninstalled or rebooted'}
+        return finish('recovery-failed')
+    if existing is None:
+        # A failed session cannot apply at the reboot; a ready or pending one could.
+        unknown = [s['sessionId'] for s in sessions if s['package'] == PACKAGE and not s['applied'] and not s['failed']]
+        if unknown:
+            stages['recover'] = {'result': 'fail', 'state': None, 'abandonedSessions': [],
+                'reason': f'unapplied SystemUI sessions {unknown} were not created by this run; nothing abandoned, '
+                    'uninstalled or rebooted'}
+            return finish('recovery-failed')
+        abandoned = []
+    else:
+        abandoned = abandon(device, created_unapplied(existing, sessions))
     code, out = device.shell('pm', 'uninstall-system-updates', PACKAGE, timeout=120)
     booted = device.reboot(boot_budget)
     state = device.state() if booted else None

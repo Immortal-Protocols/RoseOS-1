@@ -28,6 +28,13 @@ def dumpsys(code_path, version, updated):
         f'    versionCode={version} minSdk=35 targetSdk=36\n    pkgFlags=[ {flags} ]\n  Package [other] (d):\n'
         '    codePath=/data/app/other\n    versionCode=1\n')
 
+def aosp_session(session_id, package='com.android.systemui', ready=False, applied=False, failed=False, error=''):
+    """One `pm get-stagedsessions` line in the layout PackageManagerShellCommand.printSession (android15-release)
+    prints; the values are SYNTHETIC."""
+    b = lambda v: str(v).lower()
+    return (f'sessionId = {session_id}; appPackageName = {package}; isStaged = true; isReady = {b(ready)}; '
+        f'isApplied = {b(applied)}; isFailed = {b(failed)}; errorMsg = {error};\n')
+
 class FakeEmulator:
     """A scripted emulator: staged installs apply at the next reboot unless told to fail."""
     def __init__(self, qemu='1', stage_ok=True, activation='applies', boot_after_update=True, recover_ok=True):
@@ -35,6 +42,9 @@ class FakeEmulator:
         self.boot_after_update, self.recover_ok = boot_after_update, recover_ok
         self.code, self.version, self.updated, self.running, self.booted = '/system_ext/priv-app/SystemUI', 36, False, True, True
         self.sessions, self.calls, self.applied_version = [], [], 37
+        # created_state overrides the new session's state; garble_sessions_after N makes listings after the Nth
+        # unreadable (None: never)
+        self.created_state, self.garble_sessions_after, self.listings = {}, None, 0
 
     def __call__(self, argv, capture_output, text, timeout):
         args = argv[3:]
@@ -48,19 +58,23 @@ class FakeEmulator:
             code = 0 if self.running else 1
             out = '1234\n' if self.running else ''
         elif args[:3] == ['shell', 'pm', 'get-stagedsessions']:
-            out = ''.join(f'sessionId = {s["id"]}; appPackageName = com.android.systemui; isStagedSessionReady = '
-                f'{str(s["ready"]).lower()}; isStagedSessionApplied = {str(s["applied"]).lower()}; '
-                f'isStagedSessionFailed = false;\n' for s in self.sessions)
+            self.listings += 1
+            if self.garble_sessions_after is not None and self.listings > self.garble_sessions_after:
+                # the pre-fix field names: unreadable, never "not ready"
+                return subprocess.CompletedProcess(argv, 0, 'sessionId = 77; appPackageName = com.android.systemui; '
+                    'isStagedSessionReady = true;\n', '')
+            out = ''.join(aosp_session(s['id'], s.get('package', 'com.android.systemui'), s['ready'], s['applied'],
+                s.get('failed', False), s.get('error', '')) for s in self.sessions)
         elif args[0] == 'install':
             if self.stage_ok:
-                self.sessions.append({'id': 77, 'ready': True, 'applied': False})
+                self.sessions.append({'id': 77, 'ready': True, 'applied': False, **self.created_state})
                 out = 'Success. Reboot device to apply staged session\n'
             else:
                 code, out = 1, 'Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match]\n'
         elif args[:3] == ['shell', 'pm', 'install-abandon']:
             self.sessions = [s for s in self.sessions if str(s['id']) != args[3]]
         elif args[0] == 'reboot':
-            pending = [s for s in self.sessions if s['ready'] and not s['applied']]
+            pending = [s for s in self.sessions if s['ready'] and not s['applied'] and not s.get('failed')]
             if pending:
                 if not self.boot_after_update:
                     self.booted = False
@@ -159,6 +173,89 @@ class ApplyTest(unittest.TestCase):
         other = FakeEmulator()
         other.version = 35
         self.assertIn('not the INST receipt version', self.run_apply(other)[1]['stages']['preflight']['reason'])
+
+class SessionStateTest(unittest.TestCase):
+    """EXP006 run 41161860755: the old parser read isStagedSession* fields that AOSP never prints, so every real
+    session parsed as not ready, not applied and not failed."""
+    def test_the_aosp_layout_is_parsed(self):
+        out = aosp_session(77, ready=True) + aosp_session(78, failed=True, error='INSTALL_FAILED: x; y') \
+            + aosp_session(79, package='dev.pixel.other', applied=True) + '\n'
+        self.assertEqual(su.staged_sessions(out), [
+            {'sessionId': 77, 'package': 'com.android.systemui', 'ready': True, 'applied': False, 'failed': False},
+            {'sessionId': 78, 'package': 'com.android.systemui', 'ready': False, 'applied': False, 'failed': True},
+            {'sessionId': 79, 'package': 'dev.pixel.other', 'ready': False, 'applied': True, 'failed': False}])
+        self.assertEqual(su.staged_sessions(''), [], 'no staged session at all')
+
+    def test_the_old_field_names_and_any_malformed_state_fail_closed(self):
+        old = ('sessionId = 77; appPackageName = com.android.systemui; isStagedSessionReady = true; '
+            'isStagedSessionApplied = false; isStagedSessionFailed = false;\n')
+        good = aosp_session(77, ready=True)
+        for label, out in (('old field names', old),
+                ('missing isReady', good.replace('isReady = true; ', '')),
+                ('not a boolean', good.replace('isReady = true', 'isReady = yes')),
+                ('reordered', good.replace('isReady = true; isApplied = false', 'isApplied = false; isReady = true')),
+                ('not staged', good.replace('isStaged = true', 'isStaged = false')),
+                ('duplicate', good + aosp_session(77)),
+                ('truncated', good.rstrip(';\n')),
+                ('trailing text', good.rstrip('\n') + ' extra\n'),
+                ('other line', 'Error: something\n' + good)):
+            with self.subTest(label), self.assertRaises(su.SessionStateError):
+                su.staged_sessions(out)
+
+    def test_only_sessions_created_since_and_not_applied_are_abandon_candidates(self):
+        before = su.staged_sessions(aosp_session(5, applied=True) + aosp_session(6, failed=True))
+        after = su.staged_sessions(aosp_session(5, applied=True) + aosp_session(6, failed=True)
+            + aosp_session(7, ready=True) + aosp_session(8) + aosp_session(9, failed=True)
+            + aosp_session(10, applied=True) + aosp_session(11, package='dev.pixel.other'))
+        self.assertEqual([s['sessionId'] for s in su.created_unapplied(before, after)], [7, 8, 9],
+            'ready, pending and failed alike; never a pre-existing, applied or other-package session')
+
+class SessionCleanupTest(ApplyTest):
+    def test_a_stage_not_ready_abandons_the_created_session_and_never_reboots(self):
+        for state in ({'ready': False}, {'ready': False, 'failed': True}):
+            with self.subTest(state=state):
+                emulator = FakeEmulator()
+                emulator.created_state = state
+                outcome, result = self.run_apply(emulator)
+                self.assertEqual(outcome, 'refused')
+                self.assertEqual(result['stages']['stage']['abandonedSessions'], [77])
+                self.assertIn(['shell', 'pm', 'install-abandon', '77'], emulator.calls)
+                self.assertNotIn(['reboot'], emulator.calls)
+
+    def test_a_pre_existing_failed_or_applied_session_is_never_abandoned(self):
+        emulator = FakeEmulator(activation='crashes')
+        emulator.sessions += [{'id': 5, 'ready': False, 'applied': True}, {'id': 6, 'ready': False, 'applied': False,
+            'failed': True}]
+        outcome, result = self.run_apply(emulator)
+        self.assertEqual(outcome, 'recovered')
+        abandoned = [c[3] for c in emulator.calls if c[:3] == ['shell', 'pm', 'install-abandon']]
+        self.assertEqual(abandoned, [], 'the applied update (77) and the older sessions stay')
+
+    def test_unreadable_session_state_stops_without_abandon_or_reboot(self):
+        for when in ('preflight', 'stage'):
+            with self.subTest(when=when):
+                emulator = FakeEmulator()
+                emulator.garble_sessions_after = 0 if when == 'preflight' else 1
+                outcome, result = self.run_apply(emulator)
+                self.assertEqual(outcome, 'refused')
+                self.assertIn('unreadable', result['stages'][when]['reason'])
+                self.assertFalse(any(c[:3] == ['shell', 'pm', 'install-abandon'] or c == ['reboot'] for c in emulator.calls))
+
+    def test_recovery_without_a_snapshot_never_abandons_or_reboots_over_an_unknown_session(self):
+        emulator = FakeEmulator()
+        emulator.sessions.append({'id': 9, 'ready': True, 'applied': False})
+        device = su.Device('adb', 'emulator-5580', emulator, sleep=lambda s: None,
+            clock=iter(range(0, 10**6, 10)).__next__)
+        stages = {}
+        self.assertEqual(su.recover(device, self.decision, stages, 60, lambda o: o), 'recovery-failed')
+        self.assertIn('not created by this run', stages['recover']['reason'])
+        self.assertFalse(any(c[:3] == ['shell', 'pm', 'install-abandon'] or c == ['reboot']
+            or c[:3] == ['shell', 'pm', 'uninstall-system-updates'] for c in emulator.calls))
+        for state in ({'applied': True}, {'failed': True, 'ready': False}):
+            emulator.sessions[0].update({'applied': False, 'failed': False, **state})
+            self.assertEqual(su.recover(device, self.decision, {}, 60, lambda o: o), 'recovered',
+                f'{state}: cannot apply at the reboot')
+        self.assertFalse(any(c[:3] == ['shell', 'pm', 'install-abandon'] for c in emulator.calls))
 
 class CliTest(unittest.TestCase):
     def test_apply_needs_the_exact_candidate_bytes_and_a_new_evidence_dir(self):
