@@ -98,13 +98,17 @@
                  mInsetsProviderView = null;
              }
              return;
-@@ -1463,8 +1478,9 @@
+@@ -1462,9 +1477,13 @@
+ 
              // If this new activity belongs to a package the session is authorized to control,
              // we should trust it, even if it's a secondary task (like a new Chrome window).
++            // A prototype session trusts any package only for a user and screen it may act on.
++            final boolean prototypeAllowed = isPrototypeSession()
++                    && isActivityLaunchAllowed(topActivity, userId);
              synchronized (mAllowedTaskIds) {
 -                boolean isPackageAllowed = mRequest.params().getTargetPackageNames()
 -                        .contains(topActivity.getPackageName());
-+                boolean isPackageAllowed = isPrototypeSession()
++                boolean isPackageAllowed = prototypeAllowed
 +                        || mRequest.params().getTargetPackageNames()
 +                                .contains(topActivity.getPackageName());
                  int taskId = isPackageAllowed ? getTopTaskId(mVirtualDisplayId) : -1;
