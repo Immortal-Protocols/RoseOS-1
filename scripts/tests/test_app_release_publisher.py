@@ -366,22 +366,34 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(self.server.log, [])
 
     def test_latest_must_stay_the_ota_release(self):
-        # Beta 2901 is Latest (AGENT311-APP-ONLY: owner-confirmed 2026-10-30). The previous 2806 and 2805, any older Beta,
-        # a newer build, an app prerelease or no Latest is refused: the guard is one exact tag, never newest-wins.
-        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
-        for latest in ('frankel-2026102806', 'frankel-2026102805', 'frankel-2026102804', 'frankel-2026102902', 'rose-agent-307', None):
+        # AGENT-BETA-AUTO: whatever OS release is Latest is preserved (the fixed 2901 tag went stale once the Beta
+        # advanced). Before publication Latest must be an OS release; an app prerelease, another tag or no Latest refuses.
+        self.assertEqual(FRANKEL['appRelease']['publication']['latestTagPattern'], 'frankel-{build}')
+        self.assertNotIn('preserveLatest', FRANKEL['appRelease']['publication'])
+        for latest in ('rose-agent-307', 'rose-models-2', 'frankel-20261031', 'frankel-2026103101-x', None):
             self.server.latest = latest
             result = self.run_publisher(public=f'refused-{latest}')
             self.assertEqual(result.returncode, 1)
-            self.assertIn('Latest is not frankel-2026102901; nothing is published', result.stderr)
+            self.assertIn('Latest is not an OS release (frankel-{build}); nothing is published', result.stderr)
             self.assertEqual(self.api_writes(), [])
-        # After publishing: Latest moved to the new prerelease, back to 2805, or to another build is refused too.
-        for index, moved_to in enumerate((True, 'frankel-2026102805', 'frankel-2026102807')):
-            self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102901', moved_to
+        # After publishing: Latest moved to the new prerelease or back to an older build is refused.
+        for index, moved_to in enumerate((True, 'frankel-2026102805', 'frankel-2026103013')):
+            self.server.latest, self.server.move_latest_on_publish = 'frankel-2026103014', moved_to
             self.server.releases.clear()
             moved = self.run_publisher(public=f'moved{index}')
             self.assertEqual(moved.returncode, 1, moved_to)
-            self.assertIn('Latest moved away from frankel-2026102901', moved.stderr)
+            self.assertIn('Latest moved away from frankel-2026103014', moved.stderr)
+
+    def test_the_current_os_latest_is_preserved_and_may_legitimately_advance(self):
+        for index, (before, after) in enumerate((('frankel-2026103014', False), ('frankel-2026102806', False),
+                                                 ('frankel-2026103014', 'frankel-2026103101'))):
+            self.server.latest, self.server.move_latest_on_publish = before, after
+            self.server.releases.clear()
+            result = self.run_publisher(public=f'kept{index}')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.server.latest, after or before, 'an app release never becomes Latest')
+            release, = self.server.releases
+            self.assertEqual((release['prerelease'], release['make_latest']), (True, 'false'))
 
     def test_publishing_309_preserves_2806_and_promotes_nothing(self):
         result = self.run_publisher()
@@ -544,10 +556,10 @@ class PublisherReuseTest(PublisherTest):
         self.assertIn('published release rose-agent-308 differs from this app release; it is not modified', result.stderr)
         self.assertEqual(json.dumps(self.server.releases), before)
         self.server.releases.clear()
-        for latest in ('frankel-2026102805', 'frankel-2026102807', None):
+        for latest in ('rose-agent-307', None):
             self.server.latest = latest
             result = self.reuse_publisher(public=f'latest-{latest}')
-            self.assertIn('Latest is not frankel-2026102901; nothing is published', result.stderr)
+            self.assertIn('Latest is not an OS release (frankel-{build}); nothing is published', result.stderr)
             self.assertEqual(self.api_writes(), [])
         self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102901', 'frankel-2026102805'
         result = self.reuse_publisher(public='moved')
@@ -737,7 +749,7 @@ class WorkflowAppPublisherTest(unittest.TestCase):
     def test_only_app_only_with_app_publish_runs_the_hosted_app_publisher(self):
         job = self.jobs['app-publisher']
         self.assertIn("    needs: [app-builder, app-reuse]\n    if: >-\n      !cancelled() && inputs.app_publish &&\n"
-            "      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||\n"
+            "      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success' && needs.app-builder.outputs.app_skip != 'true') ||\n"
             "      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))\n    runs-on: ubuntu-24.04\n", job)
         self.assertNotIn('self-hosted', job)
         self.assertIn('          name: app-release-dev.pixel.voice-${{ github.run_id }}\n', job)

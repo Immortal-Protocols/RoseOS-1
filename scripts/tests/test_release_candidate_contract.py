@@ -112,7 +112,7 @@ class CheckedInCandidateTest(unittest.TestCase):
              41081939395))
         self.assertNotIn(311, built)
         self.assertEqual(CONFIG['appRelease']['mustExceed'], 307)
-        self.assertEqual(CONFIG['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
+        self.assertEqual(CONFIG['appRelease']['publication']['latestTagPattern'], 'frankel-{build}')
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))

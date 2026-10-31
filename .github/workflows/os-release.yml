@@ -36,7 +36,7 @@ on:
         options: [beta, prod]
         default: beta
       apps:
-        description: 'Advanced, explicit modes only (empty for latest-beta) - JSON [[package, versionCode], ...] expected in the image'
+        description: 'Advanced, explicit modes only (empty for latest-beta) - JSON [[package, versionCode], ...] expected in the image; app-only also takes auto (a fresh Rose Agent version allocated on the builder, or nothing built when these sources are already published)'
         required: false
         default: ''
       promote:
@@ -173,7 +173,7 @@ jobs:
           [[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]
           [[ "$MODE" == rango-retained || "${ROSE_FIRST_USE_ENROLL:-false}" == false ]]
           [[ -z "${ROSE_RECOVER_RUN:-}" || ( "$MODE" == rango-retained && "$ROSE_RECOVER_RUN" =~ ^[1-9][0-9]{0,19}$ && "${ROSE_FIRST_USE_ENROLL:-false}" == false ) ]]
-          [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
+          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
           [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
@@ -192,7 +192,7 @@ jobs:
           # models-sign: bound to this workflow recipe and one numeric bootstrap run; the run input exists only there.
           [[ "$MODE" != models-sign || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
           [[ ( "$MODE" == models-sign && "${MODELS_BOOTSTRAP_RUN:-}" =~ ^[1-9][0-9]{0,19}$ ) || ( "$MODE" != models-sign && -z "${MODELS_BOOTSTRAP_RUN:-}" ) ]]
-          [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
+          [[ "$MODE" != app-only || "$APPS" == auto ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
           # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
           [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
           [[ "$MODE" != app-reuse ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); b = json.loads(os.environ["REUSE_BINDING"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice" and sorted(b) == ["apkSha256", "signedTargetFilesSha256", "sourceRun", "unsignedTargetFilesSha256"] and type(b["sourceRun"]) is int and b["sourceRun"] > 0 and all(isinstance(b[k], str) and re.fullmatch("[0-9a-f]{64}", b[k]) for k in b if k != "sourceRun")'
@@ -615,6 +615,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      candidate_sha: ${{ steps.allocate.outputs.candidate_sha }}
+      apps: ${{ steps.allocate.outputs.apps }}
+      app_skip: ${{ steps.allocate.outputs.app_skip }}
     env:
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
@@ -632,14 +636,24 @@ jobs:
           test ! -e "$base"
           mkdir -p "$base"
           echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      # AGENT-BETA-AUTO (apps=auto): under the shared lock, before any signer access, allocate one fresh Rose Agent version
+      # above every consumed one from the dispatched main commit, or skip when these sources are already published.
+      # Exports CANDIDATE_SHA (the version-only derived candidate), APPS and APP_SKIP.
+      - name: Allocate Rose Agent (apps=auto)
+        id: allocate
+        if: env.APPS == 'auto'
+        run: python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"
       - name: Signer access for app signing
+        if: env.APP_SKIP != 'true'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Build, sign and verify Rose Agent
+        if: env.APP_SKIP != 'true'
         run: ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"
       - name: Drop signer access
         if: always()
         run: python3 scripts/actions-gcp-login.py logout
       - name: Private Actions artifact
+        if: env.APP_SKIP != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: app-release-dev.pixel.voice-${{ github.run_id }}
@@ -959,11 +973,14 @@ jobs:
     needs: [app-builder, app-reuse]
     if: >-
       !cancelled() && inputs.app_publish &&
-      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||
+      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success' && needs.app-builder.outputs.app_skip != 'true') ||
       (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
+      # apps=auto: the builder's allocated candidate and version; explicit app-only and app-reuse keep their inputs.
+      CANDIDATE_SHA: ${{ needs.app-builder.outputs.candidate_sha || inputs.candidate_sha }}
+      APPS: ${{ needs.app-builder.outputs.apps || inputs.apps }}
       PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
       PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
       PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}

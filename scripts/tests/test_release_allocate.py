@@ -564,5 +564,121 @@ class AppOnlyRoute(unittest.TestCase):
         self.assertIn("floor = allocated_floor(env.get('HOME', ''))", (SCRIPTS/'host-app-release.py').read_text())
 
 
+def app_repo(test):
+    """builder_repo plus the app publication tag pattern the app allocator reads (rose-agent-{versionCode})."""
+    repo, home = builder_repo(test)
+    record = json.loads((repo.path/ra.PIPELINE_CONFIG).read_text())
+    record['appRelease'] = dict(record['appRelease'], publication={'tag': 'rose-agent-{versionCode}'})
+    repo.write(ra.PIPELINE_CONFIG, json.dumps(record))
+    repo.source = repo.commit('App publication tag')
+    return repo, home
+
+
+def app_listing(*extra):
+    return lambda url: [{'tag_name': 'frankel-2026103014', 'draft': False, 'prerelease': False},
+                        {'tag_name': 'rose-agent-311', 'draft': False, 'prerelease': True}, *extra]
+
+
+class AppAllocation(unittest.TestCase):
+    """AGENT-BETA-AUTO: app-only allocation (release-allocate.py app) on the builder."""
+
+    def env(self, repo, home, run='951'):
+        out = home/f'app-out-{run}'
+        out.mkdir()
+        return {'CANDIDATE_SHA': repo.source, 'HOME': str(home), 'GITHUB_RUN_ID': run, 'GITHUB_RUN_ATTEMPT': '1',
+            'GITHUB_ENV': str(out/'env'), 'GITHUB_OUTPUT': str(out/'output')}, out
+
+    def run_app(self, repo, home, fetch, run='951', now=NOW):
+        env, out = self.env(repo, home, run)
+        record, exported = ra.app_latest(out/'allocation.json', env, repo=repo.path, fetch=fetch, clock=lambda: now)
+        return record, exported, out
+
+    def test_fresh_version_exceeds_every_consumed_one_including_drafts(self):
+        repo, home = app_repo(self)
+        # 325 is published, 326 is only a draft: both are consumed. 325 is never reused and 326 is never assumed free.
+        fetch = app_listing({'tag_name': 'rose-agent-325', 'draft': False, 'prerelease': True},
+                            {'tag_name': 'rose-agent-326', 'draft': True, 'prerelease': True})
+        record, exported, out = self.run_app(repo, home, fetch)
+        self.assertEqual((record['verdict'], record['versionCode'], record['versionName']), ('allocated', 327, '327-auto-beta'))
+        self.assertEqual(json.loads(exported['APPS']), [['dev.pixel.voice', 327]])
+        self.assertEqual((exported['APP_SKIP'], exported['APP_SOURCE_SHA']), ('false', repo.source))
+        self.assertEqual(exported['CANDIDATE_SHA'], ra.derive_app(record, repo.path))
+        self.assertEqual(json.loads((home/'rose-actions/app-allocations/327.json').read_text()), {k: v for k, v in record.items() if k != 'verdict'})
+        self.assertIn(f'CANDIDATE_SHA={exported["CANDIDATE_SHA"]}\n', (out/'env').read_text())
+        self.assertIn('app_skip=false\n', (out/'output').read_text())
+        # The next allocation passes this reservation even though it was never published.
+        again, _, _ = self.run_app(repo, home, fetch, run='952')
+        self.assertEqual(again['versionCode'], 328)
+
+    def test_candidate_is_the_source_plus_only_the_version_delta(self):
+        repo, home = app_repo(self)
+        record, exported, _ = self.run_app(repo, home, app_listing())
+        candidate = exported['CANDIDATE_SHA']
+        self.assertEqual(repo.git('rev-list', '--parents', '-n', '1', candidate).split()[1:], [repo.source])
+        self.assertEqual(repo.git('diff', '--name-only', repo.source, candidate).split(), ['workspace/rose-agent/app/AndroidManifest.xml'])
+        self.assertIn('android:versionCode="312" android:versionName="312-auto-beta"',
+            repo.git('show', f'{candidate}:workspace/rose-agent/app/AndroidManifest.xml'))
+        self.assertEqual(ra.derive_app(record, repo.path), candidate, 'deterministic')
+        self.assertEqual(repo.git('rev-parse', 'main'), repo.source, 'no ref moved, nothing pushed')
+        with self.assertRaisesRegex(ra.Refused, 'reservation_exists'):
+            ra.reserve_app(home/'rose-actions/app-allocations', record, candidate)
+        with self.assertRaisesRegex(ra.Refused, 'allocation_invalid'):
+            ra.derive_app(dict(record, versionCode=313), repo.path)
+
+    def test_already_published_sources_are_skipped_and_changed_ones_rebuilt(self):
+        repo, home = app_repo(self)
+        first, _, _ = self.run_app(repo, home, app_listing())
+        published = app_listing({'tag_name': f'rose-agent-{first["versionCode"]}', 'draft': False, 'prerelease': True})
+        repo.write('README.md', 'only docs changed\n')
+        repo.source = repo.commit('Docs only')
+        skipped, exported, out = self.run_app(repo, home, published, run='953')
+        self.assertEqual((skipped['verdict'], exported['APP_SKIP']), ('unchanged', 'true'))
+        self.assertNotIn('CANDIDATE_SHA', exported)
+        self.assertIn('already published from the same Rose Agent sources', skipped['reason'])
+        self.assertEqual(sorted(p.name for p in (home/'rose-actions/app-allocations').iterdir()), [f'{first["versionCode"]}.json'])
+        # A draft or an unpublished reservation of the same sources is not "published": it is rebuilt fresh.
+        draft_only = app_listing({'tag_name': f'rose-agent-{first["versionCode"]}', 'draft': True, 'prerelease': True})
+        rebuilt, _, _ = self.run_app(repo, home, draft_only, run='954')
+        self.assertEqual((rebuilt['verdict'], rebuilt['versionCode']), ('allocated', first['versionCode'] + 1))
+        repo.write('workspace/rose-agent/app/Main.java', 'class Main { int newer; }\n')
+        repo.source = repo.commit('Rose Agent change')
+        changed, _, _ = self.run_app(repo, home, published, run='955')
+        self.assertEqual((changed['verdict'], changed['versionCode']), ('allocated', first['versionCode'] + 2))
+
+    def test_a_published_app_without_a_builder_record_is_never_assumed_unchanged(self):
+        repo, home = app_repo(self)
+        record, _, _ = self.run_app(repo, home, app_listing())  # newest published 311 has no app reservation here
+        self.assertEqual((record['verdict'], record['previous']), ('allocated', {'versionCode': 311, 'sourceSha': None}))
+
+    def test_unreadable_state_refuses_before_reserving(self):
+        repo, home = app_repo(self)
+        (home/'rose-actions/app-allocations').mkdir()
+        (home/'rose-actions/app-allocations/400.json').write_text(json.dumps({'schema': ra.APP_SCHEMA, 'versionCode': 400}))
+        with self.assertRaisesRegex(ra.Refused, 'unreadable app reservation'):
+            self.run_app(repo, home, app_listing())
+        (home/'rose-actions/app-allocations/400.json').unlink()
+        with self.assertRaisesRegex(ra.Refused, 'invalid: CANDIDATE_SHA'):
+            ra.app_latest(home/'x.json', {'CANDIDATE_SHA': 'main', 'HOME': str(home)}, repo=repo.path, fetch=app_listing())
+        obs = observation()
+        with self.assertRaisesRegex(ra.Refused, 'no app reservations observed'):
+            ra.allocate_app(repo.source, obs, NOW, '1', '1', repo=repo.path)
+        with self.assertRaisesRegex(ra.Refused, 'incomplete appReservations'):
+            ra.allocate_app(repo.source, dict(obs, appReservations={'complete': False, 'items': []}), NOW, '1', '1', repo=repo.path)
+        self.assertEqual(list((home/'rose-actions/app-allocations').iterdir()), [])
+
+    def test_the_os_button_counts_app_reservations_and_app_tags(self):
+        repo, home = app_repo(self)
+        app, _, _ = self.run_app(repo, home, app_listing({'tag_name': 'rose-agent-330', 'draft': True, 'prerelease': True}))
+        self.assertEqual(app['versionCode'], 331)
+        env = {'GITHUB_SHA': repo.source, 'ROSE_DEVICE': 'frankel', 'HOME': str(home), 'GITHUB_RUN_ID': '960', 'GITHUB_RUN_ATTEMPT': '1'}
+        record, _ = ra.latest(home/'latest.json', env, repo=repo.path, clock=lambda: NOW,
+            fetch=lambda url: [{'tag_name': 'frankel-2026102806', 'draft': False, 'prerelease': False},
+                               {'tag_name': 'rose-agent-330', 'draft': True, 'prerelease': True}])
+        self.assertEqual(record['apps'][0], ['dev.pixel.voice', 332], 'an OS candidate never reuses an app-only version')
+
+    def test_cli_and_workflow_route(self):
+        self.assertIn("sub.add_parser('app')", (SCRIPTS/'release-allocate.py').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
