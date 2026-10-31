@@ -22,6 +22,11 @@ cannot move forward, or a malformed manifest refuses with a fixed category.
                                    record the allocation (O_EXCL) before any identity is consumed
   latest --out F                   builder, normal button: under the shared lock, observe, allocate from GITHUB_SHA,
                                    derive, reserve, and export the candidate to GITHUB_ENV and GITHUB_OUTPUT
+  app --out F                      builder, app-only with apps=auto (AGENT-BETA-AUTO): under the shared lock, observe,
+                                   then skip when the newest published app release has these Rose Agent sources, or
+                                   allocate one versionCode above every consumed one (drafts included), derive the
+                                   version-only candidate, reserve it in rose-actions/app-allocations and export
+                                   CANDIDATE_SHA, APPS and APP_SKIP
 
 Exit status: 0 done, 1 refused (category on stderr), 2 invalid input.
 """
@@ -45,6 +50,9 @@ ALLOCATION_CONFIG = 'os/latest-beta/allocation.json'
 PIPELINE_CONFIG = 'os/release-pipeline/frankel.json'
 SCHEMA = 'roseos.latest-allocation.v1'
 OBSERVATION_SCHEMA = 'roseos.release-observation.v1'
+APP_SCHEMA = 'roseos.app-allocation.v1'
+APP_RESERVATIONS = 'app-allocations'
+APP_PACKAGE = 'dev.pixel.voice'
 SHA = re.compile(r'[0-9a-f]{40}')
 BUILD = re.compile(r'(\d{8})(\d{2})')
 VERSION_CODE = re.compile(r'android:versionCode="(\d+)"')
@@ -100,6 +108,9 @@ def check_observation(observation):
         raise Refused('state_unavailable: incomplete ' + ', '.join(missing) + ' (maxima are never guessed)')
     if observation['releases'].get('includesDrafts') is not True:
         raise Refused('state_unavailable: the release listing does not include drafts')
+    apps = observation.get('appReservations')
+    if apps is not None and (not isinstance(apps, dict) or apps.get('complete') is not True or not isinstance(apps.get('items'), list)):
+        raise Refused('state_unavailable: incomplete appReservations (maxima are never guessed)')
 
 
 def known_identities(observation, pipeline, tag_pattern):
@@ -151,7 +162,24 @@ def consumed_versions(package, pipeline, observation):
             versions.add(int(release['mustExceed']))
     for row in observation['reservations']['items']:
         versions.update(int(v) for p, v in row.get('apps', []) if p == package)
+    if release.get('packageName') == package:
+        # AGENT-BETA-AUTO: builder app-only reservations and every app tag listed (drafts included) are consumed too.
+        versions.update(int(row['versionCode']) for row in (observation.get('appReservations') or {}).get('items', [])
+            if row.get('packageName') == package)
+        versions.update(app_tag_versions(observation, pipeline))
     return versions
+
+
+def app_tag_versions(observation, pipeline, published_only=False):
+    """versionCode of every listed app release tag (rose-agent-{versionCode}); published_only keeps published prereleases."""
+    prefix, _, suffix = (pipeline.get('appRelease') or {}).get('publication', {}).get('tag', '').partition('{versionCode}')
+    found = set()
+    for release in observation['releases']['items']:
+        tag = str(release.get('tag', ''))
+        middle = tag[len(prefix):len(tag) - len(suffix)] if prefix and tag.startswith(prefix) and tag.endswith(suffix) else ''
+        if middle.isdigit() and (not published_only or (release.get('draft') is False and release.get('prerelease') is True)):
+            found.add(int(middle))
+    return found
 
 
 def previous_release(observation, pipeline, tag_pattern):
@@ -412,7 +440,26 @@ def observe(home, device, repository, api, fetch=None):
         'releases': {'complete': True, 'includesDrafts': True, 'draftsBasis': DRAFTS_BASIS,
                      'items': list_releases(repository, api, fetch)},
         'attempts': {'complete': True, 'items': attempts},
-        'reservations': {'complete': True, 'items': reservations}}
+        'reservations': {'complete': True, 'items': reservations},
+        'appReservations': {'complete': True, 'items': read_app_reservations(base/APP_RESERVATIONS)}}
+
+
+def read_app_reservations(directory):
+    directory, records = Path(directory), []
+    if not directory.exists():
+        return records
+    if directory.is_symlink() or not directory.is_dir():
+        raise Refused('state_unavailable: the app reservation directory is not a plain directory')
+    for path in sorted(directory.iterdir()):
+        try:
+            if path.suffix != '.json':
+                raise ValueError
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                records.append(check_app_allocation(json.load(f)))
+        except (OSError, ValueError, Refused):
+            raise Refused(f'state_unavailable: unreadable app reservation {path.name[:40]}') from None
+    return records
 
 
 @contextlib.contextmanager
@@ -456,6 +503,118 @@ def latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock):
     return record, exported
 
 
+# ---------------------------------------------------------------- AGENT-BETA-AUTO: app-only allocation
+
+def check_app_allocation(allocation):
+    body = {k: v for k, v in allocation.items() if k not in ('allocationSha256', 'candidateSha')}
+    if allocation.get('schema') != APP_SCHEMA or allocation.get('allocationSha256') != hashlib.sha256(canonical(body)).hexdigest():
+        raise Refused('allocation_invalid: the app allocation record does not match its hash')
+    return allocation
+
+
+def allocate_app(source, observation, now_epoch, run_id, run_attempt, repo=ROOT):
+    """One fresh Rose Agent version for the app-only route, or 'unchanged' when the newest published app release was
+    built from these same Rose Agent sources (already published: nothing to build). A fresh versionCode exceeds every
+    consumed one: retained OS baselines, appRelease published/built/reserved, latest-beta and app-only reservations on
+    this builder and every listed rose-agent tag, drafts included. Nothing is assumed about the next number."""
+    if not SHA.fullmatch(source or ''):
+        raise Refused('invalid: --source must be a full commit SHA')
+    check_observation(observation)
+    if observation.get('appReservations') is None:
+        raise Refused('state_unavailable: no app reservations observed (maxima are never guessed)')
+    cfg = json.loads(show(repo, source, ALLOCATION_CONFIG))
+    pipeline = json.loads(show(repo, source, PIPELINE_CONFIG))
+    package = next((p for p in cfg['packages'] if p['packageName'] == APP_PACKAGE), None)
+    if package is None or (pipeline.get('appRelease') or {}).get('packageName') != APP_PACKAGE:
+        raise Refused(f'config_invalid: {APP_PACKAGE} is not an allocated app')
+    text = show(repo, source, package['manifest'])
+    code, version_name = manifest_version(text, package['manifest'])
+    published = app_tag_versions(observation, pipeline, published_only=True)
+    newest = max(published) if published else None
+    record = next((r for r in observation['appReservations']['items'] if r['versionCode'] == newest), None)
+    previous = {'versionCode': newest, 'sourceSha': record['sourceSha'] if record else None}
+    if record and not git(repo, 'diff', '--name-only', record['sourceSha'], source, '--', *package['sources']).strip():
+        return {'verdict': 'unchanged', 'sourceSha': source, 'previous': previous,
+            'reason': f'rose-agent-{newest} is already published from the same Rose Agent sources ({record["sourceSha"][:12]})'}
+    new_code = max(consumed_versions(APP_PACKAGE, pipeline, observation) | {code}) + 1
+    new_name = f'{new_code}-auto-beta'
+    after = set_manifest_version(text, new_code, new_name)
+    delta = [{'path': package['manifest'], 'beforeSha256': hashlib.sha256(text.encode()).hexdigest(),
+        'afterSha256': hashlib.sha256(after.encode()).hexdigest(), 'versionCode': [code, new_code],
+        'versionName': [version_name, new_name]}]
+    allocation = {'schema': APP_SCHEMA, 'packageName': APP_PACKAGE, 'sourceSha': source,
+        'run': {'id': str(run_id), 'attempt': str(run_attempt)}, 'clock': int(now_epoch), 'versionCode': new_code,
+        'versionName': new_name, 'previous': previous, 'delta': delta,
+        'observationSha256': hashlib.sha256(canonical(observation)).hexdigest()}
+    allocation['allocationSha256'] = hashlib.sha256(canonical(allocation)).hexdigest()
+    return dict(allocation, verdict='allocated')
+
+
+def derive_app(allocation, repo=ROOT):
+    """source + exactly the manifest version delta, as a fixed-identity commit (no notes: an app release is not an OS
+    build). Deterministic; created only in local objects and never pushed."""
+    allocation = check_app_allocation({k: v for k, v in allocation.items() if k != 'verdict'})
+    source, (edit,) = allocation['sourceSha'], allocation['delta']
+    text = show(repo, source, edit['path'])
+    after = set_manifest_version(text, edit['versionCode'][1], edit['versionName'][1]).encode()
+    if hashlib.sha256(text.encode()).hexdigest() != edit['beforeSha256'] or hashlib.sha256(after).hexdigest() != edit['afterSha256']:
+        raise Refused(f'delta_mismatch: {edit["path"]} differs from the app allocation')
+    with tempfile.TemporaryDirectory(prefix='rose-app-alloc-') as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp)/'index'), **IDENTITY,
+            GIT_AUTHOR_DATE=f'{allocation["clock"]} +0000', GIT_COMMITTER_DATE=f'{allocation["clock"]} +0000')
+        git(repo, 'read-tree', source, env=env)
+        blob = git(repo, 'hash-object', '-w', '--stdin', data=after, env=env).decode().strip()
+        mode = git(repo, 'ls-tree', source, '--', edit['path']).decode().split()[0]
+        git(repo, 'update-index', '--cacheinfo', f'{mode},{blob},{edit["path"]}', env=env)
+        tree = git(repo, 'write-tree', env=env).decode().strip()
+        message = (f'Allocate {APP_PACKAGE} {allocation["versionCode"]} ({allocation["versionName"]})\n\n'
+            f'Source: {source}\nAllocation: {allocation["allocationSha256"]}\n'
+            'Version-only app candidate derived by scripts/release-allocate.py app; not pushed.\n')
+        return git(repo, 'commit-tree', tree, '-p', source, data=message.encode(), env=env).decode().strip()
+
+
+def reserve_app(directory, allocation, candidate):
+    allocation = check_app_allocation({k: v for k, v in allocation.items() if k != 'verdict'})
+    directory = Path(directory)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record = dict(allocation, candidateSha=candidate)
+    try:
+        fd = os.open(directory/f'{allocation["versionCode"]}.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        raise Refused(f'reservation_exists: {APP_PACKAGE} {allocation["versionCode"]} is already reserved') from None
+    with os.fdopen(fd, 'w') as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+    return record
+
+
+def app_latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock):
+    """Builder, app-only with apps=auto: under the shared lock, observe, then skip (already published) or allocate,
+    derive and reserve one fresh Rose Agent candidate from the dispatched main commit (CANDIDATE_SHA)."""
+    source = env.get('CANDIDATE_SHA', '')
+    pipeline = json.loads(show(repo, source, PIPELINE_CONFIG)) if SHA.fullmatch(source) else None
+    if pipeline is None:
+        raise Refused('invalid: CANDIDATE_SHA is not a commit')
+    cfg = json.loads(show(repo, source, ALLOCATION_CONFIG))
+    with lock(pipeline['host']['lockPath']):
+        observation = observe(env['HOME'], cfg['device'], pipeline['publication']['repository'], pipeline['publication']['api'], fetch)
+        allocation = allocate_app(source, observation, int(clock()), env.get('GITHUB_RUN_ID', ''), env.get('GITHUB_RUN_ATTEMPT', ''), repo)
+        if allocation['verdict'] == 'unchanged':
+            record, exported = allocation, {'APP_SKIP': 'true', 'APP_SOURCE_SHA': source}
+        else:
+            candidate = derive_app(allocation, repo)
+            record = dict(reserve_app(Path(env['HOME'])/'rose-actions'/APP_RESERVATIONS, allocation, candidate), verdict='allocated')
+            exported = {'APP_SKIP': 'false', 'APP_SOURCE_SHA': source, 'CANDIDATE_SHA': candidate,
+                'APPS': json.dumps([[APP_PACKAGE, allocation['versionCode']]], separators=(',', ':'))}
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+    for name, target in (('GITHUB_ENV', exported), ('GITHUB_OUTPUT', {k.lower(): v for k, v in exported.items()})):
+        if env.get(name):
+            with open(env[name], 'a') as f:
+                f.writelines(f'{k}={v}\n' for k, v in target.items())
+    return record, exported
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = p.add_subparsers(dest='command', required=True)
@@ -464,6 +623,7 @@ def main(argv=None):
         a.add_argument(flag, required=True)
     a.add_argument('--recipe')
     sub.add_parser('latest').add_argument('--out', required=True)
+    sub.add_parser('app').add_argument('--out', required=True)
     for name in ('derive', 'notes', 'reserve'):
         s = sub.add_parser(name)
         s.add_argument('--allocation', required=True)
@@ -485,6 +645,9 @@ def main(argv=None):
         elif args.command == 'latest':
             record, exported = latest(args.out, os.environ)
             print(json.dumps(dict(exported, source=record['sourceSha'], allocation=record['allocationSha256'])))
+        elif args.command == 'app':
+            record, exported = app_latest(args.out, os.environ)
+            print(json.dumps(dict(exported, verdict=record['verdict'])))
         else:
             allocation = json.loads(Path(args.allocation).read_text())
             if args.command == 'derive':
