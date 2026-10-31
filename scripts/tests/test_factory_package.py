@@ -164,19 +164,39 @@ def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
     entries.update(images or {})
     return zip_bytes([(k, v) for k, v in entries.items() if k not in drop])
 
+def capture_script(device, images, segments, wipe=True):
+    """script.txt in the shape FlashCapturer writes (pinned optimize-factory-image excerpt); synthetic, never run."""
+    bootloader = f'flash bootloader bootloader-{device}-{BOOTLOADER}.img other-slot'
+    lines = [f'check-var product {device}', 'check-var slot-count 2', bootloader, 'toggle-active-slot', 'reboot-bootloader',
+             bootloader, 'toggle-active-slot', 'reboot-bootloader', '# size of partition splits depends on this value',
+             'check-var max-download-size 0x10000000', 'run-cmd set_active:a', 'check-var current-slot a',
+             f'flash radio radio-{device}-{BASEBAND}.img', 'reboot-bootloader', 'erase avb_custom_key',
+             'flash avb_custom_key avb_pkmd.bin', 'run-cmd oem uart disable', 'erase dpm_a', 'erase dpm_b',
+             'check-requirements android-info.txt', 'maybe-cancel-snapshot-update']
+    lines += [f'flash {p} {p}.img' for p in images]
+    lines += ['erase userdata', 'erase metadata'] if wipe else []
+    lines += [f'flash super super_{i}.img' for i in range(1, segments + 1)]
+    return ('\n'.join(lines) + '\n').encode()
+
+def android_info_zip(info):
+    return zip_bytes([('android-info.txt', info)])
+
 def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), extra=(), segments=None):
     top = top or f'{device}-install-{build}'
-    files = {'android-info.txt': info or android_info(device),
+    segments = segments or super_segments(super_partitions())
+    images = [p for p in AB if p not in DYNAMIC and p != 'abl']
+    info = info or android_info(device)
+    files = {'android-info.txt': info, 'android-info.zip': android_info_zip(info),
              'flash-all.sh': b'# synthetic stand-in, not a flasher\n# erase userdata\n',
-             'script.txt': b'# synthetic stand-in\n# erase userdata\n',
+             'flash-all.bat': b':: synthetic stand-in, not a flasher\n',
+             'script.txt': capture_script(device, images, len(segments)),
              'avb_pkmd.bin': PKMD[device],
              f'bootloader-{device}-{BOOTLOADER}.img': b'synthetic bootloader',
              f'radio-{device}-{BASEBAND}.img': b'synthetic radio', **GSC}
-    for index, segment in enumerate(segments or super_segments(super_partitions()), 1):
+    for index, segment in enumerate(segments, 1):
         files[f'super_{index}.img'] = segment
-    for part in AB:
-        if part not in DYNAMIC and part != 'abl':
-            files[f'{part}.img'] = image(part)
+    for part in images:
+        files[f'{part}.img'] = image(part)
     files.update(replace or {})
     entries = [(f'{top}/{k}', v) for k, v in files.items() if k not in drop] + list(extra)
     return zip_bytes(entries)
@@ -199,6 +219,8 @@ class Fixture(unittest.TestCase):
                     'os/release-pipeline/frankel.json', 'scripts/tests/fixtures/permission-apex/script/generate-release.sh') + tuple(
                     f'scripts/tests/fixtures/factory-package/device_common-1f5ba267/{f}'
                     for f in ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')) + tuple(
+                    f'scripts/tests/fixtures/factory-package/platform_system_core-322ff512/{f}'
+                    for f in ('fastboot-excerpt.json', 'PROVENANCE.json')) + tuple(
                     f'os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices/{d}/firmware/android-info.txt'
                     for d in ('frankel', 'rango', 'blazer')):
             (self.root/rel).parent.mkdir(parents=True, exist_ok=True)
@@ -459,7 +481,7 @@ class Content(Fixture):
 class Evidence(Fixture):
     def test_firmware_carried_needs_bound_observation_never_absence(self):
         archive, tf = self.complete('frankel')
-        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=None), 'firmware-observation for A/B partitions without an IMAGES/ image: abl')
+        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=None), 'firmware-observation for A/B partitions without an install image: abl')
         self.refused(self.classify(archive, 'frankel', tf, firmware_observation=self.firmware('frankel', partitions=())),
                      'firmware-carried evidence for abl')
         wrong = self.firmware('frankel', bootloader={'sha256': '0' * 64, 'partitions': ['abl']})
@@ -779,6 +801,108 @@ class Readiness(Fixture):
         self.assertTrue(self.classify(archive, 'rango', tf)['factoryReady'])
         self.assertEqual(fp.load_flavor('blazer', self.root)['readiness']['factoryReady'], False)
         self.assertNotIn('readiness', fp.load_flavor('rango', self.root))
+
+OPTIMIZER = SCRIPTS/'tests/fixtures/factory-package/platform_system_core-322ff512'
+
+class Optimizer(Fixture):
+    """FOLD-FACTORY-005: install-archive rules from the pinned fastboot optimize-factory-image excerpt."""
+    def test_pinned_excerpt_provenance_and_contract_derivations(self):
+        provenance = json.loads((OPTIMIZER/'PROVENANCE.json').read_text())
+        self.assertEqual(provenance['revision'], '322ff5129d865a5e8d958667e6c63ac943449493')
+        excerpt = json.loads((OPTIMIZER/'fastboot-excerpt.json').read_text())['files']
+        for entry in provenance['files']:
+            if 'excerpt' in entry:
+                numbers = {str(n) for r in entry['excerpt'] for n in range(int(r.split('-')[0]), int(r.split('-')[1]) + 1)}
+                self.assertEqual(set(excerpt[entry['path']]), numbers, entry['path'])
+                self.assertLessEqual(max(map(int, numbers)), entry['lines'])
+        license = (OPTIMIZER/'LICENSE').read_bytes()
+        self.assertEqual(hashlib.sha1(b'blob %d\0' % len(license) + license).hexdigest(),
+                         next(e['gitBlob'] for e in provenance['files'] if e['path'] == 'fastboot/LICENSE'))
+        for name in ('frankel', 'rango'):
+            factory = fp.load_flavor(name)['artifacts']['factory']
+            self.assertIn('vendor_kernel_boot', factory['fastbootImages'])
+            self.assertNotIn('userdata', factory['fastbootImages'])
+            self.assertEqual(factory['scriptChecks']['maxDownloadSize'], '0x10000000')
+
+    def test_contract_claims_must_match_the_excerpt(self):
+        for change, pattern in ((lambda f: f['fastbootImages'].append('modem'), 'fastbootImages'),
+                                (lambda f: f['optimizeMembers']['anchors'].append('AddFile("guessed.txt"'), 'optimize anchor'),
+                                (lambda f: f['scriptChecks'].update(maxDownloadSize='0x20000000'), 'scriptChecks.maxDownloadSize'),
+                                (lambda f: f['requiredMembers'].remove('android-info.zip'), 'requiredMembers')):
+            original = (self.root/'os/flavors/rango.json').read_text()
+            self.edit_json('os/flavors/rango.json', lambda d: change(d['artifacts']['factory']))
+            with self.assertRaisesRegex(fp.ContractError, pattern):
+                fp.load_flavor('rango', self.root)
+            (self.root/'os/flavors/rango.json').write_text(original)
+        excerpt = self.root/'scripts/tests/fixtures/factory-package/platform_system_core-322ff512/fastboot-excerpt.json'
+        provenance = excerpt.with_name('PROVENANCE.json')
+        original = provenance.read_text()
+        drifted = json.loads(original)
+        next(e for e in drifted['files'] if e['path'] == 'fastboot/task.cpp')['sha256'] = '0' * 64
+        provenance.write_text(json.dumps(drifted))
+        with self.assertRaisesRegex(fp.ContractError, 'optimizeFixture files'):
+            fp.load_flavor('rango', self.root)
+        provenance.write_text(original)
+        tampered = excerpt.read_text().replace('AddSplitSparsePartition', 'AddSplitSparseSegments')
+        self.assertNotEqual(tampered, excerpt.read_text())
+        excerpt.write_text(tampered)
+        with self.assertRaisesRegex(fp.ContractError, 'optimizeFixture excerpt sha256'):
+            fp.load_flavor('frankel', self.root)
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_android_info_zip_and_flash_all_bat_are_required(self):
+        _, tf = self.complete('rango')
+        for drop in (('android-info.zip',), ('flash-all.bat',)):
+            self.refused(self.classify(self.write('a.zip', install('rango', drop=drop)), 'rango', tf), f'factory:{drop[0]}')
+        other = android_info_zip(android_info('rango', baseband='g5400i-older'))
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'android-info.zip': other})), 'rango', tf),
+                     'install-script:android-info.zip is not exactly the archive android-info.txt')
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'android-info.zip': b'not a zip'})), 'rango', tf),
+                     'install-script:android-info.zip')
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_script_txt_carries_the_captured_checks(self):
+        _, tf = self.complete('frankel')
+        good = capture_script('frankel', [p for p in AB if p not in DYNAMIC and p != 'abl'], 2).decode()
+        for edit, code in ((lambda s: s.replace('check-var product frankel\n', ''), '`check-var product frankel`'),
+                           (lambda s: s.replace('0x10000000', '0x20000000'), '`check-var max-download-size 0x10000000`'),
+                           (lambda s: s.replace('check-var current-slot a\n', ''), '`check-var current-slot a`'),
+                           (lambda s: s.replace('check-requirements android-info.txt\n', ''), '`check-requirements android-info.txt`'),
+                           (lambda s: s.replace(f'flash bootloader bootloader-frankel-{BOOTLOADER}.img other-slot\n', '', 1),
+                            'has 1 `flash bootloader'),
+                           (lambda s: s.replace('flash super super_2.img\n', ''), 'super flashes'),
+                           (lambda s: s.replace('flash super super_1.img\nflash super super_2.img', 'flash super super_2.img\nflash super super_1.img'),
+                            'super flashes'),
+                           (lambda s: s + 'flash modem modem.img\n', 'flashes absent member modem.img')):
+            archive = self.write('a.zip', install('frankel', replace={'script.txt': edit(good).encode()}))
+            self.refused(self.classify(archive, 'frankel', tf), 'install-script:script.txt ' if 'flashes absent' not in code else code)
+            self.assertIn(code, ' '.join(self.classify(archive, 'frankel', tf)['problems']))
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_images_outside_the_fastboot_table_need_firmware_evidence(self):
+        archive, _ = self.complete('frankel')
+        tf = self.write('tf.zip', target_files('frankel', ab=AB + ['modem'], images={'IMAGES/modem.img': b'synthetic modem'}))
+        result = self.classify(archive, 'frankel', tf)
+        self.refused(result, 'firmware-carried evidence for modem')
+        self.assertEqual(result['inventory']['notFlashedByFastboot'], ['modem'])
+        fw = self.firmware('frankel', radio={'sha256': hashlib.sha256(b'synthetic radio').hexdigest(), 'partitions': ['modem']})
+        self.assertTrue(self.classify(archive, 'frankel', tf, firmware_observation=fw)['factoryReady'])
+        with_modem = self.write('b.zip', install('frankel', replace={'modem.img': b'synthetic modem'}))
+        self.refused(self.classify(with_modem, 'frankel', tf, firmware_observation=fw), 'unexpected-image:modem.img')
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_resparsed_non_dynamic_image_is_compared_flattened(self):
+        _, tf = self.complete('rango')
+        sparse = {'vendor_boot.img': sparse_image(image('vendor_boot'))}
+        result = self.classify(self.write('a.zip', install('rango', replace=sparse)), 'rango', tf)
+        # A whole-block sparse encoding flattens to the padded image, which is not byte-equal to IMAGES/vendor_boot.img.
+        self.refused(result, 'image-mismatch:vendor_boot.img (sparse) differs from target-files IMAGES/vendor_boot.img')
+        self.assertEqual(result['inventory']['sparseImages'], ['vendor_boot'])
+        aligned = image('vendor_boot') + b'\0' * (-len(image('vendor_boot')) % BLOCK)
+        tf = self.write('tf.zip', target_files('rango', images={'IMAGES/vendor_boot.img': aligned}))
+        ok = self.classify(self.write('a.zip', install('rango', replace={'vendor_boot.img': sparse_image(aligned)})), 'rango', tf)
+        self.assertTrue(ok['factoryReady'], ok)
+        self.assertEqual(ok['content']['sparseImages']['vendor_boot']['sha256'], hashlib.sha256(aligned).hexdigest())
 
 if __name__ == '__main__':
     unittest.main()
