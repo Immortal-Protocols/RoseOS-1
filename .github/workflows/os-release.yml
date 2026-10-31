@@ -102,9 +102,12 @@ permissions:
   contents: read
 
 concurrency:
-  # One candidate at a time across the builder's source/output tree and the publisher.
+  # One candidate at a time across the builder's source/output tree and the publisher. queue: max keeps every waiting
+  # run (FIFO, up to 100) instead of the default single pending slot, where a newly queued run (e.g. a campaign
+  # successor) cancels and replaces an unrelated pending one (e.g. a models-sign run).
   group: os-release-frankel
   cancel-in-progress: false
+  queue: max
 
 env:
   MODE: ${{ inputs.mode }}
