@@ -71,6 +71,34 @@ public final class RoseAgentWorkTest {
             "An unreadable platform state is unavailable");
         expect(RoseAgentWork.of(controller, 10, displays, tasks).items.size() == 1, "The other user sees only their work");
         expect(RoseAgentWork.unavailable("x").items.isEmpty(), "Unavailable shows no cards");
+
+        // Labels are looked up only after filtering; one failed or empty lookup never hides valid work.
+        java.util.List<Integer> asked = new java.util.ArrayList<>();
+        RoseAgentWork labelled = work.labelled(t -> {
+            asked.add(t.taskId);
+            if (t.taskId == 3) throw new IllegalStateException("private detail of a failed lookup");
+            return t.packageName.equals("com.example.mail") ? "Mail" : null;
+        });
+        expect(asked.equals(Arrays.asList(2, 3)), "Only the kept agent tasks are looked up: never the human's, another "
+            + "display's, another user's or the controller's");
+        expect(labelled.state == RoseAgentWork.State.AVAILABLE && labelled.items.size() == 2, "Nothing dropped or added");
+        expect(labelled.items.get(0).label.equals("Mail") && labelled.items.get(1).label.equals("com.example.maps"),
+            "A failed lookup shows the package name; the others keep their label");
+        expect(labelled.items.get(1).taskId == 3 && labelled.items.get(1).displayId == 7 && labelled.items.get(1).userId == 0
+            && labelled.items.get(1).topOfDisplay == false, "Every boundary fact is kept");
+        expect(RoseAgentWork.decide(labelled.items.get(0), labelled) == RoseAgentWork.Open.WATCH, "Selection still works");
+        RoseAgentWork allFail = work.labelled(t -> { throw new SecurityException("cross-user"); });
+        expect(allFail.state == RoseAgentWork.State.AVAILABLE && allFail.items.get(0).label.equals("com.example.mail"),
+            "Even if every lookup fails the work stays available, by package name");
+        java.util.List<Integer> none = new java.util.ArrayList<>();
+        expect(RoseAgentWork.of(controller, 0, Arrays.asList(new RoseAgentWork.Display(0, -1)), tasks)
+            .labelled(t -> { none.add(t.taskId); return "x"; }).state == RoseAgentWork.State.EMPTY && none.isEmpty(),
+            "Empty work looks nothing up");
+        expect(RoseAgentWork.failed(RoseAgentWork.Step.TASKS).state == RoseAgentWork.State.UNAVAILABLE
+            && "Rose's work could not be read (tasks)".equals(RoseAgentWork.failed(RoseAgentWork.Step.TASKS).reason)
+            && "Rose's work could not be read (controller)".equals(RoseAgentWork.failed(RoseAgentWork.Step.CONTROLLER).reason)
+            && "Rose's work could not be read (displays)".equals(RoseAgentWork.failed(RoseAgentWork.Step.DISPLAYS).reason),
+            "A failed platform read names its step with a fixed word");
         System.out.println("RoseAgentWorkTest: " + checks + " checks passed");
     }
 }

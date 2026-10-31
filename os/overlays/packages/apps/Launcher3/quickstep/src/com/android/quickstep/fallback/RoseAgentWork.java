@@ -4,6 +4,7 @@ package com.android.quickstep.fallback;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * RoseOS (#156): which running tasks are Rose Agent's work, for the agent row of the fallback overview.
@@ -48,6 +49,39 @@ final class RoseAgentWork {
 
     static RoseAgentWork unavailable(String reason) {
         return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), reason);
+    }
+
+    /** Which platform read failed: a fixed word for the status and log, never the exception's own text. */
+    enum Step { CONTROLLER, DISPLAYS, TASKS }
+
+    static RoseAgentWork failed(Step step) {
+        return unavailable("Rose's work could not be read (" + step.name().toLowerCase(Locale.ROOT) + ")");
+    }
+
+    /** One task's app label from the platform; it may fail. */
+    interface Labels {
+        String of(Task task) throws Exception;
+    }
+
+    /**
+     * This work with each kept item's app label, looked up only after of() has filtered to the controller's own
+     * displays and the current user. A lookup that fails or is empty shows the package name: it never drops, adds
+     * or reorders an item, and never turns the work unavailable.
+     */
+    RoseAgentWork labelled(Labels labels) {
+        if (state != State.AVAILABLE) return this;
+        List<Task> out = new ArrayList<>();
+        for (Task t : items) {
+            String label;
+            try {
+                label = labels.of(t);
+            } catch (Exception e) {
+                label = null;
+            }
+            if (label == null || label.isEmpty()) label = t.packageName;
+            out.add(new Task(t.taskId, t.displayId, t.userId, t.packageName, label, t.topOfDisplay));
+        }
+        return new RoseAgentWork(state, out, reason);
     }
 
     /**
