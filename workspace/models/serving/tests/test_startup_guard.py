@@ -166,7 +166,8 @@ class StatusTest(unittest.TestCase):
                           status['firstCategory'], status['categories'], status['limitReached']),
                          ('exited', 1, None, None, 'cuda_out_of_memory', ['cuda_out_of_memory', 'traceback'], None))
         self.assertNotIn('SECRET', self.status.read_text())
-        self.assertNotIn('OutOfMemoryError', self.status.read_text())
+        self.assertEqual((status['exceptionType'], status['exceptionProcess'], status['tracebacks']),
+                         ('OutOfMemoryError', 'worker', 1))  # allowlisted tokens; the message never leaves
 
     def test_oversized_output_without_newlines_is_inspected_only_to_the_byte_bound(self):
         proc = self.driver('flood')
@@ -192,7 +193,9 @@ class StatusTest(unittest.TestCase):
         self.assertTrue(cap.feed(b'guments: --bogus'))  # matched across chunks
         self.assertFalse(cap.feed(b'y' * 200))
         self.assertEqual(cap.summary(), {'firstCategory': 'argument_rejected', 'categories': ['argument_rejected'],
-                                         'bytesInspected': 100, 'limitReached': 'bytes'})
+                                         'bytesInspected': 100, 'limitReached': 'bytes', 'guard': None,
+                                         'tracebacks': 0, 'exceptionType': None, 'exceptionLocation': None,
+                                         'exceptionProcess': None})
         cap = guard.Capture(max_bytes=100, max_seconds=10, clock=lambda: clock[0])
         clock[0] = 11
         self.assertFalse(cap.feed(b'Traceback (most recent call last)'))
@@ -242,6 +245,117 @@ class StatusTest(unittest.TestCase):
         proc = self.driver('oom')
         proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 1)
+
+
+ENGINE_TRACEBACK = """INFO 10-31 14:31:02 [__init__.py:216] Automatically detected platform cuda.
+(EngineCore_DP0 pid=212) ERROR 10-31 14:35:40 [core.py:708] EngineCore failed to start.
+(EngineCore_DP0 pid=212) Traceback (most recent call last):
+(EngineCore_DP0 pid=212)   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py", line 699, in run_engine_core
+(EngineCore_DP0 pid=212)     engine_core = EngineCoreProc(*args, **kwargs)
+(EngineCore_DP0 pid=212)   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/executor/multiproc_executor.py", line 90, in _init_executor
+(EngineCore_DP0 pid=212)     self.workers = WorkerProc.wait_for_ready(unready_workers)
+(EngineCore_DP0 pid=212)   File "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/model_loader/weight_utils.py", line 412, in safetensors_weights_iterator
+(EngineCore_DP0 pid=212)     with safe_open(st_file, framework="pt") as f:
+(EngineCore_DP0 pid=212) safetensors_rust.SafetensorError: Error while deserializing header: SECRET-TEXT /root/.cache/hf_TOKEN_abc
+Traceback (most recent call last):
+  File "/usr/local/bin/vllm", line 10, in <module>
+    sys.exit(main())
+  File "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/cli/main.py", line 54, in main
+    args.dispatch_function(args)
+RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {'EngineCore_DP0': 1}
+"""
+GUARD_CRASH = """Traceback (most recent call last):
+  File "<string>", line 118, in <module>
+  File "<string>", line 98, in main
+KeyError: 'cache_dir'
+"""
+
+
+def guard_line(proceed, pad=0):
+    """The guard's own evidence line, as main() prints it, long enough to exceed the window when padded."""
+    node = facts(gpus=[{'name': 'NVIDIA A100-SXM4-40GB' + 'x' * pad, 'total': 42 * 10**9, 'free': 41 * 10**9}] * 2)
+    return json.dumps({'guard': 'muse-glimmer-startup', 'utc': '2026-10-31T14:31:00Z', 'facts': node, 'limits': LIMITS,
+                       'failures': [] if proceed else ['GPU0 has 3 free bytes'], 'proceed': proceed}) + '\n'
+
+
+class ClassificationTest(unittest.TestCase):
+    """Fixed-vocabulary classification of the last traceback: type, innermost component, process; guard result."""
+
+    def feed(self, text, chunk=None, **bounds):
+        cap = guard.Capture(**bounds)
+        data = text.encode()
+        step = chunk or len(data) or 1
+        for i in range(0, len(data), step):
+            cap.feed(data[i:i + step])
+        return cap
+
+    def assertFixed(self, summary):
+        vocab = {'guard': {None, 'passed', 'refused'},
+                 'exceptionType': set(getattr(guard, 'EXCEPTION_TYPES', ())) | {None, 'other'},
+                 'exceptionLocation': set(getattr(guard, 'LOCATION_NAMES', ())) | {None},
+                 'exceptionProcess': set(getattr(guard, 'PROCESS_NAMES', ())) | {None}}
+        for key, allowed in vocab.items():
+            self.assertIn(summary.get(key), allowed, key)
+        dumped = json.dumps(summary)
+        for leak in ('SECRET', 'hf_TOKEN', '/usr/local', '.py', 'line 4', 'deserializing', 'EngineCore_DP0', 'pid=',
+                     'cache_dir', 'Failed core'):
+            self.assertNotIn(leak, dumped)
+
+    def test_engine_core_traceback_last_exception_in_any_chunking(self):
+        text = guard_line(True) + ENGINE_TRACEBACK
+        for chunk in (None, 1, 7, 64, 1000):
+            with self.subTest(chunk=chunk):
+                s = self.feed(text, chunk).summary()
+                self.assertFixed(s)
+                self.assertEqual((s['guard'], s['tracebacks'], s['exceptionType'], s['exceptionLocation'],
+                                  s['exceptionProcess']), ('passed', 2, 'RuntimeError', 'entrypoint', 'main'))
+        first = self.feed(guard_line(True) + ENGINE_TRACEBACK.split('Traceback (most recent call last):\n  File "/usr/local/bin')[0]).summary()
+        self.assertEqual((first['exceptionType'], first['exceptionLocation'], first['exceptionProcess']),
+                         ('SafetensorError', 'model_loader', 'engine_core'))
+
+    def test_guard_pass_refusal_and_crash_are_distinguished(self):
+        self.assertEqual(self.feed(guard_line(True, pad=2000), chunk=333).summary()['guard'], 'passed')  # > window
+        self.assertEqual(self.feed(guard_line(False, pad=2000), chunk=333).summary()['guard'], 'refused')
+        crash = self.feed(GUARD_CRASH, chunk=5).summary()
+        self.assertFixed(crash)
+        self.assertEqual((crash['guard'], crash['exceptionType'], crash['exceptionLocation'], crash['exceptionProcess']),
+                         (None, 'KeyError', 'guard', 'main'))
+
+    def test_unknown_classes_paths_and_prefixes_become_other(self):
+        text = ("(SomeHelper pid=9) Traceback (most recent call last):\n"
+                "(SomeHelper pid=9)   File \"/opt/private/secret_project/run.py\", line 3, in go\n"
+                "(SomeHelper pid=9) acme.internal.SecretTokenLeakError: token=hf_TOKEN_abc SECRET\n")
+        s = self.feed(text, chunk=3).summary()
+        self.assertFixed(s)
+        self.assertEqual((s['exceptionType'], s['exceptionLocation'], s['exceptionProcess']), ('other', 'other', 'other'))
+        self.assertNotIn('SecretToken', json.dumps(s))
+
+    def test_log_lines_outside_a_traceback_are_not_exceptions(self):
+        s = self.feed('ValueError: logged but not raised SECRET\nINFO RuntimeError mentioned\n').summary()
+        self.assertEqual((s['exceptionType'], s['tracebacks']), (None, 0))
+
+    def test_oversized_lines_progress_bars_and_bounds(self):
+        bar = ''.join(f'\rDownloading shards: {i}% SECRET' for i in range(2000))  # \r-separated, no newline
+        long_line = 'x' * (5 << 20)  # 5 MiB without a newline
+        cap = self.feed(bar + long_line + '\n' + ENGINE_TRACEBACK, chunk=65536)
+        s = cap.summary()
+        self.assertEqual((s['bytesInspected'], s['limitReached'], s['exceptionType']), (2 << 20, 'bytes', None))
+        self.assertLessEqual(len(getattr(cap, 'head', '')), guard.WINDOW)
+        self.assertLessEqual(len(getattr(cap, 'end', '')), 64)
+        self.assertFixed(s)
+        small = self.feed(ENGINE_TRACEBACK, max_bytes=200).summary()  # the exception lies past the byte bound
+        self.assertEqual((small['exceptionType'], small['limitReached']), (None, 'bytes'))
+        clock = [0.0]
+        cap = guard.Capture(max_seconds=5, clock=lambda: clock[0])
+        cap.feed(b'Traceback (most recent call last):\n')
+        clock[0] = 6
+        cap.feed(b'  File "/x/vllm/config/model.py", line 1, in f\nValueError: late\n')  # after expiry
+        self.assertEqual((cap.summary()['limitReached'], cap.summary()['exceptionType'], cap.summary()['tracebacks']),
+                         ('time', None, 1))
+
+    def test_traceback_count_is_bounded(self):
+        cap = self.feed('Traceback (most recent call last):\n' * 1050)
+        self.assertEqual(cap.summary().get('tracebacks'), 1000)
 
 if __name__ == '__main__':
     unittest.main()
