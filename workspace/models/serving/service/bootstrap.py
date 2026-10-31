@@ -14,7 +14,8 @@ run in order and are rerun-safe: each first checks whether its result is already
              pinned reference, and the platform must be linux/amd64
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
-  diagnostic only with metadata rose-models-diagnostic=offline-validate:<payload sha256>:<id>, once per id, and then
+  diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once:<payload sha256>:<id>, once
+             per id (gpu-start-once: see gpu_start_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -41,6 +42,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -78,9 +80,11 @@ ACME_FLAG = 'agree-tos-no-email'  # metadata rose-models-acme: the operator's ex
 ROOT = '/etc/rose-models'
 STATE = '/var/lib/rose-models/bootstrap'
 RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and its published evidence
-# Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=offline-validate:<payload sha256>:<id>
+# Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=<mode>:<payload sha256>:<id>
 DIAG_KEY = 'attributes/rose-models-diagnostic'
-DIAG_VALUE = re.compile(r'offline-validate:([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once):([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+# gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
+GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
@@ -166,11 +170,12 @@ class Host:
             return 'deadline'
         return None if rc == 0 else 'signal' if rc < 0 else 'exit'
 
-    def validate(self, argv, max_seconds, capture):
+    def validate(self, argv, max_seconds, capture, probe=None, probe_every=GPU_PROBE_S):
         """Run one bounded check and inspect its merged output with `capture` (startup_guard.Capture: fixed categories,
-        bounded bytes and time). Output is never stored or forwarded. At the deadline the process group is killed.
-        Returns (exit code or None when killed at the deadline, elapsed seconds)."""
-        started = time.monotonic()
+        bounded bytes and time). Output is never stored or forwarded. At the deadline, or as soon as `probe()` is true
+        (checked every `probe_every` s), the process group is killed. Returns (exit code or None when killed, elapsed
+        seconds)."""
+        started = last_probe = time.monotonic()
         try:
             child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      start_new_session=True)
@@ -182,6 +187,10 @@ class Host:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     break
+                if probe and time.monotonic() - last_probe >= probe_every:
+                    last_probe = time.monotonic()
+                    if probe():
+                        break
                 if select.select([fd], [], [], min(left, 0.5))[0]:
                     chunk = os.read(fd, 1 << 16)
                     if not chunk:
@@ -201,6 +210,14 @@ class Host:
                 child.wait()
             child.stdout.close()
         return code, round(time.monotonic() - started, 1)
+
+    def listening(self, port):
+        """Whether something accepts connections on 127.0.0.1:port."""
+        try:
+            socket.create_connection(('127.0.0.1', port), timeout=1).close()
+            return True
+        except OSError:
+            return False
 
     def kill(self, pid, sig):
         os.kill(pid, sig)
@@ -799,11 +816,11 @@ def diagnostic_request(host, ctx):
     m = DIAG_VALUE.fullmatch(raw)
     if not m:
         return ('ignored', 'malformed')
-    if m.group(1) != ctx['payloadSha256']:
+    if m.group(2) != ctx['payloadSha256']:
         return ('ignored', 'other_payload')
-    if (host.path(STATE) / f'diagnostic-{m.group(2)}').exists():
+    if (host.path(STATE) / f'diagnostic-{m.group(3)}').exists():
         return ('ignored', 'attempt_already_used')
-    return ('requested', m.group(2))
+    return ('requested', m.group(3), m.group(1))
 
 
 def container_names(host, name):
@@ -858,6 +875,8 @@ def stage_diagnostic(host, ctx):
             raise Failed('diagnostic_model_not_stopped', [{'stopped': stopped, 'containerGone': not names}])
         host.sleep(2)
     image = ctx['runtime']['image_id']
+    if request[2] == 'gpu-start-once':
+        return gpu_start_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -886,6 +905,75 @@ def stage_diagnostic(host, ctx):
     if result['cleanup'] != 'removed':
         raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
     return f"model held; offline CLI check {result['firstCategory'] or 'no_category'} (exit {result['exitCode']})"
+
+
+def launch_argv(payload, branch):
+    """The exact `docker run` argv of the payload's launch-<branch> script, with its inlined guard source, or None
+    when the script does not have the rendered shape."""
+    try:
+        text = (Path(payload) / f'etc-rose-models/bin/launch-{branch}').read_text()
+        guard = text.split("GUARD=\"$(cat <<'GUARD_SOURCE_END'\n", 1)[1].split('GUARD_SOURCE_END\n)"\n', 1)[0]
+        argv = shlex.split(text.rsplit('\nexec docker run ', 1)[1])
+    except (OSError, IndexError, ValueError):
+        return None
+    if argv.count('$GUARD') != 1 or '--rm' not in argv or '--name' not in argv:
+        return None
+    argv[argv.index('$GUARD')] = guard.rstrip('\n')  # what bash's "$(cat <<...)" yields
+    return ['docker', 'run', '--pull=never', *argv]
+
+
+def gpu_start_once(host, ctx, attempt, image):
+    """One production GPU start of the exact payload launch command, chosen by verify_model as start-model chooses it
+    (0 offline, 3 online first load over the production Hugging Face network and cache; anything else refused). At
+    most GPU_SECONDS, DIAG_BYTES inspected by Capture (fixed categories only), stopped as soon as the server listens on
+    127.0.0.1:MODEL_PORT. The container is always removed and its absence verified; inference stays held."""
+    result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'attemptId': attempt, 'check': 'gpu-start-once', 'modelHeld': True, 'branch': None, 'verifyExit': None,
+              'exitCode': None, 'elapsedS': 0, 'listenedAfterS': None, 'stoppedOn': None, 'firstCategory': None,
+              'categories': [], 'bytesInspected': 0, 'limitReached': None, 'cleanup': None}
+    refused = diagnostic_prerequisites(host, image)
+    if not refused and host.run(['mountpoint', '-q', DATA], 30)[0] != 0:
+        refused = 'data_not_mounted'
+    argv = None
+    if not refused:
+        verify = Path(ctx['payload']) / 'etc-rose-models/lib/service/verify_model.py'
+        rc = host.run(['python3', str(verify), 'check', '--cache', f'{DATA}/hf', '--receipt', f'{DATA}/receipt.json'],
+                      300)[0]
+        result['verifyExit'] = rc
+        result['branch'] = {0: 'offline', 3: 'online'}.get(rc)
+        if result['branch'] is None:
+            refused = 'verify_refused'
+        elif host.listening(MODEL_PORT):
+            refused = 'port_in_use'
+        else:
+            argv = launch_argv(ctx['payload'], result['branch'])
+            refused = None if argv else 'launch_unreadable'
+    result['prerequisite'] = refused
+    if not refused:
+        capture = load_guard(ctx['payload']).Capture(DIAG_BYTES, GPU_SECONDS)
+        heard = {}
+        def probe():
+            heard['listened'] = host.listening(MODEL_PORT)
+            return heard['listened']
+        try:
+            code, elapsed = host.validate(argv, GPU_SECONDS, capture, probe=probe)
+        finally:
+            removed = host.run(['docker', 'rm', '-f', 'muse-glimmer'], 30)[0]
+            left = container_names(host, 'muse-glimmer')
+        stopped = 'listen' if heard.get('listened') else 'deadline' if code is None else None
+        result.update(exitCode=code, elapsedS=elapsed, stoppedOn=stopped,
+                      listenedAfterS=elapsed if stopped == 'listen' else None,
+                      cleanup='unknown' if left is None else 'failed' if left else 'removed',
+                      cleanupRemoveExit=removed, **capture.summary())
+    line = json.dumps(result, sort_keys=True)
+    host.put_guest_attribute('diagnostic', line)
+    host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    if refused:
+        raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
+    if result['cleanup'] != 'removed':
+        raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
+    return (f"inference held; GPU start {result['stoppedOn'] or 'exited'} after {result['elapsedS']} s "
+            f"({result['firstCategory'] or 'no_category'})")
 
 
 def load_guard(payload):

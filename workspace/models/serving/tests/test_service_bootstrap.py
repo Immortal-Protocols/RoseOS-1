@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -43,6 +44,8 @@ class FakeHost(B.Host):
         self.validate_output, self.validate_rc = b'', 1
         self.validate_container = self.leave_container = self.rm_fails = self.docker_down = self.no_runc = False
         self.ps_results = []  # queued (exit code, output) for `docker ps --all` (daemon errors, timeouts)
+        self.verify_rc, self.data_mounted, self.port_open = 3, True, False
+        self.gpu_listens = self.gpu_deadline = False
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -166,6 +169,8 @@ class FakeHost(B.Host):
                 self.events.append(('rm', argv[3]))
                 if argv[3] == 'muse-glimmer-validate' and not self.rm_fails:
                     self.validate_container = False
+                if argv[3] == 'muse-glimmer' and not self.rm_fails:
+                    self.model_container = self.port_open = False
                 return (1, '') if self.rm_fails else (0, '')
         if cmd == 'nvidia-ctk':
             daemon = self.path(B.DAEMON_JSON)
@@ -174,6 +179,11 @@ class FakeHost(B.Host):
             config.setdefault('runtimes', {})['nvidia'] = {'path': 'nvidia-container-runtime'}
             daemon.write_text(json.dumps(config))
             return 0, ''
+        if cmd == 'python3' and argv[1].endswith('etc-rose-models/lib/service/verify_model.py'):
+            self.events.append(('verify', argv[2:]))
+            return self.verify_rc, ''
+        if cmd == 'mountpoint':
+            return (0 if self.data_mounted else 1), ''
         if cmd == 'python3' and argv[-1] == 'secret-init':
             p = self.path('/var/lib/rose-models/auth/secret.json')
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -202,13 +212,27 @@ class FakeHost(B.Host):
             return self.tls_deploy(cmd)
         raise AssertionError(f'unexpected command {argv}')
 
-    def validate(self, argv, max_seconds, capture):
+    def validate(self, argv, max_seconds, capture, probe=None, probe_every=5):
         self.events.append(('validate', list(argv), self.model_active, self.model_container,
                             self.path(B.MODEL_HOLD).exists()))
         for i in range(0, len(self.validate_output), 65536):
             capture.feed(self.validate_output[i:i + 65536])
+        if '--gpus' in argv:  # the production container, named muse-glimmer, without --rm cleanup when killed
+            self.model_container = True
+            if probe and self.gpu_listens:
+                self.port_open = True
+                assert probe()
+                return None, 42.0
+            if self.gpu_deadline:
+                return None, float(max_seconds)
+            self.model_container = self.leave_container
+            return self.validate_rc, 3.5
         self.validate_container = self.leave_container  # e.g. a CLI killed at the deadline
         return self.validate_rc, 3.5
+
+    def listening(self, port):
+        assert port == 8000
+        return self.port_open
 
     def start_daemon(self, argv, timeout=30):
         """The daemonizing nginx: pid file, /proc identity (exe, process title, listening socket) like the real one."""
@@ -1029,8 +1053,8 @@ class AcmeHandshake(Fixture):
 SHA = 'ab' * 32
 
 
-class Diagnostic(Fixture):
-    """The explicit, one-shot offline CLI check through existing metadata, with the model held and stopped first."""
+class DiagnosticFixture(Fixture):
+    """A deployed host after a reboot: the enabled model started by systemd, /run empty."""
 
     def setUp(self):
         super().setUp()
@@ -1066,6 +1090,11 @@ class Diagnostic(Fixture):
         made = [c for c in self.host.calls for p in self.PROVISIONING if tuple(c[:len(p)]) == p]
         self.assertEqual(made, [])
         self.assertFalse(getattr(self.host, 'reboot_requested', False))
+
+
+
+class Diagnostic(DiagnosticFixture):
+    """The explicit, one-shot offline CLI check through existing metadata, with the model held and stopped first."""
 
     def test_requested_check_holds_and_stops_the_model_first_then_runs_once(self):
         self.host.validate_output = (b'INFO starting\nusage: vllm serve\nvllm serve: error: argument --tool-call-parser:'
@@ -1189,6 +1218,100 @@ class Diagnostic(Fixture):
                          (2 << 20, 'bytes', None))
 
 
+class GpuStartOnce(DiagnosticFixture):
+    """gpu-start-once: one production GPU start, stopped on listen or at 900 s, always cleaned up, inference held."""
+
+    def gpu(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'gpu-start-once:{SHA}:{attempt}')
+
+    def model_started(self):
+        return [c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart', 'enable')
+                and 'muse-glimmer.service' in c]
+
+    def test_online_first_load_stops_on_listen_cleans_up_and_keeps_inference_held(self):
+        status, code = self.gpu('listen', gpu_listens=True, verify_rc=3)
+        self.assertEqual((self.states(status)['diagnostic'][0], code, list(status['stages'])), ('ok', 0, ['diagnostic']))
+        r = self.published()
+        self.assertEqual({k: r[k] for k in ('check', 'branch', 'verifyExit', 'stoppedOn', 'listenedAfterS', 'exitCode',
+                                             'cleanup', 'prerequisite', 'modelHeld')},
+                         {'check': 'gpu-start-once', 'branch': 'online', 'verifyExit': 3, 'stoppedOn': 'listen',
+                          'listenedAfterS': 42.0, 'exitCode': None, 'cleanup': 'removed', 'prerequisite': None,
+                          'modelHeld': True})
+        _, argv, active, container, held = next(e for e in self.host.events if e[0] == 'validate')
+        self.assertEqual(argv, B.launch_argv(self.payload, 'online'))  # the payload's exact launch-online command
+        self.assertEqual(argv[:3], ['docker', 'run', '--pull=never'])
+        self.assertNotIn('HF_HUB_OFFLINE=1', argv)  # online first load: production's Hugging Face path
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'verify', 'validate', 'rm')],
+                         ['stop', 'verify', 'validate', 'rm'])
+        self.assertEqual((self.host.model_container, self.host.port_open), (False, False))  # nothing left serving
+        self.assertTrue(self.host.path(B.MODEL_HOLD).exists())  # inference stays held for this boot
+        self.assertEqual(self.model_started(), [])
+        self.assertNoProvisioning()
+
+    def test_offline_branch_failure_reports_fixed_categories_only(self):
+        status, code = self.gpu('oom', verify_rc=0, validate_rc=1,
+                                validate_output=b'Traceback (most recent call last):\ntorch.OutOfMemoryError: CUDA out of'
+                                                b' memory. SECRET-TEXT\n')
+        r = self.published()
+        self.assertEqual((r['branch'], r['exitCode'], r['stoppedOn'], r['firstCategory'], r['categories'], r['cleanup']),
+                         ('offline', 1, None, 'cuda_out_of_memory', ['cuda_out_of_memory', 'traceback'], 'removed'))
+        argv = next(e for e in self.host.events if e[0] == 'validate')[1]
+        self.assertEqual(argv, B.launch_argv(self.payload, 'offline'))
+        self.assertIn('HF_HUB_OFFLINE=1', argv)
+        self.assertNotIn('SECRET', self.host.guest['diagnostic'])
+        self.assertNotIn('OutOfMemoryError', self.host.guest['diagnostic'])
+
+    def test_deadline_kills_and_cleans_up(self):
+        self.gpu('slow', gpu_deadline=True)
+        r = self.published()
+        self.assertEqual((r['stoppedOn'], r['exitCode'], r['elapsedS'], r['listenedAfterS'], r['cleanup']),
+                         ('deadline', None, 900.0, None, 'removed'))
+        self.assertEqual(B.GPU_SECONDS, 900)
+
+    def test_other_verifier_status_and_missing_prerequisites_are_refused_without_running(self):
+        cases = (('mismatch', dict(verify_rc=4), 'verify_refused'), ('error', dict(verify_rc=1), 'verify_refused'),
+                 ('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                 ('busy', dict(port_open=True), 'port_in_use'))
+        for attempt, flags, category in cases:
+            with self.subTest(attempt):
+                status, code = self.gpu(attempt, **flags)
+                self.assertEqual((self.states(status)['diagnostic'], code),
+                                 (('failed', 'diagnostic_prerequisite_missing'), 1))
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('validate', [e[0] for e in self.host.events])
+                self.assertEqual(self.model_started(), [])
+                self.assertNoProvisioning()
+                self.host.verify_rc, self.host.data_mounted, self.host.port_open = 3, True, False
+                self.host.model_active = self.host.model_container = True
+        saved = dict(self.host.images)
+        self.host.images.clear()  # the exact image is not cached: refused, never pulled
+        self.gpu('noimage')
+        self.assertEqual(self.published()['prerequisite'], 'image_missing')
+        self.assertNoProvisioning()
+        self.host.images.update(saved)
+
+    def test_cleanup_failure_is_reported(self):
+        status, code = self.gpu('rmfail', gpu_listens=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual((self.published()['cleanup'], self.published()['stoppedOn']), ('failed', 'listen'))
+        self.assertTrue(self.host.path(B.MODEL_HOLD).exists())
+
+    def test_once_per_id_and_grammar(self):
+        self.gpu('once', gpu_listens=True)
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        status, _ = self.boot()
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        for value in (f'gpu-start-twice:{SHA}:x', f'gpu-start-once:{SHA}:', f'gpu-start-once:{SHA[:-2]}:x'):
+            with self.subTest(value):
+                self.assertEqual(self.states(self.boot(value)[0])['diagnostic'], ('ok', 'ignored: malformed'))
+
+
 class HostValidate(unittest.TestCase):
     """The real Host.validate with a stand-in docker: bounded bytes and time, process group killed, nothing kept."""
 
@@ -1212,6 +1335,22 @@ class HostValidate(unittest.TestCase):
         cap = self.guard.Capture(2 << 20, 10)
         code, _ = B.Host().validate(self.script("head -c 3145728 /dev/zero | tr '\\0' y; exit 1\n"), 20, cap)
         self.assertEqual((code, cap.summary()['bytesInspected'], cap.summary()['limitReached']), (1, 2 << 20, 'bytes'))
+
+    def test_probe_stops_a_server_as_soon_as_it_listens(self):
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+        listener = self.dir / 'listener.py'
+        listener.write_text('import socket, sys, time\ns = socket.socket()\ns.bind(("127.0.0.1", int(sys.argv[1])))\n'
+                            's.listen()\ntime.sleep(60)\n')
+        server = f'{sys.executable} {listener} {port} & sleep 60\n'
+        host, cap = B.Host(), self.guard.Capture(2 << 20, 60)
+        t = time.monotonic()
+        code, elapsed = host.validate(self.script(server), 60, cap, probe=lambda: host.listening(port), probe_every=0.5)
+        self.assertIsNone(code)
+        self.assertLess(time.monotonic() - t, 15)
+        time.sleep(0.5)
+        self.assertFalse(host.listening(port))  # the whole process group, listener included, was killed
 
     def test_deadline_kills_the_whole_process_group(self):
         marker = self.dir / 'grandchild-alive'
