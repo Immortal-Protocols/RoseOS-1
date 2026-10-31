@@ -100,10 +100,11 @@ class Flows(Base):
         fake, brain = self.server(self.ids('abcdef'))
         seq = brain.sequence()
         list(seq.append_text('q'))
-        n = []
-        out = list(seq.generate(Sampling(max_tokens=10), cancel=lambda: len(n) >= 3 or n.append(1)))
-        self.assertEqual(len(out), 3)
-        self.assertEqual(seq.tokens[-3:], out)
+        start = len(seq.tokens)
+        out = list(seq.generate(Sampling(max_tokens=10), cancel=lambda: len(seq.tokens) - start >= 3))
+        self.assertEqual(out, self.ids('abc'))  # checked while waiting and before each token
+        self.assertEqual(seq.tokens[start:], out)
+        self.assertTrue(seq.worker_stopped)
 
     def test_fork_is_independent_and_rewind_then_append_is_exact(self):
         fake, brain = self.server(self.ids('tap'), self.ids('yes'))

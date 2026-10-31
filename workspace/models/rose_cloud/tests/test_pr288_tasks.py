@@ -45,9 +45,9 @@ class Pr288Tasks(unittest.TestCase):
         tok = CharTokenizer()
         fake = FakeVllm([tok.encode('Two plus two is four.</think>'), tok.encode('It is four.<|im_end|>')])
         self.addCleanup(fake.close)
-        brain = VllmBrain(tok, fake.url, 'rose-brain', timeout_s=10)
         runtime = self.runtime_mod.Runtime()
         self.addCleanup(runtime.stop)
+        brain = VllmBrain(tok, fake.url, 'rose-brain', timeout_s=10, runtime=runtime)  # waits via coop.Waiter
         done = threading.Event()
         finished = []
         manager = self.tasks.TaskManager(runtime, brain, self.Phone(vision=False), self.Bus(),
