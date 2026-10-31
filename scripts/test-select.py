@@ -105,7 +105,7 @@ def drifted_since(ref):
     git = lambda *a: subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True)
     if not ref or git('cat-file', '-e', f'{ref}^{{commit}}').returncode:
         return None
-    diff = git('diff', '--name-only', ref)
+    diff = git('diff', '--name-only', '--no-renames', ref)
     if diff.returncode:
         return None
     return set(diff.stdout.split()) | set(git('ls-files', '--others', '--exclude-standard').stdout.split())
