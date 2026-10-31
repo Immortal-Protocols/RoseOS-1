@@ -1,0 +1,56 @@
+{
+ "schemaVersion": 1,
+ "kind": "roseos-systemui-trial-tool-manifest",
+ "trial": "EXP006-ISOLATED-TRIAL-001",
+ "basis": "Read 2026-10-31 14:01 UTC by the Infra verifier from Google's official SDK repository manifests (repository2-3.xml sha256 fb1bd2fcd70b6116519563f1ff96cc578381e4e29237ab05ec8920f0864a7955, sys-img2-3.xml sha256 7b119fdc282a65432aab52e8bbc64546f7fb6ec74e79e235633c60d06564b111). Each archive was downloaded once from dl.google.com/android/repository, matched the manifest sha1, and its sha256 recorded here. Complements os/tests/persistent-app-experiment/isolated-trial-setup.md (PR273); not a VM receipt.",
+ "sdk": {
+  "root": "/opt/android-sdk",
+  "owner": "root:root 0755, installed with this cmdline-tools sdkmanager as root so every package has package.xml",
+  "packages": [
+   {"path": "cmdline-tools;22.0", "installDir": "cmdline-tools/latest", "revision": "22.0", "channel": "stable",
+    "archive": "commandlinetools-linux-15859902_latest.zip", "size": 181833628,
+    "sha1": "040d3996a65543d22ec4bf73e4c37aa37a8d4af4",
+    "sha256": "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583", "license": "android-sdk-license",
+    "note": "Not cmdline-tools;latest (23.0): its sdkmanager is a deprecated shim that downloads an unpinned android-cli from dl.google.com/android/cli/latest at run time into the user's ~/.android/bin. 22.0 is the newest stable revision with the Java sdkmanager. Unpack the archive's cmdline-tools/ as cmdline-tools/latest"},
+   {"path": "platform-tools", "revision": "37.0.1", "channel": "stable", "archive": "platform-tools_r37.0.1-linux.zip",
+    "size": 9054187, "sha1": "477254aa5f903c15cf51001717bdf347fb6b53e0",
+    "sha256": "d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1", "license": "android-sdk-license"},
+   {"path": "emulator", "revision": "37.2.13", "channel": "stable", "archive": "emulator-linux_x64-16740729.zip",
+    "size": 349658551, "sha1": "f41f9e31eb5ca64926603c03265c50bbc0ff4172",
+    "sha256": "cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd", "license": "android-sdk-license",
+    "note": "Stable channel only. The dev-channel emulator (37.3.6) needs android-sdk-preview-license, a genuinely new term"},
+   {"path": "system-images;android-35;default;x86_64", "revision": "2", "channel": "stable", "archive": "x86_64-35_r02.zip",
+    "size": 782404023, "sha1": "2d857d170c0d1b827149565da34b3383e5306f7f",
+    "sha256": "6dd7de33e63ef105cf2fabea6badda1dbe7665c96d8908e5f6e1407e63ff4556", "license": "android-sdk-license"},
+   {"path": "platforms;android-35", "revision": "2", "channel": "stable", "archive": "platform-35_r02.zip",
+    "size": 64273788, "sha1": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
+    "sha256": "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0", "license": "android-sdk-license",
+    "note": "sha256 already pinned by scripts/setup-android-sdk.sh"},
+   {"path": "build-tools;35.0.0", "revision": "35.0.0", "channel": "stable", "archive": "build-tools_r35_linux.zip",
+    "size": 61958799, "sha1": "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc",
+    "sha256": "bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88", "license": "android-sdk-license",
+    "note": "sha256 already pinned by scripts/setup-android-sdk.sh"}
+  ]
+ },
+ "license": {
+  "id": "android-sdk-license",
+  "textSha1AsServed": "efa68a6b3c661d18699d5c026771d5911cdc2f83",
+  "textDated": "January 16, 2019",
+  "newTerms": [],
+  "basis": "Every pinned package, including the two the repository already downloads under scripts/setup-android-sdk.sh, uses the same android-sdk-license. No preview, arm-dbt or other licence is needed. The licences/ file that sdkmanager writes is produced by sdkmanager at setup and recorded then; it is never copied or invented. If an existing accepted SDK on the same Mac holds android-sdk-license, reuse is valid only when sdkmanager on the VM computes the same file value"
+ },
+ "runner": {
+  "repository": "actions/runner",
+  "version": "2.338.2",
+  "tagCommit": "d1eb12d4b115c301201de27d667284e1a80f2ab5",
+  "asset": "actions-runner-linux-x64-2.338.2.tar.gz",
+  "sha256": "missing",
+  "missingReason": "The tag and commit come from anonymous git ls-remote of github.com/actions/runner. The release page that publishes the sha256 returned HTTP 403 to this session's proxy (repository not attached); not retried. The Mac operator records the sha256 from that official release page and checks the download against it before T0"
+ },
+ "ubuntu": {
+  "image": "ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20261024",
+  "imageId": "4575951068918267275",
+  "packages": ["openjdk-17-jre-headless", "python3", "git", "unzip", "curl", "ca-certificates", "libpulse0"],
+  "versions": "recorded at setup with dpkg-query -W from the official archive; not pinned here"
+ }
+}
