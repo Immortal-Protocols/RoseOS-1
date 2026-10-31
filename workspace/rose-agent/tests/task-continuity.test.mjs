@@ -91,6 +91,26 @@ test('Watch carries the selected task and its session to the viewer, read after 
  for(const name of ['WorkspaceLauncher.java','AutoAgentPip.java'])assert.ok(!/WATCH_(TASK|SESSION)_ID/.test(source(name)),`${name} stays unbound`);
 });
 
+test('Rose\'s apps never fails silently: a tap says why Watch can\'t open, from a fresh read (APP-WATCH-1031-C)',()=>{
+ const activity=source('RoseConversationActivity.java');
+ const open=activity.slice(activity.indexOf('void openWorkspace('),activity.indexOf('\n }',activity.indexOf('void openWorkspace(')));
+ const at=s=>{const i=open.indexOf(s);assert.ok(i>0,s);return i;};
+ // No silent early return when no task is shown: the tap reaches the fresh read and gets a reason.
+ assert.ok(!/selected\.isEmpty\(\)/.test(open),'a tap with no task shown is not silently dropped');
+ assert.match(open,/final String selected=shownTaskId;final boolean active=shownTaskActive;if\(watchOpening\)return;watchOpening=true;/,'task and its state captured at the tap; one read in flight');
+ // The reason comes from App Core's watchState over the FRESH controller read, with the same five inputs as watchable.
+ assert.match(open,/TaskControl\.WatchState ws=TaskControl\.watchState\(selected,active,c\[0\],c\[1\],c\[2\]\);/);
+ assert.ok(at('controllerState()')<at('TaskControl.watchState('),'decided after the fresh read');
+ assert.match(open,/if\(!ws\.canWatch\)\{Toast\.makeText\(this,ws\.reason,Toast\.LENGTH_LONG\)\.show\(\);return;\}/,'unavailable: Core\'s reason is shown and nothing opens');
+ // Available: the existing bound route is unchanged and still re-checks the tapped task is the one shown.
+ assert.ok(at('if(!ws.canWatch)')<at('TaskControl.watchBinding(selected,selected.equals(shownTaskId),c[0],c[1],c[2])'),'the reason check never replaces the binding check');
+ assert.ok(at('TaskControl.watchBinding(')<at('startActivity('),'only a bound launch');
+ // The UI shows Core's text as given: no reason sentence is written or chosen here.
+ for(const r of ["isn't working in an app","isn't available on this phone","still starting","waiting for your consent","doesn't let Rose use",
+   "has stopped","couldn't start","busy with another task"])assert.ok(!activity.includes(r),'no hard-coded watch reason: '+r);
+ assert.ok(!/AutoAgentPip|PictureInPicture/.test(activity),'the automatic PiP fallback is not touched here');
+});
+
 test('W1: the generic phone-command path claims the id before posting and never turns a slow wait into an error',()=>{
  const voice=source('VoiceService.java');
  const start=voice.indexOf('PhoneCommandGate gate=new PhoneCommandGate(');
