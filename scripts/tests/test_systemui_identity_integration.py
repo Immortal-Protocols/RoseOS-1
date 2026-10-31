@@ -107,6 +107,29 @@ class CaptureTest(Fixture):
         self.assertEqual(aapt_args[2], (self.root/'apksigner.argv').read_text().split()[2])
         self.assertEqual(systemui_identity.serialize(r), systemui_identity.serialize(json.loads(systemui_identity.serialize(r))))
 
+    def test_the_v3_0_layout_through_the_real_pipeline(self):
+        # EXP006-SIGNER-006: a fake apksigner (SYNTHETIC certificate) printing the V3.0 layout observed in run
+        # 41158887101; the same receipt as the numbered layout, still bound to the hashed APK and a zero exit.
+        (self.root/'apksigner.out').write_text(f'V3.0 Signer: certificate DN: CN=Synthetic\n'
+            f'V3.0 Signer: certificate SHA-256 digest: {CERT}\n')
+        result, _ = self.capture()
+        self.assertEqual(result['status'], 'observed', result)
+        self.assertEqual((result['receipt']['signingCertificateSha256'], result['receipt']['certificatePinned']),
+            (CERT, False))
+        self.assertEqual(result['receipt']['apk']['sha256'], hashlib.sha256(self.data).hexdigest())
+        for mode, expect in (('fail', 'apksigner exited 2'), ('mutate', 'output is for APK')):
+            with self.subTest(mode=mode):
+                os.environ['FAKE_APKSIGNER_MODE'] = mode
+                result, _ = self.capture()
+                os.environ.pop('FAKE_APKSIGNER_MODE')
+                self.assertEqual(result['status'], 'failed')
+                self.assertTrue(any(expect in p for p in result['problems']), result)
+        (self.root/'apksigner.out').write_text(f'V3.0 Signer: certificate SHA-256 digest: {CERT}\n'
+            f'V3.0 Signer: certificate SHA-256 digest: {"9a" * 32}\n')
+        result, _ = self.capture()
+        self.assertEqual(result['status'], 'failed')
+        self.assertTrue(any('2 signers' in p for p in result['problems']), result)
+
     def test_apk_mutated_by_or_between_tool_runs_is_rejected(self):
         for tool in ('AAPT', 'APKSIGNER'):
             with self.subTest(tool=tool):
@@ -120,7 +143,7 @@ class CaptureTest(Fixture):
         for env, mode, expect in (('FAKE_AAPT_MODE', 'fail', 'aapt xmltree exited 2'),
                 ('FAKE_APKSIGNER_MODE', 'fail', 'apksigner exited 2'),
                 ('FAKE_AAPT_MODE', 'garbage', 'content before the manifest'),
-                ('FAKE_APKSIGNER_MODE', 'garbage', 'exactly one (#1)')):
+                ('FAKE_APKSIGNER_MODE', 'garbage', 'exactly one (#1 or V3.0)')):
             with self.subTest(env=env, mode=mode):
                 os.environ[env] = mode
                 result, _ = self.capture()

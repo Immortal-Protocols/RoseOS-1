@@ -103,7 +103,7 @@ class FailClosedTest(unittest.TestCase):
         self.fails('0 <application>', xmltree=out(MANIFEST.split('    A: android:versionCode')[0]))  # cut short
         self.fails('no android:versionCode', xmltree=out(MANIFEST.replace('    A: android:versionCode(0x0101021b)=(type 0x10)0x25\n', '')))
         self.fails('0 <application>', xmltree=out(MANIFEST.split('    E: application')[0]))
-        self.fails('exactly one (#1)', apksigner=out(''))
+        self.fails('exactly one (#1 or V3.0)', apksigner=out(''))
 
     def test_malformed_or_ambiguous_manifest(self):
         cases = [
@@ -130,10 +130,57 @@ class FailClosedTest(unittest.TestCase):
     def test_signer_must_be_single_and_recognised(self):
         two = SIGNER + tree(f'Signer #2 certificate SHA-256 digest: {"9a" * 32}')
         self.fails('2 signers', apksigner=out(two))
-        self.fails('exactly one (#1)', apksigner=out(SIGNER.replace('Signer #1', 'Signer #2')))
+        self.fails('exactly one (#1 or V3.0)', apksigner=out(SIGNER.replace('Signer #1', 'Signer #2')))
         self.fails('unrecognised certificate digest', apksigner=out(SIGNER + tree(f'Source Stamp Signer certificate SHA-256 digest: {"9a" * 32}')))
         self.fails('unrecognised certificate digest', apksigner=out(SIGNER.replace(CERT, CERT.upper())))
         self.fails('unrecognised certificate digest', apksigner=out(SIGNER.replace(CERT, CERT[:-2])))
+
+    # EXP006-SIGNER-006. OBSERVED is the runtime-derived line from run 41158887101's permitted annotation (the image
+    # SystemUI APK's verified signer as printed by that runner's apksigner); it is test data, never a trusted pin. The
+    # local apksigner 0.9 (build-tools android-15) prints the numbered layout for a single-signer APK, so this layout
+    # is not reproduced locally. Every other V3.0 case below is SYNTHETIC.
+    OBSERVED = 'V3.0 Signer: certificate SHA-256 digest: c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8'
+    V3 = tree('V3.0 Signer: certificate DN: CN=Synthetic, OU=Test, O=Test',
+        f'V3.0 Signer: certificate SHA-256 digest: {CERT}',
+        'V3.0 Signer: certificate SHA-1 digest: ' + 'd4' * 20,
+        'V3.0 Signer: certificate MD5 digest: ' + 'e5' * 16)
+
+    def test_the_observed_v3_0_signer_line_is_the_single_signer(self):
+        observed = self.OBSERVED.rsplit(' ', 1)[1]
+        self.assertEqual(si.parse_signer(out(self.OBSERVED + '\n'), APK), (observed, []))
+        self.assertEqual(si.build_receipt(**inputs(apksigner=out(self.V3))), si.build_receipt(**inputs()),
+            'the receipt is the same as for the numbered layout of the same certificate')
+        self.assertNotIn(observed, Path(si.__file__).read_text(), 'the observed certificate is never pinned in source')
+
+    def test_v3_0_keeps_verification_binding_and_single_record_refusals(self):
+        self.fails('apksigner exited 1', apksigner=out(self.V3, rc=1))
+        self.fails(f'apksigner output is for APK {OTHER_APK}', apksigner=out(self.V3, apk=OTHER_APK))
+        cases = {
+            'zero records': (tree('V3.0 Signer: certificate DN: CN=Synthetic'), '0 signers'),
+            'two V3.0': (self.V3 + tree(f'V3.0 Signer: certificate SHA-256 digest: {"9a" * 32}'), '2 signers'),
+            'duplicate V3.0': (self.V3 + tree(f'V3.0 Signer: certificate SHA-256 digest: {CERT}'), '2 signers'),
+            'V3.0 with #1': (self.V3 + SIGNER, '2 signers'),
+            'V3.0 with V3.1': (self.V3 + tree(f'V3.1 Signer: certificate SHA-256 digest: {"9a" * 32}'),
+                'unrecognised certificate digest'),
+            'V3.1 only': (tree(f'V3.1 Signer: certificate SHA-256 digest: {CERT}'), 'unrecognised certificate digest'),
+            'lineage': (self.V3 + tree(f'Signer (minSdkVersion=33, maxSdkVersion=35) certificate SHA-256 digest: {CERT}'),
+                'unrecognised certificate digest'),
+            'source stamp': (self.V3 + tree(f'Source Stamp Signer: certificate SHA-256 digest: {"9a" * 32}'),
+                'unrecognised certificate digest'),
+            'uppercase digest': (self.V3.replace(CERT, CERT.upper()), 'unrecognised certificate digest'),
+            'short digest': (self.V3.replace(CERT, CERT[:-2]), 'unrecognised certificate digest'),
+            'long digest': (self.V3.replace(CERT, CERT + '00'), 'unrecognised certificate digest'),
+            'trailing text': (self.V3.replace(CERT, CERT + ' (trusted)'), 'unrecognised certificate digest'),
+            'other prefix': (self.V3.replace('V3.0 Signer:', 'V3.0 Signer #1:'), 'unrecognised certificate digest'),
+            'no colon': (self.V3.replace('V3.0 Signer:', 'V3.0 Signer'), 'unrecognised certificate digest'),
+        }
+        for label, (stdout, expect) in cases.items():
+            with self.subTest(label):
+                self.fails(expect, apksigner=out(stdout))
+
+    def test_the_numbered_layout_is_unchanged(self):
+        self.assertEqual(si.parse_signer(out(SIGNER), APK), (CERT, []))
+        self.assertEqual(si.parse_signer(out(SIGNER.replace('Signer #1', 'Signer #2')), APK)[0], None)
 
     def test_wrong_association_or_identity(self):
         self.fails(f'xmltree output is for APK {OTHER_APK}', xmltree=out(MANIFEST, apk=OTHER_APK))
