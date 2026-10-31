@@ -159,6 +159,150 @@ class SdkLayoutTest(unittest.TestCase):
 def git(*args, cwd):
     subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True)
 
+
+ROOT = SCRIPTS.parent
+CC = 'services/companion/java/com/android/server/companion/virtual/computercontrol'
+SESSION = f'frameworks/base/{CC}/ComputerControlSessionImpl.java'
+# PR276 (831f21e) changed this one ComputerControlSessionImpl hunk of the modern patch; reversing it gives the
+# 10-27 bundle the retained Frankel tree was patched with before host-reconcile existed (generation 18 and earlier).
+PR276_NEW = """@@ -1462,9 +1477,13 @@
+ 
+             // If this new activity belongs to a package the session is authorized to control,
+             // we should trust it, even if it's a secondary task (like a new Chrome window).
++            // A prototype session trusts any package only for a user and screen it may act on.
++            final boolean prototypeAllowed = isPrototypeSession()
++                    && isActivityLaunchAllowed(topActivity, userId);
+             synchronized (mAllowedTaskIds) {
+-                boolean isPackageAllowed = mRequest.params().getTargetPackageNames()
+-                        .contains(topActivity.getPackageName());
++                boolean isPackageAllowed = prototypeAllowed
+"""
+PR276_OLD = """@@ -1463,8 +1478,9 @@
+             // If this new activity belongs to a package the session is authorized to control,
+             // we should trust it, even if it's a secondary task (like a new Chrome window).
+             synchronized (mAllowedTaskIds) {
+-                boolean isPackageAllowed = mRequest.params().getTargetPackageNames()
+-                        .contains(topActivity.getPackageName());
++                boolean isPackageAllowed = isPrototypeSession()
+"""
+
+class RetainedIntegrationOutputTest(unittest.TestCase):
+    """Run 41174386535 (generation 19): the retained ComputerControlSessionImpl.java held the 10-27 patch output since
+    before host-reconcile existed, so no receipt owned it; PR276's first change to it read as an owner change. Real
+    pinned 84183aff sources (os/tests/fixtures/background-control) and the repository's own patches; nothing else."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        self.source, self.candidate, self.receipts = root/'R', root/'candidate', root/'receipts'
+        self.release = root/'release'
+        self.release.mkdir()
+        base = self.source/'frameworks/base'
+        for name in ('ComputerControlAllowlistController.java', 'ComputerControlSessionImpl.java',
+                'ComputerControlSessionProcessor.java'):
+            write(base/CC/name, (ROOT/'os/tests/fixtures/background-control'/name).read_text())
+        git('init', '-q', cwd=base)
+        git('add', '-A', cwd=base)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', '84183aff', cwd=base)
+        current = (ROOT/'os/patches/background-control-modern-frameworks-base.patch').read_text()
+        self.assertEqual(current.count(PR276_NEW), 1, 'the fixture tracks the PR276 hunk')
+        bundles = {'old': current.replace(PR276_NEW, PR276_OLD), 'new': current}
+        names = [n for n in reconcile.FRAMEWORKS_BASE_SEQUENCE if (ROOT/'os/patches'/n).is_file()]
+        # The candidate repository: the 10-27 bundle, then the current one (PR276), as two commits.
+        git('init', '-q', str(self.candidate), cwd=root)
+        self.commits = {}
+        for label in ('old', 'new'):
+            for name in names:
+                text = bundles[label] if name == 'background-control-modern-frameworks-base.patch' \
+                    else (ROOT/'os/patches'/name).read_text()
+                write(self.candidate/'os/patches'/name, text)
+            git('add', '-A', cwd=self.candidate)
+            git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', label, cwd=self.candidate)
+            self.commits[label] = subprocess.run(['git', '-C', str(self.candidate), 'rev-parse', 'HEAD'],
+                capture_output=True, text=True).stdout.strip()
+        # A patcher like the real one for these files: the candidate's own sequence, in order, on the shadow.
+        write(self.candidate/'scripts/apply-os-changes.py', f'''
+            import os, subprocess, sys
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            for name in {list(reconcile.FRAMEWORKS_BASE_SEQUENCE)!r}:
+                patch = os.path.join(here, 'os/patches', name)
+                if os.path.isfile(patch):
+                    subprocess.run(['git', '-C', os.path.join(sys.argv[1], 'frameworks/base'), 'apply',
+                        '--include={CC}/*', patch], check=True)''')
+        # The retained tree: the 10-27 bundle applied by hand before reconcile; the only receipt does not name it.
+        self.retained = self.patched(bundles['old'])
+        (self.source/SESSION).write_bytes(self.retained)
+        for name in ('ComputerControlAllowlistController.java', 'ComputerControlSessionProcessor.java'):
+            (base/CC/name).write_bytes(self.patched(bundles['old'], name))
+        self.receipts.mkdir()
+        (self.receipts/'0001-2026103113.json').write_text(json.dumps({'receiptType': 'reconcile', 'entries': {}}))
+
+    def patched(self, modern, name='ComputerControlSessionImpl.java'):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            write(tree/CC/name, (ROOT/'os/tests/fixtures/background-control'/name).read_text())
+            git('init', '-q', cwd=tree)
+            for patch in reconcile.FRAMEWORKS_BASE_SEQUENCE:
+                path = ROOT/'os/patches'/patch
+                if not path.is_file():
+                    continue
+                if patch == 'background-control-modern-frameworks-base.patch':
+                    (tree.parent/f'{tree.name}.patch').write_text(modern)
+                    path = tree.parent/f'{tree.name}.patch'
+                git('apply', f'--include={CC}/{name}', str(path), cwd=tree)
+            return (tree/CC/name).read_bytes()
+
+    def run_reconcile(self):
+        return reconcile.reconcile(self.source, self.candidate, self.release, [], self.receipts, ['frameworks/base'],
+            [], {}, '2026103114', patcher='candidate')
+
+    def test_the_generation_19_state_was_a_conflict_without_the_baseline(self):
+        changes = {SESSION: (self.patched((ROOT/'os/patches/background-control-modern-frameworks-base.patch').read_text()),
+            0o644)}
+        actions, conflicts = reconcile.plan(self.source, ['frameworks/base'], [], changes, {'entries': {}})
+        self.assertEqual((actions, conflicts), ({}, [SESSION]), 'the previous rule alone refuses it, as run 41174386535 did')
+
+    def test_earlier_rose_patch_output_is_replaced_with_backup_and_named_baseline(self):
+        record = self.run_reconcile()
+        self.assertEqual(record['changed'], [SESSION])
+        expected = self.patched((ROOT/'os/patches/background-control-modern-frameworks-base.patch').read_text())
+        self.assertEqual((self.source/SESSION).read_bytes(), expected)
+        self.assertIn(b'prototypeAllowed', expected)
+        entry = record['entries'][SESSION]
+        self.assertEqual((entry['before'], entry['reproducedFrom']),
+            (hashlib.sha256(self.retained).hexdigest(), self.commits['old']))
+        self.assertEqual((self.receipts/f'0002-2026103114-backup/{SESSION}').read_bytes(), self.retained)
+        # The next candidate finds it task-owned through the receipt as usual.
+        self.assertEqual(reconcile.reconcile(self.source, self.candidate, self.release, [], self.receipts,
+            ['frameworks/base'], [], {}, '2026103115', patcher='candidate')['changed'], [])
+
+    def test_a_genuine_owner_edit_of_that_file_still_conflicts_and_nothing_is_written(self):
+        edited = self.retained.replace(b'synchronized (mAllowedTaskIds) {', b'synchronized (mAllowedTaskIds) { // owner', 1)
+        self.assertNotEqual(edited, self.retained)
+        (self.source/SESSION).write_bytes(edited)
+        with self.assertRaisesRegex(reconcile.Conflict, 'ComputerControlSessionImpl.java'):
+            self.run_reconcile()
+        self.assertEqual((self.source/SESSION).read_bytes(), edited)
+        self.assertEqual(sorted(p.name for p in self.receipts.iterdir()), ['0001-2026103113.json'])
+
+    def test_the_baseline_is_bounded_to_frameworks_base_rose_patches(self):
+        found = reconcile.historical_outputs(self.source, self.candidate, 'frameworks/base', SESSION[len('frameworks/base/'):])
+        self.assertEqual(found.get(hashlib.sha256(self.retained).hexdigest()), self.commits['old'])
+        self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'build/make', 'x'), {})
+        self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'frameworks/base', 'absent.java'), {})
+        self.assertEqual(reconcile.historical_outputs(self.source, self.candidate, 'frameworks/base',
+            SESSION[len('frameworks/base/'):], limit=0), {})
+
+    def test_the_sequence_matches_the_patcher(self):
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertIn("projects = {'frameworks/base': ['frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch']}",
+            patcher)
+        self.assertIn("projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES", patcher)
+        sys.path.insert(0, str(ROOT/'scripts'))
+        from background_apks import BACKGROUND_FRAMEWORK_PATCHES
+        self.assertEqual(reconcile.FRAMEWORKS_BASE_SEQUENCE,
+            ('frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch', *BACKGROUND_FRAMEWORK_PATCHES))
+
 class ReconcileTest(unittest.TestCase):
     """A two-project source tree; the fake candidate apply script edits a tracked file, adds an overlay and writes a
     Rose-only preinstall directory, refusing (like the real script) to run on a dirty project."""

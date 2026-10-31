@@ -8,7 +8,14 @@ changes is then classified against the retained tree:
   pristine (== HEAD, or absent like HEAD) -> install the candidate bytes (fresh mtime, backup, receipt)
   equal to the previous task receipt     -> task-owned, replace it
   under an integration-owned root        -> Rose-only directory, replace it
+  equal to an earlier Rose patch output  -> integration-reproduced, replace it (see below)
   anything else                          -> owner change: CONFLICT, nothing is written
+A receipt records only files a run changed, so a frameworks/base file the retained tree already held in Rose's patched
+form before reconcile existed (and that every candidate since reproduced byte for byte) is in no receipt; the first
+candidate that changes it would otherwise read as an owner change. For such a file only, the bytes Rose's own
+frameworks/base patch sequence produced at each earlier version of the candidate repository's os/patches (its git
+history, at most HISTORY_LIMIT versions) are recomputed from the project HEAD copy; when the retained bytes equal one,
+the file is replaced like a task-owned one and the receipt names the baseline commit. Anything else still conflicts.
 Files a previous receipt installed that the candidate no longer changes are restored to HEAD on the same terms.
 Owner changes are never reset or wiped and candidate changes are never skipped. `adopt` records the current bytes of
 conflicting files as a task-owned baseline once, explicitly and with a reason (e.g. the hand-made P1 integration);
@@ -50,6 +57,58 @@ def git(*args, **kwargs):
 def head_bytes(source, project, relative):
     result = subprocess.run(['git', '-C', str(Path(source)/project), 'show', f'HEAD:{relative}'], capture_output=True)
     return result.stdout if result.returncode == 0 else None
+
+# apply-os-changes.py's frameworks/base order for a product build with a background policy (its initial list, then
+# background_apks.BACKGROUND_FRAMEWORK_PATCHES); scripts/tests/test_host_build_reconcile.py keeps the two in step.
+FRAMEWORKS_BASE_SEQUENCE = ('frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch',
+    'background-control-frameworks-base.patch', 'background-control-modern-frameworks-base.patch',
+    'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch')
+HISTORY_LIMIT = 64
+
+def historical_outputs(source, candidate, project, relative, limit=HISTORY_LIMIT):
+    """{sha256: commit} of the bytes `relative` had after Rose's frameworks/base patch sequence at each of the last
+    `limit` commits of the candidate repository that changed os/patches, recomputed from the project's HEAD copy with
+    only that file's hunks (git apply --include). Another project, a file HEAD lacks, a patch outside the sequence
+    that touches the file, or a version whose patches do not apply yields nothing for it."""
+    base = head_bytes(source, project, relative) if project == 'frameworks/base' else None
+    if base is None:
+        return {}
+    log = subprocess.run(['git', '-C', str(candidate), 'log', '--format=%H', f'-n{limit}', '--', 'os/patches'],
+        capture_output=True, text=True)
+    outputs = {}
+    for commit in log.stdout.split() if log.returncode == 0 else []:
+        listed = subprocess.run(['git', '-C', str(candidate), 'ls-tree', '--name-only', f'{commit}:os/patches'],
+            capture_output=True, text=True)
+        names = [n for n in listed.stdout.split() if n.endswith('.patch')] if listed.returncode == 0 else []
+        patches = {}
+        for name in names:
+            text = subprocess.run(['git', '-C', str(candidate), 'show', f'{commit}:os/patches/{name}'],
+                capture_output=True).stdout
+            if f'+++ b/{relative}'.encode() in text:
+                patches[name] = text
+        if not patches or set(patches) - set(FRAMEWORKS_BASE_SEQUENCE):
+            continue
+        with tempfile.TemporaryDirectory(prefix='reconcile-history-') as directory:
+            tree = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            (tree/relative).write_bytes(base)
+            applied = True
+            for name in FRAMEWORKS_BASE_SEQUENCE:
+                if name in patches:
+                    patch = tree.parent/f'{tree.name}.{name}'
+                    patch.write_bytes(patches[name])
+                    try:
+                        result = subprocess.run(['git', '-C', str(tree), 'apply', f'--include={relative}', str(patch)],
+                            capture_output=True)
+                    finally:
+                        patch.unlink()
+                    if result.returncode:
+                        applied = False
+                        break
+            if applied:
+                outputs.setdefault(sha((tree/relative).read_bytes()), commit)
+    return outputs
 
 def sparse_paths(candidate, project, extra):
     paths = set(extra.get(project, []))
@@ -93,8 +152,11 @@ def latest_receipt(receipt_dir):
     receipts = sorted(Path(receipt_dir).glob('[0-9][0-9][0-9][0-9]-*.json'))
     return (json.loads(receipts[-1].read_text()), len(receipts)) if receipts else ({'entries': {}}, 0)
 
-def plan(source, projects, owned_roots, changes, previous):
+def plan(source, projects, owned_roots, changes, previous, reproduced=None):
+    """(actions, conflicts). `reproduced` maps a path to {sha256: commit} of earlier Rose patch outputs for it
+    (historical_outputs); current bytes equal to one of them are integration output, not an owner change."""
     owned = {path: entry['after'] for path, entry in previous.get('entries', {}).items()}
+    reproduced = reproduced or {}
     actions, conflicts = {}, []
     targets = dict(changes)
     for path in owned:
@@ -113,7 +175,8 @@ def plan(source, projects, owned_roots, changes, previous):
             pristine = sha(current) == sha(head_bytes(source, project, path[len(project) + 1:]))
         task_owned = path in owned and owned[path] == sha(current)
         integration_owned = any(path.startswith(r.rstrip('/') + '/') for r in owned_roots)
-        if pristine or task_owned or integration_owned:
+        integration_reproduced = sha(current) in reproduced.get(path, {})
+        if pristine or task_owned or integration_owned or integration_reproduced:
             actions[path] = (current, desired, mode)
         else:
             conflicts.append(path)
@@ -159,7 +222,17 @@ def reconcile(source, candidate, release_dir, apply_args, receipt_dir, projects,
         if result.returncode:
             raise Conflict('candidate apply-os-changes failed on the shadow tree: ' + (result.stdout + result.stderr).strip()[-600:])
         previous, count = latest_receipt(receipt_dir)
-        actions, conflicts = plan(source, projects, owned_roots, desired_changes(shadow, projects), previous)
+        changes = desired_changes(shadow, projects)
+        actions, conflicts = plan(source, projects, owned_roots, changes, previous)
+        reproduced = {}
+        if conflicts and mode == 'apply':
+            for path in conflicts:
+                project = project_of(path, projects)
+                found = historical_outputs(source, candidate, project, path[len(project) + 1:]) if project else {}
+                if found:
+                    reproduced[path] = found
+            if reproduced:
+                actions, conflicts = plan(source, projects, owned_roots, changes, previous, reproduced)
     finally:
         shutil.rmtree(shadow, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
@@ -189,6 +262,9 @@ def reconcile(source, candidate, release_dir, apply_args, receipt_dir, projects,
             else:
                 write_atomic(target, desired, file_mode)
             entries[path] = {'before': sha(current), 'after': sha(desired), 'action': 'removed' if desired is None else 'installed'}
+            baseline = reproduced.get(path, {}).get(sha(current))
+            if baseline:
+                entries[path]['reproducedFrom'] = baseline
         record = {'receiptType': 'reconcile', 'label': label, 'changed': sorted(actions), 'entries': entries}
     record['patcher'] = patcher_receipt
     record['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
