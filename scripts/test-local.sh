@@ -91,6 +91,8 @@ python3 scripts/tests/test_alpha_verify_retained.py
 python3 scripts/tests/test_rose_verify.py
 # MODELS-QA: loopback chat-completions fixture self-tests (fixture behaviour only, no client or model).
 python3 qa/models/test_fixture_server.py
+# EXP006 isolated SystemUI trial: QA pins, licence basis and offline setup-plan validation (no VM, network or SDK).
+python3 qa/systemui-trial/test_trial_plan.py
 # Models serving draft: pins, Agent Platform container shape and derived capacity stay consistent.
 python3 workspace/models/serving/tests/test_serving_config.py
 python3 workspace/models/serving/tests/test_startup_guard.py
