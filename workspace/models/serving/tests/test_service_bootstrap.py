@@ -1263,7 +1263,7 @@ class GpuStartOnce(DiagnosticFixture):
         self.assertEqual(argv, B.launch_argv(self.payload, 'offline'))
         self.assertIn('HF_HUB_OFFLINE=1', argv)
         self.assertNotIn('SECRET', self.host.guest['diagnostic'])
-        self.assertNotIn('OutOfMemoryError', self.host.guest['diagnostic'])
+        self.assertEqual(r['exceptionType'], 'OutOfMemoryError')  # an allowlisted token; never the message
 
     def test_deadline_kills_and_cleans_up(self):
         self.gpu('slow', gpu_deadline=True)
