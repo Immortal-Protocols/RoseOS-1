@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rose Voice + Phone Demo</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #e3e3e8;
+    --accent: #0a84ff; --user: #e9e9ee; --agent: #0a84ff; --agent-text: #fff;
+    --ok: #30a46c; --warn: #d97706; --bad: #dc2626; --chip: #f0f0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111113; --panel: #1c1c1f; --text: #f2f2f5; --muted: #9a9aa2; --line: #2c2c31;
+      --user: #2c2c31; --chip: #26262b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line);
+    background: var(--panel); flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--text); padding: 6px 12px; cursor: pointer; font: inherit; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .seg button:disabled, header .btn:disabled { opacity: .5; cursor: wait; }
+  .pill { padding: 3px 10px; border-radius: 99px; background: var(--chip); font-size: 12px; font-weight: 600; }
+  .pill.listening { color: var(--ok); } .pill.tool, .pill.warming, .pill.loading { color: var(--warn); }
+  .pill.error { color: var(--bad); }
+  .stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .spacer { flex: 1; }
+  header .btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px;
+    padding: 6px 10px; cursor: pointer; font: inherit; }
+  main { display: grid; grid-template-columns: 340px minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px;
+    height: calc(100vh - 118px); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; display: flex;
+    flex-direction: column; min-height: 0; }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+  .scroll { overflow-y: auto; padding: 12px 14px; flex: 1; }
+  .phone-wrap { display: flex; justify-content: center; align-items: flex-start; padding: 14px; overflow: auto; flex: 1; }
+  .phone-wrap img { width: 100%; max-width: 300px; border-radius: 34px; border: 8px solid #111; background: #000;
+    box-shadow: 0 8px 30px rgba(0,0,0,.18); }
+  .msg { max-width: 85%; padding: 8px 12px; border-radius: 16px; margin: 6px 0; white-space: pre-wrap; }
+  .msg.user { background: var(--user); }
+  .msg.agent { background: var(--agent); color: var(--agent-text); margin-left: auto; }
+  .msg.partial { opacity: .55; }
+  .row { display: flex; }
+  .log { font-size: 13px; border-left: 3px solid var(--line); padding: 4px 10px; margin: 6px 0; }
+  .log b { font-weight: 650; } .log .ms { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  .log.decision { border-color: #8b5cf6; } .log.tool { border-color: var(--warn); }
+  .log.done { border-color: var(--ok); } .log.step { border-color: var(--line); color: var(--muted); }
+  .log.warn { border-color: var(--bad); color: var(--bad); }
+  .log code { font: 12px ui-monospace, Menlo, monospace; word-break: break-word; }
+  footer { display: flex; gap: 8px; padding: 0 20px 14px; }
+  footer input { flex: 1; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); font: inherit; }
+  footer button { padding: 10px 14px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 20px 8px; }
+  .chips button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 99px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; height: auto; } section { min-height: 300px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rose · voice + phone demo</h1>
+  <div class="seg" id="design">
+    <button data-d="A" title="Voice model calls ask_brain / do_on_phone itself">Design A · voice calls tools</button>
+    <button data-d="B" title="Brain decides chat / think / act per user turn">Design B · brain decides</button>
+    <button data-d="C" title="Voice calls tools itself; the brain's decider holds the voice until it has ruled on each turn">Design C · hybrid</button>
+  </div>
+  <span class="pill" id="status">connecting</span>
+  <span class="stats" id="stats"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="newconv">New conversation</button>
+  <button class="btn" id="resetphone">Reset phone</button>
+</header>
+<main>
+  <section>
+    <h2>Phone <span id="phonever"></span></h2>
+    <div class="phone-wrap"><img id="phone" alt="Fake phone screen" src="/phone.png"></div>
+  </section>
+  <section>
+    <h2>Conversation</h2>
+    <div class="scroll" id="convo"></div>
+  </section>
+  <section>
+    <h2>Orchestrator &amp; brain</h2>
+    <div class="scroll" id="log"></div>
+  </section>
+</main>
+<div class="chips" id="chips"></div>
+<footer>
+  <input id="say" placeholder="Type something to speak into the mic (macOS voice), or just talk with headphones on">
+  <button id="saybtn">Speak</button>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const convo = $("convo"), log = $("log");
+const EXAMPLES = [
+  "Can you text Sam that I'm running ten minutes late?",
+  "Set an alarm for six thirty tomorrow morning.",
+  "Turn on do not disturb.",
+  "What's on my calendar this afternoon?",
+  "If a recipe for four people needs one and a half cups of flour, how much do I need for seven?",
+  "Hey, how's it going?",
+];
+for (const e of EXAMPLES) {
+  const b = document.createElement("button"); b.textContent = e; b.onclick = () => say(e); $("chips").append(b);
+}
+let userPartial = null, agentPartial = null;
+function bubble(cls, text) {
+  const row = document.createElement("div"); row.className = "row";
+  const m = document.createElement("div"); m.className = "msg " + cls; m.textContent = text;
+  row.append(m); convo.append(row); convo.scrollTop = convo.scrollHeight; return m;
+}
+function partial(which, text) {
+  let el = which === "user" ? userPartial : agentPartial;
+  if (!text) return;
+  if (!el) { el = bubble(which + " partial", text); }
+  el.textContent = text;
+  if (which === "user") userPartial = el; else agentPartial = el;
+  convo.scrollTop = convo.scrollHeight;
+}
+function finalize(which, text) {
+  const el = which === "user" ? userPartial : agentPartial;
+  if (el) { el.textContent = text; el.classList.remove("partial"); } else bubble(which, text);
+  if (which === "user") userPartial = null; else agentPartial = null;
+}
+function entry(cls, html) {
+  const d = document.createElement("div"); d.className = "log " + cls; d.innerHTML = html;
+  log.append(d); log.scrollTop = log.scrollHeight;
+}
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+const ms = (v) => v == null ? "" : `<span class="ms">${v < 1000 ? v + " ms" : (v / 1000).toFixed(1) + " s"}</span>`;
+function setStatus(s, design) {
+  const p = $("status"); p.textContent = s; p.className = "pill " + s;
+  const busy = s === "warming" || s === "loading";
+  for (const b of document.querySelectorAll("#design button, #newconv")) b.disabled = busy;
+  if (design) for (const b of document.querySelectorAll("#design button")) b.classList.toggle("on", b.dataset.d === design);
+}
+function refreshPhone() { $("phone").src = "/phone.png?t=" + Date.now(); }
+function handle(m, replay) {
+  switch (m.kind) {
+    case "hello": setStatus(m.status, m.design); m.history.forEach((h) => handle(h, true)); break;
+    case "status": setStatus(m.status, m.design);
+      if (m.status === "warming" && !replay) entry("step", "Voice model: prefilling system prompt…");
+      if (m.prefill_s) entry("step", `Voice model ready (prompt prefill ${m.prefill_s} s)`);
+      if (m.error) entry("warn", esc(m.error)); break;
+    case "stats": $("stats").textContent =
+      `voice ${m.frame_ms} ms / 80 ms frame (×${m.realtime_factor})  ·  out buffer ${m.out_buffer_ms} ms  ·  ${m.conversation_s}s into conversation`; break;
+    case "user_partial": partial("user", m.text); break;
+    case "agent_partial": partial("agent", m.text); break;
+    case "user_turn": finalize("user", m.text); break;
+    case "agent_turn": finalize("agent", m.text); break;
+    case "simulated_speech": entry("step", `🎙 speaking into mic: “${esc(m.text)}”`); break;
+    case "decision": entry("decision", `<b>Decider → ${m.mode}</b>${ms(m.ms)}${m.task ? `<br><code>${esc(m.task)}</code>` : ""}`); break;
+    case "tool_call": entry("tool", `<b>${m.by === "decider" ? "Decider tool call (voice holds)" : "Voice model tool call"}</b><br><code>${esc(m.raw)}</code>`); break;
+    case "hold": entry("step", m.held ? "⏸ voice held: waiting for the decider" : `▶ voice released (${esc(m.reason)})`); break;
+    case "tool_start": entry("tool", `<b>${esc(m.name)}</b> started<br><code>${esc(JSON.stringify(m.arguments))}</code>`); break;
+    case "phone_step": entry("step", `📱 ${esc(m.action)} <code>${esc(JSON.stringify(m.args))}</code> → ${esc(m.result)}${ms(m.ms)}`); break;
+    case "tool_done": entry("done", `<b>${esc(m.name)}</b> result${ms(m.ms)}<br><code>${esc(JSON.stringify(m.result))}</code>`); break;
+    case "injected": entry("done", `Result handed to voice model${ms(m.ms)}`); break;
+    case "phone": if (!replay) refreshPhone(); $("phonever").textContent = "v" + m.version; break;
+    case "warning": entry("warn", esc(m.message)); break;
+  }
+}
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (e) => handle(JSON.parse(e.data));
+  ws.onclose = () => { setStatus("disconnected"); setTimeout(connect, 1500); };
+}
+connect();
+async function post(path, body) {
+  await fetch(path, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {}) });
+}
+function say(text) { if (text.trim()) post("/api/say", { text }); }
+$("saybtn").onclick = () => { say($("say").value); $("say").value = ""; };
+$("say").onkeydown = (e) => { if (e.key === "Enter") $("saybtn").onclick(); };
+for (const b of document.querySelectorAll("#design button")) b.onclick = () => {
+  convo.innerHTML = ""; userPartial = agentPartial = null; post(`/api/design/${b.dataset.d}`);
+};
+$("newconv").onclick = () => { convo.innerHTML = ""; userPartial = agentPartial = null; post("/api/new_conversation"); };
+$("resetphone").onclick = () => post("/api/reset_phone").then(refreshPhone);
+</script>
+</body>
+</html>
