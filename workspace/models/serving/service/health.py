@@ -13,8 +13,9 @@
 5. Publish an allowlisted receipt to the existing guest attribute rose-models/health: boot id, probe time, the
    completion's HTTP status, token count and latency (never its text), readiness, restarts, and the model receipt's
    start and full verification results, each qualified, plus the model unit's state, result and main exit code,
-   start-model's last phase, selected container State fields, the startup guard's status for this attempt (guard
-   result, first listen, exit, last exception class name) and how much of the model the weights cache holds. Publication runs after the decision and its failure
+   start-model's last phase, selected container State fields, the startup guard's status for this attempt (its
+   result; listen, exit and fixed output categories only for an explicitly supervised attempt) and how much of the
+   model the weights cache holds. Publication runs after the decision and its failure
    only marks the status file: telemetry never restarts the model.
 """
 import argparse
@@ -41,7 +42,9 @@ PHASES = ('verifying', 'launching_offline', 'launching_online', 'refused_storage
 RUN_STAGES = ('guard_refused', 'guard_passed', 'server_started', 'listening', 'exited')
 GUARD_CODES = ('cuda_unavailable', 'driver_unknown', 'driver_too_old', 'gpu_count', 'gpu_total', 'gpu_free',
                'cache_free', 'shm', 'other')
-EXCEPTION_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_.]{0,119}$')
+OUTPUT_CATEGORIES = ('argument_rejected', 'tool_parser_invalid', 'reasoning_parser_invalid', 'image_missing',
+                     'model_config_unavailable', 'device_unavailable', 'cuda_out_of_memory', 'kv_cache_insufficient',
+                     'nccl_error', 'import_error', 'traceback')  # startup_guard.CATEGORIES
 CONTAINER = 'muse-glimmer'
 _spec = importlib.util.spec_from_file_location('unit_facts', Path(__file__).resolve().parent / 'unit_facts.py')
 unit_facts = importlib.util.module_from_spec(_spec)
@@ -203,8 +206,9 @@ def _bounded(v, lo, hi):
 
 def _container_run(path):
     """The startup guard's status for this attempt (start-model clears it before each launch): the guard result as
-    codes, when the server first listened, how it exited and the last exception class it printed. None before any
-    launch under this payload."""
+    codes; only when supervision was explicitly enabled for one attempt, also when the server first listened, how it
+    exited and the fixed output categories seen within the capture bounds. None before any launch under this
+    payload."""
     try:
         raw = json.loads(Path(path).read_text())
     except FileNotFoundError:
@@ -214,14 +218,17 @@ def _container_run(path):
     if not isinstance(raw, dict):
         return {'stage': 'unreadable'}
     failures = raw.get('failures') if isinstance(raw.get('failures'), list) else []
-    exc = raw.get('lastException')
+    seen = raw.get('categories') if isinstance(raw.get('categories'), list) else []
     return {'stage': raw.get('stage') if raw.get('stage') in RUN_STAGES else 'other',
             'proceed': raw.get('proceed') if isinstance(raw.get('proceed'), bool) else None,
             'failures': [f if f in GUARD_CODES else 'other' for f in failures[:8]],
             'elapsedS': _bounded(raw.get('elapsedS'), 0, 1 << 31),
             'listenedAfterS': _bounded(raw.get('listenedAfterS'), 0, 1 << 31),
             'exitCode': _bounded(raw.get('exitCode'), 0, 255), 'signal': _bounded(raw.get('signal'), 1, 64),
-            'lastException': None if exc is None else exc if isinstance(exc, str) and EXCEPTION_NAME.match(exc) else 'other',
+            'firstCategory': raw.get('firstCategory') if raw.get('firstCategory') in OUTPUT_CATEGORIES else None,
+            'categories': [c for c in OUTPUT_CATEGORIES if c in seen],
+            'bytesInspected': _bounded(raw.get('bytesInspected'), 0, 2 << 20),
+            'limitReached': raw.get('limitReached') if raw.get('limitReached') in ('bytes', 'time') else None,
             'at': _int(raw.get('at'))}
 
 

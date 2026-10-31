@@ -94,10 +94,19 @@ class GuardTest(unittest.TestCase):
 
 
 SERVER = r"""
-import socket, sys, time
+import os, socket, sys, time
 mode, port = sys.argv[1], int(sys.argv[sys.argv.index('--port') + 1])
 print('INFO starting server', flush=True)
 print('WARNING to stderr', file=sys.stderr, flush=True)
+if mode == 'flood':  # 3 MiB without a newline, then an error after it
+    for _ in range(48):
+        os.write(1, b'x' * 65536)
+    print('torch.OutOfMemoryError: CUDA out of memory', file=sys.stderr, flush=True)
+    sys.exit(1)
+if mode == 'late':  # quiet past the inspection window, then fails
+    time.sleep(3)
+    print('torch.OutOfMemoryError: CUDA out of memory', file=sys.stderr, flush=True)
+    sys.exit(1)
 if mode == 'oom':
     print('Traceback (most recent call last):', file=sys.stderr)
     print('(VllmWorker TP1 pid=7) torch.OutOfMemoryError: CUDA out of memory. Tried SECRET-TEXT', file=sys.stderr)
@@ -106,7 +115,8 @@ s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.
 time.sleep(60)
 """
 DRIVER = "import importlib.util, sys; spec = importlib.util.spec_from_file_location('g', sys.argv[1]); " \
-         "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g); sys.exit(g.supervise(sys.argv[3:], sys.argv[2]))"
+         "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g); " \
+         "sys.exit(g.supervise(sys.argv[5:], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])))"
 
 
 class StatusTest(unittest.TestCase):
@@ -127,9 +137,10 @@ class StatusTest(unittest.TestCase):
     def read(self):
         return json.loads(self.status.read_text())
 
-    def driver(self, mode):
+    def driver(self, mode, max_bytes=2 << 20, max_seconds=600):
         cmd = [sys.executable, str(self.dir / 'server.py'), mode, '--host', '127.0.0.1', '--port', str(self.port)]
-        return subprocess.Popen([sys.executable, '-c', DRIVER, str(HERE / 'startup_guard.py'), str(self.status), *cmd],
+        return subprocess.Popen([sys.executable, '-c', DRIVER, str(HERE / 'startup_guard.py'), str(self.status),
+                                 str(max_bytes), str(max_seconds), *cmd],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def test_refusal_writes_codes_only(self):
@@ -144,7 +155,7 @@ class StatusTest(unittest.TestCase):
                          ('guard_refused', False, ['gpu_free', 'gpu_free', 'shm']))
         self.assertNotIn('bytes', self.status.read_text())
 
-    def test_server_failure_exit_and_exception_class_without_text(self):
+    def test_server_failure_exit_and_fixed_categories_without_text(self):
         proc = self.driver('oom')
         out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 1)  # the server's own status, as `docker run` and systemd see it
@@ -152,8 +163,64 @@ class StatusTest(unittest.TestCase):
         self.assertIn(b'SECRET-TEXT', err)
         status = self.read()
         self.assertEqual((status['stage'], status['exitCode'], status['signal'], status['listenedAfterS'],
-                          status['lastException']), ('exited', 1, None, None, 'torch.OutOfMemoryError'))
+                          status['firstCategory'], status['categories'], status['limitReached']),
+                         ('exited', 1, None, None, 'cuda_out_of_memory', ['cuda_out_of_memory', 'traceback'], None))
         self.assertNotIn('SECRET', self.status.read_text())
+        self.assertNotIn('OutOfMemoryError', self.status.read_text())
+
+    def test_oversized_output_without_newlines_is_inspected_only_to_the_byte_bound(self):
+        proc = self.driver('flood')
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(out.count(b'x'), 48 * 65536)  # every byte still passed through
+        status = self.read()
+        self.assertEqual((status['bytesInspected'], status['limitReached']), (2 << 20, 'bytes'))
+        self.assertIsNone(status['firstCategory'])  # the error came after the bound
+
+    def test_inspection_expires_while_the_server_keeps_running(self):
+        proc = self.driver('late', max_seconds=1)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(b'OutOfMemoryError', err)  # passed through
+        status = self.read()
+        self.assertEqual((status['limitReached'], status['firstCategory']), ('time', None))
+
+    def test_capture_bounds_and_window(self):
+        clock = [0.0]
+        cap = guard.Capture(max_bytes=100, max_seconds=10, clock=lambda: clock[0])
+        self.assertTrue(cap.feed(b'error: unrecognized ar'))
+        self.assertTrue(cap.feed(b'guments: --bogus'))  # matched across chunks
+        self.assertFalse(cap.feed(b'y' * 200))
+        self.assertEqual(cap.summary(), {'firstCategory': 'argument_rejected', 'categories': ['argument_rejected'],
+                                         'bytesInspected': 100, 'limitReached': 'bytes'})
+        cap = guard.Capture(max_bytes=100, max_seconds=10, clock=lambda: clock[0])
+        clock[0] = 11
+        self.assertFalse(cap.feed(b'Traceback (most recent call last)'))
+        self.assertEqual(cap.summary()['limitReached'], 'time')
+        self.assertLessEqual(len(guard.Capture().tail), guard.WINDOW)
+
+    def test_supervision_is_default_off_and_one_attempt_only(self):
+        launched = []
+        def run(limits, token=False):
+            if token:
+                (self.dir / 'supervise-once').write_text('')
+            with mock.patch.object(guard, 'collect', return_value=facts()), mock.patch('builtins.print'), \
+                    mock.patch.object(guard.os, 'execvp', side_effect=lambda c, a: launched.append('exec')), \
+                    mock.patch.object(guard, 'supervise', side_effect=lambda *a: launched.append('supervise') or 0):
+                try:
+                    guard.main([json.dumps(limits), '--', 'vllm', 'serve'])
+                except SystemExit:
+                    pass
+        bounds = {'max_bytes': 2 << 20, 'max_seconds': 600}
+        run({**LIMITS, 'status_path': str(self.status)}, token=True)  # token without bounds: off
+        self.assertTrue((self.dir / 'supervise-once').exists())  # and left unconsumed
+        (self.dir / 'supervise-once').unlink()
+        run({**LIMITS, 'status_path': str(self.status), 'supervise': bounds})  # bounds without token: off
+        run({**LIMITS, 'status_path': str(self.status), 'supervise': bounds}, token=True)  # explicit: once
+        run({**LIMITS, 'status_path': str(self.status), 'supervise': bounds})  # the token was consumed
+        self.assertEqual(launched, ['exec', 'exec', 'supervise', 'exec'])
+        self.assertTrue((self.dir / 'supervise-once.used').exists())
+        self.assertEqual(self.read()['stage'], 'guard_passed')
 
     def test_listening_then_signal_is_forwarded_and_propagated(self):
         proc = self.driver('serve')

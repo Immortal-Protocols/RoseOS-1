@@ -337,12 +337,16 @@ class HealthReceipt(unittest.TestCase):
                 ('guard refused', dict(stage='guard_refused', proceed=False, failures=['gpu_free', 'shm'], at=1),
                  {'stage': 'guard_refused', 'proceed': False, 'failures': ['gpu_free', 'shm']}),
                 ('failed after the guard, never listened', dict(stage='exited', proceed=True, failures=[], elapsedS=204,
-                 listenedAfterS=None, exitCode=1, signal=None, lastException='torch.OutOfMemoryError', at=2),
+                 listenedAfterS=None, exitCode=1, signal=None, firstCategory='cuda_out_of_memory',
+                 categories=['traceback', 'cuda_out_of_memory'], bytesInspected=5000, limitReached=None, at=2),
                  {'stage': 'exited', 'exitCode': 1, 'listenedAfterS': None, 'elapsedS': 204,
-                  'lastException': 'torch.OutOfMemoryError'}),
+                  'firstCategory': 'cuda_out_of_memory', 'categories': ['cuda_out_of_memory', 'traceback'],
+                  'bytesInspected': 5000, 'limitReached': None}),
                 ('listened, then killed', dict(stage='exited', proceed=True, failures=[], elapsedS=900,
-                 listenedAfterS=610, exitCode=None, signal=9, lastException=None, at=3),
-                 {'stage': 'exited', 'signal': 9, 'listenedAfterS': 610, 'lastException': None})):
+                 listenedAfterS=610, exitCode=None, signal=9, firstCategory=None, categories=[],
+                 bytesInspected=2 << 20, limitReached='bytes', at=3),
+                 {'stage': 'exited', 'signal': 9, 'listenedAfterS': 610, 'firstCategory': None,
+                  'limitReached': 'bytes'})):
             with self.subTest(label):
                 self.run_status(**fields)
                 self.once(90_060)
@@ -355,11 +359,14 @@ class HealthReceipt(unittest.TestCase):
 
     def test_container_run_status_is_allowlisted(self):
         self.run_status(stage='exited; rm -rf /', proceed='yes', failures=['gpu_free', 'GPU0 has 3 free bytes'] * 9,
-                        elapsedS=-5, exitCode=999, signal=0, lastException='ValueError: secret token abc', at='now')
+                        elapsedS=-5, exitCode=999, signal=0, firstCategory='ValueError: secret token abc',
+                        categories=['cuda_out_of_memory', 'secret'], bytesInspected=3 << 20, limitReached='lines',
+                        at='now')
         self.once(95_000)
         self.assertEqual(self.last()['containerRun'], {
             'stage': 'other', 'proceed': None, 'failures': ['gpu_free', 'other'] * 4, 'elapsedS': None,
-            'listenedAfterS': None, 'exitCode': None, 'signal': None, 'lastException': 'other', 'at': None})
+            'listenedAfterS': None, 'exitCode': None, 'signal': None, 'firstCategory': None,
+            'categories': ['cuda_out_of_memory'], 'bytesInspected': None, 'limitReached': None, 'at': None})
         self.assertNotIn('secret', self.published[-1][1])
         self.a.container_status.write_text('{')
         self.once(95_060)

@@ -9,15 +9,20 @@ or credentials.
 
 Usage: startup_guard.py '<limits json>' -- vllm serve <args...>
 
-With "status_path" in the limits (the persistent service only), the guard also writes a small nonsecret status file
-there and supervises the server instead of exec-ing it: output passes through unchanged, signals are forwarded, and
-the guard exits with the server's own status (128+N for signal N). The file records the guard's result as failure
-codes, when the server's port first accepted a connection, the exit status, the elapsed time and the class name of
-the last exception the server printed. It never records message text, arguments or environment.
+With "status_path" in the limits (the persistent service), the guard writes its own result there as failure codes,
+then execs the server exactly as without it: the server's output goes straight to the container log.
+
+Supervision is explicit, default OFF and one attempt only: it needs both "supervise" bounds in the limits and a
+one-shot token file "supervise-once" next to the status file, which the guard consumes (renames) before it starts.
+Supervised, the guard reads the server's output in chunks of at most 64 KiB, passes every byte through, and inspects
+at most "max_bytes" (2 MiB) within "max_seconds" (10 minutes); after either bound it only passes output through.
+Inspection keeps fixed category names (CATEGORIES), never text. Signals are forwarded and the guard exits with the
+server's own status (128+N for signal N).
 """
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import socket
@@ -89,7 +94,62 @@ def collect(cache_dir):
 CODES = (('CUDA unavailable', 'cuda_unavailable'), ('driver version not reported', 'driver_unknown'),
          ('driver ', 'driver_too_old'), ('GPUs visible', 'gpu_count'), ('total bytes', 'gpu_total'),
          ('free bytes', 'gpu_free'), ('cache free', 'cache_free'), ('/dev/shm', 'shm'))
-EXCEPTION = re.compile(r'(?:^|[\s(\[])((?:[A-Za-z_][A-Za-z0-9_]*\.){0,5}[A-Z][A-Za-z0-9_]*(?:Error|Exception|Interrupt))(?::|$)')
+CHUNK, WINDOW = 1 << 16, 1024
+# (category, pattern): fixed names for where a vLLM start or CLI run stopped. Matching runs over a bounded window and
+# keeps only the category name, never the matched text.
+CATEGORIES = (
+    ('argument_rejected', re.compile(r'error: (argument |unrecognized arguments|the following arguments are required)'
+                                     r'|invalid choice')),
+    ('tool_parser_invalid', re.compile(r'(?i)invalid tool[ _-]call parser|tool[ _-]call[ _-]parser.{0,40}not (found|registered|supported)')),
+    ('reasoning_parser_invalid', re.compile(r'(?i)invalid reasoning parser|reasoning[ _-]parser.{0,40}not (found|registered|supported)')),
+    ('image_missing', re.compile(r'No such image|Unable to find image|pull access denied')),
+    ('model_config_unavailable', re.compile(r'LocalEntryNotFoundError|OfflineModeIsEnabled|HFValidationError|'
+                                            r'RepositoryNotFoundError|couldn.t connect to|Can.t load the configuration|'
+                                            r'NameResolutionError|MaxRetryError')),
+    ('device_unavailable', re.compile(r'Failed to infer device type|No CUDA GPUs are available|'
+                                      r'CUDA driver initialization failed|Found no NVIDIA driver')),
+    ('cuda_out_of_memory', re.compile(r'OutOfMemoryError|CUDA out of memory')),
+    ('kv_cache_insufficient', re.compile(r'No available memory for the cache blocks|larger than the maximum number of tokens')),
+    ('nccl_error', re.compile(r'NCCL error|ncclInternalError|ncclSystemError|ncclUnhandledCudaError')),
+    ('import_error', re.compile(r'ModuleNotFoundError|ImportError')),
+    ('traceback', re.compile(r'Traceback \(most recent call last\)')),
+)
+CATEGORY_NAMES = tuple(name for name, _ in CATEGORIES)
+
+
+class Capture:
+    """Bounded inspection: at most max_bytes within max_seconds, matched over a sliding window of WINDOW bytes, so
+    a line without newlines or an endless stream never grows memory. Keeps fixed category names only."""
+
+    def __init__(self, max_bytes=2 << 20, max_seconds=600, clock=time.monotonic):
+        self.max_bytes, self.deadline, self.clock = max_bytes, clock() + max_seconds, clock
+        self.inspected, self.limit, self.first, self.seen, self.tail = 0, None, None, [], ''
+
+    def feed(self, chunk):
+        """Inspect what fits in the bounds; returns False once inspection has stopped."""
+        if self.limit:
+            return False
+        if self.clock() >= self.deadline:
+            self.limit = 'time'
+            return False
+        room = self.max_bytes - self.inspected
+        part = chunk[:room]
+        self.inspected += len(part)
+        text = self.tail + part.decode('utf-8', 'replace')
+        for name, pattern in CATEGORIES:
+            if name not in self.seen and pattern.search(text):
+                self.seen.append(name)
+                if self.first is None and name != 'traceback':
+                    self.first = name
+        self.tail = text[-WINDOW:]
+        if len(chunk) > room:
+            self.limit = 'bytes'
+            return False
+        return True
+
+    def summary(self):
+        return {'firstCategory': self.first, 'categories': [n for n in CATEGORY_NAMES if n in self.seen],
+                'bytesInspected': self.inspected, 'limitReached': self.limit}
 
 
 def codes(failures):
@@ -107,26 +167,32 @@ def write_status(path, **fields):
         pass
 
 
-def supervise(command, status_path):
-    """Run the server as a child, pass its output through, and return the exit status the container should have."""
-    started, seen = time.monotonic(), {'listenedAfterS': None, 'lastException': None}
+def claim_once(status_path):
+    """Consume the one-shot supervision token next to the status file. True only for the attempt that renamed it."""
+    token = os.path.join(os.path.dirname(status_path), 'supervise-once')
+    try:
+        os.rename(token, token + '.used')
+        return True
+    except OSError:
+        return False
+
+
+def supervise(command, status_path, max_bytes=2 << 20, max_seconds=600):
+    """Run the server as a child, pass all of its output through, inspect a bounded prefix of it, and return the exit
+    status the container should have."""
+    started, seen = time.monotonic(), {'listenedAfterS': None}
+    capture = Capture(max_bytes, max_seconds)
     args = command[1:]
     host = args[args.index('--host') + 1] if '--host' in args else '127.0.0.1'
     port = int(args[args.index('--port') + 1]) if '--port' in args else 8000
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda s, _: child.poll() is None and child.send_signal(s))
-    status = lambda stage, **extra: write_status(status_path, stage=stage, proceed=True, failures=[],  # noqa: E731
-                                                 elapsedS=int(time.monotonic() - started), **seen, **extra)
-    status('server_started')
 
-    def relay(src, dst):
-        for raw in iter(src.readline, b''):
-            dst.write(raw)
-            dst.flush()
-            m = EXCEPTION.search(raw[:2000].decode('utf-8', 'replace').rstrip())
-            if m:
-                seen['lastException'] = m.group(1)[:120]
+    def status(stage, **extra):
+        write_status(status_path, stage=stage, proceed=True, failures=[], elapsedS=int(time.monotonic() - started),
+                     **seen, **capture.summary(), **extra)
+    status('server_started')
 
     def listen():
         while child.poll() is None and seen['listenedAfterS'] is None:
@@ -136,18 +202,27 @@ def supervise(command, status_path):
                 status('listening')
             except OSError:
                 time.sleep(5)
-
-    threads = [threading.Thread(target=relay, args=(child.stdout, sys.stdout.buffer), daemon=True),
-               threading.Thread(target=relay, args=(child.stderr, sys.stderr.buffer), daemon=True),
-               threading.Thread(target=listen, daemon=True)]
-    for t in threads:
-        t.start()
+    listener = threading.Thread(target=listen, daemon=True)
+    listener.start()
+    outputs = {child.stdout.fileno(): sys.stdout.buffer, child.stderr.fileno(): sys.stderr.buffer}
+    while outputs:
+        try:
+            ready, _, _ = select.select(list(outputs), [], [], 1.0)
+        except InterruptedError:
+            continue
+        for fd in ready:
+            chunk = os.read(fd, CHUNK)
+            if not chunk:
+                del outputs[fd]
+                continue
+            outputs[fd].write(chunk)
+            outputs[fd].flush()
+            capture.feed(chunk)
+        capture.feed(b'')  # notices the deadline even when the server is quiet
     rc = child.wait()
-    for t in threads:  # the listener too, so `exited` is the last status written
-        t.join(10)
-    code = 128 - rc if rc < 0 else rc
+    listener.join(10)  # so `exited` is the last status written
     status('exited', exitCode=rc if rc >= 0 else None, signal=-rc if rc < 0 else None)
-    return code
+    return 128 - rc if rc < 0 else rc
 
 
 def main(argv):
@@ -164,8 +239,10 @@ def main(argv):
                      failures=codes(failures))
     if failures:
         sys.exit(EXIT_REFUSED)
-    if status_path:
-        sys.exit(supervise(command, status_path))
+    bounds = limits.get('supervise')
+    if status_path and isinstance(bounds, dict) and claim_once(status_path):
+        sys.exit(supervise(command, status_path, int(bounds.get('max_bytes', 2 << 20)),
+                           int(bounds.get('max_seconds', 600))))
     os.execvp(command[0], command)
 
 
