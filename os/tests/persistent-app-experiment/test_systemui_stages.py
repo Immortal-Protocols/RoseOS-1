@@ -32,16 +32,16 @@ SIGNER = f'Signer #1 certificate DN: CN=Synthetic\nSigner #1 certificate SHA-256
 
 class Emulator(fake.FakeEmulator):
     """The scripted emulator plus pm path, pull, the host tools and a refusal for a foreign signer."""
-    def __init__(self, foreign_accepted=False, **kw):
+    def __init__(self, foreign_accepted=False, signer=SIGNER, **kw):
         super().__init__(**kw)
-        self.foreign_accepted = foreign_accepted
+        self.foreign_accepted, self.signer = foreign_accepted, signer
 
     def __call__(self, argv, capture_output=True, text=True, timeout=None):
         if Path(argv[0]).name in ('aapt', 'apksigner'):
             if argv[1] == 'sign':
                 Path(argv[argv.index('--out') + 1]).write_bytes(b'foreign')
                 return subprocess.CompletedProcess(argv, 0, '', '')
-            return subprocess.CompletedProcess(argv, 0, XMLTREE if argv[1] == 'dump' else SIGNER, '')
+            return subprocess.CompletedProcess(argv, 0, XMLTREE if argv[1] == 'dump' else self.signer, '')
         args = argv[3:]
         if args[:3] == ['shell', 'pm', 'path']:
             return subprocess.CompletedProcess(argv, 0, 'package:/system_ext/priv-app/SystemUI/SystemUI.apk\n', '')
@@ -101,6 +101,22 @@ class SystemUiStagesTest(unittest.TestCase):
         staged = json.loads((self.tmp/'evidence/systemui/result.json').read_text())
         self.assertEqual(staged['outcome'], 'verified')
         self.assertIn(['shell', 'pm', 'uninstall-system-updates', 'com.android.systemui'], emulator.calls)
+
+    def test_the_v3_0_signer_layout_passes_identity_and_keeps_the_foreign_refusal(self):
+        # EXP006-SIGNER-006: run 41158887101's apksigner printed "V3.0 Signer: ..." (layout runtime-derived; the
+        # certificate here is SYNTHETIC). Identity now passes and the later stages run as for the numbered layout.
+        emulator = Emulator(signer=f'V3.0 Signer: certificate DN: CN=Synthetic\n'
+            f'V3.0 Signer: certificate SHA-256 digest: {CERT}\n')
+        emulator.version = emulator.applied_version = 36
+        results = self.run_stages(emulator)
+        self.assertEqual({k: v['result'] for k, v in results.items()}, {'systemui-identity': 'pass',
+            'systemui-foreign': 'pass', 'systemui-staged': 'pass', 'systemui-restore': 'pass'}, results)
+        self.assertEqual(results['systemui-identity']['signingCertificateSha256'], CERT)
+        self.assertIn('INSTALL_FAILED_SHARED_USER_INCOMPATIBLE', results['systemui-foreign']['refusal'])
+        two = Emulator(signer=f'V3.0 Signer: certificate SHA-256 digest: {CERT}\nSigner #1 certificate SHA-256 digest: {CERT}\n')
+        results = self.run_stages(two)
+        self.assertEqual((results['systemui-identity']['result'], results['systemui-foreign']['result']),
+            ('fail', 'not-run'), 'two signer records still fail identity and stop the later stages')
 
     def test_an_accepted_foreign_signer_fails_and_stops_the_later_stages(self):
         emulator = Emulator(foreign_accepted=True)

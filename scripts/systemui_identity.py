@@ -182,10 +182,15 @@ def parse_manifest(output, apk_sha256):
     return (identity, []) if not problems else (None, problems)
 
 SIGNER = re.compile(r'Signer #(\d+) certificate SHA-256 digest: ([0-9a-f]{64})')
+# EXP006-SIGNER-006: newer apksigner prints the single verified signer as "V3.0 Signer: certificate SHA-256 digest:
+# <64 hex>" (observed in run 41158887101 for the image SystemUI APK). One whole-line record of either layout is the
+# signer; any other digest line (V3.1, lineage, source stamp, a malformed digest) is refused as before.
+V3_0_SIGNER = re.compile(r'V3\.0 Signer: certificate SHA-256 digest: ([0-9a-f]{64})')
 ANY_DIGEST = re.compile(r'.*certificate SHA-256 digest: .*')
 
 def parse_signer(output, apk_sha256):
-    """(certificate sha256, problems) from `apksigner verify --print-certs`: exactly one signer, nothing else."""
+    """(certificate sha256, problems) from `apksigner verify --print-certs`: exactly one signer record, either
+    `Signer #1 ...` or `V3.0 Signer: ...`, nothing else; two records are refused even when their digests agree."""
     if output.apk_sha256 != apk_sha256:
         return None, [f'apksigner output is for APK {output.apk_sha256}, not {apk_sha256}']
     if output.returncode != 0:
@@ -193,14 +198,16 @@ def parse_signer(output, apk_sha256):
     signers, others = [], []
     for line in output.stdout.splitlines():
         line = line.strip()
-        match = SIGNER.fullmatch(line)
+        match, v3 = SIGNER.fullmatch(line), V3_0_SIGNER.fullmatch(line)
         if match:
-            signers.append((int(match[1]), match[2]))
+            signers.append((f'#{int(match[1])}', match[2]))
+        elif v3:
+            signers.append(('V3.0', v3[1]))
         elif ANY_DIGEST.fullmatch(line):
             others.append(line)  # lineage, source stamp or an unrecognised layout: not this receipt's single signer
     problems = [f'unrecognised certificate digest line {line!r}' for line in others]
-    if len(signers) != 1 or (signers and signers[0][0] != 1):
-        problems.append(f'apksigner reports {len(signers)} signers; exactly one (#1) is required')
+    if len(signers) != 1 or (signers and signers[0][0] not in ('#1', 'V3.0')):
+        problems.append(f'apksigner reports {len(signers)} signers; exactly one (#1 or V3.0) is required')
     return (signers[0][1], []) if not problems else (None, problems)
 
 def build_receipt(*, apk_path, apk_sha256, xmltree, apksigner, artifact, source, tools, expected_package='com.android.systemui'):
