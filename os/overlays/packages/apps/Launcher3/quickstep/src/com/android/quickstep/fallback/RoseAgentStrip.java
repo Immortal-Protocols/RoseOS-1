@@ -73,40 +73,43 @@ public final class RoseAgentStrip extends LinearLayout {
         });
     }
 
+    /**
+     * The platform's running work, filtered to the controller's own displays and the current user before any label is
+     * looked up (RoseAgentWork.of, then labelled). A label that cannot be read shows the package name; only a failed
+     * controller, display or task read makes the row unavailable, named by its step (no exception text shown or kept).
+     */
     private static RoseAgentWork read(Context context) {
+        RoseAgentWork.Step step = RoseAgentWork.Step.CONTROLLER;
         try {
             int user = ActivityManager.getCurrentUser();
+            PackageManager pm = context.getPackageManager();
             int controllerUid;
             try {
-                controllerUid = context.getPackageManager().getPackageUidAsUser(RoseAgentWork.CONTROLLER, user);
+                controllerUid = pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user);
             } catch (PackageManager.NameNotFoundException e) {
                 controllerUid = -1;
             }
+            step = RoseAgentWork.Step.DISPLAYS;
             List<RoseAgentWork.Display> displays = new ArrayList<>();
             for (android.view.Display d : context.getSystemService(DisplayManager.class).getDisplays()) {
                 displays.add(new RoseAgentWork.Display(d.getDisplayId(), d.getOwnerUid()));
             }
+            step = RoseAgentWork.Step.TASKS;
             List<RoseAgentWork.Task> tasks = new ArrayList<>();
             List<Integer> seenDisplays = new ArrayList<>();
-            PackageManager pm = context.getPackageManager();
             // getTasks lists tasks front to back, so the first task met on a display is its current screen.
             for (ActivityManager.RunningTaskInfo t : ActivityTaskManager.getInstance().getTasks(64)) {
                 if (t.topActivity == null) continue;
                 String pkg = t.topActivity.getPackageName();
-                CharSequence label;
-                try {
-                    label = pm.getApplicationLabel(pm.getApplicationInfoAsUser(pkg, 0, t.userId));
-                } catch (PackageManager.NameNotFoundException e) {
-                    label = pkg;
-                }
                 boolean top = !seenDisplays.contains(t.displayId);
                 seenDisplays.add(t.displayId);
-                tasks.add(new RoseAgentWork.Task(t.taskId, t.displayId, t.userId, pkg, label.toString(), top));
+                tasks.add(new RoseAgentWork.Task(t.taskId, t.displayId, t.userId, pkg, pkg, top));
             }
-            return RoseAgentWork.of(controllerUid, user, displays, tasks);
+            return RoseAgentWork.of(controllerUid, user, displays, tasks).labelled(task ->
+                    pm.getApplicationLabel(pm.getApplicationInfoAsUser(task.packageName, 0, task.userId)).toString());
         } catch (RuntimeException e) {
-            Log.w(TAG, "Agent work unavailable", e);
-            return RoseAgentWork.unavailable("Rose's work could not be read");
+            Log.w(TAG, "Agent work unavailable at " + step + " (" + e.getClass().getSimpleName() + ")");
+            return RoseAgentWork.failed(step);
         }
     }
 
