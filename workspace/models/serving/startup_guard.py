@@ -141,6 +141,11 @@ LOCATION_NAMES = tuple(dict.fromkeys(c for _, c in LOCATIONS)) + ('other',)
 PROCESSES = (('EngineCore', 'engine_core'), ('VllmWorker', 'worker'), ('Worker', 'worker'), ('APIServer', 'api_server'))
 PROCESS_NAMES = ('main', 'engine_core', 'worker', 'api_server', 'other')
 PREFIX = re.compile(r'^\(([A-Za-z_]{1,40})[^)\n]{0,80}\)\s+')  # vLLM's "(EngineCore_DP0 pid=7) " line prefix
+# The rest of vLLM's log header (vllm/logger.py _FORMAT: "%(levelname)s %(asctime)s [%(fileinfo)s:%(lineno)d] "), which
+# its NewLineFormatter repeats on every line of a multi-line record, tracebacks from logger.exception included.
+HEADER = re.compile(r'^(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+\d\d-\d\d \d\d:\d\d:\d\d(?:[.,]\d+)?\s+\[[^\]\n]{1,200}\]\s?')
+ANSI = re.compile(r'\x1b\[[0-9;]*m')  # ColoredFormatter's header colors
+MAX_PROCESSES = 16  # traceback state is kept per line-prefix process, so interleaved processes do not mix
 FRAME = re.compile(r'File "([^"\n]{1,600})", line \d+, in ')
 EXCEPTION_LINE = re.compile(r'^([A-Za-z_][\w.]{0,100}(?:Error|Exception|Exit|Interrupt))(?::|$)')
 GUARD_MARK, TAIL = '"guard": "muse-glimmer-startup"', 64
@@ -152,14 +157,16 @@ class Capture:
     a line without newlines or an endless stream never grows memory. Keeps fixed category names only.
 
     The same bounded bytes are also read as lines, keeping at most WINDOW characters of a line's head and TAIL of its
-    end (lines end at \\n or \\r), to classify with fixed vocabularies: whether the guard passed or refused, and the
-    last traceback's exception type, innermost frame component and vLLM process."""
+    end (lines end at \\n or \\r), to classify with fixed vocabularies: whether the guard passed or refused, and for
+    the first and the last classified traceback its exception type, innermost frame component and vLLM process. A
+    vLLM process prefix and log header (repeated per line by its NewLineFormatter) are skipped, and traceback state
+    is kept per process. The first exception is only the earliest one classified, not a proven root cause."""
 
     def __init__(self, max_bytes=2 << 20, max_seconds=600, clock=time.monotonic):
         self.max_bytes, self.deadline, self.clock = max_bytes, clock() + max_seconds, clock
         self.inspected, self.limit, self.first, self.seen, self.tail = 0, None, None, [], ''
         self.head, self.end, self.guard, self.tracebacks = '', '', None, 0
-        self.exception, self.frame, self.in_traceback = None, None, False
+        self.first_exception, self.exception, self.state = None, None, {}  # state: process -> [in traceback, frame]
 
     def feed(self, chunk):
         """Inspect what fits in the bounds; returns False once inspection has stopped."""
@@ -196,35 +203,47 @@ class Capture:
                 self.head = self.end = ''
 
     def line(self, head, end):
+        head = ANSI.sub('', head)
         if GUARD_MARK in head:
             self.guard = 'passed' if '"proceed": true' in end else 'refused' if '"proceed": false' in end else self.guard
             return
         prefix = PREFIX.match(head)
         body = head[prefix.end():] if prefix else head
+        header = HEADER.match(body)
+        body = body[header.end():] if header else body
+        key = prefix.group(1) if prefix else ''
+        if key not in self.state and len(self.state) >= MAX_PROCESSES:
+            key = '*'
+        state = self.state.setdefault(key, [False, None])
         if body.startswith('Traceback (most recent call last)'):
             self.tracebacks = min(self.tracebacks + 1, MAX_TRACEBACKS)
-            self.in_traceback, self.frame = True, None
+            state[:] = [True, None]
             return
-        if not self.in_traceback:
+        if not state[0]:
             return
         frame = FRAME.search(body)
         if frame:
-            self.frame = next((c for fragment, c in LOCATIONS if fragment in frame.group(1)), 'other')
+            state[1] = next((c for fragment, c in LOCATIONS if fragment in frame.group(1)), 'other')
             return
         found = EXCEPTION_LINE.match(body)
         if found:
             name = found.group(1).rsplit('.', 1)[-1]
             process = 'main' if not prefix else next(
                 (token for marker, token in PROCESSES if prefix.group(1).startswith(marker)), 'other')
-            self.exception = {'exceptionType': name if name in EXCEPTION_TYPES else 'other',
-                              'exceptionLocation': self.frame or 'other', 'exceptionProcess': process}
-            self.in_traceback = False  # a chained traceback starts again with its own header
+            self.exception = (name if name in EXCEPTION_TYPES else 'other', state[1] or 'other', process)
+            self.first_exception = self.first_exception or self.exception
+            state[0] = False  # a chained traceback starts again with its own header
 
     def summary(self):
         return {'firstCategory': self.first, 'categories': [n for n in CATEGORY_NAMES if n in self.seen],
                 'bytesInspected': self.inspected, 'limitReached': self.limit, 'guard': self.guard,
-                'tracebacks': self.tracebacks,
-                **(self.exception or {'exceptionType': None, 'exceptionLocation': None, 'exceptionProcess': None})}
+                'tracebacks': self.tracebacks, **self.tokens('exception', self.exception),
+                **self.tokens('firstException', self.first_exception)}
+
+    @staticmethod
+    def tokens(name, found):
+        kind, location, process = found or (None, None, None)
+        return {f'{name}Type': kind, f'{name}Location': location, f'{name}Process': process}
 
 
 def codes(failures):

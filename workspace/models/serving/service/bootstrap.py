@@ -14,8 +14,8 @@ run in order and are rerun-safe: each first checks whether its result is already
              pinned reference, and the platform must be linux/amd64
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
-  diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once:<payload sha256>:<id>, once
-             per id (gpu-start-once: see gpu_start_once), and then
+  diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once|hf-probe-once:<payload
+             sha256>:<id>, once per id (see gpu_start_once, hf_probe_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -82,9 +82,11 @@ STATE = '/var/lib/rose-models/bootstrap'
 RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and its published evidence
 # Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=<mode>:<payload sha256>:<id>
 DIAG_KEY = 'attributes/rose-models-diagnostic'
-DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once):([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once):([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
 # gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
 GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
+# hf-probe-once: lib/service/hf_probe.py in the pinned image, offline, no GPU, cache read-only, at most 120 s
+HF_PROBE_SECONDS, HF_PROBE_CONTAINER, HF_PROBE_LINE = 120, 'muse-glimmer-hfprobe', 4096
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
@@ -877,6 +879,8 @@ def stage_diagnostic(host, ctx):
     image = ctx['runtime']['image_id']
     if request[2] == 'gpu-start-once':
         return gpu_start_once(host, ctx, attempt, image)
+    if request[2] == 'hf-probe-once':
+        return hf_probe_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -976,6 +980,81 @@ def gpu_start_once(host, ctx, attempt, image):
             f"({result['firstCategory'] or 'no_category'})")
 
 
+def load_probe(payload):
+    spec = importlib.util.spec_from_file_location('hf_probe', Path(payload) / 'etc-rose-models/lib/service/hf_probe.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, spec.origin
+
+
+def probe_result(probe, out):
+    """The probe's fixed tokens from its MARKER line, re-checked against its own allowlists (the line comes from inside
+    a container, so nothing in it is trusted), or None when there is no such line."""
+    line = next((l for l in reversed(out.splitlines()) if l.startswith(probe.MARKER)), None)
+    if line is None or len(line) > HF_PROBE_LINE:
+        return None
+    try:
+        raw = json.loads(line[len(probe.MARKER):])
+    except ValueError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    loaders = raw.get('loaders') if isinstance(raw.get('loaders'), dict) else {}
+    files = raw.get('files') if isinstance(raw.get('files'), dict) else {}
+    version = raw.get('transformersVersion')
+    flag = lambda v: v if isinstance(v, bool) else None  # noqa: E731
+    result = {'loaders': {n: loaders.get(n) if loaders.get(n) in probe.CATEGORIES else 'other' for n in probe.LOADERS},
+              'transformersVersion': version if version is None or (isinstance(version, str)
+                                                                    and probe.VERSION.match(version)) else 'other',
+              'registeredTransformers': flag(raw.get('registeredTransformers')),
+              'registeredVllm': flag(raw.get('registeredVllm')),
+              'files': {n: files.get(n) if files.get(n) in probe.FILE_STATES else 'unknown'
+                        for n in probe.FILES}}
+    failed = [n for n in probe.LOADERS if result['loaders'][n] != 'ok']
+    result.update(firstFailure=failed[0] if failed else None, allOk=not failed)
+    return result
+
+
+def hf_probe_once(host, ctx, attempt, image):
+    """One offline loader probe of the pinned model in the exact cached image: --pull=never, runc, no network, no GPU,
+    the Hugging Face cache read-only, HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE, at most HF_PROBE_SECONDS. Four loaders are
+    tried independently (hf_probe.py); only fixed tokens are published. The container is always removed and its
+    absence verified; inference stays held for the boot. It shows which loader fails, not why."""
+    result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'attemptId': attempt, 'check': 'hf-probe-once', 'modelHeld': True, 'exitCode': None, 'timedOut': False,
+              'probe': None, 'cleanup': None}
+    refused = diagnostic_prerequisites(host, image)
+    if not refused and host.run(['mountpoint', '-q', DATA], 30)[0] != 0:
+        refused = 'data_not_mounted'
+    result['prerequisite'] = refused
+    if not refused:
+        probe, origin = load_probe(ctx['payload'])
+        source = Path(origin).read_text()
+        model = ctx['model']
+        argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                '--name', HF_PROBE_CONTAINER, '-e', 'HF_HUB_OFFLINE=1', '-e', 'TRANSFORMERS_OFFLINE=1',
+                '-v', f'{DATA}/hf:/root/.cache/huggingface:ro', '--entrypoint', 'python3', image,
+                '-c', source, model['repo'], model['revision']]
+        try:
+            code, out = host.run(argv, HF_PROBE_SECONDS)
+        finally:
+            removed = host.run(['docker', 'rm', '-f', HF_PROBE_CONTAINER], 30)[0]  # a killed CLI leaves it running
+            left = container_names(host, HF_PROBE_CONTAINER)
+        result.update(exitCode=code if code != 124 else None, timedOut=code == 124,
+                      probe=probe_result(probe, out) if code != 124 else None,
+                      cleanup='unknown' if left is None else 'failed' if left else 'removed', cleanupRemoveExit=removed)
+    line = json.dumps(result, sort_keys=True)
+    host.put_guest_attribute('diagnostic', line)
+    host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    if refused:
+        raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
+    if result['cleanup'] != 'removed':
+        raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
+    if result['probe'] is None:
+        return 'inference held; loader probe ' + ('timed out' if result['timedOut'] else 'gave no result')
+    return f"inference held; loader probe first failure {result['probe']['firstFailure'] or 'none'}"
+
+
 def load_guard(payload):
     spec = importlib.util.spec_from_file_location('startup_guard', Path(payload) / 'etc-rose-models/lib/startup_guard.py')
     module = importlib.util.module_from_spec(spec)
@@ -1011,7 +1090,7 @@ def run(host, payload, payload_sha256, now=time.time):
         config = json.loads((payload / 'etc-rose-models/lib/muse-glimmer-30b.json').read_text())
         option = next(o for o in config['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')
         ctx = {'payload': payload, 'runtime': option['runtime'], 'serveArgs': option['container_spec']['args'],
-               'results': {}, 'payloadSha256': payload_sha256}
+               'model': config['model'], 'results': {}, 'payloadSha256': payload_sha256}
         ctx['diagnostic'] = diagnostic_request(host, ctx)
         if ctx['diagnostic'] and ctx['diagnostic'][0] == 'requested':  # before any stage can start the model
             host.path(MODEL_HOLD).parent.mkdir(parents=True, exist_ok=True)
