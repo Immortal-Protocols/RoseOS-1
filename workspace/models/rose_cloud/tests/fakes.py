@@ -46,10 +46,12 @@ class CharTokenizer:
 class FakeVllm:
     """Scripted completions server on 127.0.0.1. ``script`` is a list of token-id lists, one per request."""
 
-    def __init__(self, script=(), mode='ids', chunk=1, delay_s=0.0, status=200, send_stop=True, raw=None):
+    def __init__(self, script=(), mode='ids', chunk=1, delay_s=0.0, status=200, send_stop=True, raw=None,
+                 header_delay_s=0.0, stall_at=None, stall_s=0.0):
         self.script = [list(s) for s in script]
         self.mode, self.chunk, self.delay_s, self.status, self.send_stop, self.raw = (
             mode, chunk, delay_s, status, send_stop, raw)
+        self.header_delay_s, self.stall_at, self.stall_s = header_delay_s, stall_at, stall_s
         self.requests: list[dict] = []
         self.aborted = 0
         self.sent: list[int] = []  # tokens written to the socket, all requests
@@ -64,6 +66,7 @@ class FakeVllm:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 fake.requests.append(body)
+                time.sleep(fake.header_delay_s)  # vLLM still queueing or prefilling: no headers yet
                 if fake.status != 200:
                     data = b'{"error": "SECRET-TEXT /root/.cache"}'
                     self.send_response(fake.status)
@@ -114,6 +117,8 @@ class FakeVllm:
             if len(tokens) < body['max_tokens']:
                 finish = 'stop'  # script ran out: EOS-like stop with no stop_reason
         for i in range(0, len(emitted), self.chunk):
+            if self.stall_at is not None and i == self.stall_at:
+                time.sleep(self.stall_s)  # a mid-stream stall
             part = emitted[i:i + self.chunk]
             out.write(self.event(part) + b'\n\n')
             out.flush()
