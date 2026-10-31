@@ -1,5 +1,8 @@
 """Static and unit checks for the persistent-app experiment (OS-COMPONENT-EXP-004). Outputs below are SYNTHETIC
 shapes of adb/dumpsys/logcat/apksigner; they test the classifiers, not any device."""
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -74,7 +77,9 @@ class BoundaryTest(unittest.TestCase):
         self.assertEqual(on.strip(), "on:\n  workflow_dispatch:\n    inputs:\n      systemui:\n        description: "
             "'Also run the opt-in SystemUI stages on the emulator image (EXP006)'\n        type: boolean\n        default: false"
             "\n      kvm_acl:\n        description: 'Grant this job user rw on the KVM device for the run and restore it "
-            "(EXP006-KVM-001; approved runs only)'\n        type: boolean\n        default: false")
+            "(EXP006-KVM-001; approved runs only)'\n        type: boolean\n        default: false"
+            "\n      startup_diagnostic:\n        description: 'Stop after the first emulator launch and report a fixed "
+            "startup category (EXP006-STARTUP-003; not with systemui)'\n        type: boolean\n        default: false")
         for needle in ('permissions:\n  contents: read', 'cancel-in-progress: false', 'runs-on: ubuntu-24.04',
                 'timeout-minutes: 30', 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
                 'persist-credentials: false', 'retention-days: 7', 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'):
@@ -235,6 +240,210 @@ class BootWaitTest(unittest.TestCase):
         e = ex.Failed('f')
         e.facts = {'bootWait': {'wait': 'timeout'}}
         self.assertEqual(ex.outcome(raises(e)), {'result': 'fail', 'reason': 'f', 'bootWait': {'wait': 'timeout'}})
+
+class StartupDiagnosticTest(unittest.TestCase):
+    """EXP006-STARTUP-003 over synthetic files only: the cap, ambiguity, path safety, no raw data, stage exclusion
+    and cleanup. Nothing is launched."""
+    SECRET = 'TOKEN-abc123 /home/runner/private ANDROID_SDK_ROOT=/x --flag'
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='pfx-startup-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def owned(self, data, name='emulator.log'):
+        """The run's own descriptor for a new task-local file, as boot() creates it, with data written through it."""
+        fd = os.open(self.tmp/name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        self.addCleanup(os.close, fd)
+        os.write(fd, data)
+        return fd
+
+    def test_each_fixed_category_and_unknown(self):
+        samples = {'avd_missing': b'PANIC: Unknown AVD name [fixture], use -list-avds to see valid list.',
+            'image_missing': b'PANIC: Cannot find AVD system path. Please define ANDROID_SDK_ROOT',
+            'acceleration_refused': b'ERROR: x86_64 emulation currently requires hardware acceleration!',
+            'rejected_option': b'emulator: ERROR: unknown option: -bogus',
+            'missing_library': b'qemu-system-x86_64: error while loading shared libraries: libfoo.so.1: cannot open '
+                b'shared object file: No such file or directory'}
+        self.assertEqual(set(samples), set(ex.STARTUP_PATTERNS))
+        for category, text in samples.items():
+            self.assertEqual(ex.classify_startup(b'INFO | starting\n' + text + b'\n'), (category, False), category)
+        self.assertEqual(ex.classify_startup(b'INFO | Android emulator version 36\nINFO | boot'), ('unknown', False))
+        self.assertEqual(ex.STARTUP_CATEGORIES[-1], 'unknown')
+
+    def test_two_categories_or_malformed_input_stay_unknown(self):
+        both = b'PANIC: Unknown AVD name [fixture]\nerror while loading shared libraries: libx.so'
+        self.assertEqual(ex.classify_startup(both), ('unknown', True))
+        for junk in (b'', b'\x00' * 100, bytes(range(256)) * 8, b'\xff\xfe unknown \xc3( avd'):
+            self.assertEqual(ex.classify_startup(junk), ('unknown', False))
+        # A pattern split by invalid bytes is not a match.
+        self.assertEqual(ex.classify_startup(b'unknown \xff avd name')[0], 'unknown')
+
+    def test_only_the_first_cap_bytes_are_read_and_truncation_is_reported(self):
+        cap = ex.STARTUP_CAP
+        self.assertEqual(cap, 16384)
+        facts = ex.startup_output(self.owned(b'x' * cap + b'PANIC: Unknown AVD name [fixture]'))
+        self.assertEqual((facts['log'], facts['bytesRead'], facts['truncated'], facts['category']),
+            ('read', cap, True, 'unknown'), 'a match after the cap is never seen')
+        facts = ex.startup_output(self.owned(b'y' * (cap - 33) + b'PANIC: Unknown AVD name [fixture]', 'exact.log'))
+        self.assertEqual((facts['bytesRead'], facts['truncated'], facts['category']), (cap, False, 'avd_missing'))
+        self.assertEqual(ex.startup_output(self.owned(b'ERROR: unknown option: -x', 'short.log')), {'log': 'read',
+            'capBytes': cap, 'bytesRead': 25, 'truncated': False, 'category': 'rejected_option', 'ambiguous': False})
+        self.assertEqual(ex.startup_output(self.owned(b'', 'empty.log'))['bytesRead'], 0)
+
+    def test_only_the_owned_new_regular_file_is_read_never_the_path_again(self):
+        fd = self.owned(b'ERROR: unknown option: -x')
+        path = self.tmp/'emulator.log'
+        path.unlink()
+        path.write_bytes(b'PANIC: Unknown AVD name [fixture]')  # a replacement at the path, possibly the same inode
+        self.assertEqual(ex.startup_output(fd)['category'], 'rejected_option', 'read through the owned descriptor only')
+        # Creation refuses any existing path: a file, a link to elsewhere, a dangling link.
+        target = self.tmp/'elsewhere.txt'
+        target.write_text('PANIC: Unknown AVD name')
+        for name, make in (('file.log', lambda p: p.write_text('x')), ('link.log', lambda p: p.symlink_to(target)),
+                ('dangling.log', lambda p: p.symlink_to(self.tmp/'missing'))):
+            make(self.tmp/name)
+            with self.assertRaises(OSError):
+                self.owned(b'', name)
+        self.assertEqual(target.read_text(), 'PANIC: Unknown AVD name', 'a linked target is never written')
+        self.assertFalse((self.tmp/'missing').exists())
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        self.addCleanup(os.close, w)
+        self.assertEqual(ex.startup_output(r)['log'], 'not-regular')
+        self.assertEqual(ex.startup_output(None)['log'], 'not-created', 'never read without an owned launch')
+        closed = os.dup(r)
+        os.close(closed)
+        self.assertEqual(ex.startup_output(closed)['log'], 'unreadable')
+
+    def test_the_avd_descriptor_fact(self):
+        ini = self.tmp/'fixture.ini'
+        self.assertEqual(ex.avd_descriptor(ini), 'absent')
+        ini.write_text('path=/x\n')
+        self.assertEqual(ex.avd_descriptor(ini), 'present')
+        link = self.tmp/'link.ini'
+        link.symlink_to(ini)
+        self.assertEqual(ex.avd_descriptor(link), 'unknown')
+        (self.tmp/'dir.ini').mkdir()
+        self.assertEqual(ex.avd_descriptor(self.tmp/'dir.ini'), 'unknown')
+
+    def test_no_raw_text_path_or_value_leaves_the_facts(self):
+        facts = ex.startup_output(self.owned(('PANIC: Unknown AVD name ' + self.SECRET).encode()))
+        text = json.dumps(facts)
+        for fragment in ('TOKEN', '/home/runner', 'ANDROID_SDK_ROOT', '--flag', str(self.tmp), 'PANIC', 'fixture'):
+            self.assertNotIn(fragment, text)
+        self.assertEqual(set(facts), {'log', 'capBytes', 'bytesRead', 'truncated', 'category', 'ambiguous'})
+
+    # ---- run() end to end over a fake SDK, child and adb
+
+    def fake_sdk(self):
+        sdk = self.tmp/'sdk'
+        for tool in ('cmdline-tools/latest/bin/sdkmanager', 'cmdline-tools/latest/bin/avdmanager', 'emulator/emulator',
+                'platform-tools/adb'):
+            (sdk/tool).parent.mkdir(parents=True, exist_ok=True)
+            (sdk/tool).write_text('')
+        (sdk/'licenses').mkdir()
+        work = self.tmp/'work'
+        work.mkdir()
+        (work/'apks.json').write_text('{}')
+        (work/'test-only.keystore').write_text('k')
+        return sdk, work
+
+    def run_fake(self, startup_text, create_ini=True, pre_existing_log=False, **kw):
+        sdk, work = self.fake_sdk()
+        if pre_existing_log:
+            (work/'emulator.log').write_text('older output')
+        clock, calls, launched = FakeClock(), [], []
+
+        class Child:
+            def __init__(self, argv, stdout, stderr):
+                launched.append([str(a) for a in argv])
+                os.write(stdout, startup_text.encode())
+            def poll(self):
+                return 1
+            def wait(self, timeout=None):
+                return 1
+            def kill(self):
+                pass
+
+        def run(argv, **kwargs):
+            argv = [str(a) for a in argv]
+            calls.append(argv)
+            name = Path(argv[0]).name
+            out = ''
+            if name == 'emulator':
+                out = 'Android emulator version 36.0\n'
+            elif name == 'sdkmanager' and '--list_installed' in argv:
+                out = f'  {ex.IMAGE} | 1 | image\n'
+            elif name == 'avdmanager' and create_ini:
+                (work/'avd').mkdir(exist_ok=True)
+                (work/'avd/fixture.ini').write_text('path=x\n')
+            elif name == 'adb' and argv[1:] == ['devices']:
+                out = 'List of devices attached\n'
+            return ex.subprocess.CompletedProcess(argv, 0, out, '')
+
+        evidence = self.tmp/'evidence'
+        env = dict(os.environ)
+        with mock.patch.object(ex.subprocess, 'run', run), mock.patch.object(ex.subprocess, 'Popen', Child), \
+                mock.patch.object(ex.time, 'time', clock.time), mock.patch.object(ex.time, 'sleep', clock.sleep), \
+                mock.patch.object(ex.os, 'access', lambda p, m: True), mock.patch.dict(ex.os.environ, env, clear=True):
+            results = ex.run(sdk, work, evidence, startup_diagnostic=True, **kw)
+        return results, work, evidence, calls, launched
+
+    def test_the_mode_runs_only_the_startup_stages_and_cleans_up(self):
+        results, work, evidence, calls, launched = self.run_fake('PANIC: Unknown AVD name [fixture] ' + self.SECRET)
+        stages = results['stages']
+        self.assertEqual((stages['environment']['result'], stages['image']['result'], stages['device']['result']),
+            ('pass', 'pass', 'fail'))
+        self.assertEqual(stages['device']['bootWait']['wait'], 'child-exited')
+        for name in ('seed', 'ordinary', 'staged', 'restore'):
+            self.assertEqual(stages[name], {'result': 'not-run', 'reason': 'excluded: startup diagnostic only'})
+        self.assertFalse([n for n in stages if n.startswith('systemui')])
+        self.assertEqual(len(launched), 1, 'one initial launch only')
+        self.assertEqual(launched[0][1:], ['-avd', 'fixture', '-port', '5580', '-no-window', '-no-snapshot',
+            '-no-boot-anim', '-no-audio', '-writable-system', '-gpu', 'swiftshader_indirect'], 'launch flags unchanged')
+        for banned in ('install', 'push', 'remount', 'root', 'reboot'):
+            self.assertFalse([c for c in calls if Path(c[0]).name == 'adb' and banned in c[1:]], banned)
+        self.assertEqual(results['mode'], 'startup-diagnostic')
+        self.assertEqual(results['startupDiagnostic'], {'log': 'read', 'capBytes': 16384,
+            'bytesRead': len(('PANIC: Unknown AVD name [fixture] ' + self.SECRET).encode()), 'truncated': False,
+            'category': 'avd_missing', 'ambiguous': False, 'avdDescriptor': 'present'},
+            'the descriptor is checked before cleanup removes it')
+        for private in ('test-only.keystore', 'avd', 'emulator-home'):
+            self.assertFalse((work/private).exists(), private)
+        written = (evidence/'results.json').read_text()
+        for fragment in ('TOKEN', '/home/runner', 'ANDROID_SDK_ROOT', 'PANIC', str(work)):
+            self.assertNotIn(fragment, written)
+        self.assertEqual(sorted(p.name for p in evidence.iterdir()), ['results.json', 'sdkmanager-install.txt'])
+
+    def test_a_missing_descriptor_is_reported_absent(self):
+        results, *_ = self.run_fake('PANIC: Cannot find AVD system path.', create_ini=False)
+        self.assertEqual((results['startupDiagnostic']['category'], results['startupDiagnostic']['avdDescriptor']),
+            ('image_missing', 'absent'))
+
+    def test_an_existing_output_file_stops_before_launch_and_is_never_read(self):
+        results, work, _, _, launched = self.run_fake('PANIC: Unknown AVD name', pre_existing_log=True)
+        self.assertEqual(launched, [], 'nothing launches over an existing output file')
+        self.assertEqual(results['stages']['device']['result'], 'fail')
+        self.assertEqual(results['startupDiagnostic'], {'log': 'not-created', 'capBytes': 16384, 'bytesRead': 0,
+            'truncated': None, 'category': 'unknown', 'ambiguous': False, 'avdDescriptor': 'unknown'})
+        self.assertFalse((work/'avd').exists())
+        self.assertEqual((work/'emulator.log').read_text(), 'older output', 'left as it was')
+
+    def test_never_with_systemui_and_off_by_default(self):
+        with self.assertRaises(ex.Unavailable):
+            ex.run(self.tmp/'sdk', self.tmp/'work', self.tmp/'evidence', systemui=True, startup_diagnostic=True)
+        self.assertFalse((self.tmp/'evidence').exists(), 'refused before anything is written')
+        with mock.patch.object(ex, 'run') as run, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                ex.main(['run', '--sdk', 's', '--work', 'w', '--evidence', 'e', '--systemui', '--startup-diagnostic'])
+            run.assert_not_called()
+        self.assertIn("p.add_argument('--startup-diagnostic', action='store_true'", CODE)
+        step = WORKFLOW[WORKFLOW.index('- name: Run the experiment'):WORKFLOW.index('- name: Evidence')]
+        self.assertIn('STARTUP_DIAGNOSTIC: ${{ inputs.startup_diagnostic }}', step)
+        self.assertLess(step.index('not with systemui'), step.index('kvm_access.py grant'),
+            'the combination is refused before any KVM grant')
+        self.assertIn('flag=(--startup-diagnostic)', step)
+        self.assertNotIn('emulator.log', WORKFLOW[WORKFLOW.index('Evidence (allowlist only)'):WORKFLOW.index('Remove the test key')])
 
 @unittest.skipUnless(os.environ.get('ANDROID_HOME') or Path('/opt/roseos/android-sdk/platforms/android-35').is_dir(),
     'no Android SDK with platform 35')

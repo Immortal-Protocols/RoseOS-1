@@ -8,7 +8,10 @@ name: SystemUI persistent-app experiment
 # SELinux or verity setting is changed: unavailable prerequisites are recorded as such. EXP006-KVM-001: only with
 # the manual kvm_acl input (default false) does kvm_access.py add one ACL entry giving this job's own non-root user
 # read/write on the KVM device, just before the run, and restore the exact original ACL from a trap and the cleanup
-# step. A run with it needs the owner's approval of that exact delta.
+# step. A run with it needs the owner's approval of that exact delta. EXP006-STARTUP-003: only with the manual
+# startup_diagnostic input (default false, never with systemui) does the run stop after environment, image and the
+# first launch and boot wait, and report one fixed startup category from at most the first 16 KiB of its own new
+# emulator output, with whether the AVD descriptor existed; no output text is reported or uploaded.
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +21,10 @@ on:
         default: false
       kvm_acl:
         description: 'Grant this job user rw on the KVM device for the run and restore it (EXP006-KVM-001; approved runs only)'
+        type: boolean
+        default: false
+      startup_diagnostic:
+        description: 'Stop after the first emulator launch and report a fixed startup category (EXP006-STARTUP-003; not with systemui)'
         type: boolean
         default: false
 
@@ -57,9 +64,15 @@ jobs:
         env:
           SYSTEMUI: ${{ inputs.systemui }}
           KVM_ACL: ${{ inputs.kvm_acl }}
+          STARTUP_DIAGNOSTIC: ${{ inputs.startup_diagnostic }}
         run: |
           flag=()
           if [ "$SYSTEMUI" = "true" ]; then flag=(--systemui); fi
+          if [ "$STARTUP_DIAGNOSTIC" = "true" ]; then
+            # Refused before any KVM grant or launch: the diagnostic never runs the SystemUI stages.
+            if [ "$SYSTEMUI" = "true" ]; then echo "::error title=startup diagnostic::not with systemui"; exit 1; fi
+            flag=(--startup-diagnostic)
+          fi
           if [ "$KVM_ACL" = "true" ]; then
             # Granted immediately before the run; restored when this step ends, however it ends.
             trap 'python3 os/tests/persistent-app-experiment/kvm_access.py restore --state "$RUNNER_TEMP/kvm-state" --evidence "$RUNNER_TEMP/pfx-evidence"' EXIT INT TERM
