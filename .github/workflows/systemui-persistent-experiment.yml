@@ -12,6 +12,11 @@ name: SystemUI persistent-app experiment
 # startup_diagnostic input (default false, never with systemui) does the run stop after environment, image and the
 # first launch and boot wait, and report one fixed startup category from at most the first 16 KiB of its own new
 # emulator output, with whether the AVD descriptor existed; no output text is reported or uploaded.
+# EXP006-ISOLATED-TRIAL-001: only with the manual runner input isolated-trial (default hosted) does the job run on the
+# self-hosted runner group roseos-systemui-test (restricted to this private repository and this workflow on main).
+# There a guard before checkout requires workflow_dispatch on refs/heads/main of this repository and refuses
+# kvm_acl=true, and trial_preflight.py then requires a non-root job user without sudo, an already usable /dev/kvm,
+# no persisted git credential and at least 35 minutes before the root-owned trial deadline; it changes nothing.
 on:
   workflow_dispatch:
     inputs:
@@ -27,6 +32,13 @@ on:
         description: 'Stop after the first emulator launch and report a fixed startup category (EXP006-STARTUP-003; not with systemui)'
         type: boolean
         default: false
+      runner:
+        description: 'hosted (ubuntu-24.04) or the isolated self-hosted trial runner (EXP006-ISOLATED-TRIAL-001; approved trial only)'
+        type: choice
+        options:
+          - hosted
+          - isolated-trial
+        default: hosted
 
 permissions:
   contents: read
@@ -37,18 +49,35 @@ concurrency:
 
 jobs:
   experiment:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner == 'isolated-trial' && fromJSON('{"group":"roseos-systemui-test","labels":["self-hosted","roseos-systemui-test"]}') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
+      - name: Isolated trial guard (before checkout)
+        if: inputs.runner == 'isolated-trial'
+        env:
+          KVM_ACL: ${{ inputs.kvm_acl }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$GITHUB_REF" != refs/heads/main ] \
+              || [ "$GITHUB_REPOSITORY_ID" != 1428996648 ] \
+              || [ "$GITHUB_WORKFLOW_REF" != "Immortal-Protocols/RoseOS-1/.github/workflows/systemui-persistent-experiment.yml@refs/heads/main" ]; then
+            echo "::error title=isolated trial::only this workflow on main by workflow_dispatch"; exit 1
+          fi
+          if [ "$KVM_ACL" != false ]; then echo "::error title=isolated trial::kvm_acl is refused on the trial runner"; exit 1; fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Isolated trial preflight (changes nothing)
+        if: inputs.runner == 'isolated-trial'
+        env:
+          KVM_ACL: ${{ inputs.kvm_acl }}
+        run: python3 os/tests/persistent-app-experiment/trial_preflight.py --evidence "$RUNNER_TEMP/pfx-evidence"
       - name: Static and unit checks
         run: |
           python3 os/tests/persistent-app-experiment/test_experiment.py -v
           python3 os/tests/persistent-app-experiment/test_setup_emulator.py -v
           python3 os/tests/persistent-app-experiment/test_report.py -v
           python3 os/tests/persistent-app-experiment/test_kvm_access.py -v
+          python3 os/tests/persistent-app-experiment/test_trial_preflight.py -v
       - name: Build v1 and v2 (job-local test key)
         run: python3 os/tests/persistent-app-experiment/experiment.py build --sdk "$ANDROID_HOME" --work "$RUNNER_TEMP/pfx"
       - name: SDK emulator package (installed sdkmanager, already accepted licences only)
