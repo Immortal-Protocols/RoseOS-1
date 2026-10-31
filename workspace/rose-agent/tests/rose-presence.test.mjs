@@ -57,8 +57,8 @@ test('HiFi composition: header, caption, results type and the three-well tray wi
  assert.ok(!/agents\.available\(/.test(activity),'Rose\'s apps is never disabled');
  assert.match(activity,/void dimmed\(boolean dim,String description\)\{setEnabled\(true\);setAlpha\(dim\?\.45f:1f\);setContentDescription\(description\);\}/);
  assert.match(activity,/agents\.dimmed\(!ws\.canWatch,ws\.canWatch\?"View this task's background workspace":"Rose's apps\. "\+ws\.reason\)/);
- assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";shownTaskActive=false;showWatchState\(TaskControl\.watchState\("",false,ctlStatus,ctlSession,ctlTask\)\);return;\}/,'no task shown: dimmed with its reason');
- assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctlStatus,ctlSession,ctlTask\);boolean canWatch=ws\.canWatch;showWatchState\(ws\);/,'the same five inputs as watchable');
+ assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";shownTaskActive=false;showWatchState\(TaskControl\.watchState\("",false,ctl\)\);return;\}/,'no task shown: dimmed with its reason');
+ assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);boolean canWatch=ws\.canWatch;showWatchState\(ws\);/,'the same classified controller read as watchBinding');
  assert.ok(!/Interrupt|EditText/.test(activity),'no composer or Interrupt in the tray');
 });
 

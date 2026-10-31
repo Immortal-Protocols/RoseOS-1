@@ -82,7 +82,7 @@ test('Watch carries the selected task and its session to the viewer, read after 
  const open=activity.slice(activity.indexOf('void openWorkspace('),activity.indexOf('\n }',activity.indexOf('void openWorkspace(')));
  assert.match(open,/final String selected=shownTaskId;/,'the selected task id is captured at the tap');
  assert.ok(open.indexOf('controllerState()')>0&&open.indexOf('controllerState()')<open.indexOf('startActivity('),'controller state is read fresh before opening');
- assert.match(open,/TaskControl\.watchBinding\(selected,selected\.equals\(shownTaskId\),c\[0\],c\[1\],c\[2\]\)/,'binding from the fresh read for the tapped task');
+ assert.match(open,/TaskControl\.watchBinding\(selected,selected\.equals\(shownTaskId\),c\)/,'binding from the fresh read for the tapped task');
  assert.match(open,/if\(binding==null\)\{[^}]*return;\}/,'no binding, no viewer');
  assert.match(open,/putExtra\(TaskControl\.EXTRA_WATCH_TASK_ID,binding\[0\]\)\.putExtra\(TaskControl\.EXTRA_WATCH_SESSION_ID,binding\[1\]\)/,'the viewer intent carries both ids');
  assert.equal((activity.match(/AgentWorkspaceActivity/g)||[]).length,1,'the conversation surface has one, bound, viewer launch');
@@ -98,17 +98,40 @@ test('Rose\'s apps never fails silently: a tap says why Watch can\'t open, from 
  // No silent early return when no task is shown: the tap reaches the fresh read and gets a reason.
  assert.ok(!/selected\.isEmpty\(\)/.test(open),'a tap with no task shown is not silently dropped');
  assert.match(open,/final String selected=shownTaskId;final boolean active=shownTaskActive;if\(watchOpening\)return;watchOpening=true;/,'task and its state captured at the tap; one read in flight');
- // The reason comes from App Core's watchState over the FRESH controller read, with the same five inputs as watchable.
- assert.match(open,/TaskControl\.WatchState ws=TaskControl\.watchState\(selected,active,c\[0\],c\[1\],c\[2\]\);/);
+ // The reason comes from App Core's watchState over the FRESH, classified controller read.
+ assert.match(open,/final TaskControl\.ControllerRead c=controllerState\(\);/);
+ assert.match(open,/TaskControl\.WatchState ws=TaskControl\.watchState\(selected,active,c\);/);
  assert.ok(at('controllerState()')<at('TaskControl.watchState('),'decided after the fresh read');
  assert.match(open,/if\(!ws\.canWatch\)\{Toast\.makeText\(this,ws\.reason,Toast\.LENGTH_LONG\)\.show\(\);return;\}/,'unavailable: Core\'s reason is shown and nothing opens');
  // Available: the existing bound route is unchanged and still re-checks the tapped task is the one shown.
- assert.ok(at('if(!ws.canWatch)')<at('TaskControl.watchBinding(selected,selected.equals(shownTaskId),c[0],c[1],c[2])'),'the reason check never replaces the binding check');
+ assert.ok(at('if(!ws.canWatch)')<at('TaskControl.watchBinding(selected,selected.equals(shownTaskId),c)'),'the reason check never replaces the binding check');
  assert.ok(at('TaskControl.watchBinding(')<at('startActivity('),'only a bound launch');
  // The UI shows Core's text as given: no reason sentence is written or chosen here.
  for(const r of ["isn't working in an app","isn't available on this phone","still starting","waiting for your consent","doesn't let Rose use",
-   "has stopped","couldn't start","busy with another task"])assert.ok(!activity.includes(r),'no hard-coded watch reason: '+r);
+   "has stopped","couldn't start","busy with another task","running a background workspace","couldn't check","wasn't allowed to check",
+   "couldn't find its background","couldn't read","doesn't recognise","isn't linked"])assert.ok(!activity.includes(r),'no hard-coded watch reason: '+r);
  assert.ok(!/AutoAgentPip|PictureInPicture/.test(activity),'the automatic PiP fallback is not touched here');
+});
+
+test('The controller read keeps idle apart from a failed read, in fixed categories (APP-WATCH-1031-C-M002)',()=>{
+ const activity=source('RoseConversationActivity.java');
+ const read=activity.slice(activity.indexOf('TaskControl.ControllerRead controllerState('),activity.indexOf('\n }',activity.indexOf('static String stateField(')));
+ // One classified read: Core's adapter decides idle/status/failure; nothing is discarded into empty strings.
+ assert.match(read,/return TaskControl\.readController\(\(\)->\{/);
+ assert.ok(!/catch\(Exception/.test(read),'no catch-all here: every failure goes to the adapter');
+ assert.match(read,/acquireUnstableContentProviderClient\(CONTROLLER_AUTHORITY\);\s*if\(client==null\)throw new TaskControl\.NoProvider\(\);/,'absent provider is its own category');
+ assert.match(read,/catch\(org\.json\.JSONException e\)\{throw new TaskControl\.InvalidReply\(\);\}/,'malformed JSON is an invalid answer');
+ assert.match(read,/if\(!\(v instanceof String\)\)throw new TaskControl\.InvalidReply\(\);/,'a non-string field is an invalid answer');
+ assert.match(read,/client\.call\("get_state",null,null\)/,'read-only: only get_state');
+ assert.ok(!/"start"|"command"|"stop"/.test(read),'the read never starts, commands or stops anything');
+ assert.match(read,/finally\{client\.close\(\);\}/);
+ assert.ok(!/getMessage\(\)|toString\(\)|printStackTrace|Log\./.test(read),'no exception text is kept or logged');
+ // State is the classified read everywhere; the first frame says it is still checking.
+ assert.match(activity,/volatile TaskControl\.ControllerRead ctl=TaskControl\.ControllerRead\.PENDING_READ;/);
+ assert.ok(!/ctlStatus|ctlSession|ctlTask/.test(activity),'no unclassified copies of the fields remain');
+ assert.match(activity,/new Thread\(\(\)->\{ctl=controllerState\(\);ctlPolling=false;\},"rose-controller-state"\)/);
+ assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);/);
+ assert.match(activity,/\+ctl\.key\(\)\+/,'a changed read or category redraws the task');
 });
 
 test('W1: the generic phone-command path claims the id before posting and never turns a slow wait into an error',()=>{
