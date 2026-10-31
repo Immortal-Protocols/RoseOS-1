@@ -43,7 +43,7 @@ BLOCK = 4096
 SSH = shutil.which('ssh-keygen')
 REAL_SIMG2IMG = shutil.which('simg2img')
 RETAINED = ['os/retained-rango/release.json', 'os/release-notes/rango-2026103001.md', 'os/devices/pixel10.json',
-            'os/release-pipeline/frankel.json', 'os/flavors/frankel.json', 'os/flavors/rango.json']
+            'os/release-pipeline/frankel.json', 'os/flavors/frankel.json', 'os/flavors/rango.json', 'os/flavors/blazer.json']
 
 def image(part):
     magic = {'boot': b'ANDROID!', 'init_boot': b'ANDROID!', 'vendor_boot': b'VNDRBOOT', 'vendor_kernel_boot': b'VNDRBOOT'}
@@ -195,12 +195,12 @@ class Fixture(unittest.TestCase):
         self.work.mkdir()
         # A repository copy pinned to synthetic AVB keys and (when ssh-keygen exists) a throwaway factory-signing key.
         self.root = self.tmp/'repo'
-        for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/devices/pixel10.json',
+        for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/flavors/blazer.json', 'os/devices/pixel10.json',
                     'os/release-pipeline/frankel.json', 'scripts/tests/fixtures/permission-apex/script/generate-release.sh') + tuple(
                     f'scripts/tests/fixtures/factory-package/device_common-1f5ba267/{f}'
                     for f in ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')) + tuple(
                     f'os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices/{d}/firmware/android-info.txt'
-                    for d in ('frankel', 'rango')):
+                    for d in ('frankel', 'rango', 'blazer')):
             (self.root/rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT/rel, self.root/rel)
         self.edit_json('os/release-pipeline/frankel.json', lambda d: d['identities'].update(
@@ -665,6 +665,120 @@ class GscFirmware(Fixture):
         result = self.classify(self.write(f'rango-factory-{BUILD}.zip', intermediate), 'rango', self.complete('rango')[1])
         self.refused(result, 'not-factory:factory-intermediate')
         self.assertEqual(result['role'], 'factory-intermediate')
+
+class PeerIdentity(Fixture):
+    """FOLD-FACTORY-004: AVB pins compared across every flavor through the real loader, never recursively."""
+    def frankel_pin(self):
+        return json.loads((self.root/'os/release-pipeline/frankel.json').read_text())['identities']['avbPublicKeySha256']
+
+    def set_pin(self, flavor, value, field='avbPublicKeySha256'):
+        self.edit_json(f'os/flavors/{flavor}.json', lambda d: d['identity'].update({field: value}))
+
+    def test_repository_flavors_have_distinct_or_unknown_pins(self):
+        pins = {name: fp.pinned_avb_key(fp.load_flavor(name)) for name in ('frankel', 'rango', 'blazer')}
+        self.assertIsNone(pins['blazer'])
+        self.assertEqual(len({p for p in pins.values() if p}), 2)
+
+    def test_blazer_rango_collision_refuses_both_loads(self):
+        self.set_pin('blazer', hashlib.sha256(PKMD['rango']).hexdigest())
+        for name, peer in (('blazer', 'rango'), ('rango', 'blazer')):
+            with self.assertRaisesRegex(fp.ContractError, f'{name}: signer_collision: the pinned AVB key equals the {peer} key'):
+                fp.load_flavor(name, self.root)
+        fp.load_flavor('frankel', self.root)
+
+    def test_frankel_collision_refuses_frankel_and_the_duplicate(self):
+        self.set_pin('blazer', self.frankel_pin())
+        for name, peer in (('blazer', 'frankel'), ('frankel', 'blazer')):
+            with self.assertRaisesRegex(fp.ContractError, f'{name}: signer_collision: the pinned AVB key equals the {peer} key'):
+                fp.load_flavor(name, self.root)
+
+    def test_distinct_and_unknown_pins_load(self):
+        self.set_pin('blazer', '2' * 64)
+        for name in ('frankel', 'rango', 'blazer'):
+            fp.load_flavor(name, self.root)
+        self.set_pin('blazer', None)
+        self.set_pin('rango', None)
+        # Two unknown identities are not a collision.
+        self.assertEqual([fp.pinned_avb_key(fp.load_flavor(n, self.root), self.root) for n in ('rango', 'blazer')], [None, None])
+
+    def test_malformed_peer_identity_is_never_skipped(self):
+        cases = ((lambda d: d['identity'].update(avbPublicKeySha256='not-a-sha256'), 'peer blazer: avbPublicKeySha256 is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256=7), 'peer blazer: avbPublicKeySha256 is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256='A' * 64), 'peer blazer: avbPublicKeySha256 is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256=None, avbPublicKeySha256From='os/release-pipeline/frankel.json identities.missing'),
+                  'peer blazer: avbPublicKeySha256From .* does not resolve'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256=None, avbPublicKeySha256From='os/release-pipeline/frankel.json target.device'),
+                  'peer blazer: avbPublicKeySha256From .* is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256From=['x']), 'peer blazer: avbPublicKeySha256From is not text'),
+                 (lambda d: d.update(identity='none'), 'peer blazer: identity is not an object'),
+                 (lambda d: d.pop('identity'), 'peer blazer contract has no identity'),
+                 (lambda d: d.update(flavor='rango'), 'peer blazer contract has no identity for flavor blazer'))
+        original = (self.root/'os/flavors/blazer.json').read_text()
+        for change, pattern in cases:
+            (self.root/'os/flavors/blazer.json').write_text(original)
+            self.edit_json('os/flavors/blazer.json', change)
+            with self.assertRaisesRegex(fp.ContractError, 'rango: ' + pattern):
+                fp.load_flavor('rango', self.root)
+        (self.root/'os/flavors/blazer.json').write_text('{ not json')
+        with self.assertRaisesRegex(fp.ContractError, 'frankel: peer blazer contract is unreadable'):
+            fp.load_flavor('frankel', self.root)
+
+    def test_own_malformed_pin_refuses(self):
+        self.set_pin('rango', '')
+        self.edit_json('os/flavors/rango.json', lambda d: d['identity'].update(avbPublicKeySha256='', avbPublicKeySha256From=None))
+        with self.assertRaisesRegex(fp.ContractError, 'rango: avbPublicKeySha256 is not a sha256'):
+            fp.load_flavor('rango', self.root)
+
+    def test_peers_are_read_without_recursive_full_loads(self):
+        with mock.patch.object(fp, 'load_flavor', wraps=fp.load_flavor) as loader:
+            fp.load_flavor('rango', self.root)
+        self.assertEqual(loader.call_count, 1)
+
+class Readiness(Fixture):
+    """FOLD-FACTORY-004: the optional readiness declaration is strict and can never claim a result."""
+    def refuses(self, change, pattern, flavor='blazer'):
+        self.edit_json(f'os/flavors/{flavor}.json', change)
+        with self.assertRaisesRegex(fp.ContractError, f'{flavor}: ' + pattern):
+            fp.load_flavor(flavor, self.root)
+
+    def test_real_declaration_and_absent_block_load(self):
+        self.assertEqual({k: v for k, v in fp.load_flavor('blazer')['readiness'].items() if k != 'basis'},
+                         {'buildReady': False, 'factoryReady': False, 'phoneValidated': False, 'receipts': []})
+        for name in ('frankel', 'rango'):
+            self.assertNotIn('readiness', fp.load_flavor(name))
+        self.edit_json('os/flavors/rango.json', lambda d: d.update(readiness={'buildReady': False, 'factoryReady': False,
+            'phoneValidated': False, 'receipts': ['os-release run 40974306111 receipt']}))
+        fp.load_flavor('rango', self.root)
+
+    def test_positive_claims_are_unsupported(self):
+        for flag in fp.READINESS_FLAGS:
+            original = (self.root/'os/flavors/blazer.json').read_text()
+            self.refuses(lambda d: d['readiness'].update({flag: True, 'receipts': ['some real-looking receipt']}),
+                         rf"unsupported readiness claim \['{flag}'\]")
+            (self.root/'os/flavors/blazer.json').write_text(original)
+
+    def test_strict_types_keys_and_synthetic_receipts(self):
+        original = (self.root/'os/flavors/blazer.json').read_text()
+        for change, pattern in ((lambda d: d['readiness'].update(factoryReady=0), r"readiness \['factoryReady'\] must be true or false"),
+                                (lambda d: d['readiness'].update(phoneValidated='false'), r"readiness \['phoneValidated'\] must be"),
+                                (lambda d: d['readiness'].update(receipts='none'), 'readiness.receipts must be a list'),
+                                (lambda d: d['readiness'].update(receipts=['']), 'readiness.receipts must be a list'),
+                                (lambda d: d['readiness'].update(receipts=[{'id': 1}]), 'readiness.receipts must be a list'),
+                                (lambda d: d['readiness'].update(basis=1), 'readiness.basis must be text'),
+                                (lambda d: d['readiness'].update(otaReady=False), r"readiness keys: unknown \['otaReady'\]"),
+                                (lambda d: d['readiness'].pop('buildReady'), r"readiness keys: unknown \[\], missing \['buildReady'\]"),
+                                (lambda d: d.update(readiness=[False]), 'readiness must be an object'),
+                                (lambda d: d['readiness'].update(receipts=['Synthetic test package receipt']),
+                                 'readiness.receipts names synthetic evidence, which is never a readiness receipt')):
+            (self.root/'os/flavors/blazer.json').write_text(original)
+            self.refuses(change, pattern)
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_synthetic_artifact_success_never_changes_declared_readiness(self):
+        archive, tf = self.complete('rango')
+        self.assertTrue(self.classify(archive, 'rango', tf)['factoryReady'])
+        self.assertEqual(fp.load_flavor('blazer', self.root)['readiness']['factoryReady'], False)
+        self.assertNotIn('readiness', fp.load_flavor('rango', self.root))
 
 if __name__ == '__main__':
     unittest.main()
