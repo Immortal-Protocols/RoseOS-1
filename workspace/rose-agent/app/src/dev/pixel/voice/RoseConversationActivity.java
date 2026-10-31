@@ -26,7 +26,7 @@ public final class RoseConversationActivity extends Activity {
  final ConversationState.Notices notices=new ConversationState.Notices();
  ConversationState state;
  RosePresenceView presence;LinearLayout stage;TextView caption;Control agents;LinearLayout notice;TextView noticeIcon,noticeText,failure;
- LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";
+ LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";boolean shownTaskActive;
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
  volatile String ctlStatus="",ctlSession="",ctlTask="";volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
@@ -52,6 +52,8 @@ public final class RoseConversationActivity extends Activity {
    setPadding(0,0,0,0);setMinimumHeight(dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP));}
   void show(ConversationPresentation.Glyph glyph,String text,String description){icon.set(glyph,color);label.setText(text);setContentDescription(description);}
   void available(boolean on){setEnabled(on);setAlpha(on?1f:.45f);}
+  /** Dimmed but still tappable, so a tap can say why (Rose's apps: TaskControl.watchState). */
+  void dimmed(boolean dim,String description){setEnabled(true);setAlpha(dim?.45f:1f);setContentDescription(description);}
  }
 
  @Override protected void onCreate(Bundle b){
@@ -106,7 +108,7 @@ public final class RoseConversationActivity extends Activity {
   primary=new Control(ink());primary.setOnClickListener(v->primary());row.addView(primary,new LinearLayout.LayoutParams(0,-2,1f));
   end=new Control(endInk());end.show(ConversationPresentation.Glyph.END,"End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
   // Rose's apps: the existing bound workspace view of the shown task (openWorkspace); no simulated windows.
-  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());agents.available(false);
+  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());showWatchState(TaskControl.watchState("",false,ctlStatus,ctlSession,ctlTask));
   row.addView(agents,new LinearLayout.LayoutParams(0,-2,1f));
   LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT));rp.topMargin=dp(8);bottom.addView(row,rp);
   FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);bp.leftMargin=bp.rightMargin=dp(ConversationPresentation.MARGIN);root.addView(bottom,bp);
@@ -172,15 +174,16 @@ public final class RoseConversationActivity extends Activity {
    // margin+84), so no extra inset.
    stage.setPadding(0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
   presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
-  if(!t.visible){shownTaskId="";agents.available(false);return;}
+  if(!t.visible){shownTaskId="";shownTaskActive=false;showWatchState(TaskControl.watchState("",false,ctlStatus,ctlSession,ctlTask));return;}
   if(!t.id.equals(shownTaskId)){shownTaskId=t.id;presentedScroll.scrollTo(0,0);}
   taskEyebrow.setText(t.eyebrow);taskTitle.setText(t.title);
   taskBody.setVisibility(t.body.isEmpty()?View.GONE:View.VISIBLE);if(!t.body.isEmpty())TaskText.set(taskBody,t.body);
   taskNote.setVisibility(t.note.isEmpty()?View.GONE:View.VISIBLE);taskNote.setText(t.note);
   boolean running=available&&(state.equals("running")||state.equals("checking"));
-  boolean canWatch=TaskControl.watchable(t.id,t.active(),ctlStatus,ctlSession,ctlTask);
+  shownTaskActive=t.active();
+  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctlStatus,ctlSession,ctlTask);boolean canWatch=ws.canWatch;showWatchState(ws);
   boolean canStop=running&&stopPendingFor==null&&!stopInFlight;
-  watch.setVisibility(canWatch?View.VISIBLE:View.GONE);agents.available(canWatch);stopTask.setVisibility(canStop?View.VISIBLE:View.GONE);
+  watch.setVisibility(canWatch?View.VISIBLE:View.GONE);stopTask.setVisibility(canStop?View.VISIBLE:View.GONE);
   taskActions.setVisibility(canWatch||canStop?View.VISIBLE:View.GONE);
   stopNote.setText(stopInFlight?"Sending Stop…":stopMessage);stopNote.setVisibility(stopInFlight||!stopMessage.isEmpty()?View.VISIBLE:View.GONE);
  }
@@ -201,16 +204,24 @@ public final class RoseConversationActivity extends Activity {
   * is read fresh, and the viewer receives that task id with its own session id (TaskControl.watchBinding), so
   * it can refuse to show a session that is gone or now carries another task. Opening never stops anything. */
  void openWorkspace(){
-  final String selected=shownTaskId;if(selected.isEmpty()||watchOpening)return;watchOpening=true;
+  final String selected=shownTaskId;final boolean active=shownTaskActive;if(watchOpening)return;watchOpening=true;
   new Thread(()->{final String[] c=controllerState();runOnUiThread(()->{
    watchOpening=false;ctlStatus=c[0];ctlSession=c[1];ctlTask=c[2];lastTaskKey="";
    if(isFinishing()||isDestroyed())return;
+   // Never a silent tap: from the fresh read, say why Watch can't open (App Core's fixed reasons). When it can, the
+   // bound route below is unchanged and still re-checks that the tapped task is the one shown.
+   TaskControl.WatchState ws=TaskControl.watchState(selected,active,c[0],c[1],c[2]);
+   if(!ws.canWatch){Toast.makeText(this,ws.reason,Toast.LENGTH_LONG).show();return;}
    String[] binding=TaskControl.watchBinding(selected,selected.equals(shownTaskId),c[0],c[1],c[2]);
    if(binding==null){stopMessage="That task’s workspace is no longer available.";return;}
    try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity"))
     .putExtra(TaskControl.EXTRA_WATCH_TASK_ID,binding[0]).putExtra(TaskControl.EXTRA_WATCH_SESSION_ID,binding[1]).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
    catch(Exception e){stopMessage="The workspace viewer couldn’t open.";}
   });},"rose-watch-open").start();
+ }
+ /** Rose's apps: full strength when Watch can open, dimmed with the reason in its spoken name when it can't. */
+ void showWatchState(TaskControl.WatchState ws){
+  agents.dimmed(!ws.canWatch,ws.canWatch?"View this task's background workspace":"Rose's apps. "+ws.reason);
  }
  /** Confirms Stop for the task shown now. The id is captured here, so a later task is never stopped by this dialog. */
  void confirmStop(){
