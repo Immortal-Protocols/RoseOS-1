@@ -4,7 +4,8 @@
 stage SOURCE_DIR DEST_DIR   copy only the five public connection inputs (verified with the candidate's
                             check-public-assets.mjs) into DEST_DIR with a nonsecret digest receipt
 build CANDIDATE RELEASE_DIR restore those five inputs into the candidate, then with the stable SDK and JDK:
-                            npm ci --ignore-scripts, both app build.sh scripts and the controller compile;
+                            npm ci --ignore-scripts, the candidate's scripts/setup-zxing.sh when present,
+                            both app build.sh scripts and the controller compile;
                             each new output is captured by before/after directory sets (exactly one each) and
                             copied to RELEASE_DIR/unsigned/{voice.apk,calculator.apk,controller/Agent-unsigned.apk}
 build-voice CANDIDATE RELEASE_DIR
@@ -24,6 +25,7 @@ PUBLIC_ASSETS = ('workspace/rose-agent/app/assets/connection.json', 'workspace/r
     'workspace/pixel-clipboard/clipboard-connection.json', 'workspace/rose-agent/app/res/raw/mac_screen_cert.pem',
     'workspace/rose-agent/app/res/xml/mac_screen_network.xml')
 RECEIPT = 'public-assets-receipt.json'
+ZXING_SETUP = 'scripts/setup-zxing.sh'  # candidate-relative; verifies .tools/zxing/core-3.5.4.jar by SHA-256
 
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -92,6 +94,9 @@ def build(candidate, release_dir, sdk, java_home, asset_dir, pinned=None, run=su
     out = candidate/'out'
     out.mkdir(exist_ok=True)
     run(['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], cwd=candidate/'workspace/rose-agent/server', env=env, check=True)
+    if (candidate/ZXING_SETUP).is_file():
+        # A fresh candidate checkout has no .tools: its build.sh needs the ZXing jar its own hash-pinned setup fetches.
+        run(['bash', ZXING_SETUP], cwd=candidate, env=env, check=True)
     before = set(out.glob('rose-agent.*/rose-agent-unsigned.apk'))
     run(['bash', 'workspace/rose-agent/build.sh'], cwd=candidate, env=env, check=True)
     voice = capture(out, 'rose-agent.*/rose-agent-unsigned.apk', before)
