@@ -139,3 +139,5 @@
 /* Translucent options over the wallpaper (2, 4, 7, 10): light symbols keep the voice state legible. */
 .screen:is([data-tray="2"],[data-tray="4"],[data-tray="7"],[data-tray="10"]) #home-tray #tray-voice{color:#fff;filter:drop-shadow(0 1px 1px rgba(10,25,50,.35))}
 .screen:is([data-tray="2"],[data-tray="4"],[data-tray="7"],[data-tray="10"]) #home-tray #tray-voice[data-voice-muted=true]{color:#ffc2cd;background-color:rgba(232,80,100,.28)}
+/* Glass lenses (3) also sit over the wallpaper: light muted symbol for contrast. */
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]{color:#ffc2cd;background-color:rgba(232,80,100,.3)}
