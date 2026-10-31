@@ -2,7 +2,7 @@
 
   python3 -m rose_cloud.speech --pr288 prototypes/voice-phone-demo --model-dir <phonon-31m-en dir> \
       --voice zoey=<voices/NbpkqMVS3CJeq2j8.safetensors> --text "Hello there, how are you today? I am fine." \
-      [--quant q8] [--wav out.wav]
+      [--quant q8_0] [--wav out.wav]
 
 What runs unchanged from PR288 (loaded through nomlx): rose.runtime.Runtime, rose.bus.Bus, rose.speaker.Speaker and
 Utterance (chunking, segment ids, played-sample accounting, Stop/duck/pause, at most ~1.5 s synthesized ahead of
@@ -160,7 +160,7 @@ def main(argv=None) -> int:
     p.add_argument('--pr288', required=True)
     p.add_argument('--model-dir', required=True)
     p.add_argument('--voice', required=True, help='name=path, e.g. zoey=/data/voices/NbpkqMVS3CJeq2j8.safetensors')
-    p.add_argument('--quant', choices=('q8', 'q4k'), default=None)
+    p.add_argument('--quant', choices=('f32', 'q8_0', 'q4k'), default='f32')
     p.add_argument('--text', default='Hello there, how are you today? I am fine.')
     p.add_argument('--wav')
     a = p.parse_args(argv)

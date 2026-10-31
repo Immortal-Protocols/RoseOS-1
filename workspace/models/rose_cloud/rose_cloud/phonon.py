@@ -19,8 +19,9 @@ utterance) stops the stream before anything else is handed out.
 
 Inputs are explicit local files, checked against the pins below before ``ptts`` sees them. ``lang`` defaults to
 ``none`` (text as written): PR288's speaker already normalizes each chunk with ``textnorm.speakable``. Not verified
-here: the ``ptts`` package itself (not installed in this environment), its ``quant`` value for the safetensors
-weights, its chunk size and timing, and that its audio matches mlx-audio's for the same weights and voice.
+here: the ``ptts`` package itself (0.6.0 pinned in manifest.json, not installed in this environment), its chunk
+size and timing, and that its audio matches mlx-audio's for the same weights and voice. The quant choice is resolved
+from ptts 0.6.0's source: ``f32`` (its default) loads ``model.safetensors``.
 """
 
 from __future__ import annotations
@@ -45,7 +46,10 @@ MODEL_FILES = {
     'config.json': ('gitsha1', '11cfeb2513febe31358a8ff942093e0b2c28710a', 4634),
     'tokenizer.json': ('gitsha1', '70d39980cb2154bd364dbed8424b1343923a03e2', 277967),
 }
-WEIGHTS = {None: 'model.safetensors', 'q8': 'model.q8.gguf', 'q4k': 'model.q4k.gguf'}
+# ptts quant names (ptts 0.6.0 available_quants) and the weights file each loads first (checkpoint.rs
+# weight_candidates). f32 is the default (quant=None is Quant::F32) and the full-precision file mlx-audio uses.
+WEIGHTS = {'f32': 'model.safetensors', 'q8_0': 'model.q8.gguf', 'q4k': 'model.q4k.gguf'}
+PTTS = ('ptts', '0.6.0')  # PyPI; wheel pinned in manifest.json
 # PR288 rose/speaker.py VOICES, with each voice file's sha256 at VOICE_REPO's revision.
 VOICES = {
     'zoey': ('NbpkqMVS3CJeq2j8', '97c7f8c253413574406ab80dd23f49c3ebb2517163b00a9bf86b9c4cf43e7e23'),
@@ -75,8 +79,10 @@ def file_digest(path: Path, kind: str) -> str:
 
 
 def check_inputs(model_dir: str | os.PathLike, voice_files: dict[str, str | os.PathLike],
-                 quant: str | None = None) -> dict:
+                 quant: str = 'f32') -> dict:
     """Every missing or mismatched input, by name: {'missing': [...], 'mismatched': [...]} (empty lists if ready)."""
+    if quant not in WEIGHTS:
+        raise ValueError(f'unsupported quant {quant!r}; pinned: {", ".join(WEIGHTS)}')
     model_dir = Path(model_dir)
     missing, mismatched = [], []
     needed = ['config.json', 'tokenizer.json', WEIGHTS[quant]]
@@ -111,7 +117,7 @@ class PhononProvider:
     three calls (``add_voice``, ``stream``, ``sample_rate``) and say so."""
 
     def __init__(self, model_dir: str | os.PathLike, voice_files: dict[str, str | os.PathLike], *,
-                 runtime: Any = None, lang: str = 'none', quant: str | None = None,
+                 runtime: Any = None, lang: str = 'none', quant: str = 'f32',
                  tts_factory: Callable[..., Any] | None = None, verify: bool = True, max_chunks: int = 32):
         if verify:
             problems = check_inputs(model_dir, voice_files, quant)
@@ -123,8 +129,7 @@ class PhononProvider:
             import ptts  # noqa: F401  (the official runtime; not installed here)
 
             def tts_factory(model, lang, quant):
-                kw = {'lang': lang} if quant is None else {'lang': lang, 'quant': quant}
-                return ptts.TTS(str(model), **kw)
+                return ptts.TTS(str(model), device='cpu', quant=quant, lang=lang)
         self.tts = tts_factory(Path(model_dir), lang, quant)
         rate = getattr(self.tts, 'sample_rate', None)
         if rate != RATE:
