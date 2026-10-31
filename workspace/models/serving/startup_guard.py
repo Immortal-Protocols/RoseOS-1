@@ -8,12 +8,22 @@ that cannot fit the model fails before it downloads 59.6 GB. It never reads envi
 or credentials.
 
 Usage: startup_guard.py '<limits json>' -- vllm serve <args...>
+
+With "status_path" in the limits (the persistent service only), the guard also writes a small nonsecret status file
+there and supervises the server instead of exec-ing it: output passes through unchanged, signals are forwarded, and
+the guard exits with the server's own status (128+N for signal N). The file records the guard's result as failure
+codes, when the server's port first accepted a connection, the exit status, the elapsed time and the class name of
+the last exception the server printed. It never records message text, arguments or environment.
 """
 import json
 import os
 import re
 import shutil
+import signal
+import socket
+import subprocess
 import sys
+import threading
 import time
 
 EXIT_REFUSED = 3
@@ -76,6 +86,70 @@ def collect(cache_dir):
     return facts
 
 
+CODES = (('CUDA unavailable', 'cuda_unavailable'), ('driver version not reported', 'driver_unknown'),
+         ('driver ', 'driver_too_old'), ('GPUs visible', 'gpu_count'), ('total bytes', 'gpu_total'),
+         ('free bytes', 'gpu_free'), ('cache free', 'cache_free'), ('/dev/shm', 'shm'))
+EXCEPTION = re.compile(r'(?:^|[\s(\[])((?:[A-Za-z_][A-Za-z0-9_]*\.){0,5}[A-Z][A-Za-z0-9_]*(?:Error|Exception|Interrupt))(?::|$)')
+
+
+def codes(failures):
+    return [next((c for marker, c in CODES if marker in f), 'other') for f in failures]
+
+
+def write_status(path, **fields):
+    """Atomic and best effort: the status file is telemetry and never changes what the guard does."""
+    try:
+        tmp = f'{path}.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({**fields, 'at': int(time.time())}, f, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def supervise(command, status_path):
+    """Run the server as a child, pass its output through, and return the exit status the container should have."""
+    started, seen = time.monotonic(), {'listenedAfterS': None, 'lastException': None}
+    args = command[1:]
+    host = args[args.index('--host') + 1] if '--host' in args else '127.0.0.1'
+    port = int(args[args.index('--port') + 1]) if '--port' in args else 8000
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, lambda s, _: child.poll() is None and child.send_signal(s))
+    status = lambda stage, **extra: write_status(status_path, stage=stage, proceed=True, failures=[],  # noqa: E731
+                                                 elapsedS=int(time.monotonic() - started), **seen, **extra)
+    status('server_started')
+
+    def relay(src, dst):
+        for raw in iter(src.readline, b''):
+            dst.write(raw)
+            dst.flush()
+            m = EXCEPTION.search(raw[:2000].decode('utf-8', 'replace').rstrip())
+            if m:
+                seen['lastException'] = m.group(1)[:120]
+
+    def listen():
+        while child.poll() is None and seen['listenedAfterS'] is None:
+            try:
+                socket.create_connection((host, port), timeout=2).close()
+                seen['listenedAfterS'] = int(time.monotonic() - started)
+                status('listening')
+            except OSError:
+                time.sleep(5)
+
+    threads = [threading.Thread(target=relay, args=(child.stdout, sys.stdout.buffer), daemon=True),
+               threading.Thread(target=relay, args=(child.stderr, sys.stderr.buffer), daemon=True),
+               threading.Thread(target=listen, daemon=True)]
+    for t in threads:
+        t.start()
+    rc = child.wait()
+    for t in threads:  # the listener too, so `exited` is the last status written
+        t.join(10)
+    code = 128 - rc if rc < 0 else rc
+    status('exited', exitCode=rc if rc >= 0 else None, signal=-rc if rc < 0 else None)
+    return code
+
+
 def main(argv):
     if '--' not in argv or argv.index('--') != 1:
         raise SystemExit(__doc__)
@@ -84,8 +158,14 @@ def main(argv):
     failures = evaluate(facts, limits)
     print(json.dumps({'guard': 'muse-glimmer-startup', 'utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                       'facts': facts, 'limits': limits, 'failures': failures, 'proceed': not failures}), flush=True)
+    status_path = limits.get('status_path')
+    if status_path:
+        write_status(status_path, stage='guard_refused' if failures else 'guard_passed', proceed=not failures,
+                     failures=codes(failures))
     if failures:
         sys.exit(EXIT_REFUSED)
+    if status_path:
+        sys.exit(supervise(command, status_path))
     os.execvp(command[0], command)
 
 

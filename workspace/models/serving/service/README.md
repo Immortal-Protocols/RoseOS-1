@@ -88,7 +88,11 @@ gcloud compute instances get-guest-attributes models-glimmer-01 --project=$P --z
   code, restarts), `startup` (start-model's last phase: `verifying`, `refused_storage`, `launching_offline` or
   `launching_online`, with the verify exit and whether the data disk is mounted and the image present) and
   `container` (docker State: status, exit code, OOM, start time) separate a refused start, a failed container and a
-  running container that does not answer. Fresh means this boot's `bootId` and `checkedAt` within 3 minutes. A
+  running container that does not answer. `containerRun` is the startup guard's record of this attempt (`start-model`
+  clears it first): `guard_refused` with failure codes, or `guard_passed`, `server_started`, `listening` (with
+  `listenedAfterS`) and `exited` (exit code or signal, `elapsedS`, and the class name of the last exception the server
+  printed, never its text). `weightsCache` compares the Hugging Face cache's complete and partial blob bytes with the
+  pinned repository size. Fresh means this boot's `bootId` and `checkedAt` within 3 minutes. A
   publication or query failure never changes recovery.
 - **`rose-models/renewal`** (after the edge starts, then every 6 h, `renewal_status.py`): `certbotTimer` (enabled,
   active, `nextRun`, `schedule`, and `certbot.service`'s last result), `renewalConfig` (webroot, deploy hook, single account), `certificate` (`notAfter`, `daysLeft`,

@@ -41,18 +41,23 @@ def check_local(config, option):
         raise render_upload.Rejected('the model cache must live on the scratch mount')
 
 
-def render(config, offline=False, profile=PROFILE):
+def render(config, offline=False, profile=PROFILE, status=None):
+    """status: optional (host dir, container dir) for the guard's status file (the persistent service)."""
     option = render_upload.profile(config, profile)
     check_local(config, option)
     launch, runtime = option['local_launch'], option['runtime']
     limits = render_upload.guard_limits(config, option)
+    mounts = []
+    if status:
+        limits['status_path'] = f'{status[1]}/status.json'
+        mounts = ['-v', f'{status[0]}:{status[1]}']
     guard = (HERE/'startup_guard.py').read_text()
     if 'GUARD_SOURCE_END' in guard:
         raise render_upload.Rejected('guard source collides with the heredoc marker')
     env = ['-e', 'HF_HUB_OFFLINE=1'] if offline else []
     run = ['docker', 'run', '--rm', '--name', launch['container_name'], '--gpus', 'all', '--network', 'host',
            '--shm-size', f"{launch['shm_size_mb']}m", '-v', f"{launch['host_cache_dir']}:{launch['container_cache_dir']}",
-           *env, '--entrypoint', 'python3', runtime['image_id'], '-c']
+           *mounts, *env, '--entrypoint', 'python3', runtime['image_id'], '-c']
     tail = [json.dumps(limits, sort_keys=True), '--', 'vllm', 'serve', *option['container_spec']['args']]
     q = shlex.quote
     return f"""#!/usr/bin/env bash

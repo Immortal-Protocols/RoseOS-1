@@ -40,6 +40,7 @@ RUN_ACME = '/run/rose-acme'  # the ACME-only Nginx, before the first certificate
 VERIFY_START = '/run/rose-models/verify-start.json'  # this boot's start check (published by health.py)
 VERIFY_FULL = '/var/lib/rose-models/verify-full.json'  # the last full rehash or first record
 START_PHASE = '/run/rose-models/start-phase.json'  # start-model's last phase this boot
+CONTAINER_STATUS = '/run/rose-models/container'  # the guard's status file, this attempt (published by health.py)
 LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/https/render_proxy.py': SERVING / 'https' / 'render_proxy.py',
              **{f'lib/service/{n}': SERVING / 'service' / n
@@ -62,7 +63,8 @@ Description={description}
 def files(config, root=ROOT, data=DATA):
     out = {}
     for offline in (False, True):
-        script, _ = render_local.render(config, offline=offline, profile=PROFILE)
+        script, _ = render_local.render(config, offline=offline, profile=PROFILE,
+                                        status=(CONTAINER_STATUS, '/run/rose-status'))
         out['bin/launch-' + ('offline' if offline else 'online')] = script
     verify = f'{PY} {root}/lib/service/verify_model.py'
     model_args = f'--cache {data}/hf --receipt {data}/receipt.json'
@@ -80,11 +82,16 @@ phase() {{
     && mv -f {START_PHASE}.tmp {START_PHASE} 2>/dev/null
   return 0
 }}
+fresh() {{  # this attempt's container status starts empty, so a stale one is never read as current
+  mkdir -p {CONTAINER_STATUS} 2>/dev/null && rm -f {CONTAINER_STATUS}/status.json 2>/dev/null
+  return 0
+}}
 prechecks() {{  # the launch scripts' own refusals, observed in advance
   if mountpoint -q {data}; then mounted=true; else mounted=false; fi
   if [ "$(timeout 30 docker image inspect --format '{{{{.Id}}}}' {image_id} 2>/dev/null)" = {image_id} ]; then image=true
   else image=false; fi
 }}
+fresh
 phase verifying
 {verify} check {model_args} --result {VERIFY_START}
 verify=$?

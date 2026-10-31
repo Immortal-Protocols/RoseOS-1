@@ -12,6 +12,7 @@ on:
       - 'workspace/models/serving/tests/test_service_*.py'
       - 'workspace/models/serving/muse-glimmer-30b.json'
       - 'workspace/models/serving/render_local.py'
+      - 'workspace/models/serving/startup_guard.py'
       - 'workspace/models/contracts/service-auth-v1.md'
       - 'workspace/models/serving/conformance/**'
       - 'workspace/models/rose-chat-core/examples/conformance.rs'
@@ -25,6 +26,7 @@ on:
       - 'workspace/models/serving/tests/test_service_*.py'
       - 'workspace/models/serving/muse-glimmer-30b.json'
       - 'workspace/models/serving/render_local.py'
+      - 'workspace/models/serving/startup_guard.py'
       - 'workspace/models/contracts/service-auth-v1.md'
       - 'workspace/models/serving/conformance/**'
       - 'workspace/models/rose-chat-core/examples/conformance.rs'
@@ -102,7 +104,8 @@ jobs:
       - name: Persistent-service source tests (synthetic; no systemd, Docker, GPU, model or network)
         run: |
           for t in test_service_auth test_service_ops test_service_tls_deploy test_service_render \
-                   test_service_bootstrap test_service_start_chain test_serving_config test_local_profile; do
+                   test_service_bootstrap test_service_start_chain test_serving_config test_local_profile \
+                   test_startup_guard; do
             /usr/bin/python3 -I workspace/models/serving/tests/$t.py -v
           done
       - name: Render the service tree and build the bootstrap payload (identity printed)

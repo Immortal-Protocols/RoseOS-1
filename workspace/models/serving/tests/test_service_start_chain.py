@@ -42,7 +42,8 @@ IMAGE_ID = render_service.render_local.render_upload.profile(CONFIG, render_serv
 SYSTEMD_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
-"""docker stand-in: records argv; `run` checks the launcher's container argv, then plays the container."""
+"""docker stand-in: records argv; `run` checks the launcher's container argv, then plays the container: the real
+supervise() from the guard source the launcher passed runs the stand-in server, with the -v status mount honoured."""
 import json, os, sys
 argv = sys.argv[1:]
 with open(os.environ['FAKE_LOG'], 'a') as log:
@@ -55,22 +56,31 @@ if argv[:2] == ['image', 'inspect']:
     print('Error: No such image', file=sys.stderr); sys.exit(1)
 if argv[0] == 'run':
     sep = argv.index('--')
-    head, command = argv[:sep], argv[sep + 1:]
-    mode = os.environ.get('FAKE_CONTAINER', 'serve')
-    if mode == 'guard_refused':
-        sys.exit(3)
-    if mode == 'crash':
-        sys.exit(1)
-    os.execv(sys.executable, [sys.executable, os.environ['FAKE_VLLM'], *command])
+    guard, limits, command = argv[argv.index('-c') + 1], json.loads(argv[sep - 1]), argv[sep + 1:]
+    mounts = dict(reversed(argv[i + 1].split(':', 1)) for i, a in enumerate(argv[:sep]) if a == '-v')
+    status = limits['status_path']
+    container_dir = os.path.dirname(status)
+    host_status = os.path.join(mounts[container_dir], os.path.basename(status))
+    ns = {'__name__': 'guard'}
+    exec(compile(guard, 'startup_guard', 'exec'), ns)
+    if os.environ.get('FAKE_CONTAINER') == 'guard_refused':
+        ns['write_status'](host_status, stage='guard_refused', proceed=False, failures=['gpu_free'])
+        sys.exit(ns['EXIT_REFUSED'])
+    ns['write_status'](host_status, stage='guard_passed', proceed=True, failures=[])
+    sys.exit(ns['supervise']([sys.executable, os.environ['FAKE_VLLM'], *command], host_status))
 sys.exit(2)
 '''
 
 FAKE_VLLM = r'''#!/usr/bin/env python3
-"""vllm stand-in: `vllm serve <repo> ... --served-model-name N --host H --port P` serves N on H:P."""
-import json, sys
+"""vllm stand-in: `vllm serve <repo> ... --served-model-name N --host H --port P` serves N on H:P, or crashes."""
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 args = sys.argv[1:]
 assert args[:2] == ['vllm', 'serve'], args
+if os.environ.get('FAKE_CONTAINER') == 'crash':
+    print('Traceback (most recent call last):', file=sys.stderr)
+    print('ValueError: No available memory for the cache blocks. SECRET-TEXT', file=sys.stderr)
+    sys.exit(1)
 opt = lambda name: args[args.index(name) + 1]
 name, host, port = opt('--served-model-name'), opt('--host'), int(opt('--port'))
 class Handler(BaseHTTPRequestHandler):
@@ -205,6 +215,13 @@ class StartChain(unittest.TestCase):
     def phase(self):
         return json.loads((self.run_dir / 'start-phase.json').read_text())
 
+    def container_status(self, until=None):
+        path = self.run_dir / 'container/status.json'
+        deadline = time.time() + 20
+        while until and time.time() < deadline and not (path.exists() and json.loads(path.read_text())['stage'] == until):
+            time.sleep(0.1)
+        return json.loads(path.read_text())
+
     def wait_ready(self, proc):
         deadline, result = time.time() + 20, None
         while time.time() < deadline:
@@ -222,8 +239,11 @@ class StartChain(unittest.TestCase):
         self.assertEqual({k: v for k, v in self.phase().items() if k != 'at'},
                          {'phase': 'launching_offline', 'verifyExit': 0, 'dataMounted': True, 'imagePresent': True})
         self.assertEqual(json.loads((self.run_dir / 'verify-start.json').read_text())['result'], 'verified')
-        proc.terminate()
-        proc.wait(10)
+        status = self.container_status(until='listening')
+        self.assertEqual((status['stage'], status['proceed'], status.get('exitCode')), ('listening', True, None))
+        proc.terminate()  # systemd stop -> docker -> guard -> server
+        self.assertEqual(proc.wait(30), 128 + 15)
+        self.assertEqual((self.container_status()['stage'], self.container_status()['signal']), ('exited', 15))
 
     def test_no_receipt_launches_online(self):
         self.receipt.unlink()
@@ -244,6 +264,8 @@ class StartChain(unittest.TestCase):
         for label, setup, env, code, phase, runs in cases:
             with self.subTest(label):
                 self.log.unlink(missing_ok=True)
+                (self.run_dir / 'container').mkdir(parents=True, exist_ok=True)
+                (self.run_dir / 'container/status.json').write_text('{"stage": "exited"}')  # a previous attempt's
                 if setup:
                     setup()
                 proc = self.systemd(**env)
@@ -251,6 +273,14 @@ class StartChain(unittest.TestCase):
                 p = self.phase()
                 self.assertEqual((p['phase'], p['verifyExit'], p['dataMounted'], p['imagePresent']), phase)
                 self.assertEqual(len(self.docker_runs()), runs)
+                status_file = self.run_dir / 'container/status.json'
+                if runs:
+                    status = json.loads(status_file.read_text())
+                    self.assertEqual((status['stage'], status.get('exitCode'), status.get('lastException')),
+                                     {3: ('guard_refused', None, None), 1: ('exited', 1, 'ValueError')}[code])
+                    self.assertNotIn('SECRET', status_file.read_text())
+                else:
+                    self.assertFalse(status_file.exists())  # cleared for this attempt; no container ran
                 if label == 'storage mismatch':
                     (self.vm.dir / 'moved').rename(self.cache / 'hub')
         unit = self.vm.unit('muse-glimmer.service')  # 4 is not restarted; 3 and 1 are, within the start limit
