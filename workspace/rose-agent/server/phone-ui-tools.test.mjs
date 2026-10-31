@@ -31,7 +31,7 @@ const SNAPSHOT='0f0e0d0c-0b0a-4908-8706-050403020100',SHOT='1f1e1d1c-1b1a-4918-9
 const settle=()=>new Promise(r=>setImmediate(r));
 
 // mode 'foreground': commands go to the paired phone's queue. mode 'background': through BackgroundPhone.
-function fixture({background=false,visual=false}={}){
+function fixture({background=false,visual=false,refused=new Set()}={}){
  const launcher=new LauncherTask(path.join(fs.mkdtempSync(path.join(os.tmpdir(),'phone-ui-')),'task.json'));
  const phone=new PhoneCommands(),delivered=[],controller=[];let deviceHold=null,controllerHold=null;
  // The paired phone collects pending commands and answers; a held command waits until released.
@@ -40,6 +40,11 @@ function fixture({background=false,visual=false}={}){
   Promise.resolve(reply).then(r=>phone.complete(c.id,r));}},5);
  const controllerReply=c=>{controller.push({operation:c.operation,...c.params});
   if(controllerHold&&c.operation==='command')return controllerHold.then(()=>({status:'action_accepted'}));
+  // Android's ComputerControl allowlist: a refused app's session fails after the start request is accepted.
+  const lastStart=[...controller].reverse().find(x=>x.operation==='start');
+  if(c.operation==='start'&&refused.has(c.params.packageName))return {status:'starting',sessionId:'s2',targetPackage:c.params.packageName,anyAppControl:false};
+  if(c.operation==='get_state'&&lastStart&&refused.has(lastStart.packageName))return {status:'target_not_allowed',sessionId:'s2',targetPackage:lastStart.packageName,anyAppControl:false,
+   error:'java.lang.IllegalArgumentException: Invalid target package for ComputerControl: '+lastStart.packageName};
   if(c.operation==='get_state')return controller.some(x=>x.operation==='start')?{status:'ready',sessionId:'s1',targetPackage:'com.openai.chatgpt'}:{status:'idle'};
   if(c.operation==='start')return {status:'ready',sessionId:'s1',targetPackage:c.params.packageName};
   if(c.operation==='command'&&c.params.action==='screenshot')return {status:'ok',mimeType:'image/jpeg',imageBase64:WORKSPACE_JPEG,sessionId:'s1'};
@@ -329,5 +334,25 @@ test('visual trial disabled: the same calls run directly with their ordinary pay
   const reply=await f.call('turn-A','phone_open_app',{packageName:'com.openai.chatgpt',display:'phone'});
   assert.equal(visualStatus(f,reply),'opened');
   assert.deepEqual(f.delivered.map(wire),[{action:'open_app',packageName:'com.openai.chatgpt'}],'no screenshot gate when the trial is off');
+ }finally{f.close();}
+});
+
+test('an app the OS refuses for the workspace is reported as such, and the phone screen route still works',async()=>{
+ const f=fixture({background:true,refused:new Set(['com.amazon.mShop.android.shopping'])});
+ try{
+  const A=f.newRequest('Search Amazon','turn-A');
+  const refused=await f.call('turn-A','phone_open_app',{packageName:'com.amazon.mShop.android.shopping'});
+  assert.equal(refused.success,false);
+  const r=f.read(refused);
+  assert.equal(r.status,'background_target_not_allowed');
+  assert.equal(r.actionExecuted,false);assert.equal(r.anyAppControl,false);
+  assert.match(r.reason,/does not let Rose use this app in its background workspace\. Nothing was opened/);
+  assert.ok(!f.controller.some(c=>c.operation==='command'),'nothing was inspected or acted on in a workspace that never opened');
+  assert.ok(!f.taskStop.active(),'a refusal is not a Stop');
+  // The physical phone screen is a separate route: it still opens the app, once, as the same task.
+  const onScreen=await f.call('turn-A','phone_open_app',{packageName:'com.amazon.mShop.android.shopping',display:'phone'});
+  assert.equal(onScreen.success,true);
+  assert.deepEqual(f.delivered.filter(c=>c.action!=='app_command').map(wire),[{action:'open_app',packageName:'com.amazon.mShop.android.shopping'}]);
+  assert.ok(f.controller.filter(c=>c.operation==='start').every(c=>c.taskId===A),'the refused start was still bound to the current task');
  }finally{f.close();}
 });
