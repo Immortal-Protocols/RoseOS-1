@@ -35,7 +35,8 @@ class WatchWiringTest(unittest.TestCase):
 
     def test_new_intents_and_recreation(self):
         intent = method('protected void onNewIntent(Intent intent)')
-        self.assertIn('binding = WatchBinding.next(binding, fromIntent(intent));', intent)
+        self.assertIn('WatchBinding incoming = fromIntent(intent);', intent)
+        self.assertIn('binding = WatchBinding.next(binding, incoming);', intent)
         self.assertIn('if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }', intent)
         self.assertIn('handler.post(refresh)', intent)
         saved = method('protected void onSaveInstanceState(Bundle out)')
@@ -43,6 +44,25 @@ class WatchWiringTest(unittest.TestCase):
         extras = method('static WatchBinding fromIntent(Intent intent)')
         self.assertIn('intent.hasExtra(WatchBinding.EXTRA_TASK), intent.getStringExtra(WatchBinding.EXTRA_TASK)', extras)
         self.assertIn('intent.hasExtra(WatchBinding.EXTRA_SESSION), intent.getStringExtra(WatchBinding.EXTRA_SESSION)', extras)
+
+    def test_explicit_watch_is_full_screen_and_the_fallback_stays(self):
+        # APP-WATCH-1031-C: a bound entry (Rose's apps, an overview selection) is expanded; only PiP asks for PiP.
+        create = method('public void onCreate(Bundle saved)')
+        self.assertIn('ViewerPresentation.forEntry(binding.mode == WatchBinding.Mode.BOUND, null)', create)
+        self.assertIn('if (ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());', create)
+        self.assertLess(create.index('if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }'),
+            create.index('presentation = '), 'an invalid entry closes before any presentation is chosen')
+        intent = method('protected void onNewIntent(Intent intent)')
+        self.assertIn('presentation = ViewerPresentation.forEntry(incoming.mode == WatchBinding.Mode.BOUND, presentation);', intent)
+        self.assertIn('if (frame != null && ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());', intent)
+        self.assertNotIn('if (frame != null) frame.post(() -> enterFloatingView());', intent, 'no unconditional return to PiP')
+        # The presentation survives recreation with the binding.
+        self.assertIn('out.putString(KEY_PRESENTATION, presentation.name());', method('protected void onSaveInstanceState(Bundle out)'))
+        # Privacy and lock guards are unchanged: the view is secure and never shown over the keyguard.
+        self.assertIn('getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);', create)
+        self.assertNotRegex(SOURCE, r'setShowWhenLocked|FLAG_SHOW_WHEN_LOCKED|setTurnScreenOn|requestDismissKeyguard')
+        # The automatic show itself is unchanged: picture-in-picture is still the default for an unbound entry.
+        self.assertIn('.setAutoEnterEnabled(true)', method('private PictureInPictureParams parameters()'))
 
     def test_closing_the_viewer_never_stops_work(self):
         close = method('private void unavailable()')

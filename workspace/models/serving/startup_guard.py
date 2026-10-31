@@ -116,14 +116,50 @@ CATEGORIES = (
 )
 CATEGORY_NAMES = tuple(name for name, _ in CATEGORIES)
 
+# Fixed vocabularies for the last traceback. Only these tokens can leave Capture: never a message, path, line number,
+# stack or class string from the output. Anything not listed is `other`.
+EXCEPTION_TYPES = (
+    'RuntimeError', 'ValueError', 'TypeError', 'KeyError', 'IndexError', 'AttributeError', 'AssertionError',
+    'NotImplementedError', 'OSError', 'FileNotFoundError', 'PermissionError', 'TimeoutError', 'ConnectionError',
+    'ImportError', 'ModuleNotFoundError', 'MemoryError', 'SystemExit', 'KeyboardInterrupt', 'EOFError',
+    'JSONDecodeError', 'OutOfMemoryError', 'DistBackendError', 'LocalEntryNotFoundError', 'EntryNotFoundError',
+    'HfHubHTTPError', 'RepositoryNotFoundError', 'RevisionNotFoundError', 'GatedRepoError', 'HTTPError',
+    'ReadTimeout', 'ConnectTimeout', 'ChunkedEncodingError', 'MaxRetryError', 'SafetensorError', 'ValidationError',
+    'CalledProcessError', 'EngineDeadError', 'EngineGenerateError')
+LOCATIONS = (  # (path fragment, component): the innermost frame of the last traceback, first match wins
+    ('<string>', 'guard'),  # the guard runs as `python3 -c <source>`
+    ('/vllm/model_executor/model_loader/', 'model_loader'), ('/vllm/model_executor/', 'model_executor'),
+    ('/vllm/distributed/', 'distributed'), ('/vllm/v1/worker/', 'worker'), ('/vllm/worker/', 'worker'),
+    ('/vllm/v1/engine/', 'engine_core'), ('/vllm/engine/', 'engine'), ('/vllm/v1/executor/', 'executor'),
+    ('/vllm/executor/', 'executor'), ('/vllm/config', 'config'), ('/vllm/platforms/', 'platform'),
+    ('/vllm/v1/core/', 'kv_cache'), ('/vllm/compilation/', 'compile'), ('/vllm/entrypoints/', 'entrypoint'),
+    ('/vllm/transformers_utils/', 'hf_config'), ('/vllm/', 'vllm_other'), ('/huggingface_hub/', 'huggingface_hub'),
+    ('/transformers/', 'transformers'), ('/torch/cuda/', 'torch_cuda'), ('/torch/distributed/', 'torch_distributed'),
+    ('/torch/', 'torch'), ('/safetensors/', 'safetensors'), ('/requests/', 'requests'), ('/urllib3/', 'urllib3'),
+    ('/multiprocessing/', 'multiprocessing'), ('/asyncio/', 'asyncio'))
+LOCATION_NAMES = tuple(dict.fromkeys(c for _, c in LOCATIONS)) + ('other',)
+PROCESSES = (('EngineCore', 'engine_core'), ('VllmWorker', 'worker'), ('Worker', 'worker'), ('APIServer', 'api_server'))
+PROCESS_NAMES = ('main', 'engine_core', 'worker', 'api_server', 'other')
+PREFIX = re.compile(r'^\(([A-Za-z_]{1,40})[^)\n]{0,80}\)\s+')  # vLLM's "(EngineCore_DP0 pid=7) " line prefix
+FRAME = re.compile(r'File "([^"\n]{1,600})", line \d+, in ')
+EXCEPTION_LINE = re.compile(r'^([A-Za-z_][\w.]{0,100}(?:Error|Exception|Exit|Interrupt))(?::|$)')
+GUARD_MARK, TAIL = '"guard": "muse-glimmer-startup"', 64
+MAX_TRACEBACKS = 1000
+
 
 class Capture:
     """Bounded inspection: at most max_bytes within max_seconds, matched over a sliding window of WINDOW bytes, so
-    a line without newlines or an endless stream never grows memory. Keeps fixed category names only."""
+    a line without newlines or an endless stream never grows memory. Keeps fixed category names only.
+
+    The same bounded bytes are also read as lines, keeping at most WINDOW characters of a line's head and TAIL of its
+    end (lines end at \\n or \\r), to classify with fixed vocabularies: whether the guard passed or refused, and the
+    last traceback's exception type, innermost frame component and vLLM process."""
 
     def __init__(self, max_bytes=2 << 20, max_seconds=600, clock=time.monotonic):
         self.max_bytes, self.deadline, self.clock = max_bytes, clock() + max_seconds, clock
         self.inspected, self.limit, self.first, self.seen, self.tail = 0, None, None, [], ''
+        self.head, self.end, self.guard, self.tracebacks = '', '', None, 0
+        self.exception, self.frame, self.in_traceback = None, None, False
 
     def feed(self, chunk):
         """Inspect what fits in the bounds; returns False once inspection has stopped."""
@@ -135,21 +171,60 @@ class Capture:
         room = self.max_bytes - self.inspected
         part = chunk[:room]
         self.inspected += len(part)
-        text = self.tail + part.decode('utf-8', 'replace')
+        decoded = part.decode('utf-8', 'replace')
+        text = self.tail + decoded
         for name, pattern in CATEGORIES:
             if name not in self.seen and pattern.search(text):
                 self.seen.append(name)
                 if self.first is None and name != 'traceback':
                     self.first = name
         self.tail = text[-WINDOW:]
+        self.lines(decoded)
         if len(chunk) > room:
             self.limit = 'bytes'
             return False
         return True
 
+    def lines(self, text):
+        pieces = re.split(r'[\r\n]', text)
+        for i, piece in enumerate(pieces):
+            if len(self.head) < WINDOW:
+                self.head += piece[:WINDOW - len(self.head)]
+            self.end = (self.end + piece)[-TAIL:]
+            if i < len(pieces) - 1:  # a line ended
+                self.line(self.head, self.end)
+                self.head = self.end = ''
+
+    def line(self, head, end):
+        if GUARD_MARK in head:
+            self.guard = 'passed' if '"proceed": true' in end else 'refused' if '"proceed": false' in end else self.guard
+            return
+        prefix = PREFIX.match(head)
+        body = head[prefix.end():] if prefix else head
+        if body.startswith('Traceback (most recent call last)'):
+            self.tracebacks = min(self.tracebacks + 1, MAX_TRACEBACKS)
+            self.in_traceback, self.frame = True, None
+            return
+        if not self.in_traceback:
+            return
+        frame = FRAME.search(body)
+        if frame:
+            self.frame = next((c for fragment, c in LOCATIONS if fragment in frame.group(1)), 'other')
+            return
+        found = EXCEPTION_LINE.match(body)
+        if found:
+            name = found.group(1).rsplit('.', 1)[-1]
+            process = 'main' if not prefix else next(
+                (token for marker, token in PROCESSES if prefix.group(1).startswith(marker)), 'other')
+            self.exception = {'exceptionType': name if name in EXCEPTION_TYPES else 'other',
+                              'exceptionLocation': self.frame or 'other', 'exceptionProcess': process}
+            self.in_traceback = False  # a chained traceback starts again with its own header
+
     def summary(self):
         return {'firstCategory': self.first, 'categories': [n for n in CATEGORY_NAMES if n in self.seen],
-                'bytesInspected': self.inspected, 'limitReached': self.limit}
+                'bytesInspected': self.inspected, 'limitReached': self.limit, 'guard': self.guard,
+                'tracebacks': self.tracebacks,
+                **(self.exception or {'exceptionType': None, 'exceptionLocation': None, 'exceptionProcess': None})}
 
 
 def codes(failures):

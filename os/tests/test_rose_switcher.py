@@ -13,8 +13,27 @@ FIXTURES = ROOT/'os/tests/fixtures/rose-switcher'
 PATCH = ROOT/'os/patches/rose-switcher-launcher3.patch'
 OVERLAY = ROOT/'os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback'
 LAYOUT = 'quickstep/res/layout/fallback_recents_activity.xml'
+QUICKSTEP = 'quickstep/src/com/android/quickstep'
+DIMENS = 'quickstep/res/values/rose_agent_strip.xml'
+# Launcher3 47accce (os/pinned-manifest.xml), byte for byte from GrapheneOS platform_packages_apps_Launcher3.
 PINNED = {'fallback_recents_activity.xml': '8df1879fb83e2a9f5b11b657a498e6153504171cb702f859d136f37ab968a9f7',
-    'OverviewComponentObserver.java': 'a94703d973e14ba8e1f43ab07d7eacaa0e32f8b5668d16bff1c6843dd4877893'}
+    'OverviewComponentObserver.java': 'a94703d973e14ba8e1f43ab07d7eacaa0e32f8b5668d16bff1c6843dd4877893',
+    'BaseContainerInterface.java': 'a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829',
+    'FallbackActivityInterface.java': 'dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa'}
+TARGETS = {'fallback_recents_activity.xml': LAYOUT, 'BaseContainerInterface.java': f'{QUICKSTEP}/BaseContainerInterface.java',
+    'FallbackActivityInterface.java': f'{QUICKSTEP}/FallbackActivityInterface.java'}
+
+def patched_tree(test):
+    tree = Path(tempfile.mkdtemp(prefix='launcher3-'))
+    test.addCleanup(shutil.rmtree, tree, True)
+    for name, relative in TARGETS.items():
+        (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(FIXTURES/name, tree/relative)
+    subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+    check = subprocess.run(['git', '-C', str(tree), 'apply', '--check', str(PATCH)], capture_output=True, text=True)
+    test.assertEqual(check.returncode, 0, check.stderr)
+    subprocess.run(['git', '-C', str(tree), 'apply', str(PATCH)], check=True)
+    return tree
 
 class RoseSwitcherTest(unittest.TestCase):
     def test_fixtures_are_the_pinned_files_and_rose_home_gets_the_fallback_overview(self):
@@ -25,20 +44,56 @@ class RoseSwitcherTest(unittest.TestCase):
         self.assertIn('mOverviewIntent = mFallbackIntent;', observer)
 
     def test_the_patch_applies_cleanly_and_adds_only_the_agent_row(self):
-        tree = Path(tempfile.mkdtemp(prefix='launcher3-'))
-        self.addCleanup(shutil.rmtree, tree, True)
-        (tree/LAYOUT).parent.mkdir(parents=True)
-        shutil.copyfile(FIXTURES/'fallback_recents_activity.xml', tree/LAYOUT)
-        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
-        check = subprocess.run(['git', '-C', str(tree), 'apply', '--check', str(PATCH)], capture_output=True, text=True)
-        self.assertEqual(check.returncode, 0, check.stderr)
-        subprocess.run(['git', '-C', str(tree), 'apply', str(PATCH)], check=True)
+        tree = patched_tree(self)
         layout = (tree/LAYOUT).read_text()
         self.assertIn('<com.android.quickstep.fallback.RoseAgentStrip', layout)
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'),
             'the human carousel stays; the agent row is added beside it')
         removed = [l for l in PATCH.read_text().splitlines() if l.startswith('-') and not l.startswith('---')]
-        self.assertEqual(removed, [], 'nothing of the stock overview is removed')
+        self.assertEqual(removed, ['-                    /* claimedSpaceAbove= */0,'],
+            'only the hard-coded zero claimed space is replaced; nothing else of the stock overview is removed')
+
+    def test_the_carousel_is_laid_out_below_the_agent_row_not_under_it(self):
+        """47accce sizes overview cards from DeviceProfile and insets (BaseContainerInterface.calculateTaskSize), not from
+        the view's bounds, with claimedSpaceAbove hard-coded to 0, so an overlay margin could never move them. The
+        fallback overview now claims the row's whole extent; the in-launcher overview is unchanged."""
+        tree = patched_tree(self)
+        layout = (tree/LAYOUT).read_text()
+        strip = layout[layout.index('<com.android.quickstep.fallback.RoseAgentStrip'):]
+        strip = strip[:strip.index('/>')]
+        self.assertIn('android:layout_height="@dimen/rose_agent_strip_height"', strip)
+        self.assertIn('android:layout_marginTop="@dimen/rose_agent_strip_top_margin"', strip)
+        self.assertNotIn('wrap_content', strip.split('layout_width')[1], 'a fixed height, the one that is claimed')
+        import re
+        dimens = dict(re.findall(r'<dimen name="(\w+)">(\d+)dp</dimen>', (tree/DIMENS).read_text()))
+        self.assertEqual(set(dimens), {'rose_agent_strip_top_margin', 'rose_agent_strip_height'})
+        base = (tree/f'{QUICKSTEP}/BaseContainerInterface.java').read_text()
+        size = base[base.index('public final void calculateTaskSize('):base.index('private void calculateLargeTileSize(')]
+        self.assertIn('/* claimedSpaceAbove= */ getOverviewClaimedSpaceAbove(context),', size)
+        self.assertIn('protected int getOverviewClaimedSpaceAbove(Context context) {\n        return 0;\n    }', base)
+        fallback = (tree/f'{QUICKSTEP}/FallbackActivityInterface.java').read_text()
+        override = fallback[fallback.index('protected int getOverviewClaimedSpaceAbove(Context context) {'):]
+        override = override[:override.index('}')]
+        self.assertIn('R.dimen.rose_agent_strip_top_margin', override)
+        self.assertIn('R.dimen.rose_agent_strip_height', override)
+        self.assertIn('import com.android.launcher3.R;', fallback)
+        self.assertEqual(fallback.count('getOverviewClaimedSpaceAbove'), 1)
+        # The row's content fits its fixed height: padding 12 + title ~18 + card 72 + status ~18 dp.
+        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 18 + 72 + 18)
+
+    def test_labels_are_looked_up_only_for_kept_work_and_a_failure_names_only_its_step(self):
+        strip = (OVERLAY/'RoseAgentStrip.java').read_text()
+        read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
+        tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(64)'):read.index('RoseAgentWork.of(')]
+        self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
+        self.assertNotIn('getApplicationLabel', tasks)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, displays, tasks).labelled(', read)
+        self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
+        for step in ('CONTROLLER', 'DISPLAYS', 'TASKS'):
+            self.assertIn(f'RoseAgentWork.Step.{step}', read)
+        self.assertIn('return RoseAgentWork.failed(step);', read)
+        self.assertNotIn('getMessage', read, 'no exception text in the status or the log')
+        self.assertNotIn('Log.w(TAG, "Agent work unavailable", e)', read, 'no stack trace with private text')
 
     def test_agent_work_decisions(self):
         out = Path(tempfile.mkdtemp(prefix='rose-agent-work-'))
