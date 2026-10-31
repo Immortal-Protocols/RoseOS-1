@@ -66,10 +66,13 @@ BRAIN_PREREQUISITES = {
            'top_k, presence_penalty, stop_token_ids, skip_special_tokens=false, and return_token_ids or '
            '(logprobs with return_tokens_as_token_ids); vLLM merges the model\'s default stop ids into every request',
     'memory': 'FP8 weights 37.5 GB, about 18.7 GB per GPU at tensor parallel 2 on 40 GB A100s; KV-cache and '
-              'activation headroom not measured. --language-model-only (model card) skips the vision encoder, '
-              'which the adapter does not use',
+              'activation headroom not measured. --language-model-only (model card) skips the vision encoder: '
+              'it saves memory but makes the server text-only (VllmBrain(vision=False)); PR288 looks and '
+              'phone-agent screenshots need the vision tower loaded',
     'flags': 'no --trust-remote-code; the card examples use --reasoning-parser qwen3 for the chat API, which the '
-             'completions route used here does not need',
+             'adapter does not need (it parses tool calls and thinking itself). Vision adds: --chat-template '
+             '<write_raw_template file>, --chat-template-content-format openai and --limit-mm-per-prompt '
+             '\'{"image": 16, "video": 0}\' (vllm_brain.MAX_IMAGES); never --trust-request-chat-template',
 }
 
 # What this slice provides for each part of PR288's system. Nothing here is "parity" unless it says so.
@@ -78,7 +81,9 @@ CAPABILITIES = {
     'brain_text': 'real adapter: vllm_brain.VllmBrain over vLLM /v1/completions with token-id prompts',
     'brain_marks': 'exact on tokens: mark/rewind/fork are token-list operations; server prefix caching is speed only',
     'brain_prefill': 'deferred: no server work until generate (same tokens, later cost); not the Mac latency profile',
-    'brain_vision': 'unsupported: append_image raises Unsupported (talker look and phone-agent screenshots)',
+    'brain_vision': 'chat route: append_image sends PR288-sized PNGs to /v1/chat/completions with RAW_TEMPLATE and '
+                    'checks the server prompt tokens; fixture-tested only, needs a vision-capable server (not '
+                    '--language-model-only)',
     'brain_logits': 'unsupported: no next-token logits are kept (unused by conductor/tasks at PR288_HEAD)',
     'runtime': 'reuse: PR288 rose/runtime.py unchanged through nomlx; network and synthesis waits run on worker '
                'threads and step only higher-priority jobs while waiting (coop.Waiter)',
