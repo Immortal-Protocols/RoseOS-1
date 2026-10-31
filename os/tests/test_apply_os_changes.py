@@ -84,11 +84,15 @@ class LockedSessionDefaultTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r'config_pixelComputerControlLockedSessions">true<', patcher)), 1)
         self.assertIn("    if a.locked_control:\n        marker = '    <bool name=\"config_pixelComputerControlLockedSessions\">false</bool>'", patcher)
         config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
-        self.assertEqual((config['framework']['lockedSessions'], config['framework']['prototypeAgentsEmpty']), (False, True))
+        # OCT31 "control any app": the release names the signed controller as its only prototype agent; locked
+        # sessions stay off.
+        self.assertEqual((config['framework']['lockedSessions'], config['framework']['prototypeAgents']),
+            (False, ['dev.pixel.backgroundcontrol']))
         self.assertNotIn('--locked-control', config['host']['integrate']['reconcile']['applyArgs'])
         # The pinned candidate's own patcher predates this default; reconcile runs this checkout's patcher on its bundle.
         self.assertEqual(config['host']['integrate']['reconcile']['patcher'], 'trusted')
-        self.assertNotIn('--prototype-control', (ROOT/'scripts/host-integrate.py').read_text())
+        self.assertIn("*(['--prototype-control'] if (config.get('framework') or {}).get('prototypeAgents') else [])",
+            (ROOT/'scripts/host-integrate.py').read_text())
 
 if __name__ == '__main__':
     unittest.main()

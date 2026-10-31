@@ -98,6 +98,9 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         targets = [str(p) for r, p in sorted(signed.items()) if r.startswith('target:')]
         run([sys.executable, str(ROOT/'scripts/prepare-background-policy.py'), '--agent-apk', str(signed['agent']),
             '--voice-apk', str(signed['voice']), *[x for t in targets for x in ('--target-apk', t)],
+            # The signed controller as the sole prototype agent, only when the release config names it; the release
+            # verifier then requires exactly that controller pinned to the app signer in the compiled framework.
+            *(['--prototype-control'] if (config.get('framework') or {}).get('prototypeAgents') else []),
             '--sdk', str(integrate.get('sdk', 37)), '--aapt', aapt, '--apksigner', apksigner,
             '--output', str(release_dir/'background-policy.json')], stdout=subprocess.DEVNULL)
         values.update(policy=str(release_dir/'background-policy.json'), signed_apps=str(signed_dir))
