@@ -12,10 +12,12 @@
 4. Write the status JSON for operators and monitoring: categories only, no prompt or reply text.
 5. Publish an allowlisted receipt to the existing guest attribute rose-models/health: boot id, probe time, the
    completion's HTTP status, token count and latency (never its text), readiness, restarts, and the model receipt's
-   start and full verification results, each qualified. Publication runs after the decision and its failure only
-   marks the status file: telemetry never restarts the model.
+   start and full verification results, each qualified, plus the model unit's state, result and main exit code,
+   start-model's last phase and selected container State fields. Publication runs after the decision and its failure
+   only marks the status file: telemetry never restarts the model.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -33,7 +35,12 @@ PROBE_TIMEOUT_S = 60
 UNIT = 'muse-glimmer.service'
 LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never route loopback probes via a proxy
 GUEST = 'http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/rose-models/'
-RECEIPT_SCHEMA, RECEIPT_MAX = 'rose-models-health/1', 2048
+RECEIPT_SCHEMA, RECEIPT_MAX = 'rose-models-health/1', 4096
+PHASES = ('verifying', 'launching_offline', 'launching_online', 'refused_storage')
+CONTAINER = 'muse-glimmer'
+_spec = importlib.util.spec_from_file_location('unit_facts', Path(__file__).resolve().parent / 'unit_facts.py')
+unit_facts = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(unit_facts)
 CATEGORY = re.compile(r'^[a-z][a-z0-9_]{0,39}$')
 BOOT = re.compile(r'^[0-9a-f-]{36}$')
 STATUSES = ('ready', 'starting', 'recovering', 'degraded', 'down', 'failed_needs_operator', 'unknown')
@@ -165,7 +172,34 @@ def _int(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
-def receipt(boot, now, ok, category, state, action, facts, receipt_present, start_check, full_check, recorded_at=None):
+def _startup_fact(path):
+    """start-model's last recorded phase this boot (it lives in /run): phase, verifyExit, dataMounted, imagePresent,
+    at. None when start-model has not run under this payload this boot."""
+    try:
+        raw = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {'phase': 'unreadable'}
+    if not isinstance(raw, dict):
+        return {'phase': 'unreadable'}
+    flag = lambda v: v if isinstance(v, bool) else None  # noqa: E731
+    exit_code = _int(raw.get('verifyExit'))
+    return {'phase': raw.get('phase') if raw.get('phase') in PHASES else 'other',
+            'verifyExit': exit_code if exit_code is not None and 0 <= exit_code <= 255 else None,
+            'dataMounted': flag(raw.get('dataMounted')), 'imagePresent': flag(raw.get('imagePresent')),
+            'at': _int(raw.get('at'))}
+
+
+def diagnose(a, query=subprocess.run):
+    """Why the model may not answer: the unit's state, last result and main exit; start-model's phase; selected
+    container State fields. Bounded queries; no journal, logs, environment or stderr."""
+    return {'service': unit_facts.service(UNIT, query), 'startup': _startup_fact(a.start_phase),
+            'container': unit_facts.container(CONTAINER, query)}
+
+
+def receipt(boot, now, ok, category, state, action, facts, receipt_present, start_check, full_check, recorded_at=None,
+            diagnostics=None):
     """The published health receipt, built field by field from an allowlist. Model receipt facts are qualified:
     `present` is only the file and `recordedAt` when it hashed every file at first load; `startCheck` (this boot,
     blob ids and sizes; None until a start under this payload) and `fullCheck` (last content rehash) are separate
@@ -181,6 +215,8 @@ def receipt(boot, now, ok, category, state, action, facts, receipt_present, star
            'restartLimitPerHour': RESTARTS_PER_HOUR, 'action': action if action in ('restart',) else None,
            'modelReceipt': {'present': receipt_present is True, 'recordedAt': recorded_at,
                             'startCheck': start_check, 'fullCheck': full_check}}
+    for key in ('service', 'startup', 'container'):  # each already allowlisted by diagnose()
+        out[key] = (diagnostics or {}).get(key)
     line = json.dumps(out, sort_keys=True)
     if len(line) > RECEIPT_MAX:
         raise ValueError('receipt_too_large')
@@ -193,7 +229,8 @@ def publish(key, line, timeout=5):
     LOOPBACK.open(req, timeout=timeout).close()
 
 
-def run_once(a, now=None, prober=probe, since=active_since, run=subprocess.run, publisher=publish, boot=None):
+def run_once(a, now=None, prober=probe, since=active_since, run=subprocess.run, publisher=publish, boot=None,
+             query=subprocess.run):
     now = time.time() if now is None else now
     boot = boot_id() if boot is None else boot
     state = json.loads(a.state.read_text()) if a.state.exists() else {}
@@ -212,7 +249,8 @@ def run_once(a, now=None, prober=probe, since=active_since, run=subprocess.run, 
               'modelReceipt': a.receipt.exists(), 'action': action}
     try:  # telemetry: after the decision, and its failure never changes it
         line = receipt(boot, now, ok, category, state, action, facts, a.receipt.exists(),
-                       _verify_fact(a.verify_start), _verify_fact(a.verify_full), _recorded_at(a.receipt))
+                       _verify_fact(a.verify_start), _verify_fact(a.verify_full), _recorded_at(a.receipt),
+                       diagnose(a, query))
         publisher('health', line)
         status['published'] = True
     except Exception as e:  # noqa: BLE001 - any publication failure is reported, never raised
@@ -231,6 +269,7 @@ def main(argv=None):
     p.add_argument('--receipt', type=Path, default=Path('/mnt/models-data/receipt.json'))
     p.add_argument('--verify-start', type=Path, default=Path('/run/rose-models/verify-start.json'))
     p.add_argument('--verify-full', type=Path, default=Path('/var/lib/rose-models/verify-full.json'))
+    p.add_argument('--start-phase', type=Path, default=Path('/run/rose-models/start-phase.json'))
     p.add_argument('--record', nargs=argparse.REMAINDER, help='command that records the model receipt (last option)')
     a = p.parse_args(argv)
     if a.command == 'probe':

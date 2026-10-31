@@ -84,10 +84,14 @@ gcloud compute instances get-guest-attributes models-glimmer-01 --project=$P --z
   completion's HTTP status, token count and latency (never its text), `lastOkThisBoot`, restarts against the limit, and
   `modelReceipt`. In `modelReceipt`, `present` is only the file and `recordedAt` its first-load hashing;
   `startCheck` (blob ids and sizes, this boot; null until a model start under this payload) and `fullCheck` (last
-  content rehash, daily) are separate results with their own times. Fresh means this boot's `bootId` and
-  `checkedAt` within 3 minutes. A publication failure never changes recovery.
+  content rehash, daily) are separate results with their own times. `service` (the unit's state, result, main exit
+  code, restarts), `startup` (start-model's last phase: `verifying`, `refused_storage`, `launching_offline` or
+  `launching_online`, with the verify exit and whether the data disk is mounted and the image present) and
+  `container` (docker State: status, exit code, OOM, start time) separate a refused start, a failed container and a
+  running container that does not answer. Fresh means this boot's `bootId` and `checkedAt` within 3 minutes. A
+  publication or query failure never changes recovery.
 - **`rose-models/renewal`** (after the edge starts, then every 6 h, `renewal_status.py`): `certbotTimer` (enabled,
-  active, `nextRun`), `renewalConfig` (webroot, deploy hook, single account), `certificate` (`notAfter`, `daysLeft`,
+  active, `nextRun`, `schedule`, and `certbot.service`'s last result), `renewalConfig` (webroot, deploy hook, single account), `certificate` (`notAfter`, `daysLeft`,
   installed chain equals the lineage) and `edgeAcme`, a fresh challenge through the RUNNING edge's :80 (200, all else
   404) from its verified pid. `renewalReady` requires all of them.
 - **Rerun** (for example after supplying an input) by resetting the VM or with `gcloud compute instances add-metadata`

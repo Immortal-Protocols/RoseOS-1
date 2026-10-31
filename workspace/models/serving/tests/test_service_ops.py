@@ -107,10 +107,11 @@ class Decide(unittest.TestCase):
         calls = []
         a = types.SimpleNamespace(base='x', model='muse-glimmer', state=tmp / 's.json', status=tmp / 'run/h.json',
                                   receipt=tmp / 'receipt.json', record=['record-cmd'], verify_start=tmp / 'vs.json',
-                                  verify_full=tmp / 'vf.json')
+                                  verify_full=tmp / 'vf.json', start_phase=tmp / 'sp.json')
         for i in range(3):
             H.run_once(a, now=10_000 + i, prober=lambda b, m, facts: (False, 'unreachable'), since=lambda: 0,
-                       run=lambda cmd, timeout: calls.append(cmd), publisher=lambda k, v: None, boot=BOOT)
+                       run=lambda cmd, timeout: calls.append(cmd), publisher=lambda k, v: None, boot=BOOT,
+                       query=query())
         self.assertEqual(calls, [['systemctl', 'restart', 'muse-glimmer.service']])
         H.run_once(a, now=10_100, prober=lambda b, m, facts: (True, 'ready'), since=lambda: 10_050,
                    run=lambda cmd, timeout: calls.append(cmd), publisher=lambda k, v: None, boot=BOOT)
@@ -122,7 +123,31 @@ class Decide(unittest.TestCase):
 
 BOOT, OLD_BOOT = '2f1c3a9e-0d4b-4c62-9a51-7e8f00c1d2e3', '11111111-2222-3333-4444-555555555555'
 RECEIPT_KEYS = {'schema', 'bootId', 'checkedAt', 'ready', 'status', 'category', 'completion', 'lastOkThisBoot',
-                'consecutiveFailures', 'restartsLastHour', 'restartLimitPerHour', 'action', 'modelReceipt'}
+                'consecutiveFailures', 'restartsLastHour', 'restartLimitPerHour', 'action', 'modelReceipt',
+                'service', 'startup', 'container'}
+UNIT_RUNNING = {'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'running', 'Result': 'success',
+                'ExecMainCode': '0', 'ExecMainStatus': '0', 'NRestarts': '0',
+                'ActiveEnterTimestamp': 'Sat 2026-10-31 00:20:00 UTC', 'ExecMainExitTimestamp': ''}
+CONTAINER_RUNNING = {'Status': 'running', 'Running': True, 'Paused': False, 'OOMKilled': False, 'Dead': False, 'Pid': 4242,
+                     'ExitCode': 0, 'Error': '', 'StartedAt': '2026-10-31T00:20:05.123456789Z',
+                     'FinishedAt': '0001-01-01T00:00:00Z'}
+
+
+def query(unit=UNIT_RUNNING, state=CONTAINER_RUNNING, systemctl_rc=0, docker='ok'):
+    """systemctl show / docker inspect as they answer on the VM (systemd 255, Docker 29)."""
+    def run(argv, **kw):
+        if argv[0] == 'systemctl':
+            assert argv[1:3] == ['show', 'muse-glimmer.service'] and kw['env']['TZ'] == 'UTC', argv
+            wanted = [argv[i + 1] for i, a in enumerate(argv) if a == '-p']
+            return types.SimpleNamespace(returncode=systemctl_rc, stderr='',
+                                         stdout=''.join(f'{k}={unit[k]}\n' for k in wanted if k in unit))
+        assert argv[:3] == ['docker', 'inspect', '--type'] and argv[-1] == 'muse-glimmer', argv
+        if docker == 'absent':
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='Error: No such container: muse-glimmer')
+        if docker == 'daemon_down':
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='Cannot connect to the Docker daemon SECRET')
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(state) + '\n', stderr='')
+    return run
 
 
 class HealthReceipt(unittest.TestCase):
@@ -138,11 +163,13 @@ class HealthReceipt(unittest.TestCase):
         self.a = types.SimpleNamespace(
             base=f'http://127.0.0.1:{server.server_address[1]}', model='muse-glimmer', state=self.tmp / 's.json',
             status=self.tmp / 'run/h.json', receipt=self.tmp / 'receipt.json', record=None,
-            verify_start=self.tmp / 'run/verify-start.json', verify_full=self.tmp / 'verify-full.json')
+            verify_start=self.tmp / 'run/verify-start.json', verify_full=self.tmp / 'verify-full.json',
+            start_phase=self.tmp / 'run/start-phase.json')
+        self.query = query()
         self.published, self.calls = [], []
 
     def once(self, now, since=0, publisher=None, boot=BOOT, prober=H.probe):
-        state, action = H.run_once(self.a, now=now, prober=prober, since=lambda: since, boot=boot,
+        state, action = H.run_once(self.a, now=now, prober=prober, since=lambda: since, boot=boot, query=self.query,
                                    run=lambda cmd, timeout: self.calls.append(cmd),
                                    publisher=publisher or (lambda k, v: self.published.append((k, v))))
         return state, action, json.loads(self.a.status.read_text())
@@ -232,6 +259,73 @@ class HealthReceipt(unittest.TestCase):
                                                        'fullCheck': {'result': 'unreadable'},
                                                        'startCheck': {'result': 'unknown', 'full': False, 'at': None}})
 
+    def phase(self, **fields):
+        self.a.start_phase.parent.mkdir(parents=True, exist_ok=True)
+        self.a.start_phase.write_text(json.dumps(fields) + '\n')
+
+    def test_diagnostics_distinguish_prelaunch_container_and_listener_failures(self):
+        self.behavior['mode'] = 'ok'
+        self.phase(phase='launching_offline', verifyExit=0, dataMounted=True, imagePresent=True, at=1793405000)
+        self.once(60_000)
+        r = self.last()
+        self.assertEqual(r['service'], {'query': 'ok', 'load': 'loaded', 'active': 'active', 'sub': 'running',
+                                        'result': 'success', 'mainCode': 0, 'mainStatus': 0, 'restarts': 0,
+                                        'activeSince': 1793406000, 'lastExit': None})
+        self.assertEqual(r['startup'], {'phase': 'launching_offline', 'verifyExit': 0, 'dataMounted': True,
+                                        'imagePresent': True, 'at': 1793405000})
+        self.assertEqual(r['container'], {'query': 'ok', 'present': True, 'status': 'running', 'exitCode': 0,
+                                          'oomKilled': False, 'startedAt': 1793406005, 'finishedAt': None})
+        cases = (
+            ('prelaunch: storage refused', dict(phase='refused_storage', verifyExit=4),
+             {**UNIT_RUNNING, 'ActiveState': 'failed', 'SubState': 'failed', 'Result': 'exit-code', 'ExecMainCode': '1',
+              'ExecMainStatus': '4'}, 'absent', ('failed', 4, 'refused_storage', False)),
+            ('prelaunch: image missing', dict(phase='launching_offline', verifyExit=0, dataMounted=True, imagePresent=False),
+             {**UNIT_RUNNING, 'ActiveState': 'failed', 'SubState': 'failed', 'Result': 'exit-code', 'ExecMainCode': '1',
+              'ExecMainStatus': '4'}, 'absent', ('failed', 4, 'launching_offline', False)),
+            ('container: guard refused, restarting', dict(phase='launching_offline', verifyExit=0, dataMounted=True,
+                                                          imagePresent=True),
+             {**UNIT_RUNNING, 'ActiveState': 'activating', 'SubState': 'auto-restart', 'Result': 'exit-code',
+              'ExecMainCode': '1', 'ExecMainStatus': '3', 'NRestarts': '2'}, 'absent', ('activating', 3, 'launching_offline', False)),
+            ('listener: container running, nothing answers', dict(phase='launching_offline', verifyExit=0,
+                                                                 dataMounted=True, imagePresent=True),
+             UNIT_RUNNING, 'ok', ('active', 0, 'launching_offline', True)))
+        self.behavior['mode'] = 'not_listed'
+        for label, phase, unit, docker, (active, status, startup, present) in cases:
+            with self.subTest(label):
+                self.phase(**phase)
+                self.query = query(unit=unit, docker=docker)
+                self.once(60_060, since=0)
+                r = self.last()
+                self.assertEqual((r['service']['active'], r['service']['mainStatus'], r['startup']['phase'],
+                                  r['container'].get('present')), (active, status, startup, present))
+                self.assertFalse(r['ready'])
+
+    def test_diagnostic_query_failures_are_categories_and_never_change_recovery(self):
+        self.behavior['mode'] = 'http_500'
+        results = {}
+        for label, q in (('answers', query()), ('systemctl fails', query(systemctl_rc=1)),
+                         ('docker down', query(docker='daemon_down')),
+                         ('tools missing', lambda argv, **kw: (_ for _ in ()).throw(FileNotFoundError(argv[0])))):
+            self.a.state.unlink(missing_ok=True)
+            self.calls.clear()
+            self.query = q
+            seq = [self.once(70_000 + 60 * i, since=0)[:2] for i in range(4)]
+            results[label] = ([(st['status'], act) for st, act in seq], list(self.calls))
+            r = self.last()
+            if label != 'answers':
+                self.assertIn('failed', (r['service']['query'], r['container']['query']))
+            self.assertNotIn('SECRET', self.published[-1][1])
+        self.assertEqual(len({json.dumps(v) for v in results.values()}), 1, results)  # identical decisions and restarts
+
+    def test_startup_phase_is_allowlisted(self):
+        self.phase(phase='rm -rf /', verifyExit='0', dataMounted='yes', imagePresent=1, at=None, extra='x' * 5000)
+        self.once(80_000)
+        self.assertEqual(self.last()['startup'], {'phase': 'other', 'verifyExit': None, 'dataMounted': None,
+                                                  'imagePresent': None, 'at': None})
+        self.a.start_phase.write_text('{"phase": ')
+        self.once(80_060)
+        self.assertEqual(self.last()['startup'], {'phase': 'unreadable'})
+
     def test_unknown_boot_id_and_oversize_receipts(self):
         self.assertEqual(H.boot_id(self.tmp / 'missing'), 'unknown')
         (self.tmp / 'bid').write_text('../../etc/passwd\n')
@@ -239,7 +333,7 @@ class HealthReceipt(unittest.TestCase):
         state = {'status': 'ready', 'failures': 0, 'restarts': list(range(500)), 'lastOk': None}
         with self.assertRaises(ValueError):
             H.receipt(BOOT, 1, True, 'ready', state, None, {}, True, None,
-                      {'result': 'verified', 'full': True, 'at': 1, 'pad': 'x' * 3000})
+                      {'result': 'verified', 'full': True, 'at': 1, 'pad': 'x' * 5000})
 
 
 def fake_cache(root, model, extra=None, corrupt=None):
