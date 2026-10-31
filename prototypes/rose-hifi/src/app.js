@@ -415,6 +415,15 @@
   $('h-tasks').onclick = () => { for (const id of Object.keys(M.TASKS)) dispatch({ type: 'startTask', id }); };
   $('h-attn').onclick = () => dispatch({ type: 'taskEvent', id: 'reply', value: 'attention' });
   $('h-done').onclick = () => { const id = Object.keys(state.tasks).find((k) => M.STOPPABLE.includes(state.tasks[k].state)); if (id) dispatch({ type: 'taskEvent', id, value: 'done' }); };
+  // Bottom-tray exploration: opt-in via ?tray=1…10 or the harness selector; default unchanged.
+  function setTray(v) {
+    const n = /^(10|[1-9])$/.test(String(v)) ? String(v) : '';
+    if (n) screen.dataset.tray = n; else delete screen.dataset.tray;
+    $('h-tray').value = n;
+    renderer.refresh();
+  }
+  $('h-tray').onchange = (e) => setTray(e.target.value);
+  setTray(new URLSearchParams(location.search).get('tray'));
   $('h-reduced').checked = media.matches;
   $('h-reduced').onchange = (e) => { reducedOverride = e.target.checked; render(); };
   media.addEventListener('change', () => { $('h-reduced').checked = media.matches || reducedOverride; render(); });

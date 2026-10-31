@@ -25,7 +25,8 @@ def build():
     html = (SRC / 'index.html').read_text()
     js = {k: (SRC / f).read_text() for k, f in {'MODEL': 'model.js', 'RENDERER': 'renderer.js', 'APP': 'icons.js'}.items()}
     js['APP'] = js['APP'] + '\n' + (SRC / 'views.js').read_text() + '\n' + (SRC / 'app.js').read_text()
-    html = html.replace('/*%%CSS%%*/', (SRC / 'style.css').read_text())
+    # Tray options are opt-in (data-tray on #screen) and appended after the default styles.
+    html = html.replace('/*%%CSS%%*/', (SRC / 'style.css').read_text() + '\n' + (SRC / 'tray-variants.css').read_text())
     for key, code in js.items():
         html = html.replace('/*%%' + key + '%%*/', code)
     html = html.replace('%%WALLPAPER%%', data_uri('wallpaper.jpg', 'image/jpeg'))

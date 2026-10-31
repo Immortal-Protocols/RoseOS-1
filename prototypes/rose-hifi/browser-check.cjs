@@ -10,7 +10,8 @@ const fs = require('fs');
 const { chromium } = require('playwright');
 
 const OUT = path.resolve(process.argv[2] || path.join(__dirname, 'out'));
-const FILE = 'file://' + path.join(__dirname, 'Rose-HiFi.html');
+// ROSE_TRAY=1…10 runs the same walkthrough with a bottom-tray option applied (default: none).
+const FILE = 'file://' + path.join(__dirname, 'Rose-HiFi.html') + (process.env.ROSE_TRAY ? '?tray=' + process.env.ROSE_TRAY : '');
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];

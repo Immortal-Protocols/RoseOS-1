@@ -128,6 +128,43 @@ only. It is not physical-device acceptance:
   The app itself makes no readPixels calls.
 - Physical-device rendering, touch feel and GPU performance remain unverified.
 
+## Bottom-tray options (exploration)
+
+`src/tray-variants.css` holds ten opt-in bottom-tray directions, requested by
+Nathan on 2026-10-31. They are prompts, not a selection, and the default tray is
+unchanged. To try one, open `Rose-HiFi.html?tray=N` with N from 1 to 10, or use
+**Tray option** in the controls panel:
+
+| N | Option |
+| --- | --- |
+| 1 | Slim full-width rail |
+| 2 | Flush inset strip |
+| 3 | Floating glass lenses |
+| 4 | Quiet thin capsule |
+| 5 | Bottom edge shelf |
+| 6 | Split wings |
+| 7 | Continuous glass |
+| 8 | Porcelain band |
+| 9 | Satin fine metal |
+| 10 | Slender open frame |
+
+Every option keeps the same controls, states and minimum 44 px targets in Home,
+Rose and Rose's apps. Rendered with motion frozen, the default is pixel-identical
+to `4e843d4`.
+
+To capture the options and build a contact sheet:
+
+```sh
+node prototypes/rose-hifi/capture-trays.cjs prototypes/rose-hifi/out/trays
+```
+
+```sh
+python3 prototypes/rose-hifi/contact-sheet.py prototypes/rose-hifi/out/trays
+```
+
+To run the full walkthrough with one option applied, set `ROSE_TRAY=N` for
+`browser-check.cjs`.
+
 ## Review history
 
 Two independent multi-agent reviews ran against this prototype, each in a real
