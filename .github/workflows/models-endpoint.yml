@@ -105,7 +105,7 @@ jobs:
         run: |
           for t in test_service_auth test_service_ops test_service_tls_deploy test_service_render \
                    test_service_bootstrap test_service_start_chain test_serving_config test_local_profile \
-                   test_startup_guard; do
+                   test_startup_guard test_service_hf_probe; do
             /usr/bin/python3 -I workspace/models/serving/tests/$t.py -v
           done
       - name: Render the service tree and build the bootstrap payload (identity printed)

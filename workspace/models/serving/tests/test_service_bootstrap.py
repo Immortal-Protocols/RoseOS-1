@@ -46,6 +46,8 @@ class FakeHost(B.Host):
         self.ps_results = []  # queued (exit code, output) for `docker ps --all` (daemon errors, timeouts)
         self.verify_rc, self.data_mounted, self.port_open = 3, True, False
         self.gpu_listens = self.gpu_deadline = False
+        self.probe_container = self.probe_timeout = False
+        self.probe_rc, self.probe_out = 0, ''
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -162,7 +164,8 @@ class FakeHost(B.Host):
                 if self.ps_results:
                     return self.ps_results.pop(0)
                 names = [n for n, alive in (('muse-glimmer', self.model_container),
-                                            ('muse-glimmer-validate', self.validate_container)) if alive]
+                                            ('muse-glimmer-validate', self.validate_container),
+                                            ('muse-glimmer-hfprobe', self.probe_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -171,7 +174,17 @@ class FakeHost(B.Host):
                     self.validate_container = False
                 if argv[3] == 'muse-glimmer' and not self.rm_fails:
                     self.model_container = self.port_open = False
+                if argv[3] == 'muse-glimmer-hfprobe' and not self.rm_fails:
+                    self.probe_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'muse-glimmer-hfprobe' in argv:
+                self.events.append(('hfprobe', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists()))
+                self.probe_container = True
+                if self.probe_timeout:
+                    return 124, ''  # Host.run killed the CLI at the deadline; the container is still there
+                self.probe_container = self.leave_container
+                return self.probe_rc, self.probe_out
         if cmd == 'nvidia-ctk':
             daemon = self.path(B.DAEMON_JSON)
             daemon.parent.mkdir(parents=True, exist_ok=True)
@@ -1310,6 +1323,126 @@ class GpuStartOnce(DiagnosticFixture):
         for value in (f'gpu-start-twice:{SHA}:x', f'gpu-start-once:{SHA}:', f'gpu-start-once:{SHA[:-2]}:x'):
             with self.subTest(value):
                 self.assertEqual(self.states(self.boot(value)[0])['diagnostic'], ('ok', 'ignored: malformed'))
+
+
+class HfProbeOnce(DiagnosticFixture):
+    """hf-probe-once: one offline loader probe in the cached exact image, no GPU, cache read-only, fixed tokens only."""
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'hf-probe-once:{SHA}:{attempt}')
+
+    def line(self, **over):
+        import hf_probe as P
+        body = {'loaders': dict.fromkeys(P.LOADERS, 'ok'), 'transformersVersion': '5.23.0.dev0',
+                'registeredTransformers': True, 'registeredVllm': False,
+                'files': dict.fromkeys(P.FILES, 'present'), **over}
+        return 'Some warning on stdout\n' + P.MARKER + json.dumps(body) + '\n'
+
+    def model_started(self):
+        return [c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart', 'enable')
+                and 'muse-glimmer.service' in c]
+
+    def test_all_loaders_pass_with_the_exact_offline_argv(self):
+        status, code = self.probe('pass', probe_out=self.line())
+        self.assertEqual((self.states(status)['diagnostic'][0], code, list(status['stages'])), ('ok', 0, ['diagnostic']))
+        r = self.published()
+        self.assertEqual({k: r[k] for k in ('check', 'exitCode', 'timedOut', 'cleanup', 'prerequisite', 'modelHeld')},
+                         {'check': 'hf-probe-once', 'exitCode': 0, 'timedOut': False, 'cleanup': 'removed',
+                          'prerequisite': None, 'modelHeld': True})
+        self.assertEqual((r['probe']['allOk'], r['probe']['firstFailure'], r['probe']['transformersVersion'],
+                          r['probe']['registeredTransformers'], r['probe']['registeredVllm']),
+                         (True, None, '5.23.0.dev0', True, False))
+        _, argv, active, container, held = next(e for e in self.host.events if e[0] == 'hfprobe')
+        source = (self.payload / 'etc-rose-models/lib/service/hf_probe.py').read_text()
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                                '--name', 'muse-glimmer-hfprobe', '-e', 'HF_HUB_OFFLINE=1', '-e', 'TRANSFORMERS_OFFLINE=1',
+                                '-v', '/mnt/models-data/hf:/root/.cache/huggingface:ro', '--entrypoint', 'python3',
+                                RUNTIME['image_id'], '-c', source, CONFIG['model']['repo'], CONFIG['model']['revision']])
+        self.assertEqual(source, (HERE.parent / 'service/hf_probe.py').read_text())  # the reviewed script, shipped
+        launch = next(o for o in CONFIG['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')['local_launch']
+        self.assertIn(f"{launch['host_cache_dir']}:{launch['container_cache_dir']}:ro", argv)  # the serve cache, ro
+        for forbidden in ('--gpus', '--privileged', '--mount', 'HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN'):
+            self.assertFalse([a for a in argv if forbidden in a], forbidden)
+        self.assertEqual([a for a in argv if a.endswith(':ro') or a.startswith('/mnt')],
+                         ['/mnt/models-data/hf:/root/.cache/huggingface:ro'])
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'hfprobe', 'rm')], ['stop', 'hfprobe', 'rm'])
+        self.assertTrue(self.host.path(B.MODEL_HOLD).exists())
+        self.assertEqual(self.model_started(), [])
+        self.assertNoProvisioning()
+
+    def test_first_failure_in_fixed_order(self):
+        import hf_probe as P
+        loaders = {'autoConfig': 'ok', 'autoTokenizer': 'value_error', 'autoProcessor': 'os_error',
+                   'generationConfig': 'ok'}
+        self.probe('fail', probe_out=self.line(loaders=loaders))
+        r = self.published()['probe']
+        self.assertEqual((r['firstFailure'], r['allOk'], r['loaders']), ('autoTokenizer', False, loaders))
+        self.assertEqual(set(r['files']), set(P.FILES))
+
+    def test_hostile_or_oversized_output_is_reduced_to_fixed_tokens(self):
+        import hf_probe as P
+        hostile = self.line(loaders={'autoConfig': 'ValueError: SECRET /root/x', 'autoTokenizer': 'ok',
+                                     'autoProcessor': 'ok', 'generationConfig': 'ok', 'extra': 'SECRET'},
+                            transformersVersion='4.0 SECRET', registeredTransformers='yes SECRET',
+                            files={'config.json': '/root/.cache/SECRET'}, message='SECRET-TEXT')
+        self.probe('hostile', probe_out=hostile)
+        r = self.published()['probe']
+        self.assertEqual((r['loaders']['autoConfig'], r['transformersVersion'], r['registeredTransformers'],
+                          r['files']['config.json'], r['firstFailure']), ('other', 'other', None, 'unknown', 'autoConfig'))
+        self.assertNotIn('SECRET', self.host.guest['diagnostic'])
+        self.assertNotIn('/root', self.host.guest['diagnostic'])
+        self.assertEqual(set(r), {'loaders', 'transformersVersion', 'registeredTransformers', 'registeredVllm', 'files',
+                                  'firstFailure', 'allOk'})
+        for attempt, out in (('huge', P.MARKER + '{"loaders": "' + 'x' * 10000 + '"}\n'),
+                             ('garbled', P.MARKER + '{not json SECRET\n'), ('none', 'Traceback SECRET\n'),
+                             ('list', P.MARKER + '[1, 2]\n')):
+            with self.subTest(attempt):
+                status, _ = self.probe(attempt, probe_out=out, probe_rc=1)
+                self.assertEqual((self.published()['probe'], self.published()['exitCode']), (None, 1))
+                self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; loader probe gave no result'))
+                self.assertNotIn('SECRET', self.host.guest['diagnostic'])
+                self.host.model_active = self.host.model_container = True
+
+    def test_timeout_is_cleaned_up_with_no_result(self):
+        status, _ = self.probe('slow', probe_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['probe'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; loader probe timed out'))
+        self.assertEqual(B.HF_PROBE_SECONDS, 120)
+        self.assertFalse(self.host.probe_container)
+
+    def test_refusals_and_cleanup_failure(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                status, code = self.probe(attempt, **flags)
+                self.assertEqual((self.states(status)['diagnostic'], code),
+                                 (('failed', 'diagnostic_prerequisite_missing'), 1))
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('hfprobe', [e[0] for e in self.host.events])
+                self.assertNoProvisioning()
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        saved = dict(self.host.images)
+        self.host.images.clear()
+        self.probe('noimage')
+        self.assertEqual(self.published()['prerequisite'], 'image_missing')
+        self.host.images.update(saved)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', probe_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+
+    def test_once_per_id(self):
+        self.probe('once', probe_out=self.line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
 
 
 class HostValidate(unittest.TestCase):

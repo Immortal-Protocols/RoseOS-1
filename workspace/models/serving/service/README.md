@@ -205,6 +205,20 @@ and `…Process`, each from a fixed allowlist in `startup_guard.py`, anything el
 or stack. vLLM's per-line log header (upstream `NewLineFormatter`) is skipped. They narrow where a start stopped; the
 first exception is only the earliest classified (it may be the API server's wrapper), not a proven root cause.
 
+**One loader probe (diagnostic, explicit, once per id).** `rose-models-diagnostic=hf-probe-once:<payloadTarSha256>:<id>`
+uses the same hold, stop, positive absence and read-only prerequisites, and refuses an unmounted data disk
+(`data_not_mounted`). It runs `lib/service/hf_probe.py` once in the pinned image already in the local store:
+`--pull=never`, `--runtime=runc`, `--network none`, no GPU, only `/mnt/models-data/hf` mounted read-only at the serve
+cache path, `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`, no credentials, at most 120 s; the container is always removed
+and its absence verified, and inference stays held for the boot. AutoConfig, AutoTokenizer, AutoProcessor and
+GenerationConfig are each tried once at the pinned revision with `local_files_only` (and `trust_remote_code=False`).
+`probe` holds fixed tokens only, re-checked by bootstrap: per loader `ok`/`value_error`/`os_error`/`key_error`/
+`type_error`/`attribute_error`/`import_error`/`runtime_error`/`not_implemented`/`other`, `firstFailure` (fixed order)
+and `allOk`, `transformersVersion` (a plain version or `other`), `registeredTransformers`/`registeredVllm` (is
+`muse_glimmer` a known model type; `null` if not determinable) and, per small config file, `present`/`absent`/
+`not_cached`/`unknown`; `null` on a timeout or without a valid line. It shows which loader fails, not why. Library
+names were checked against upstream source and released transformers 4.57.1/5.22.1, never against the pinned image.
+
 ## 5. Operations
 
 | Situation | What happens | Operator |

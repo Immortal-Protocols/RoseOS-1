@@ -46,7 +46,7 @@ LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/https/render_proxy.py': SERVING / 'https' / 'render_proxy.py',
              **{f'lib/service/{n}': SERVING / 'service' / n
                 for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py', 'renewal_status.py',
-                          'unit_facts.py')},
+                          'unit_facts.py', 'hf_probe.py')},
              'lib/startup_guard.py': SERVING / 'startup_guard.py'}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
