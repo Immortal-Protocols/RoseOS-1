@@ -1,6 +1,8 @@
 """Startup guard: synthetic node facts pass or refuse before any weights download, and the rendered command fails closed."""
 import importlib.util
+import io
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import unittest
 from unittest import mock
 
@@ -108,7 +111,7 @@ if mode == 'late':  # quiet past the inspection window, then fails
     print('torch.OutOfMemoryError: CUDA out of memory', file=sys.stderr, flush=True)
     sys.exit(1)
 if mode == 'oom':
-    print('Traceback (most recent call last):', file=sys.stderr)
+    print('(VllmWorker TP1 pid=7) Traceback (most recent call last):', file=sys.stderr)
     print('(VllmWorker TP1 pid=7) torch.OutOfMemoryError: CUDA out of memory. Tried SECRET-TEXT', file=sys.stderr)
     sys.exit(1)
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', port)); s.listen()
@@ -195,7 +198,8 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(cap.summary(), {'firstCategory': 'argument_rejected', 'categories': ['argument_rejected'],
                                          'bytesInspected': 100, 'limitReached': 'bytes', 'guard': None,
                                          'tracebacks': 0, 'exceptionType': None, 'exceptionLocation': None,
-                                         'exceptionProcess': None})
+                                         'exceptionProcess': None, 'firstExceptionType': None,
+                                         'firstExceptionLocation': None, 'firstExceptionProcess': None})
         cap = guard.Capture(max_bytes=100, max_seconds=10, clock=lambda: clock[0])
         clock[0] = 11
         self.assertFalse(cap.feed(b'Traceback (most recent call last)'))
@@ -356,6 +360,119 @@ class ClassificationTest(unittest.TestCase):
     def test_traceback_count_is_bounded(self):
         cap = self.feed('Traceback (most recent call last):\n' * 1050)
         self.assertEqual(cap.summary().get('tracebacks'), 1000)
+
+
+VLLM = '/usr/local/lib/python3.12/dist-packages/vllm'
+
+
+class UpstreamFormatter(logging.Formatter):
+    """vLLM's NewLineFormatter (vllm/logging_utils/formatter.py, main): the header is repeated on every line of a
+    multi-line record, joined with \\r\\n. Upstream behaviour only; the pinned image's vLLM is not available here."""
+
+    def format(self, record):
+        record.fileinfo = record.filename
+        msg = super().format(record)
+        if record.message != '':
+            parts = msg.split(record.message)
+            msg = msg.replace('\n', '\r\n' + parts[0])
+        return msg
+
+
+UPSTREAM_FORMAT = ('(%(vllm_process_name)s pid=%(process)d) %(levelname)s %(asctime)s '
+                   '[%(fileinfo)s:%(lineno)d] %(message)s')  # vllm/logger.py _FORMAT with an empty prefix
+
+
+def raise_in(path, exc):
+    """Raise `exc` from code whose frames name `path`, as a real traceback would."""
+    code = compile(f'def inner():\n    raise {exc}\ninner()\n', path, 'exec')
+    exec(code, {'ValueError': ValueError, 'RuntimeError': RuntimeError, 'KeyError': KeyError})
+
+
+def logged(process, path, exc, message, color=False):
+    """One logger.exception record exactly as vLLM's default handler writes it."""
+    out = io.StringIO()
+    handler = logging.StreamHandler(out)
+    handler.setFormatter(UpstreamFormatter(('\x1b[1;31m' if color else '') + UPSTREAM_FORMAT, '%m-%d %H:%M:%S'))
+    log = logging.getLogger(f'vllm-fixture-{process}-{color}')
+    log.handlers[:] = [handler]
+    log.propagate = False
+    try:
+        raise_in(path, exc)
+    except Exception:
+        log.exception(message, extra={'vllm_process_name': process})
+    return out.getvalue()
+
+
+def uncaught(path, exc):
+    """An exception the interpreter prints itself (sys.excepthook), with no vLLM header."""
+    try:
+        raise_in(path, exc)
+    except Exception:
+        return ''.join(traceback.format_exc())
+
+
+class UpstreamFormatTest(unittest.TestCase):
+    """Tracebacks as vLLM's own logging writes them: header on every line, \\r\\n, interleaved processes."""
+
+    def run_capture(self, text, chunk):
+        cap = guard.Capture()
+        data = text.encode()
+        for i in range(0, len(data), chunk):
+            cap.feed(data[i:i + chunk])
+        return cap.summary()
+
+    def scenario(self, color=False):
+        engine = logged('EngineCore_DP0', f'{VLLM}/v1/worker/gpu_worker.py',
+                        "ValueError('weights: SECRET-TEXT hf_TOKEN_x /root/private')", 'EngineCore failed to start.',
+                        color)
+        api = logged('APIServer', f'{VLLM}/v1/engine/utils.py',
+                     "RuntimeError('Engine core initialization failed. See root cause above. SECRET-TEXT')",
+                     'API server failed.', color)
+        return engine, api
+
+    def test_header_prefixed_tracebacks_in_any_chunking(self):
+        engine, api = self.scenario()
+        self.assertIn('\r\n(EngineCore_DP0 pid=', engine)  # the fixture really repeats the header per line
+        self.assertIn('] Traceback (most recent call last):', engine)
+        for chunk in (1, 7, 64, 1000, 1 << 16):
+            with self.subTest(chunk=chunk):
+                s = self.run_capture(engine + api, chunk)
+                self.assertEqual((s['tracebacks'], s['firstExceptionType'], s['firstExceptionLocation'],
+                                  s['firstExceptionProcess']), (2, 'ValueError', 'worker', 'engine_core'))
+                self.assertEqual((s['exceptionType'], s['exceptionLocation'], s['exceptionProcess']),
+                                 ('RuntimeError', 'engine_core', 'api_server'))
+                dumped = json.dumps(s)
+                for leak in ('SECRET', 'hf_TOKEN', '/root', '/usr/local', 'pid=', 'failed to start', '.py'):
+                    self.assertNotIn(leak, dumped)
+
+    def test_colored_headers_and_interleaved_processes(self):
+        engine, api = self.scenario(color=True)
+        lines_e, lines_a = engine.splitlines(True), api.splitlines(True)
+        mixed = ''.join(x for pair in zip(lines_e, lines_a) for x in pair)
+        mixed += ''.join(lines_e[len(lines_a):] + lines_a[len(lines_e):])
+        s = self.run_capture(mixed, 13)
+        self.assertEqual(sorted([(s['firstExceptionType'], s['firstExceptionProcess']),
+                                 (s['exceptionType'], s['exceptionProcess'])]),
+                         [('RuntimeError', 'api_server'), ('ValueError', 'engine_core')])
+        self.assertEqual(s['tracebacks'], 2)
+
+    def test_plain_and_logged_mixed_unknown_and_secret(self):
+        plain = uncaught('/opt/acme/secret_job.py', "KeyError('SECRET-TEXT')")
+        unknown = logged('Mystery', '/srv/private/thing.py', "RuntimeError('SECRET-TEXT')", 'oops')
+        s = self.run_capture(plain + unknown, 9)
+        self.assertEqual((s['firstExceptionType'], s['firstExceptionLocation'], s['firstExceptionProcess']),
+                         ('KeyError', 'other', 'main'))
+        self.assertEqual((s['exceptionType'], s['exceptionLocation'], s['exceptionProcess']),
+                         ('RuntimeError', 'other', 'other'))
+        self.assertNotIn('SECRET', json.dumps(s))
+        self.assertNotIn('Mystery', json.dumps(s))
+
+    def test_header_tracebacks_beyond_the_byte_bound_are_not_read(self):
+        engine, api = self.scenario()
+        cap = guard.Capture(max_bytes=len(engine.encode()) // 2)
+        cap.feed((engine + api).encode())
+        s = cap.summary()
+        self.assertEqual((s['limitReached'], s['firstExceptionType'], s['exceptionType']), ('bytes', None, None))
 
 if __name__ == '__main__':
     unittest.main()

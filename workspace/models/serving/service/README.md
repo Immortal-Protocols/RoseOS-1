@@ -199,10 +199,11 @@ uses the same hold, stop, positive absence and read-only prerequisites. `verify_
 status, an unmounted data disk, a busy :8000 or an unreadable launcher is refused. That exact `docker run`, plus
 `--pull=never`, runs once: at most 900 s, 2 MiB inspected for fixed categories, stopped as soon as :8000 listens. The
 container is always removed and its absence verified; inference stays held for the boot. It shows how far a start gets,
-not why. The same bounded bytes also yield fixed tokens only: `guard` (`passed`/`refused`), `tracebacks`, and the last
-traceback's `exceptionType`, `exceptionLocation` (innermost frame's component) and `exceptionProcess`, each from a
-fixed allowlist in `startup_guard.py`, anything else `other`; never a message, path, line or stack. They narrow where
-a start stopped; they are not a root cause.
+not why. The same bounded bytes also yield fixed tokens only: `guard` (`passed`/`refused`), `tracebacks`, and for the
+last and the first classified traceback `exceptionType`/`firstExceptionType`, `…Location` (innermost frame's component)
+and `…Process`, each from a fixed allowlist in `startup_guard.py`, anything else `other`; never a message, path, line
+or stack. vLLM's per-line log header (upstream `NewLineFormatter`) is skipped. They narrow where a start stopped; the
+first exception is only the earliest classified (it may be the API server's wrapper), not a proven root cause.
 
 ## 5. Operations
 
