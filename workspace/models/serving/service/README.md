@@ -67,6 +67,7 @@ These stages are rerun-safe and each command has a time bound.
 | `image` | pulls the pinned image digest and requires the pinned image ID |
 | `nginx` | checks the binary's sha256 and disables the distro unit |
 | `service` | installs the units and starts vLLM, health and verification. The first start downloads the model once and records the receipt |
+| `diagnostic` | only when requested (below); otherwise `not requested` |
 | `auth` | initializes the server secret once; starts the auth service when roots are present |
 | `tls` | prepare, issue, install; see §4. Nothing listens on :80 until metadata `rose-models-acme=agree-tos-no-email` is set **and** `models.a-list.com` resolves to this VM |
 | `edge` | starts Nginx (:443 and challenge-only :80); a lineage issued standalone is switched to the webroot |
@@ -88,12 +89,11 @@ gcloud compute instances get-guest-attributes models-glimmer-01 --project=$P --z
   code, restarts), `startup` (start-model's last phase: `verifying`, `refused_storage`, `launching_offline` or
   `launching_online`, with the verify exit and whether the data disk is mounted and the image present) and
   `container` (docker State: status, exit code, OOM, start time) separate a refused start, a failed container and a
-  running container that does not answer. `containerRun` is the startup guard's record of this attempt (`start-model`
-  clears it first): `guard_refused` with failure codes, or `guard_passed`, `server_started`, `listening` (with
-  `listenedAfterS`) and `exited` (exit code or signal, `elapsedS`, and the class name of the last exception the server
-  printed, never its text). `weightsCache` compares the Hugging Face cache's complete and partial blob bytes with the
-  pinned repository size. Fresh means this boot's `bootId` and `checkedAt` within 3 minutes. A
-  publication or query failure never changes recovery.
+  running container that does not answer. `containerRun` is the startup guard's result for this attempt
+  (`guard_refused` with failure codes, or `guard_passed`); the guard then execs vLLM, whose output goes only to the
+  container log. `weightsCache` compares the Hugging Face cache's complete and partial blob bytes with the pinned
+  repository size. Fresh means this boot's `bootId` and `checkedAt` within 3 minutes. A publication or query failure
+  never changes recovery.
 - **`rose-models/renewal`** (after the edge starts, then every 6 h, `renewal_status.py`): `certbotTimer` (enabled,
   active, `nextRun`, `schedule`, and `certbot.service`'s last result), `renewalConfig` (webroot, deploy hook, single account), `certificate` (`notAfter`, `daysLeft`,
   installed chain equals the lineage) and `edgeAcme`, a fresh challenge through the RUNNING edge's :80 (200, all else
@@ -180,6 +180,18 @@ python3 /etc/rose-models/lib/service/auth_service.py invite --label nathan-pixel
 Scan the code in the Models app. It is single use and valid for 24 h.
 - `auth_service.py invites` lists codes (never the codes themselves).
 - `auth_service.py revoke nathan-pixel` revokes that label's devices and its unused codes.
+
+**Offline CLI check (diagnostic, explicit, once per id).** Set existing metadata
+`rose-models-diagnostic=offline-validate:<payloadTarSha256>:<id>` (id: lower-case letters, digits, `-`) and reset.
+That boot holds the model (`/run/rose-models/model-hold`, which `muse-glimmer.service`'s `ExecCondition` honours and
+any reboot clears), stops it and waits until its container is gone, then runs `vllm serve` with the deployed arguments
+in the pinned image already in the local store: `--pull=never`, `--network none`, no GPU, no mounts,
+`HF_HUB_OFFLINE=1`, 120 s, at most 2 MiB of output inspected and never kept. The result, fixed categories only, is
+the serial line `ROSE-MODELS-DIAGNOSTIC` and `rose-models/diagnostic`. It shows where the CLI stopped
+(`argument_rejected`, `tool_parser_invalid`, `reasoning_parser_invalid`, `model_config_unavailable`,
+`device_unavailable`, ...); without network, GPU or weights it cannot show that serving works. HTTPS and auth continue;
+inference is off until the next reset without a new id. Another payload's digest, a malformed value or a used id
+holds and runs nothing.
 
 ## 5. Operations
 

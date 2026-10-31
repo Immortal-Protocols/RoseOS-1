@@ -14,6 +14,10 @@ run in order and are rerun-safe: each first checks whether its result is already
              pinned reference, and the platform must be linux/amd64
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
+  diagnostic only with metadata rose-models-diagnostic=offline-validate:<payload sha256>:<id>, once per id: the model
+             is held (MODEL_HOLD, set before any stage), stopped and its container gone; then one offline CLI check
+             of the exact serve command (pinned local image, --pull=never, no network, GPU or mounts, 120 s); fixed
+             categories published as rose-models/diagnostic. The model stays held for this boot only
   auth       secret-init once; the auth service only once attestation roots are present
   tls        an installed certificate; else an issued-but-uninstalled lineage is installed (never reissued); else, with
              rose-models-acme set and DNS here, an ACME-only Nginx is started and proven (challenge 200, all else 404);
@@ -29,9 +33,11 @@ file, and the guest attribute rose-models/bootstrap. Exit 0 when ready, waiting 
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import select
 import shutil
 import signal
@@ -70,6 +76,11 @@ ACME_FLAG = 'agree-tos-no-email'  # metadata rose-models-acme: the operator's ex
 ROOT = '/etc/rose-models'
 STATE = '/var/lib/rose-models/bootstrap'
 RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and its published evidence
+# Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=offline-validate:<payload sha256>:<id>
+DIAG_KEY = 'attributes/rose-models-diagnostic'
+DIAG_VALUE = re.compile(r'offline-validate:([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
+DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
                'models-attestation-status.timer')
 METADATA = 'http://metadata.google.internal/computeMetadata/v1/instance/'
@@ -152,6 +163,42 @@ class Host:
             child.wait()
             return 'deadline'
         return None if rc == 0 else 'signal' if rc < 0 else 'exit'
+
+    def validate(self, argv, max_seconds, capture):
+        """Run one bounded check and inspect its merged output with `capture` (startup_guard.Capture: fixed categories,
+        bounded bytes and time). Output is never stored or forwarded. At the deadline the process group is killed.
+        Returns (exit code or None when killed at the deadline, elapsed seconds)."""
+        started = time.monotonic()
+        try:
+            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+        except OSError:
+            return 127, 0
+        deadline, fd, code = started + max_seconds, child.stdout.fileno(), None
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                if select.select([fd], [], [], min(left, 0.5))[0]:
+                    chunk = os.read(fd, 1 << 16)
+                    if not chunk:
+                        code = child.wait(max(0.1, deadline - time.monotonic()))
+                        break
+                    capture.feed(chunk)
+                else:
+                    capture.feed(b'')
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                child.wait()
+            child.stdout.close()
+        return code, round(time.monotonic() - started, 1)
 
     def kill(self, pid, sig):
         os.kill(pid, sig)
@@ -461,7 +508,12 @@ def stage_service(host, ctx):
     os.chmod(host.path('/var/lib/rose-models/acme'), 0o755)  # nginx workers read the webroot unprivileged
     if changed:
         must(host, ['systemctl', 'daemon-reload'], 'daemon_reload_failed', 120)
-    must(host, ['systemctl', 'enable', '--now', *MODEL_UNITS], 'service_enable_failed', 300)
+    if host.path(MODEL_HOLD).exists():  # diagnostic branch: enable for later boots, start nothing that runs the model
+        must(host, ['systemctl', 'enable', *MODEL_UNITS], 'service_enable_failed', 300)
+        must(host, ['systemctl', 'start', 'models-verify-full.timer', 'models-attestation-status.timer'],
+             'service_enable_failed', 300)
+    else:
+        must(host, ['systemctl', 'enable', '--now', *MODEL_UNITS], 'service_enable_failed', 300)
     health = host.path('/run/rose-models/health.json')
     try:
         model = json.loads(health.read_text()).get('status', 'unknown')
@@ -737,9 +789,78 @@ def stage_edge(host, ctx):
     return 'active'
 
 
+def diagnostic_request(host, ctx):
+    """None, ('requested', id) or ('ignored', reason). The value must name this exact payload; each id runs once."""
+    raw = (host.metadata(DIAG_KEY) or '').strip()
+    if not raw:
+        return None
+    m = DIAG_VALUE.fullmatch(raw)
+    if not m:
+        return ('ignored', 'malformed')
+    if m.group(1) != ctx['payloadSha256']:
+        return ('ignored', 'other_payload')
+    if (host.path(STATE) / f'diagnostic-{m.group(2)}').exists():
+        return ('ignored', 'attempt_already_used')
+    return ('requested', m.group(2))
+
+
+def stage_diagnostic(host, ctx):
+    """The offline CLI check of the exact serve command: the pinned image already in the local store (--pull=never),
+    `vllm serve` with the deployed arguments, no network, no GPU, no mounts, HF_HUB_OFFLINE=1, at most 120 s and 2 MiB
+    inspected. It runs only after the model service is stopped and its container is gone, and the model stays held
+    for the rest of this boot. It proves only where the CLI stopped (fixed categories), not that serving works."""
+    request = ctx.get('diagnostic')
+    if request is None:
+        return 'not requested'
+    if request[0] == 'ignored':
+        return f'ignored: {request[1]}'
+    attempt = request[1]
+    (host.path(STATE) / f'diagnostic-{attempt}').write_text(ctx['payloadSha256'] + '\n')  # used even if this fails
+    must(host, ['systemctl', 'stop', 'models-health.timer', 'models-health.service', 'muse-glimmer.service'],
+         'diagnostic_stop_failed', 180)
+    deadline = host.clock() + DIAG_STOP_S
+    while True:
+        _, out = host.run(['systemctl', 'is-active', 'muse-glimmer.service'], 30)
+        stopped = out.strip() in ('inactive', 'failed', 'unknown')
+        gone = host.run(['docker', 'inspect', '--type', 'container', 'muse-glimmer'], 30)[0] != 0
+        if stopped and gone:
+            break
+        if host.clock() >= deadline:
+            raise Failed('diagnostic_model_not_stopped', [{'stopped': stopped, 'containerGone': gone}])
+        host.sleep(2)
+    image = ctx['runtime']['image_id']
+    result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
+    if host.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image], 60)[1].strip() != image:
+        result.update(imagePresent=False, exitCode=None, elapsedS=0, firstCategory='image_missing',
+                      categories=['image_missing'], bytesInspected=0, limitReached=None)
+    else:
+        guard = load_guard(ctx['payload'])
+        capture = guard.Capture(DIAG_BYTES, DIAG_SECONDS)
+        argv = ['docker', 'run', '--rm', '--pull=never', '--network', 'none', '--name', DIAG_CONTAINER,
+                '-e', 'HF_HUB_OFFLINE=1', '--entrypoint', 'vllm', image, 'serve', *ctx['serveArgs']]
+        try:
+            code, elapsed = host.validate(argv, DIAG_SECONDS, capture)
+        finally:
+            host.run(['docker', 'rm', '-f', DIAG_CONTAINER], 30)  # a killed CLI leaves its container running
+        result.update(imagePresent=True, exitCode=code, elapsedS=elapsed, **capture.summary())
+    line = json.dumps(result, sort_keys=True)
+    host.put_guest_attribute('diagnostic', line)
+    host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    return f"model held; offline CLI check {result['firstCategory'] or 'no_category'} (exit {result['exitCode']})"
+
+
+def load_guard(payload):
+    spec = importlib.util.spec_from_file_location('startup_guard', Path(payload) / 'etc-rose-models/lib/startup_guard.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 STAGES = (('disk', stage_disk), ('packages', stage_packages), ('driver', stage_driver),
           ('container', stage_container), ('image', stage_image), ('nginx', stage_nginx),
-          ('service', stage_service), ('auth', stage_auth), ('tls', stage_tls), ('edge', stage_edge))
+          ('service', stage_service), ('diagnostic', stage_diagnostic), ('auth', stage_auth), ('tls', stage_tls),
+          ('edge', stage_edge))
 INDEPENDENT = {'tls'}  # may still run while auth waits
 
 
@@ -761,8 +882,13 @@ def run(host, payload, payload_sha256, now=time.time):
         return {'result': 'already_running'}, 0
     try:
         config = json.loads((payload / 'etc-rose-models/lib/muse-glimmer-30b.json').read_text())
-        runtime = next(o for o in config['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')['runtime']
-        ctx = {'payload': payload, 'runtime': runtime, 'results': {}, 'payloadSha256': payload_sha256}
+        option = next(o for o in config['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')
+        ctx = {'payload': payload, 'runtime': option['runtime'], 'serveArgs': option['container_spec']['args'],
+               'results': {}, 'payloadSha256': payload_sha256}
+        ctx['diagnostic'] = diagnostic_request(host, ctx)
+        if ctx['diagnostic'] and ctx['diagnostic'][0] == 'requested':  # before any stage can start the model
+            host.path(MODEL_HOLD).parent.mkdir(parents=True, exist_ok=True)
+            host.path(MODEL_HOLD).write_text(ctx['diagnostic'][1] + '\n')
         stopped = None
         for name, fn in STAGES:
             if stopped and not (stopped == 'waiting' and name in INDEPENDENT | {'edge'}):

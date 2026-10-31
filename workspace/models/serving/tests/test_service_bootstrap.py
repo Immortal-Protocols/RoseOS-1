@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -38,6 +39,8 @@ class FakeHost(B.Host):
         self.probes, self.http_override = [], {}
         self.now, self.sleeps, self.on_sleep, self.events, self.md_reads = 0.0, 0, None, [], set()
         self.certbot_fail = self.acme_config_bad = False
+        self.model_active = self.model_container = self.model_stuck = False
+        self.validate_output, self.validate_rc, self.diag_image_missing = b'', 1, False
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -144,7 +147,14 @@ class FakeHost(B.Host):
                 if store not in self.images:
                     return 1, ''
                 i, digests, os_, arch = self.images[store]
+                if argv[-2] == '{{.Id}}':
+                    return (1, '') if self.diag_image_missing else (0, i)
                 return 0, f'{i}|{json.dumps(digests)}|{os_}|{arch}\n'
+            if argv[1:4] == ['inspect', '--type', 'container']:
+                return (0, '{}') if self.model_container else (1, '')
+            if argv[1:3] == ['rm', '-f']:
+                self.events.append(('rm', argv[3]))
+                return 0, ''
         if cmd == 'nvidia-ctk':
             daemon = self.path(B.DAEMON_JSON)
             daemon.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +189,13 @@ class FakeHost(B.Host):
         if cmd.endswith('/bin/tls-deploy'):
             return self.tls_deploy(cmd)
         raise AssertionError(f'unexpected command {argv}')
+
+    def validate(self, argv, max_seconds, capture):
+        self.events.append(('validate', list(argv), self.model_active, self.model_container,
+                            self.path(B.MODEL_HOLD).exists()))
+        for i in range(0, len(self.validate_output), 65536):
+            capture.feed(self.validate_output[i:i + 65536])
+        return self.validate_rc, 3.5
 
     def start_daemon(self, argv, timeout=30):
         """The daemonizing nginx: pid file, /proc identity (exe, process title, listening socket) like the real one."""
@@ -224,8 +241,17 @@ class FakeHost(B.Host):
             self.enabled -= set(args[2:])
             return 0, ''
         if args[0] == 'enable':
-            self.enabled |= set(args[2:])
+            self.enabled |= {a for a in args[1:] if not a.startswith('--')}
+            if '--now' in args and 'muse-glimmer.service' in args:
+                self.model_active = self.model_container = True
             return 0, ''
+        if args[0] == 'stop':
+            self.events.append(('stop', tuple(args[1:])))
+            if 'muse-glimmer.service' in args and not self.model_stuck:
+                self.model_active = self.model_container = False
+            return 0, ''
+        if args[:2] == ['is-active', 'muse-glimmer.service']:
+            return (0, 'active\n') if self.model_active else (3, 'inactive\n')
         if args == ['restart', 'docker']:
             daemon = self.path(B.DAEMON_JSON)
             config = json.loads(daemon.read_text()) if daemon.exists() else {}
@@ -968,7 +994,7 @@ class AcmeHandshake(Fixture):
     def test_the_only_operator_channel_is_existing_instance_metadata_and_reset(self):
         self.host.ack()
         self.boot()
-        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY,
+        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY, B.DIAG_KEY,
                                                'network-interfaces/0/access-configs/0/external-ip'}, self.host.md_reads)
         readme = (HERE.parent / 'service/README.md').read_text()
         section = readme[readme.index('**Operator (Mac)'):readme.index('**Impact of that one reset')]
@@ -985,6 +1011,143 @@ class AcmeHandshake(Fixture):
         self.assertIn('reset', section)
         for word in ('80', 'closed'):
             self.assertIn(word, section)
+
+
+SHA = 'ab' * 32
+
+
+class Diagnostic(Fixture):
+    """The explicit, one-shot offline CLI check through existing metadata, with the model held and stopped first."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.driver_loaded_on_boot = 1
+        self.payload = self.extract(self.tmp / 'build-roots')
+        B.run(self.host, self.payload, SHA)  # a normal first boot: model, TLS and edge as deployed
+        self.host.deploy_current()
+        self.host.events.clear()
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True  # systemd starts the enabled model at boot
+        self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)  # /run is empty after a reboot
+        self.expected = ['docker', 'run', '--rm', '--pull=never', '--network', 'none', '--name', 'muse-glimmer-validate',
+                         '-e', 'HF_HUB_OFFLINE=1', '--entrypoint', 'vllm', RUNTIME['image_id'], 'serve',
+                         *next(o for o in CONFIG['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')
+                         ['container_spec']['args']]
+
+    def boot(self, value=None):
+        if value is not None:
+            self.host.md[B.DIAG_KEY] = value
+        self.host.calls.clear()
+        status, code = B.run(self.host, self.payload, SHA)
+        return status, code
+
+    def published(self):
+        return json.loads(self.host.guest['diagnostic'])
+
+    def test_requested_check_holds_and_stops_the_model_first_then_runs_once(self):
+        self.host.validate_output = (b'INFO starting\nusage: vllm serve\nvllm serve: error: argument --tool-call-parser:'
+                                     b' invalid choice: SECRET-TEXT\n')
+        self.host.validate_rc = 2
+        status, code = self.boot(f'offline-validate:{SHA}:first')
+        self.assertEqual(self.states(status)['diagnostic'][0], 'ok')
+        self.assertIn(['systemctl', 'enable', *B.MODEL_UNITS], self.host.calls)  # enabled for later boots, not started
+        self.assertNotIn(['systemctl', 'enable', '--now', *B.MODEL_UNITS], self.host.calls)
+        kinds = [e[0] for e in self.host.events if e[0] in ('stop', 'validate', 'rm')]
+        self.assertEqual(kinds, ['stop', 'validate', 'rm'])
+        _, argv, active, container, held = next(e for e in self.host.events if e[0] == 'validate')
+        self.assertEqual(argv, self.expected)
+        self.assertEqual((active, container, held), (False, False, True))  # never alongside the model service
+        for forbidden in ('--gpus', '-v', '--volume', '--mount', '--privileged'):
+            self.assertNotIn(forbidden, argv)
+        result = self.published()
+        self.assertEqual({k: result[k] for k in ('payloadSha256', 'attemptId', 'check', 'imagePresent', 'exitCode',
+                                                  'firstCategory', 'categories', 'limitReached', 'modelHeld')},
+                         {'payloadSha256': SHA, 'attemptId': 'first', 'check': 'vllm-serve-cli-offline',
+                          'imagePresent': True, 'exitCode': 2, 'firstCategory': 'argument_rejected',
+                          'categories': ['argument_rejected'], 'limitReached': None, 'modelHeld': True})
+        self.assertNotIn('SECRET', self.host.guest['diagnostic'])
+        self.assertEqual(self.states(status)['edge'], ('ok', 'active'))  # HTTPS continues; the certificate is kept
+        self.assertTrue(self.host.path(B.MODEL_HOLD).exists())
+        # the same value never runs again
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.events.clear()
+        status, _ = self.boot()
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertFalse([e for e in self.host.events if e[0] in ('stop', 'validate')])
+        self.assertIn(['systemctl', 'enable', '--now', *B.MODEL_UNITS], self.host.calls)  # normal service again
+        self.assertFalse(self.host.path(B.MODEL_HOLD).exists())
+
+    def test_other_payload_or_malformed_values_never_hold_or_run(self):
+        for value, reason in ((f'offline-validate:{"cd" * 32}:x', 'other_payload'),
+                              (f'offline-validate:{SHA}:Bad_Id', 'malformed'), ('yes please', 'malformed')):
+            with self.subTest(value):
+                self.host.events.clear()
+                status, _ = self.boot(value)
+                self.assertEqual(self.states(status)['diagnostic'], ('ok', f'ignored: {reason}'))
+                self.assertFalse(self.host.path(B.MODEL_HOLD).exists())
+                self.assertFalse([e for e in self.host.events if e[0] in ('stop', 'validate')])
+        del self.host.md[B.DIAG_KEY]
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'not requested'))
+
+    def test_a_model_that_does_not_stop_blocks_the_check(self):
+        self.host.model_stuck = True
+        status, code = self.boot(f'offline-validate:{SHA}:stuck')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_model_not_stopped'), 1))
+        self.assertFalse([e for e in self.host.events if e[0] == 'validate'])
+        self.assertLessEqual(self.host.sleeps, B.DIAG_STOP_S // 2 + 1)  # bounded wait
+        self.assertTrue((self.host.path(B.STATE) / 'diagnostic-stuck').exists())  # the attempt is spent
+
+    def test_missing_image_is_reported_without_running(self):
+        self.host.diag_image_missing = True  # the exact image ID is not in the local store
+        status, _ = self.boot(f'offline-validate:{SHA}:noimage')
+        self.assertNotIn('validate', [e[0] for e in self.host.events])
+        result = self.published()
+        self.assertEqual((result['imagePresent'], result['firstCategory'], result['exitCode']),
+                         (False, 'image_missing', None))
+
+    def test_output_is_inspected_only_to_the_bound(self):
+        self.host.validate_output = b'z' * (3 << 20) + b' OutOfMemoryError'
+        self.boot(f'offline-validate:{SHA}:flood')
+        result = self.published()
+        self.assertEqual((result['bytesInspected'], result['limitReached'], result['firstCategory']),
+                         (2 << 20, 'bytes', None))
+
+
+class HostValidate(unittest.TestCase):
+    """The real Host.validate with a stand-in docker: bounded bytes and time, process group killed, nothing kept."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix='host-validate-'))
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        guard_spec = __import__('importlib.util').util.spec_from_file_location('startup_guard', HERE.parent / 'startup_guard.py')
+        self.guard = __import__('importlib.util').util.module_from_spec(guard_spec)
+        guard_spec.loader.exec_module(self.guard)
+
+    def script(self, body):
+        path = self.dir / 'docker'
+        path.write_text('#!/bin/sh\n' + body)
+        os.chmod(path, 0o755)
+        return [str(path), 'run']
+
+    def test_categories_exit_and_bounds(self):
+        cap = self.guard.Capture(2 << 20, 10)
+        code, elapsed = B.Host().validate(self.script("echo 'error: unrecognized arguments: --x'; exit 2\n"), 10, cap)
+        self.assertEqual((code, cap.summary()['firstCategory']), (2, 'argument_rejected'))
+        cap = self.guard.Capture(2 << 20, 10)
+        code, _ = B.Host().validate(self.script("head -c 3145728 /dev/zero | tr '\\0' y; exit 1\n"), 20, cap)
+        self.assertEqual((code, cap.summary()['bytesInspected'], cap.summary()['limitReached']), (1, 2 << 20, 'bytes'))
+
+    def test_deadline_kills_the_whole_process_group(self):
+        marker = self.dir / 'grandchild-alive'
+        cap = self.guard.Capture(2 << 20, 1)
+        t = time.monotonic()
+        code, elapsed = B.Host().validate(self.script(f"(sleep 5; touch {marker}) & sleep 30\n"), 1, cap)
+        self.assertIsNone(code)
+        self.assertLess(time.monotonic() - t, 5)
+        time.sleep(5.5)
+        self.assertFalse(marker.exists())
+        self.assertEqual(cap.summary()['limitReached'], 'time')
 
 
 class Build(Fixture):

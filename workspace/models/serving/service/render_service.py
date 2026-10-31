@@ -40,12 +40,14 @@ RUN_ACME = '/run/rose-acme'  # the ACME-only Nginx, before the first certificate
 VERIFY_START = '/run/rose-models/verify-start.json'  # this boot's start check (published by health.py)
 VERIFY_FULL = '/var/lib/rose-models/verify-full.json'  # the last full rehash or first record
 START_PHASE = '/run/rose-models/start-phase.json'  # start-model's last phase this boot
+MODEL_HOLD = '/run/rose-models/model-hold'  # bootstrap.MODEL_HOLD
 CONTAINER_STATUS = '/run/rose-models/container'  # the guard's status file, this attempt (published by health.py)
 LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/https/render_proxy.py': SERVING / 'https' / 'render_proxy.py',
              **{f'lib/service/{n}': SERVING / 'service' / n
                 for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py', 'renewal_status.py',
-                          'unit_facts.py')}}
+                          'unit_facts.py')},
+             'lib/startup_guard.py': SERVING / 'startup_guard.py'}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
 
@@ -113,6 +115,8 @@ exec {PY} {root}/lib/service/tls_deploy.py --tls-dir {root}/tls --pidfile {RUN_E
     out['systemd/muse-glimmer.service'] = unit(
         f'Muse Glimmer vLLM ({PROFILE}) on 127.0.0.1:8000',
         f'''Type=exec
+# A diagnostic boot holds the model: nothing starts it while this runtime flag exists (cleared by any reboot).
+ExecCondition=/bin/sh -c 'test ! -e {MODEL_HOLD}'
 ExecStartPre=-/usr/bin/docker rm -f muse-glimmer
 ExecStart={root}/bin/start-model
 ExecStopPost=-/usr/bin/docker rm -f muse-glimmer

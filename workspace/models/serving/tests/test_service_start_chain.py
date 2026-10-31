@@ -67,7 +67,11 @@ if argv[0] == 'run':
         ns['write_status'](host_status, stage='guard_refused', proceed=False, failures=['gpu_free'])
         sys.exit(ns['EXIT_REFUSED'])
     ns['write_status'](host_status, stage='guard_passed', proceed=True, failures=[])
-    sys.exit(ns['supervise']([sys.executable, os.environ['FAKE_VLLM'], *command], host_status))
+    server = [sys.executable, os.environ['FAKE_VLLM'], *command]
+    bounds = limits.get('supervise')  # what startup_guard.main decides: supervise only when explicitly enabled once
+    if isinstance(bounds, dict) and ns['claim_once'](host_status):
+        sys.exit(ns['supervise'](server, host_status, bounds['max_bytes'], bounds['max_seconds']))
+    os.execv(server[0], server)
 sys.exit(2)
 '''
 
@@ -198,8 +202,11 @@ class StartChain(unittest.TestCase):
                     'FAKE_VLLM': str(self.vm.dir / 'vllm.py'), 'FAKE_IMAGE': 'present', 'FAKE_MOUNTED': '1'}
 
     def systemd(self, **env):
-        """ExecStartPre (failure ignored), ExecStart; returns (process, unit)."""
+        """ExecCondition (non-zero: skipped, None), ExecStartPre (failure ignored), ExecStart; returns the process."""
         unit = self.vm.unit('muse-glimmer.service')
+        condition = shlex.split(unit['ExecCondition'].replace('/run/rose-models', str(self.run_dir)))
+        if subprocess.run(condition, env=self.env, timeout=30).returncode != 0:
+            return None
         pre = shlex.split(unit['ExecStartPre'].lstrip('-'))
         self.assertEqual(pre[0], '/usr/bin/docker')
         subprocess.run([str(self.fake / 'docker'), *pre[1:]], env={**self.env, **env}, timeout=30)
@@ -214,6 +221,10 @@ class StartChain(unittest.TestCase):
 
     def phase(self):
         return json.loads((self.run_dir / 'start-phase.json').read_text())
+
+    def limits(self):
+        run, = self.docker_runs()
+        return json.loads(run[run.index('--') - 1])
 
     def container_status(self, until=None):
         path = self.run_dir / 'container/status.json'
@@ -239,11 +250,12 @@ class StartChain(unittest.TestCase):
         self.assertEqual({k: v for k, v in self.phase().items() if k != 'at'},
                          {'phase': 'launching_offline', 'verifyExit': 0, 'dataMounted': True, 'imagePresent': True})
         self.assertEqual(json.loads((self.run_dir / 'verify-start.json').read_text())['result'], 'verified')
-        status = self.container_status(until='listening')
-        self.assertEqual((status['stage'], status['proceed'], status.get('exitCode')), ('listening', True, None))
-        proc.terminate()  # systemd stop -> docker -> guard -> server
-        self.assertEqual(proc.wait(30), 128 + 15)
-        self.assertEqual((self.container_status()['stage'], self.container_status()['signal']), ('exited', 15))
+        status = self.container_status()
+        self.assertEqual((status['stage'], status['proceed']), ('guard_passed', True))  # default: no supervision
+        self.assertNotIn('supervise', self.limits())
+        proc.terminate()  # systemd stop reaches the exec'd server directly
+        self.assertEqual(proc.wait(30), -15)
+        self.assertEqual(self.container_status()['stage'], 'guard_passed')
 
     def test_no_receipt_launches_online(self):
         self.receipt.unlink()
@@ -276,8 +288,8 @@ class StartChain(unittest.TestCase):
                 status_file = self.run_dir / 'container/status.json'
                 if runs:
                     status = json.loads(status_file.read_text())
-                    self.assertEqual((status['stage'], status.get('exitCode'), status.get('lastException')),
-                                     {3: ('guard_refused', None, None), 1: ('exited', 1, 'ValueError')}[code])
+                    self.assertEqual((status['stage'], status.get('exitCode')),
+                                     {3: ('guard_refused', None), 1: ('guard_passed', None)}[code])
                     self.assertNotIn('SECRET', status_file.read_text())
                 else:
                     self.assertFalse(status_file.exists())  # cleared for this attempt; no container ran
@@ -285,6 +297,18 @@ class StartChain(unittest.TestCase):
                     (self.vm.dir / 'moved').rename(self.cache / 'hub')
         unit = self.vm.unit('muse-glimmer.service')  # 4 is not restarted; 3 and 1 are, within the start limit
         self.assertEqual(unit['RestartPreventExitStatus'], '4')
+
+    def test_a_held_model_is_never_started(self):
+        unit = self.vm.unit('muse-glimmer.service')
+        self.assertEqual(unit['ExecCondition'], "/bin/sh -c 'test ! -e /run/rose-models/model-hold'")
+        self.assertEqual(B.MODEL_HOLD, '/run/rose-models/model-hold')
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        (self.run_dir / 'model-hold').write_text('attempt\n')
+        self.assertIsNone(self.systemd())
+        self.assertEqual(self.docker_runs(), [])
+        (self.run_dir / 'model-hold').unlink()  # cleared by the next reboot
+        proc = self.systemd()
+        self.assertEqual(self.wait_ready(proc), (True, 'ready'))
 
     def test_phase_recording_failure_never_changes_the_outcome(self):
         self.run_dir.parent.mkdir(parents=True, exist_ok=True)
