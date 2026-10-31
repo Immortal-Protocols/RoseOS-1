@@ -8,6 +8,7 @@ on:
       - 'workspace/**'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
+      - 'os/tests/persistent-app-experiment/**'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   push:
@@ -16,6 +17,7 @@ on:
       - 'workspace/**'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
+      - 'os/tests/persistent-app-experiment/**'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   workflow_dispatch:
