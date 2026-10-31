@@ -198,8 +198,10 @@ class Protocol(Base):
 
 
 class Unsupported_(Base):
-    def test_vision_is_refused(self):
-        fake, brain = self.server()
+    def test_vision_off_is_refused(self):  # a language-model-only server (tests/test_vision.py covers vision on)
+        fake = FakeVllm(())
+        self.addCleanup(fake.close)
+        brain = VllmBrain(self.tok, fake.url, 'rose-brain', vision=False)
         seq = brain.sequence()
         with self.assertRaises(Unsupported):
             list(seq.append_image(object()))

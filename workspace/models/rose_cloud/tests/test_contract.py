@@ -34,7 +34,7 @@ class Pinned(unittest.TestCase):
         self.assertTrue(contract.CLOUD_BRAIN[0].startswith(contract.BRAIN_BASE[0]))  # same model, Qwen's FP8
         for rev in (contract.BRAIN_BASE[1], contract.CLOUD_BRAIN[1], contract.PR288_HEAD):
             self.assertRegex(rev, r'^[0-9a-f]{40}$')
-        self.assertRegex(contract.CAPABILITIES['brain_vision'], r'^unsupported')
+        self.assertIn('fixture-tested only', contract.CAPABILITIES['brain_vision'])  # no vision proof claimed
         self.assertIn('fixture recognizers only', contract.CAPABILITIES['listener'])  # no recognition claimed
         self.assertIn('injected engine only', contract.CAPABILITIES['speaker'])  # no real synthesis claimed
         self.assertIn('>= 0.19.0', contract.BRAIN_PREREQUISITES['backend'])
