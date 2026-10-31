@@ -254,7 +254,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('exit "$restored"', cleanup)
         self.assertIn('test_kvm_access.py -v', WORKFLOW)
         self.assertIn('KVM_ACL: ${{ inputs.kvm_acl }}', WORKFLOW[WORKFLOW.index('Stage and cleanup summary'):])
-        for needle in ('timeout-minutes: 30', 'permissions:\n  contents: read', 'runs-on: ubuntu-24.04'):
+        for needle in ('timeout-minutes: 30', 'permissions:\n  contents: read', "|| 'ubuntu-24.04' }}"):
             self.assertIn(needle, WORKFLOW)
         self.assertNotIn('${{ inputs.kvm_acl }}\n          then', WORKFLOW, 'the input reaches the shell only via env')
 

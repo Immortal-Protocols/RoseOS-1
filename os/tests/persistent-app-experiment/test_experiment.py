@@ -79,14 +79,21 @@ class BoundaryTest(unittest.TestCase):
             "\n      kvm_acl:\n        description: 'Grant this job user rw on the KVM device for the run and restore it "
             "(EXP006-KVM-001; approved runs only)'\n        type: boolean\n        default: false"
             "\n      startup_diagnostic:\n        description: 'Stop after the first emulator launch and report a fixed "
-            "startup category (EXP006-STARTUP-003; not with systemui)'\n        type: boolean\n        default: false")
-        for needle in ('permissions:\n  contents: read', 'cancel-in-progress: false', 'runs-on: ubuntu-24.04',
+            "startup category (EXP006-STARTUP-003; not with systemui)'\n        type: boolean\n        default: false"
+            "\n      runner:\n        description: 'hosted (ubuntu-24.04) or the isolated self-hosted trial runner "
+            "(EXP006-ISOLATED-TRIAL-001; approved trial only)'\n        type: choice\n        options:\n          - hosted"
+            "\n          - isolated-trial\n        default: hosted")
+        for needle in ('permissions:\n  contents: read', 'cancel-in-progress: false', "|| 'ubuntu-24.04' }}",
                 'timeout-minutes: 30', 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
                 'persist-credentials: false', 'retention-days: 7', 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'):
             self.assertIn(needle, WORKFLOW)
-        for banned in ('secrets.', 'id-token', 'environment:', 'self-hosted', 'pull_request', 'push:', 'schedule',
+        trial = ("fromJSON('{\"group\":\"roseos-systemui-test\",\"labels\":[\"self-hosted\",\"roseos-systemui-test\"]}')")
+        self.assertEqual(WORKFLOW.count(trial), 1, 'self-hosted only as the exact trial group and label')
+        steps = WORKFLOW[WORKFLOW.index('    steps:'):]
+        for banned in ('secrets.', 'id-token', 'environment:', 'pull_request', 'push:', 'schedule',
                 'emulator-runner', 'reactivecircus'):
             self.assertNotIn(banned, WORKFLOW)
+        self.assertNotIn('self-hosted', steps, 'no step names a self-hosted runner')
         upload = WORKFLOW[WORKFLOW.index('Evidence (allowlist only)'):WORKFLOW.index('Remove the test key')]
         self.assertNotIn('keystore', upload)
         self.assertNotIn('avd', upload)

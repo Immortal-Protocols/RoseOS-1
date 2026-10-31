@@ -214,7 +214,7 @@ class WorkflowTest(unittest.TestCase):
         for needle in ('if: always()', 'CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}', 'SETUP_OUTCOME: ${{ steps.setup.outcome }}',
                 'RUN_OUTCOME: ${{ steps.run.outcome }}', '--summary "$GITHUB_STEP_SUMMARY"'):
             self.assertIn(needle, summary)
-        for needle in ('permissions:\n  contents: read', 'timeout-minutes: 30', 'runs-on: ubuntu-24.04',
+        for needle in ('permissions:\n  contents: read', 'timeout-minutes: 30', "|| 'ubuntu-24.04' }}",
                 'cancel-in-progress: false', 'test_report.py -v'):
             self.assertIn(needle, WORKFLOW)
         code = (HERE/'report.py').read_text().split('"""', 2)[2]
