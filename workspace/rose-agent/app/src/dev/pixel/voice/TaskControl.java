@@ -6,11 +6,41 @@ package dev.pixel.voice;
  * POST /task/stop (server/task-stop.mjs request): accepted means stopping, never stopped; the task is
  * stopped only when its own state becomes interrupted. Voice End and mute are not involved. */
 final class TaskControl {
- /** The viewer may open only for a live controller session tagged with this task's id. */
+ static final String WATCH_NO_TASK="Rose isn't working in an app right now.";
+ static final String WATCH_UNAVAILABLE="Rose's workspace isn't available on this phone.";
+ static final String WATCH_STARTING="Rose's workspace is still starting.";
+ static final String WATCH_CONSENT="Android is waiting for your consent before Rose's workspace can start.";
+ static final String WATCH_NOT_ALLOWED="This phone doesn't let Rose use that app in the background.";
+ static final String WATCH_STOPPED="Rose's workspace has stopped.";
+ static final String WATCH_FAILED="Rose's workspace couldn't start.";
+ static final String WATCH_OTHER_TASK="Rose's workspace is busy with another task.";
+
+ /** What Watch can do for the task shown now: canWatch, or the one fixed reason it can't (never empty then). */
+ static final class WatchState {
+  final boolean canWatch;final String reason;
+  private WatchState(boolean canWatch,String reason){this.canWatch=canWatch;this.reason=reason;}
+ }
+ /** Watch opens only a live controller session tagged with this task's id; otherwise the reason says why, from the
+  * controller's own status (Controller.state schema 3). A session of another task is never offered. */
+ static WatchState watchState(String taskId,boolean taskActive,String controllerStatus,String sessionId,String controllerTaskId){
+  if(!taskActive||taskId==null||taskId.isEmpty())return new WatchState(false,WATCH_NO_TASK);
+  String status=controllerStatus==null?"":controllerStatus;
+  boolean session=sessionId!=null&&!sessionId.isEmpty()&&!"null".equals(sessionId);
+  switch(status){
+   case "ready":case "blocked":case "launching":
+    if(!session)return new WatchState(false,WATCH_UNAVAILABLE);
+    return taskId.equals(controllerTaskId)?new WatchState(true,""):new WatchState(false,WATCH_OTHER_TASK);
+   case "starting":case "scheduled":return new WatchState(false,WATCH_STARTING);
+   case "consent_required":return new WatchState(false,WATCH_CONSENT);
+   case "target_not_allowed":return new WatchState(false,WATCH_NOT_ALLOWED);
+   case "stopped":case "closed":case "user_stopped":case "cleanup_failed":return new WatchState(false,WATCH_STOPPED);
+   case "failed":case "rejected":return new WatchState(false,WATCH_FAILED);
+   default:return new WatchState(false,WATCH_UNAVAILABLE);
+  }
+ }
+ /** The viewer may open only for a live controller session tagged with this task's id (watchState.canWatch). */
  static boolean watchable(String taskId,boolean taskActive,String controllerStatus,String sessionId,String controllerTaskId){
-  if(!taskActive||taskId==null||taskId.isEmpty())return false;
-  boolean live="ready".equals(controllerStatus)||"blocked".equals(controllerStatus)||"launching".equals(controllerStatus);
-  return live&&sessionId!=null&&!sessionId.isEmpty()&&!"null".equals(sessionId)&&taskId.equals(controllerTaskId);
+  return watchState(taskId,taskActive,controllerStatus,sessionId,controllerTaskId).canWatch;
  }
 
  /** Watch binding extras on the viewer intent (APP-OS-WATCH-002). Additive; an unbound launch has neither.
