@@ -241,6 +241,131 @@ class BootWaitTest(unittest.TestCase):
         e.facts = {'bootWait': {'wait': 'timeout'}}
         self.assertEqual(ex.outcome(raises(e)), {'result': 'fail', 'reason': 'f', 'bootWait': {'wait': 'timeout'}})
 
+def official_avdmanager_create(argv, env):
+    """A MODEL (not the real tool) of `avdmanager create avd -n NAME ... -p DATA`, transcribed from the official
+    source, platform/tools/base mirror-goog-studio-main: AbstractAndroidLocations.kt avdLocation =
+    singlePathOf(ANDROID_AVD_HOME) ?: prefsLocation/avd, where PathLocator.handlePath drops a value that is not an
+    existing directory (mustExist); prefs falls back to user.home/HOME + /.android (ANDROID_USER_HOME,
+    ANDROID_PREFS_ROOT, ANDROID_SDK_HOME unset here); ANDROID_EMULATOR_HOME is not read. AvdInfo.getDefaultIniFile =
+    baseAvdFolder/NAME.ini whatever -p is; createAvdIniFile writes path=<absolute -p> (MetadataKey.ABS_PATH = "path")
+    and target=; buildAvdFilesList creates a missing base folder. Returns the base folder it used."""
+    name, data = argv[argv.index('-n') + 1], Path(argv[argv.index('-p') + 1])
+    home = env.get('ANDROID_AVD_HOME')
+    base = Path(home) if home and Path(home).is_dir() else Path(env['HOME'])/'.android/avd'
+    base.mkdir(parents=True, exist_ok=True)
+    data.mkdir(parents=True, exist_ok=True)
+    (data/'config.ini').write_text('image.sysdir.1=system-images/android-35/default/x86_64/\n')
+    (base/f'{name}.ini').write_text(f'avd.ini.encoding=UTF-8\npath={data.absolute()}\ntarget=android-35\n')
+    return base
+
+class AvdPreparationTest(unittest.TestCase):
+    """EXP006-AVD-004. No official avdmanager or emulator is installed here, so the real-tool reproduction is not
+    possible; these use official_avdmanager_create (a source-transcribed model) and synthetic files, labelled so."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='pfx-avd-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.work, self.home = self.tmp/'work', self.tmp/'home'
+        self.work.mkdir()
+        self.home.mkdir()
+        self.env = {'HOME': str(self.home), 'ANDROID_AVD_HOME': str(self.work/'avd'),
+            'ANDROID_EMULATOR_HOME': str(self.work/'emulator-home')}
+        self.argv = ['avdmanager', 'create', 'avd', '-n', 'fixture', '-k', ex.IMAGE, '-d', 'pixel', '-p',
+            str(self.work/'avd/fixture.avd')]
+
+    def test_model_reproduces_the_run_when_the_avd_home_is_absent(self):
+        # Run 41154781046: avdmanager exited 0, yet fixture.ini was absent from the AVD home the emulator was given.
+        base = official_avdmanager_create(self.argv, self.env)
+        self.assertEqual(base, self.home/'.android/avd', 'the absent ANDROID_AVD_HOME is dropped for HOME/.android/avd')
+        self.assertTrue((self.work/'avd/fixture.avd/config.ini').is_file(), '-p still creates the data folder')
+        self.assertTrue((self.work/'avd').is_dir(), '...so the AVD home exists afterwards, without the descriptor')
+        self.assertFalse((self.work/'avd/fixture.ini').exists())
+        self.assertEqual(ex.avd_binding(self.work/'avd'), (False, {'descriptor': 'absent', 'binding': 'unchecked',
+            'data': 'unchecked'}), 'the old order is now refused before launch')
+
+    def test_prepared_homes_bind_the_descriptor_to_the_task_data(self):
+        ex.prepare_homes(self.work)
+        self.assertEqual(official_avdmanager_create(self.argv, self.env), self.work/'avd')
+        self.assertEqual(ex.avd_binding(self.work/'avd'), (True, {'descriptor': 'present', 'binding': 'match',
+            'data': 'present'}))
+        self.assertFalse((self.home/'.android').exists(), 'nothing is written outside the task directories')
+        self.assertTrue((self.work/'emulator-home').is_dir())
+
+    def test_prepare_refuses_any_existing_path_or_link(self):
+        for make in (lambda p: p.mkdir(), lambda p: p.write_text('x'), lambda p: p.symlink_to(self.tmp/'elsewhere'),
+                lambda p: p.symlink_to(self.home)):
+            work = Path(tempfile.mkdtemp(dir=self.tmp))
+            make(work/'avd')
+            with self.assertRaises(ex.Failed):
+                ex.prepare_homes(work)
+        self.assertEqual(list(self.home.iterdir()), [], 'a linked target is never written')
+        self.assertFalse((self.tmp/'elsewhere').exists())
+
+    def descriptor(self, text, data=True, config=True):
+        ex.prepare_homes(self.work)
+        avd = self.work/'avd'
+        if data:
+            (avd/'fixture.avd').mkdir()
+            if config:
+                (avd/'fixture.avd/config.ini').write_text('x=1\n')
+        if text is not None:
+            (avd/'fixture.ini').write_bytes(text if isinstance(text, bytes) else text.encode())
+        return ex.avd_binding(avd)
+
+    def test_binding_refusals(self):
+        good = f'path={self.work.absolute()}/avd/fixture.avd\n'
+        cases = {
+            'no path': ('target=android-35\n', {'descriptor': 'present', 'binding': 'missing', 'data': 'unchecked'}),
+            'two paths': (good + good, {'descriptor': 'present', 'binding': 'ambiguous', 'data': 'unchecked'}),
+            'relative': ('path=avd/fixture.avd\n', {'descriptor': 'present', 'binding': 'mismatch', 'data': 'unchecked'}),
+            'elsewhere': (f'path={self.home}/.android/avd/fixture.avd\n',
+                {'descriptor': 'present', 'binding': 'mismatch', 'data': 'unchecked'}),
+            'escape': (f'path={self.work.absolute()}/avd/fixture.avd/../../other\n',
+                {'descriptor': 'present', 'binding': 'mismatch', 'data': 'unchecked'}),
+            'not utf-8': (b'path=\xff\xfe\n', {'descriptor': 'unreadable', 'binding': 'unchecked', 'data': 'unchecked'}),
+            'oversized': (good + 'x' * ex.DESCRIPTOR_CAP, {'descriptor': 'oversized', 'binding': 'unchecked',
+                'data': 'unchecked'}),
+        }
+        for label, (text, facts) in cases.items():
+            with self.subTest(label):
+                shutil.rmtree(self.work)
+                self.work.mkdir()
+                self.assertEqual(self.descriptor(text), (False, facts))
+        for label, kw, data in (('no data folder', {'data': False}, 'absent'), ('no config.ini', {'config': False},
+                'config-missing')):
+            with self.subTest(label):
+                shutil.rmtree(self.work)
+                self.work.mkdir()
+                self.assertEqual(self.descriptor(good, **kw), (False, {'descriptor': 'present', 'binding': 'match',
+                    'data': data}))
+        shutil.rmtree(self.work)
+        self.work.mkdir()
+        self.assertEqual(self.descriptor(good)[0], True)
+
+    def test_linked_or_non_regular_descriptor_and_data_are_refused(self):
+        outside = self.tmp/'outside.ini'
+        outside.write_text(f'path={self.work.absolute()}/avd/fixture.avd\n')
+        ex.prepare_homes(self.work)
+        avd = self.work/'avd'
+        (avd/'fixture.avd').mkdir()
+        (avd/'fixture.avd/config.ini').write_text('x=1\n')
+        (avd/'fixture.ini').symlink_to(outside)
+        self.assertEqual(ex.avd_binding(avd)[1]['descriptor'], 'symlink')
+        (avd/'fixture.ini').unlink()
+        (avd/'fixture.ini').mkdir()
+        self.assertEqual(ex.avd_binding(avd)[1]['descriptor'], 'not-regular')
+        (avd/'fixture.ini').rmdir()
+        (avd/'fixture.ini').write_text(f'path={avd.absolute()}/fixture.avd\n')
+        real = self.tmp/'real-data'
+        shutil.move(str(avd/'fixture.avd'), real)
+        (avd/'fixture.avd').symlink_to(real)
+        self.assertEqual(ex.avd_binding(avd), (False, {'descriptor': 'present', 'binding': 'match',
+            'data': 'symlink'}), 'a linked data folder is refused')
+        (avd/'fixture.avd').unlink()
+        (avd/'fixture.avd').write_text('not a folder')
+        self.assertEqual(ex.avd_binding(avd)[1]['data'], 'not-directory')
+        facts = json.dumps(ex.avd_binding(avd))
+        self.assertNotIn(str(self.tmp), facts, 'no path value in the facts')
+
 class StartupDiagnosticTest(unittest.TestCase):
     """EXP006-STARTUP-003 over synthetic files only: the cap, ambiguity, path safety, no raw data, stage exclusion
     and cleanup. Nothing is launched."""
@@ -374,15 +499,18 @@ class StartupDiagnosticTest(unittest.TestCase):
                 out = 'Android emulator version 36.0\n'
             elif name == 'sdkmanager' and '--list_installed' in argv:
                 out = f'  {ex.IMAGE} | 1 | image\n'
-            elif name == 'avdmanager' and create_ini:
-                (work/'avd').mkdir(exist_ok=True)
-                (work/'avd/fixture.ini').write_text('path=x\n')
+            elif name == 'avdmanager':
+                env = dict(ex.os.environ)
+                if not create_ini:
+                    env['ANDROID_AVD_HOME'] = str(self.tmp/'not-there')  # the old effect: the descriptor lands elsewhere
+                official_avdmanager_create(argv, env)
             elif name == 'adb' and argv[1:] == ['devices']:
                 out = 'List of devices attached\n'
             return ex.subprocess.CompletedProcess(argv, 0, out, '')
 
         evidence = self.tmp/'evidence'
-        env = dict(os.environ)
+        (self.tmp/'home').mkdir()
+        env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(self.tmp/'home')}
         with mock.patch.object(ex.subprocess, 'run', run), mock.patch.object(ex.subprocess, 'Popen', Child), \
                 mock.patch.object(ex.time, 'time', clock.time), mock.patch.object(ex.time, 'sleep', clock.sleep), \
                 mock.patch.object(ex.os, 'access', lambda p, m: True), mock.patch.dict(ex.os.environ, env, clear=True):
@@ -415,10 +543,20 @@ class StartupDiagnosticTest(unittest.TestCase):
             self.assertNotIn(fragment, written)
         self.assertEqual(sorted(p.name for p in evidence.iterdir()), ['results.json', 'sdkmanager-install.txt'])
 
-    def test_a_missing_descriptor_is_reported_absent(self):
-        results, *_ = self.run_fake('PANIC: Cannot find AVD system path.', create_ini=False)
-        self.assertEqual((results['startupDiagnostic']['category'], results['startupDiagnostic']['avdDescriptor']),
-            ('image_missing', 'absent'))
+    def test_a_descriptor_absent_from_the_task_avd_home_refuses_before_launch(self):
+        results, work, evidence, calls, launched = self.run_fake('PANIC: Unknown AVD name [fixture]', create_ini=False)
+        self.assertEqual(launched, [], 'no doomed emulator is spawned')
+        device = results['stages']['device']
+        self.assertEqual(device['result'], 'fail')
+        self.assertIn('no usable fixture descriptor in the task AVD home (descriptor absent', device['reason'])
+        self.assertEqual(device['avdPrepare'], {'descriptor': 'absent', 'binding': 'unchecked', 'data': 'unchecked'})
+        self.assertNotIn('bootWait', device)
+        self.assertEqual(results['startupDiagnostic']['log'], 'not-created')
+        for name in ('seed', 'ordinary', 'staged', 'restore'):
+            self.assertEqual(results['stages'][name]['result'], 'not-run')
+        for private in ('test-only.keystore', 'avd', 'emulator-home'):
+            self.assertFalse((work/private).exists(), private)
+        self.assertNotIn(str(work), (evidence/'results.json').read_text())
 
     def test_an_existing_output_file_stops_before_launch_and_is_never_read(self):
         results, work, _, _, launched = self.run_fake('PANIC: Unknown AVD name', pre_existing_log=True)
