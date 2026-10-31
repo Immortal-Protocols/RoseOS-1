@@ -37,6 +37,8 @@ BOOTLOADER = 'deepspace-17.4-16119390'
 BASEBAND = 'g5400i-260604-260807-B-16035863'
 PKMD = {'frankel': b'synthetic frankel avb public key metadata', 'rango': b'synthetic rango avb public key metadata'}
 SPARSE = b'\x3a\xff\x26\xed'
+GSC = {'evt.ec.bin': b'synthetic gsc evt', 'prod.ec.bin': b'synthetic gsc prod'}
+GENERATOR = SCRIPTS/'tests/fixtures/factory-package/device_common-1f5ba267'
 BLOCK = 4096
 SSH = shutil.which('ssh-keygen')
 REAL_SIMG2IMG = shutil.which('simg2img')
@@ -152,6 +154,7 @@ def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
     entries = {'META/ab_partitions.txt': '\n'.join(ab or AB).encode(), 'META/misc_info.txt': misc.encode(),
                'OTA/android-info.txt': android_info(device), 'SYSTEM/build.prop': f'ro.build.version.incremental={build}\n'.encode(),
                'RADIO/bootloader.img': b'synthetic bootloader', 'RADIO/radio.img': b'synthetic radio'}
+    entries.update({f'VENDOR/firmware/dauntless/{name}': data for name, data in GSC.items()})
     for part in AB:
         if part not in DYNAMIC and part != 'abl':
             entries[f'IMAGES/{part}.img'] = image(part)
@@ -168,7 +171,7 @@ def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), ext
              'script.txt': b'# synthetic stand-in\n# erase userdata\n',
              'avb_pkmd.bin': PKMD[device],
              f'bootloader-{device}-{BOOTLOADER}.img': b'synthetic bootloader',
-             f'radio-{device}-{BASEBAND}.img': b'synthetic radio'}
+             f'radio-{device}-{BASEBAND}.img': b'synthetic radio', **GSC}
     for index, segment in enumerate(segments or super_segments(super_partitions()), 1):
         files[f'super_{index}.img'] = segment
     for part in AB:
@@ -194,6 +197,8 @@ class Fixture(unittest.TestCase):
         self.root = self.tmp/'repo'
         for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/devices/pixel10.json',
                     'os/release-pipeline/frankel.json', 'scripts/tests/fixtures/permission-apex/script/generate-release.sh') + tuple(
+                    f'scripts/tests/fixtures/factory-package/device_common-1f5ba267/{f}'
+                    for f in ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')) + tuple(
                     f'os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices/{d}/firmware/android-info.txt'
                     for d in ('frankel', 'rango')):
             (self.root/rel).parent.mkdir(parents=True, exist_ok=True)
@@ -584,6 +589,82 @@ class Negative(Fixture):
         self.refused(self.classify(self.write('a.zip', install('frankel', replace=quiet)), 'frankel', tf), 'install-mode:')
         tf = self.write('tf.zip', target_files('frankel', misc=MISC.replace('ab_update=true', 'ab_update=false')))
         self.refused(self.classify(self.complete('frankel')[0], 'frankel', tf), 'install-semantics:target-files ab_update')
+
+class Generator(Fixture):
+    def test_pinned_device_common_fixtures_are_byte_identical_and_never_executable(self):
+        provenance = json.loads((GENERATOR/'PROVENANCE.json').read_text())
+        self.assertEqual(provenance['revision'], '1f5ba2671e4b04e3bd8899b3df2c5e30a894b35c')
+        for entry in provenance['files']:
+            data = (GENERATOR/entry['fixture']).read_bytes()
+            self.assertEqual(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), entry['gitBlob'])
+            self.assertEqual(hashlib.sha256(data).hexdigest(), entry['sha256'])
+            self.assertFalse((GENERATOR/entry['fixture']).stat().st_mode & 0o111)
+            self.assertIn(b'Licensed under the Apache License, Version 2.0', data)
+        for name in ('frankel', 'rango'):
+            pinned = fp.load_flavor(name)['inventory']['generatorFixture']['files']
+            self.assertEqual(pinned, {e['fixture']: e['sha256'] for e in provenance['files']})
+
+    def test_contract_layout_claims_are_anchored_in_the_generator(self):
+        flavor = fp.load_flavor('rango')
+        self.assertEqual(flavor['artifacts']['factory']['generatorMembers']['gscFirmware']['source'], 'VENDOR/firmware/dauntless/')
+        self.edit_json('os/flavors/rango.json', lambda d: d['artifacts']['factory']['generatorMembers']['gscFirmware'].update(
+            source='VENDOR/firmware/epic/'))
+        with self.assertRaisesRegex(fp.ContractError, 'gscFirmware.source'):
+            fp.load_flavor('rango', self.root)
+        self.edit_json('os/flavors/rango.json', lambda d: (d['artifacts']['factory']['generatorMembers']['gscFirmware'].update(
+            source='VENDOR/firmware/dauntless/'), d['artifacts']['factory']['generatorMembers']['anchors'].append(
+            'cp tmp/RADIO/guessed.img tmp/$PRODUCT-$VERSION/guessed.img')))
+        with self.assertRaisesRegex(fp.ContractError, 'generator anchor'):
+            fp.load_flavor('rango', self.root)
+
+    def test_frankel_and_rango_are_pinned_and_an_unpinned_contract_never_completes(self):
+        for name in ('frankel', 'rango'):
+            self.assertTrue(fp.pinned_layout(fp.load_flavor(name)), name)
+        # An older contract shape (no generatorMembers, as other flavors may still use) loads but cannot complete.
+        def unpin(d):
+            factory = d['artifacts']['factory']
+            for key in ('generatorMembers', 'optimizeMembers', 'intermediate'):
+                factory.pop(key)
+            d['inventory']['generatorFixture'] = {'status': 'not in this repository', 'files': ['generate-factory-images-common.sh']}
+        self.edit_json('os/flavors/rango.json', unpin)
+        self.assertFalse(fp.pinned_layout(fp.load_flavor('rango', self.root)))
+        archive, tf = self.complete('rango')
+        result = self.classify(archive, 'rango', tf)
+        self.refused(result, 'contract:rango pinned generator layout')
+        self.assertFalse(result['structurallyComplete'])
+
+    def test_fixture_drift_refuses_the_contract(self):
+        target = self.root/'scripts/tests/fixtures/factory-package/device_common-1f5ba267'
+        (target/'generate-factory-images-common.sh').write_bytes(
+            (GENERATOR/'generate-factory-images-common.sh').read_bytes().replace(b'GSCFIRMWARESRC=dauntless', b'GSCFIRMWARESRC=epic'))
+        with self.assertRaisesRegex(fp.ContractError, 'generatorFixture generate-factory-images-common.sh sha256'):
+            fp.load_flavor('frankel', self.root)
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class GscFirmware(Fixture):
+    def test_gsc_firmware_must_be_present_byte_equal_and_nothing_else(self):
+        archive, tf = self.complete('rango')
+        self.assertEqual(self.classify(archive, 'rango', tf)['inventory']['gscFirmware'], sorted(GSC))
+        self.refused(self.classify(self.write('a.zip', install('rango', drop=('evt.ec.bin',))), 'rango', tf),
+                     'factory:evt.ec.bin (GSC firmware from target-files)')
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'prod.ec.bin': b'other'})), 'rango', tf),
+                     'mixed-firmware:prod.ec.bin differs from target-files VENDOR/firmware/dauntless/prod.ec.bin')
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'notes.txt': b'x'})), 'rango', tf),
+                     'unexpected-member:notes.txt')
+        bat = self.classify(self.write('a.zip', install('rango', replace={'flash-all.bat': b':: synthetic'})), 'rango', tf)
+        self.assertTrue(bat['factoryReady'], bat)
+        tf = self.write('tf.zip', target_files('rango', drop=tuple(f'VENDOR/firmware/dauntless/{n}' for n in GSC)))
+        self.refused(self.classify(archive, 'rango', tf), 'target-files:VENDOR/firmware/dauntless/* (GSC firmware')
+        tf = self.write('tf.zip', target_files('rango', images={'VENDOR/firmware/dauntless/sub/x.bin': b'x'}))
+        self.refused(self.classify(archive, 'rango', tf), 'gsc-firmware-nested:VENDOR/firmware/dauntless/sub/x.bin')
+
+    def test_generator_intermediate_is_refused_as_not_the_release_artifact(self):
+        top = f'rango-factory-{BUILD}'
+        intermediate = zip_bytes([(f'{top}/image-rango-{BUILD}.zip', b'synthetic img zip'), (f'{top}/flash-all.sh', b'# synthetic'),
+                                  (f'{top}/bootloader-rango-{BOOTLOADER}.img', b'synthetic bootloader')])
+        result = self.classify(self.write(f'rango-factory-{BUILD}.zip', intermediate), 'rango', self.complete('rango')[1])
+        self.refused(result, 'not-factory:factory-intermediate')
+        self.assertEqual(result['role'], 'factory-intermediate')
 
 if __name__ == '__main__':
     unittest.main()
