@@ -68,8 +68,11 @@ class Pr288Tasks(unittest.TestCase):
     def test_model_code_still_refuses_without_mlx(self):
         from rose_cloud.nomlx import MlxUnavailable
         import mlx.core as mx
-        with self.assertRaises(MlxUnavailable):
-            mx.array([1])
+        for op in ('argmax', 'softmax', 'random', 'zeros', 'new_stream_cpu'):
+            with self.assertRaises(MlxUnavailable):
+                getattr(mx, op)  # model arithmetic (PR288's Brain sampling, mlx-audio) has no stand-in
+        import numpy as np
+        self.assertIsInstance(mx.array([1.0]), np.ndarray)  # only host audio wrapping does (PR288 listener)
 
 
 if __name__ == '__main__':
