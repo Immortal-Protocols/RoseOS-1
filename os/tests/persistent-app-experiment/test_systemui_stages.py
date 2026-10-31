@@ -2,6 +2,7 @@
 output (shapes from scripts/tests/test_systemui_identity.py). Tests the stage logic only; no emulator, adb or key."""
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -32,9 +33,9 @@ SIGNER = f'Signer #1 certificate DN: CN=Synthetic\nSigner #1 certificate SHA-256
 
 class Emulator(fake.FakeEmulator):
     """The scripted emulator plus pm path, pull, the host tools and a refusal for a foreign signer."""
-    def __init__(self, foreign_accepted=False, signer=SIGNER, **kw):
+    def __init__(self, foreign_accepted=False, signer=SIGNER, foreign=None, **kw):
         super().__init__(**kw)
-        self.foreign_accepted, self.signer = foreign_accepted, signer
+        self.foreign_accepted, self.signer, self.foreign = foreign_accepted, signer, foreign
 
     def __call__(self, argv, capture_output=True, text=True, timeout=None):
         if Path(argv[0]).name in ('aapt', 'apksigner'):
@@ -48,6 +49,13 @@ class Emulator(fake.FakeEmulator):
         if args[0] == 'pull':
             Path(args[2]).write_bytes(b'image SystemUI')
             return subprocess.CompletedProcess(argv, 0, '', '')
+        if args[0] == 'install' and args[-1].endswith('systemui-foreign.apk') and self.foreign:
+            # SYNTHETIC outcomes in the android15-release pm shell layouts: (exit, printed line, created session state)
+            code, line, state = self.foreign
+            self.calls.append(args)
+            if state is not None:
+                self.sessions.append({'id': 88, 'applied': False, **state})
+            return subprocess.CompletedProcess(argv, code, line + '\n', '')
         if args[0] == 'install' and args[-1].endswith('systemui-foreign.apk') and not self.foreign_accepted:
             self.calls.append(args)
             return subprocess.CompletedProcess(argv, 1, '', 'Failure [INSTALL_FAILED_SHARED_USER_INCOMPATIBLE: '
@@ -125,6 +133,80 @@ class SystemUiStagesTest(unittest.TestCase):
         self.assertEqual(results['systemui-foreign']['result'], 'fail')
         self.assertIn(['shell', 'pm', 'install-abandon', '77'], emulator.calls, 'the foreign session is abandoned')
         self.assertEqual(results['systemui-staged']['result'], 'not-run')
+
+    def foreign_run(self, foreign, **kw):
+        emulator = Emulator(foreign=foreign, **kw)
+        emulator.version = emulator.applied_version = 36
+        return emulator, self.run_stages(emulator)
+
+    def test_run_41161860755_shape_exit_0_is_a_failure_and_its_session_is_abandoned(self):
+        # Exit 0 with pm's ready line and a ready session: the parser now sees it; the stage fails, abandons it, and
+        # claims neither acceptance nor activation (no reboot happens).
+        emulator, results = self.foreign_run((0, 'Success. Reboot device to apply staged session', {'ready': True}))
+        foreign = results['systemui-foreign']
+        self.assertEqual(foreign['result'], 'fail')
+        self.assertIn('exited 0 (success-ready); not a refusal', foreign['reason'])
+        self.assertIn('a session it created was ready', foreign['reason'])
+        self.assertIn('Neither acceptance nor activation', foreign['reason'])
+        self.assertIn(['shell', 'pm', 'install-abandon', '88'], emulator.calls)
+        self.assertNotIn(['reboot'], emulator.calls)
+        self.assertEqual(results['systemui-staged']['result'], 'not-run')
+
+    def test_every_outcome_category_and_cleanup(self):
+        cases = (
+            ('plain success, pending session', (0, 'Success', {'ready': False}), 'fail', 'success', [88]),
+            ('verification verdict', (1, 'Error [-110] [INSTALL_FAILED_SHARED_USER_INCOMPATIBLE: x]',
+                {'ready': False, 'failed': True}), 'pass', 'verification-error', [88]),
+            ('timeout is not a refusal', (1, 'Failure [timed out after 60000 ms]', {'ready': False}), 'fail',
+                'timeout', [88]),
+            ('refused before a session', (1, 'Failure [INSTALL_FAILED_SHARED_USER_INCOMPATIBLE: x]', None), 'pass',
+                'failure', []),
+            ('nonzero without a refusal', (1, 'adb: failed to install', None), 'fail', 'other', []),
+        )
+        for label, foreign, result, category, abandoned in cases:
+            with self.subTest(label):
+                shutil.rmtree(self.tmp/'evidence')
+                (self.tmp/'evidence').mkdir()
+                emulator, results = self.foreign_run(foreign)
+                stage = results['systemui-foreign']
+                self.assertEqual(stage['result'], result, stage)
+                image = next((i for i, c in enumerate(emulator.calls) if c[0] == 'install'
+                    and c[-1].endswith('systemui-image.apk')), len(emulator.calls))
+                foreign_calls = emulator.calls[:image]  # the later stages run only after a pass
+                aborted = [c[3] for c in foreign_calls if c[:3] == ['shell', 'pm', 'install-abandon']]
+                self.assertEqual(aborted, [str(i) for i in abandoned])
+                self.assertNotIn(['reboot'], foreign_calls, 'the foreign stage never reboots')
+                self.assertEqual(results['systemui-staged']['result'], 'pass' if result == 'pass' else 'not-run')
+                if result == 'pass':
+                    self.assertEqual((stage['foreignInstall']['installResult'], stage['foreignInstall']['abandoned'],
+                        stage['foreignInstall']['remainingCreated']), (category, abandoned, 0))
+                else:
+                    self.assertIn(f'({category})', stage['reason'])
+
+    def test_pre_existing_sessions_are_never_abandoned_and_unreadable_state_fails_closed(self):
+        emulator = Emulator(foreign=(1, 'Error [-110] [x]', {'ready': False, 'failed': True}))
+        emulator.version = emulator.applied_version = 36
+        emulator.sessions.append({'id': 5, 'ready': False, 'applied': False, 'failed': True})
+        results = self.run_stages(emulator)
+        self.assertEqual(results['systemui-foreign']['result'], 'pass')
+        aborted = [c[3] for c in emulator.calls if c[:3] == ['shell', 'pm', 'install-abandon']]
+        self.assertEqual(aborted, ['88'], 'the pre-existing failed session 5 is not this test\'s')
+        self.assertNotIn('5', [c[3] for c in emulator.calls if c[:3] == ['shell', 'pm', 'install-abandon']],
+            'nor by the later stages')
+        for after in (0, 1):
+            with self.subTest(garbled_after=after):
+                shutil.rmtree(self.tmp/'evidence')
+                (self.tmp/'evidence').mkdir()
+                emulator = Emulator(foreign=(0, 'Success. Reboot device to apply staged session', {'ready': True}))
+                emulator.version = emulator.applied_version = 36
+                emulator.garble_sessions_after = after
+                results = self.run_stages(emulator)
+                self.assertEqual(results['systemui-foreign']['result'], 'fail')
+                self.assertIn('staged session state unreadable', results['systemui-foreign']['reason'])
+                self.assertFalse(any(c[:3] == ['shell', 'pm', 'install-abandon'] for c in emulator.calls),
+                    'nothing is abandoned blindly')
+                if after == 0:
+                    self.assertFalse(any(c[0] == 'install' for c in emulator.calls), 'no install without a snapshot')
 
     def test_the_systemui_stages_are_opt_in_and_not_gated_on_fixture_seeding(self):
         code = (HERE/'experiment.py').read_text()

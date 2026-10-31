@@ -2,8 +2,11 @@
 
 They act on the emulator image's own com.android.systemui and need no platform key:
   systemui-identity  pm path, pull the image APK, identity receipt (aapt xmltree + apksigner, scripts/systemui_identity.py)
-  systemui-foreign   the same APK re-signed with the job-local test key: adb install --staged must be refused and no
-                     ready session may remain (a different signer cannot join android.uid.systemui)
+  systemui-foreign   the same APK re-signed with the job-local test key: adb install --staged must exit nonzero with a
+                     recognised refusal (pm's "Error [...]" verification verdict or a "Failure [...]" other than a
+                     timeout) and no session it created may be ready (a different signer cannot join
+                     android.uid.systemui). Exit 0 is always a failure, never acceptance or activation proof. Every
+                     session it created that is not applied is abandoned, whatever its state, and checked gone
   systemui-staged    scripts/systemui-component-update.py apply with the image's own bytes (a same-version reinstall):
                      staged, reboot, /data codePath, UPDATED_SYSTEM_APP, a SystemUI process, the session applied
   systemui-restore   that tool's recovery: pm uninstall-system-updates, reboot, the image copy running again
@@ -48,6 +51,25 @@ def identity_receipt(apk, device_path, tools, run):
         source={'revision': revision},
         tools={k: {'path': str(tools[k]), 'sha256': _sha256(tools[k])} for k in ('aapt', 'apksigner')})
 
+def install_result(text):
+    """A fixed category for `adb install --staged` output (pm android15-release doWaitForStagedSessionReady):
+    success-ready ("Success. Reboot device to apply staged session"), success, verification-error ("Error [..]"),
+    timeout ("Failure [timed out ..]"), failure ("Failure [..]") or other. Never the text itself."""
+    lines = [line.strip() for line in text.splitlines()]
+    if any(line.startswith('Failure [timed out') for line in lines):
+        return 'timeout'
+    if any(line.startswith('Error [') for line in lines):
+        return 'verification-error'
+    if any(line.startswith('Failure [') for line in lines):
+        return 'failure'
+    if 'Success. Reboot device to apply staged session' in lines:
+        return 'success-ready'
+    if 'Success' in lines:
+        return 'success'
+    return 'other'
+
+REFUSALS = ('verification-error', 'failure')
+
 def stages(device, tools, work, evidence, serial, Failed, run=subprocess.run):
     """[(name, fn)] for experiment.run; each fn returns facts or raises Failed."""
     work, evidence = Path(work), Path(evidence)
@@ -73,16 +95,47 @@ def stages(device, tools, work, evidence, serial, Failed, run=subprocess.run):
             'pass:test-only', '--out', str(foreign_apk), str(image_apk)], capture_output=True, text=True, timeout=180)
         if result.returncode:
             raise Failed('re-signing with the job-local test key failed: ' + result.stderr.strip()[-300:])
+        def sessions(when):
+            listed = device.sh('shell', 'pm', 'get-stagedsessions')
+            try:
+                if listed.returncode:
+                    raise update.SessionStateError(f'pm get-stagedsessions exited {listed.returncode}')
+                return update.staged_sessions(listed.stdout)
+            except update.SessionStateError as error:
+                failure = Failed(f'staged session state unreadable {when} the foreign install: {error}')
+                failure.facts = {'foreignInstall': facts}
+                raise failure
+        facts = {'installExit': None, 'installResult': None, 'created': [], 'abandoned': [], 'remainingCreated': None}
+        before = sessions('before')
         install = device.sh('install', '--staged', str(foreign_apk), timeout=300)
         text = install.stdout + install.stderr
-        ready = [s for s in update.staged_sessions(device.sh('shell', 'pm', 'get-stagedsessions').stdout)
-            if s['package'] == SYSTEMUI and s['ready'] and not s['applied'] and not s['failed']]
-        for session in ready:
-            device.sh('shell', 'pm', 'install-abandon', str(session['sessionId']))
         (evidence/'systemui-foreign.txt').write_text(text[-4000:])
-        if install.returncode == 0 or ready:
-            raise Failed(f'a SystemUI signed by another key was staged (exit {install.returncode}, ready {ready})')
-        return {'refusal': next((l for l in text.splitlines() if 'Failure' in l), text.strip()[-200:])}
+        facts.update(installExit=install.returncode, installResult=install_result(text))
+        # Only sessions this stage created, and every one of them that is not applied, whatever its state.
+        created = update.created_unapplied(before, sessions('after'), SYSTEMUI)
+        facts['created'] = [{k: s[k] for k in ('sessionId', 'ready', 'applied', 'failed')} for s in created]
+        for session in created:
+            device.sh('shell', 'pm', 'install-abandon', str(session['sessionId']))
+        facts['abandoned'] = [s['sessionId'] for s in created]
+        left = [s for s in update.created_unapplied(before, sessions('after abandoning'), SYSTEMUI)]
+        facts['remainingCreated'] = len(left)
+        problems = []
+        if install.returncode == 0:
+            problems.append(f'adb install --staged exited 0 ({facts["installResult"]}); not a refusal')
+        elif facts['installResult'] not in REFUSALS:
+            problems.append(f'adb install --staged exited {install.returncode} without a recognised refusal '
+                f'({facts["installResult"]})')
+        if any(s['ready'] and not s['failed'] for s in created):
+            problems.append('a session it created was ready')
+        if left:
+            problems.append(f'{len(left)} created session(s) remain after abandoning')
+        if problems:
+            failure = Failed('a SystemUI signed by another key was not refused: ' + '; '.join(problems)
+                + '. Neither acceptance nor activation is shown by this')
+            failure.facts = {'foreignInstall': facts}
+            raise failure
+        return {'refusal': next((l for l in text.splitlines() if l.strip().startswith(('Failure [', 'Error ['))), ''),
+            'foreignInstall': facts}
 
     def staged():
         receipt = json.loads(receipt_path.read_text())
