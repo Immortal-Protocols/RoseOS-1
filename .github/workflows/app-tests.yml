@@ -7,6 +7,7 @@ on:
     paths:
       - 'workspace/**'
       - 'os/background-control/**'
+      - 'qa/systemui-trial/**'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   push:
@@ -14,6 +15,7 @@ on:
     paths:
       - 'workspace/**'
       - 'os/background-control/**'
+      - 'qa/systemui-trial/**'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   workflow_dispatch:
