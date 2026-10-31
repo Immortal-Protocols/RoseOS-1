@@ -193,6 +193,14 @@ the serial line `ROSE-MODELS-DIAGNOSTIC` and `rose-models/diagnostic`. It shows 
 inference is off until the next reset without a new id. Another payload's digest, a malformed value or a used id
 holds and runs nothing.
 
+**One GPU start (diagnostic, explicit, once per id).** `rose-models-diagnostic=gpu-start-once:<payloadTarSha256>:<id>`
+uses the same hold, stop, positive absence and read-only prerequisites. `verify_model check` picks the payload's
+`launch-offline` (0) or `launch-online` (3: production's Hugging Face first load over its network and cache); any other
+status, an unmounted data disk, a busy :8000 or an unreadable launcher is refused. That exact `docker run`, plus
+`--pull=never`, runs once: at most 900 s, 2 MiB inspected for fixed categories, stopped as soon as :8000 listens. The
+container is always removed and its absence verified; inference stays held for the boot. It shows how far a start gets,
+not why: the image's vLLM log text is unknown, so categories may only say `traceback`.
+
 ## 5. Operations
 
 | Situation | What happens | Operator |
