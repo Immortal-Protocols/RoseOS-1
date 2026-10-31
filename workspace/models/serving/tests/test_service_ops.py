@@ -107,7 +107,8 @@ class Decide(unittest.TestCase):
         calls = []
         a = types.SimpleNamespace(base='x', model='muse-glimmer', state=tmp / 's.json', status=tmp / 'run/h.json',
                                   receipt=tmp / 'receipt.json', record=['record-cmd'], verify_start=tmp / 'vs.json',
-                                  verify_full=tmp / 'vf.json', start_phase=tmp / 'sp.json')
+                                  verify_full=tmp / 'vf.json', start_phase=tmp / 'sp.json',
+                                  container_status=tmp / 'cs.json', cache=tmp / 'hf')
         for i in range(3):
             H.run_once(a, now=10_000 + i, prober=lambda b, m, facts: (False, 'unreachable'), since=lambda: 0,
                        run=lambda cmd, timeout: calls.append(cmd), publisher=lambda k, v: None, boot=BOOT,
@@ -124,7 +125,7 @@ class Decide(unittest.TestCase):
 BOOT, OLD_BOOT = '2f1c3a9e-0d4b-4c62-9a51-7e8f00c1d2e3', '11111111-2222-3333-4444-555555555555'
 RECEIPT_KEYS = {'schema', 'bootId', 'checkedAt', 'ready', 'status', 'category', 'completion', 'lastOkThisBoot',
                 'consecutiveFailures', 'restartsLastHour', 'restartLimitPerHour', 'action', 'modelReceipt',
-                'service', 'startup', 'container'}
+                'service', 'startup', 'container', 'containerRun', 'weightsCache'}
 UNIT_RUNNING = {'LoadState': 'loaded', 'ActiveState': 'active', 'SubState': 'running', 'Result': 'success',
                 'ExecMainCode': '0', 'ExecMainStatus': '0', 'NRestarts': '0',
                 'ActiveEnterTimestamp': 'Sat 2026-10-31 00:20:00 UTC', 'ExecMainExitTimestamp': ''}
@@ -164,7 +165,8 @@ class HealthReceipt(unittest.TestCase):
             base=f'http://127.0.0.1:{server.server_address[1]}', model='muse-glimmer', state=self.tmp / 's.json',
             status=self.tmp / 'run/h.json', receipt=self.tmp / 'receipt.json', record=None,
             verify_start=self.tmp / 'run/verify-start.json', verify_full=self.tmp / 'verify-full.json',
-            start_phase=self.tmp / 'run/start-phase.json')
+            start_phase=self.tmp / 'run/start-phase.json', container_status=self.tmp / 'run/container/status.json',
+            cache=self.tmp / 'hf')
         self.query = query()
         self.published, self.calls = [], []
 
@@ -316,6 +318,52 @@ class HealthReceipt(unittest.TestCase):
                 self.assertIn('failed', (r['service']['query'], r['container']['query']))
             self.assertNotIn('SECRET', self.published[-1][1])
         self.assertEqual(len({json.dumps(v) for v in results.values()}), 1, results)  # identical decisions and restarts
+
+    def run_status(self, **fields):
+        self.a.container_status.parent.mkdir(parents=True, exist_ok=True)
+        self.a.container_status.write_text(json.dumps(fields))
+
+    def test_guard_and_server_stages_and_cache_completeness(self):
+        self.behavior['mode'] = 'not_listed'
+        self.once(90_000)
+        self.assertIsNone(self.last()['containerRun'])  # no launch under this payload yet
+        self.assertEqual({k: v for k, v in self.last()['weightsCache'].items() if k != 'expectedBytes'},
+                         {'query': 'absent', 'blobBytes': 0, 'incompleteBytes': 0, 'incompleteFiles': 0,
+                          'snapshotFiles': 0})
+        self.assertEqual(self.last()['weightsCache']['expectedBytes'], 59580000000)
+        snap = fake_cache(self.a.cache, {'repo': 'meta-models/Muse-Glimmer-30B', 'revision': 'c' * 40})
+        (snap.parents[1] / 'blobs' / ('f' * 64 + '.incomplete')).write_bytes(b'x' * 5)
+        for label, fields, want in (
+                ('guard refused', dict(stage='guard_refused', proceed=False, failures=['gpu_free', 'shm'], at=1),
+                 {'stage': 'guard_refused', 'proceed': False, 'failures': ['gpu_free', 'shm']}),
+                ('failed after the guard, never listened', dict(stage='exited', proceed=True, failures=[], elapsedS=204,
+                 listenedAfterS=None, exitCode=1, signal=None, lastException='torch.OutOfMemoryError', at=2),
+                 {'stage': 'exited', 'exitCode': 1, 'listenedAfterS': None, 'elapsedS': 204,
+                  'lastException': 'torch.OutOfMemoryError'}),
+                ('listened, then killed', dict(stage='exited', proceed=True, failures=[], elapsedS=900,
+                 listenedAfterS=610, exitCode=None, signal=9, lastException=None, at=3),
+                 {'stage': 'exited', 'signal': 9, 'listenedAfterS': 610, 'lastException': None})):
+            with self.subTest(label):
+                self.run_status(**fields)
+                self.once(90_060)
+                run = self.last()['containerRun']
+                self.assertEqual({k: run[k] for k in want}, want)
+        cache = self.last()['weightsCache']
+        self.assertEqual((cache['query'], cache['blobBytes'], cache['incompleteBytes'], cache['incompleteFiles'],
+                          cache['snapshotFiles']), ('ok', 26, 5, 1, 3))  # 8 + 7 + 11 bytes
+        self.assertNotIn('safetensors', self.published[-1][1])
+
+    def test_container_run_status_is_allowlisted(self):
+        self.run_status(stage='exited; rm -rf /', proceed='yes', failures=['gpu_free', 'GPU0 has 3 free bytes'] * 9,
+                        elapsedS=-5, exitCode=999, signal=0, lastException='ValueError: secret token abc', at='now')
+        self.once(95_000)
+        self.assertEqual(self.last()['containerRun'], {
+            'stage': 'other', 'proceed': None, 'failures': ['gpu_free', 'other'] * 4, 'elapsedS': None,
+            'listenedAfterS': None, 'exitCode': None, 'signal': None, 'lastException': 'other', 'at': None})
+        self.assertNotIn('secret', self.published[-1][1])
+        self.a.container_status.write_text('{')
+        self.once(95_060)
+        self.assertEqual(self.last()['containerRun'], {'stage': 'unreadable'})
 
     def test_startup_phase_is_allowlisted(self):
         self.phase(phase='rm -rf /', verifyExit='0', dataMounted='yes', imagePresent=1, at=None, extra='x' * 5000)

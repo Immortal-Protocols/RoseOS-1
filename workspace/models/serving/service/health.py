@@ -13,7 +13,8 @@
 5. Publish an allowlisted receipt to the existing guest attribute rose-models/health: boot id, probe time, the
    completion's HTTP status, token count and latency (never its text), readiness, restarts, and the model receipt's
    start and full verification results, each qualified, plus the model unit's state, result and main exit code,
-   start-model's last phase and selected container State fields. Publication runs after the decision and its failure
+   start-model's last phase, selected container State fields, the startup guard's status for this attempt (guard
+   result, first listen, exit, last exception class name) and how much of the model the weights cache holds. Publication runs after the decision and its failure
    only marks the status file: telemetry never restarts the model.
 """
 import argparse
@@ -37,6 +38,10 @@ LOOPBACK = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never
 GUEST = 'http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/rose-models/'
 RECEIPT_SCHEMA, RECEIPT_MAX = 'rose-models-health/1', 4096
 PHASES = ('verifying', 'launching_offline', 'launching_online', 'refused_storage')
+RUN_STAGES = ('guard_refused', 'guard_passed', 'server_started', 'listening', 'exited')
+GUARD_CODES = ('cuda_unavailable', 'driver_unknown', 'driver_too_old', 'gpu_count', 'gpu_total', 'gpu_free',
+               'cache_free', 'shm', 'other')
+EXCEPTION_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_.]{0,119}$')
 CONTAINER = 'muse-glimmer'
 _spec = importlib.util.spec_from_file_location('unit_facts', Path(__file__).resolve().parent / 'unit_facts.py')
 unit_facts = importlib.util.module_from_spec(_spec)
@@ -191,11 +196,69 @@ def _startup_fact(path):
             'at': _int(raw.get('at'))}
 
 
+def _bounded(v, lo, hi):
+    v = _int(v)
+    return v if v is not None and lo <= v <= hi else None
+
+
+def _container_run(path):
+    """The startup guard's status for this attempt (start-model clears it before each launch): the guard result as
+    codes, when the server first listened, how it exited and the last exception class it printed. None before any
+    launch under this payload."""
+    try:
+        raw = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {'stage': 'unreadable'}
+    if not isinstance(raw, dict):
+        return {'stage': 'unreadable'}
+    failures = raw.get('failures') if isinstance(raw.get('failures'), list) else []
+    exc = raw.get('lastException')
+    return {'stage': raw.get('stage') if raw.get('stage') in RUN_STAGES else 'other',
+            'proceed': raw.get('proceed') if isinstance(raw.get('proceed'), bool) else None,
+            'failures': [f if f in GUARD_CODES else 'other' for f in failures[:8]],
+            'elapsedS': _bounded(raw.get('elapsedS'), 0, 1 << 31),
+            'listenedAfterS': _bounded(raw.get('listenedAfterS'), 0, 1 << 31),
+            'exitCode': _bounded(raw.get('exitCode'), 0, 255), 'signal': _bounded(raw.get('signal'), 1, 64),
+            'lastException': None if exc is None else exc if isinstance(exc, str) and EXCEPTION_NAME.match(exc) else 'other',
+            'at': _int(raw.get('at'))}
+
+
+def _weights_cache(cache):
+    """How much of the model the Hugging Face cache holds: complete and partial blob bytes, snapshot files, and the
+    pinned repository size to compare with. Sizes only; no names."""
+    out = {'blobBytes': 0, 'incompleteBytes': 0, 'incompleteFiles': 0, 'snapshotFiles': 0, 'expectedBytes': None}
+    try:
+        out['expectedBytes'] = _int(json.loads((Path(__file__).resolve().parents[1] / 'muse-glimmer-30b.json')
+                                               .read_text())['model']['repo_bytes'])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        repos = [r for r in (Path(cache) / 'hub').iterdir() if r.name.startswith('models--')][:4]
+    except OSError:
+        return {**out, 'query': 'absent'}
+    for repo in repos:
+        try:
+            for blob in os.scandir(repo / 'blobs'):
+                size = blob.stat(follow_symlinks=False).st_size
+                if blob.name.endswith('.incomplete'):
+                    out['incompleteBytes'] += size
+                    out['incompleteFiles'] += 1
+                else:
+                    out['blobBytes'] += size
+            out['snapshotFiles'] += sum(len(files) for _, _, files in os.walk(repo / 'snapshots'))
+        except OSError:
+            continue
+    return {**out, 'query': 'ok'}
+
+
 def diagnose(a, query=subprocess.run):
     """Why the model may not answer: the unit's state, last result and main exit; start-model's phase; selected
     container State fields. Bounded queries; no journal, logs, environment or stderr."""
     return {'service': unit_facts.service(UNIT, query), 'startup': _startup_fact(a.start_phase),
-            'container': unit_facts.container(CONTAINER, query)}
+            'container': unit_facts.container(CONTAINER, query), 'containerRun': _container_run(a.container_status),
+            'weightsCache': _weights_cache(a.cache)}
 
 
 def receipt(boot, now, ok, category, state, action, facts, receipt_present, start_check, full_check, recorded_at=None,
@@ -215,7 +278,7 @@ def receipt(boot, now, ok, category, state, action, facts, receipt_present, star
            'restartLimitPerHour': RESTARTS_PER_HOUR, 'action': action if action in ('restart',) else None,
            'modelReceipt': {'present': receipt_present is True, 'recordedAt': recorded_at,
                             'startCheck': start_check, 'fullCheck': full_check}}
-    for key in ('service', 'startup', 'container'):  # each already allowlisted by diagnose()
+    for key in ('service', 'startup', 'container', 'containerRun', 'weightsCache'):  # allowlisted by diagnose()
         out[key] = (diagnostics or {}).get(key)
     line = json.dumps(out, sort_keys=True)
     if len(line) > RECEIPT_MAX:
@@ -270,6 +333,8 @@ def main(argv=None):
     p.add_argument('--verify-start', type=Path, default=Path('/run/rose-models/verify-start.json'))
     p.add_argument('--verify-full', type=Path, default=Path('/var/lib/rose-models/verify-full.json'))
     p.add_argument('--start-phase', type=Path, default=Path('/run/rose-models/start-phase.json'))
+    p.add_argument('--container-status', type=Path, default=Path('/run/rose-models/container/status.json'))
+    p.add_argument('--cache', type=Path, default=Path('/mnt/models-data/hf'))
     p.add_argument('--record', nargs=argparse.REMAINDER, help='command that records the model receipt (last option)')
     a = p.parse_args(argv)
     if a.command == 'probe':

@@ -1,10 +1,14 @@
 """Startup guard: synthetic node facts pass or refuse before any weights download, and the rendered command fails closed."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -87,6 +91,90 @@ class GuardTest(unittest.TestCase):
             guard.main([json.dumps(LIMITS), '--', 'vllm', 'serve', 'meta-models/Muse-Glimmer-30B'])
         execvp.assert_called_once_with('vllm', ['vllm', 'serve', 'meta-models/Muse-Glimmer-30B'])
 
+
+
+SERVER = r"""
+import socket, sys, time
+mode, port = sys.argv[1], int(sys.argv[sys.argv.index('--port') + 1])
+print('INFO starting server', flush=True)
+print('WARNING to stderr', file=sys.stderr, flush=True)
+if mode == 'oom':
+    print('Traceback (most recent call last):', file=sys.stderr)
+    print('(VllmWorker TP1 pid=7) torch.OutOfMemoryError: CUDA out of memory. Tried SECRET-TEXT', file=sys.stderr)
+    sys.exit(1)
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', port)); s.listen()
+time.sleep(60)
+"""
+DRIVER = "import importlib.util, sys; spec = importlib.util.spec_from_file_location('g', sys.argv[1]); " \
+         "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g); sys.exit(g.supervise(sys.argv[3:], sys.argv[2]))"
+
+
+class StatusTest(unittest.TestCase):
+    """The persistent service's guard: status file, supervision, pass-through and exit propagation."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix='guard-status-'))
+        self.status = self.dir / 'status.json'
+        (self.dir / 'server.py').write_text(SERVER)
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            self.port = s.getsockname()[1]
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def read(self):
+        return json.loads(self.status.read_text())
+
+    def driver(self, mode):
+        cmd = [sys.executable, str(self.dir / 'server.py'), mode, '--host', '127.0.0.1', '--port', str(self.port)]
+        return subprocess.Popen([sys.executable, '-c', DRIVER, str(HERE / 'startup_guard.py'), str(self.status), *cmd],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_refusal_writes_codes_only(self):
+        limits = {**LIMITS, 'status_path': str(self.status)}
+        node = facts(gpus=[{'name': 'x', 'total': 42 * 10**9, 'free': 30 * 10**9}] * 2, shm_total=64 * 2**20)
+        with mock.patch.object(guard, 'collect', return_value=node), mock.patch('builtins.print'), \
+                self.assertRaises(SystemExit) as stop:
+            guard.main([json.dumps(limits), '--', 'vllm', 'serve'])
+        self.assertEqual(stop.exception.code, guard.EXIT_REFUSED)
+        status = self.read()
+        self.assertEqual((status['stage'], status['proceed'], status['failures']),
+                         ('guard_refused', False, ['gpu_free', 'gpu_free', 'shm']))
+        self.assertNotIn('bytes', self.status.read_text())
+
+    def test_server_failure_exit_and_exception_class_without_text(self):
+        proc = self.driver('oom')
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 1)  # the server's own status, as `docker run` and systemd see it
+        self.assertIn(b'INFO starting server', out)  # passed through unchanged
+        self.assertIn(b'SECRET-TEXT', err)
+        status = self.read()
+        self.assertEqual((status['stage'], status['exitCode'], status['signal'], status['listenedAfterS'],
+                          status['lastException']), ('exited', 1, None, None, 'torch.OutOfMemoryError'))
+        self.assertNotIn('SECRET', self.status.read_text())
+
+    def test_listening_then_signal_is_forwarded_and_propagated(self):
+        proc = self.driver('serve')
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if self.status.exists() and self.read()['stage'] == 'listening':
+                break
+            time.sleep(0.2)
+        self.assertEqual(self.read()['stage'], 'listening')
+        proc.send_signal(signal.SIGTERM)  # docker stop
+        proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 128 + signal.SIGTERM)
+        status = self.read()
+        self.assertEqual((status['stage'], status['signal'], status['exitCode']), ('exited', signal.SIGTERM, None))
+        self.assertIsInstance(status['listenedAfterS'], int)
+
+    def test_unwritable_status_never_changes_the_outcome(self):
+        self.status = self.dir / 'missing-dir' / 'status.json'
+        proc = self.driver('oom')
+        proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 1)
 
 if __name__ == '__main__':
     unittest.main()
