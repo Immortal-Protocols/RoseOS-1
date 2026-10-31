@@ -74,6 +74,53 @@ class ReportTest(unittest.TestCase):
         self.assertIn('%250A', note, 'percent signs are escaped in workflow commands')
         self.assertTrue(note.startswith('::warning title=seed%3A fail::line1 ::error::'),
             'one line: an injected command is mid-line data, which the runner does not parse')
+    def startup(self, diagnostic, wait=None):
+        self.write('emulator-setup.json', {'result': 'installed', 'version': 'v'})
+        device = {'result': 'fail', 'reason': 'the emulator exited with status 1 before boot completed'}
+        if wait is not None:
+            device['bootWait'] = wait
+        stages = {'environment': {'result': 'pass'}, 'image': {'result': 'pass'}, 'device': device,
+            **{n: {'result': 'not-run', 'reason': 'excluded: startup diagnostic only'}
+                for n in ('seed', 'ordinary', 'staged', 'restore')}}
+        self.write('results.json', {'mode': 'startup-diagnostic', 'stages': stages,
+            **({'startupDiagnostic': diagnostic} if diagnostic is not None else {})})
+        return self.run_report({'KVM_ACL': 'true', 'CLEANUP_OUTCOME': 'success'})
+
+    def test_a_startup_diagnostic_reports_the_fixed_facts_and_never_passes(self):
+        summary, notes = self.startup({'log': 'read', 'capBytes': 16384, 'bytesRead': 16384, 'truncated': True,
+            'category': 'avd_missing', 'ambiguous': False, 'avdDescriptor': 'absent'},
+            {'child': 'exited', 'childExitStatus': 1, 'serial': 'absent', 'serialReachedDevice': False,
+                'wait': 'child-exited', 'bootCompleted': False, 'seconds': 3})
+        self.assertIn('**Functional verdict: unavailable** (startup diagnostic only', summary)
+        self.assertIn('| startup diagnostic | avd_missing | log read, 16384 of first 16384 bytes, truncated yes, '
+            'ambiguous no; AVD descriptor absent; child exited status 1, serial absent, wait child-exited, boot '
+            'completed no |', summary)
+        self.assertTrue(any(n.startswith('::warning title=startup diagnostic%3A avd_missing::log read') for n in notes))
+        self.assertIn('| seed | not-run | excluded: startup diagnostic only |', summary)
+        self.assertIn('| cleanup | success | test key, AVD and emulator home absent |', summary)
+
+    def test_startup_values_outside_the_fixed_sets_are_invalid_never_echoed(self):
+        leak = 'PANIC /home/runner/work/x secret=abc ::error::'
+        summary, notes = self.startup({'log': leak, 'capBytes': '16384', 'bytesRead': True, 'truncated': 'yes',
+            'category': leak, 'ambiguous': 1, 'avdDescriptor': leak},
+            {'child': leak, 'childExitStatus': leak, 'serial': leak, 'wait': leak, 'bootCompleted': leak})
+        self.assertIn('| startup diagnostic | invalid | log invalid, invalid of first invalid bytes, truncated invalid, '
+            'ambiguous invalid; AVD descriptor invalid; child invalid status invalid, serial invalid, wait invalid, '
+            'boot completed invalid |', summary)
+        for text in (summary, '\n'.join(notes)):
+            for fragment in ('PANIC', '/home/runner', 'secret', '::error'):
+                self.assertNotIn(fragment, text)
+
+    def test_a_missing_startup_record_is_reported_missing(self):
+        summary, _ = self.startup(None)
+        self.assertIn('| startup diagnostic | missing | no startup diagnostic record |', summary)
+        self.assertIn('**Functional verdict: unavailable**', summary)
+
+    def test_without_the_mode_there_is_no_startup_row(self):
+        self.write('results.json', {'stages': {'environment': {'result': 'pass'}}, 'startupDiagnostic': {'category': 'x'}})
+        summary, _ = self.run_report({})
+        self.assertNotIn('startup diagnostic', summary)
+
 
 class VerdictTest(unittest.TestCase):
     FIXTURE = {n: {'result': 'pass'} for n in report.FIXTURE}

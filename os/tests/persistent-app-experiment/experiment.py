@@ -16,8 +16,11 @@
            staged       adb install --staged of the same v2, reboot: /data codePath, v2, same signer, live v2 marker
            restore      pm uninstall-system-updates, reboot: image codePath, v1, live v1 marker (manual restoration
                         to the image copy, not platform rollback)
-         EDIR receives results.json and small text excerpts only. The emulator is always stopped and the key and AVD
-         removed. A stage that cannot run stops the later ones; nothing is forced.
+         EDIR receives results.json and small text excerpts only. With --startup-diagnostic (EXP006-STARTUP-003, never
+         with --systemui) only environment, image and device run; after the owned emulator exits, at most the first
+         STARTUP_CAP bytes of its own newly created log are classified into one fixed category (STARTUP_PATTERNS),
+         recorded with the byte-cap facts and whether the AVD descriptor existed; no text, path, argv or environment.
+         The emulator is always stopped and the key and AVD removed. A stage that cannot run stops the later ones; nothing is forced.
 Synthetic fixture only: no conclusion about SystemUI, platform signatures, privileged installers, OTA or Pixels.
 """
 import argparse
@@ -27,6 +30,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -167,6 +171,63 @@ def outcome(fn):
     except (Failed, subprocess.TimeoutExpired) as e:
         return {'result': 'fail', 'reason': str(e)[:600], **getattr(e, 'facts', {})}
 
+# EXP006-STARTUP-003: fixed startup categories, matched case-insensitively in the first STARTUP_CAP bytes of the
+# owned emulator log. One category or none; two or more is ambiguous and stays unknown. A match is evidence, never a
+# repair.
+STARTUP_CAP = 16 * 1024
+STARTUP_PATTERNS = {
+    'avd_missing': (r'unknown avd name', r'no avd (name )?specified', r'avd\b[^\n]{0,80}\bdoes not exist',
+        r'cannot find avd\b(?! system path)'),
+    'image_missing': (r'cannot find avd system path', r'no initial system image', r'system image[^\n]{0,80}'
+        r'\b(not found|missing|does not exist)'),
+    'acceleration_refused': (r'requires hardware acceleration', r'/dev/kvm[^\n]{0,80}\b(permission denied|not found|'
+        r'no such file|is not accessible)', r'\bkvm\b[^\n]{0,40}\b(is required|not available|permission denied)'),
+    'rejected_option': (r'\b(unknown|invalid|unrecognized) option\b', r'option[^\n]{0,60}requires an argument'),
+    'missing_library': (r'error while loading shared libraries', r'cannot open shared object file',
+        r'could not load[^\n]{0,80}\.so\b'),
+}
+STARTUP_CATEGORIES = (*STARTUP_PATTERNS, 'unknown')
+
+def classify_startup(data):
+    """(category, ambiguous) for bytes of startup output; no match or more than one category is 'unknown'."""
+    text = data.decode('utf-8', 'replace')
+    found = [name for name, patterns in STARTUP_PATTERNS.items()
+        if any(re.search(p, text, re.IGNORECASE) for p in patterns)]
+    return (found[0] if len(found) == 1 else 'unknown'), len(found) > 1
+
+def startup_output(fd, cap=STARTUP_CAP):
+    """Facts about the owned log through `fd`, the descriptor this run created it with (O_EXCL, O_NOFOLLOW) and gave
+    the child as its output; the path is never opened again, so a replaced or linked path cannot be read. Only a
+    regular file is read, at most its first cap bytes; never its text or path."""
+    facts = {'log': 'not-created', 'capBytes': cap, 'bytesRead': 0, 'truncated': None, 'category': 'unknown',
+        'ambiguous': False}
+    if fd is None:
+        return facts
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return {**facts, 'log': 'not-regular'}
+        data = b''
+        while len(data) < cap:
+            chunk = os.pread(fd, cap - len(data), len(data))
+            if not chunk:
+                break
+            data += chunk
+        category, ambiguous = classify_startup(data)
+        return {**facts, 'log': 'read', 'bytesRead': len(data), 'truncated': os.fstat(fd).st_size > cap,
+            'category': category, 'ambiguous': ambiguous}
+    except OSError:
+        return {**facts, 'log': 'unreadable'}
+
+def avd_descriptor(path):
+    """present (a regular file), absent, or unknown (anything else, or it could not be checked)."""
+    try:
+        return 'present' if stat.S_ISREG(os.lstat(path).st_mode) else 'unknown'
+    except FileNotFoundError:
+        return 'absent'
+    except OSError:
+        return 'unknown'
+
 # ------------------------------------------------------------------ run
 
 class Device:
@@ -242,7 +303,9 @@ class Device:
         self.save(f'{label}-logcat.txt', log)
         return {'package': package_state(dump), 'marker': latest_marker(log), 'pidof': pid or None}
 
-def run(sdk, work, evidence, systemui=False):
+def run(sdk, work, evidence, systemui=False, startup_diagnostic=False):
+    if startup_diagnostic and systemui:
+        raise Unavailable('the startup diagnostic runs without the SystemUI stages')
     work, evidence = Path(work), Path(evidence)
     evidence.mkdir(parents=True, exist_ok=True)
     results = {'experiment': 'OS-COMPONENT-EXP-004', 'source': os.environ.get('GITHUB_SHA'),
@@ -250,8 +313,10 @@ def run(sdk, work, evidence, systemui=False):
     stages = results['stages']
     start = time.time()
     budget = lambda minutes: min(time.time() + minutes * 60, start + 24 * 60)
-    emulator_proc = None
+    emulator_proc = owned_log = None
     device = Device(sdk, evidence)
+    if startup_diagnostic:
+        results['mode'] = 'startup-diagnostic'
 
     def stage(name, fn, needs=None):
         if any(s['result'] != 'pass' for n, s in stages.items() if needs is None or n in needs):
@@ -287,15 +352,24 @@ def run(sdk, work, evidence, systemui=False):
         return {'package': line.strip(), 'files': {p.name: sha256(p) for p in sorted(root.glob('*.img'))}}
 
     def boot():
-        nonlocal emulator_proc
+        nonlocal emulator_proc, owned_log
         avd = work/'avd'
         os.environ['ANDROID_AVD_HOME'] = str(avd)
         os.environ['ANDROID_EMULATOR_HOME'] = str(work/'emulator-home')
         run_ok([Path(sdk)/'cmdline-tools/latest/bin/avdmanager', 'create', 'avd', '-n', 'fixture', '-k', IMAGE,
             '-d', 'pixel', '-p', avd/'fixture.avd'], input='no\n')
+        if startup_diagnostic:
+            # A new file of this run only (never an existing file or a link); its descriptor is kept for the read.
+            try:
+                owned_log = os.open(work/'emulator.log', os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            except OSError:
+                raise Failed('the task-local emulator output already exists; the startup diagnostic needs a new one')
+            log = owned_log
+        else:
+            log = open(work/'emulator.log', 'w')
         emulator_proc = subprocess.Popen([str(Path(sdk)/'emulator/emulator'), '-avd', 'fixture', '-port', str(SERIAL_PORT),
             '-no-window', '-no-snapshot', '-no-boot-anim', '-no-audio', '-writable-system', '-gpu', 'swiftshader_indirect'],
-            stdout=open(work/'emulator.log', 'w'), stderr=subprocess.STDOUT)
+            stdout=log, stderr=subprocess.STDOUT)
         device.child = emulator_proc
         boot_wait = device.wait_boot(budget(8))
         devices = [l.split()[0] for l in run_ok([device.adb, 'devices']).splitlines()[1:] if l.strip()]
@@ -391,6 +465,9 @@ def run(sdk, work, evidence, systemui=False):
     try:
         for name, fn in (('environment', environment), ('image', image), ('device', boot), ('seed', seed),
                 ('ordinary', ordinary), ('staged', staged), ('restore', restore)):
+            if startup_diagnostic and name not in ('environment', 'image', 'device'):
+                stages[name] = {'result': 'not-run', 'reason': 'excluded: startup diagnostic only'}
+                continue
             stage(name, fn)
         if systemui:
             # Opt-in (OS-COMPONENT-UPDATES-001): the image's own SystemUI, after the fixture stages but not gated on
@@ -407,6 +484,22 @@ def run(sdk, work, evidence, systemui=False):
                 emulator_proc.wait(timeout=60)
             except subprocess.TimeoutExpired:
                 emulator_proc.kill()
+        if startup_diagnostic:
+            # After the owned child exits and before the AVD is removed; any failure is a recorded fact, not a raise.
+            try:
+                try:
+                    if emulator_proc:
+                        emulator_proc.wait(timeout=10)
+                    diagnostic = startup_output(owned_log)
+                except subprocess.TimeoutExpired:
+                    diagnostic = {**startup_output(None), 'log': 'child-running'}
+                diagnostic['avdDescriptor'] = avd_descriptor(work/'avd/fixture.ini') if owned_log is not None else 'unknown'
+            except Exception:
+                diagnostic = {**startup_output(None), 'log': 'error', 'avdDescriptor': 'unknown'}
+            finally:
+                if owned_log is not None:
+                    os.close(owned_log)
+            results['startupDiagnostic'] = diagnostic
         for private in ('test-only.keystore', 'avd', 'emulator-home'):
             target = work/private
             if target.is_dir():
@@ -424,14 +517,18 @@ def main(argv=None):
     p.add_argument('--work', required=True)
     p.add_argument('--evidence')
     p.add_argument('--systemui', action='store_true', help='run: also the SystemUI stages (systemui_stages.py)')
+    p.add_argument('--startup-diagnostic', action='store_true',
+        help='run: environment, image and device only, then classify the owned emulator startup output')
     a = p.parse_args(argv)
+    if a.startup_diagnostic and a.systemui:
+        p.error('--startup-diagnostic runs without --systemui')
     try:
         if a.command == 'build':
             print(json.dumps(build(a.sdk, a.work), indent=2, sort_keys=True))
             return 0
         if not a.evidence:
             p.error('run needs --evidence')
-        results = run(a.sdk, a.work, a.evidence, a.systemui)
+        results = run(a.sdk, a.work, a.evidence, a.systemui, a.startup_diagnostic)
         # Results and reasons in the job log too, so the outcome is readable without downloading the artifact.
         print(json.dumps({k: {'result': v['result'], 'reason': v.get('reason')} for k, v in results['stages'].items()},
             indent=2, sort_keys=True))

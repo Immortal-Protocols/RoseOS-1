@@ -18,6 +18,11 @@ green job or run step never makes it pass. Cleanup is reported separately and do
 EXP006-KVM-001: with KVM_ACL true it also reports EDIR/kvm-access.json, the grant (granted, not-needed or refused) and
 its restoration (restored, not-needed or restore-failed); a missing restore record is `not observed`, never restored.
 Without KVM_ACL the KVM access row says disabled.
+
+EXP006-STARTUP-003: a startup-diagnostic run (results.json mode) has the functional verdict unavailable, never pass,
+and one `startup diagnostic` row: the fixed category, the log and byte-cap facts, the AVD descriptor fact and the
+device stage's boot-wait facts. Every value is checked against a fixed set or as a number; anything else is
+`invalid`, so no text from the run can reach the summary through it.
 """
 import argparse
 import json
@@ -30,6 +35,11 @@ LIMIT = 300
 PRIVATE = ('test-only.keystore', 'avd', 'emulator-home')
 FIXTURE = ('environment', 'image', 'device', 'seed', 'ordinary', 'staged', 'restore')
 USABLE = ('installed', 'pre-existing')
+CATEGORIES = ('avd_missing', 'image_missing', 'acceleration_refused', 'rejected_option', 'missing_library', 'unknown')
+LOG_STATES = ('read', 'not-created', 'not-regular', 'unreadable', 'child-running', 'error')
+DESCRIPTOR = ('present', 'absent', 'unknown')
+SERIAL = ('absent', 'offline', 'unauthorized', 'device', 'other', 'adb-error', 'adb-timeout')
+WAIT = ('child-exited', 'timeout', 'boot-completed')
 
 def clean(text, limit=LIMIT):
     text = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(text if text is not None else '')).strip()
@@ -71,6 +81,33 @@ def verdict(setup, stages, systemui):
         return 'unavailable', f'{short[0]} is {results[short[0]] or "missing"}'
     return 'pass', 'every required stage passed'
 
+def fixed(value, allowed):
+    return value if value in allowed else 'invalid'
+
+def number(value):
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else 'invalid'
+
+def flag(value):
+    return {True: 'yes', False: 'no', None: 'unknown'}.get(value, 'invalid') if value is None or isinstance(value, bool) \
+        else 'invalid'
+
+def startup_row(results, stages):
+    """('startup diagnostic', category, reason) from allowlisted values only."""
+    d = results.get('startupDiagnostic')
+    if not isinstance(d, dict):
+        return 'startup diagnostic', 'missing', 'no startup diagnostic record'
+    device = stages.get('device') if isinstance(stages, dict) and isinstance(stages.get('device'), dict) else {}
+    wait = device.get('bootWait') if isinstance(device.get('bootWait'), dict) else {}
+    exit_status = wait.get('childExitStatus')
+    child = fixed(wait.get('child'), ('running', 'exited', 'not-owned')) if wait else 'not observed'
+    reason = (f'log {fixed(d.get("log"), LOG_STATES)}, {number(d.get("bytesRead"))} of first {number(d.get("capBytes"))}'
+        f' bytes, truncated {flag(d.get("truncated"))}, ambiguous {flag(d.get("ambiguous"))}; AVD descriptor '
+        f'{fixed(d.get("avdDescriptor"), DESCRIPTOR)}; child {child}'
+        + (f' status {number(exit_status)}' if exit_status is not None else '')
+        + (f', serial {fixed(wait.get("serial"), SERIAL)}, wait {fixed(wait.get("wait"), WAIT)}, boot completed '
+            f'{flag(wait.get("bootCompleted"))}' if wait else ''))
+    return 'startup diagnostic', fixed(d.get('category'), CATEGORIES), reason
+
 def build(evidence, work, env):
     """(markdown lines, annotation lines)."""
     rows, notes = [], []
@@ -89,6 +126,9 @@ def build(evidence, work, env):
             stage = stage if isinstance(stage, dict) else {}
             rows.append((clean(name, 40), clean(stage.get('result'), 20), clean(stage.get('reason'))))
     functional, why = verdict(setup, stages, (env.get('SYSTEMUI') or 'false') == 'true')
+    if isinstance(results, dict) and results.get('mode') == 'startup-diagnostic':
+        functional, why = 'unavailable', 'startup diagnostic only: the fixture and SystemUI stages were excluded'
+        rows.append(startup_row(results, stages))
     if (env.get('KVM_ACL') or 'false') == 'true':
         kvm, problem = read(Path(evidence)/'kvm-access.json')
         kvm = kvm if isinstance(kvm, dict) else {}
