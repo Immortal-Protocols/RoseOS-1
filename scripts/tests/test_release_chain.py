@@ -210,8 +210,9 @@ class Workflow(unittest.TestCase):
         self.assertRegex(inputs, r"campaign:\n        description: [^\n]+\n        type: string\n        default: ''\n")
 
     def test_run_name_matches_the_successor_lookup(self):
-        self.assertIn("\nrun-name: ${{ inputs.campaign && format('%s - campaign {0}', inputs.campaign) || '%s' }}\n"
-            % (rc.TITLE, rc.TITLE), WORKFLOW)
+        # AGENT-BETA-AUTO: an apps=auto app-only run is named for its tested SHA (the dispatcher's duplicate check).
+        self.assertIn("\nrun-name: ${{ inputs.campaign && format('%s - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && "
+            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || '%s' }}\n" % (rc.TITLE, rc.TITLE), WORKFLOW)
         self.assertEqual(rc.run_name('7.1793380000.2'), f'{rc.TITLE} - campaign 7.1793380000.2')
 
     def test_guard_checks_the_campaign_before_any_host(self):

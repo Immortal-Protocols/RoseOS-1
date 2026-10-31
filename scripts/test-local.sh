@@ -62,6 +62,7 @@ python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_release_chain.py
+python3 scripts/tests/test_agent_beta_auto.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
 python3 scripts/tests/test_signing_job.py
