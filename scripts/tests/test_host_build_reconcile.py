@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import re
 import textwrap
 import unittest
+import unittest.mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 PY = sys.executable
@@ -110,6 +112,58 @@ class AppBuildTest(unittest.TestCase):
         (self.sdk/'build-tools/android-15/core-lambda-stubs.jar').unlink()
         with self.assertRaisesRegex(SystemExit, 'core-lambda-stubs.jar'):
             app_build.build(self.candidate, self.root/'release-2', self.sdk, self.root/'jdk', self.assets, run=self.run_fake)
+
+class ZxingSetupTest(unittest.TestCase):
+    """PR288: a fresh candidate has no .tools/zxing; its build.sh requires the jar its own pinned setup-zxing.sh fetches."""
+    JAR = '.tools/zxing/core-3.5.4.jar'
+
+    run_fake = AppBuildTest.run_fake
+
+    def setUp(self):
+        AppBuildTest.setUp(self)
+        write(self.candidate/'workspace/rose-agent/build.sh', f'''
+            set -e; test -f {self.JAR} || {{ echo "Missing build input: {self.JAR}" >&2; exit 1; }}
+            d=$(mktemp -d out/rose-agent.XXXXXX); echo voice > "$d/rose-agent-unsigned.apk"''')
+        app_build.stage(self.source, self.assets, self.candidate)
+        self.order = []
+
+    def run_logged(self, argv, cwd, env, check):
+        self.order.append(argv[1] if argv[0] == 'bash' else argv[0])
+        return self.run_fake(argv, cwd, env, check)
+
+    def test_fresh_candidate_without_a_jar_runs_its_setup_before_the_app_build(self):
+        self.assertFalse((self.candidate/'.tools').exists())
+        write(self.candidate/app_build.ZXING_SETUP, f'''
+            set -e; cd "$(dirname "$0")/.."; mkdir -p .tools/zxing; echo pinned > {self.JAR}''')
+        hashes = app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_logged, voice_only=True)
+        self.assertEqual(set(hashes), {'voice'})
+        self.assertEqual(self.order, ['npm', app_build.ZXING_SETUP, 'workspace/rose-agent/build.sh'])
+        self.assertTrue((self.candidate/self.JAR).is_file())
+
+    def test_the_real_pinned_setup_refuses_bytes_that_are_not_the_pinned_jar(self):
+        shutil.copy(SCRIPTS/'setup-zxing.sh', self.candidate/app_build.ZXING_SETUP)
+        bin_dir = self.root/'bin'
+        write(bin_dir/'curl', '#!/bin/sh\nwhile [ "$1" != --output ]; do shift; done; echo not-zxing > "$2"\n', 0o755)
+        with unittest.mock.patch.dict(os.environ, {'PATH': f'{bin_dir}:' + os.environ['PATH']}):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_logged)
+        self.assertEqual(raised.exception.cmd, ['bash', app_build.ZXING_SETUP])
+        self.assertNotIn('workspace/rose-agent/build.sh', self.order)
+        self.assertFalse((self.candidate/self.JAR).exists())
+        self.assertFalse((self.release/'unsigned').exists())
+
+    def test_a_candidate_without_the_setup_script_builds_as_before(self):
+        self.assertFalse((self.candidate/app_build.ZXING_SETUP).exists())
+        write(self.candidate/self.JAR, 'preinstalled')
+        app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_logged, voice_only=True)
+        self.assertEqual(self.order, ['npm', 'workspace/rose-agent/build.sh'])
+
+    def test_the_wired_script_is_the_hash_pinned_one_the_candidate_build_checks(self):
+        setup, build_sh = (SCRIPTS/'setup-zxing.sh').read_text(), (SCRIPTS.parent/'workspace/rose-agent/build.sh').read_text()
+        pin = re.search(r'^SHA256=([0-9a-f]{64})$', setup, re.M)[1]
+        self.assertIn(f'ZXING_SHA256={pin}', build_sh)
+        self.assertIn('JAR="$DIR/core-3.5.4.jar"', setup)
+        self.assertIn('ZXING="$ROOT/.tools/zxing/core-3.5.4.jar"', build_sh)
 
 class SdkLayoutTest(unittest.TestCase):
     def setUp(self):
