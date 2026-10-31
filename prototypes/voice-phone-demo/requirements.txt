@@ -1,0 +1,15 @@
+mlx==0.32.4
+mlx-metal==0.32.4
+mlx-vlm==0.7.11
+mlx-audio==0.6.3
+transformers==5.22.1
+huggingface_hub==2.4.0
+numpy==2.5.4
+sounddevice==0.5.6
+soundfile==0.14.0
+pillow==13.0.0
+fastapi==0.162.0
+uvicorn==0.54.0
+websockets==17.4
+scipy==1.18.1
+httpx==0.28.1

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Rose</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23e0557d'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div id="orb" class="orb" data-state="loading" aria-hidden="true"><i></i><b></b></div>
+      <div class="brand-text">
+        <h1>Rose</h1>
+        <div id="state-label" class="state-label" aria-live="polite">Connecting</div>
+      </div>
+    </div>
+
+    <div class="mic-area">
+      <button id="mic" class="mic-btn" type="button" aria-pressed="false" title="Start or stop the microphone (Space)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 1 0-7 0v5A3.5 3.5 0 0 0 12 15Z"/><path d="M18.5 11.5a6.5 6.5 0 0 1-13 0M12 18v3m-3.5 0h7" fill="none"/></svg>
+        <span id="mic-label">Start microphone</span>
+        <kbd>Space</kbd>
+      </button>
+      <div class="mic-side">
+        <div class="meter" title="Microphone level"><div id="level"></div><div id="vad" title="Speech probability"></div></div>
+        <div id="mic-hint" class="hint">Wear headphones, or rely on the browser's echo cancellation.</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <label class="select" title="Rose's voice">
+        <span>Voice</span>
+        <select id="voice"></select>
+      </label>
+      <button id="reset" class="ghost" type="button" title="New conversation and a fresh phone">Reset</button>
+      <span id="conn" class="conn" title="Event stream"></span>
+    </div>
+    <div id="loadbar" class="loadbar" hidden></div>
+  </header>
+
+  <main class="grid">
+    <section class="col phone-col" aria-label="Phone">
+      <div class="phone">
+        <div class="screen">
+          <img id="phone-img" alt="The fake phone's screen" src="/phone.png">
+          <div id="taps" class="taps"></div>
+        </div>
+      </div>
+      <div id="phone-caption" class="caption">Fake phone</div>
+    </section>
+
+    <section class="col convo-col panel" aria-label="Conversation">
+      <div class="panel-head">
+        <h2>Conversation</h2>
+        <span id="mode-tag" class="tag" hidden></span>
+      </div>
+      <div id="convo" class="convo">
+        <div id="empty" class="empty">
+          <p>Start the microphone and talk to Rose, or type below.</p>
+          <p class="muted">Her words light up as she says them. Talk over her any time.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="col side-col" aria-label="Background tasks and latency">
+      <div class="panel tasks-panel">
+        <div class="panel-head">
+          <h2>Background tasks</h2>
+          <span id="task-count" class="count"></span>
+        </div>
+        <div id="tasks" class="tasks"><div class="none">No tasks yet. Ask Rose to do something on the phone.</div></div>
+      </div>
+      <div class="panel hud-panel">
+        <div class="panel-head">
+          <h2>Latency</h2>
+          <span id="turn-count" class="count"></span>
+        </div>
+        <div id="hud-bar" class="hud-bar"></div>
+        <table id="hud" class="hud">
+          <thead><tr><th></th><th>last</th><th>median</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bottom">
+    <form id="say-form" class="say" autocomplete="off">
+      <input id="say-text" type="text" maxlength="400" placeholder="Type something; Rose hears it spoken (macOS say)">
+      <button id="say-btn" type="submit">Speak</button>
+    </form>
+    <div class="chips" id="chips">
+      <span class="chips-label">Try</span>
+    </div>
+    <div class="chips sim" id="sim">
+      <span class="chips-label">Simulate incoming text</span>
+    </div>
+    <div id="stats" class="stats"></div>
+  </footer>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
