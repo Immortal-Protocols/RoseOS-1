@@ -4,7 +4,8 @@
   check                                   hosted-safe: validate the committed bindings only; no host path is read
   run --run-id ID --recipe-sha SHA --out NEW_DIRECTORY
                                           builder, under the shared builder lock: hash and observe the fixed retained
-                                          inputs and stage fastboot plus its dependencies task-locally (never executed)
+                                          inputs, stage fastboot plus its dependencies task-locally, then run exactly
+                                          that staged fastboot --version, bounded, in its own process group
 
 Every path and hash is fixed by committed configuration (os/retained-rango/release.json, os/flavors/rango.json) or by
 the retained signing marker those paths name; nothing is taken from arguments, the environment or a guess. A missing
@@ -17,12 +18,15 @@ Outputs (only inside the newly created NEW_DIRECTORY, removed again on any refus
   target-files-observation.json   the pinned scripts/factory-package.py observe of the signed target-files
   firmware-members.json           sha256 and size of the selected RADIO/, VENDOR/firmware/dauntless/ and OTA members
   fastboot/bin/fastboot, fastboot/lib64/*
-                                  otatools bin/fastboot and exactly its DT_NEEDED closure from lib64/, hashed;
-                                  never executed here (a bounded --version belongs to the future operator helper)
+                                  otatools bin/fastboot and exactly its DT_NEEDED closure from lib64/, hashed. After
+                                  that, only `<staged fastboot> --version` runs: new process group, scrubbed
+                                  environment, 10 s timeout, 16 KiB combined output, the whole group killed and reaped
+                                  afterwards. The receipt keeps only category, exit code, a parsed version string and
+                                  the output's size and sha256; raw output (which names the install path) is dropped.
   rango-factory-observe.json      the receipt binding all of the above
 
 Never read: the first-use record directory (first-use.json), secrets, bootstrap receipts (held artifact 12961047183)
-or any other path. No generator, signing, packaging, device or network action.
+or any other path. Nothing else is executed: no generator, signing, packaging, device or network action.
 
 Exit status: 0 observed/checked, 3 refused (JSON on stdout), 2 usage error.
 """
@@ -34,7 +38,9 @@ import importlib.util
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import stat
 import struct
 import subprocess
@@ -57,8 +63,11 @@ FIRMWARE_MEMBER = re.compile(r'(RADIO/[^/]+|VENDOR/firmware/dauntless/[^/]+|OTA/
 # Host C runtime libraries fastboot may name but otatools never ships; recorded as system, never copied or trusted.
 SYSTEM_LIBS = frozenset({'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0', 'librt.so.1', 'libgcc_s.so.1',
                          'ld-linux-x86-64.so.2'})
-LIMITS = {'seconds': 25 * 60, 'markerBytes': 1 << 20, 'receiptBytes': 16 << 20, 'firmwareMembers': 128,
-          'firmwareMemberBytes': 1 << 30, 'firmwareBytes': 4 << 30, 'fastbootLibs': 32, 'fastbootBytes': 256 << 20}
+# 'seconds' stays below the proposed outer 20-minute group timeout, so the helper refuses (and cleans up) first.
+LIMITS = {'seconds': 18 * 60, 'markerBytes': 1 << 20, 'receiptBytes': 16 << 20, 'firmwareMembers': 128,
+          'firmwareMemberBytes': 1 << 30, 'firmwareBytes': 4 << 30, 'fastbootLibs': 32, 'fastbootBytes': 256 << 20,
+          'versionSeconds': 10, 'versionOutputBytes': 16 << 10, 'versionKillGraceSeconds': 1}
+VERSION_LINE = re.compile(r'fastboot version ([0-9A-Za-z][0-9A-Za-z._+-]{0,63})')
 
 
 class Refused(Exception):
@@ -310,7 +319,7 @@ def _write_new(path, data, mode):
 
 def stage_fastboot(otatools, b, out, excluded, deadline):
     """Verify the whole otatools archive against its committed size and sha256 first; then copy only bin/fastboot and
-    its DT_NEEDED closure from lib64/ into out/fastboot. Nothing is executed."""
+    its DT_NEEDED closure from lib64/ into out/fastboot. Nothing is executed here."""
     with open_regular(otatools, 'otatools', excluded) as f:
         size, digest = hash_stream(f, b['otatools']['bytes'], 'otatools', deadline)
         if (size, digest) != (b['otatools']['bytes'], b['otatools']['sha256']):
@@ -358,8 +367,89 @@ def stage_fastboot(otatools, b, out, excluded, deadline):
                         raise Refused(f'fastboot_dependency_missing: {name} (needed by {label}) is not in otatools lib64/')
     return {'otatools': {'sha256': digest, 'size': size},
             'fastboot': {'member': 'bin/fastboot', 'sha256': hashlib.sha256(fastboot).hexdigest(), 'size': len(fastboot)},
-            'libraries': dict(sorted(libs.items())), 'systemLibraries': sorted(system), 'executed': False,
-            'versionCheck': 'not run here: a bounded fastboot --version is reserved for the future operator helper'}
+            'libraries': dict(sorted(libs.items())), 'systemLibraries': sorted(system)}
+
+
+def _signal_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _end_group(proc, grace):
+    """TERM the whole process group, KILL it after the grace, and reap the direct child. Run on every exit path, so
+    no descendant outlives the check even when the child itself already exited."""
+    _signal_group(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(proc.pid, signal.SIGKILL)
+    proc.wait()
+
+
+def fastboot_version(fastboot, limits=None):
+    """Run exactly `<fastboot> --version` (the staged task-local copy) and return only bounded fields."""
+    limits = dict(LIMITS, **(limits or {}))
+    fastboot = Path(fastboot)
+    lib64 = fastboot.parent.parent/'lib64'
+    # A fresh environment: nothing inherited (no GITHUB_TOKEN, ACTIONS_ID_TOKEN_*, GOOGLE_*, SSH_*, credential paths).
+    env = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C', 'HOME': str(fastboot.parent.parent),
+           'LD_LIBRARY_PATH': str(lib64)}
+    result = {'argv': ['fastboot', '--version'], 'executed': False, 'category': None, 'exitCode': None, 'version': None,
+              'outputBytes': 0, 'outputSha256': None}
+    info = os.lstat(fastboot)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return dict(result, category='spawn_refused')
+    try:
+        proc = subprocess.Popen([str(fastboot), '--version'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env=env, cwd=str(fastboot.parent.parent), close_fds=True,
+                                start_new_session=True)
+    except OSError:
+        return dict(result, category='spawn_failed')
+    result['executed'] = True
+    cap, end = limits['versionOutputBytes'], time.monotonic() + limits['versionSeconds']
+    output, category = bytearray(), None
+    fd = proc.stdout.fileno()
+    try:
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                category = 'timeout'
+                break
+            ready, _, _ = select.select([fd], [], [], min(remaining, 0.05))
+            if ready:
+                block = os.read(fd, 4096)
+                if not block:
+                    break  # EOF: the child and every descendant closed the pipe
+                output += block
+                if len(output) > cap:
+                    category = 'output_overflow'
+                    break
+            elif proc.poll() is not None:
+                break  # the child exited; a descendant may still hold the pipe, and is ended with the group below
+    finally:
+        _end_group(proc, limits['versionKillGraceSeconds'])
+        try:
+            while category is None:  # the group is gone, so this reaches EOF: bytes written just before exit count too
+                block = os.read(fd, 4096)
+                if not block:
+                    break
+                output += block
+                if len(output) > cap:
+                    category = 'output_overflow'
+        finally:
+            proc.stdout.close()
+    output = bytes(output[:cap + 1])
+    result.update(exitCode=proc.returncode if category is None else None, outputBytes=len(output),
+                  outputSha256=hashlib.sha256(output).hexdigest())
+    if category is None:
+        match = VERSION_LINE.search(output.decode('utf-8', 'replace'))
+        result['version'] = match[1] if match else None
+        category = 'nonzero_exit' if proc.returncode != 0 else 'ok' if match else 'unparsed'
+    result['category'] = category
+    return result
 
 
 def factory_package(root=ROOT):
@@ -415,7 +505,8 @@ def new_directory(out):
     return out
 
 
-def run(run_id, recipe_sha, out, root=ROOT, b=None, lock=shared_lock, head=recipe_head, clock=time.monotonic):
+def run(run_id, recipe_sha, out, root=ROOT, b=None, lock=shared_lock, head=recipe_head, clock=time.monotonic,
+        version=fastboot_version):
     if not RUN_ID.fullmatch(str(run_id)):
         raise Refused('usage_refused: --run-id must be a workflow run id')
     if not HEX40.fullmatch(str(recipe_sha)) or head(root) != recipe_sha:
@@ -451,6 +542,8 @@ def run(run_id, recipe_sha, out, root=ROOT, b=None, lock=shared_lock, head=recip
             deadline.check('observe')
             firmware = firmware_members(b['targetFiles'], excluded, deadline)
             staged = stage_fastboot(b['otatools']['path'], b, out, excluded, deadline)
+            deadline.check('fastboot staging')
+            staged['version'] = version(out/'fastboot/bin/fastboot')
             files = {
                 'target-files-observation.json': observation,
                 'firmware-members.json': {'schema': FIRMWARE_SCHEMA, 'device': DEVICE, 'build': BUILD,
@@ -468,9 +561,10 @@ def run(run_id, recipe_sha, out, root=ROOT, b=None, lock=shared_lock, head=recip
                     'otatools': dict(staged['otatools'], path=b['otatools']['path']),
                 },
                 'outputs': {name: hashlib.sha256((out/name).read_bytes()).hexdigest() for name in sorted(files)},
-                'fastboot': {k: staged[k] for k in ('fastboot', 'libraries', 'systemLibraries', 'executed', 'versionCheck')},
+                'fastboot': {k: staged[k] for k in ('fastboot', 'libraries', 'systemLibraries', 'version')},
                 'excluded': excluded + ['secrets', 'bootstrap receipts'],
-                'limits': LIMITS, 'claims': 'observation only: no generator, signing, packaging, device or host execution',
+                'limits': LIMITS,
+                'claims': 'observation only: one bounded staged fastboot --version; no generator, signing, packaging or device',
             }
             _write_new(out/'rango-factory-observe.json', (json.dumps(receipt, indent=2, sort_keys=True) + '\n').encode(), 0o644)
             return receipt

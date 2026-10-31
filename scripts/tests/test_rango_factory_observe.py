@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """FOLD-OBSERVE-001 source tests: synthetic fixtures (target-files, otatools with a hand-built x86-64 ELF fastboot,
 marker and receipt) under a temporary tree, a stubbed recipe check and the real shared-lock code. No real retained
-input, generator, signer, device or host is read or executed; fastboot is never run."""
+input, generator, signer, device or host is read or executed. The bounded `fastboot --version` runner is exercised only
+against real synthetic child processes (Python scripts standing in for fastboot), never a real or retained fastboot."""
 import contextlib
 import fcntl
 import hashlib
@@ -9,9 +10,13 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import stat
 import struct
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -128,7 +133,13 @@ class Tree:
     def run(self, **kw):
         kw.setdefault('b', self.b)
         kw.setdefault('head', lambda root: RECIPE)
+        self.version_calls = []
+        kw.setdefault('version', lambda path: (self.version_calls.append(Path(path)), FAKE_VERSION)[1])
         return obs.run('41200000001', RECIPE, kw.pop('out', self.out), **kw)
+
+
+FAKE_VERSION = {'argv': ['fastboot', '--version'], 'executed': True, 'category': 'ok', 'exitCode': 0,
+                'version': '35.0.2-12147458', 'outputBytes': 20, 'outputSha256': '5' * 64}
 
 
 class Observe(unittest.TestCase):
@@ -138,19 +149,21 @@ class Observe(unittest.TestCase):
             t.run(**kw)
         self.assertFalse(t.out.exists(), 'the new directory is removed on refusal')
         self.assertEqual(t.retained(), before, 'retained bytes are never changed')
+        self.assertEqual(getattr(t, 'version_calls', []), [], 'nothing runs unless every check before it passed')
 
-    def test_positive_observation_binds_every_input_and_executes_nothing(self):
+    def test_positive_observation_binds_every_input_and_runs_only_the_staged_version_check(self):
         t = Tree(self)
         before = t.retained()
         with mock.patch('subprocess.run') as run, mock.patch('subprocess.Popen') as popen, mock.patch('os.execv') as execv:
             receipt = t.run()
-        run.assert_not_called(), popen.assert_not_called(), execv.assert_not_called()
+        run.assert_not_called(), popen.assert_not_called(), execv.assert_not_called()  # only through the version runner
+        self.assertEqual(t.version_calls, [t.out/'fastboot/bin/fastboot'])
+        self.assertEqual(receipt['fastboot']['version'], FAKE_VERSION)
         self.assertEqual(t.retained(), before)
         self.assertEqual(sorted(os.listdir(t.out)), ['fastboot', 'firmware-members.json', 'rango-factory-observe.json',
                                                      'target-files-observation.json'])
         self.assertEqual(sorted(os.listdir(t.out/'fastboot/lib64')), ['libbase.so', 'liblog.so'])  # never libunused/simg2img
         self.assertEqual(receipt['fastboot']['systemLibraries'], ['libc.so.6', 'libm.so.6'])
-        self.assertFalse(receipt['fastboot']['executed'])
         self.assertEqual(receipt['fastboot']['fastboot']['sha256'], h((t.out/'fastboot/bin/fastboot').read_bytes()))
         self.assertEqual(receipt['inputs']['signedTargetFiles']['sha256'], h(t.tf.read_bytes()))
         self.assertEqual(receipt['inputs']['otatools']['sha256'], t.b['otatools']['sha256'])
@@ -293,6 +306,121 @@ class Observe(unittest.TestCase):
         with self.assertRaisesRegex(obs.Refused, 'usage_refused'):
             obs.run('../1', RECIPE, t.out, b=t.b, head=lambda root: RECIPE)
         self.assertFalse(t.out.exists())
+
+
+def alive(pid):
+    """True while pid is a live (non-zombie) process."""
+    try:
+        state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state != 'Z'
+
+
+class VersionCheck(unittest.TestCase):
+    """Real child processes: a Python script installed as the staged fastboot, in a staged fastboot/bin layout."""
+
+    def child(self, body):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(root, ignore_errors=True))
+        (root/'fastboot/bin').mkdir(parents=True)
+        (root/'fastboot/lib64').mkdir()
+        self.record = root/'record.json'
+        path = root/'fastboot/bin/fastboot'
+        path.write_text(f'#!{sys.executable}\nimport json, os, sys, time, subprocess\nRECORD = {str(self.record)!r}\n'
+                        + body)
+        path.chmod(0o700)
+        return path
+
+    def check(self, path, **limits):
+        start = time.monotonic()
+        result = obs.fastboot_version(path, limits)
+        self.elapsed = time.monotonic() - start
+        self.assertEqual(set(result), {'argv', 'executed', 'category', 'exitCode', 'version', 'outputBytes', 'outputSha256'})
+        self.assertNotIn(str(path.parent), json.dumps(result))  # never the install path
+        return result
+
+    def test_success_reports_only_bounded_fields(self):
+        path = self.child(
+            "json.dump({'argv': sys.argv, 'env': dict(os.environ), 'pgid': os.getpgid(0), 'parent_pgid': os.getpgid(os.getppid()),"
+            " 'cwd': os.getcwd()}, open(RECORD, 'w'))\n"
+            "print('fastboot version 35.0.2-12147458')\nprint('Installed as ' + sys.argv[0])\n"
+            "print('SECRET-TOKEN-should-never-be-reported')\n")
+        secrets = {'GITHUB_TOKEN': 'ghs_x', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'y', 'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://z',
+                   'GOOGLE_APPLICATION_CREDENTIALS': '/creds.json', 'CLOUDSDK_AUTH_ACCESS_TOKEN': 'w', 'SSH_AUTH_SOCK': '/s'}
+        with mock.patch.dict(os.environ, secrets):
+            result = self.check(path)
+        self.assertEqual((result['category'], result['exitCode'], result['version'], result['executed']),
+                         ('ok', 0, '35.0.2-12147458', True))
+        self.assertNotIn('SECRET-TOKEN', json.dumps(result))
+        record = json.loads(self.record.read_text())
+        self.assertEqual(record['argv'], [str(path), '--version'])  # exactly the staged copy and --version
+        self.assertEqual(sorted(record['env']), ['HOME', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'PATH'])
+        self.assertEqual(record['env']['LD_LIBRARY_PATH'], str(path.parent.parent/'lib64'))
+        self.assertNotEqual(record['pgid'], record['parent_pgid'])  # its own process group
+        self.assertEqual(record['cwd'], str(path.parent.parent))
+        self.assertEqual(result['outputSha256'], hashlib.sha256(
+            f'fastboot version 35.0.2-12147458\nInstalled as {path}\nSECRET-TOKEN-should-never-be-reported\n'.encode()).hexdigest())
+
+    def test_nonzero_exit_and_unparsed_output(self):
+        result = self.check(self.child("print('fastboot version 1.0'); sys.exit(3)\n"))
+        self.assertEqual((result['category'], result['exitCode']), ('nonzero_exit', 3))
+        result = self.check(self.child("print('no version here')\n"))
+        self.assertEqual((result['category'], result['exitCode'], result['version']), ('unparsed', 0, None))
+        result = self.check(self.child("print('fastboot version ../../etc/$(id)')\n"))
+        self.assertEqual((result['category'], result['version']), ('unparsed', None))  # never an unsafe token
+
+    def test_hang_times_out_and_the_group_is_killed(self):
+        path = self.child("json.dump({'pid': os.getpid()}, open(RECORD, 'w'))\n"
+                          "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(60)\n")
+        result = self.check(path, versionSeconds=1)
+        self.assertEqual((result['category'], result['exitCode'], result['version']), ('timeout', None, None))
+        self.assertLess(self.elapsed, 6)  # 1 s timeout + 1 s grace, then SIGKILL even though SIGTERM is ignored
+        self.assertFalse(alive(json.loads(self.record.read_text())['pid']))
+
+    def test_flood_overflows_the_cap_and_is_killed(self):
+        path = self.child("json.dump({'pid': os.getpid()}, open(RECORD, 'w'))\n"
+                          "while True:\n    sys.stdout.write('x' * 65536); sys.stdout.flush()\n")
+        result = self.check(path)
+        self.assertEqual((result['category'], result['exitCode']), ('output_overflow', None))
+        self.assertLessEqual(result['outputBytes'], obs.LIMITS['versionOutputBytes'] + 1)
+        self.assertLess(self.elapsed, 5)
+        self.assertFalse(alive(json.loads(self.record.read_text())['pid']))
+        result = self.check(self.child("sys.stderr.write('e' * 20000)\n"))  # stderr counts toward the same cap
+        self.assertEqual(result['category'], 'output_overflow')
+
+    def test_descendants_are_ended_with_the_group(self):
+        # The child exits at once; one grandchild keeps the pipe open, another detaches it and ignores SIGTERM.
+        path = self.child(
+            "a = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            "b = subprocess.Popen([sys.executable, '-c', 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+            " time.sleep(60)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "json.dump({'pids': [a.pid, b.pid]}, open(RECORD, 'w'))\nprint('fastboot version 9.9', flush=True)\n")
+        result = self.check(path)
+        self.assertEqual((result['category'], result['exitCode'], result['version']), ('ok', 0, '9.9'))
+        self.assertLess(self.elapsed, 6)
+        deadline = time.monotonic() + 5
+        pids = json.loads(self.record.read_text())['pids']
+        while any(alive(p) for p in pids) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual([p for p in pids if alive(p)], [])
+
+    def test_output_written_just_before_exit_is_still_read(self):
+        # select never reports data, so the loop ends on the child's exit and the bytes arrive only through the drain.
+        path = self.child("print('fastboot version 7.7', flush=True)\n")
+        with mock.patch.object(obs.select, 'select', lambda r, w, x, t: (time.sleep(min(t, 0.01)), ([], [], []))[1]):
+            result = self.check(path)
+        self.assertEqual((result['category'], result['version']), ('ok', '7.7'))
+
+    def test_spawn_refusal_and_failure(self):
+        path = self.child("print('x')\n")
+        link = path.with_name('linked')
+        link.symlink_to(path)
+        self.assertEqual(obs.fastboot_version(link)['category'], 'spawn_refused')
+        self.assertFalse(obs.fastboot_version(link)['executed'])
+        path.chmod(0o600)
+        result = obs.fastboot_version(path)
+        self.assertEqual((result['category'], result['executed']), ('spawn_failed', False))
 
 
 class Bindings(unittest.TestCase):
