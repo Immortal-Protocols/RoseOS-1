@@ -5,7 +5,9 @@ random probe file in the ACME webroot that it removes again. It never runs certb
   publish   collect the evidence, write /run/rose-models/renewal.json and the guest attribute rose-models/renewal
 
 Evidence (nonsecret; no key material, account ids or certificate contents):
-- certbot.timer: enabled, active, next and last run (unix seconds);
+- certbot.timer: enabled, active, next and last run (unix seconds), one `schedule` category (query_failed, not_found,
+  disabled, inactive, timestamp_format_unsupported, unscheduled, out_of_range, scheduled) and the triggered service's
+  state and last result;
 - renewal config for models.a-list.com: webroot authenticator, webroot path, deploy hook, and that its account is the
   single existing account;
 - certificate: the installed chain passes check_tls and equals the lineage's chain; notAfter and days left;
@@ -31,6 +33,9 @@ HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location('render_proxy', HERE.parent / 'https' / 'render_proxy.py')
 render_proxy = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(render_proxy)
+_spec = importlib.util.spec_from_file_location('unit_facts', HERE / 'unit_facts.py')
+unit_facts = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(unit_facts)
 
 SCHEMA = 'rose-models-renewal/1'
 HOSTNAME = 'models.a-list.com'
@@ -44,25 +49,9 @@ GUEST = 'http://metadata.google.internal/computeMetadata/v1/instance/guest-attri
 NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _int(text):
-    try:
-        return int(text)
-    except (TypeError, ValueError):
-        return None
-
-
-def timer(run=subprocess.run):
-    """certbot.timer facts from systemctl (unix timestamps)."""
-    try:
-        out = run(['systemctl', 'show', '--timestamp=unix', 'certbot.timer', '-p', 'UnitFileState', '-p', 'ActiveState',
-                   '-p', 'NextElapseUSecRealtime', '-p', 'LastTriggerUSec'],
-                  capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError):
-        return {'enabled': False, 'active': False, 'nextRun': None, 'lastRun': None}
-    props = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
-    return {'enabled': props.get('UnitFileState') == 'enabled', 'active': props.get('ActiveState') == 'active',
-            'nextRun': _int(props.get('NextElapseUSecRealtime', '').lstrip('@')),
-            'lastRun': _int(props.get('LastTriggerUSec', '').lstrip('@'))}
+def timer(run=subprocess.run, now=None, unit='certbot.timer', scope=()):
+    """certbot.timer and the service it triggers, with one `schedule` category (unit_facts.timer)."""
+    return unit_facts.timer(unit, run, scope, now)
 
 
 def renewal_config(prefix='/'):
@@ -218,11 +207,11 @@ def boot_id(prefix='/'):
 
 def collect(prefix='/', now=None, run=subprocess.run, get=http_get, edge=EDGE, webroot=WEBROOT, proc_prefix='/'):
     now = time.time() if now is None else now
-    t, conf, cert = timer(run), renewal_config(prefix), certificate(prefix, now)
+    t, conf, cert = timer(run, now), renewal_config(prefix), certificate(prefix, now)
     proc = edge_process(edge, proc_prefix)
     acme = edge_acme(edge, webroot, prefix, get) if all(proc.values()) else {'challenge': None, 'notFound': None,
                                                                               'ok': False}
-    ready = (t['enabled'] and t['active'] and t['nextRun'] is not None and conf.get('present') is True
+    ready = (t['schedule'] == 'scheduled' and conf.get('present') is True
              and all(conf.get(k) is True for k in ('authenticatorWebroot', 'webroot', 'deployHook',
                                                      'accountIsTheSingleAccount'))
              and cert['check'] == 'ok' and cert['matchesLineage'] and all(proc.values()) and acme['ok'])

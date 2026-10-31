@@ -82,9 +82,10 @@ jobs:
         env:
           ROSE_REQUIRE_NGINX: '1'
         run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_tls_install.py -v
-      - name: Renewal evidence (timer/config/expiry facts; CURRENT ACME proof through the running rendered edge)
+      - name: Renewal evidence (real systemd timer query; CURRENT ACME proof through the running rendered edge)
         env:
           ROSE_REQUIRE_NGINX: '1'
+          ROSE_REQUIRE_SYSTEMD: '1'
         run: /usr/bin/python3 -I workspace/models/serving/tests/test_service_renewal.py -v
 
   service:
@@ -101,7 +102,7 @@ jobs:
       - name: Persistent-service source tests (synthetic; no systemd, Docker, GPU, model or network)
         run: |
           for t in test_service_auth test_service_ops test_service_tls_deploy test_service_render \
-                   test_service_bootstrap test_serving_config test_local_profile; do
+                   test_service_bootstrap test_service_start_chain test_serving_config test_local_profile; do
             /usr/bin/python3 -I workspace/models/serving/tests/$t.py -v
           done
       - name: Render the service tree and build the bootstrap payload (identity printed)

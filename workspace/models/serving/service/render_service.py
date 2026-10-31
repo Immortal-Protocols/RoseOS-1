@@ -39,10 +39,12 @@ ACME_WEBROOT = '/var/lib/rose-models/acme'
 RUN_ACME = '/run/rose-acme'  # the ACME-only Nginx, before the first certificate exists
 VERIFY_START = '/run/rose-models/verify-start.json'  # this boot's start check (published by health.py)
 VERIFY_FULL = '/var/lib/rose-models/verify-full.json'  # the last full rehash or first record
+START_PHASE = '/run/rose-models/start-phase.json'  # start-model's last phase this boot
 LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/https/render_proxy.py': SERVING / 'https' / 'render_proxy.py',
              **{f'lib/service/{n}': SERVING / 'service' / n
-                for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py', 'renewal_status.py')}}
+                for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py', 'renewal_status.py',
+                          'unit_facts.py')}}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
 
@@ -64,14 +66,32 @@ def files(config, root=ROOT, data=DATA):
         out['bin/launch-' + ('offline' if offline else 'online')] = script
     verify = f'{PY} {root}/lib/service/verify_model.py'
     model_args = f'--cache {data}/hf --receipt {data}/receipt.json'
+    image_id = render_local.render_upload.profile(config, PROFILE)['runtime']['image_id']
     out['bin/start-model'] = f'''#!/usr/bin/env bash
 # Verify model storage, then start vLLM: offline from the verified cache, or online for the one first download.
+# Each phase is recorded in {START_PHASE} for health.py to publish. Recording is diagnostic
+# only: it never changes which branch runs or the exit code systemd sees.
 set -uo pipefail
+verify=null mounted=null image=null
+phase() {{
+  mkdir -p {START_PHASE.rsplit('/', 1)[0]} 2>/dev/null
+  printf '{{"phase": "%s", "verifyExit": %s, "dataMounted": %s, "imagePresent": %s, "at": %s}}\\n' \\
+    "$1" "$verify" "$mounted" "$image" "$(date +%s)" > {START_PHASE}.tmp 2>/dev/null \\
+    && mv -f {START_PHASE}.tmp {START_PHASE} 2>/dev/null
+  return 0
+}}
+prechecks() {{  # the launch scripts' own refusals, observed in advance
+  if mountpoint -q {data}; then mounted=true; else mounted=false; fi
+  if [ "$(timeout 30 docker image inspect --format '{{{{.Id}}}}' {image_id} 2>/dev/null)" = {image_id} ]; then image=true
+  else image=false; fi
+}}
+phase verifying
 {verify} check {model_args} --result {VERIFY_START}
-case $? in
-  0) exec {root}/bin/launch-offline ;;
-  3) exec {root}/bin/launch-online ;;
-  *) echo "refused: model storage does not match the receipt; see verify_model.py" >&2; exit 4 ;;
+verify=$?
+case $verify in
+  0) prechecks; phase launching_offline; exec {root}/bin/launch-offline ;;
+  3) prechecks; phase launching_online; exec {root}/bin/launch-online ;;
+  *) phase refused_storage; echo "refused: model storage does not match the receipt; see verify_model.py" >&2; exit 4 ;;
 esac
 '''
     nginx = f'{NGINX} -p {RUN_EDGE} -c {root}/edge/nginx.conf'
