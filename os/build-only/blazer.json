@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-build-only-recipe",
+  "basis": "FAM-BLAZER-BUILD-004: unsigned build-only recipe for blazer (Pixel 10 Pro) from checked-in pinned sources only. It binds no host: the operator supplies the host label, source root, lock, download and receipt paths, and make jobs at run time, and scripts/blazer-build-only.py admits them. Nothing here was downloaded, generated, compiled, signed or run on any host or phone. Allowances are null until measured on the operator's host; capacity.allowanceRequired is true, so preflight stays not ready until they are.",
+  "device": "blazer",
+  "lunch": "blazer-cur-user",
+  "deviceContract": "os/devices/pixel10.json",
+  "manifest": "os/pinned-manifest.xml",
+  "flavor": "os/flavors/blazer.json",
+  "factory": {
+    "file": "blazer-cp3a.261005.005-factory-cd7d12c2.zip",
+    "sha256": "cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3",
+    "url": "https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip"
+  },
+  "pins": {
+    "vendor/adevtool": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "vendor/state": "1469180711293a5852bfda9a5f67b8f53d9828ad",
+    "device/google/laguna-kernels/6.6": "275dad3c1f144f6bdd6d2c1ec22eccbfbd467da9"
+  },
+  "kernelDir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
+  "generate": {
+    "argv": ["vendor/adevtool/bin/run", "generate-all", "-d", "blazer"],
+    "downloadEnv": "ADEVTOOL_IMG_DOWNLOAD_DIR"
+  },
+  "compile": {
+    "outDir": "out-blazer-build",
+    "makeGoals": [
+      "vendorbootimage",
+      "vendorkernelbootimage",
+      "target-files-package",
+      "otatools-package"
+    ],
+    "maxJobs": 256
+  },
+  "adevtool": {
+    "depsDir": "out_adevtool_deps",
+    "depsTools": [
+      "aapt2",
+      "apksigner",
+      "aprotoc",
+      "arsclib",
+      "debugfs",
+      "dispol",
+      "fsck.erofs",
+      "lpdump",
+      "lpunpack",
+      "lz4",
+      "ota_extractor",
+      "simg2img",
+      "sqlite3",
+      "toybox"
+    ]
+  },
+  "integration": {
+    "receiptType": "reconcile",
+    "labelPrefix": "blazer-",
+    "patcher": ["apply-os-changes.py", "background_apks.py", "integration_copy.py"],
+    "basis": "Compile needs the Rose integration: the newest reconcile receipt in the operator's --integration-dir must be a blazer-labelled receipt from this checkout's trusted patcher that still matches the tree. No blazer reconcile config exists yet; that is the integration owner's next step."
+  },
+  "capacity": {
+    "reserveBytes": 322122547200,
+    "allowanceRequired": true,
+    "generateAllowanceBytes": null,
+    "compileAllowanceBytes": null,
+    "basis": "available - allowance >= reserve on the filesystem holding the source root and download dir. Each allowance must be measured for blazer on the operator's host; null is never estimated and never waived (no isolated-host exception)."
+  }
+}
