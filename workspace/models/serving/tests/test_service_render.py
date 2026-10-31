@@ -44,6 +44,17 @@ class Rendered(unittest.TestCase):
         self.assertIn('/etc/rose-models/tls/current/fullchain.pem', conf)
         self.assertNotIn('token.map', conf)
 
+    def test_cloud_preflight_helper_is_packaged_but_inert(self):
+        m = R.render(self.tmp / 'out')
+        src = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        for name in ('preflight.py', 'manifest.json'):
+            rel = f'lib/rose_cloud/{name}'
+            self.assertIn(rel, m['files'])  # in the tree manifest, so in the roots-inclusive payload digest
+            self.assertEqual((self.tmp / 'out' / rel).read_bytes(), (src / name).read_bytes())
+            self.assertFalse((self.tmp / 'out' / rel).stat().st_mode & 0o111)
+        units = ''.join(p.read_text() for p in (self.tmp / 'out/systemd').iterdir())
+        self.assertNotIn('rose_cloud', units)  # nothing runs it except bootstrap's explicit diagnostic mode
+
     def test_launch_scripts_are_the_pinned_tp2_loopback_profile(self):
         R.render(self.tmp / 'out')
         for mode in ('online', 'offline'):

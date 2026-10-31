@@ -191,7 +191,7 @@ class ProviderInputs(unittest.TestCase):
         for name in ('gradium/phonon-31m-en@92741c5b07d0/config.json', 'tokenizer.json', 'model.safetensors',
                      'gradium/phonon-voices@0ee17205f254/voices/NbpkqMVS3CJeq2j8.safetensors'):
             self.assertIn(name, msg)
-        problems = phonon.check_inputs('/nonexistent', {}, quant='q8')
+        problems = phonon.check_inputs('/nonexistent', {}, quant='q8_0')
         self.assertIn('gradium/phonon-31m-en@92741c5b07d0/model.q8.gguf', problems['missing'])
 
     def test_wrong_files_are_refused(self):

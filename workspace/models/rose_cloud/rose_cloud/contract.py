@@ -15,8 +15,13 @@ expected not to fit two A100 40 GB with a KV cache, but that is arithmetic on fi
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
+
+# The pinned bring-up manifest (MODELS-ROSE-CLOUD-003): target, image, every staged file with size and hash, the ptts
+# wheel, assumptions and the unapproved trial. bootstrap's cloud-preflight-once ships it beside preflight.py.
+MANIFEST = json.loads((Path(__file__).resolve().parent / 'manifest.json').read_text())
 
 PR288_HEAD = 'e1b702ee3b8a6bf656b5cc59bd765787622ae543'
 
@@ -78,8 +83,11 @@ CAPABILITIES = {
     'runtime': 'reuse: PR288 rose/runtime.py unchanged through nomlx; network and synthesis waits run on worker '
                'threads and step only higher-priority jobs while waiting (coop.Waiter)',
     'listener': 'unsupported: VAD/smart-turn/streaming ASR/final ASR are MLX models; no Linux provider yet',
-    'speaker': 'provider: phonon.PhononProvider on the official ptts runtime behind PR288 Speaker/Utterance and '
-               '/ws/audio unchanged; tested with an injected engine only (no ptts, weights or voice file here)',
+    'speaker': 'provider: phonon.PhononProvider on the official ptts runtime (0.6.0, quant f32 = model.safetensors) '
+               'behind PR288 Speaker/Utterance and /ws/audio unchanged; tested with an injected engine only (no ptts, '
+               'weights or voice file here)',
+    'preflight': 'bootstrap cloud-preflight-once runs preflight.py in the cached image (no load/install/download); '
+                 'source and fixture tests only: it has not run on any VM',
 }
 
 
