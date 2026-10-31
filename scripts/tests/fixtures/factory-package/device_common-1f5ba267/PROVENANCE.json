@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/GrapheneOS/device_common",
+  "revision": "1f5ba2671e4b04e3bd8899b3df2c5e30a894b35c",
+  "manifest": "os/pinned-manifest.xml project device_common path device/common (upstream refs/tags/2026100600)",
+  "route": "FOLD-FACTORY-003: add_repo read (owner-approved 2026-10-31 20:28 UTC) -> session git proxy anonymous read; git fetch --depth 1 of this revision; files copied with git show, never executed",
+  "license": "Apache-2.0 (headers kept in each file; the repository has no root NOTICE or LICENSE file)",
+  "files": [
+    {"fixture": "clear-factory-images-variables.sh", "path": "clear-factory-images-variables.sh",
+     "gitBlob": "c214866c3d01029b08d8b1a04eaf3ed706a1224e", "sha256": "4311f6435e74c8b1f4941bfc6580ffe0bf8dc021a177dca66ebeb8e4ddf3c353"},
+    {"fixture": "generate-factory-images-common.sh", "path": "generate-factory-images-common.sh",
+     "gitBlob": "8d29b895fd364bd585978f6069b8dda186669db4", "sha256": "33e8c16f9a2669d6d385d2eb7939a0d02f9160965db9b4d8c7a8914cd89dca49"}
+  ]
+}

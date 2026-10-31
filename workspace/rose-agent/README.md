@@ -87,3 +87,30 @@ request with the replacement key returned HTTP 200 and `store: false`; Live
 started and closed successfully. A task submitted through the running Pixel
 Voice backend wrote and read back `runtime/api-auth-proof.txt` with the exact
 expected text. The connected Pixel UI received that successful result.
+
+## Local Rose over Wi-Fi or Tailscale (remote link v1)
+
+With local mode on (the default; `local-rose` preference `enabled`), the voice and phone links
+talk to Rose on the Mac (`prototypes/voice-phone-demo`). Before pairing they use the USB
+developer path, plain `ws://127.0.0.1:8091` over `adb reverse tcp:8091 tcp:8091`. After pairing
+they never use that unauthenticated loopback.
+
+- Pair once: on the Mac choose **Pair phone** in the Rose dashboard (or `python -m rose.pair`),
+  then on the phone choose **Pair with Mac** in the Home menu and scan the code (or scan it with
+  the Camera app: `roseagent://pair` opens `LocalRosePairActivity`). The screen asks before it
+  sends anything. The same screen shows the pairing and offers **Unpair** (the device key stays).
+- The QR code carries the Mac's addresses (MagicDNS name, Tailscale IPs, LAN IPs), its TLS port
+  and the SHA-256 pin of its self-signed certificate. The phone trusts only that certificate.
+  `LocalRoseKey` keeps an EC P-256 key (alias `rose-local-device-v1`) in StrongBox or the TEE and
+  refuses to pair without secure hardware. Every websocket upgrade is signed (`X-Rose-Device`,
+  `-Time`, `-Nonce`, `-Signature`; canonical string in `LocalRoseAuth.canonical`).
+- `LocalRoseConnection` tries the address that worked last first, then the others, with backoff
+  of 0.5 to 8 s. A default-network change (Wi-Fi, mobile, the Tailscale VPN) retries at once. A
+  401/403 means the Mac removed this phone: the page shows "Not paired" and retries stop until the
+  user pairs again. Pairing state lives in the app's `local-rose` preferences, never in Git.
+- Build input: ZXing core 3.5.4 (Apache-2.0, notice in `app/assets/licenses/`), fetched by
+  `bash scripts/setup-zxing.sh` (run by `scripts/bootstrap.sh`) into `.tools/zxing/` and checked
+  by SHA-256 in `build.sh`.
+- Offline test: `node --test workspace/rose-agent/tests/local-rose-auth.test.mjs` runs
+  `app/tests/LocalRoseAuthTest.java` and cross-checks signatures with the Mac's Python
+  (`prototypes/voice-phone-demo/.venv`).

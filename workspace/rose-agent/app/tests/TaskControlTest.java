@@ -26,9 +26,9 @@ public final class TaskControlTest {
             {"t1", "true", "blocked", "s1", "t1", ""},
             {"t1", "true", "launching", "s1", "t1", ""},
             {"t1", "true", "ready", "s1", "t2", TaskControl.WATCH_OTHER_TASK},
-            {"t1", "true", "ready", "s1", null, TaskControl.WATCH_OTHER_TASK},
-            {"t1", "true", "ready", "null", "t1", TaskControl.WATCH_UNAVAILABLE},
-            {"t1", "true", "ready", "", "t1", TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "true", "ready", "s1", null, TaskControl.WATCH_UNLINKED},
+            {"t1", "true", "ready", "null", "t1", TaskControl.WATCH_INVALID},
+            {"t1", "true", "ready", "", "t1", TaskControl.WATCH_INVALID},
             {"t1", "false", "ready", "s1", "t1", TaskControl.WATCH_NO_TASK},
             {"", "true", "ready", "s1", "", TaskControl.WATCH_NO_TASK},
             {null, "true", "ready", "s1", null, TaskControl.WATCH_NO_TASK},
@@ -41,10 +41,16 @@ public final class TaskControlTest {
             {"t1", "true", "user_stopped", "s1", "t1", TaskControl.WATCH_STOPPED},
             {"t1", "true", "failed", "s1", "t1", TaskControl.WATCH_FAILED},
             {"t1", "true", "rejected", "s1", "t1", TaskControl.WATCH_FAILED},
-            {"t1", "true", "idle", null, "t1", TaskControl.WATCH_UNAVAILABLE},
-            {"t1", "true", "", "", "", TaskControl.WATCH_UNAVAILABLE},
-            {"t1", "true", null, null, null, TaskControl.WATCH_UNAVAILABLE},
-            {"t1", "true", "something_new", "s1", "t1", TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "true", "idle", null, "t1", TaskControl.WATCH_IDLE},
+            {"t1", "true", "idle", null, null, TaskControl.WATCH_IDLE},
+            {"t1", "true", "idle", "s1", "t1", TaskControl.WATCH_INVALID},
+            {"t1", "true", "launching", null, "t1", TaskControl.WATCH_INVALID},
+            {"t1", "true", "blocked", "s1", "", TaskControl.WATCH_UNLINKED},
+            {"t1", "true", "error", null, null, TaskControl.WATCH_READ_FAILED},
+            {"t1", "true", "cleanup_failed", "s1", "t1", TaskControl.WATCH_STOPPED},
+            {"t1", "true", "", "", "", TaskControl.WATCH_INVALID},
+            {"t1", "true", null, null, null, TaskControl.WATCH_INVALID},
+            {"t1", "true", "something_new", "s1", "t1", TaskControl.WATCH_UNKNOWN_STATE},
         };
         for (String[] r : rows) {
             boolean active = Boolean.parseBoolean(r[1]);
@@ -69,6 +75,50 @@ public final class TaskControlTest {
         expect(TaskControl.watchBinding("", true, "ready", "s1", "") == null, "No selected task, no binding");
         String[] bound = TaskControl.watchBinding("A", true, "launching", "s1", "A");
         expect(bound != null && bound[0].equals("A") && bound[1].equals("s1"), "The binding carries the selected id, not whatever is current");
+        // The read adapter (APP-WATCH-1031-C-M002): each failure is a fixed category, never idle, never its exception text.
+        Object[][] reads = {
+            {(TaskControl.StateCall) () -> { throw new TaskControl.NoProvider(); }, TaskControl.ReadFailure.NO_PROVIDER, TaskControl.WATCH_NO_PROVIDER},
+            {(TaskControl.StateCall) () -> { throw new SecurityException("Caller signing identity does not match uid=10123"); }, TaskControl.ReadFailure.DENIED, TaskControl.WATCH_DENIED},
+            {(TaskControl.StateCall) () -> { throw new TaskControl.InvalidReply(); }, TaskControl.ReadFailure.INVALID_RESPONSE, TaskControl.WATCH_INVALID},
+            {(TaskControl.StateCall) () -> null, TaskControl.ReadFailure.INVALID_RESPONSE, TaskControl.WATCH_INVALID},
+            {(TaskControl.StateCall) () -> new String[] {"ready"}, TaskControl.ReadFailure.INVALID_RESPONSE, TaskControl.WATCH_INVALID},
+            {(TaskControl.StateCall) () -> new String[] {null, "s1", "t1"}, TaskControl.ReadFailure.INVALID_RESPONSE, TaskControl.WATCH_INVALID},
+            {(TaskControl.StateCall) () -> new String[] {"ready", null, "t1"}, TaskControl.ReadFailure.INVALID_RESPONSE, TaskControl.WATCH_INVALID},
+            {(TaskControl.StateCall) () -> new String[] {"error", null, null}, TaskControl.ReadFailure.READ_FAILED, TaskControl.WATCH_READ_FAILED},
+            {(TaskControl.StateCall) () -> { throw new IllegalStateException("binder died /data/user/0/secret"); }, TaskControl.ReadFailure.READ_FAILED, TaskControl.WATCH_READ_FAILED},
+            {(TaskControl.StateCall) () -> { throw new java.io.IOException("x"); }, TaskControl.ReadFailure.READ_FAILED, TaskControl.WATCH_READ_FAILED},
+            {(TaskControl.StateCall) () -> new String[] {"idle", null, null}, TaskControl.ReadFailure.NONE, TaskControl.WATCH_IDLE},
+            {(TaskControl.StateCall) () -> new String[] {"mystery", null, null}, TaskControl.ReadFailure.NONE, TaskControl.WATCH_UNKNOWN_STATE},
+            {(TaskControl.StateCall) () -> new String[] {"ready", "s1", "t1"}, TaskControl.ReadFailure.NONE, ""},
+        };
+        java.util.Set<String> failureReasons = new java.util.HashSet<>();
+        for (Object[] r : reads) {
+            TaskControl.ControllerRead read = TaskControl.readController((TaskControl.StateCall) r[0]);
+            TaskControl.WatchState w = TaskControl.watchState("t1", true, read);
+            expect(read.failure == r[1], "read category " + r[1] + " got " + read.failure);
+            expect(w.reason.equals(r[2]) && w.canWatch == ((String) r[2]).isEmpty(), "read reason for " + r[1] + ": '" + w.reason + "'");
+            if (read.failure != TaskControl.ReadFailure.NONE) {
+                expect(read.status.isEmpty() && read.sessionId.isEmpty() && read.taskId.isEmpty(), "A failed read carries no fields");
+                expect(!w.reason.equals(TaskControl.WATCH_IDLE), "A failed read is never idle");
+                expect(!w.reason.contains("uid") && !w.reason.contains("/data") && !w.reason.contains("binder"), "No exception text leaks");
+                expect(TaskControl.watchBinding("t1", true, read) == null, "A failed read never binds");
+                failureReasons.add(w.reason);
+            }
+        }
+        expect(failureReasons.size() == 4, "Absent provider, denied, malformed and failed reads each have their own reason");
+        expect(!TaskControl.WATCH_IDLE.equals(TaskControl.WATCH_READ_FAILED) && !TaskControl.WATCH_IDLE.contains("phone"), "Idle is not 'unavailable on this phone'");
+        // Before the first read nothing is claimed; an inactive task still says there is nothing to watch.
+        expect(TaskControl.watchState("t1", true, TaskControl.ControllerRead.PENDING_READ).reason.equals(TaskControl.WATCH_CHECKING), "Pending read says checking");
+        expect(TaskControl.watchState("t1", false, TaskControl.ControllerRead.failed(TaskControl.ReadFailure.DENIED)).reason.equals(TaskControl.WATCH_NO_TASK), "No task beats a failed read");
+        expect(TaskControl.watchState("t1", true, (TaskControl.ControllerRead) null).reason.equals(TaskControl.WATCH_READ_FAILED), "No read is a failed read");
+        // Binding from a validated read: same task and session only; a task or session replaced after the tap never binds.
+        TaskControl.ControllerRead live = TaskControl.readController(() -> new String[] {"ready", "s1", "A"});
+        expect(java.util.Arrays.equals(TaskControl.watchBinding("A", true, live), new String[] {"A", "s1"}), "Valid same-task read binds its session");
+        expect(TaskControl.watchBinding("A", false, live) == null, "Task replaced between tap and open");
+        expect(TaskControl.watchBinding("B", true, live) == null, "Wrong task identity never binds");
+        expect(TaskControl.watchBinding("A", true, TaskControl.readController(() -> new String[] {"ready", "s2", "B"})) == null, "Session replaced by another task's");
+        expect(TaskControl.watchBinding("A", true, TaskControl.readController(() -> new String[] {"ready", "s1", null})) == null, "Missing task identity never binds");
+        expect(TaskControl.watchBinding("A", true, TaskControl.readController(() -> new String[] {"idle", null, null})) == null, "Idle never binds");
         expect(TaskControl.EXTRA_WATCH_TASK_ID.equals("dev.pixel.backgroundcontrol.extra.WATCH_TASK_ID")
                 && TaskControl.EXTRA_WATCH_SESSION_ID.equals("dev.pixel.backgroundcontrol.extra.WATCH_SESSION_ID"),
                 "Extra names agreed with the OS viewer (APP-OS-WATCH-002)");

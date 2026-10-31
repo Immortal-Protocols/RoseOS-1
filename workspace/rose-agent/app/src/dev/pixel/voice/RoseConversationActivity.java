@@ -29,7 +29,7 @@ public final class RoseConversationActivity extends Activity {
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";boolean shownTaskActive;
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
- volatile String ctlStatus="",ctlSession="",ctlTask="";volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
+ volatile TaskControl.ControllerRead ctl=TaskControl.ControllerRead.PENDING_READ;volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
  String stopPendingFor,stopMessage="";boolean stopInFlight;
  Control primary,end;
  int noticeSerial;
@@ -108,7 +108,7 @@ public final class RoseConversationActivity extends Activity {
   primary=new Control(ink());primary.setOnClickListener(v->primary());row.addView(primary,new LinearLayout.LayoutParams(0,-2,1f));
   end=new Control(endInk());end.show(ConversationPresentation.Glyph.END,"End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
   // Rose's apps: the existing bound workspace view of the shown task (openWorkspace); no simulated windows.
-  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());showWatchState(TaskControl.watchState("",false,ctlStatus,ctlSession,ctlTask));
+  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());showWatchState(TaskControl.watchState("",false,ctl));
   row.addView(agents,new LinearLayout.LayoutParams(0,-2,1f));
   LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT));rp.topMargin=dp(8);bottom.addView(row,rp);
   FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);bp.leftMargin=bp.rightMargin=dp(ConversationPresentation.MARGIN);root.addView(bottom,bp);
@@ -156,7 +156,7 @@ public final class RoseConversationActivity extends Activity {
   String raw=s==null?null:s.taskStateJson;
   boolean available=s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000);
   pollController();
-  String key=raw+"|"+available+"|"+ctlStatus+"|"+ctlSession+"|"+ctlTask+"|"+stopPendingFor+"|"+stopMessage+"|"+stopInFlight;if(key.equals(lastTaskKey))return;lastTaskKey=key;
+  String key=raw+"|"+available+"|"+ctl.key()+"|"+stopPendingFor+"|"+stopMessage+"|"+stopInFlight;if(key.equals(lastTaskKey))return;lastTaskKey=key;
   TaskPresentation t=TaskPresentation.NONE;String state="";
   if(raw!=null)try{org.json.JSONObject cur=new org.json.JSONObject(raw).optJSONObject("current");
    if(cur!=null){state=cur.optString("state");t=TaskPresentation.of(true,cur.optString("id"),state,cur.optString("title"),cur.optString("activity"),cur.optString("progress"),cur.optString("result"),available);}
@@ -174,14 +174,14 @@ public final class RoseConversationActivity extends Activity {
    // margin+84), so no extra inset.
    stage.setPadding(0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
   presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
-  if(!t.visible){shownTaskId="";shownTaskActive=false;showWatchState(TaskControl.watchState("",false,ctlStatus,ctlSession,ctlTask));return;}
+  if(!t.visible){shownTaskId="";shownTaskActive=false;showWatchState(TaskControl.watchState("",false,ctl));return;}
   if(!t.id.equals(shownTaskId)){shownTaskId=t.id;presentedScroll.scrollTo(0,0);}
   taskEyebrow.setText(t.eyebrow);taskTitle.setText(t.title);
   taskBody.setVisibility(t.body.isEmpty()?View.GONE:View.VISIBLE);if(!t.body.isEmpty())TaskText.set(taskBody,t.body);
   taskNote.setVisibility(t.note.isEmpty()?View.GONE:View.VISIBLE);taskNote.setText(t.note);
   boolean running=available&&(state.equals("running")||state.equals("checking"));
   shownTaskActive=t.active();
-  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctlStatus,ctlSession,ctlTask);boolean canWatch=ws.canWatch;showWatchState(ws);
+  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctl);boolean canWatch=ws.canWatch;showWatchState(ws);
   boolean canStop=running&&stopPendingFor==null&&!stopInFlight;
   watch.setVisibility(canWatch?View.VISIBLE:View.GONE);stopTask.setVisibility(canStop?View.VISIBLE:View.GONE);
   taskActions.setVisibility(canWatch||canStop?View.VISIBLE:View.GONE);
@@ -190,29 +190,41 @@ public final class RoseConversationActivity extends Activity {
  /** Reads the background controller's session (same-signer provider) about once a second, off the UI thread. */
  void pollController(){
   if(ctlPolling||SystemClock.uptimeMillis()-ctlPolledAt<1000)return;ctlPolling=true;ctlPolledAt=SystemClock.uptimeMillis();
-  new Thread(()->{String[] c=controllerState();ctlStatus=c[0];ctlSession=c[1];ctlTask=c[2];ctlPolling=false;},"rose-controller-state").start();
+  new Thread(()->{ctl=controllerState();ctlPolling=false;},"rose-controller-state").start();
  }
- /** {status, sessionId, taskId} from the controller's get_state; empty strings when unavailable. Off the UI thread. */
- String[] controllerState(){String st="",se="",tk="";
-  try{Bundle reply=getContentResolver().call(android.net.Uri.parse("content://dev.pixel.backgroundcontrol.agent"),"get_state",null,null);
-   org.json.JSONObject c=new org.json.JSONObject(reply==null?"{}":reply.getString("result","{}"));
-   st=c.optString("status");se=c.isNull("sessionId")?"":c.optString("sessionId");tk=c.isNull("taskId")?"":c.optString("taskId");
-  }catch(Exception unavailable){/* No controller, or not permitted: nothing to watch. */}
-  return new String[]{st,se,tk};
+ static final String CONTROLLER_AUTHORITY="dev.pixel.backgroundcontrol.agent";
+ /** One get_state read of the controller (same-signer provider), classified by TaskControl.readController: a
+  * validated status (idle = no workspace running) or a fixed failure category (absent provider, denied, malformed
+  * answer, other failure). No exception text is kept. Read-only: never starts a task or workspace. Off the UI thread. */
+ TaskControl.ControllerRead controllerState(){
+  return TaskControl.readController(()->{
+   android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
+   if(client==null)throw new TaskControl.NoProvider();
+   try{Bundle reply=client.call("get_state",null,null);
+    String raw=reply==null?null:reply.getString("result");if(raw==null)return null;
+    org.json.JSONObject c;try{c=new org.json.JSONObject(raw);}catch(org.json.JSONException e){throw new TaskControl.InvalidReply();}
+    return new String[]{stateField(c,"status"),stateField(c,"sessionId"),stateField(c,"taskId")};
+   }finally{client.close();}
+  });
+ }
+ /** A get_state field as read: null when absent or JSON null; any non-string value makes the answer malformed. */
+ static String stateField(org.json.JSONObject c,String key)throws TaskControl.InvalidReply{
+  if(!c.has(key)||c.isNull(key))return null;Object v=c.opt(key);
+  if(!(v instanceof String))throw new TaskControl.InvalidReply();return (String)v;
  }
  /** Opens the existing viewer bound to the selected task: the task id is captured at the tap, the controller
   * is read fresh, and the viewer receives that task id with its own session id (TaskControl.watchBinding), so
   * it can refuse to show a session that is gone or now carries another task. Opening never stops anything. */
  void openWorkspace(){
   final String selected=shownTaskId;final boolean active=shownTaskActive;if(watchOpening)return;watchOpening=true;
-  new Thread(()->{final String[] c=controllerState();runOnUiThread(()->{
-   watchOpening=false;ctlStatus=c[0];ctlSession=c[1];ctlTask=c[2];lastTaskKey="";
+  new Thread(()->{final TaskControl.ControllerRead c=controllerState();runOnUiThread(()->{
+   watchOpening=false;ctl=c;lastTaskKey="";
    if(isFinishing()||isDestroyed())return;
    // Never a silent tap: from the fresh read, say why Watch can't open (App Core's fixed reasons). When it can, the
    // bound route below is unchanged and still re-checks that the tapped task is the one shown.
-   TaskControl.WatchState ws=TaskControl.watchState(selected,active,c[0],c[1],c[2]);
+   TaskControl.WatchState ws=TaskControl.watchState(selected,active,c);
    if(!ws.canWatch){Toast.makeText(this,ws.reason,Toast.LENGTH_LONG).show();return;}
-   String[] binding=TaskControl.watchBinding(selected,selected.equals(shownTaskId),c[0],c[1],c[2]);
+   String[] binding=TaskControl.watchBinding(selected,selected.equals(shownTaskId),c);
    if(binding==null){stopMessage="That task’s workspace is no longer available.";return;}
    try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity"))
     .putExtra(TaskControl.EXTRA_WATCH_TASK_ID,binding[0]).putExtra(TaskControl.EXTRA_WATCH_SESSION_ID,binding[1]).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
