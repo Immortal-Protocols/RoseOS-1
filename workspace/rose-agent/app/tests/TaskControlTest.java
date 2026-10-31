@@ -19,6 +19,43 @@ public final class TaskControlTest {
         expect(!TaskControl.watchable("t1", true, "ready", "null", "t1"), "JSON null session is no session");
         expect(!TaskControl.watchable("t1", false, "ready", "s1", "t1"), "Finished task has no live workspace");
 
+        // watchState (APP-WATCH-1031-C): canWatch is exactly watchable; otherwise one fixed, truthful reason.
+        String[][] rows = {
+            // task, active, status, session, controllerTask, expected reason ("" = can watch)
+            {"t1", "true", "ready", "s1", "t1", ""},
+            {"t1", "true", "blocked", "s1", "t1", ""},
+            {"t1", "true", "launching", "s1", "t1", ""},
+            {"t1", "true", "ready", "s1", "t2", TaskControl.WATCH_OTHER_TASK},
+            {"t1", "true", "ready", "s1", null, TaskControl.WATCH_OTHER_TASK},
+            {"t1", "true", "ready", "null", "t1", TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "true", "ready", "", "t1", TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "false", "ready", "s1", "t1", TaskControl.WATCH_NO_TASK},
+            {"", "true", "ready", "s1", "", TaskControl.WATCH_NO_TASK},
+            {null, "true", "ready", "s1", null, TaskControl.WATCH_NO_TASK},
+            {"t1", "true", "starting", "s1", "t1", TaskControl.WATCH_STARTING},
+            {"t1", "true", "scheduled", null, "t1", TaskControl.WATCH_STARTING},
+            {"t1", "true", "consent_required", "s1", "t1", TaskControl.WATCH_CONSENT},
+            {"t1", "true", "target_not_allowed", "s2", "t1", TaskControl.WATCH_NOT_ALLOWED},
+            {"t1", "true", "stopped", "s1", "t1", TaskControl.WATCH_STOPPED},
+            {"t1", "true", "closed", null, "t1", TaskControl.WATCH_STOPPED},
+            {"t1", "true", "user_stopped", "s1", "t1", TaskControl.WATCH_STOPPED},
+            {"t1", "true", "failed", "s1", "t1", TaskControl.WATCH_FAILED},
+            {"t1", "true", "rejected", "s1", "t1", TaskControl.WATCH_FAILED},
+            {"t1", "true", "idle", null, "t1", TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "true", "", "", "", TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "true", null, null, null, TaskControl.WATCH_UNAVAILABLE},
+            {"t1", "true", "something_new", "s1", "t1", TaskControl.WATCH_UNAVAILABLE},
+        };
+        for (String[] r : rows) {
+            boolean active = Boolean.parseBoolean(r[1]);
+            TaskControl.WatchState w = TaskControl.watchState(r[0], active, r[2], r[3], r[4]);
+            String label = java.util.Arrays.toString(r);
+            expect(w.canWatch == r[5].isEmpty() && w.reason.equals(r[5]), "watchState " + label + " -> " + w.canWatch + " '" + w.reason + "'");
+            expect(w.canWatch == TaskControl.watchable(r[0], active, r[2], r[3], r[4]), "watchable agrees with watchState " + label);
+            expect(w.canWatch || !w.reason.isEmpty(), "A refusal always has a reason " + label);
+        }
+        expect(!TaskControl.watchState("t1", true, "ready", "s1", "t2").reason.contains("t2"), "The reason never names another task");
+
         // Watch binding (APP-FIX-004, V1): the selected task and its own session, read after the tap.
         expect(java.util.Arrays.equals(TaskControl.watchBinding("A", true, "ready", "s1", "A"), new String[] {"A", "s1"}),
                 "Ordinary Watch binds the selected task to its live session");

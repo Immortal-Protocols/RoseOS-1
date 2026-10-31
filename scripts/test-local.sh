@@ -52,6 +52,8 @@ python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
 python3 os/tests/persistent-app-experiment/test_report.py
+# Isolated SystemUI trial: exact installed SDK revisions against the QA manifest pins (parses given tables, installs nothing).
+python3 os/tests/persistent-app-experiment/test_sdk_revisions.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
@@ -105,7 +107,7 @@ node --test workspace/rose-agent/delivery/catalog.test.mjs
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT
-for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip AnyAppControl:agent-pip \
+for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip AnyAppControl:agent-pip ViewerPresentation:agent-pip \
  PanePolicy:agent-split InstallerRecoveryPolicy:agent-split; do
  name="${pair%%:*}" variant="${pair##*:}"
  java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/$name" \
