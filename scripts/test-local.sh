@@ -82,6 +82,7 @@ python3 scripts/tests/test_blazer_preparation_preflight.py
 # Blazer (Pixel 10 Pro) flavor contract and unsigned build-only recipe (synthetic tree, fake runner).
 python3 os/tests/test_blazer_flavor.py
 python3 scripts/tests/test_blazer_build_only.py
+python3 scripts/tests/test_blazer_integration.py
 # Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
 python3 scripts/tests/test_factory_package.py
 python3 scripts/tests/test_signing_bootstrap.py
