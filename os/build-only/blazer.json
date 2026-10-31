@@ -55,7 +55,7 @@
     "receiptType": "reconcile",
     "labelPrefix": "blazer-",
     "patcher": ["apply-os-changes.py", "background_apks.py", "integration_copy.py"],
-    "basis": "Compile needs the Rose integration: the newest reconcile receipt in the operator's --integration-dir must be a blazer-labelled receipt from this checkout's trusted patcher that still matches the tree. No blazer reconcile config exists yet; that is the integration owner's next step."
+    "basis": "Compile needs the Rose integration: the newest reconcile receipt in the operator's --integration-dir must be a blazer-labelled receipt from this checkout's trusted patcher that still matches the tree, and must bind to --inputs-receipt (scripts/blazer_integration.py admit over os/build-only/blazer-reconcile.json): the admitted build label and recipe, the installed APK bytes, Launcher3, the routed Updater and the policy pins."
   },
   "capacity": {
     "reserveBytes": 322122547200,

@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-blazer-reconcile-template",
+  "device": "blazer",
+  "basis": "FAM-BLAZER-INTEGRATE-005: host-free template for scripts/host-reconcile.py on a blazer tree. scripts/blazer_integration.py admits an already-signed bundle (no keys), then renders the operator's own --config from this template, the admitted inputs and the operator's host paths; nothing here names a host. The trusted patcher reads patches and overlays from candidate C's os/ bundle, so C must carry the Launcher3 and Updater release-discovery changes (checked at admission). Control policy is Frankel's shipped one: the signed controller as sole prototype agent, locked sessions off. The Updater route is REQUIRED and has no default: no blazer feed exists, Frankel's releases/latest names Frankel and Rango's feed is Rango's, so admission refuses until the release owner supplies a blazer route.",
+  "recipe": "os/build-only/blazer.json",
+  "reconcile": {
+    "projects": [
+      "frameworks/base",
+      "build/make",
+      "build/release",
+      "packages/apps/Updater",
+      "packages/modules/Permission",
+      "packages/apps/Launcher3"
+    ],
+    "integrationOwnedRoots": [
+      "packages/apps/PixelBackgroundControl",
+      "packages/apps/RosePreinstall"
+    ],
+    "sparsePaths": {
+      "frameworks/base": [
+        "core/res/res/values/config.xml"
+      ],
+      "build/make": [
+        "target/product/handheld_product.mk"
+      ],
+      "packages/apps/Updater": [
+        "res/values/config.xml"
+      ],
+      "packages/modules/Permission": [
+        "service/java/com/android/role/RoleService.java"
+      ]
+    },
+    "patcher": "trusted",
+    "applyArgs": [
+      "--background-policy",
+      "{policy}",
+      "--background-agent",
+      "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+      "--agent-tray",
+      "--updater-url",
+      "{updater_url}",
+      "--updater-release-index",
+      "{updater_release_index}",
+      "--updater-published-channel",
+      "{updater_channel}",
+      "--preinstall-apk",
+      "{signed_apps}/dev.pixel.voice.apk",
+      "--preinstall-apk",
+      "{signed_apps}/dev.pixel.calculator.agent.apk"
+    ]
+  },
+  "candidateInputs": {
+    "schema": "roseos.blazer-candidate.v1",
+    "androidManifestBlob": "b57648423ffb20af35d1c7058a3b7c58bb049770",
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "sdk": 37,
+    "prototypeControl": true,
+    "candidateFiles": [
+      "os/patches/rose-switcher-launcher3.patch",
+      "os/patches/updater-rose-channels.patch",
+      "os/patches/updater-rose-releases.patch",
+      "os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java"
+    ],
+    "apps": [
+      {
+        "role": "agent",
+        "package": "dev.pixel.backgroundcontrol"
+      },
+      {
+        "role": "voice",
+        "package": "dev.pixel.voice"
+      },
+      {
+        "role": "target",
+        "package": "dev.pixel.calculator.agent"
+      }
+    ]
+  },
+  "updaterRoute": {
+    "status": "missing",
+    "schema": "roseos.blazer-updater-route.v1",
+    "missingInput": "--updater-route ROUTE.json from the release owner: device blazer, updaterUrl https://github.com/OWNER/REPO/releases/download/, releaseIndex https://api.github.com/repos/OWNER/REPO/releases, publishedChannel stable, the blazer producer contract (tag blazer-{build}, assets blazer-stable and blazer-ota_update-{build}.zip, metadata line '{build} {buildDateUtc} blazer stable'), owner and approvalRef",
+    "basis": "Device-qualified release discovery (RoseReleases) is the only route form admitted: each check resolves one blazer-N release. A releases/latest URL is refused because Latest names Frankel."
+  }
+}

@@ -79,6 +79,11 @@ python3 scripts/tests/test_device_contract.py
 python3 scripts/tests/test_device_readiness.py
 python3 scripts/tests/test_signing_tool_observation.py
 python3 scripts/tests/test_blazer_preparation_preflight.py
+# Blazer (Pixel 10 Pro) flavor contract and unsigned build-only recipe (synthetic tree, fake runner).
+python3 os/tests/test_blazer_flavor.py
+python3 scripts/tests/test_blazer_build_only.py
+# Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
+python3 scripts/tests/test_factory_package.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -98,6 +103,13 @@ python3 qa/models/test_fixture_server.py
 python3 qa/systemui-trial/test_trial_plan.py
 # Models serving draft: pins, Agent Platform container shape and derived capacity stay consistent.
 python3 workspace/models/serving/tests/test_serving_config.py
+# Models rose_cloud (stand-in brain and speech, no model or audio). The PR288 cases need ROSE_PR288_DIR (PR288 head
+# e1b702e prototypes/voice-phone-demo) and its numpy/pillow/fastapi/cryptography; without them they skip and say why.
+python3 -I workspace/models/rose_cloud/tests/test_vllm_brain.py
+python3 -I workspace/models/rose_cloud/tests/test_contract.py
+python3 -I workspace/models/rose_cloud/tests/test_pr288_tasks.py
+python3 -I workspace/models/rose_cloud/tests/test_coop.py
+python3 -I workspace/models/rose_cloud/tests/test_speech_wire.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
 python3 workspace/models/serving/tests/test_local_profile.py

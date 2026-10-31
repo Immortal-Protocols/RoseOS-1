@@ -12,6 +12,7 @@ supplies, and this tool admits, every host fact:
   --lock PATH         the builder's lock file (probed, never kept by preflight)
   --download-dir DIR  generate: absent or empty, outside the tree, on the tree's filesystem
   --integration-dir DIR   compile: the Rose reconcile receipts for this tree
+  --inputs-receipt FILE   compile: the local-inputs.json of scripts/blazer_integration.py admit
 
   blazer-build-only.py plan      --stage S ...   the rendered command and the preflight report; runs nothing
   blazer-build-only.py preflight --stage S ...   the report alone (exit 0 ready, 1 not ready)
@@ -39,6 +40,7 @@ from xml.etree import ElementTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
+import blazer_integration  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RECIPE = ROOT/'os/build-only/blazer.json'
@@ -116,13 +118,14 @@ def load(path=RECIPE, root=ROOT):
         raise InvalidInput('; '.join(problems))
     return recipe
 
-def operator(host, source_root, jobs, lock, download_dir=None, integration_dir=None, max_jobs=256):
+def operator(host, source_root, jobs, lock, download_dir=None, integration_dir=None, max_jobs=256, inputs_receipt=None):
     """The operator's host inputs, validated for shape only. Nothing is invented: every value is required."""
     if not HOST_LABEL.fullmatch(str(host or '')):
         raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
     if not isinstance(jobs, int) or isinstance(jobs, bool) or not 1 <= jobs <= max_jobs:
         raise InvalidInput(f'--jobs must be an integer from 1 to {max_jobs}')
-    paths = {'sourceRoot': source_root, 'lock': lock, 'downloadDir': download_dir, 'integrationDir': integration_dir}
+    paths = {'sourceRoot': source_root, 'lock': lock, 'downloadDir': download_dir, 'integrationDir': integration_dir,
+        'inputsReceipt': inputs_receipt}
     for name, value in paths.items():
         if value is None:
             continue
@@ -163,9 +166,11 @@ def lock_free(path):
     except BlockingIOError:
         return False
 
-def integration(recipe, src, directory):
+def integration(recipe, src, directory, inputs_receipt=None):
     """(problems, facts): the newest reconcile receipt in the operator's integration dir must be a blazer-labelled
-    receipt from this checkout's trusted patcher whose recorded entries still match the tree."""
+    receipt from this checkout's trusted patcher whose recorded entries still match the tree, and (FAM-BLAZER-
+    INTEGRATE-005) bind to the admitted inputs: build label, recipe, installed APK bytes, Launcher3, the routed
+    Updater and the policy pins (blazer_integration.compile_problems)."""
     spec = recipe['integration']
     if directory is None:
         return ['compile needs --integration-dir: the Rose reconcile receipts for this tree'], {}
@@ -200,6 +205,7 @@ def integration(recipe, src, directory):
             drifted.append(relative)
     if drifted:
         problems.append(f'the source tree no longer matches {latest.name}: {drifted[:5]}')
+    problems += blazer_integration.compile_problems(record, src, inputs_receipt)
     return problems, facts
 
 def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free):
@@ -209,7 +215,7 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free):
     src = op['sourceRoot']
     problems, facts = [], {'stage': stage, 'device': DEVICE, 'host': op['host'], 'jobs': op['jobs'],
         'outDir': recipe['compile']['outDir'], 'signed': False}
-    for name in ('sourceRoot', 'lock', 'downloadDir', 'integrationDir'):
+    for name in ('sourceRoot', 'lock', 'downloadDir', 'integrationDir', 'inputsReceipt'):
         if op[name] is not None and symlink_in(op[name]):
             problems.append(f'{name} passes through a symlink ({symlink_in(op[name])})')
     if not src.is_dir():
@@ -252,7 +258,8 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free):
             problems.append(f'{vendor}/{DEVICE}.mk is missing: run the generate stage first')
         if not check.is_file() or recipe['pins']['vendor/adevtool'] not in check.read_text():
             problems.append('the generated vendor tree is not from the pinned adevtool revision (foreign provenance)')
-        integration_problems, facts['roseIntegration'] = integration(recipe, src, op['integrationDir'])
+        integration_problems, facts['roseIntegration'] = integration(recipe, src, op['integrationDir'],
+            op['inputsReceipt'])
         problems += integration_problems
     if os.path.lexists(src/recipe['compile']['outDir']):
         problems.append(f'{recipe["compile"]["outDir"]} already exists; refusing to reuse or overwrite an OUT_DIR')
@@ -307,12 +314,13 @@ def main(argv=None):
     parser.add_argument('--lock', required=True)
     parser.add_argument('--download-dir')
     parser.add_argument('--integration-dir')
+    parser.add_argument('--inputs-receipt')
     parser.add_argument('--receipt-dir')
     a = parser.parse_args(argv)
     try:
         recipe = load(a.recipe)
         op = operator(a.host, a.source_root, a.jobs, a.lock, a.download_dir, a.integration_dir,
-            recipe['compile']['maxJobs'])
+            recipe['compile']['maxJobs'], a.inputs_receipt)
         if a.action == 'run':
             if not a.receipt_dir:
                 raise InvalidInput('run needs --receipt-dir')
