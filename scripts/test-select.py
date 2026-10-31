@@ -9,9 +9,10 @@
                                               record the tracked files it opens, plus the repo paths its text names
 
 A unit's inputs are its recorded files and the paths its command names. A change selects every unit whose inputs it
-touches. It runs the FULL suite instead when it touches test-local.sh, this tool or its map, a workflow, a package
-manifest, or any code file no unit claims; non-code files no unit reads select nothing. A unit missing from the map
-(new or edited in test-local.sh) is always selected. Changed files default to the working tree against --base
+touches. An edit to test-local.sh selects the units it adds or changes; an edit to its header or Java prelude runs the
+FULL suite, as does a change to this tool or its map, a package manifest, or any code file no unit claims. GitHub
+configuration (.github/) and other files no unit reads select nothing: the offline suite never reads them. A unit
+missing from the map (new or edited in test-local.sh) is always selected. Changed files default to the working tree against --base
 (origin/main) plus uncommitted changes. Exit: 0 pass, 1 a unit failed, 2 invalid input.
 """
 import argparse
@@ -29,11 +30,23 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT/'scripts/test-local.sh'
 MAP = ROOT/'scripts/test-select-deps.json'
-FULL_TRIGGERS = ('scripts/test-local.sh', 'scripts/test-select.py', 'scripts/test-select-deps.json')
-FULL_PREFIXES = ('.github/',)
+FULL_TRIGGERS = ('scripts/test-select.py', 'scripts/test-select-deps.json')
+OUTSIDE_SUITE = ('.github/',)   # read by GitHub, not by the offline suite; a unit that reads one still claims it
 FULL_NAMES = ('package.json', 'package-lock.json')
 CODE = re.compile(r'\.(py|mjs|cjs|js|ts|java|kt|sh|json|xml|patch|yml|yaml|toml|cfg|properties|bp|mk|c|cc|h|rs|go)$')
 PATH_TOKEN = re.compile(r'(?<![\w./-])((?:workspace|os|scripts|qa|prototypes|infra)/[\w./@+-]+)')
+
+
+def suite_prelude(text):
+    """The lines that apply to every unit: the header through cd "$ROOT", and the Java directory/trap setup."""
+    lines = text.splitlines()
+    end = next(i for i, l in enumerate(lines) if l.strip() == 'cd "$ROOT"') + 1
+    return lines[:end] + [l.strip() for l in lines[end:] if l.strip().startswith(('JAVA_TESTS=', 'trap '))]
+
+
+def suite_at(ref):
+    out = subprocess.run(['git', '-C', str(ROOT), 'show', f'{ref}:scripts/test-local.sh'], capture_output=True, text=True)
+    return out.stdout if out.returncode == 0 else None
 
 
 def units(text=None):
@@ -98,20 +111,30 @@ def unit_inputs(unit, dep_map):
     return inputs, entry is not None
 
 
-def select(files, suite_units=None, dep_map=None):
-    suite_units = suite_units if suite_units is not None else units()
+def select(files, suite_units=None, dep_map=None, base_suite=None, suite_text=None):
+    """base_suite: test-local.sh at the base, so an edit to it selects only the units it adds or changes."""
+    suite_text = suite_text if suite_text is not None else SUITE.read_text()
+    suite_units = suite_units if suite_units is not None else units(suite_text)
     dep_map = dep_map if dep_map is not None else load_map()
     files = sorted(set(files))
-    full = [f for f in files if f in FULL_TRIGGERS or f.startswith(FULL_PREFIXES) or Path(f).name in FULL_NAMES]
-    selected, claimed = [], set()
+    full = [f for f in files if f in FULL_TRIGGERS or Path(f).name in FULL_NAMES]
+    new_keys = set()
+    if 'scripts/test-local.sh' in files:
+        if base_suite is None or suite_prelude(base_suite) != suite_prelude(suite_text):
+            full.append('scripts/test-local.sh')
+        else:
+            new_keys = {u['key'] for u in suite_units} - {u['key'] for u in units(base_suite)}
+    selected, claimed = [], {'scripts/test-local.sh'}
     for unit in suite_units:
         inputs, mapped = unit_inputs(unit, dep_map)
         hit = sorted(inputs & set(files)) if mapped else ['(not in map)']
+        if unit['key'] in new_keys:
+            hit = ['(added or changed in test-local.sh)'] + hit
         claimed |= inputs
         if hit:
             selected.append({'id': unit['id'], 'because': hit[:5]})
     unclaimed = [f for f in files if f not in claimed and f not in full]
-    unclaimed_code = [f for f in unclaimed if CODE.search(f)]
+    unclaimed_code = [f for f in unclaimed if CODE.search(f) and not f.startswith(OUTSIDE_SUITE)]
     if full or unclaimed_code:
         return {'mode': 'full', 'reason': {'triggers': full, 'unclaimedCode': unclaimed_code},
                 'units': [u['id'] for u in suite_units], 'changed': files}
@@ -194,7 +217,7 @@ def main(argv=None):
     if a.command == 'run' and a.all:
         chosen = {'mode': 'full', 'units': [u['id'] for u in suite_units]}
     else:
-        chosen = select(a.files or changed_files(a.base), suite_units)
+        chosen = select(a.files or changed_files(a.base), suite_units, base_suite=suite_at(a.base))
     if a.command == 'select':
         print(json.dumps(chosen, indent=1))
         return 0

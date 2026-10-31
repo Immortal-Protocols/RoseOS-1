@@ -93,11 +93,35 @@ class Select(unittest.TestCase):
         self.assertEqual((r['mode'], r['reason']['unclaimedCode']), ('full', ['scripts/new_helper.py']))
         self.assertEqual(r['units'], list(range(6)))
 
-    def test_suite_tool_workflow_and_package_changes_run_the_full_suite(self):
-        for f in ('scripts/test-local.sh', 'scripts/test-select.py', 'scripts/test-select-deps.json',
-                  '.github/workflows/app-tests.yml', 'workspace/rose-agent/server/package-lock.json'):
+    def test_tool_map_and_package_changes_run_the_full_suite(self):
+        for f in ('scripts/test-select.py', 'scripts/test-select-deps.json', 'workspace/rose-agent/server/package-lock.json'):
             with self.subTest(f):
                 self.assertEqual(self.pick(f)['mode'], 'full')
+
+    def test_github_configuration_selects_only_units_that_read_it(self):
+        r = self.pick('.github/workflows/app-tests.yml', '.github/actionlint.yaml')
+        self.assertEqual((r['mode'], r['units']), ('targeted', []))
+        self.map['units'][self.units[2]['key']]['inputs'].append('.github/workflows/os-release.yml')
+        self.assertEqual(self.pick('.github/workflows/os-release.yml')['units'], [2])
+
+    def suite_edit(self, edited, *files):
+        return ts.select(('scripts/test-local.sh',) + files, ts.units(edited), self.map, base_suite=SUITE, suite_text=edited)
+
+    def test_a_suite_edit_selects_only_added_or_changed_units(self):
+        edited = SUITE.replace('python3 os/tests/test_beta.py\n', 'python3 os/tests/test_beta.py\npython3 os/tests/test_gamma.py\n')
+        r = self.suite_edit(edited)
+        self.assertEqual((r['mode'], r['units']), ('targeted', [4]))
+        changed = SUITE.replace('python3 scripts/tests/test_alpha.py', 'python3 scripts/tests/test_alpha.py -v')
+        self.assertEqual(self.suite_edit(changed)['units'], [2])
+        removed = SUITE.replace('python3 os/tests/test_beta.py\n', '')
+        self.assertEqual(self.suite_edit(removed)['units'], [])
+
+    def test_a_suite_header_or_java_prelude_edit_or_unknown_base_runs_the_full_suite(self):
+        for edited in (SUITE.replace('set -euo pipefail', 'set -eo pipefail'),
+                       SUITE.replace('JAVA_TESTS="$(mktemp -d)"', 'JAVA_TESTS="$(mktemp -d -p /var/tmp)"')):
+            with self.subTest(edited[:0]):
+                self.assertEqual(self.suite_edit(edited)['mode'], 'full')
+        self.assertEqual(ts.select(['scripts/test-local.sh'], self.units, self.map, base_suite=None, suite_text=SUITE)['mode'], 'full')
 
     def test_unclaimed_documents_select_nothing(self):
         r = self.pick('docs/VERIFY.md', 'README.md')
