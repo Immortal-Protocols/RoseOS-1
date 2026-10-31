@@ -221,6 +221,24 @@ class Workflow(unittest.TestCase):
         self.assertIn('  CAMPAIGN: ${{ inputs.campaign }}\n', WORKFLOW)
 
 
+class Concurrency(unittest.TestCase):
+    """One run at a time in os-release-frankel, and every waiting run keeps its place: with the default single pending
+    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. models-sign)."""
+
+    def test_the_shared_group_queues_every_pending_run_and_never_cancels_one_in_progress(self):
+        block = re.search(r'(?m)^concurrency:\n((?:  .*\n)+)', WORKFLOW)[1]
+        settings = dict(re.findall(r'(?m)^  ([\w-]+): (.*)$', block))
+        self.assertEqual(settings, {'group': 'os-release-frankel', 'cancel-in-progress': 'false', 'queue': 'max'})
+        self.assertEqual(re.findall(r'(?m)^ +concurrency:', WORKFLOW), [])  # no job overrides the workflow group
+
+    def test_actionlint_ignores_only_the_unknown_queue_key_in_this_workflow(self):
+        config = (ROOT/'.github/actionlint.yaml').read_text()
+        paths = config[config.index('\npaths:\n'):]
+        self.assertEqual(re.findall(r"(?m)^  (\S+):$", paths), ['.github/workflows/os-release.yml'])
+        self.assertEqual(re.findall(r"(?m)^      - '(.*)'$", paths),
+            ['unexpected key "queue" for "concurrency" section\\. expected one of "cancel-in-progress", "group"'])
+
+
 class RunnerLabels(unittest.TestCase):
     def test_every_self_hosted_label_is_declared_for_actionlint(self):
         declared = set(re.findall(r'(?m)^    - ([\w-]+)$', (ROOT/'.github/actionlint.yaml').read_text()))

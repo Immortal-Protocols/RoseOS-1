@@ -6,3 +6,9 @@ self-hosted-runner:
     - roseos-cuttlefish-runtime
     # Dedicated signer runner, group roseos-signing (SIGN-021 .github/workflows/os-sign.yml).
     - roseos-dedicated-signer
+paths:
+  .github/workflows/os-release.yml:
+    ignore:
+      # GitHub supports concurrency queue (single|max; docs control-workflow-concurrency, @actions/workflow-parser
+      # concurrency-queue); actionlint 1.7.12 does not know the key yet. Only this exact diagnostic is ignored.
+      - 'unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"'
