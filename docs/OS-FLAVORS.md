@@ -1,6 +1,6 @@
 # OS flavors and install artifacts
 
-FLAVOR001, FLAVOR002 and FOLD-FACTORY-003. A flavor is one device build of RoseOS with its own install-artifact
+FLAVOR001, FLAVOR002, FOLD-FACTORY-003 and -004. A flavor is one device build of RoseOS with its own install-artifact
 contract: `os/flavors/frankel.json` (Pixel 10) and `os/flavors/rango.json` (Pixel 10 Pro Fold).
 `scripts/factory-package.py` loads a contract, decides what a candidate artifact is, verifies a
 factory install archive in three separate tiers, and packages it only when all three pass.
@@ -29,6 +29,24 @@ publication receipt.
   key, and not a reread bootstrap journal (held artifact 12961047183 is never retrieved).
 - A `--first-use-binding` record that disagrees is `identity_conflict`.
 - A pin equal to the Frankel key is `signer_collision`.
+
+**Pins across flavors (FOLD-FACTORY-004).** Each load reads every other `os/flavors/*.json` as raw
+JSON, never through the full loader, and resolves its AVB pin strictly.
+- A non-null pin shared by any two flavors (Frankel, Rango, Blazer, …) is `signer_collision`, so
+  both loads refuse.
+- `null` means unknown and never matches, including null against null.
+- A malformed peer refuses the load and is never skipped. That covers an unreadable file, a missing
+  or non-object identity, a non-sha256 literal, and a pointer that doesn't resolve to a sha256.
+- No separate archive-signing key is required by this check.
+
+**Readiness declaration (optional `readiness` block).** The block holds `buildReady`,
+`factoryReady` and `phoneValidated`, which must be strict booleans; `receipts`, a list of
+non-empty references; and an optional `basis`. No other keys are allowed.
+- Any `true` is an unsupported claim and refuses: source never declares a result. Artifacts are
+  verified by `classify`/`package`, and phones by QA.
+- A receipt reference naming synthetic evidence refuses.
+- Contracts without the block are unchanged, and a passing synthetic classification never changes
+  a declaration.
 
 ## Three tiers; `factoryReady` needs all of them
 

@@ -130,14 +130,57 @@ def load_flavor(name, root=ROOT):
         raise ContractError(f'{name}: factorySigning needs both a plain principal and one ssh-ed25519 public key, or neither')
     if not (factory['dataWipe'] and factory['requiresUnlockedBootloader']) or flavor['artifacts']['ota']['dataWipe']:
         raise ContractError(f'{name}: install-mode declarations must be factory wipe+unlock, OTA no wipe')
-    pinned = pinned_avb_key(flavor, root)
-    if pinned is not None and not HEX64.fullmatch(pinned):
-        raise ContractError(f'{name}: pinned avbPublicKeySha256 is not a sha256')
-    # Only Frankel's pinned value is needed here; Frankel's own contract is validated whenever it is loaded.
-    frankel = json.loads((root/'os/flavors/frankel.json').read_text())
-    if name != 'frankel' and pinned is not None and pinned == pinned_avb_key(frankel, root):
-        raise ContractError(f'{name}: signer_collision: the pinned AVB key equals the Frankel key')
+    check_peer_identities(name, pinned_avb_key(flavor, root), root)
+    check_readiness(name, flavor)
     return flavor
+
+def check_peer_identities(name, pinned, root):
+    """Every other os/flavors contract is read as raw JSON (never through load_flavor) and its AVB pin resolved strictly.
+    A non-null pin equal to this flavor's is signer_collision; null on either side is unknown, never a match. A peer
+    whose identity cannot be read or resolved refuses this load: it is never skipped."""
+    for path in sorted((root/'os/flavors').glob('*.json')):
+        peer = path.stem
+        if peer == name:
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError) as error:
+            raise ContractError(f'{name}: peer {peer} contract is unreadable ({type(error).__name__})') from None
+        if not isinstance(data, dict) or data.get('flavor') != peer or 'identity' not in data:
+            raise ContractError(f'{name}: peer {peer} contract has no identity for flavor {peer}')
+        theirs = strict_avb_pin(data['identity'], root, f'{name}: peer {peer}')
+        if pinned is not None and theirs == pinned:
+            raise ContractError(f'{name}: signer_collision: the pinned AVB key equals the {peer} key')
+
+READINESS_FLAGS = ('buildReady', 'factoryReady', 'phoneValidated')
+
+def check_readiness(name, flavor):
+    """The optional readiness declaration: strict booleans and a list of receipt references. Source cannot carry a
+    positive build, factory or phone claim (artifacts are verified by classify/package, phones by QA), and synthetic
+    evidence is never a readiness receipt. Contracts without the block are unchanged."""
+    if 'readiness' not in flavor:
+        return
+    readiness = flavor['readiness']
+    if not isinstance(readiness, dict):
+        raise ContractError(f'{name}: readiness must be an object')
+    unknown = sorted(set(readiness) - {*READINESS_FLAGS, 'receipts', 'basis'})
+    absent = [key for key in (*READINESS_FLAGS, 'receipts') if key not in readiness]
+    if unknown or absent:
+        raise ContractError(f'{name}: readiness keys: unknown {unknown}, missing {absent}')
+    wrong = [key for key in READINESS_FLAGS if type(readiness[key]) is not bool]
+    if wrong:
+        raise ContractError(f'{name}: readiness {wrong} must be true or false')
+    receipts = readiness['receipts']
+    if type(receipts) is not list or any(type(r) is not str or not r.strip() for r in receipts):
+        raise ContractError(f'{name}: readiness.receipts must be a list of non-empty receipt references')
+    if 'basis' in readiness and type(readiness['basis']) is not str:
+        raise ContractError(f'{name}: readiness.basis must be text')
+    claimed = [key for key in READINESS_FLAGS if readiness[key]]
+    if claimed:
+        raise ContractError(f'{name}: unsupported readiness claim {claimed}: a contract never declares a build, factory or '
+                            'phone result; artifacts are verified by classify/package and phones by QA')
+    if any('synthetic' in r.lower() for r in receipts):
+        raise ContractError(f'{name}: readiness.receipts names synthetic evidence, which is never a readiness receipt')
 
 def pinned_layout(flavor):
     """True when the contract anchors its layout in the pinned device_common generator fixture. A contract without it
@@ -163,16 +206,32 @@ def check_generator_layout(name, flavor, script_bytes, root, checks):
     checks['gscFirmware.source'] = (members['gscFirmware']['source'], f'VENDOR/firmware/{gsc}/')
 
 def pinned_avb_key(flavor, root=ROOT):
-    """A literal pin with its provenance, or a pointer 'FILE dotted.field' read from a checked-in source."""
-    identity = flavor['identity']
-    if identity.get('avbPublicKeySha256'):
-        return identity['avbPublicKeySha256']
-    match = re.fullmatch(r'(os/[\w./-]+\.json) ([\w.]+)', identity.get('avbPublicKeySha256From') or '')
+    """A literal pin with its provenance, or a pointer 'FILE dotted.field' read from a checked-in source; None is unknown."""
+    return strict_avb_pin(flavor['identity'], root, str(flavor.get('flavor')))
+
+def strict_avb_pin(identity, root, label):
+    """null (absent) is unknown; anything else must be, or resolve to, one lowercase sha256, or the contract refuses."""
+    if not isinstance(identity, dict):
+        raise ContractError(f'{label}: identity is not an object')
+    literal = identity.get('avbPublicKeySha256')
+    if literal is not None:
+        if type(literal) is not str or not HEX64.fullmatch(literal):
+            raise ContractError(f'{label}: avbPublicKeySha256 is not a sha256')
+        return literal
+    source = identity.get('avbPublicKeySha256From')
+    if source is not None and type(source) is not str:
+        raise ContractError(f'{label}: avbPublicKeySha256From is not text')
+    match = re.fullmatch(r'(os/[\w./-]+\.json) ([\w.]+)', source or '')
     if not match:
         return None
-    value = json.loads((root/match.group(1)).read_text())
-    for key in match.group(2).split('.'):
-        value = value[key]
+    try:
+        value = json.loads((root/match.group(1)).read_text())
+        for key in match.group(2).split('.'):
+            value = value[key]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ContractError(f'{label}: avbPublicKeySha256From {source!r} does not resolve ({type(error).__name__})') from None
+    if type(value) is not str or not HEX64.fullmatch(value):
+        raise ContractError(f'{label}: avbPublicKeySha256From {source!r} is not a sha256')
     return value
 
 def member_digest(archive, name):

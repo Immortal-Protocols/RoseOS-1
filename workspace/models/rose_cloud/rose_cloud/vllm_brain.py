@@ -10,9 +10,12 @@ vLLM's OpenAI-compatible ``/v1/completions`` with ``stream`` and ``return_token_
   the tokens the Mac's cache would hold. vLLM's prefix caching only makes the resend cheap;
 - prefill is deferred: no server work happens until ``generate``, which pays for the whole prompt (the same tokens,
   different latency from the Mac's eager prefill);
+- the request runs on a worker thread (pump.Pump). ``generate`` waits for each token with coop.Waiter, so on PR288's
+  runtime thread higher-priority jobs (listening, speaking) keep running during delayed headers or stalls, and the
+  consumer still receives only token ids;
 - ``generate`` yields one server-sampled token per ``next()`` and appends it only when it is yielded. Closing the
-  generator (barge-in, cancellation, a caller's ``break``) closes the stream, which makes vLLM abort the request;
-  tokens the server produced after that are never added;
+  generator (barge-in, a caller's ``break``), the ``cancel`` callable or cancelling the runtime job shuts the socket
+  down, which makes vLLM abort the request; tokens the server produced after that are never added;
 - sampling maps onto vLLM's parameters (temperature, top_p, top_k, presence_penalty, max_tokens, stop_token_ids);
   the server samples, so outputs are not bit-identical to the Mac's MLX sampler;
 - if the server stops on a token the caller did not ask to stop on (vLLM merges the model's default stop ids into
@@ -26,14 +29,18 @@ to another model or tokenizer.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from functools import partial
+from typing import Any, Iterator
+
+from .coop import Waiter
+from .pump import END, Pump
 
 IM_START, IM_END = '<|im_start|>', '<|im_end|>'
 MAX_LINE = 1 << 20  # one server-sent event line; anything longer is refused
@@ -68,14 +75,19 @@ class VllmBrain:
     """Brain on a vLLM server: ``base_url`` like http://127.0.0.1:8000, ``model`` the served model name."""
 
     def __init__(self, tokenizer, base_url: str, model: str, template: str | None = None,
-                 timeout_s: float = 60.0, opener: Callable[..., Any] | None = None):
+                 timeout_s: float = 60.0, runtime: Any = None, max_events: int = 256):
         t = time.perf_counter()
         self.tok = tokenizer
         self.template = template
         self.base_url = base_url.rstrip('/')
         self.model = model
         self.timeout_s = timeout_s
-        self.open = opener or urllib.request.urlopen
+        url = urllib.parse.urlsplit(self.base_url)
+        if url.scheme not in ('http', 'https') or not url.hostname:
+            raise ValueError('base_url must be http(s)://host[:port]')
+        self._url = url
+        self.waiter = Waiter(runtime)  # waits step only higher-priority PR288 jobs (coop.py)
+        self.max_events = max_events
         self.im_end = self._single(IM_END)
         self.eos = {self.im_end, self._single('<|endoftext|>')}
         self.tool_call_start = self._single('<tool_call>')
@@ -110,44 +122,67 @@ class VllmBrain:
     def sequence(self, name: str = 'seq') -> 'VllmSequence':
         return VllmSequence(self, name)
 
-    def stream(self, body: dict) -> Iterator[dict]:
-        """POST /v1/completions with stream; yields each event's JSON. Closing the generator closes the socket."""
-        req = urllib.request.Request(f'{self.base_url}/v1/completions', data=json.dumps(body).encode(),
-                                     headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'})
-        try:
-            resp = self.open(req, timeout=self.timeout_s)
-        except urllib.error.HTTPError as e:
-            e.close()
-            raise ServerError(f'completions refused: HTTP {e.code}') from None
-        except (urllib.error.URLError, OSError, socket.timeout) as e:
-            raise ServerError(f'completions unreachable: {type(e).__name__}') from None
-        try:
-            while True:
+    def stream(self, body: dict) -> Pump:
+        """Start POST /v1/completions (stream) on a worker thread; events arrive through the returned Pump.
+
+        The worker owns the socket: delayed headers and stalled reads wait there, not on the runtime thread.
+        ``Pump.close`` shuts the socket down, which ends a blocked read (and makes vLLM abort the request)."""
+        data = json.dumps(body).encode()
+        url = self._url
+
+        def produce(pump: Pump) -> None:
+            cls = http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection
+            conn = cls(url.hostname, url.port, timeout=self.timeout_s)
+            try:
                 try:
-                    line = resp.readline(MAX_LINE + 1)
-                except (OSError, socket.timeout) as e:
-                    raise ServerError(f'completions stream broke: {type(e).__name__}') from None
-                if not line:
-                    raise ServerError('completions stream ended without [DONE]')
-                if len(line) > MAX_LINE:
-                    raise ServerError('completions event too long')
-                line = line.strip()
-                if not line.startswith(b'data:'):
-                    continue
-                data = line[5:].strip()
-                if data == b'[DONE]':
-                    return
-                try:
-                    event = json.loads(data)
-                except ValueError:
-                    raise ServerError('completions event is not JSON') from None
-                if not isinstance(event, dict):
-                    raise ServerError('completions event is not an object')
-                if 'error' in event:
-                    raise ServerError('completions stream reported an error')
-                yield event
-        finally:
-            resp.close()
+                    conn.connect()
+                    # The response takes the socket over (conn.sock becomes None), so keep it for close().
+                    pump.on_stop.append(partial(_shutdown, conn.sock))
+                    if pump.stopped.is_set():
+                        return
+                    conn.request('POST', (url.path or '') + '/v1/completions', body=data,
+                                 headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'})
+                    resp = conn.getresponse()
+                except (OSError, http.client.HTTPException) as e:
+                    raise ServerError(f'completions unreachable: {type(e).__name__}') from None
+                if resp.status != 200:
+                    raise ServerError(f'completions refused: HTTP {resp.status}')
+                while not pump.stopped.is_set():
+                    try:
+                        line = resp.readline(MAX_LINE + 1)
+                    except (OSError, http.client.HTTPException) as e:
+                        raise ServerError(f'completions stream broke: {type(e).__name__}') from None
+                    if not line:
+                        raise ServerError('completions stream ended without [DONE]')
+                    if len(line) > MAX_LINE:
+                        raise ServerError('completions event too long')
+                    line = line.strip()
+                    if not line.startswith(b'data:'):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == b'[DONE]':
+                        return
+                    try:
+                        event = json.loads(payload)
+                    except ValueError:
+                        raise ServerError('completions event is not JSON') from None
+                    if not isinstance(event, dict):
+                        raise ServerError('completions event is not an object')
+                    if 'error' in event:
+                        raise ServerError('completions stream reported an error')
+                    if not pump.put(event):
+                        return
+            finally:
+                conn.close()
+
+        return Pump(self.waiter, produce, maxsize=self.max_events, name='vllm-stream')
+
+
+def _shutdown(sock: socket.socket) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)  # wakes a read blocked in the worker
+    except OSError:
+        pass
 
 
 def _token_ids(choice: dict) -> list[int]:
@@ -179,6 +214,7 @@ class VllmSequence:
         self.image_tokens = 0
         self.last_image: dict | None = None
         self.requests = 0  # completions requests made (for the smoke and tests)
+        self.worker_stopped: bool | None = None  # whether the last request's worker thread was joined
 
     def mark(self) -> Mark:
         return Mark(len(self.tokens), [], None, self.pos)
@@ -227,10 +263,15 @@ class VllmSequence:
             'return_token_ids': True, 'logprobs': 0, 'return_tokens_as_token_ids': True, 'n': 1,
         }
         self.requests += 1
-        events = self.brain.stream(body)
+        pump = self.brain.stream(body)
         produced = 0
         try:
-            for event in events:
+            while True:
+                ok, event = pump.get(abort=lambda: cancel is not None and cancel())
+                if not ok:
+                    return  # cancelled while waiting: nothing more is appended
+                if event is END:
+                    break
                 choices = event.get('choices') or []
                 if not choices:
                     continue
@@ -262,4 +303,4 @@ class VllmSequence:
                 raise Unsupported(f'server finished ({reason}) before a requested stop token')
             raise ServerError('completions stream ended without a finish reason')
         finally:
-            events.close()
+            self.worker_stopped = pump.close()

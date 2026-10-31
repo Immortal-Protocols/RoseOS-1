@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
 bb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bb)
+sys.path.insert(0, str(ROOT/'scripts/tests'))
+import test_blazer_integration as ti  # noqa: E402  (the admit producer for compile's inputs receipt)
 
 RESERVE = 322122547200
 ADEVTOOL = '17df3b79a73e67ad68387b35c7d41c85e1d8103c'
@@ -54,7 +56,7 @@ class Fixture(unittest.TestCase):
 
     def op(self, **change):
         values = dict(host='operator-builder-1', source_root=str(self.src), jobs=16, lock=str(self.lock),
-            download_dir=str(self.download), integration_dir=None)
+            download_dir=str(self.download), integration_dir=None, inputs_receipt=getattr(self, 'inputs', None))
         values.update(change)
         return bb.operator(**values)
 
@@ -70,14 +72,16 @@ class Fixture(unittest.TestCase):
         return vendor
 
     def integrated(self, **record):
-        apk = self.src/'packages/apps/PixelBackgroundControl/Agent.apk'
-        apk.parent.mkdir(parents=True)
-        apk.write_bytes(b'synthetic agent')
+        """Real admitted inputs (blazer_integration.admit) and the tree and receipt host-reconcile would leave."""
+        producer = ti.Fixture('setUp')
+        producer.setUp()
+        self.addCleanup(producer.doCleanups)
+        _, out = producer.admit()
+        self.inputs = str(out/'local-inputs.json')
+        producer.tmp = self.tmp
+        _, body = producer.tree(json.loads(Path(self.inputs).read_text()))
         receipts = self.tmp/'reconcile'
         receipts.mkdir()
-        ours = {name: bb.sha256_file(ROOT/'scripts'/name) for name in self.recipe['integration']['patcher']}
-        body = {'receiptType': 'reconcile', 'label': 'blazer-2026103140', 'patcher': {'patcher': 'trusted', 'sha256': ours},
-            'entries': {'packages/apps/PixelBackgroundControl/Agent.apk': {'after': hashlib.sha256(b'synthetic agent').hexdigest()}}}
         body.update(record)
         (receipts/'0001-blazer.json').write_text(json.dumps(body))
         return receipts
@@ -221,9 +225,17 @@ class CompileTest(Fixture):
             (receipts/'0002-later.json').write_text(json.dumps(body))
             self.assertIn(pattern, ' '.join(self.preflight('compile', integration_dir=str(receipts))['problems']), pattern)
             (receipts/'0002-later.json').unlink()
-        (self.src/'packages/apps/PixelBackgroundControl/Agent.apk').write_bytes(b'changed')
+        agent = self.src/'packages/apps/PixelBackgroundControl/Agent.apk'
+        original = agent.read_bytes()
+        agent.write_bytes(b'changed')
         self.assertIn('no longer matches', ' '.join(self.preflight('compile', integration_dir=str(receipts))['problems']))
-        (self.src/'packages/apps/PixelBackgroundControl/Agent.apk').write_bytes(b'synthetic agent')
+        agent.write_bytes(original)
+        self.assertIn('blazer local-inputs.json',
+            ' '.join(self.preflight('compile', integration_dir=str(receipts), inputs_receipt=None)['problems']))
+        body = json.loads((receipts/'0001-blazer.json').read_text())
+        (receipts/'0002-other-build.json').write_text(json.dumps(dict(body, label='blazer-2026103199')))
+        self.assertIn('not blazer-2026103150', ' '.join(self.preflight('compile', integration_dir=str(receipts))['problems']))
+        (receipts/'0002-other-build.json').unlink()
         elsewhere = self.tmp/'foreign.json'
         shutil.copyfile(receipts/'0001-blazer.json', elsewhere)
         os.symlink(elsewhere, receipts/'0003-link.json')

@@ -5,7 +5,9 @@ tool-call parsing) import ``mlx.core`` at module level, but outside the MLX mode
 pick a GPU stream and wire memory when its thread starts. ``install()`` registers a stand-in ``mlx.core`` whose
 stream and memory calls do nothing and whose every other attribute raises ``MlxUnavailable``. So PR288's scheduler and
 task manager run as written with ``VllmBrain`` as the brain (tests/test_pr288_tasks.py), and anything that still
-reaches for an MLX model (PR288's own Brain, listener, speaker) fails loudly instead of being imitated.
+reaches for an MLX model (PR288's own Brain, listener, mlx-audio loader) fails loudly instead of being imitated.
+PR288's Speaker calls ``mx.eval`` on each audio frame; with a Linux provider those frames are NumPy arrays that are
+already computed, so ``eval`` accepts NumPy arrays (and lists of them) and refuses anything else.
 """
 
 from __future__ import annotations
@@ -32,6 +34,15 @@ def _module(name: str) -> types.ModuleType:
     return mod
 
 
+def _eval_host_arrays(*arrays) -> None:
+    """``mx.eval`` for what a Linux provider hands PR288's speaker: NumPy arrays, already computed."""
+    import numpy as np
+
+    for a in arrays:
+        if not isinstance(a, (np.ndarray, list, tuple)):
+            raise MlxUnavailable(f'mlx.core.eval of {type(a).__name__}: MLX is not available on this host')
+
+
 def install() -> None:
     """Idempotent. Refuses to shadow a real MLX installation."""
     current = sys.modules.get('mlx.core')
@@ -47,6 +58,7 @@ def install() -> None:
     core.set_default_stream = lambda stream: None
     core.set_wired_limit = lambda limit: None
     core.device_info = lambda: {}
+    core.eval = _eval_host_arrays
     pkg.core = core
     pkg.__path__ = []
     sys.modules['mlx'], sys.modules['mlx.core'] = pkg, core

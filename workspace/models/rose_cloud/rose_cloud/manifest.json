@@ -1,0 +1,450 @@
+{
+ "schema": "rose-cloud-manifest/1",
+ "status": "PROPOSAL: pins for a separately approved bring-up; nothing here is staged, installed or authorized",
+ "target": {
+  "project": "protocols-465723",
+  "zone": "us-central1-f",
+  "instance": "models-glimmer-01",
+  "instanceId": "2705251739288295377",
+  "machineType": "a2-highgpu-2g",
+  "gpus": "2x NVIDIA A100 40GB",
+  "gpuMemoryBytes": 42949672960,
+  "vcpus": 24,
+  "ramGiB": 170,
+  "dataDisk": "/mnt/models-data (500 GB pd-ssd)",
+  "source": "instance id and zone: Models manager packet MODELS-ROSE-CLOUD-003; shape: serving/service/README.md"
+ },
+ "image": {
+  "id": "sha256:e90b8320f680a6a7b8daff87ad08cdf063a68d869880e662fd6d2cebfef689dc",
+  "manifestDigest": "sha256:dbb04f5c0c0a6356779cf3175381a0406584df01b0ad2f88eaadb46f7f2da08c",
+  "sourceTag": "vllm/vllm-openai:muse-glimmer",
+  "vllmVersion": "unknown until cloud-preflight-once runs"
+ },
+ "stagingRoot": "/mnt/models-data/rose-cloud",
+ "groups": {
+  "qwen": {
+   "repo": "Qwen/Qwen3.6-35B-A3B-FP8",
+   "revision": "95a723d08a9490559dae23d0cff1d9466213d989",
+   "dir": "qwen3.6-35b-a3b-fp8-95a723d0",
+   "license": "apache-2.0",
+   "files": [
+    [
+     "LICENSE",
+     11343,
+     "gitsha1",
+     "1d5180a42f1c3383ba7c7bd0a50f0837ef0168df"
+    ],
+    [
+     "chat_template.jinja",
+     7764,
+     "gitsha1",
+     "a8755d827c0a7b614c246c4060dfd58ab352a8ff"
+    ],
+    [
+     "config.json",
+     37000,
+     "gitsha1",
+     "c8df3b893d8070130c2b59497ddb508f41cf9168"
+    ],
+    [
+     "configuration.json",
+     58,
+     "gitsha1",
+     "d24dba949ee1fe70cc810e4c4709a0bddf4e06ba"
+    ],
+    [
+     "generation_config.json",
+     202,
+     "gitsha1",
+     "023756cfadf88e5bf69eefeee3e172f38c448d64"
+    ],
+    [
+     "layers-0.safetensors",
+     843713608,
+     "sha256",
+     "969ed52b6d4a45e1c919115aed81a48a00004625a0406eebf630e829ff97c5bf"
+    ],
+    [
+     "layers-1.safetensors",
+     843713608,
+     "sha256",
+     "9b6714f0a7b7f9f7ed9eceefc31af655de1863bd83a23d735aa8dbad2cc03dfe"
+    ],
+    [
+     "layers-10.safetensors",
+     843715168,
+     "sha256",
+     "5cc57c2d6e18830429e2c9ea27a0b7d15e6502c74463d3d4ec6b621c699a5ef8"
+    ],
+    [
+     "layers-11.safetensors",
+     837094000,
+     "sha256",
+     "0f85558bc82b754230204607f55a3035fd39a6ad4e7f0f5613aa40a632566cab"
+    ],
+    [
+     "layers-12.safetensors",
+     843715168,
+     "sha256",
+     "0eb974e0b80092a722d10140647aedc14647831007ea7d898b892064c9fb4d0d"
+    ],
+    [
+     "layers-13.safetensors",
+     843715168,
+     "sha256",
+     "7d4bbdc09e40a3ccfa503c5149c7bb477b07bf8a75ca81613aa68031d995cbf8"
+    ],
+    [
+     "layers-14.safetensors",
+     843715168,
+     "sha256",
+     "0c6c07e10d047dd742b90fdfdbe734d5b4627fcae7728f8319413194c8d6f171"
+    ],
+    [
+     "layers-15.safetensors",
+     837094000,
+     "sha256",
+     "786c965fcbc9544aa97524e986ff7e1e2303b6c22812249b283b8c590ada7a77"
+    ],
+    [
+     "layers-16.safetensors",
+     843715168,
+     "sha256",
+     "dbbaab6eef74ab4f24d374ce94203c8f439019a26d322d8b02fb1cee6ed70267"
+    ],
+    [
+     "layers-17.safetensors",
+     843715168,
+     "sha256",
+     "29a35db86d591da297ac0ff46f773bf5e5386035172b6c637e00cf0786b0fdc9"
+    ],
+    [
+     "layers-18.safetensors",
+     843715168,
+     "sha256",
+     "99db8f52e91928e6a362c4510b15112c0c5d2eb0e9279b3413ec1db2016f1b2b"
+    ],
+    [
+     "layers-19.safetensors",
+     837094000,
+     "sha256",
+     "b1bc3e93c3a22adc01a77b4a2d5e2171e9588e2478ed648526596700ffa566c7"
+    ],
+    [
+     "layers-2.safetensors",
+     843713608,
+     "sha256",
+     "7ca3668d7dde8c47e796186f9a459afe6f86a60e547bc2f72fcc87543e4a718e"
+    ],
+    [
+     "layers-20.safetensors",
+     843715168,
+     "sha256",
+     "027f68acf35eb9e9fc41ae12154c18da1b0126bee7eaf16a177cfcbeaafbc7a6"
+    ],
+    [
+     "layers-21.safetensors",
+     843715168,
+     "sha256",
+     "79205dfb7fe145b26e5941f1b9590a870bc9e1df3127a67bd1ac32f1a12ad75f"
+    ],
+    [
+     "layers-22.safetensors",
+     843715168,
+     "sha256",
+     "94e7674ffb28f4cd9cf8859c6d0440cbd5d4d3a6dc33193a0442642ae303cd17"
+    ],
+    [
+     "layers-23.safetensors",
+     837094000,
+     "sha256",
+     "51a7c63c51959faa40c369c80ddac42233cd13d7ad6603e75574bbeeca72e98d"
+    ],
+    [
+     "layers-24.safetensors",
+     843715168,
+     "sha256",
+     "8c64b42cb8abc93ff5e5ac801c556da6eb81545a151c10320618bae250c9efd9"
+    ],
+    [
+     "layers-25.safetensors",
+     843715168,
+     "sha256",
+     "18ca830020bd0c7af5f99257112e1c5ba457673d4fd926e6eafcb3127edb06b5"
+    ],
+    [
+     "layers-26.safetensors",
+     843715168,
+     "sha256",
+     "a3fcd9cfeeb8ef52b749041df0986865cd2b6822a67bd69d0e0692571e49cfde"
+    ],
+    [
+     "layers-27.safetensors",
+     837094000,
+     "sha256",
+     "48829a4c312ecaf44e03bd9266245549982c326c0311b37694eb29dde4f30c62"
+    ],
+    [
+     "layers-28.safetensors",
+     843715168,
+     "sha256",
+     "9e40e51e6b2fbd04642cdfe3e66f4936bb74ef880ea8ff5417ec2075c47a938f"
+    ],
+    [
+     "layers-29.safetensors",
+     843715168,
+     "sha256",
+     "154e2b6da74a5c7921382d1738a57d4a7a9465594f68aa2f7e269340cef27d76"
+    ],
+    [
+     "layers-3.safetensors",
+     837092440,
+     "sha256",
+     "9ebbd0a7aa2f82f516ec339b66b317f5a7d710d244c42d00f4fea22478bac7da"
+    ],
+    [
+     "layers-30.safetensors",
+     843715168,
+     "sha256",
+     "292aa0e63dfbd0c757945021b0995b83d7f561985202df9fbfe591c61911f9fa"
+    ],
+    [
+     "layers-31.safetensors",
+     837094000,
+     "sha256",
+     "21073b1a747d3736b46dc4f84ed66ae287ee3acb699807757a06d77de98af99e"
+    ],
+    [
+     "layers-32.safetensors",
+     843715168,
+     "sha256",
+     "52e7905b111b6fbfb2b91b9f5b4fd748e61c93cbd39e988d1fabbcd9e00f4f20"
+    ],
+    [
+     "layers-33.safetensors",
+     843715168,
+     "sha256",
+     "bcc4ad3526f6bb99ae9af57cc319da6bfd69228e5d0bcbd678590323f240cccb"
+    ],
+    [
+     "layers-34.safetensors",
+     843715168,
+     "sha256",
+     "f52d1343ed110f00a661fcdc17e530a5f3c22a9397469bd2f41e22c8a2ffe9f1"
+    ],
+    [
+     "layers-35.safetensors",
+     837094000,
+     "sha256",
+     "a079648624f32732831382efa86c72bf03bc58336dcfe6b8ae11f4fcba33e2ea"
+    ],
+    [
+     "layers-36.safetensors",
+     843715168,
+     "sha256",
+     "f293aff9b2498b7a86303bfb928a03b62b1763bf71f0fe35c14d2d1712292673"
+    ],
+    [
+     "layers-37.safetensors",
+     843715168,
+     "sha256",
+     "918c26a832494ea368013e5fce8dba0e98923cc62f69d0b21f752dfeb241d404"
+    ],
+    [
+     "layers-38.safetensors",
+     843715168,
+     "sha256",
+     "2cd43a74c05a8f112c4f137f8139f217601a6035f6474c256b4bac315ccf5c39"
+    ],
+    [
+     "layers-39.safetensors",
+     837094000,
+     "sha256",
+     "0e347a8527fb41e4dde7e92a359feb0709d770d2b7ab4f2081c940205b85dba9"
+    ],
+    [
+     "layers-4.safetensors",
+     843713608,
+     "sha256",
+     "3fda002efe01809173b2a9179d529e04f1a9e28d58038cf47fea02b1251c544e"
+    ],
+    [
+     "layers-5.safetensors",
+     843713608,
+     "sha256",
+     "85f08db02168b263497757002827eb15c44c9ae46962ec26f19a648a0f5fb826"
+    ],
+    [
+     "layers-6.safetensors",
+     843713608,
+     "sha256",
+     "0601aa7cd21d29efdd6330614aaff2b9a7e4b599d1de894fdb50525033c8725a"
+    ],
+    [
+     "layers-7.safetensors",
+     837092440,
+     "sha256",
+     "ec6d9082f26b2e3d6010114cac16d71626836a53812782690bce582bf2baac51"
+    ],
+    [
+     "layers-8.safetensors",
+     843713608,
+     "sha256",
+     "a4284bb825ff85f6166208edfb8315897771db03dae82a078bc69014c695502a"
+    ],
+    [
+     "layers-9.safetensors",
+     843713608,
+     "sha256",
+     "f2bc291ccdccde1094f34e5d2f506e2b8a3857327faa9ffbd2d3a5d75de9d23a"
+    ],
+    [
+     "merges.txt",
+     3353259,
+     "gitsha1",
+     "a494e019ca1502219fd0128658b979e5f05ae8e8"
+    ],
+    [
+     "model.safetensors.index.json",
+     6329223,
+     "gitsha1",
+     "3a6440878f2f2564e214496bb35fcc37cbbf7d8b"
+    ],
+    [
+     "mtp.safetensors",
+     853860608,
+     "sha256",
+     "3e9c9fef90a5c02314cf27eeccc72f9f61ce711c12c869244c7127c787b5bd7d"
+    ],
+    [
+     "outside.safetensors",
+     2927422112,
+     "sha256",
+     "bb9755bc8ebd638e6a9994ae75064f9a6ac3f56541c00a10a90b7a930d24cc4f"
+    ],
+    [
+     "preprocessor_config.json",
+     390,
+     "gitsha1",
+     "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+    ],
+    [
+     "tokenizer.json",
+     12807982,
+     "sha256",
+     "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+    ],
+    [
+     "tokenizer_config.json",
+     16718,
+     "gitsha1",
+     "28d96ff303d1d20350185caf4bf037045916ed35"
+    ],
+    [
+     "video_preprocessor_config.json",
+     385,
+     "gitsha1",
+     "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+    ],
+    [
+     "vocab.json",
+     6722759,
+     "gitsha1",
+     "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+    ]
+   ]
+  },
+  "phonon": {
+   "repo": "gradium/phonon-31m-en",
+   "revision": "92741c5b07d085ff840e26fea8ce43110b87852f",
+   "dir": "phonon-31m-en-92741c5b",
+   "license": "apache-2.0",
+   "files": [
+    [
+     "config.json",
+     4634,
+     "gitsha1",
+     "11cfeb2513febe31358a8ff942093e0b2c28710a"
+    ],
+    [
+     "model.safetensors",
+     102823920,
+     "sha256",
+     "8a04cf833cfe69b67c2ec968b2d31244655b9accc84ade9c0ebcc176f2074607"
+    ],
+    [
+     "tokenizer.json",
+     277967,
+     "gitsha1",
+     "70d39980cb2154bd364dbed8424b1343923a03e2"
+    ]
+   ]
+  },
+  "voices": {
+   "repo": "gradium/phonon-voices",
+   "revision": "0ee17205f254b5abc43b266c8a0f215565c352f7",
+   "dir": "phonon-voices-0ee17205",
+   "license": "apache-2.0",
+   "files": [
+    [
+     "voices/NbpkqMVS3CJeq2j8.safetensors",
+     256136,
+     "sha256",
+     "97c7f8c253413574406ab80dd23f49c3ebb2517163b00a9bf86b9c4cf43e7e23"
+    ]
+   ],
+   "note": "zoey, PR288's default voice; the other eight PR288 voices are pinned in phonon.VOICES"
+  },
+  "ptts": {
+   "package": "ptts",
+   "version": "0.6.0",
+   "dir": "wheels",
+   "license": "MIT OR Apache-2.0",
+   "files": [
+    [
+     "ptts-0.6.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+     7483513,
+     "sha256",
+     "6efb197e73af258e278e90fcc771f36022c5123e9ecca2fca50ae90472caa60c"
+    ]
+   ],
+   "url": "https://files.pythonhosted.org (PyPI ptts 0.6.0, uploaded 2026-10-30T11:24:36Z)",
+   "requiresPython": ">=3.9",
+   "requiresDist": [
+    "numpy"
+   ],
+   "glibc": ">=2.17 (manylinux2014)",
+   "cpu": "x86-64-v3 (AVX2, FMA, F16C) per ptts-pyo3 README",
+   "quant": "f32",
+   "quantBasis": "ptts v0.6.0 ptts-pyo3/src/lib.rs: quant=None is Quant::F32, which prefers model.safetensors; available_quants() lists f32, q8_0, q8_1, q8k, q6k, q5_0, q5_1, q5k, q4_0, q4_1, q4k",
+   "device": "cpu",
+   "lang": "none"
+  }
+ },
+ "probe": {
+  "mode": "cloud-preflight-once",
+  "seconds": 120,
+  "captureBytes": 1048576,
+  "receiptBytes": 4096,
+  "mount": "/mnt/models-data:/mnt/models-data:ro",
+  "hashLimitBytes": 1048576
+ },
+ "assumptions": {
+  "stagingBytes": {
+   "qwen": 37492949243,
+   "phonon": 103106521,
+   "voices": 256136,
+   "ptts": 7483513
+  },
+  "stagingBytesTotal": 37603795413,
+  "diskNeed": "staging total plus 10% margin on /mnt/models-data, beside the existing Muse cache (59.58 GB); free space is measured by the preflight, not assumed",
+  "perGpu": "FP8 weights ~18.75 GB per A100 40 GB at tensor parallel 2 (37.49 GB / 2); KV cache, activations, the vision tower and CUDA graphs not measured; BF16 fit not asserted either way",
+  "phononCpu": "ptts runs on CPU (f32); 24 vCPU shared with vLLM's host threads"
+ },
+ "trial": {
+  "approved": false,
+  "duration": "30 minutes, loopback only (127.0.0.1)",
+  "cost": "about US$3.68 at US$7.35/h for a2-highgpu-2g (serving/service/README.md), excluding disk and network",
+  "cleanup": "stop and remove the trial containers; staged files stay on /mnt/models-data/rose-cloud unless removal is approved; Muse hold unchanged"
+ }
+}
