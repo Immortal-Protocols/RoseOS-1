@@ -895,11 +895,13 @@ class DeadlineTest(unittest.TestCase):
     def test_time_passing_between_directories_stops_before_the_next_is_opened(self):
         with fixture(usageSeconds=45) as f:
             paths = self.tree(f, ['a', 'b', 'c', 'd'])
-            first = max(paths)  # the stack pops the last-listed name first
-            with self.costed({}, close_costs={first: 50}) as (state, clock):
+            # Whichever directory the stack pops first (scandir order is the filesystem's) passes the budget on close.
+            with self.costed({}, close_costs={p: 50 for p in paths}) as (state, clock):
                 result = readiness.usage(f.source, 'out', readiness.Deadline(10 ** 6, clock), clock)
             self.assertEqual((result['status'], result['reason']), ('incomplete', 'time cap'))
-            self.assertEqual([p for p in state['opened'] if p != 'out'], [f'out/{paths[first]}'], 'nothing opened after expiry')
+            opened = [p for p in state['opened'] if p != 'out']
+            self.assertEqual(len(opened), 1, 'nothing opened after expiry')
+            self.assertIn(opened[0], {f'out/{n}' for n in paths.values()})
 
     def test_time_passing_after_the_last_listing_is_not_reported_complete(self):
         with fixture(usageSeconds=45) as f:
