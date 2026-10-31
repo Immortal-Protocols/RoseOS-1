@@ -1,0 +1,50 @@
+name: Publish Models v2 prerelease (one-off)
+
+# MODELS-PUBLISH-001 (owner-approved 2026-10-31): publish the owner-supplied signed dev.pixel.models 2/0.2.0 APK from
+# the fixed private input commit as prerelease rose-models-2 in pixel-ota, never Latest. Manual and main-only. Every
+# input and APK check runs before the publisher token exists; scripts/models-publication.py pins all identities.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: models-publish-rose-models-2
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Read the fixed input commit (repository API, read-only)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/models-publication.py ingest --out "$RUNNER_TEMP/models-input"
+      - name: Verify the APK with the pinned build-tools r35
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "$RUNNER_TEMP/models-tools"
+          python3 scripts/models-publication.py verify --input "$RUNNER_TEMP/models-input" --sdk-root "$RUNNER_TEMP/models-tools/sdk-r35"
+      - name: Mint pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Upload, verify and publish rose-models-2 (never Latest)
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/models-publication.py publish --input "$RUNNER_TEMP/models-input"
+      - name: Remove temporary files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/models-input" "$RUNNER_TEMP/models-tools"

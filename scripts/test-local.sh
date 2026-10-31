@@ -79,6 +79,7 @@ python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
 python3 scripts/tests/test_models_signing_bootstrap.py
 python3 scripts/tests/test_models_apk_signing.py
+python3 scripts/tests/test_models_publication.py
 python3 scripts/tests/test_alpha_runtime.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py
