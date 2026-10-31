@@ -35,6 +35,7 @@
         <span>Voice</span>
         <select id="voice"></select>
       </label>
+      <button id="pair" class="ghost pair-btn" type="button" title="Connect Rose Agent over Wi-Fi or Tailscale with a QR code">Pair phone</button>
       <button id="reset" class="ghost" type="button" title="New conversation and a fresh phone">Reset</button>
       <span id="conn" class="conn" title="Event stream"></span>
     </div>
@@ -100,6 +101,35 @@
     </div>
     <div id="stats" class="stats"></div>
   </footer>
+
+  <div id="pair-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="pair-title" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="pair-title">Pair a phone</h2>
+        <button id="pair-close" class="icon-btn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="pair-body">
+        <div class="qr-box" id="pair-qr-box">
+          <img id="pair-qr" alt="Pairing QR code" width="300" height="300">
+          <div id="pair-done" class="pair-done" hidden></div>
+        </div>
+        <div class="pair-info">
+          <p class="pair-lead">On the phone, open Rose Agent's menu, choose <b>Pair with Mac</b> and scan this code.
+            It works on the same Wi-Fi or from anywhere on your Tailscale network.</p>
+          <dl class="pair-facts">
+            <dt>Mac</dt><dd id="pair-name">&nbsp;</dd>
+            <dt>Mac ID</dt><dd id="pair-id" class="mono">&nbsp;</dd>
+            <dt>Addresses</dt><dd id="pair-hosts">&nbsp;</dd>
+            <dt>Code</dt><dd id="pair-count">&nbsp;</dd>
+          </dl>
+          <div id="pair-error" class="pair-error" hidden></div>
+          <button id="pair-new" class="ghost" type="button">New code</button>
+        </div>
+      </div>
+      <h3 class="pair-sub">Paired phones</h3>
+      <ul id="pair-devices" class="pair-devices"><li class="none">None yet.</li></ul>
+    </div>
+  </div>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <script type="module" src="/app.js"></script>

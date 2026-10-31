@@ -6,6 +6,15 @@ ROOT="$(cd "$APP/../.." && pwd)"
 SDK="${ANDROID_SDK_ROOT:-$ROOT/.tools/android-sdk}"
 BT="$SDK/build-tools/android-15"
 JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+# ZXing core decodes the pairing QR code (LocalRosePairActivity); fetched by scripts/setup-zxing.sh.
+ZXING="$ROOT/.tools/zxing/core-3.5.4.jar"
+ZXING_SHA256=71de5d89341b5fcf5dd89da7f44e84d825d0e084cdf3ec77c9abe26b0f0ceb13
+if [[ ! -f "$ZXING" ]]; then
+  printf 'Missing build input: %s\nRun bash scripts/setup-zxing.sh (or scripts/bootstrap.sh).\n' "$ZXING" >&2; exit 1
+fi
+if command -v sha256sum >/dev/null; then ZXING_ACTUAL="$(sha256sum "$ZXING")"; else ZXING_ACTUAL="$(shasum -a 256 "$ZXING")"; fi
+[[ "${ZXING_ACTUAL%% *}" == "$ZXING_SHA256" ]] || {
+  printf 'ZXing jar checksum mismatch: %s\nDelete it and run bash scripts/setup-zxing.sh.\n' "$ZXING" >&2; exit 1; }
 for file in "$BT/aapt" "$BT/d8" "$SDK/platforms/android-35/android.jar" \
   "$APP/app/assets/connection.json" "$APP/app/assets/mac-screen-connection.json" \
   "$ROOT/workspace/pixel-clipboard/clipboard-connection.json" \
@@ -36,12 +45,12 @@ done
   --bundle --format=iife --platform=browser --minify --outfile="$STAGE/assets/eleven-client.js"
 "$BT/aapt" package -f -M "$STAGE/AndroidManifest.xml" -S "$STAGE/res" \
   -A "$STAGE/assets" -I "$SDK/platforms/android-35/android.jar" -F "$OUT/resources.apk" -J "$OUT/generated"
-mapfile -t SOURCES < <(find "$STAGE/src" "$OUT/generated" -name '*.java' -type f | sort)
+SOURCES=(); while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$STAGE/src" "$OUT/generated" -name '*.java' -type f | sort)
 "$JAVA" -m jdk.compiler/com.sun.tools.javac.Main -encoding UTF-8 -source 8 -target 8 \
   -Xlint:-options -bootclasspath "$SDK/platforms/android-35/android.jar:$BT/core-lambda-stubs.jar" \
-  -d "$OUT/classes" "${SOURCES[@]}"
-mapfile -t CLASSES < <(find "$OUT/classes" -name '*.class' -type f | sort)
-"$BT/d8" --min-api 29 --lib "$SDK/platforms/android-35/android.jar" --output "$OUT/dex" "${CLASSES[@]}"
+  -classpath "$ZXING" -d "$OUT/classes" "${SOURCES[@]}"
+CLASSES=(); while IFS= read -r f; do CLASSES+=("$f"); done < <(find "$OUT/classes" -name '*.class' -type f | sort)
+"$BT/d8" --min-api 29 --lib "$SDK/platforms/android-35/android.jar" --output "$OUT/dex" "${CLASSES[@]}" "$ZXING"
 cp "$OUT/resources.apk" "$OUT/unaligned.apk"
 (cd "$OUT/dex" && zip -q "$OUT/unaligned.apk" classes*.dex)
 "$BT/zipalign" -f 4 "$OUT/unaligned.apk" "$OUT/rose-agent-unsigned.apk"

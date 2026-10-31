@@ -9,5 +9,6 @@ done
 java -m jdk.compiler/com.sun.tools.javac.Main -version
 node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
 bash scripts/setup-android-sdk.sh
+bash scripts/setup-zxing.sh
 npm ci --prefix workspace/rose-agent/server --ignore-scripts --cache "$ROOT/.tools/npm-cache" --no-audit --no-fund
 printf 'Local tool setup complete. See docs/APP-BUILD.md for public endpoint configuration.\n'
