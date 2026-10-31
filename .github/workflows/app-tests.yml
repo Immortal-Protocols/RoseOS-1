@@ -43,5 +43,25 @@ jobs:
           node --version
           python3 --version
           java -version
+      - name: Models PR288 inputs (pinned head e1b702e voice-phone-demo, its pinned numpy/pillow/fastapi, cryptography)
+        run: |
+          set -euo pipefail
+          pr288="$RUNNER_TEMP/pr288"
+          mkdir -p "$pr288"
+          git archive e1b702ee3b8a6bf656b5cc59bd765787622ae543 prototypes/voice-phone-demo | tar -x -C "$pr288"
+          python3 -m venv "$RUNNER_TEMP/pr288-venv"
+          "$RUNNER_TEMP/pr288-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
+            $(grep -E '^(numpy|pillow|fastapi)==' "$pr288/prototypes/voice-phone-demo/requirements.txt") cryptography
+          "$RUNNER_TEMP/pr288-venv/bin/pip" list --disable-pip-version-check | grep -iE '^(numpy|pillow|fastapi|cryptography) '
+          echo "ROSE_PR288_DIR=$pr288/prototypes/voice-phone-demo" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/pr288-venv/bin" >> "$GITHUB_PATH"
       - name: Offline suite
         run: bash scripts/test-local.sh
+      - name: Models PR288 cases executed, not skipped
+        run: |
+          set -euo pipefail
+          for t in test_vllm_brain test_contract test_pr288_tasks test_coop test_speech_wire; do
+            out="$(python3 -I "workspace/models/rose_cloud/tests/$t.py" -v 2>&1)" || { printf '%s\n' "$out"; exit 1; }
+            printf '%s\n' "$out" | grep -E '^(Ran|OK|FAILED)'
+            if grep -q 'skipped' <<<"$out"; then printf '%s\n' "$out" | grep skipped; echo "$t skipped cases" >&2; exit 1; fi
+          done
