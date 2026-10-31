@@ -12,8 +12,12 @@ A unit's inputs are its recorded files and the paths its command names. A change
 touches. An edit to test-local.sh selects the units it adds or changes; an edit to its header or Java prelude runs the
 FULL suite, as does a change to this tool or its map, a package manifest, or any code file no unit claims. GitHub
 configuration (.github/) and other files no unit reads select nothing: the offline suite never reads them. A unit
-missing from the map (new or edited in test-local.sh) is always selected. Changed files default to the working tree against --base
-(origin/main) plus uncommitted changes. Exit: 0 pass, 1 a unit failed, 2 invalid input.
+missing from the map (new or edited in test-local.sh) is always selected.
+
+Map drift: the map is a trace at one commit (its generatedAt). A unit whose recorded or named code inputs have changed
+since that commit may now read other files (an added import, a new fixture path), so it is STALE and always selected
+until the map is retraced. If the map's commit is not in this checkout, the FULL suite runs. Changed files default to
+the working tree against --base (origin/main) plus uncommitted changes. Exit: 0 pass, 1 a unit failed, 2 invalid input.
 """
 import argparse
 import hashlib
@@ -96,6 +100,17 @@ def changed_files(base):
     return sorted(set(committed + working + untracked))
 
 
+def drifted_since(ref):
+    """Files that differ between the map's traced commit and the working tree (incl. untracked); None if unknown."""
+    git = lambda *a: subprocess.run(['git', '-C', str(ROOT), *a], capture_output=True, text=True)
+    if not ref or git('cat-file', '-e', f'{ref}^{{commit}}').returncode:
+        return None
+    diff = git('diff', '--name-only', ref)
+    if diff.returncode:
+        return None
+    return set(diff.stdout.split()) | set(git('ls-files', '--others', '--exclude-standard').stdout.split())
+
+
 def load_map():
     try:
         return json.loads(MAP.read_text())
@@ -111,25 +126,36 @@ def unit_inputs(unit, dep_map):
     return inputs, entry is not None
 
 
-def select(files, suite_units=None, dep_map=None, base_suite=None, suite_text=None):
-    """base_suite: test-local.sh at the base, so an edit to it selects only the units it adds or changes."""
+def select(files, suite_units=None, dep_map=None, base_suite=None, suite_text=None, drifted=...):
+    """base_suite: test-local.sh at the base, so an edit to it selects only the units it adds or changes.
+    drifted: files changed since the map's trace (drifted_since); None means unknown, which runs the full suite. By
+    default it is computed from the map's generatedAt; a map without one (a synthetic map) has no drift."""
     suite_text = suite_text if suite_text is not None else SUITE.read_text()
     suite_units = suite_units if suite_units is not None else units(suite_text)
     dep_map = dep_map if dep_map is not None else load_map()
+    if drifted is ...:
+        drifted = drifted_since(dep_map['generatedAt']) if dep_map.get('generatedAt') else frozenset()
     files = sorted(set(files))
     full = [f for f in files if f in FULL_TRIGGERS or Path(f).name in FULL_NAMES]
+    if drifted is None:
+        full.append('(map commit not in this checkout: retrace)')
+        drifted = frozenset()
     new_keys = set()
     if 'scripts/test-local.sh' in files:
         if base_suite is None or suite_prelude(base_suite) != suite_prelude(suite_text):
             full.append('scripts/test-local.sh')
         else:
             new_keys = {u['key'] for u in suite_units} - {u['key'] for u in units(base_suite)}
-    selected, claimed = [], {'scripts/test-local.sh'}
+    selected, claimed, stale_units = [], {'scripts/test-local.sh'}, []
     for unit in suite_units:
         inputs, mapped = unit_inputs(unit, dep_map)
         hit = sorted(inputs & set(files)) if mapped else ['(not in map)']
         if unit['key'] in new_keys:
             hit = ['(added or changed in test-local.sh)'] + hit
+        stale = sorted(f for f in inputs & drifted if CODE.search(f)) if mapped else []
+        if stale and not hit:
+            hit = ['(stale: inputs changed since the trace)'] + stale
+            stale_units.append(unit['id'])
         claimed |= inputs
         if hit:
             selected.append({'id': unit['id'], 'because': hit[:5]})
@@ -139,7 +165,7 @@ def select(files, suite_units=None, dep_map=None, base_suite=None, suite_text=No
         return {'mode': 'full', 'reason': {'triggers': full, 'unclaimedCode': unclaimed_code},
                 'units': [u['id'] for u in suite_units], 'changed': files}
     return {'mode': 'targeted', 'units': [s['id'] for s in selected], 'because': selected,
-            'ignored': unclaimed, 'changed': files, 'of': len(suite_units)}
+            'stale': stale_units, 'ignored': unclaimed, 'changed': files, 'of': len(suite_units)}
 
 
 def run_units(chosen, suite_units, timings=None, wrap=None):

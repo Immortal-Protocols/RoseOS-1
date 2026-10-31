@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """scripts/test-select.py: unit parsing keeps every test-local.sh command exactly once, and selection is targeted only
-when every changed code file is claimed by some unit's inputs; otherwise it runs the full suite."""
+when every changed code file is claimed by some unit's inputs; otherwise it runs the full suite. A unit whose code inputs
+changed since the map's trace is stale and always selected; an unknown map commit runs the full suite."""
 import importlib.util
 import json
 from pathlib import Path
@@ -131,8 +132,36 @@ class Select(unittest.TestCase):
         del self.map['units'][self.units[3]['key']]
         self.assertEqual(self.pick('scripts/alpha.py')['units'], [2, 3])
 
+    def test_a_unit_whose_code_inputs_changed_since_the_trace_is_stale_and_selected(self):
+        # unit 3 (test_beta) gained an import after the trace; a change elsewhere must still run it
+        r = ts.select(['scripts/alpha.py'], self.units, self.map, drifted={'os/tests/test_beta.py', 'scripts/alpha.py'})
+        self.assertEqual((r['mode'], r['units'], r['stale']), ('targeted', [2, 3], [3]))
+        r = ts.select(['docs/VERIFY.md'], self.units, self.map, drifted={'os/beta.py', 'docs/VERIFY.md'})
+        self.assertEqual((r['units'], r['stale']), ([3], [3]), 'a changed fixture path: the source changed, unit stale')
+
+    def test_non_code_drift_and_no_drift_leave_selection_unchanged(self):
+        self.map['units'][self.units[3]['key']]['inputs'].append('os/beta.jpg')
+        self.assertEqual(ts.select(['scripts/alpha.py'], self.units, self.map, drifted={'os/beta.jpg'})['units'], [2])
+        self.assertEqual(ts.select(['scripts/alpha.py'], self.units, self.map, drifted=set())['units'], [2])
+
+    def test_an_unknown_map_commit_runs_the_full_suite(self):
+        r = ts.select(['scripts/alpha.py'], self.units, self.map, drifted=None)
+        self.assertEqual(r['mode'], 'full')
+        self.assertEqual(ts.drifted_since('0' * 40), None)
+        self.assertEqual(ts.drifted_since(None), None)
+
+    def test_default_drift_comes_from_the_map_commit(self):
+        self.map['generatedAt'] = '0' * 40
+        self.assertEqual(self.pick('scripts/alpha.py')['mode'], 'full')
+
 
 class RealMap(unittest.TestCase):
+    def test_checked_in_map_commit_is_known_so_selection_can_measure_drift(self):
+        commit = json.loads(ts.MAP.read_text())['generatedAt']
+        if subprocess.run(['git', '-C', str(SCRIPTS), 'cat-file', '-e', f'{commit}^{{commit}}']).returncode:
+            self.skipTest('map commit not in this (shallow) checkout: selection runs the full suite')
+        self.assertIsInstance(ts.drifted_since(commit), set)
+
     def test_checked_in_map_names_tracked_files_only(self):
         dep_map = json.loads(ts.MAP.read_text())
         files = ts.tracked()
