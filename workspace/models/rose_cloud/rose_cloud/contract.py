@@ -82,7 +82,9 @@ CAPABILITIES = {
     'brain_logits': 'unsupported: no next-token logits are kept (unused by conductor/tasks at PR288_HEAD)',
     'runtime': 'reuse: PR288 rose/runtime.py unchanged through nomlx; network and synthesis waits run on worker '
                'threads and step only higher-priority jobs while waiting (coop.Waiter)',
-    'listener': 'unsupported: VAD/smart-turn/streaming ASR/final ASR are MLX models; no Linux provider yet',
+    'listener': 'providers: listen.py binds PR288 Listener (unchanged) to Silero (PR288 SileroCPU, same weights), '
+                'smart-turn v3.2 ONNX, Parakeet TDT and Nemotron streaming via transformers; tested with fixture '
+                'recognizers only (no model files, onnxruntime or recognizer weights here)',
     'speaker': 'provider: phonon.PhononProvider on the official ptts runtime (0.6.0, quant f32 = model.safetensors) '
                'behind PR288 Speaker/Utterance and /ws/audio unchanged; tested with an injected engine only (no ptts, '
                'weights or voice file here)',
