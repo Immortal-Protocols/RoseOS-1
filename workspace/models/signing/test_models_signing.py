@@ -35,7 +35,7 @@ def write_apk(path, native, extra=None):
             z.writestr(info, data)
 
 
-def badging(package='dev.pixel.models', version=('1', '0.1.0-dev-unsigned'), abi='arm64-v8a'):
+def badging(package='dev.pixel.models', version=('2', '0.2.0'), abi='arm64-v8a'):
     return (f"package: name='{package}' versionCode='{version[0]}' versionName='{version[1]}' "
             "platformBuildVersionName='15'\nsdkVersion:'29'\ntargetSdkVersion:'35'\n"
             "uses-permission: name='android.permission.INTERNET'\napplication-label:'Rose Models'\n"
@@ -190,13 +190,61 @@ class Fixture(unittest.TestCase):
         self.assertEqual(self.password.read_text(), 'NOT A PASSWORD\n')
 
 
+# MODELS-V2-SIGN-BIND-001: the selected v2 input, exactly as the producer's own verify-artifact job (run 41106159024
+# attempt 1, job 124237197482) printed SHA256SUMS and artifact-receipt.txt for artifact 13000324772. The tree and
+# Cargo.lock values also equal git at the source commit.
+V2_INPUT = {
+    'githubEvent': 'push', 'githubRef': 'refs/heads/main',
+    'sourceSha': '5bc2d03fbc77a3f3569b0536a6ca87949a166837', 'runId': '41106159024', 'runAttempt': '1',
+    'apkSha256': '5a48d30dc50c3247a65141a7aa123bbe845da63015d6faffde6c52c3d206faf4',
+    'nativeSha256': 'f3aad0226f99a8b0853663d08bd0e623559741338dd54915443f1daac811d060',
+    'artifactReceiptSha256': '1b389e38a6407776ccfb0cd82f9d31aabdb6dadf9d80c5bd6610ef61ff0fbb8b',
+    'apkMetadataSha256': '4660b8a6d0b9e4dada6b6c8dba0e1ccf401d5fd0626ad74e61f3ccde7309ad27',
+    'buildReceiptSha256': 'e10f5e78092cc7cbcf7d39d6c929d55b59f540a77c8fd918b61826c4a095b65d',
+    'treeAndroid': 'a473151ad8c30e28c79bc8c245e25ca36ce33e89',
+    'treeRoseChatAndroid': '09859c9a84892d1336f1ae5b69bb68f877030bb8',
+    'treeRoseChatCore': '665ffe46a629877a12cb87ca567ce74f40616a5f',
+    'treeContracts': 'f6aa5f32fb1b2f04e1ebe25a736eae3e5337c83f',
+    'cargoLockRoseChatAndroid': '8b843cce02f19bf86a31554018bd56e94c4d0b0acf847c364545cdf4b1349139',
+    'cargoLockRoseChatCore': '95378f5c99aa716c2ea6b505570e5869c9db24b6159cd03fcef2def8bd388861',
+}
+# The superseded v1 binding (run 40960062067); none of it may be accepted again.
+V1_INPUT = {
+    'sourceSha': '8ff67d6bcfabad015dae7d370325cf8bf21690d2', 'runId': '40960062067',
+    'apkSha256': '7c8fc53c59517da7cd466c7e9695d26846485aced74de53ee764e71b11dfae15',
+    'artifactReceiptSha256': 'df269566539dec21dd0d4f7e8e33fdcfb5975f262cdf4860b19719c66af94d54',
+    'apkMetadataSha256': 'cc1c42104c1e2116e9bdfe8b049a73a9cf47f9757edead87134bb1a5f2e78ddc',
+    'buildReceiptSha256': 'b3819357931761b7b147e7827e1fb5cdc723ecd3ad53bf7be04a2fd2b9f7a544',
+    'treeAndroid': '7b8b79783bc12db7f89b763b5f107fb38654a3a6',
+    'treeContracts': '10a4dbdf3a2e7147bc64f0d3b9686b87b7c29964',
+}
+
+
 class ProfileTests(Fixture):
     def test_committed_profile_is_valid_and_unbound(self):
         p = ms.load_profile(Path(ms.__file__).with_name('profile.json'))
         self.assertEqual(p['package'], 'dev.pixel.models')
+        self.assertEqual((p['versionCode'], p['versionName'], p['abi']), ('2', '0.2.0', 'arm64-v8a'))
+        self.assertEqual(p['requiredSchemes'], ['v2', 'v3'])
         self.assertEqual(ms.readiness(p), ['signer_unbound', 'tool_unbound'])
-        self.assertEqual(p['expectedInput']['apkSha256'],
-                         '7c8fc53c59517da7cd466c7e9695d26846485aced74de53ee764e71b11dfae15')
+        self.assertEqual(p['expectedInput'], V2_INPUT)
+        for key, old in V1_INPUT.items():
+            self.assertNotEqual(p['expectedInput'][key], old, key)
+
+    def test_old_or_wrong_input_binding_refuses_before_signing(self):
+        # The artifact's own hashes and receipt fields are checked against the profile, independent of SHA256SUMS
+        # and of verify-artifact.sh (stubbed here so only the adapter's pinned bindings can refuse).
+        verifier = lambda *a, **k: SimpleNamespace(returncode=0, stdout='', stderr='')
+        bound = profile_for(self.artifact, self.sdk)
+        ms.verify_input(bound, self.artifact, run_tool=verifier)
+        hashes = {'apkSha256', 'artifactReceiptSha256', 'apkMetadataSha256', 'buildReceiptSha256'}
+        cases = dict(V1_INPUT, nativeSha256='0' * 64, cargoLockRoseChatAndroid='f' * 64, treeRoseChatCore='9' * 40)
+        for key, value in cases.items():
+            with self.subTest(key):
+                p = copy.deepcopy(bound)
+                p['expectedInput'][key] = value
+                category = 'input_hash_mismatch' if key in hashes | {'nativeSha256'} else 'source_binding'
+                self.assertRefused(category, ms.verify_input, p, self.artifact, run_tool=verifier)
 
     def write(self, data):
         f = self.tmp / 'p.json'
@@ -288,7 +336,8 @@ class SignTests(Fixture):
         # verify-artifact.sh (unchanged) already rejects a foreign package or ABI on input; the
         # adapter's own identity check is what catches a version change, and every output change.
         for name, kw, category in [('voice', {'package': 'dev.pixel.voice'}, 'input_verifier_failed'),
-                                   ('version', {'version': ('2', '0.2.0')}, 'wrong_version'),
+                                   ('old v1', {'version': ('1', '0.1.0-dev-unsigned')}, 'wrong_version'),
+                                   ('versionName only', {'version': ('2', '0.2.1')}, 'wrong_version'),
                                    ('abi', {'abi': 'x86_64'}, 'input_verifier_failed')]:
             with self.subTest(name):
                 art = make_artifact(self.tmp / f'art-{name}', **kw)
@@ -489,8 +538,8 @@ class NegativeControls(Fixture):
         self.assertEqual(receipt['signerCertificateSha256'], FAKE_SIGNER)  # would claim the bound signer
 
     def test_removing_version_check_lets_wrong_version_through(self):
-        art = make_artifact(self.tmp / 'v2', version=('2', '0.2.0'))
-        sdk = make_sdk(self.tmp / 'sdk-v2', badging(version=('2', '0.2.0')))
+        art = make_artifact(self.tmp / 'v1', version=('1', '0.1.0-dev-unsigned'))
+        sdk = make_sdk(self.tmp / 'sdk-v1', badging(version=('1', '0.1.0-dev-unsigned')))
         with mock.patch.object(ms, '_require_identity', lambda *a: None):
             ms.sign(profile_for(art, sdk), art, self.out, self.keystore, self.password, sdk,
                     executor=MockSigner(), inspector=mock_inspector(), evidence_tier='mock-source-test')
