@@ -17,7 +17,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest import mock
 import urllib.parse
 import zipfile
 
@@ -43,13 +45,23 @@ def signing_block(certificate, scheme=0x7109871A):
     size = len(pairs) + 8 + 16
     return struct.pack('<Q', size) + pairs + struct.pack('<Q', size) + b'APK Sig Block 42'
 
+APK_ZIP_TIME = (2026, 1, 1, 0, 0, 0)  # fixed, valid DOS time: writestr(name) would stamp the clock (2 s resolution)
+
+
+def apk_member(name):
+    """A ZIP member with a fixed timestamp and writestr(name)'s defaults, so identical inputs give identical bytes."""
+    info = zipfile.ZipInfo(name, date_time=APK_ZIP_TIME)
+    info.external_attr = 0o600 << 16
+    return info
+
+
 def apk_bytes(certificate, content=b'rose agent 309', scheme=0x7109871A, block=True, libs=()):
     """A ZIP with an APK signing block between the entries and the central directory, as apksigner writes it."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
-        archive.writestr('AndroidManifest.xml', content)
+        archive.writestr(apk_member('AndroidManifest.xml'), content)
         for lib in libs:
-            archive.writestr(lib, b'\x7fELF synthetic')
+            archive.writestr(apk_member(lib), b'\x7fELF synthetic')
     data = buffer.getvalue()
     eocd = data.rfind(b'PK\x05\x06')
     directory = struct.unpack_from('<I', data, eocd + 16)[0]
@@ -145,6 +157,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.reply(404, {'message': 'not found'})
 
     do_GET = do_POST = do_PATCH = do_DELETE = handle_any
+
+class ApkFixtureTest(unittest.TestCase):
+    """apk_bytes is a pure function of its inputs: the clock (writestr's default stamp) never reaches the bytes."""
+
+    @staticmethod
+    def at(seconds):
+        start = time.mktime((2026, 10, 31, 12, 0, 0, 0, 0, -1))   # an even second: +2 s crosses ZIP's clock step
+        clock = mock.Mock(wraps=time, time=mock.Mock(return_value=start + seconds), localtime=time.localtime)
+        return mock.patch.object(zipfile, 'time', clock)
+
+    def test_identical_inputs_give_identical_bytes_across_the_two_second_zip_clock(self):
+        for kw in (dict(certificate=b'cert'), dict(certificate=b'cert', libs=('lib/arm64-v8a/librose.so',)),
+                   dict(certificate=b'', block=False)):
+            with self.subTest(kw):
+                with self.at(0):
+                    first = apk_bytes(**kw)
+                with self.at(2):
+                    second = apk_bytes(**kw)
+                with self.at(86400 * 400 + 7):
+                    later = apk_bytes(**kw)
+                self.assertEqual(first, second)
+                self.assertEqual(first, later)
+                with zipfile.ZipFile(io.BytesIO(first)) as archive:
+                    self.assertEqual({i.date_time for i in archive.infolist()}, {APK_ZIP_TIME})
+                    self.assertIsNone(archive.testzip())
+
+    def test_payload_certificate_scheme_and_libs_still_change_the_bytes(self):
+        base = apk_bytes(b'cert')
+        variants = {'payload': apk_bytes(b'cert', b'rose agent 310'), 'certificate': apk_bytes(b'another certificate'),
+                    'scheme': apk_bytes(b'cert', scheme=0xF05368C0), 'libs': apk_bytes(b'cert', libs=('lib/x86_64/librose.so',)),
+                    'no block': apk_bytes(b'cert', block=False)}
+        for name, data in variants.items():
+            with self.subTest(name):
+                self.assertNotEqual(data, base)
+        self.assertEqual(len(set(variants.values())), len(variants))
+
+    def test_refusal_fixtures_differ_from_a_valid_apk_only_where_intended(self):
+        """The signer and scheme refusals keep the valid APK's ZIP entries; only the signing block differs."""
+        def split(data):
+            """(entries, signing block, central directory + EOCD); the block ends where the EOCD says the directory starts."""
+            eocd = data.rfind(b'PK\x05\x06')
+            directory = struct.unpack_from('<I', data, eocd + 16)[0]
+            self.assertEqual(data[directory - 16:directory], b'APK Sig Block 42')
+            start = directory - 8 - struct.unpack_from('<Q', data, directory - 24)[0]
+            self.assertEqual(data[start:start + 8], data[directory - 24:directory - 16], 'block size fields agree')
+            return data[:start], data[start:directory], data[directory:]
+        good = split(apk_bytes(b'cert'))
+        for name, data in {'signer': apk_bytes(b'another certificate'), 'scheme': apk_bytes(b'cert', scheme=0x42726577)}.items():
+            with self.subTest(name):
+                entries, block, _ = split(data)
+                self.assertEqual(entries, good[0])
+                self.assertNotEqual(block, good[1])
+        unsigned = apk_bytes(b'cert', block=False)
+        self.assertTrue(unsigned.startswith(good[0]))
+        self.assertNotIn(b'APK Sig Block 42', unsigned)
+
 
 class PublisherTest(unittest.TestCase):
     def setUp(self):
