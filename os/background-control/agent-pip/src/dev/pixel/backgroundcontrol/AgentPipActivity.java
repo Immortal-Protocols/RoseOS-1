@@ -30,12 +30,17 @@ public final class AgentPipActivity extends Activity {
     private boolean visible;
     private WatchBinding binding = WatchBinding.UNBOUND;
     private WatchBinding attachedBinding;
+    // Full screen for an explicit Watch; picture-in-picture for the automatic show and unbound reopens (ViewerPresentation).
+    private ViewerPresentation.Mode presentation;
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         // A recreated viewer keeps the pair it was bound to; its original intent is not re-read.
-        binding = saved != null && saved.containsKey(KEY_MODE) ? restore(saved) : fromIntent(getIntent());
+        boolean recreated = saved != null && saved.containsKey(KEY_MODE);
+        binding = recreated ? restore(saved) : fromIntent(getIntent());
         if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
+        presentation = recreated ? ViewerPresentation.restore(saved.getString(KEY_PRESENTATION))
+            : ViewerPresentation.forEntry(binding.mode == WatchBinding.Mode.BOUND, null);
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             fail("Picture-in-picture is unavailable on this phone", null);
             return;
@@ -66,7 +71,7 @@ public final class AgentPipActivity extends Activity {
             placeBelowWindow(mirror);
             frame.addView(mirror, new FrameLayout.LayoutParams(-1, -1));
             setContentView(frame);
-            frame.post(() -> enterFloatingView());
+            if (ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());
         } catch (Throwable error) {
             fail("The agent view could not open", error);
         }
@@ -98,13 +103,18 @@ public final class AgentPipActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         // An unbound reopen keeps the current Watch; a new Watch replaces it only once validated below.
-        binding = WatchBinding.next(binding, fromIntent(intent));
+        WatchBinding incoming = fromIntent(intent);
+        binding = WatchBinding.next(binding, incoming);
         if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
+        // An explicit Watch is shown full screen and is never pushed back into the floating view here; launching the
+        // viewer's task brings it out of picture-in-picture. An unbound reopen keeps the current presentation.
+        presentation = ViewerPresentation.forEntry(incoming.mode == WatchBinding.Mode.BOUND, presentation);
         if (visible) { handler.removeCallbacks(refresh); handler.post(refresh); }
-        if (frame != null) frame.post(() -> enterFloatingView());
+        if (frame != null && ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());
     }
 
-    private static final String KEY_MODE = "watchMode", KEY_TASK = "watchTask", KEY_SESSION = "watchSession";
+    private static final String KEY_MODE = "watchMode", KEY_TASK = "watchTask", KEY_SESSION = "watchSession",
+        KEY_PRESENTATION = "presentation";
     static WatchBinding fromIntent(Intent intent) {
         if (intent == null) return WatchBinding.UNBOUND;
         // getStringExtra returns null for a non-String value, which makes the Watch invalid. An overview selection
@@ -123,6 +133,7 @@ public final class AgentPipActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         out.putString(KEY_MODE, binding.mode.name());
+        if (presentation != null) out.putString(KEY_PRESENTATION, presentation.name());
         if (binding.mode == WatchBinding.Mode.BOUND) { out.putString(KEY_TASK, binding.task); out.putString(KEY_SESSION, binding.session); }
     }
     /** The selected task is not the one in the agent view now. Close the view only; the work continues. */
