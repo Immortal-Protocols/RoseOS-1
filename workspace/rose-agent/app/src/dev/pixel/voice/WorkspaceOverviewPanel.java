@@ -38,6 +38,9 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   void watch(WorkspaceOverview.Identity task,WorkspaceOverview.Binding atTap);
   /** The tray's End call well while connected (HiFi ag-mid); the voice conversation's own End. */
   void endCall();
+  /** Sends one read-only controller preview request (#225) off the UI thread and hands its answer to
+   * previewAnswer on the UI thread. A host without the provider leaves this as is: no preview, the text body stays. */
+  default void requestPreview(WorkspaceOverviewPreview.Request request){}
  }
  /** Selection and Stop survive the panel and the activity (one process). */
  static final class State {
@@ -51,6 +54,8 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  final State state;
  /** The HiFi observe line: why the last tap opened or stopped nothing. Cleared when the panel opens. */
  private String note="";
+ /** The workspace card's live preview (#225): requested only while open and resumed, for the verified binding. */
+ final WorkspaceOverviewPreview preview=new WorkspaceOverviewPreview();private boolean resumed=true;
  private final View endWell;private final WorkspaceOverviewView.Glyph endGlyph,roseGlyph;
 
  WorkspaceOverviewPanel(Context c,State state){this(c,state,null,0);}
@@ -124,7 +129,16 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  /** Supplies the workspace app's real icon to the window card. */
  void setIcons(WorkspaceOverviewView.Icons icons){view.setIcons(icons);}
  /** Back/Home: only hides the panel. The work, the selection and any pending Stop are unchanged. */
- void close(){setVisibility(GONE);}
+ void close(){setVisibility(GONE);preview.cancel();}
+ /** The host activity resumed / paused (Home, another app, the lock screen): pausing cancels and drops any preview. */
+ void resume(){resumed=true;refresh();}
+ void pause(){resumed=false;preview.cancel();}
+ /** The host is going away: nothing in flight may land, nothing is kept. */
+ void teardown(){resumed=false;preview.cancel();}
+ /** A preview answer for a request this panel made (UI thread). Shown only if WorkspaceOverviewPreview accepts it. */
+ void previewAnswer(WorkspaceOverviewPreview.Request r,WorkspaceOverviewPreview.Response a){
+  if(preview.answer(r,a,System.currentTimeMillis()))refresh();
+ }
  /** Redraws from the host's current inputs (no-op when hidden, or when nothing changed). */
  void refresh(){
   if(!isOpen())return;
@@ -139,7 +153,11 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   shown=m;boolean live=source!=null&&source.connected();
   endGlyph.setVisibility(live?VISIBLE:GONE);roseGlyph.setVisibility(live?GONE:VISIBLE);
   endWell.setContentDescription(live?"End call":"Open Rose");
-  view.show(m,note);
+  // #225: only the verified binding (watchRow) is ever previewed; without one there is no request and no image.
+  WorkspaceOverview.Binding target=m.watchRow==null?null:m.watchRow.binding;long now=System.currentTimeMillis();
+  WorkspaceOverviewPreview.Request r=preview.next(resumed,target,now);
+  if(r!=null&&actions!=null)actions.requestPreview(r);
+  view.show(m,note,preview.frameFor(target,now));
  }
  int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
 }

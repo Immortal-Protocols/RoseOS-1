@@ -61,6 +61,8 @@ public class WorkspaceOverviewRenderTest {
         public void stop(Identity t) { calls.add("stop:" + t.id); }
         public void watch(Identity t, Binding atTap) { calls.add("watch:" + t.id + ":" + (atTap == null ? "none" : atTap.sessionId)); }
         public void endCall() { calls.add("end"); }
+        final List<WorkspaceOverviewPreview.Request> previews = new ArrayList<>();
+        public void requestPreview(WorkspaceOverviewPreview.Request r) { previews.add(r); }
     }
     static WorkspaceOverviewPanel panel(Host h) {
         WorkspaceOverviewPanel p = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication(), new WorkspaceOverviewPanel.State());
@@ -149,5 +151,93 @@ public class WorkspaceOverviewRenderTest {
         assertNotNull("disconnected: Open Rose in the middle well", described(p, "Open Rose"));
         assertTrue(texts(p).contains("Not connected"));
         RosePresenceRenderTest.save(draw(p), "overview-hifi-disconnected");
+    }
+
+    // ---------- #225 live preview consumer (synthetic frames only; no controller or phone) ----------
+    /** A synthetic stand-in for the controller's JPEG: a labelled gradient, never presented as real app content. */
+    static Bitmap synthetic(int w, int h) {
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); Canvas c = new Canvas(b);
+        android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        p.setShader(new android.graphics.LinearGradient(0, 0, 0, h, 0xff2f6be6, 0xffe8eef7, android.graphics.Shader.TileMode.CLAMP)); c.drawRect(0, 0, w, h, p);
+        p.setShader(null); p.setColor(0xffffffff); p.setTextSize(28); c.drawText("SYNTHETIC", 20, 60, p); return b;
+    }
+    static WorkspaceOverviewPreview.Response ok(WorkspaceOverviewPreview.Request r, String session, String task, String pkg, Bitmap img) {
+        return new WorkspaceOverviewPreview.Response("ok", session, task, pkg, System.currentTimeMillis(), img.getWidth(), img.getHeight(), "image/jpeg", 30000, img);
+    }
+    static Host linkedHost() { Host h = new Host(); h.tasks = linked(); h.scope = S; h.ws = ready("Calculator"); return h; }
+    static ImageView preview(View root) { View v = tagged(root, "preview"); return v instanceof ImageView ? (ImageView) v : null; }
+
+    @Test public void verifiedBindingShowsItsOwnFreshFrame() throws Exception {
+        Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
+        assertEquals("one request for the verified binding", 1, h.previews.size());
+        WorkspaceOverviewPreview.Request r = h.previews.get(0);
+        assertEquals(B.sessionId, r.sessionId()); assertEquals(B.controllerTaskId, r.taskId());
+        p.refresh(); p.refresh();
+        assertEquals("one in flight, at most once a second", 1, h.previews.size());
+        Bitmap img = synthetic(320, 693);
+        p.previewAnswer(r, ok(r, B.sessionId, B.controllerTaskId, B.targetPackage, img)); layout(p);
+        ImageView iv = preview(p);
+        assertNotNull("the window card shows the frame", iv);
+        assertTrue(((android.graphics.drawable.BitmapDrawable) iv.getDrawable()).getBitmap() == img);
+        assertTrue(iv.getContentDescription().toString().contains("Calculator"));
+        assertTrue("its task card keeps the real text", texts(p).contains("Typing 12 × 7"));
+        RosePresenceRenderTest.save(draw(p), "overview-preview-synthetic-frame");
+    }
+
+    @Test public void wrongIdentityStaleAndLateAnswersKeepTheTextBody() throws Exception {
+        String[][] wrong = {{"s-2", B.controllerTaskId, B.targetPackage}, {B.sessionId, "rose-ws-other", B.targetPackage}, {B.sessionId, B.controllerTaskId, "com.android.chrome"}};
+        for (String[] f : wrong) {
+            Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
+            WorkspaceOverviewPreview.Request r = h.previews.get(0);
+            p.previewAnswer(r, ok(r, f[0], f[1], f[2], synthetic(320, 693))); layout(p);
+            assertNull("wrong " + java.util.Arrays.toString(f) + ": no image", preview(p));
+            assertTrue("text body retained", texts(p).contains("Multiply 12 by 7"));
+        }
+        Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
+        WorkspaceOverviewPreview.Request r = h.previews.get(0);
+        p.previewAnswer(r, new WorkspaceOverviewPreview.Response("ok", B.sessionId, B.controllerTaskId, B.targetPackage, System.currentTimeMillis() - 60000, 320, 693, "image/jpeg", 30000, synthetic(320, 693))); layout(p);
+        assertNull("stale capture: no image", preview(p));
+        for (String word : new String[]{"locked", "blocked", "stale_session", "stale_task", "not_ready", "unbound", "too_soon", "no_frame"}) {
+            Host q = linkedHost(); WorkspaceOverviewPanel pq = panel(q);
+            pq.previewAnswer(q.previews.get(0), new WorkspaceOverviewPreview.Response(word, null, null, null, 0, 0, 0, null, 0, null)); layout(pq);
+            assertNull(word + ": no image", preview(pq));
+            assertTrue(word + ": text body", texts(pq).contains("Multiply 12 by 7"));
+        }
+    }
+
+    @Test public void backPauseAndTeardownCancelAndHiddenNeverRequests() throws Exception {
+        Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
+        WorkspaceOverviewPreview.Request r = h.previews.get(0);
+        described(p, "Back").performClick();
+        p.previewAnswer(r, ok(r, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693)));
+        for (int i = 0; i < 5; i++) p.refresh();
+        assertEquals("closed: no further requests", 1, h.previews.size());
+        p.open(); layout(p);
+        assertNull("a late answer after Back is never shown", preview(p));
+        Host h2 = linkedHost(); WorkspaceOverviewPanel p2 = panel(h2);
+        WorkspaceOverviewPreview.Request r2 = h2.previews.get(0);
+        p2.previewAnswer(r2, ok(r2, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693))); layout(p2);
+        assertNotNull(preview(p2));
+        p2.pause(); p2.refresh(); layout(p2);
+        assertNull("pause drops the frame", preview(p2));
+        assertEquals("paused: no requests", 1, h2.previews.size());
+        Host h3 = linkedHost(); WorkspaceOverviewPanel p3 = panel(h3);
+        WorkspaceOverviewPreview.Request r3 = h3.previews.get(0);
+        p3.teardown();
+        p3.previewAnswer(r3, ok(r3, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693))); layout(p3);
+        assertNull("after teardown nothing lands", preview(p3));
+    }
+
+    @Test public void unboundOrReplacedBindingNeverRequestsOrShows() throws Exception {
+        Host h = new Host(); WorkspaceOverviewPanel p = panel(h);  // PR318 today: open workspace, no producer binding
+        for (int i = 0; i < 5; i++) p.refresh();
+        assertTrue("no binding: never a request, whichever workspace is open", h.previews.isEmpty());
+        assertNull(preview(p));
+        Host l = linkedHost(); WorkspaceOverviewPanel pl = panel(l);
+        WorkspaceOverviewPreview.Request r = l.previews.get(0);
+        l.ws = Workspace.read("ready", "s-2", "rose-ws-n1-2-com.android.chrome", "com.android.chrome", "Chrome", S); pl.refresh();
+        pl.previewAnswer(r, ok(r, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693))); layout(pl);
+        assertNull("the workspace was replaced: the old binding's answer is not shown", preview(pl));
+        assertEquals("no request for the replacement (it is not this task's binding)", 1, l.previews.size());
     }
 }
