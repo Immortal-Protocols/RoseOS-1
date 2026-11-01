@@ -12,17 +12,17 @@ public final class RoseAgentWorkTest {
         return new RoseAgentWork.Task(id, display, user, pkg, pkg + " label", top);
     }
     static RoseAgentWork.Automation reported(String... packages) {
-        return new RoseAgentWork.Automation(true, Arrays.asList(packages));
+        return new RoseAgentWork.Automation(true, Arrays.asList(packages), Arrays.asList());
     }
     public static void main(String[] args) {
         int controller = 10123;
         // Display 7 is Rose's ComputerControl session display. It is private, so DisplayManager.getDisplays() lists
         // only display 0 to Launcher3 (Display.hasAccess); the old read keyed on that list and showed "No background
-        // work" while Rose worked. Nothing below takes a display list: 7 and 9 are what getDeviceIdForDisplayId says
-        // belong to a virtual device (9: another app's), and the controller's automated packages come from the
-        // platform's report for CONTROLLER only.
+        // work" while Rose worked. Nothing below takes that display list: 7 is a display of a virtual device whose
+        // platform-set profile is DEVICE_PROFILE_COMPUTER_CONTROL; 9 (com.other.cast's) is another app's virtual
+        // device, so it is never passed. The automated packages come from the platform's per-owner report.
         RoseAgentWork.Automation auto = reported("com.example.mail", "com.example.maps");
-        List<Integer> displays = Arrays.asList(7, 9);
+        List<Integer> displays = Arrays.asList(7);
         List<RoseAgentWork.Task> tasks = Arrays.asList(
             task(1, 0, 0, "com.human.app", true),            // the human's own task: never an agent card
             task(2, 7, 0, "com.example.mail", true),         // Rose's current screen
@@ -65,7 +65,45 @@ public final class RoseAgentWorkTest {
             "Once the platform reports the controller automating nothing, its old display's tasks are not agent work");
         RoseAgentWork notVirtual = RoseAgentWork.of(controller, 0, auto, Arrays.asList(9), tasks);
         expect(RoseAgentWork.decide(mail, notVirtual) == RoseAgentWork.Open.GONE,
-            "A display the platform no longer places on a virtual device is not agent work");
+            "A display that is no longer a ComputerControl device's is not agent work");
+
+        // #156 cross-display false card (old-fails on PR337, whose of() took every virtual device's display): Rose
+        // automates mail on its session display 7 while the user also casts mail to display 9, another app's virtual
+        // device. The cast is never Rose's card and never counted as in progress.
+        List<RoseAgentWork.Task> cast = Arrays.asList(task(2, 7, 0, "com.example.mail", true),
+            task(8, 9, 0, "com.example.mail", true));
+        RoseAgentWork onlyRose = RoseAgentWork.of(controller, 0, reported("com.example.mail"), Arrays.asList(7), cast);
+        expect(onlyRose.items.size() == 1 && onlyRose.items.get(0).taskId == 2 && onlyRose.working() == 1
+            && "1 task in progress".equals(onlyRose.linkLabel()) && onlyRose.reason == null,
+            "The same package on another app's virtual display is not Rose's work");
+        expect(RoseAgentWork.decide(task(8, 9, 0, "com.example.mail", true), onlyRose) == RoseAgentWork.Open.GONE,
+            "and is refused if it ever were a card");
+        // Another ComputerControl session owner (display 11) also automates mail: the platform cannot say which
+        // session display is Rose's, so neither mail task is attributed; the row says so instead of guessing.
+        List<RoseAgentWork.Task> twoAgents = Arrays.asList(task(2, 7, 0, "com.example.mail", true),
+            task(3, 7, 0, "com.example.maps", false), task(9, 11, 0, "com.example.mail", true));
+        RoseAgentWork.Automation shared = new RoseAgentWork.Automation(true,
+            Arrays.asList("com.example.mail", "com.example.maps"), Arrays.asList("com.example.mail"));
+        RoseAgentWork partly = RoseAgentWork.of(controller, 0, shared, Arrays.asList(7, 11), twoAgents);
+        expect(partly.state == RoseAgentWork.State.AVAILABLE && partly.items.size() == 1 && partly.items.get(0).taskId == 3
+            && partly.unattributed.size() == 2 && RoseAgentWork.UNATTRIBUTED.equals(partly.reason)
+            && partly.working() == 0 && "No active work".equals(partly.linkLabel()),
+            "Only the package no other agent automates is Rose's; the shared one is named as unattributed, not shown");
+        expect(RoseAgentWork.decide(mail, partly) == RoseAgentWork.Open.UNATTRIBUTED
+            && RoseAgentWork.describe(RoseAgentWork.Open.UNATTRIBUTED, "Mail")
+                .equals("Mail can't be told apart from another agent's work"),
+            "Selecting a card that became shared is refused with that reason");
+        expect(partly.labelled(t -> "x").unattributed.size() == 2, "Labels keep the unattributed facts");
+        RoseAgentWork allShared = RoseAgentWork.of(controller, 0, new RoseAgentWork.Automation(true,
+            Arrays.asList("com.example.mail"), Arrays.asList("com.example.mail")), Arrays.asList(7, 11), twoAgents);
+        expect(allShared.state == RoseAgentWork.State.UNAVAILABLE && allShared.items.isEmpty()
+            && RoseAgentWork.UNATTRIBUTED.equals(allShared.reason) && allShared.linkLabel().isEmpty(),
+            "When nothing can be attributed the row is unavailable with that reason, never empty and never a card");
+        RoseAgentWork othersOnly = RoseAgentWork.of(controller, 0, new RoseAgentWork.Automation(true,
+            Arrays.asList(), Arrays.asList("com.example.mail")), Arrays.asList(11), Arrays.asList(task(9, 11, 0,
+            "com.example.mail", true)));
+        expect(othersOnly.state == RoseAgentWork.State.EMPTY && othersOnly.unattributed.isEmpty(),
+            "Another agent's own work is not Rose's: a truthful empty row");
         expect(RoseAgentWork.describe(RoseAgentWork.Open.NOT_CURRENT, "Maps").equals("Maps is not on Rose's screen right now"), "");
         expect(RoseAgentWork.describe(RoseAgentWork.Open.CHANGED, "Mail").equals("Mail changed; pick it again"), "");
         expect(RoseAgentWork.describe(RoseAgentWork.Open.GONE, "Maps").equals("Maps is no longer running"), "");
@@ -82,13 +120,13 @@ public final class RoseAgentWorkTest {
             task(7, 3, 0, "com.example.mail", true)));
         expect(spoof.state == RoseAgentWork.State.EMPTY,
             "An automated package on the default display or on a display of no virtual device never counts");
-        RoseAgentWork pending = RoseAgentWork.of(controller, 0, new RoseAgentWork.Automation(false, Arrays.asList()),
+        RoseAgentWork pending = RoseAgentWork.of(controller, 0, new RoseAgentWork.Automation(false, Arrays.asList(), Arrays.asList()),
             displays, tasks);
         expect(pending.state == RoseAgentWork.State.UNAVAILABLE && pending.items.isEmpty()
             && RoseAgentWork.NOT_REPORTED.equals(pending.reason) && pending.linkLabel().isEmpty() && pending.working() == 0,
             "Work on a virtual display before the platform's first report for the controller is not reported, never "
             + "\"No background work\" and never a card");
-        RoseAgentWork quiet = RoseAgentWork.of(controller, 0, new RoseAgentWork.Automation(false, Arrays.asList()),
+        RoseAgentWork quiet = RoseAgentWork.of(controller, 0, new RoseAgentWork.Automation(false, Arrays.asList(), Arrays.asList()),
             displays, Arrays.asList(task(1, 0, 0, "com.human.app", true)));
         expect(quiet.state == RoseAgentWork.State.EMPTY,
             "With no task on any virtual display there is no agent work, reported or not");
