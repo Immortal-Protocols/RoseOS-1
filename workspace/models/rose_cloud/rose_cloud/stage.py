@@ -17,16 +17,19 @@ For every manifest file, in manifest order:
   deadline or the byte cap leaves ``.partial`` where it is (partials and caches are never deleted).
 
 The run stops at ``deadlineS`` or once ``maxBytes`` have been read. It prints one MARKER line of fixed tokens
-(sanitize() is the allowlist bootstrap re-applies): counts per group, bytes in, elapsed seconds and the stop reason.
-Never a URL, query, header, path outside the manifest's names, or exception text.
+(sanitize() is the allowlist bootstrap re-applies): counts per group, bytes in, elapsed seconds, the stop reason and,
+for refused destinations, at most MAX_REFUSED_HOSTS sanitized hostnames with a fixed reason and a count. Never a URL,
+scheme, userinfo, port, path, query, fragment, header, path outside the manifest's names, or exception text.
 
 Unverified until a separately approved run: the image's Python ssl/CA store, the Hub's redirect hosts from the VM's
 region (only the three hosts seen from a development sandbox are allowed), its Range support on those hosts, and
 the throughput needed to finish 37.6 GB inside the deadline.
 """
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import sys
 import time
 
@@ -43,6 +46,29 @@ STOPS = ('done', 'refused_existing', 'insufficient_space', 'deadline', 'byte_cap
 FAILURES = ('existing_differs', 'redirect_refused', 'auth_required', 'http_error', 'size_mismatch', 'range_refused',
             'hash_mismatch', 'network')
 GROUP_KEYS = ('expected', 'present', 'downloaded', 'resumed', 'failed', 'bytesIn')
+# Why a destination was refused, and which host it was: the hostname only (lower case, no trailing dot, DNS syntax or
+# an IP literal), never the scheme, userinfo, port, path, query, fragment or headers. At most MAX_REFUSED_HOSTS
+# distinct hosts are kept, each with a count; the rest are counted in refusedOther.
+REFUSAL_REASONS = ('host_not_allowed', 'scheme_not_https', 'userinfo', 'malformed')
+MAX_REFUSED_HOSTS = 4
+MAX_URL_CHARS = 8192
+_LABEL = re.compile(r'^(?!-)[a-z0-9-]{1,63}(?<!-)$')
+
+
+def clean_host(host):
+    """The hostname as a fixed-syntax token, or None: DNS names (<= 253 chars, labels a-z0-9-) or an IP literal."""
+    if not isinstance(host, str):
+        return None
+    host = host.strip().lower().rstrip('.')
+    if '%' in host:
+        return None  # an IPv6 zone/scope id is free text: never a hostname token
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    if not 0 < len(host) <= 253 or not all(_LABEL.match(label) for label in host.split('.')):
+        return None
+    return host
 
 
 class Stop(Exception):
@@ -91,6 +117,8 @@ class Fetcher:
         self.deadline = clock() + float(limits['deadlineS'])
         self.max_bytes = int(limits['maxBytes'])
         self.clock, self.bytes_in = clock, 0
+        self.refused = {}  # (host or None, reason) -> count, at most MAX_REFUSED_HOSTS keys
+        self.refused_other = 0
         fetcher = self
 
         class Hop(urllib.request.HTTPRedirectHandler):
@@ -106,10 +134,40 @@ class Fetcher:
         self.opener.addheaders = [('User-Agent', 'rose-cloud-stage/1')]
 
     def check(self, url):
+        """Refuse anything but https to an allowed host without userinfo; record which host and why (sanitized)."""
         import urllib.parse
-        u = urllib.parse.urlsplit(url)
-        if u.scheme not in self.schemes or u.hostname not in self.allow or u.username or u.password:
+        reason, host = None, None
+        try:
+            if not isinstance(url, str) or len(url) > MAX_URL_CHARS:
+                raise ValueError
+            u = urllib.parse.urlsplit(url)
+            host = clean_host(u.hostname)
+            u.port  # noqa: B018 - raises ValueError for a malformed port
+        except ValueError:
+            reason = 'malformed'
+        if reason is None:
+            if host is None:
+                reason = 'malformed'
+            elif u.username is not None or u.password is not None:
+                reason = 'userinfo'
+            elif u.scheme not in self.schemes:
+                reason = 'scheme_not_https'
+            elif host not in self.allow:
+                reason = 'host_not_allowed'
+        if reason is not None:
+            self.note_refusal(host if reason != 'malformed' else None, reason)
             raise FileFailure('redirect_refused')
+
+    def note_refusal(self, host, reason):
+        key = (host, reason)
+        if key in self.refused or len(self.refused) < MAX_REFUSED_HOSTS:
+            self.refused[key] = self.refused.get(key, 0) + 1
+        else:
+            self.refused_other += 1
+
+    def refusals(self):
+        ordered = sorted(self.refused.items(), key=lambda kv: (-kv[1], kv[0][1], kv[0][0] or ''))
+        return [{'host': h, 'reason': r, 'count': n} for (h, r), n in ordered], self.refused_other
 
     def get(self, url, offset):
         import urllib.error
@@ -178,7 +236,7 @@ def stage(manifest, limits, clock=time.monotonic):
     counts = {g: dict.fromkeys(GROUP_KEYS, 0) for g in groups}
     failures = {g: None for g in groups}
     result = {'stop': None, 'bytesIn': 0, 'elapsedS': 0, 'groups': counts, 'firstFailure': failures,
-              'freeBytes': None, 'needBytes': None}
+              'freeBytes': None, 'needBytes': None, 'refusedHosts': [], 'refusedOther': 0}
     plan = []
     for name, group in groups.items():
         for rel, size, kind, digest in group['files']:
@@ -232,6 +290,7 @@ def stage(manifest, limits, clock=time.monotonic):
     except Stop as s:
         result['stop'] = str(s)
     result['bytesIn'] = fetcher.bytes_in
+    result['refusedHosts'], result['refusedOther'] = fetcher.refusals()
     result['elapsedS'] = round(clock() - t0)
     return result
 
@@ -253,7 +312,25 @@ def sanitize(raw, manifest):
         'groups': {n: {k: _count((g.get(n) if isinstance(g.get(n), dict) else {}).get(k)) for k in GROUP_KEYS}
                    for n in manifest['groups']},
         'firstFailure': {n: f.get(n) if f.get(n) in FAILURES else None for n in manifest['groups']},
+        'refusedHosts': _refused(raw.get('refusedHosts')),
+        'refusedOther': _count(raw.get('refusedOther')),
     }
+
+
+def _refused(entries):
+    """At most MAX_REFUSED_HOSTS entries of {host: clean_host or None, reason: fixed token, count}; anything else
+    is dropped, so no URL, path, query, userinfo or header can pass through."""
+    out = []
+    for e in entries if isinstance(entries, list) else []:
+        if len(out) >= MAX_REFUSED_HOSTS:
+            break
+        if not isinstance(e, dict) or e.get('reason') not in REFUSAL_REASONS or _count(e.get('count')) is None:
+            continue
+        host = clean_host(e.get('host')) if e.get('host') is not None else None
+        if e.get('host') is not None and host is None:
+            continue  # not a hostname: drop the entry rather than pass any of it on
+        out.append({'host': host, 'reason': e['reason'], 'count': e['count']})
+    return out
 
 
 def main(argv):

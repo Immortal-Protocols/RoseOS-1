@@ -322,6 +322,41 @@ None of these is retried without a new decision.
   seconds, free and needed bytes, per-group counts (expected, present, downloaded, resumed, failed, bytes in) and
   the first failure token per group. It never contains a URL, query, host, header or path.
 
+**Refused destinations** (CLOUD-STAGING-REDIRECT-DIAG-001):
+
+- **The gap:** the one approved run (payload `6a99cc0a…`, merge `e192912`) verified 14 of 59 files and refused 45
+  redirects (`redirect_refused`), but its receipt could not say where they went.
+- **What the receipt now adds:** `refusedHosts`, up to 4 entries of `{host, reason, count}`, plus a `refusedOther`
+  count.
+- **`host`:** the lower-cased hostname (no trailing dot, DNS syntax, at most 253 characters) or a normalized IP
+  literal without an IPv6 zone id (a zone id is free text, so such a URL counts as `malformed`). It is `null` when
+  the URL is malformed. The scheme, userinfo, port, path, query (signed CDN URLs carry
+  their signature there), fragment and headers are never kept.
+- **`reason`:** one of `host_not_allowed`, `scheme_not_https`, `userinfo` or `malformed`.
+- **Bounds:** URLs over 8192 characters count as `malformed`.
+- **Bootstrap:** `bootstrap.py` passes this through unchanged via `stage.sanitize`, which drops any entry that is
+  not a hostname.
+- **What did not change:** the allowlist, the refusal itself and what follows it (nothing). There are no retries.
+
+**Smallest safe next diagnostic** (proposal only; not executed or authorized):
+
+- **Who:** the original Mac operator, once.
+- **Steps:**
+  1. Build at the merge commit of this change with the deployed attestation roots.
+  2. Set the payload metadata and `rose-models-diagnostic=cloud-stage-once:<new payloadTarSha256>:<fresh id>`.
+  3. Do one reset.
+  4. Read `rose-models/diagnostic`.
+- **Same bounds:** no allowlist change and the same 60 minute / 45 GB limits. Nothing is deleted.
+- **Expected behaviour:**
+  - the 14 verified files are re-hashed locally and kept (no transfer);
+  - the 45 files whose redirects were refused are refused again at their first redirect, before any body bytes;
+  - existing partials are untouched.
+- **What it reveals:** `refusedHosts` names the concrete host or hosts and reasons, and `bytesIn` should stay near 0.
+- **After that:** adding the named host to `ALLOW_HOSTS` is a separate source change and its own decision; it should
+  never be guessed.
+- **Same reset effects:** the TLS interruption, inference held for that boot, and the next reset without a new id
+  starts Muse.
+
 **Unverified** (needs the separately approved run):
 
 - the image's Python ssl and CA store;
