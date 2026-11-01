@@ -54,6 +54,8 @@ class FakeHost(B.Host):
         self.stage_rc, self.stage_out = 0, ''
         self.redirect_container = self.redirect_timeout = False
         self.redirect_rc, self.redirect_out = 0, ''
+        self.deps_container = self.deps_timeout = False
+        self.deps_rc, self.deps_out = 0, ''
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -174,7 +176,8 @@ class FakeHost(B.Host):
                                             ('muse-glimmer-hfprobe', self.probe_container),
                                             ('rose-cloud-preflight', self.cloud_container),
                                             ('rose-cloud-stage', self.stage_container),
-                                            ('rose-cloud-redirect-probe', self.redirect_container)) if alive]
+                                            ('rose-cloud-redirect-probe', self.redirect_container),
+                                            ('rose-cloud-validate', self.deps_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -191,7 +194,17 @@ class FakeHost(B.Host):
                     self.stage_container = False
                 if argv[3] == 'rose-cloud-redirect-probe' and not self.rm_fails:
                     self.redirect_container = False
+                if argv[3] == 'rose-cloud-validate' and not self.rm_fails:
+                    self.deps_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-validate' in argv:
+                self.events.append(('depsvalidate', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.deps_container = True
+                if self.deps_timeout:
+                    return 124, ''
+                self.deps_container = self.leave_container
+                return self.deps_rc, self.deps_out
             if argv[1] == 'run' and 'rose-cloud-redirect-probe' in argv:
                 self.events.append(('redirectprobe', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), self.path(B.STAGING).exists(), timeout))
@@ -1951,6 +1964,151 @@ class CloudRedirectProbeOnce(DiagnosticFixture):
             self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:r1'))  # existing modes unchanged
         self.assertEqual(json.loads(B.stage_limits()), {'deadlineS': 3600, 'maxBytes': 45_000_000_000,
                                                        'readTimeoutS': 30})
+
+
+class CloudValidateOnce(DiagnosticFixture):
+    """cloud-validate-once (CLOUD-DEPS-VALIDATE-001): the exact container, bounds and controls. The helper line comes
+    from the payload's own validate.py run as a real subprocess over the real pinned manifest, with test-only fixture
+    mount/net/dev tables, on paths that refuse before any install (so nothing is installed or imported here). The
+    container is FakeHost's."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(B.STAGING).mkdir(parents=True, exist_ok=True)
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-validate-once:{SHA}:{attempt}')
+
+    def real_line(self, net=('lo', 'eth0')):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        fx = self.tmp / 'validate-fixture'
+        for d in [fx / 'net' / n for n in net] + [fx / 'dev', fx / 'tmp']:
+            d.mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        manifest['stagingRoot'] = str(self.tmp / 'empty-staging')
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw,size=524288k 0 0\n"
+                                   f"/dev/sdb {manifest['stagingRoot']} ext4 ro 0 0\n")
+        limits = dict(json.loads(B.validate_limits()), mountsFile=str(fx / 'mounts'), netDir=str(fx / 'net'),
+                      devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'validate.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])  # refused before anything was installed
+        return 'pip notice on stdout\n' + out
+
+    def test_exact_container_bounds_and_hold(self):
+        status, code = self.probe('deps', deps_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; dependency validation stopped: not_isolated'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['timedOut'], r['exitCode']),
+                         ('cloud-validate-once', 'removed', None, True, False, 0))
+        v = r['validate']
+        self.assertEqual((v['stop'], v['isolation']['networkOnlyLo'], v['isolation']['tmpBounded'], v['ptts'],
+                          v['qwen']), ('not_isolated', False, False, None, None))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'depsvalidate')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                                '--name', 'rose-cloud-validate', '--cap-drop', 'ALL', '--security-opt',
+                                'no-new-privileges', '--read-only',
+                                '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=536870912,mode=1777',
+                                '--cpus', '2', '--memory', '4294967296', '--memory-swap', '4294967296',
+                                '-v', '/mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:ro',
+                                '--entrypoint', 'python3', RUNTIME['image_id'], '-c', (lib / 'validate.py').read_text(),
+                                (lib / 'manifest.json').read_text(), B.validate_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'deadlineS': 270, 'tmpMaxBytes': 512 << 20})
+        self.assertEqual(timeout, 300)  # the container is killed at 300 s; the helper stops itself at 270 s
+        for forbidden in ('--gpus', '--privileged', '-e', '--env', '--cap-add', '--network=host', 'bridge', 'host'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if a.startswith('/') and ':' in a and a != argv[argv.index('--tmpfs') + 1]],
+                         ['/mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:ro'])  # only staging, read-only
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'depsvalidate', 'rm')],
+                         ['stop', 'depsvalidate', 'rm'])
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_refusals_once_per_id_and_default_boot(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                self.probe(attempt, **flags)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('depsvalidate', [e[0] for e in self.host.events])
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        self.host.path(B.STAGING).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertFalse(self.host.path(B.STAGING).exists())  # never created: docker must not create it either
+        self.host.path(B.STAGING).mkdir(parents=True)
+        self.host.model_active = self.host.model_container = True
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        saved = m.read_text()
+        m.write_text(saved.replace('"apache-2.0"', '"other"', 1))
+        self.probe('edited')
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        m.write_text(saved)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', deps_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('depsvalidate', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('depsvalidate', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-validate-once:{SHA}:v1'))
+        for mode in ('offline-validate', 'gpu-start-once', 'hf-probe-once', 'cloud-preflight-once', 'cloud-stage-once',
+                     'cloud-redirect-probe-once'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:v1'))  # existing modes unchanged
+        self.assertEqual(json.loads(B.stage_limits()), {'deadlineS': 3600, 'maxBytes': 45_000_000_000,
+                                                       'readTimeoutS': 30})
+        self.assertEqual(json.loads(B.probe_limits()), {'mode': 'head', 'deadlineS': 100, 'maxBytes': 0,
+                                                       'readTimeoutS': 10})
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', deps_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['validate'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; dependency validation timed out'))
+        self.assertFalse(self.host.deps_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', deps_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-VALIDATE '
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'stop': 'done; rm -rf /', 'ptts': {'error': 'Err: SECRET',
+                                                                                   'version': '/x/SECRET'},
+                                                 'qwen': {'errors': {'config': 'ValueError: SECRET'}}})),
+                ('stage', 'ROSE-CLOUD-STAGE ' + json.dumps({'stop': 'done'})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, deps_out=out + '\n', deps_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                v = self.published()['validate']
+                if attempt == 'hostile':
+                    self.assertEqual((v['stop'], v['ptts']['error'], v['ptts']['version'], v['qwen']['errors']['config']),
+                                     (None, None, 'other', None))
+                else:
+                    self.assertIsNone(v)
 
 
 class HostValidate(unittest.TestCase):
