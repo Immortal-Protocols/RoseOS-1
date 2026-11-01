@@ -52,7 +52,7 @@ public final class WorkspaceOverviewFeedTest {
         WorkspaceOverviewFeed.accept("[]");
         expect(WorkspaceOverviewFeed.tasks().isEmpty() && !WorkspaceOverviewFeed.scope().known(), "[] clears the list and scope");
         Model empty = WorkspaceOverview.of(true, WorkspaceOverviewFeed.scope(), Workspace.read("idle", "", "", "", "", Scope.UNKNOWN), WorkspaceOverviewFeed.tasks(), null, null, false);
-        expect(empty.empty.equals(WorkspaceOverview.TASKS_NONE), "the empty text claims nothing about tasks that never arrived");
+        expect(empty.empty.equals(WorkspaceOverview.EMPTY), "idle workspace and no tasks: the HiFi empty text");
 
         // Malformed or mixed deliveries are dropped whole; the previous list stays.
         WorkspaceOverviewFeed.accept(CURRENT);
