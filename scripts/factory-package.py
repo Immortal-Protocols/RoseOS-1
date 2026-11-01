@@ -64,6 +64,11 @@ SUPER = re.compile(r'super_(\d+)\.img')
 HEX64 = re.compile(r'[0-9a-f]{64}')
 OBSERVED_PREFIXES = ('META/', 'IMAGES/', 'RADIO/', 'OTA/', 'VENDOR/firmware/')
 TOOLS = ('bin/simg2img', 'bin/lpunpack')
+# Members this script reads from a target-files; a symlink entry there is always refused. Android target-files also carry
+# legitimate symlink entries elsewhere (e.g. VENDOR/bin/<tool> -> toybox): those are admitted names-only, never read,
+# followed or extracted, and only when their stored link text is small.
+TARGET_READ = OBSERVED_PREFIXES + ('SYSTEM/build.prop',)
+LINK_TEXT_BYTES = 4095
 DEFAULT_MAX_WORK = 64 << 30
 TOOL_TIMEOUT = 3600
 
@@ -270,8 +275,9 @@ def head(archive, name, count=8):
     with archive.open(name) as stream:
         return stream.read(count)
 
-def open_checked(path, label, result):
-    """Open a ZIP whose names are safe, unique and link-free and whose CRCs check; problems go to result."""
+def open_checked(path, label, result, names_only_links=False):
+    """Open a ZIP whose names are safe and unique and whose CRCs check; problems go to result. Link entries are refused,
+    except, with names_only_links (target-files only), small ones outside TARGET_READ, which are counted, never used."""
     try:
         archive = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile) as error:
@@ -286,6 +292,10 @@ def open_checked(path, label, result):
             result['problems'].append(f'unsafe-path:{label}:{name}')
             bad = True
         if statmod.S_ISLNK(info.external_attr >> 16):
+            if names_only_links and not name.startswith(TARGET_READ) and not name.endswith('/') \
+                    and 0 < info.file_size <= LINK_TEXT_BYTES:
+                result['linkEntries'] = result.get('linkEntries', 0) + 1
+                continue
             result['problems'].append(f'link-entry:{label}:{name}')
             bad = True
     for name in sorted({n for n in names if names.count(n) > 1}):
@@ -336,7 +346,7 @@ def observe(target_files, flavor_name, build, source, root=ROOT):
     the partition metadata the classifier reads. No image bytes leave the archive."""
     flavor = load_flavor(flavor_name, root)
     result = {'problems': [], 'missing': []}
-    archive = open_checked(target_files, 'target-files', result)
+    archive = open_checked(target_files, 'target-files', result, names_only_links=True)
     if archive is None:
         raise ContractError('target-files refused: ' + ', '.join(result['problems']))
     with archive:
@@ -376,7 +386,7 @@ def check_observation(obs, tf_path, names, flavor, build, result, allow_syntheti
     return ok
 
 def target_inventory(path, flavor, build, result, observation, allow_synthetic):
-    archive = open_checked(path, 'target-files', result)
+    archive = open_checked(path, 'target-files', result, names_only_links=True)
     if archive is None:
         return None
     result['inventory']['targetFilesSha256'] = sha256_file(path)

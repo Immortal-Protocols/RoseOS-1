@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import signal
 import stat
 import struct
@@ -67,8 +68,8 @@ def zip_bytes(members, links=()):
     return buf.getvalue()
 
 
-def target_files(extra=None):
-    members = {
+def target_files_members():
+    return {
         'META/misc_info.txt': b'ab_update=true\nuse_dynamic_partitions=true\ndynamic_partition_list=system vendor\n',
         'META/ab_partitions.txt': b'boot\nsystem\nvendor\nabl\n',
         'IMAGES/boot.img': b'ANDROID!' + bytes(64),
@@ -78,8 +79,15 @@ def target_files(extra=None):
         'VENDOR/firmware/dauntless/evt.ec.bin': b'synthetic gsc',
         'SYSTEM/build.prop': b'not selected',
     }
-    members.update(extra or {})
-    return zip_bytes(members)
+
+
+def target_files(extra=None, links=()):
+    return zip_bytes(dict(target_files_members(), **(extra or {})), links)
+
+
+# Android target-files carry symlink entries (mode S_IFLNK, data = link text) outside the members any script reads, as
+# run 41262748192 observed (link-entry for VENDOR/bin/gpioinfo, VENDOR/bin/tail). Link texts here are synthetic.
+ANDROID_LINKS = {'VENDOR/bin/gpioinfo': b'toybox_vendor', 'VENDOR/bin/tail': b'toybox_vendor', 'SYSTEM/bin/sh': b'mksh'}
 
 
 def otatools(members=None, links=()):
@@ -216,6 +224,74 @@ class Observe(unittest.TestCase):
         for name, mutate in cases.items():
             with self.subTest(name):
                 self.assertRefused('marker_mismatch', Tree(self, marker=mutate))
+
+    def test_names_only_link_entries_outside_read_paths_are_admitted_never_followed(self):
+        # Fails on factory-package.py before the names-only link hunk with exactly run 41262748192's refusal.
+        t = Tree(self, tf=target_files(ANDROID_LINKS, links=set(ANDROID_LINKS)))
+        before = t.retained()
+        receipt = t.run()
+        self.assertEqual(t.retained(), before)
+        tfo = json.loads((t.out/'target-files-observation.json').read_text())
+        self.assertFalse(set(ANDROID_LINKS) & set(tfo['members']))  # names outside the observed prefixes stay out
+        fw = json.loads((t.out/'firmware-members.json').read_text())
+        self.assertFalse(set(ANDROID_LINKS) & set(fw['members']))
+        staged = {str(p.relative_to(t.out)) for p in t.out.rglob('*')}
+        self.assertFalse([n for n in staged if 'gpioinfo' in n or 'tail' in n or n.endswith('/sh')])  # nothing extracted
+        self.assertEqual(receipt['inputs']['signedTargetFiles']['sha256'], h(t.tf.read_bytes()))
+
+    def test_unsafe_link_entries_still_refuse(self):
+        def dup(name, data):
+            members = dict(target_files_members(), **{name: data})
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, 'w') as z:
+                for n, d in list(members.items()) + [(name, data)]:
+                    info = zipfile.ZipInfo(n, (2026, 1, 1, 0, 0, 0))
+                    if n == name:
+                        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+                    with __import__('warnings').catch_warnings():
+                        __import__('warnings').simplefilter('ignore')
+                        z.writestr(info, d)
+            return buf.getvalue()
+        cases = {
+            # a link where any script reads a member: refused whatever its text
+            'RADIO image': ({'RADIO/radio.img': b'../../etc/passwd'}, 'link-entry:target-files:RADIO/radio.img'),
+            'IMAGES image': ({'IMAGES/boot.img': b'boot.img'}, 'link-entry:target-files:IMAGES/boot.img'),
+            'META': ({'META/misc_info.txt': b'/etc/passwd'}, 'link-entry:target-files:META/misc_info.txt'),
+            'OTA info': ({'OTA/android-info.txt': b'x'}, 'link-entry:target-files:OTA/android-info.txt'),
+            'GSC firmware': ({'VENDOR/firmware/dauntless/evt.ec.bin': b'x'}, 'link-entry:target-files:VENDOR/firmware/'),
+            'build.prop': ({'SYSTEM/build.prop': b'x'}, 'link-entry:target-files:SYSTEM/build.prop'),
+            # malformed link metadata: empty, oversized, or a directory entry
+            'empty text': ({'VENDOR/bin/empty': b''}, 'link-entry:target-files:VENDOR/bin/empty'),
+            'oversized text': ({'VENDOR/bin/big': b'a' * 4096}, 'link-entry:target-files:VENDOR/bin/big'),
+            'directory link': ({'VENDOR/lnk/': b'x'}, 'link-entry:target-files:VENDOR/lnk/'),
+            # names stay checked before any link decision
+            'traversal name': ({'VENDOR/../../escape': b'toybox'}, 'unsafe-path:target-files:VENDOR/../../escape'),
+            'absolute name': ({'/VENDOR/bin/abs': b'toybox'}, 'unsafe-path:target-files:/VENDOR/bin/abs'),
+        }
+        for name, (extra, pattern) in cases.items():
+            with self.subTest(name):
+                self.assertRefused('observe_refused: target-files refused: .*' + re.escape(pattern),
+                                   Tree(self, tf=target_files(extra, links=set(extra))))
+        with self.subTest('duplicate link'):
+            self.assertRefused(re.escape('duplicate-entry:target-files:VENDOR/bin/tail'),
+                               Tree(self, tf=dup('VENDOR/bin/tail', b'toybox_vendor')))
+        with self.subTest('otatools stays link-free'):
+            tools = otatools({'bin/fastboot': elf(), 'lib64/x.so': b'y'}, links={'bin/fastboot'})
+            self.assertRefused('archive_unsafe: otatools bin/fastboot is not a regular member', Tree(self, tools=tools))
+
+    def test_open_checked_admits_names_only_links_for_target_files_only(self):
+        fp, _ = obs.factory_package()
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(tmp, ignore_errors=True))
+        path = tmp/'tf.zip'
+        path.write_bytes(target_files(ANDROID_LINKS, links=set(ANDROID_LINKS)))
+        strict = {'problems': [], 'missing': []}
+        self.assertIsNone(fp.open_checked(path, 'artifact', strict))  # the default (install archive) stays link-free
+        self.assertEqual(sorted(strict['problems']), sorted(f'link-entry:artifact:{n}' for n in ANDROID_LINKS))
+        names_only = {'problems': [], 'missing': []}
+        with fp.open_checked(path, 'target-files', names_only, names_only_links=True) as archive:
+            self.assertIn('VENDOR/bin/gpioinfo', archive.namelist())
+        self.assertEqual((names_only['problems'], names_only['linkEntries']), ([], len(ANDROID_LINKS)))
 
     def test_path_traversal_and_unsafe_members_refuse(self):
         tools = otatools(dict(json.loads('{}'), **{'bin/fastboot': elf(), '../escape': b'x'}))
