@@ -184,5 +184,72 @@ class RoseSwitcherTest(unittest.TestCase):
         contract = json.loads((ROOT/'os/devices/pixel10.json').read_text())
         self.assertIn('packages/apps/Launcher3', contract['roseInclusion']['projects'])
 
+class RoseSwitcherInteractionTest(unittest.TestCase):
+    """#156 acceptance against the production overlay source (RoseAgentStrip/RoseAgentWork as shipped) and the patched
+    pinned layout. Source contract only: scrolling, animation and selection on a device need a runtime recording."""
+    STRIP = (OVERLAY/'RoseAgentStrip.java').read_text()
+    # Selected HiFi ce126f56 (prototypes/rose-hifi/Rose-HiFi.html renderSwitcher): the link label and empty text.
+    HIFI = {'in progress': " task in progress", 'plural': " tasks in progress", 'idle': "No active work",
+        'empty': "No background work"}
+
+    def body(self, signature, end):
+        return self.STRIP[self.STRIP.index(signature):self.STRIP.index(end)]
+
+    def test_the_agent_carousel_scrolls_on_its_own(self):
+        self.assertEqual(self.STRIP.count('new HorizontalScrollView(context)'), 1)
+        self.assertIn('scroller.addView(cards);', self.STRIP)
+        for coupled in ('RecentsView', 'PagedView', 'overview_panel', 'setOnScrollChangeListener', 'scrollBy('):
+            self.assertNotIn(coupled, self.STRIP, f'{coupled}: the agent row never drives the human carousel')
+        tree = patched_tree(self)
+        layout = (tree/LAYOUT).read_text()
+        self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'),
+            'a sibling of the human carousel in the drag layer, not inside it')
+
+    def test_every_entry_starts_fresh_and_leaving_stops_the_connector(self):
+        visibility = self.body('protected void onWindowVisibilityChanged(int visibility)', 'private void setWorking(')
+        self.assertLess(visibility.index('scroller.scrollTo(0, 0);'), visibility.index('refresh();'))
+        self.assertIn('setWorking(false);', visibility.split('} else {')[1])
+        refresh = self.body('void refresh() {', 'private static RoseAgentWork read(')
+        self.assertIn('int token = ++generation;', refresh)
+        self.assertIn('if (token == generation) show(next);', refresh, 'the newest read wins on re-entry')
+
+    def test_the_connector_reflects_only_actual_work(self):
+        show = self.body('private void show(RoseAgentWork next) {', 'private void select(')
+        self.assertIn('link.setText(next.linkLabel());', show)
+        self.assertIn('setWorking(next.working() > 0 && getWindowVisibility() == VISIBLE);', show)
+        working = self.body('private void setWorking(boolean working) {', 'void refresh() {')
+        self.assertIn('pulse.setRepeatCount(ValueAnimator.INFINITE);', working)
+        self.assertIn('if (pulse != null) pulse.cancel();', working.split('} else {')[1])
+        self.assertIn('connector.setAlpha(IDLE);', working)
+        self.assertIn('task.topOfDisplay ? 0x55FFFFFF : 0x33FFFFFF', show, 'the current card is marked')
+        self.assertIn('Rose is working in it now', show)
+
+    def test_empty_and_error_states_invent_nothing(self):
+        show = self.body('private void show(RoseAgentWork next) {', 'private void select(')
+        self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'cards come only from the read')
+        self.assertEqual(show.count('cards.addView('), 1)
+        work = (OVERLAY/'RoseAgentWork.java').read_text()
+        self.assertIn(f'static final String EMPTY = "{self.HIFI["empty"]}";', work)
+        for key in ('in progress', 'plural', 'idle'):
+            self.assertIn(self.HIFI[key], work, key)
+
+    def test_back_home_and_selection_never_stop_or_move_work(self):
+        for banned in ('removeTask', 'finishAndRemoveTask', 'killBackgroundProcesses', 'forceStopPackage', 'finish()',
+                'moveTaskToFront', 'startActivityFromRecents', 'setFocusedRootTask', 'stopLockTask', 'onBackPressed'):
+            self.assertNotIn(banned, self.STRIP, banned)
+        select = self.body('private void select(', 'private TextView text(')
+        self.assertEqual(select.count('startActivityAsUser('), 1, 'a selection only asks the viewer for that work')
+        # The human carousel's selection is Launcher3's own: the patch removes nothing else of the overview.
+        removed = [l for l in PATCH.read_text().splitlines() if l.startswith('-') and not l.startswith('---')]
+        self.assertEqual(removed, ['-                    /* claimedSpaceAbove= */0,'])
+
+    def test_the_row_still_fits_its_claimed_height(self):
+        # padding 12 + link row ~18 + card 72 + status ~18 dp, inside the claimed rose_agent_strip_height.
+        import re
+        tree = patched_tree(self)
+        height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
+        self.assertGreaterEqual(height, 12 + 18 + 72 + 18)
+        self.assertNotIn('title = text(', self.STRIP, 'the HiFi link row replaces the old static title')
+
 if __name__ == '__main__':
     unittest.main()
