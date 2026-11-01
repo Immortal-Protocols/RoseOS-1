@@ -28,9 +28,9 @@ final class WorkspaceOverview {
 
  // ---------- Fixed texts (HiFi views.js LABEL/OBSERVE wording, real-contract reasons) ----------
  static final String TITLE="Rose’s apps";
+ static final String WORKSPACE="Rose’s workspace";
+ static final String WATCH_CARD_UNLINKED="Rose hasn’t linked this workspace to a task shown here, so Watch isn’t offered.";
  static final String EMPTY="Rose isn’t using any apps right now.";
- /** No task list rows: true whether the list is empty or has not reached this screen at all. */
- static final String TASKS_NONE="No tasks from Rose on the Mac have reached this screen.";
  static final String WATCH_OK="Watch Rose’s workspace for this task";
  static final String WATCH_DISCONNECTED="Rose isn’t connected, so its workspace can’t be checked.";
  static final String WATCH_CHECKING="Rose is checking its background workspace.";
@@ -167,7 +167,15 @@ final class WorkspaceOverview {
  /** The one real workspace card. */
  static final class Card {
   final Place place;final Dot dot;final String label,detail;final int linkedTasks;
-  Card(Place place,Dot dot,String label,String detail,int linkedTasks){this.place=place;this.dot=dot;this.label=label;this.detail=detail;this.linkedTasks=linkedTasks;}
+  /** The HiFi window card's header (the workspace app's visible name, or "Rose’s workspace"), the package whose real
+   * icon it shows (empty: none known), and the footer's short state (views.js SHORT). */
+  final String app,pkg,shortState;
+  Card(Place place,Dot dot,String label,String detail,int linkedTasks){this(place,dot,label,detail,linkedTasks,"","");}
+  Card(Place place,Dot dot,String label,String detail,int linkedTasks,String app,String pkg){
+   this.place=place;this.dot=dot;this.label=label;this.detail=detail;this.linkedTasks=linkedTasks;
+   this.app=app==null||app.isEmpty()?WORKSPACE:app;this.pkg=pkg==null?"":pkg;this.shortState=shortState(place);}
+  /** HiFi shows only windows that are in use: an idle controller has no card. */
+  boolean shown(){return place!=Place.NONE;}
  }
  static final class Row {
   final Identity identity;final Dot dot;final String title,state,detail,result,watchReason,stopNote;final boolean canWatch,canStop,selected,linked;
@@ -181,10 +189,16 @@ final class WorkspaceOverview {
  }
  static final class Model {
   final boolean connected;final Card card;final List<Row> rows;final Row selected;final String empty;
-  Model(boolean connected,Card card,List<Row> rows,Row selected,String empty){this.connected=connected;this.card=card;this.rows=rows;this.selected=selected;this.empty=empty;}
+  /** The task the workspace card opens Watch for: the one row whose own binding verified (null: the card only explains). */
+  final Row watchRow;
+  Model(boolean connected,Card card,List<Row> rows,Row selected,String empty){
+   this.connected=connected;this.card=card;this.rows=rows;this.selected=selected;this.empty=empty;
+   Row w=null;for(Row r:rows)if(r.canWatch){w=r;break;}watchRow=w;}
+  /** Why tapping the workspace card opens nothing (empty when it opens Watch). */
+  String cardReason(){return watchRow!=null?"":card.place==Place.OPEN||card.place==Place.STARTING||card.place==Place.WAITING?WATCH_CARD_UNLINKED:card.detail;}
   /** A stable key: equal keys render the same, so re-entry and repeated reads redraw nothing. */
   String key(){
-   StringBuilder b=new StringBuilder().append(connected).append('|').append(card.place).append(card.dot).append(card.label).append('|').append(card.detail);
+   StringBuilder b=new StringBuilder().append(connected).append('|').append(card.place).append(card.dot).append(card.label).append('|').append(card.detail).append('|').append(card.app).append('|').append(card.pkg);
    for(Row r:rows)b.append('\n').append(r.identity.id).append(r.dot).append(r.state).append(r.detail).append(r.result).append(r.canWatch).append(r.canStop).append(r.stopNote).append(r.selected).append(r.linked);
    return b.toString();
   }
@@ -232,7 +246,10 @@ final class WorkspaceOverview {
     selected!=null&&selected.same(t.identity()),canWatch,canWatch?t.binding:null);
    rows.add(r);if(r.selected)sel=r;
   }
-  return new Model(connected,card(connected,ws,linked),Collections.unmodifiableList(rows),sel,rows.isEmpty()?TASKS_NONE:"");
+  Card card=card(connected,ws,linked);
+  // HiFi a-empty: only when there is neither a workspace in use nor a task to show.
+  if(rows.isEmpty()&&!card.shown())return new Model(connected,card,Collections.<Row>emptyList(),null,EMPTY);
+  return new Model(connected,card,Collections.unmodifiableList(rows),sel,"");
  }
 
  /** Why Watch can't open for this task (empty when it can): only its own explicit binding, from the current scope,
@@ -274,6 +291,19 @@ final class WorkspaceOverview {
  }
 
  static Card card(boolean connected,Workspace ws,int linked){
+  Card c=cardState(connected,ws,linked);
+  boolean known=ws.read==Read.OK&&connected&&c.place!=Place.NONE;
+  return new Card(c.place,c.dot,c.label,c.detail,c.linkedTasks,known?ws.appLabel:"",known?ws.targetPackage:"");
+ }
+ /** views.js SHORT for the window card footer, from the real controller state. */
+ static String shortState(Place p){
+  switch(p){
+   case OPEN:return "Open";case STARTING:return "Starting";case WAITING:return "Waiting";case ENDED:return "Closed";
+   case DISCONNECTED:return "Not connected";case CHECKING:return "Checking…";case UNREADABLE:return "Can’t check";case NONE:return "Not started";
+   default:return "Unknown";
+  }
+ }
+ static Card cardState(boolean connected,Workspace ws,int linked){
   if(!connected)return new Card(Place.DISCONNECTED,Dot.IDLE,"Not connected","Rose isn’t connected, so its workspace can’t be checked.",0);
   if(ws.read==Read.CHECKING)return new Card(Place.CHECKING,Dot.IDLE,"Checking…",WATCH_CHECKING,0);
   if(ws.read!=Read.OK)return new Card(Place.UNREADABLE,Dot.IDLE,"Can’t check",WATCH_UNREADABLE,0);

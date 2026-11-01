@@ -117,7 +117,8 @@ public final class RoseConversationActivity extends Activity {
   more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});
    m.getMenu().add("Settings").setOnMenuItemClickListener(i->{startActivity(new Intent(MainActivity.ACTION_SETTINGS).setClass(this,MainActivity.class));return true;});m.show();});
   FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
-  overview=new WorkspaceOverviewPanel(this,WorkspaceOverviewPanel.State.INSTANCE);overview.bind(overviewSource(),overviewActions());
+  overview=new WorkspaceOverviewPanel(this,WorkspaceOverviewPanel.State.INSTANCE,ivory?new ConversationDrawing.IvoryBackground(this):null,statusInset());
+  overview.bind(overviewSource(),overviewActions());overview.setIcons(this::appIcon);
   root.addView(overview,new FrameLayout.LayoutParams(-1,-1));
   setContentView(root);
  }
@@ -271,6 +272,13 @@ public final class RoseConversationActivity extends Activity {
   String label;try{label=String.valueOf(getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(pkg,0)));}catch(Exception e){label="";}
   labelFor=new String[]{pkg,label};return label;
  }
+ /** The workspace app's real launcher icon for its window card (null when it can't be read); cached with its package. */
+ Object[] iconFor={"",null};
+ android.graphics.drawable.Drawable appIcon(String pkg){
+  Object[] l=iconFor;if(pkg.equals(l[0]))return (android.graphics.drawable.Drawable)l[1];
+  android.graphics.drawable.Drawable d;try{d=getPackageManager().getApplicationIcon(pkg);}catch(Exception e){d=null;}
+  iconFor=new Object[]{pkg,d};return d;
+ }
  WorkspaceOverviewPanel.Source overviewSource(){
   return new WorkspaceOverviewPanel.Source(){
    public boolean connected(){return localLive();}
@@ -285,6 +293,7 @@ public final class RoseConversationActivity extends Activity {
  WorkspaceOverviewPanel.Actions overviewActions(){
   return new WorkspaceOverviewPanel.Actions(){
    public boolean stopRoute(){return false;}
+   public void endCall(){send("end");}
    public void stop(WorkspaceOverview.Identity task){}
    public void watch(final WorkspaceOverview.Identity task,final WorkspaceOverview.Binding atTap){
     if(watchOpening)return;watchOpening=true;

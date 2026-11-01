@@ -37,6 +37,7 @@ public class WorkspaceOverviewPanelRenderTest {
         public Workspace workspace() { return Workspace.read("ready", "sess-1", B.controllerTaskId, "pkg", "Calculator", S); }
         public boolean stopRoute() { return route; }
         public void stop(Identity t) { calls.add("stop:" + t.id); }
+        public void endCall() { calls.add("end"); }
         public void watch(Identity t, Binding atTap) { calls.add("watch:" + t.id + (atTap == null ? ":none" : ":" + atTap.sessionId)); }
     }
     static List<String> texts(View v, List<String> out) {
@@ -55,6 +56,17 @@ public class WorkspaceOverviewPanelRenderTest {
         return null;
     }
 
+    static View tagged(View v, String tag) {
+        if (tag.equals(v.getTag())) return v;
+        if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { View r = tagged(((ViewGroup) v).getChildAt(i), tag); if (r != null) return r; }
+        return null;
+    }
+    static View described(View v, String d) {
+        if (v.getContentDescription() != null && d.equals(v.getContentDescription().toString())) return v;
+        if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { View r = described(((ViewGroup) v).getChildAt(i), d); if (r != null) return r; }
+        return null;
+    }
+
     @Test public void noStopRouteNoStopAndBackKeepsEverything() {
         Host host = new Host();
         WorkspaceOverviewPanel.State state = new WorkspaceOverviewPanel.State();
@@ -63,13 +75,14 @@ public class WorkspaceOverviewPanelRenderTest {
         p.refresh();
         assertFalse("closed panel draws nothing", p.isOpen());
         p.open();
-        assertEquals(null, button(p, "Stop"));
-        assertTrue(texts(p, new ArrayList<>()).contains(WorkspaceOverview.STOP_NO_ROUTE));
-        row(p, "Multiply 12 by 7").performClick();
+        assertEquals("no live Stop without a route", null, tagged(p, "stop"));
+        tagged(tagged(p, "task:2"), "stop-unavailable").performClick();
+        assertTrue("an unavailable Stop says why", texts(p, new ArrayList<>()).contains(WorkspaceOverview.STOP_NO_ROUTE));
+        assertTrue("nothing was sent", host.calls.isEmpty());
+        tagged(p, "task:2").performClick();
         assertTrue(state.selected != null && state.selected.id.equals("2"));
-        button(p, "Watch").performClick();
-        assertEquals(Arrays.asList("watch:2:sess-1"), host.calls);
-        button(p, "Back").performClick();
+        assertEquals("a linked task card opens Watch with its own binding", Arrays.asList("watch:2:sess-1"), host.calls);
+        described(p, "Back").performClick();
         assertFalse(p.isOpen());
         p.open();
         assertTrue("selection survives Back and re-entry", state.selected.id.equals("2"));
@@ -81,9 +94,9 @@ public class WorkspaceOverviewPanelRenderTest {
         WorkspaceOverviewPanel.State state = new WorkspaceOverviewPanel.State();
         WorkspaceOverviewPanel p = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication(), state);
         p.bind(host, host); p.open();
-        button(p, "Stop").performClick();
+        tagged(p, "stop").performClick();
         assertEquals(Arrays.asList("stop:2"), host.calls);
-        assertEquals(null, button(p, "Stop"));
+        assertEquals(null, tagged(p, "stop"));
         assertTrue(texts(p, new ArrayList<>()).contains(WorkspaceOverview.STOP_SENDING));
         state.ack(new Identity("2", new Scope("server-b", "pair-1")), Ack.STOPPED);
         assertEquals("a foreign answer is ignored", StopPhase.SENDING, state.stop.phase);
@@ -91,7 +104,7 @@ public class WorkspaceOverviewPanelRenderTest {
         p.close();
         WorkspaceOverviewPanel again = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication(), state);
         again.bind(host, host); again.open();
-        assertTrue("a recreated panel shows the same pending Stop", texts(again, new ArrayList<>()).contains("Stopping… · Typing"));
+        assertTrue("a recreated panel shows the same pending Stop", texts(again, new ArrayList<>()).contains(WorkspaceOverview.STOP_STOPPING));
         assertEquals(Arrays.asList("stop:2"), host.calls);
     }
 }

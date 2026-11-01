@@ -34,6 +34,7 @@ public final class WorkspaceOverviewTest {
         idleDisconnectedConfirmation();
         repeatedEntryAndBack();
         noStopRoute();
+        hifiCard();
         System.out.println("WorkspaceOverviewTest: " + checks + " checks passed");
     }
 
@@ -194,7 +195,7 @@ public final class WorkspaceOverviewTest {
 
     static void idleDisconnectedConfirmation() {
         Model empty = WorkspaceOverview.of(true, S1, Workspace.read("idle", "", "", "", "", S1), new ArrayList<Task>(), null, null);
-        expect(empty.rows.isEmpty() && empty.empty.equals(WorkspaceOverview.TASKS_NONE) && empty.card.place == Place.NONE, "idle");
+        expect(empty.rows.isEmpty() && empty.empty.equals(WorkspaceOverview.EMPTY) && empty.card.place == Place.NONE, "idle");
         List<Task> one = Arrays.asList(task("2", S1, Status.RUNNING, "Multiply 12 by 7", bound(S1), 20));
         Model off = WorkspaceOverview.of(false, S1, ready(S1), one, null, null);
         expect(off.card.place == Place.DISCONNECTED && off.card.label.equals("Not connected"), "disconnected is not idle");
@@ -207,6 +208,32 @@ public final class WorkspaceOverviewTest {
         Model consent = WorkspaceOverview.of(true, S1, Workspace.read("consent_required", "", "", "", "", S1), one, null, null);
         expect(consent.card.label.equals("Waiting for your consent") && !consent.rows.get(0).canWatch, "consent");
         expect(WorkspaceOverview.of(true, S1, Workspace.read("strange", "", "", "", "", S1), one, null, null).card.place == Place.UNKNOWN, "unknown controller state is not relabelled");
+    }
+
+    /** HOME-WORKSPACE-FIDELITY-225: the HiFi window card is the one real workspace, named only from the real read. */
+    static void hifiCard() {
+        List<Task> none = new ArrayList<>();
+        Model idle = WorkspaceOverview.of(true, S1, Workspace.read("idle", "", "", "", "", S1), none, null, null, false);
+        expect(!idle.card.shown() && idle.empty.equals(WorkspaceOverview.EMPTY), "idle and no tasks: no window card, the HiFi empty text");
+        Model idleTasks = WorkspaceOverview.of(true, S1, Workspace.read("idle", "", "", "", "", S1), Arrays.asList(task("1", S1, Status.DONE, "Add", null, 1)), null, null, false);
+        expect(!idleTasks.card.shown() && idleTasks.empty.isEmpty() && idleTasks.rows.size() == 1, "idle with results: results only, no empty text");
+        Model open = WorkspaceOverview.of(true, S1, ready(S1), none, null, null, false);
+        expect(open.card.shown() && open.card.app.equals("Calculator") && open.card.pkg.equals(PKG) && open.card.shortState.equals("Open"), "open: the real app's name, package and HiFi short state");
+        expect(open.empty.isEmpty(), "a workspace in use is never 'not using any apps'");
+        expect(open.watchRow == null && open.cardReason().equals(WorkspaceOverview.WATCH_CARD_UNLINKED), "unlinked: the card says why it opens nothing");
+        Model off = WorkspaceOverview.of(false, S1, ready(S1), none, null, null, false);
+        expect(off.card.shown() && off.card.app.equals(WorkspaceOverview.WORKSPACE) && off.card.pkg.isEmpty() && off.card.shortState.equals("Not connected"), "disconnected: no stale app name or icon");
+        Model unread = WorkspaceOverview.of(true, S1, Workspace.UNREADABLE, none, null, null, false);
+        expect(unread.card.pkg.isEmpty() && unread.card.shortState.equals("Can’t check") && unread.cardReason().equals(WorkspaceOverview.WATCH_UNREADABLE), "unreadable: no app, its reason");
+        Model nolabel = WorkspaceOverview.of(true, S1, Workspace.read("ready", SESSION, WS, PKG, "", S1), none, null, null, false);
+        expect(nolabel.card.app.equals(WorkspaceOverview.WORKSPACE), "no readable label: Rose's workspace, never a guessed name");
+        List<Task> bound = Arrays.asList(task("2", S1, Status.RUNNING, "Multiply 12 by 7", bound(S1), 20));
+        Model linked = WorkspaceOverview.of(true, S1, ready(S1), bound, null, null, false);
+        expect(linked.watchRow != null && linked.watchRow.identity.id.equals("2") && linked.cardReason().isEmpty(), "linked: the card opens its own task's Watch");
+        Model moved = WorkspaceOverview.of(true, S1, Workspace.read("ready", "sess-2", "rose-ws-x", "com.android.chrome", "Chrome", S1), bound, null, null, false);
+        expect(moved.watchRow == null && moved.card.app.equals("Chrome"), "another session: shown as itself, attributed to no task");
+        String[][] places = {{"launching", "Starting"}, {"blocked", "Waiting"}, {"consent_required", "Waiting"}, {"stopped", "Closed"}, {"failed", "Closed"}, {"strange", "Unknown"}};
+        for (String[] p : places) expect(WorkspaceOverview.of(true, S1, Workspace.read(p[0], p[0].equals("launching") || p[0].equals("blocked") ? SESSION : "", WS, PKG, "Calculator", S1), none, null, null, false).card.shortState.equals(p[1]), "short state " + p[0]);
     }
 
     /** Without an authoritative Stop route Stop is never offered; the row says so instead of failing silently. */

@@ -153,7 +153,7 @@ test('Rose\'s apps opens the managed workspace overview: read-only tasks, one wo
  const block=activity.slice(activity.indexOf('// ---------- Managed workspace overview'),activity.indexOf('/** Confirms Stop for the task shown now.'));
  assert.ok(block.length>500,'the overview section is found');
  assert.match(activity,/agents\.setOnClickListener\(v->openOverview\(\)\)/,'the well opens the overview');
- assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,WorkspaceOverviewPanel\.State\.INSTANCE\)/,'selection and a pending Stop live in the process-wide state');
+ assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,WorkspaceOverviewPanel\.State\.INSTANCE,ivory\?new ConversationDrawing\.IvoryBackground\(this\):null,statusInset\(\)\)/,'selection and a pending Stop live in the process-wide state');
  assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
  // Tasks only from Core's onLocalTasks feed; never the backend projection or an open session.
  assert.match(block,/public java\.util\.List<WorkspaceOverview\.Task> tasks\(\)\{return WorkspaceOverviewFeed\.tasks\(\);\}/);
@@ -173,4 +173,7 @@ test('Rose\'s apps opens the managed workspace overview: read-only tasks, one wo
  assert.match(block,/String\[\] p=ctlPackage;String pkg=r\.key\(\)\.equals\(p\[0\]\)\?p\[1\]:"";/);
  assert.ok(!/Log\.[dviwe]\(/.test(block),'no identifiers are logged');
  assert.ok(!/AutoAgentPip|PictureInPicture/.test(activity),'automatic PiP is untouched');
+ // HOME-WORKSPACE-FIDELITY-225: the HiFi tray's middle well ends the existing voice conversation; real app icons only.
+ assert.match(block,/public void endCall\(\)\{send\("end"\);\}/);
+ assert.match(block,/d=getPackageManager\(\)\.getApplicationIcon\(pkg\);/);
 });
