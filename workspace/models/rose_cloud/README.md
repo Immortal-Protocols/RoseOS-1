@@ -600,6 +600,152 @@ or latency.
   - `validate: null`;
   - `stop` other than `done`.
 
+## cloud-qwen-gpu-once (CLOUD-QWEN-GPU-001; source only, has not run: running it is a separate runtime decision)
+
+**Why:** the approved `cloud-validate-once` run passed: the ptts import and API, and all 11 staged Qwen config,
+tokenizer and processor checks. Cleanup and the hold were verified at 20:22:39. That does not show that the weights
+load or that inference works. `gpu-start-once` runs Muse's production launch script (Muse model, Muse cache, port 8000,
+container `muse-glimmer`), so it is not reused.
+
+**What `qwen_gpu.py` does** (stdlib only at module level; `tests/test_qwen_gpu.py` runs it against a stand-in `vllm`
+package), stopping at the first refusal:
+
+1. **Manifest:** the `qwen` group must be exactly `Qwen/Qwen3.6-35B-A3B-FP8` at
+   `95a723d08a9490559dae23d0cff1d9466213d989`. A Muse manifest or any other model is `bad_manifest`.
+2. **Isolation, from inside before vLLM is imported** (otherwise `not_isolated`):
+   - `/tmp` is a tmpfs of at most 8 GiB that is not `noexec` (Triton and vLLM kernel caches);
+   - `/dev/shm` is a tmpfs of at most 4 GiB;
+   - `/` and the model directory are read-only;
+   - the only network interface is `lo`;
+   - exactly two `/dev/nvidiaN` devices exist.
+3. **Inputs** (otherwise `bad_inputs`):
+   - the 11 non-weight files match their manifest hashes;
+   - the 43 weight files (42 shards and the index) match their manifest sizes. They are not re-hashed: staging
+     verified them, and hashing 37.5 GB would use much of the bound.
+4. **One child process** in its own session, its process group killed at the deadline (engine workers included):
+   - it imports vLLM and refuses **before loading** if the image's `EngineArgs` lacks any requested option
+     (`engine_arg_unsupported`). For example, there is no silent fallback to loading the vision tower;
+   - it builds `vllm.LLM(model=<staged dir>, tokenizer=<staged dir>, tensor_parallel_size=2, max_model_len=2048,
+     max_num_seqs=1, gpu_memory_utilization=0.90, enforce_eager=True, language_model_only=True,
+     trust_remote_code=False, seed=0, distributed_executor_backend="mp", disable_log_stats=True)`;
+   - it sends ONE `generate` of the fixed synthetic prompt `Count from one to ten in English words, separated by
+     commas:` as token ids, with `SamplingParams(max_tokens=32, temperature=0.0, seed=0)`, `use_tqdm=False`.
+   - **Offline API only:** no HTTP server and no service port.
+
+   The child gets the image's own environment (bootstrap passes no `-e`) with these changes:
+   - proxies removed;
+   - HOME and the HF, vLLM, Triton, Inductor and CUDA caches on the tmpfs;
+   - `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, `VLLM_NO_USAGE_STATS` and `DO_NOT_TRACK` set;
+   - `VLLM_HOST_IP=127.0.0.1` and `VLLM_WORKER_MULTIPROC_METHOD=spawn`.
+
+   Its stderr is discarded unread, and only the tail of its stdout is read.
+
+**Receipt** (`rose-models/diagnostic`, at most 4096 bytes), `qwen`, re-checked by `qwen_gpu.sanitize`:
+- `stop`: `done`, `bad_manifest`, `not_isolated`, `bad_inputs`, `engine_arg_unsupported`, `engine_failed`,
+  `generate_failed`, `crashed` or `deadline`.
+- **Isolation flags** with the tmpfs, shm and GPU-device counts, and the **input counts**.
+- **`engine`:**
+  - `run` and the step reached;
+  - the vLLM version, and any unsupported option names (from the fixed list);
+  - `loadS` and `generateS`;
+  - prompt and generated token counts, `finishReason`, and the sha256 of the generated token ids;
+  - whether every id is inside the vocabulary;
+  - the quantization name, and an exception class or missing module name.
+- **Never** the generated text, the prompt, a log line, a path or an environment value.
+
+**How bootstrap runs it** (`cloud_qwen_gpu_once`):
+- **Checks first:** the same hold, model stop, positive absence, read-only prerequisites, image digest, data-disk and
+  pinned-manifest checks as `cloud-validate-once`. The staged Qwen directory must exist (`staging_missing`
+  otherwise; Docker would create the bind source).
+- **The container:**
+
+  ```
+  docker run --rm --pull=never --runtime=runc --gpus all --network none --name rose-cloud-qwen-gpu --cap-drop ALL
+    --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777
+    --shm-size 4294967296 --cpus 16 --memory 68719476736 --memory-swap 68719476736
+    -v /mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0:/mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0:ro
+    --entrypoint python3 <pinned image id> -c <qwen_gpu.py> <manifest.json>
+    {"deadlineS":870,"shmMaxBytes":4294967296,"tmpMaxBytes":8589934592}
+  ```
+
+- **GPUs** are requested exactly as the Muse launch requests them (`--gpus all` under `runc`; bootstrap registers
+  the `nvidia` runtime but does not make it the default).
+- **Cleanup:** the container is always removed and its absence verified. No retry.
+
+**Corrections to the proposed bounds** (with evidence):
+
+- **Shared memory added: `--shm-size 4 GiB`.** Docker's default `/dev/shm` is 64 MiB, and vLLM's TP2
+  multiprocessing workers and NCCL use `/dev/shm`. The existing Muse TP2 launch uses 16 GiB (`shm_size_mb` in
+  `serving/muse-glimmer-30b.json`).
+- **Memory accounting:** the 8 GiB cache tmpfs and the 4 GiB `/dev/shm` are tmpfs, charged to the container's memory
+  cgroup. They fit inside the 64 GiB limit, which is not widened, so processes keep at least 52 GiB when both are full.
+- **Ports:** no service port is listened on or published.
+  - **Worker rendezvous inside the container:** at vLLM v0.19.0, workers meet over TCP on 127.0.0.1 (`multiproc_executor.py`:
+    `get_distributed_init_method(get_loopback_ip(), get_open_port())`). At v0.32.0 they use a file store under
+    `tempfile.gettempdir()`.
+  - **Unreachable from outside:** with `--network none` neither is reachable from outside the container.
+- **900 s split:** the container is killed at 900 s, and the helper stops at 870 s so a receipt is still printed.
+  `enforce_eager` skips CUDA-graph capture and `torch.compile`, which keeps the load inside the bound and the caches
+  inside 8 GiB. The trade-off is that timings are not representative of serving.
+- **Weights size-checked, not re-hashed** (see step 3).
+
+**Checked against upstream vLLM source at v0.19.0** (the model card's minimum) **and v0.32.0** (the latest release):
+- every `ENGINE` name is an `EngineArgs` field (`language_model_only: bool = MultiModalConfig.language_model_only`);
+- `LLM.__init__(**kwargs)` forwards them to `EngineArgs`;
+- `Qwen3_5MoeForConditionalGeneration` is registered (`qwen3_5`);
+- `generate(prompts, sampling_params)` accepts a `TokensPrompt` (`prompt_token_ids`) and returns `RequestOutput`, whose
+  `outputs[0]` has `token_ids` and `finish_reason`;
+- `SamplingParams` has `max_tokens`, `temperature` and `seed`;
+- `VLLM_NO_USAGE_STATS` and `DO_NOT_TRACK` are honoured.
+
+**Exact-image-unverified** (the cached image is `vllm/vllm-openai:muse-glimmer`; its vLLM version is not recorded in
+this repository, and the helper reports it):
+- **vLLM version and options:** whether that version has these `EngineArgs` fields (checked before loading) and the
+  `qwen3_5` model.
+- **A100 FP8 path:** whether it runs the FP8 block-quantized MoE weight-only on the A100 (sm80, Marlin W8A16) for both
+  dense and expert layers.
+- **Memory:** whether TP2 with 0.90 GPU memory fits about 18.75 GB of weights per 40 GB GPU with a 2048 context and
+  eager mode, and whether 64 GiB of RAM covers the loader's host memory.
+- **Load time:** whether the load from the pd-ssd finishes inside 870 s.
+- **GPU access:** whether `--gpus all` works with `--cap-drop ALL`, `no-new-privileges` and a read-only root.
+- **Interpreter:** whether `python3 -I` finds vLLM in the image. The approved validation found `transformers` this way
+  in the same image, which is evidence but not proof for vLLM.
+- **Tokenizer:** whether the tokenizer adds special tokens to the fixed prompt as expected.
+
+**Time outside the 900 s bound,** each step already bounded:
+- the reset and boot;
+- the model stop (≤ 180 s) and absence wait (≤ 120 s);
+- `docker info` and image inspect (≤ 60 s each), the identity inspect (≤ 60 s) and `mountpoint` (≤ 30 s);
+- `docker rm -f` (≤ 30 s, after a kill at 900 s at most) and `docker ps` (≤ 30 s);
+- the guest attribute (≤ 10 s).
+
+**Not shown even by `done`:** serving through the HTTP API, vision (the vision tower is not loaded), speech, ASR,
+throughput or latency at serving settings, longer contexts, or output quality. The token hash is for comparison
+across runs, not a correctness check.
+
+**Proposed operator packet** (NOT authorized; a separate runtime decision):
+- **Who:** only the original Mac operator, on `models-glimmer-01`.
+- **Steps:**
+  1. Build at the merge commit with the deployed attestation roots, and record `payloadTarSha256` (P). Confirm the
+     payload lists `etc-rose-models/lib/rose_cloud/qwen_gpu.py` and `manifest.json` with the hashes Core reports.
+  2. Set `startup-script` and `rose-models-payload` from that build, plus
+     `rose-models-diagnostic=cloud-qwen-gpu-once:<P>:<fresh id>`.
+  3. Do one reset.
+  4. Read `rose-models/diagnostic`.
+- **Consequences:**
+  - the usual TLS and auth interruption;
+  - Muse inference is held for that boot (the model service is stopped first, and its container is positively
+    absent before the GPUs are used);
+  - **both A100s are used for up to 900 s** and are released when the container is removed;
+  - the staged data is read-only;
+  - the **next** reset without a new id boots normally and starts Muse;
+  - no download, install, data-disk write or retry.
+- **Stop conditions:**
+  - a `prerequisite` refusal;
+  - `cleanup` other than `removed`;
+  - `qwen: null`;
+  - `stop` other than `done`.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through

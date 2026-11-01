@@ -56,6 +56,8 @@ class FakeHost(B.Host):
         self.redirect_rc, self.redirect_out = 0, ''
         self.deps_container = self.deps_timeout = False
         self.deps_rc, self.deps_out = 0, ''
+        self.qwen_container = self.qwen_timeout = False
+        self.qwen_rc, self.qwen_out = 0, ''
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -177,7 +179,8 @@ class FakeHost(B.Host):
                                             ('rose-cloud-preflight', self.cloud_container),
                                             ('rose-cloud-stage', self.stage_container),
                                             ('rose-cloud-redirect-probe', self.redirect_container),
-                                            ('rose-cloud-validate', self.deps_container)) if alive]
+                                            ('rose-cloud-validate', self.deps_container),
+                                            ('rose-cloud-qwen-gpu', self.qwen_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -196,7 +199,17 @@ class FakeHost(B.Host):
                     self.redirect_container = False
                 if argv[3] == 'rose-cloud-validate' and not self.rm_fails:
                     self.deps_container = False
+                if argv[3] == 'rose-cloud-qwen-gpu' and not self.rm_fails:
+                    self.qwen_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-qwen-gpu' in argv:
+                self.events.append(('qwengpu', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.qwen_container = True
+                if self.qwen_timeout:
+                    return 124, ''
+                self.qwen_container = self.leave_container
+                return self.qwen_rc, self.qwen_out
             if argv[1] == 'run' and 'rose-cloud-validate' in argv:
                 self.events.append(('depsvalidate', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), timeout))
@@ -2109,6 +2122,182 @@ class CloudValidateOnce(DiagnosticFixture):
                                      (None, None, 'other', None))
                 else:
                     self.assertIsNone(v)
+
+
+class CloudQwenGpuOnce(DiagnosticFixture):
+    """cloud-qwen-gpu-once (CLOUD-QWEN-GPU-001): the exact container, bounds and controls, and that it shares nothing
+    with Muse's gpu-start-once. The helper line comes from the payload's own qwen_gpu.py run as a real subprocess over
+    the real pinned manifest with fixture isolation facts, on a path that refuses before vLLM is imported (no GPU, no
+    model here). The container is FakeHost's."""
+
+    QWEN_DIR = '/mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0'
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-qwen-gpu-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        fx = self.tmp / 'qwen-fixture'
+        for d in (fx / 'net' / 'lo', fx / 'net' / 'eth0', fx / 'dev', fx / 'tmp', fx / 'shm'):
+            d.mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        manifest['stagingRoot'] = str(self.tmp / 'empty-staging')
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw 0 0\n")
+        limits = dict(json.loads(B.qwen_gpu_limits()), mountsFile=str(fx / 'mounts'), netDir=str(fx / 'net'),
+                      devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'), shmRoot=str(fx / 'shm'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'qwen_gpu.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])  # refused before vLLM or any cache
+        return 'vllm log noise on stdout\n' + out
+
+    def test_exact_container_bounds_hold_and_no_muse_path(self):
+        status, code = self.probe('qwen', qwen_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; Qwen GPU check stopped: not_isolated'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['timedOut'], r['exitCode']),
+                         ('cloud-qwen-gpu-once', 'removed', None, True, False, 0))
+        self.assertEqual((r['qwen']['stop'], r['qwen']['isolation']['networkOnlyLo'],
+                          r['qwen']['isolation']['gpuDevices'], r['qwen']['engine']), ('not_isolated', False, 0, None))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'qwengpu')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all',
+                                '--network', 'none', '--name', 'rose-cloud-qwen-gpu', '--cap-drop', 'ALL',
+                                '--security-opt', 'no-new-privileges', '--read-only',
+                                '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777',
+                                '--shm-size', '4294967296', '--cpus', '16',
+                                '--memory', '68719476736', '--memory-swap', '68719476736',
+                                '-v', f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro', '--entrypoint', 'python3',
+                                RUNTIME['image_id'], '-c', (lib / 'qwen_gpu.py').read_text(),
+                                (lib / 'manifest.json').read_text(), B.qwen_gpu_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30})
+        self.assertEqual(timeout, 900)  # load plus request: the container is killed at 900 s, the helper stops at 870
+        for forbidden in ('-e', '--env', '--privileged', '--cap-add', '-p', '--publish', '--network=host', 'host',
+                          'bridge', '--ipc'):
+            self.assertNotIn(forbidden, argv)
+        joined = ' '.join(argv[:argv.index('-c')])
+        for muse in ('muse-glimmer', '/mnt/models-data/hf', 'launch-', 'verify_model', 'meta-models', 'vllm serve',
+                     ':8000', 'startup_guard'):
+            self.assertNotIn(muse, joined)  # nothing of Muse's model, cache, launch script, port or container
+        self.assertEqual([a for a in argv if ':' in a and a.startswith('/') and not a.startswith('/tmp:')],
+                         [f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro'])  # only the Qwen directory, read-only
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'qwengpu', 'validate', 'rm')],
+                         ['stop', 'qwengpu', 'rm'])  # never the Muse launch (FakeHost.validate), only this container
+        self.assertFalse([c for c in self.host.calls if 'verify_model.py' in ' '.join(c)])
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_refusals_once_per_id_default_boot_and_muse_mode_unchanged(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                self.probe(attempt, **flags)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        self.host.path(self.QWEN_DIR).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertFalse(self.host.path(self.QWEN_DIR).exists())  # never created, by bootstrap or by docker
+        self.host.path(self.QWEN_DIR).mkdir(parents=True)
+        self.host.model_active = self.host.model_container = True
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        saved = m.read_text()
+        m.write_text(saved.replace('"apache-2.0"', '"other"', 1))
+        self.probe('edited')
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        m.write_text(saved)
+        saved_images = dict(self.host.images)
+        self.host.images.update({k: (v[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *v[2:])
+                                 for k, v in saved_images.items()})
+        self.host.model_active = self.host.model_container = True
+        self.probe('digest')
+        self.assertEqual(self.published()['prerequisite'], 'image_digest_mismatch')
+        self.host.images.update(saved_images)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', qwen_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-gpu-once:{SHA}:q1'))
+        for bad in (f'cloud-qwen-gpu:{SHA}:q1', f'cloud-qwen-gpu-once:{"0" * 63}:q1', f'cloud-qwen-gpu-once:{SHA}:Q1'):
+            self.assertIsNone(B.DIAG_VALUE.fullmatch(bad))
+        for mode in ('offline-validate', 'gpu-start-once', 'hf-probe-once', 'cloud-preflight-once', 'cloud-stage-once',
+                     'cloud-redirect-probe-once', 'cloud-validate-once'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:q1'))  # existing modes unchanged
+        self.assertEqual((B.GPU_SECONDS, json.loads(B.validate_limits())), (900, {'deadlineS': 270,
+                                                                             'tmpMaxBytes': 512 << 20}))
+
+    def test_other_payload_is_ignored(self):
+        self.probe('x')  # a binding for this payload runs (FakeHost's container returns no line)
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, _ = self.boot(f'cloud-qwen-gpu-once:{"1" * 64}:fresh')
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'ignored: other_payload'))
+        self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', qwen_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['qwen'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; Qwen GPU check timed out'))
+        self.assertFalse(self.host.qwen_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', qwen_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        self.host.model_active = self.host.model_container = True
+        # the model's absence answers; then docker does not answer this container's absence check: never "removed"
+        self.host.ps_results = [(0, ''), (1, '')]
+        status, code = self.probe('psfail', qwen_out='')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'unknown')
+        marker = 'ROSE-CLOUD-QWEN-GPU '
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'stop': 'done; rm', 'engine': {
+                    'text': 'generated SECRET', 'error': 'Error: SECRET', 'vllm': '/x/SECRET',
+                    'outputSha256': 'SECRET'}})),
+                ('validate', 'ROSE-CLOUD-VALIDATE ' + json.dumps({'stop': 'done'})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, qwen_out=out + '\n', qwen_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                q = self.published()['qwen']
+                if attempt == 'hostile':
+                    self.assertEqual((q['stop'], q['engine']['error'], q['engine']['vllm'],
+                                      q['engine']['outputSha256']), (None, None, 'other', None))
+                    self.assertNotIn('text', q['engine'])
+                else:
+                    self.assertIsNone(q)
 
 
 class HostValidate(unittest.TestCase):

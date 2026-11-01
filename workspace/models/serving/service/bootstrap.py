@@ -15,9 +15,9 @@ run in order and are rerun-safe: each first checks whether its result is already
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once|hf-probe-once|
-             cloud-preflight-once|cloud-stage-once|cloud-redirect-probe-once|cloud-validate-once:<payload sha256>:<id>,
-             once per id (see gpu_start_once, hf_probe_once, cloud_preflight_once, cloud_stage_once,
-             cloud_redirect_probe_once, cloud_validate_once), and then
+             cloud-preflight-once|cloud-stage-once|cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once:
+             <payload sha256>:<id>, once per id (see gpu_start_once, hf_probe_once, cloud_preflight_once,
+             cloud_stage_once, cloud_redirect_probe_once, cloud_validate_once, cloud_qwen_gpu_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -85,7 +85,8 @@ RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and
 # Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=<mode>:<payload sha256>:<id>
 DIAG_KEY = 'attributes/rose-models-diagnostic'
 DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once|cloud-stage-once|'
-                        r'cloud-redirect-probe-once|cloud-validate-once):([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+                        r'cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once):([0-9a-f]{64}):'
+                        r'([a-z0-9][a-z0-9-]{0,31})')
 # gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
 GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
 # hf-probe-once: lib/service/hf_probe.py in the pinned image, offline, no GPU, cache read-only, at most 120 s
@@ -110,6 +111,14 @@ PROBE_CONTAINER, PROBE_SECONDS, PROBE_HELPER_S, PROBE_READ_TIMEOUT_S = 'rose-clo
 # VALIDATE_HELPER_S. The tmpfs allows exec because the ptts extension is loaded from it.
 VALIDATE_CONTAINER, VALIDATE_SECONDS, VALIDATE_HELPER_S = 'rose-cloud-validate', 300, 270
 VALIDATE_TMP_BYTES, VALIDATE_CPUS, VALIDATE_MEMORY = 512 << 20, '2', 4 << 30
+# cloud-qwen-gpu-once (CLOUD-QWEN-GPU-001; runs only when a separate runtime decision sets it): lib/rose_cloud/
+# qwen_gpu.py loads the staged Qwen/Qwen3.6-35B-A3B-FP8 text model with vLLM's offline API (TP2, 2048 context, eager)
+# and runs one fixed request of at most 32 tokens. Not gpu-start-once: no Muse model, cache, launch script or container
+# name. --gpus all as the Muse launch requests GPUs, --network none, only the Qwen directory mounted read-only, an
+# 8 GiB exec tmpfs for caches and a 4 GiB /dev/shm (both counted inside QWEN_GPU_MEMORY), 16 CPUs, 64 GiB, no swap.
+# Killed at QWEN_GPU_SECONDS; the helper stops at QWEN_GPU_HELPER_S.
+QWEN_GPU_CONTAINER, QWEN_GPU_SECONDS, QWEN_GPU_HELPER_S = 'rose-cloud-qwen-gpu', 900, 870
+QWEN_GPU_TMP_BYTES, QWEN_GPU_SHM_BYTES, QWEN_GPU_CPUS, QWEN_GPU_MEMORY = 8 << 30, 4 << 30, '16', 64 << 30
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
@@ -912,6 +921,8 @@ def stage_diagnostic(host, ctx):
         return cloud_redirect_probe_once(host, ctx, attempt, image)
     if request[2] == 'cloud-validate-once':
         return cloud_validate_once(host, ctx, attempt, image)
+    if request[2] == 'cloud-qwen-gpu-once':
+        return cloud_qwen_gpu_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -1362,6 +1373,84 @@ def cloud_validate_once(host, ctx, attempt, image):
     if result['validate'] is None:
         return 'inference held; dependency validation ' + ('timed out' if result['timedOut'] else 'gave no result')
     return f"inference held; dependency validation stopped: {result['validate']['stop']}"
+
+
+def qwen_gpu_limits() -> str:
+    """The only limits cloud-qwen-gpu-once passes: no test hooks (mountsFile, netDir, devDir, tmpRoot, shmRoot,
+    extraPath)."""
+    return json.dumps({'deadlineS': QWEN_GPU_HELPER_S, 'tmpMaxBytes': QWEN_GPU_TMP_BYTES,
+                       'shmMaxBytes': QWEN_GPU_SHM_BYTES}, sort_keys=True)
+
+
+def cloud_qwen_gpu_once(host, ctx, attempt, image):
+    """CLOUD-QWEN-GPU-001: one offline text load and one fixed request of the staged Qwen FP8 model on both A100s
+    (rose_cloud/qwen_gpu.py). Same hold, stop, positive absence, read-only prerequisites, image digest, data-disk and
+    pinned-manifest checks as cloud-validate-once; the staged Qwen directory must already exist. Then one container:
+    --pull=never, runc with --gpus all, --network none (no published or reachable port), no credentials, all
+    capabilities dropped, no-new-privileges, a read-only root filesystem, only the Qwen directory mounted read-only,
+    QWEN_GPU_TMP_BYTES tmpfs, QWEN_GPU_SHM_BYTES /dev/shm, QWEN_GPU_CPUS CPUs, QWEN_GPU_MEMORY without swap, killed at
+    QWEN_GPU_SECONDS. The helper re-checks isolation and inputs from inside before importing vLLM. The container is
+    always removed and its absence verified; the receipt is at most CLOUD_RECEIPT bytes; inference stays held; no
+    retry."""
+    result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'attemptId': attempt, 'check': 'cloud-qwen-gpu-once', 'modelHeld': True, 'exitCode': None,
+              'timedOut': False, 'qwen': None, 'cleanup': None}
+    refused = diagnostic_prerequisites(host, image)
+    if not refused:
+        ref = f"vllm/vllm-openai@{ctx['runtime']['image_digest']}"
+        facts, _ = image_identity(host, image)
+        if facts is None or facts['id'] != image or ref not in facts['repoDigests'] \
+                or facts['platform'] != 'linux/amd64':
+            refused = 'image_digest_mismatch'
+    if not refused and host.run(['mountpoint', '-q', DATA], 30)[0] != 0:
+        refused = 'data_not_mounted'
+    lib = Path(ctx['payload']) / 'etc-rose-models/lib/rose_cloud'
+    manifest_text = (lib / 'manifest.json').read_text() if not refused else ''
+    if not refused and hashlib.sha256(manifest_text.encode()).hexdigest() != STAGE_MANIFEST_SHA256:
+        refused = 'manifest_mismatch'
+    model_dir = f"{STAGING}/{json.loads(manifest_text)['groups']['qwen']['dir']}" if not refused else None
+    if not refused and not host.path(model_dir).is_dir():
+        refused = 'staging_missing'
+    result['prerequisite'] = refused
+    if not refused:
+        spec = importlib.util.spec_from_file_location('rose_cloud_qwen_gpu', lib / 'qwen_gpu.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        source = (lib / 'qwen_gpu.py').read_text()
+        argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all', '--network', 'none',
+                '--name', QWEN_GPU_CONTAINER, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
+                '--tmpfs', f'/tmp:rw,exec,nosuid,nodev,size={QWEN_GPU_TMP_BYTES},mode=1777',
+                '--shm-size', str(QWEN_GPU_SHM_BYTES), '--cpus', QWEN_GPU_CPUS,
+                '--memory', str(QWEN_GPU_MEMORY), '--memory-swap', str(QWEN_GPU_MEMORY),
+                '-v', f'{model_dir}:{model_dir}:ro', '--entrypoint', 'python3', image,
+                '-c', source, manifest_text, qwen_gpu_limits()]
+        try:
+            code, out = host.run(argv, QWEN_GPU_SECONDS)
+        finally:
+            removed = host.run(['docker', 'rm', '-f', QWEN_GPU_CONTAINER], 30)[0]
+            left = container_names(host, QWEN_GPU_CONTAINER)
+        line = next((l for l in reversed(out.splitlines()) if l.startswith(module.MARKER)), None) \
+            if code != 124 else None
+        try:
+            checked = module.sanitize(json.loads(line[len(module.MARKER):])) \
+                if line and len(line) <= CLOUD_RECEIPT else None
+        except (ValueError, TypeError, AttributeError):
+            checked = None
+        result.update(exitCode=code if code != 124 else None, timedOut=code == 124, qwen=checked,
+                      cleanup='unknown' if left is None else 'failed' if left else 'removed', cleanupRemoveExit=removed)
+    line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    if len(line) > CLOUD_RECEIPT:
+        result.update(qwen=None, receiptTooLarge=True)
+        line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    host.put_guest_attribute('diagnostic', line)
+    host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    if refused:
+        raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
+    if result['cleanup'] != 'removed':
+        raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
+    if result['qwen'] is None:
+        return 'inference held; Qwen GPU check ' + ('timed out' if result['timedOut'] else 'gave no result')
+    return f"inference held; Qwen GPU check stopped: {result['qwen']['stop']}"
 
 
 def load_guard(payload):

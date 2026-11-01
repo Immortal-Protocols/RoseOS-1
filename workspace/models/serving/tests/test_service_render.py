@@ -47,7 +47,7 @@ class Rendered(unittest.TestCase):
     def test_cloud_preflight_helper_is_packaged_but_inert(self):
         m = R.render(self.tmp / 'out')
         src = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
-        for name in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py'):
+        for name in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py', 'qwen_gpu.py'):
             rel = f'lib/rose_cloud/{name}'
             self.assertIn(rel, m['files'])  # in the tree manifest, so in the roots-inclusive payload digest
             self.assertEqual((self.tmp / 'out' / rel).read_bytes(), (src / name).read_bytes())
