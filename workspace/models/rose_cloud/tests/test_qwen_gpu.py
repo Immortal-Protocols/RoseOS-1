@@ -38,17 +38,22 @@ class SamplingParams:
     def __init__(self, **kw):
         self.kw = kw
         log('sampling', kw=kw)
+PAD = 151655
 class _Tok:
     def encode(self, text):
         return [len(w) for w in text.split()]
     def __len__(self):
         return 1000
+    def convert_tokens_to_ids(self, token):
+        return PAD if token == '<|image_pad|>' else 0
+    def decode(self, ids):
+        return MODE.get('answer', 'Red.')
 class _Out:
     def __init__(self, ids, reason):
         self.token_ids, self.finish_reason = ids, reason
 class _Res:
-    def __init__(self, outs):
-        self.outputs = outs
+    def __init__(self, outs, prompt_ids=None):
+        self.outputs, self.prompt_token_ids = outs, prompt_ids
 class _Cfg:
     quantization = 'fp8'
 class _Engine:
@@ -73,11 +78,23 @@ class LLM:
     def get_tokenizer(self):
         return _Tok()
     def generate(self, prompts, params, use_tqdm=True):
-        log('generate', prompts=prompts, use_tqdm=use_tqdm)
+        shown = []
+        for p in prompts:
+            p = dict(p)
+            mm = p.pop('multi_modal_data', None)
+            if mm is not None:
+                img = mm['image']
+                p['image'] = [type(img).__module__, img.mode, list(img.size), list(img.color), sorted(mm)]
+            shown.append(p)
+        log('generate', prompts=shown, use_tqdm=use_tqdm)
         if MODE.get('generate') == 'fail':
             raise ValueError('generated SECRET text')
         n = params.kw['max_tokens']
-        return [_Res([_Out(list(range(100, 100 + n)), 'length')])]
+        pids = None
+        if any('image' in p for p in shown):  # the processor expands the one placeholder to (w/32)*(h/32) pads
+            w, h = shown[0]['image'][2]
+            pids = [1, 2] + [PAD] * MODE.get('pads', (w // 32) * (h // 32)) + [3, 4]
+        return [_Res([_Out(list(range(100, 100 + n)), 'length')], pids)]
 '''
 
 ARG_UTILS = '''
@@ -86,13 +103,22 @@ from dataclasses import make_dataclass
 MODE = json.load(open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'mode.json')))
 FIELDS = ['model', 'tokenizer', 'tensor_parallel_size', 'max_model_len', 'max_num_seqs', 'gpu_memory_utilization',
           'enforce_eager', 'language_model_only', 'trust_remote_code', 'seed', 'distributed_executor_backend',
-          'disable_log_stats']
+          'disable_log_stats', 'limit_mm_per_prompt', 'mm_processor_kwargs']
 EngineArgs = make_dataclass('EngineArgs', [(f, object, None) for f in FIELDS if f not in MODE.get('drop', [])])
 '''
 
 
 def gitsha1(data):
     return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+PIL_IMAGE = '''
+class _Image:
+    def __init__(self, mode, size, color):
+        self.mode, self.size, self.color = mode, size, color
+def new(mode, size, color=0):
+    return _Image(mode, tuple(size), tuple(color))
+'''
 
 
 class Fixture(unittest.TestCase):
@@ -110,6 +136,9 @@ class Fixture(unittest.TestCase):
         (self.extra / 'vllm' / '__init__.py').write_text(VLLM)
         (self.extra / 'vllm' / 'engine' / '__init__.py').write_text('')
         (self.extra / 'vllm' / 'engine' / 'arg_utils.py').write_text(ARG_UTILS)
+        (self.extra / 'PIL').mkdir()
+        (self.extra / 'PIL' / '__init__.py').write_text('')
+        (self.extra / 'PIL' / 'Image.py').write_text(PIL_IMAGE)
         self.mode({})
         files = []
         for name, data in (('config.json', b'{"model_type": "qwen3_5_moe"}'), ('tokenizer.json', b'{}')):
@@ -235,6 +264,79 @@ class QwenGpu(Fixture):
         self.assertEqual(raw['stop'], 'done')
         self.assertEqual(G.sanitize(raw)['engine']['generatedTokens'], 32)
         self.assertNotIn('Count', out)
+
+
+class Vision(Fixture):
+    """Vision mode (CLOUD-QWEN-VISION-001): one synthetic image, the vision tower loaded, a bounded request."""
+
+    def test_one_synthetic_image_request_with_vision_engine(self):
+        r = self.diagnose(mode='vision')
+        self.assertEqual((r['mode'], r['stop']), ('vision', 'done'))
+        e = r['engine']
+        self.assertEqual((e['imageTokens'], e['promptTokens'], e['expectedWordSeen'], e['generatedTokens'],
+                          e['finishReason']), (64, 68, True, 32, 'length'))
+        (llm,) = self.calls('llm')
+        self.assertEqual(llm['kw'], G.VISION_ENGINE)
+        self.assertNotIn('language_model_only', llm['kw'])  # the vision tower is loaded in this mode only
+        self.assertEqual(llm['kw']['limit_mm_per_prompt'], {'image': {'count': 1, 'width': 256, 'height': 256},
+                                                           'video': 0})
+        self.assertEqual(llm['kw']['mm_processor_kwargs'], {'max_pixels': 256 * 256})
+        self.assertEqual((G.VISION['width'], G.VISION['height']), (256, 256))  # the request matches the profile
+        self.assertEqual({k: v for k, v in llm['kw'].items() if k not in ('limit_mm_per_prompt',
+                                                                          'mm_processor_kwargs')},
+                         {k: v for k, v in G.ENGINE.items() if k != 'language_model_only'})  # same bounds as text
+        (gen,) = self.calls('generate')  # exactly one request with exactly one image
+        (prompt,) = gen['prompts']
+        self.assertEqual(prompt['image'], ['PIL.Image', 'RGB', [256, 256], [255, 0, 0], ['image']])
+        self.assertEqual(prompt['prompt'], G.VISION['prompt'])
+        self.assertEqual(prompt['prompt'].count('<|image_pad|>'), 1)
+        self.assertNotIn('prompt_token_ids', prompt)
+        self.assertEqual([c['kw'] for c in self.calls('sampling')], [G.SAMPLING])
+        line = json.dumps(G.sanitize(r))
+        for leak in ('Red', 'colour', 'vision_start', str(self.dir)):
+            self.assertNotIn(leak, line)  # the answer and the prompt never leave the child
+
+    def test_vision_not_applied_or_unbounded_and_weak_answer_signal(self):
+        for pads in (0, G.MAX_IMAGE_TOKENS + 1):
+            with self.subTest(pads=pads):
+                self.mode({'pads': pads})
+                r = self.diagnose(mode='vision')
+                self.assertEqual((r['stop'], r['engine']['imageTokens']), ('vision_not_applied', pads))
+        self.mode({'answer': 'Blue'})
+        r = self.diagnose(mode='vision')
+        self.assertEqual((r['stop'], r['engine']['expectedWordSeen']), ('done', False))  # a signal, not a gate
+
+    def test_text_engine_cannot_stand_in_for_vision(self):
+        self.mode({'drop': ['limit_mm_per_prompt']})  # an image without the multimodal options: refused, not loaded
+        r = self.diagnose(mode='vision')
+        self.assertEqual((r['stop'], r['engine']['unsupported']), ('engine_arg_unsupported', ['limit_mm_per_prompt']))
+        self.assertEqual(self.calls('llm'), [])
+        self.mode({})
+        r = self.diagnose()  # the default (text) mode is the PR345 configuration, untouched
+        self.assertEqual((r['mode'], r['stop'], r['engine'].get('imageTokens')), ('text', 'done', None))
+        (llm,) = [c for c in self.calls('llm')]
+        self.assertEqual(llm['kw'], G.ENGINE)
+        (gen,) = self.calls('generate')
+        self.assertNotIn('image', gen['prompts'][0])
+        self.assertEqual(G.child_config('text'), {'engine': G.ENGINE, 'sampling': G.SAMPLING, 'prompt': G.PROMPT})
+        self.assertEqual(G.diagnose(self.manifest, dict(self.limits, mode='audio'))['stop'], 'bad_mode')
+
+    def test_vision_failures_and_deadline(self):
+        self.mode({'generate': 'fail'})
+        r = self.diagnose(mode='vision')
+        self.assertEqual((r['stop'], r['engine']['error']), ('generate_failed', 'ValueError'))
+        self.mode({'load': 'hang', 'worker': True})
+        t = time.monotonic()
+        r = self.diagnose(mode='vision', deadlineS=4)
+        self.assertLess(time.monotonic() - t, 12)
+        self.assertEqual(r['stop'], 'deadline')
+        (self.extra / 'PIL' / 'Image.py').write_text("raise ModuleNotFoundError('No module named PIL', name='PIL')\n")
+        # no Pillow in the image: a fixed category, reported after the load
+        self.mode({})
+        r = self.diagnose(mode='vision')
+        self.assertEqual((r['stop'], r['engine']['step'], r['engine']['error']),
+                         ('generate_failed', 'generate', 'ModuleNotFoundError'))
+        self.assertEqual(r['engine']['module'], 'PIL')
 
 
 class Refusals(Fixture):
