@@ -263,11 +263,14 @@
  function local(o){
   return new Promise((resolve,reject)=>{
    let input=0,output=0,live=false,closed=false;const seen=new Set(),tasks=localTasks(o.onLocalTasks,20,'c'+(++localConnections)+'-'+Math.random().toString(36).slice(2,10));
-   const handle={close:async()=>{closed=true;root.localRoseEvent=null;root.Native?.localRoseStop();tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
+   // close is idempotent and clears only its own handler: a repeated close of an older connection (a stale start
+   // closing its result) must never stop or deafen a newer one.
+   let onEvent=null;
+   const handle={close:async()=>{if(closed)return;closed=true;if(root.localRoseEvent===onEvent)root.localRoseEvent=null;root.Native?.localRoseStop();tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
    const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
    const unpaired='Not paired: open the menu and choose Pair with Mac';
    const timer=setTimeout(()=>fail('Rose on the Mac is not reachable. Check that Rose is running on the Mac and this phone is on the same Wi-Fi or Tailscale (or USB).'),8000);
-   root.localRoseEvent=m=>{
+   root.localRoseEvent=onEvent=m=>{
     if(closed)return;
     if(m.type==='level'){input=Math.min(1,m.input*3);output=Math.min(1,m.output*3);}
     else if(m.type==='status'&&m.status==='live'&&!live){live=true;clearTimeout(timer);o.onSession?.({provider:'local'});o.onConversationCreated?.(handle);o.onConnect?.();resolve(handle);tasks.live();}
