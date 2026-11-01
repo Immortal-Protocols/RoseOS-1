@@ -249,3 +249,14 @@ test('each connection has its own scope id; a re-paired connection never shares 
  assert.deepEqual(p.last()[0].binding,WS);
 });
 
+test('closing a connection twice never stops or deafens a newer connection',async()=>{
+ const p=page();live(p);const old=await p.started;await old.close();
+ const ctx=p.context,next=ctx.VoiceProviders.start({provider:'local',onLocalTasks:()=>{}});
+ const handler=ctx.localRoseEvent;assert.equal(typeof handler,'function');
+ const stops=p.calls.filter(c=>c[0]==='stop').length;
+ await old.close();
+ assert.equal(ctx.localRoseEvent,handler,'the newer connection keeps its handler');
+ assert.equal(p.calls.filter(c=>c[0]==='stop').length,stops,'and its native link');
+ handler({type:'status',status:'live'});await next;
+});
+
