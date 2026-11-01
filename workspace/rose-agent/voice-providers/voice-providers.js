@@ -174,26 +174,50 @@
    return handle;
   }catch(error){await close();throw error;}
  }
+ // Local Rose tasks (LocalRoseLink forwards the Mac's task events as {type:'task',task:Task.to_dict()}). Only a fixed,
+ // validated projection leaves here: never steps, screen text, a typed draft or other raw fields. The Mac numbers tasks
+ // per run, so a task is id@started; its terminal status is final (later running snapshots are stale) and identical
+ // snapshots are dropped. The full list is delivered only while live; closing delivers [] once and nothing after.
+ // Read-only: no Stop or command reaches the Mac from here, and nothing joins the backend task projection.
+ const LOCAL_TASK_KINDS=new Set(['phone','think']),LOCAL_TASK_STATES=new Set(['running','done','failed','cancelled']);
+ function localTask(t){
+  if(!t||typeof t!=='object'||!Number.isSafeInteger(t.id)||t.id<1||!LOCAL_TASK_KINDS.has(t.kind)||!LOCAL_TASK_STATES.has(t.status)||typeof t.goal!=='string'||typeof t.started!=='number'||!Number.isFinite(t.started))return null;
+  const text=v=>typeof v==='string'?v.slice(0,500):'',running=t.status==='running';
+  return {key:t.id+'@'+t.started,id:t.id,kind:t.kind,goal:text(t.goal),status:t.status,detail:running?text(t.detail):'',result:running?'':text(t.result),
+   background:t.background===true,onScreen:t.on_screen===true,awaitingSend:t.status==='done'&&!!t.ready_to_send,started:t.started,finished:typeof t.finished==='number'&&Number.isFinite(t.finished)?t.finished:null};
+ }
+ function localTasks(callback,keep=20){
+  const deliver=callback&&(list=>{try{callback(list);}catch(e){console.warn('local task consumer failed');}});
+  const tasks=new Map();let open=true,live=false,sent='[]';
+  const publish=()=>{if(!open||!live||!deliver)return;const list=[...tasks.values()].sort((a,b)=>a.started-b.started||a.id-b.id),sig=JSON.stringify(list);if(sig===sent)return;sent=sig;deliver(list.map(t=>({...t})));};
+  const trim=()=>{const ended=[...tasks.values()].filter(t=>t.status!=='running').sort((a,b)=>(a.finished||0)-(b.finished||0)||a.started-b.started);while(ended.length>keep)tasks.delete(ended.shift().key);};
+  return {
+   accept(raw){if(!open)return false;const t=localTask(raw);if(!t)return false;const prev=tasks.get(t.key);if(prev&&prev.status!=='running')return false;tasks.set(t.key,t);trim();publish();return true;},
+   live(){live=true;publish();},
+   end(){if(!open)return;open=false;tasks.clear();if(live&&deliver&&sent!=='[]')deliver([]);}
+  };
+ }
  // Local Rose: the models run on the Mac, reached over Wi-Fi or Tailscale once paired by QR code, or over
  // USB before that (LocalRoseConnection). The native LocalRoseLink does the audio
  // (voice-call capture with Android's echo canceller; a player that reports what was actually heard)
  // and Rose listens, decides, speaks and drives the phone herself, so this maps its events onto the contract.
  function local(o){
   return new Promise((resolve,reject)=>{
-   let input=0,output=0,live=false,closed=false;const seen=new Set();
-   const handle={close:async()=>{closed=true;root.localRoseEvent=null;root.Native?.localRoseStop();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
+   let input=0,output=0,live=false,closed=false;const seen=new Set(),tasks=localTasks(o.onLocalTasks);
+   const handle={close:async()=>{closed=true;root.localRoseEvent=null;root.Native?.localRoseStop();tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
    const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
    const unpaired='Not paired: open the menu and choose Pair with Mac';
    const timer=setTimeout(()=>fail('Rose on the Mac is not reachable. Check that Rose is running on the Mac and this phone is on the same Wi-Fi or Tailscale (or USB).'),8000);
    root.localRoseEvent=m=>{
     if(closed)return;
     if(m.type==='level'){input=Math.min(1,m.input*3);output=Math.min(1,m.output*3);}
-    else if(m.type==='status'&&m.status==='live'&&!live){live=true;clearTimeout(timer);o.onSession?.({provider:'local'});o.onConversationCreated?.(handle);o.onConnect?.();resolve(handle);}
+    else if(m.type==='status'&&m.status==='live'&&!live){live=true;clearTimeout(timer);o.onSession?.({provider:'local'});o.onConversationCreated?.(handle);o.onConnect?.();resolve(handle);tasks.live();}
     else if(m.type==='status'&&m.status==='reconnecting'&&live)o.onError?.('Reconnecting to Rose on the Mac…');
     else if(m.type==='status'&&m.status==='clock'){const clock='The Mac refused this phone\'s time. Turn on automatic date and time in Settings.';if(!live)fail(clock);else o.onError?.(clock);}
     else if(m.type==='status'&&m.status==='unpaired'){if(!live)fail(unpaired);else{o.onError?.(unpaired);void handle.close();o.onDisconnect?.({reason:'unpaired'});}}
     else if(m.type==='mode')o.onModeChange?.({mode:m.mode});
     else if(m.type==='message'&&m.text){const key=m.role+':'+m.id+':'+m.text;if(!seen.has(key)){seen.add(key);o.onMessage?.({role:m.role==='user'?'user':'agent',message:m.text});}}
+    else if(m.type==='task')tasks.accept(m.task);
     else if(m.type==='closed'){void handle.close();o.onDisconnect?.({reason:'replaced'});}
     else if(m.type==='error')fail(m.message);
    };
@@ -201,6 +225,6 @@
   });
  }
  const providers={elevenlabs:eleven,openai,local};
- root.VoiceProviders={createInputHandoff,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
+ root.VoiceProviders={createInputHandoff,localTask,localTasks,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
  if(typeof module!=='undefined')module.exports=root.VoiceProviders;
 })(typeof window!=='undefined'?window:globalThis);

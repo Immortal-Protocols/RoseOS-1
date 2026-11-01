@@ -8,6 +8,8 @@ node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
 node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
+# Local Rose task events from the real PR318 producer, through the local() provider bridge.
+node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
