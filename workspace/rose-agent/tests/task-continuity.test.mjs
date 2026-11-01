@@ -81,10 +81,12 @@ test('Watch carries the selected task and its session to the viewer, read after 
  const activity=source('RoseConversationActivity.java');
  const open=activity.slice(activity.indexOf('void openWorkspace('),activity.indexOf('\n }',activity.indexOf('void openWorkspace(')));
  assert.match(open,/final String selected=shownTaskId;/,'the selected task id is captured at the tap');
- assert.ok(open.indexOf('controllerState()')>0&&open.indexOf('controllerState()')<open.indexOf('startActivity('),'controller state is read fresh before opening');
+ assert.ok(open.indexOf('controllerState()')>0&&open.indexOf('controllerState()')<open.indexOf('launchBoundViewer('),'controller state is read fresh before opening');
  assert.match(open,/TaskControl\.watchBinding\(selected,selected\.equals\(shownTaskId\),c\)/,'binding from the fresh read for the tapped task');
  assert.match(open,/if\(binding==null\)\{[^}]*return;\}/,'no binding, no viewer');
- assert.match(open,/putExtra\(TaskControl\.EXTRA_WATCH_TASK_ID,binding\[0\]\)\.putExtra\(TaskControl\.EXTRA_WATCH_SESSION_ID,binding\[1\]\)/,'the viewer intent carries both ids');
+ assert.match(open,/launchBoundViewer\(binding\[0\],binding\[1\]\)/,'the viewer is opened with both ids');
+ const launch=activity.slice(activity.indexOf('boolean launchBoundViewer('),activity.indexOf('\n }',activity.indexOf('boolean launchBoundViewer(')));
+ assert.match(launch,/putExtra\(TaskControl\.EXTRA_WATCH_TASK_ID,controllerTaskId\)\.putExtra\(TaskControl\.EXTRA_WATCH_SESSION_ID,sessionId\)/,'the viewer intent carries both ids');
  assert.equal((activity.match(/AgentWorkspaceActivity/g)||[]).length,1,'the conversation surface has one, bound, viewer launch');
  assert.ok(!/task\/stop|sendStop|send\("end"\)/.test(open),'opening the viewer stops nothing and ends no voice');
  // Existing unbound entries (app reveal and automatic view) are unchanged.
@@ -105,7 +107,7 @@ test('Rose\'s apps never fails silently: a tap says why Watch can\'t open, from 
  assert.match(open,/if\(!ws\.canWatch\)\{Toast\.makeText\(this,ws\.reason,Toast\.LENGTH_LONG\)\.show\(\);return;\}/,'unavailable: Core\'s reason is shown and nothing opens');
  // Available: the existing bound route is unchanged and still re-checks the tapped task is the one shown.
  assert.ok(at('if(!ws.canWatch)')<at('TaskControl.watchBinding(selected,selected.equals(shownTaskId),c)'),'the reason check never replaces the binding check');
- assert.ok(at('TaskControl.watchBinding(')<at('startActivity('),'only a bound launch');
+ assert.ok(at('TaskControl.watchBinding(')<at('launchBoundViewer('),'only a bound launch');
  // The UI shows Core's text as given: no reason sentence is written or chosen here.
  for(const r of ["isn't working in an app","isn't available on this phone","still starting","waiting for your consent","doesn't let Rose use",
    "has stopped","couldn't start","busy with another task","running a background workspace","couldn't check","wasn't allowed to check",
@@ -144,4 +146,31 @@ test('W1: the generic phone-command path claims the id before posting and never 
  assert.match(path,/return gate\.await\(task,id,5000\);/,'the bounded wait answers from the receipt');
  assert.ok(!/task\.get\(5,TimeUnit\.SECONDS\)/.test(voice),'no bare five-second get whose timeout becomes an error');
  assert.equal((voice.match(/savePhoneResult\(saved,id,result\);\s*final JSONObject completed=result;/g)||[]).length,1,'the posted action still saves its real result first');
+});
+
+test('Rose\'s apps opens the managed workspace overview: read-only tasks, one workspace, no guessed Watch or Stop (MANAGED-WORKSPACE-OVERVIEW-001)',()=>{
+ const activity=source('RoseConversationActivity.java');
+ const block=activity.slice(activity.indexOf('// ---------- Managed workspace overview'),activity.indexOf('/** Confirms Stop for the task shown now.'));
+ assert.ok(block.length>500,'the overview section is found');
+ assert.match(activity,/agents\.setOnClickListener\(v->openOverview\(\)\)/,'the well opens the overview');
+ assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,WorkspaceOverviewPanel\.State\.INSTANCE\)/,'selection and a pending Stop live in the process-wide state');
+ assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
+ // Tasks only from Core's onLocalTasks feed; never the backend projection or an open session.
+ assert.match(block,/public java\.util\.List<WorkspaceOverview\.Task> tasks\(\)\{return WorkspaceOverviewFeed\.tasks\(\);\}/);
+ assert.match(block,/public WorkspaceOverview\.Scope scope\(\)\{return WorkspaceOverviewFeed\.scope\(\);\}/);
+ assert.ok(!/taskStateJson/.test(block),'the overview never reads the backend task projection');
+ // No Stop transport exists: Stop is unavailable and nothing is sent.
+ assert.match(block,/public boolean stopRoute\(\)\{return false;\}/);
+ assert.match(block,/public void stop\(WorkspaceOverview\.Identity task\)\{\}/);
+ assert.ok(!/task\/stop|sendStop|localRoseStop/.test(block),'the overview sends no Stop');
+ // Watch: fresh read after the tap, the binding the row showed, the one bound launch.
+ const watch=block.slice(block.indexOf('public void watch('));
+ const at=s=>{const i=watch.indexOf(s);assert.ok(i>0,s);return i;};
+ assert.ok(at('controllerState()')<at('WorkspaceOverview.watchBinding(task,atTap,')&&at('WorkspaceOverview.watchBinding(task,atTap,')<at('launchBoundViewer(b.controllerTaskId,b.sessionId)'),'fresh read, then the captured-binding check, then the bound launch');
+ assert.match(watch,/if\(b==null\)\{Toast\.makeText\(RoseConversationActivity\.this,WorkspaceOverview\.WATCH_MOVED_ON/,'a changed binding opens nothing and says so');
+ // targetPackage: optional, published with its read's key, never makes the read malformed.
+ assert.match(activity,/ctlPackage=new String\[\]\{r\.key\(\),pkg instanceof String\?\(String\)pkg:""\};/);
+ assert.match(block,/String\[\] p=ctlPackage;String pkg=r\.key\(\)\.equals\(p\[0\]\)\?p\[1\]:"";/);
+ assert.ok(!/Log\.[dviwe]\(/.test(block),'no identifiers are logged');
+ assert.ok(!/AutoAgentPip|PictureInPicture/.test(activity),'automatic PiP is untouched');
 });

@@ -31,8 +31,9 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   boolean stopRoute();
   /** Sends Stop for exactly this identity; the answer comes back through State.ack. */
   void stop(WorkspaceOverview.Identity task);
-  /** Re-reads the controller off the UI thread and opens the viewer only if watchBinding still verifies. */
-  void watch(WorkspaceOverview.Identity task);
+  /** Re-reads the controller off the UI thread and opens the viewer only if watchBinding still verifies and equals
+   * the binding the row showed at the tap. */
+  void watch(WorkspaceOverview.Identity task,WorkspaceOverview.Binding atTap);
  }
  /** Selection and Stop survive the panel and the activity (one process). */
  static final class State {
@@ -42,7 +43,7 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   synchronized void ack(WorkspaceOverview.Identity about,WorkspaceOverview.Ack ack){stop.ack(about,ack);}
  }
 
- private final WorkspaceOverviewView view;private Source source;private Actions actions;
+ private final WorkspaceOverviewView view;private Source source;private Actions actions;private WorkspaceOverview.Model shown;
  final State state;
 
  WorkspaceOverviewPanel(Context c,State state){
@@ -57,7 +58,10 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   addView(back,bp);
   view.setListener(new WorkspaceOverviewView.Listener(){
    public void select(WorkspaceOverview.Identity t){state.selected=t;refresh();}
-   public void watch(WorkspaceOverview.Identity t){if(actions!=null)actions.watch(t);}
+   public void watch(WorkspaceOverview.Identity t){
+    if(actions==null||shown==null)return;
+    for(WorkspaceOverview.Row r:shown.rows)if(r.identity.same(t)&&r.canWatch){actions.watch(t,r.binding);return;}
+   }
    public void stop(WorkspaceOverview.Identity t){
     if(actions==null||!actions.stopRoute())return;
     boolean sent;synchronized(state){sent=state.stop.request(t,SystemClock.elapsedRealtime());}
@@ -82,7 +86,7 @@ final class WorkspaceOverviewPanel extends FrameLayout {
    m=WorkspaceOverview.of(connected,source==null?WorkspaceOverview.Scope.UNKNOWN:source.scope(),
     source==null?WorkspaceOverview.Workspace.UNREADABLE:source.workspace(),tasks,state.selected,state.stop,actions!=null&&actions.stopRoute());
   }
-  view.show(m);
+  shown=m;view.show(m);
  }
  int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
 }

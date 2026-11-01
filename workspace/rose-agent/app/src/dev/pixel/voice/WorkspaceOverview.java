@@ -29,6 +29,8 @@ final class WorkspaceOverview {
  // ---------- Fixed texts (HiFi views.js LABEL/OBSERVE wording, real-contract reasons) ----------
  static final String TITLE="Rose’s apps";
  static final String EMPTY="Rose isn’t using any apps right now.";
+ /** No task list rows: true whether the list is empty or has not reached this screen at all. */
+ static final String TASKS_NONE="No tasks from Rose on the Mac have reached this screen.";
  static final String WATCH_OK="Watch Rose’s workspace for this task";
  static final String WATCH_DISCONNECTED="Rose isn’t connected, so its workspace can’t be checked.";
  static final String WATCH_CHECKING="Rose is checking its background workspace.";
@@ -169,8 +171,10 @@ final class WorkspaceOverview {
  }
  static final class Row {
   final Identity identity;final Dot dot;final String title,state,detail,result,watchReason,stopNote;final boolean canWatch,canStop,selected,linked;
-  Row(Identity identity,Dot dot,String title,String state,String detail,String result,boolean canWatch,String watchReason,boolean canStop,String stopNote,boolean selected,boolean linked){
-   this.identity=identity;this.dot=dot;this.title=title;this.state=state;this.detail=detail;this.result=result;this.canWatch=canWatch;
+  /** The task's own binding when Watch can open, captured with the row so a tap re-check can refuse a changed one. */
+  final Binding binding;
+  Row(Identity identity,Dot dot,String title,String state,String detail,String result,boolean canWatch,String watchReason,boolean canStop,String stopNote,boolean selected,boolean linked,Binding binding){
+   this.binding=binding;this.identity=identity;this.dot=dot;this.title=title;this.state=state;this.detail=detail;this.result=result;this.canWatch=canWatch;
    this.watchReason=watchReason;this.canStop=canStop;this.stopNote=stopNote;this.selected=selected;this.linked=linked;}
   /** The spoken name of the row: title, state and, when Watch can't open, why. */
   String description(){return title+", "+state+(canWatch?"":". "+watchReason);}
@@ -225,10 +229,10 @@ final class WorkspaceOverview {
    Dot dot=stopping?Dot.STOPPING:dot(t.status);
    String state=stopping?STOP_STOPPING:label(t.status);
    Row r=new Row(t.identity(),dot,title(t),state,t.active()?t.activity:"",t.result,canWatch,canWatch?WATCH_OK:reason,canStop,stopNote,
-    selected!=null&&selected.same(t.identity()),canWatch);
+    selected!=null&&selected.same(t.identity()),canWatch,canWatch?t.binding:null);
    rows.add(r);if(r.selected)sel=r;
   }
-  return new Model(connected,card(connected,ws,linked),Collections.unmodifiableList(rows),sel,rows.isEmpty()?EMPTY:"");
+  return new Model(connected,card(connected,ws,linked),Collections.unmodifiableList(rows),sel,rows.isEmpty()?TASKS_NONE:"");
  }
 
  /** Why Watch can't open for this task (empty when it can): only its own explicit binding, from the current scope,
@@ -253,6 +257,14 @@ final class WorkspaceOverview {
  }
  /** The binding Watch opens with for the selected task, re-checked against a fresh read at the tap; null when the
   * selection is gone, replaced or no longer verified. Never substitutes the open workspace's session. */
+ static Binding watchBinding(Identity selected,Binding atTap,boolean connected,Scope scope,Workspace fresh,List<Task> tasks){
+  Binding b=watchBinding(selected,connected,scope,fresh,tasks);
+  return b!=null&&same(b,atTap)?b:null;
+ }
+ /** Two bindings name the same controller session in all three fields and the same scope. */
+ static boolean same(Binding a,Binding b){
+  return a!=null&&b!=null&&a.controllerTaskId.equals(b.controllerTaskId)&&a.sessionId.equals(b.sessionId)&&a.targetPackage.equals(b.targetPackage)&&a.scope.same(b.scope);
+ }
  static Binding watchBinding(Identity selected,boolean connected,Scope scope,Workspace fresh,List<Task> tasks){
   if(selected==null||tasks==null)return null;
   List<Task> list=new ArrayList<>();for(Task t:tasks)if(t!=null)list.add(t);

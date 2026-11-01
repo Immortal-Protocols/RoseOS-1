@@ -37,7 +37,7 @@ public class WorkspaceOverviewPanelRenderTest {
         public Workspace workspace() { return Workspace.read("ready", "sess-1", B.controllerTaskId, "pkg", "Calculator", S); }
         public boolean stopRoute() { return route; }
         public void stop(Identity t) { calls.add("stop:" + t.id); }
-        public void watch(Identity t) { calls.add("watch:" + t.id); }
+        public void watch(Identity t, Binding atTap) { calls.add("watch:" + t.id + (atTap == null ? ":none" : ":" + atTap.sessionId)); }
     }
     static List<String> texts(View v, List<String> out) {
         if (v instanceof TextView) out.add(((TextView) v).getText().toString());
@@ -68,12 +68,12 @@ public class WorkspaceOverviewPanelRenderTest {
         row(p, "Multiply 12 by 7").performClick();
         assertTrue(state.selected != null && state.selected.id.equals("2"));
         button(p, "Watch").performClick();
-        assertEquals(Arrays.asList("watch:2"), host.calls);
+        assertEquals(Arrays.asList("watch:2:sess-1"), host.calls);
         button(p, "Back").performClick();
         assertFalse(p.isOpen());
         p.open();
         assertTrue("selection survives Back and re-entry", state.selected.id.equals("2"));
-        assertEquals("Back never stopped or opened anything", Arrays.asList("watch:2"), host.calls);
+        assertEquals("Back never stopped or opened anything", Arrays.asList("watch:2:sess-1"), host.calls);
     }
 
     @Test public void stopIsSentOnceForTheCapturedIdentityAndSurvivesReentry() {
