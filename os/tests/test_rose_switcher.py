@@ -118,7 +118,7 @@ class RoseSwitcherTest(unittest.TestCase):
         tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(64)'):read.index('RoseAgentWork.of(')]
         self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
         self.assertNotIn('getApplicationLabel', tasks)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, virtualDisplays, tasks).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDisplays, tasks).labelled(', read)
         self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
         for step in ('CONTROLLER', 'AUTOMATION', 'TASKS', 'DISPLAYS'):
             self.assertIn(f'RoseAgentWork.Step.{step}', read)
@@ -155,7 +155,10 @@ class RoseSwitcherTest(unittest.TestCase):
             'android/companion/virtual/VirtualDeviceManager.java': 'package android.companion.virtual; '
                 'public final class VirtualDeviceManager { public void registerAutomatedPackageListener('
                 'java.util.concurrent.Executor e, android.companion.virtual.computercontrol.AutomatedPackageListener l) {} '
-                'public int getDeviceIdForDisplayId(int displayId){return 0;} }',
+                'public java.util.List<VirtualDevice> getVirtualDevices(){return null;} }',
+            'android/companion/virtual/VirtualDevice.java': 'package android.companion.virtual; '
+                'public final class VirtualDevice { public static final int DEVICE_PROFILE_COMPUTER_CONTROL = 1; '
+                'public int getDeviceProfile(){return 0;} public int[] getDisplayIds(){return null;} }',
             'android/companion/virtual/computercontrol/AutomatedPackageListener.java':
                 'package android.companion.virtual.computercontrol; public interface AutomatedPackageListener { '
                 'void onAutomatedPackagesChanged(String automatingPackage, java.util.List<String> automatedPackages, '
@@ -330,7 +333,7 @@ class ControllerReadPermissionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
         self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, virtualDisplays, tasks).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDisplays, tasks).labelled(', read)
         self.assertIn('platform.forUser(user)', read)
         # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
         self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
@@ -437,10 +440,14 @@ class PrivateControllerDisplayTest(unittest.TestCase):
         holder = strip[strip.index('private static final class Automation implements AutomatedPackageListener {'):
             strip.index('private static final float IDLE')]
         callback = holder[holder.index('public void onAutomatedPackagesChanged('):holder.index('synchronized RoseAgentWork.Automation forUser(')]
-        self.assertLess(callback.index('if (!RoseAgentWork.CONTROLLER.equals(automatingPackage)) return;'),
-            callback.index('reported.add(user.getIdentifier());'), 'another owner is ignored before anything is kept')
-        self.assertIn('controller.put(user.getIdentifier(), new HashSet<>(automatedPackages));', callback)
-        self.assertIn('if (automatedPackages.isEmpty()) controller.remove(user.getIdentifier());', callback)
+        self.assertIn('if (RoseAgentWork.CONTROLLER.equals(automatingPackage)) reported.add(id);', callback,
+            'only the exact controller\'s report makes its absence meaningful')
+        self.assertIn('else byUser.put(id, new HashSet<>(automatedPackages));', callback)
+        self.assertIn('if (automatedPackages == null || automatedPackages.isEmpty()) byUser.remove(id);', callback)
+        users = holder[holder.index('synchronized RoseAgentWork.Automation forUser('):]
+        self.assertIn('Set<String> automated = owner.getValue().get(user);', users, 'only this user\'s reports')
+        self.assertIn('if (RoseAgentWork.CONTROLLER.equals(owner.getKey())) packages = automated;', users)
+        self.assertIn('else others.addAll(automated);', users)
         self.assertIn('if (strip.getWindowVisibility() == VISIBLE) strip.refresh();', callback, 'a change re-reads')
         self.assertIn('new RoseAgentWork.Automation(reported.contains(user),', holder)
         self.assertIn('if (registered) return;', holder)
@@ -452,11 +459,69 @@ class PrivateControllerDisplayTest(unittest.TestCase):
         read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
         self.assertLess(read.index('step = RoseAgentWork.Step.AUTOMATION;'), read.index('platform.register();'),
             'a refused or missing registration is named at its own step on every read')
-        self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getDeviceIdForDisplayId(id)'))
-        self.assertIn('vdm.getDeviceIdForDisplayId(id) != Context.DEVICE_ID_DEFAULT', read)
+        self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getVirtualDevices()'))
         work = (OVERLAY/'RoseAgentWork.java').read_text()
         self.assertIn('if (candidates && !automation.reported) return unavailable(NOT_REPORTED);', work,
             'unreported work is never shown as "No background work"')
+
+class CrossDisplayAttributionTest(unittest.TestCase):
+    """#156 disclosed gap after PR337: a package Rose automates can also run on another app's virtual display (or on
+    another ComputerControl owner's session display) and was shown as Rose's card. Old-fails: PR337's of() took every
+    virtual device's display (getDeviceIdForDisplayId != DEVICE_ID_DEFAULT) and attributed by package alone, so a cast
+    of the same app became a second card and "2 tasks in progress" (reproduced against a2a51d6). The correction uses
+    two platform facts on frameworks/base 84183aff, with no permission, PUBLIC display or guessed binding."""
+    PINNED = {'VirtualDevice.java': '6a7602ceb3d7e9bfd6669d96861b288e7d0969ab4a84297c7ebc1dcdc56ec97f',
+        'DisplayWindowPolicyControllerHelper.java': '699e7d4253a5fd7d293f48e44d2ce779fb151629883ec8c9581d3818daf1dd44'}
+    method = staticmethod(PrivateControllerDisplayTest.method)
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in self.PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_only_the_session_path_makes_a_computer_control_device_and_anyone_may_list_its_displays(self):
+        service = (FIXTURES/'VirtualDeviceManagerService.java').read_text()
+        self.assertEqual(service.count('VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL'), 1)
+        factory = service[service.index('mComputerControlSessionProcessor =\n'):service.index('mComputerControlConsentManager =')]
+        self.assertIn('VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL)));', factory, 'set by the platform, not the app')
+        self.assertIn('token, attributionSource, params, VirtualDevice.DEVICE_PROFILE_SHELL);', service)
+        mapping = self.method(service, 'private static int getDeviceProfile(@NonNull AssociationInfo associationInfo) {')
+        self.assertNotIn('COMPUTER_CONTROL', mapping, 'no companion association maps to it')
+        listing = self.method(service, 'public List<VirtualDevice> getVirtualDevices() {')
+        self.assertNotIn('enforce', listing)
+        self.assertNotIn('check', listing)
+        device = (FIXTURES/'VirtualDevice.java').read_text()
+        self.assertIn('public static final int DEVICE_PROFILE_COMPUTER_CONTROL = 1;', device)
+        self.assertIn('public int getDeviceProfile() {\n        return mProfile;', device)
+        self.assertIn('dest.writeInt(mProfile);', device)
+        displays = self.method((FIXTURES/'VirtualDeviceImpl.java').read_text(), 'public int[] getDisplayIds() {')
+        self.assertIn('displayIds[i] = mVirtualDisplays.keyAt(i);', displays)
+        self.assertNotIn('enforce', displays)
+
+    def test_each_owners_report_is_the_activities_on_its_own_session_displays(self):
+        helper = self.method((FIXTURES/'DisplayWindowPolicyControllerHelper.java').read_text(), 'void onRunningActivityChanged() {')
+        self.assertIn('mDisplayContent.forAllActivities((r) -> {\n            if (!r.finishing) {', helper)
+        self.assertIn('uidPackagePairs.add(new Pair<>(r.getUid(), r.info.packageName));', helper)
+        device = (FIXTURES/'VirtualDeviceImpl.java').read_text()
+        self.assertIn('mDeviceId, mOwnerPackageName, runningUids, newAllRunningUidPackagePairs);', device)
+        repo = (FIXTURES/'AutomatedPackagesRepository.java').read_text()
+        self.assertIn('// This aggregates packages from all virtual devices associated with the current\n'
+            '        // deviceOwnerPackageName.', repo)
+        # So a task on a session display is in its owner's report; reported by CONTROLLER alone, that owner is it.
+
+    def test_the_row_uses_only_session_devices_and_never_attributes_a_shared_package(self):
+        code = ControllerReadPermissionTest.code()
+        read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
+        self.assertNotIn('getDeviceIdForDisplayId', code, 'any virtual device display is no longer enough')
+        self.assertIn('if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;', read)
+        self.assertIn('for (int id : device.getDisplayIds()) if (id > 0) sessionDisplays.add(id);', read)
+        work = (OVERLAY/'RoseAgentWork.java').read_text()
+        self.assertIn('if (!automation.packages.contains(t.packageName)) continue;\n'
+            '            if (automation.others.contains(t.packageName)) shared.add(t);\n'
+            '            else items.add(t);', work)
+        self.assertIn('for (Task t : fresh.unattributed) if (t.taskId == card.taskId) return Open.UNATTRIBUTED;', work)
+        show = code[code.index('private void show(RoseAgentWork next) {'):code.index('private void select(')]
+        self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unattributed tasks are never cards')
+        self.assertNotIn('unattributed', show)
 
 if __name__ == '__main__':
     unittest.main()

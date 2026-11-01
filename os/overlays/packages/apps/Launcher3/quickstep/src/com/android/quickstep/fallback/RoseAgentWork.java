@@ -21,9 +21,15 @@ import java.util.Set;
  * (VirtualDeviceManager.registerAutomatedPackageListener, allowed by checkCallerIsRecentsOrHomeRoleHolder, the same
  * channel Launcher3's AutomationRepositoryImpl uses): for each ComputerControl session owner, the session owner package
  * VirtualDeviceImpl recorded from its allowlisted AttributionSource, and the packages running on that owner's session
- * displays, per user. A task counts when it is this user's, on a virtual device's display (getDeviceIdForDisplayId),
- * not the controller itself, and its package is one the platform reports CONTROLLER automating for this user. The
- * controller still binds a selection to its own session display (agent-pip WatchBinding.fromSelection). The
+ * displays, per user. Those reports come from the non-finishing activities on each owner's session displays
+ * (DisplayWindowPolicyControllerHelper.onRunningActivityChanged), and only ComputerControl sessions create a virtual
+ * device with DEVICE_PROFILE_COMPUTER_CONTROL (VirtualDeviceManagerService), whose displays getVirtualDevices() lists
+ * without any permission. A task counts when it is this user's, on a COMPUTER_CONTROL device's display, not the
+ * controller itself, and its package is reported automated for this user by CONTROLLER and by no other session owner:
+ * then the session owning that display can only be the controller's. The same package on another app's virtual
+ * display (not a ComputerControl device) is never Rose's work; one that another session owner also reports cannot be
+ * attributed, so it is no card and the row says so. The controller still binds a selection to its own session
+ * display (agent-pip WatchBinding.fromSelection). The
  * signer-gated AgentProvider is not read. Nothing is invented: no such task is a truthful empty state, a failed query
  * an unavailable state, and work the platform has not reported yet is said to be not reported, never "none".
  * Pure logic, no Android types.
@@ -45,31 +51,43 @@ final class RoseAgentWork {
     }
 
     /**
-     * What the platform has reported CONTROLLER automating for one user. reported: a report for CONTROLLER and that
-     * user arrived since this process registered (the platform sends the current state on registration, then each
-     * change; an empty list means its session ended). Before that, absence is not evidence of no work.
+     * What the platform has reported for one user. reported: a report for CONTROLLER and that user arrived since this
+     * process registered (the platform sends the current state on registration, then each change; an empty list means
+     * its session ended). Before that, absence is not evidence of no work. packages: what CONTROLLER automates.
+     * others: what any other ComputerControl session owner automates for that user (never shown; it only stops a
+     * shared package from being attributed to Rose).
      */
     static final class Automation {
         final boolean reported;
-        final Set<String> packages;
-        Automation(boolean reported, Collection<String> packages) {
+        final Set<String> packages, others;
+        Automation(boolean reported, Collection<String> packages, Collection<String> others) {
             this.reported = reported;
             this.packages = Collections.unmodifiableSet(new HashSet<>(packages));
+            this.others = Collections.unmodifiableSet(new HashSet<>(others));
         }
     }
 
     final State state;
     final List<Task> items;
+    /** Tasks on a session display whose package another session owner also automates: never cards. */
+    final List<Task> unattributed;
     final String reason;
 
     private RoseAgentWork(State state, List<Task> items, String reason) {
-        this.state = state; this.items = Collections.unmodifiableList(items); this.reason = reason;
+        this(state, items, new ArrayList<>(), reason);
+    }
+
+    private RoseAgentWork(State state, List<Task> items, List<Task> unattributed, String reason) {
+        this.state = state; this.items = Collections.unmodifiableList(items);
+        this.unattributed = Collections.unmodifiableList(unattributed); this.reason = reason;
     }
 
     /** The selected HiFi's empty agent carousel (ce126f56 renderSwitcher: "No background work"). */
     static final String EMPTY = "No background work";
     /** Running work exists on a virtual display, but the platform has not yet reported what Rose automates. */
     static final String NOT_REPORTED = "Rose's work has not been reported yet";
+    /** Some work on an agent screen is in an app another agent also automates, so it is not shown as Rose's. */
+    static final String UNATTRIBUTED = "Some agent work can't be told apart from another agent's";
 
     /**
      * How many items are their display's current screen: the apps Rose is actually working in now, as the platform
@@ -125,37 +143,40 @@ final class RoseAgentWork {
             if (label == null || label.isEmpty()) label = t.packageName;
             out.add(new Task(t.taskId, t.displayId, t.userId, t.packageName, label, t.topOfDisplay));
         }
-        return new RoseAgentWork(state, out, reason);
+        return new RoseAgentWork(state, out, unattributed, reason);
     }
 
     /**
      * controllerUid: the uid of CONTROLLER for the current user, or -1 when it is not installed for that user.
      * currentUser: only that user's agent work is shown (user/profile boundary).
-     * automation: what the platform reported CONTROLLER automating for currentUser.
-     * virtualDisplays: the non-default displays of these tasks that the platform says belong to a virtual device.
+     * automation: what the platform reported for currentUser.
+     * sessionDisplays: the displays of the virtual devices whose platform-set profile is DEVICE_PROFILE_COMPUTER_CONTROL.
      */
-    static RoseAgentWork of(int controllerUid, int currentUser, Automation automation, Collection<Integer> virtualDisplays,
+    static RoseAgentWork of(int controllerUid, int currentUser, Automation automation, Collection<Integer> sessionDisplays,
             List<Task> tasks) {
         if (controllerUid < 0) return unavailable("Rose agent control is not installed for this user");
-        if (automation == null || virtualDisplays == null || tasks == null) {
+        if (automation == null || sessionDisplays == null || tasks == null) {
             return unavailable("Running work could not be read");
         }
-        List<Task> items = new ArrayList<>();
+        List<Task> items = new ArrayList<>(), shared = new ArrayList<>();
         boolean candidates = false;
         for (Task t : tasks) {
-            if (t.userId != currentUser || t.displayId <= 0 || !virtualDisplays.contains(t.displayId)
+            if (t.userId != currentUser || t.displayId <= 0 || !sessionDisplays.contains(t.displayId)
                     || CONTROLLER.equals(t.packageName)) {
                 continue;
             }
             candidates = true;
-            if (automation.packages.contains(t.packageName)) items.add(t);
+            if (!automation.packages.contains(t.packageName)) continue;
+            if (automation.others.contains(t.packageName)) shared.add(t);
+            else items.add(t);
         }
-        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, null);
+        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, shared, shared.isEmpty() ? null : UNATTRIBUTED);
+        if (!shared.isEmpty()) return new RoseAgentWork(State.UNAVAILABLE, items, shared, UNATTRIBUTED);
         if (candidates && !automation.reported) return unavailable(NOT_REPORTED);
         return new RoseAgentWork(State.EMPTY, items, EMPTY);
     }
 
-    enum Open { WATCH, NOT_CURRENT, CHANGED, GONE }
+    enum Open { WATCH, NOT_CURRENT, CHANGED, UNATTRIBUTED, GONE }
 
     /** Selection-request extras for the controller's viewer (agent-pip WatchBinding): Android facts, never Rose IDs. */
     static final String EXTRA_SELECT_DISPLAY = "dev.pixel.backgroundcontrol.extra.SELECT_DISPLAY_ID";
@@ -168,6 +189,9 @@ final class RoseAgentWork {
      * own live session or refuses. Any other outcome says why and never shows a different task.
      */
     static Open decide(Task card, RoseAgentWork fresh) {
+        if (fresh != null) {
+            for (Task t : fresh.unattributed) if (t.taskId == card.taskId) return Open.UNATTRIBUTED;
+        }
         if (fresh == null || fresh.state != State.AVAILABLE) return Open.GONE;
         for (Task t : fresh.items) {
             if (t.taskId != card.taskId) continue;
@@ -184,6 +208,7 @@ final class RoseAgentWork {
             case WATCH: return null;
             case NOT_CURRENT: return label + " is not on Rose's screen right now";
             case CHANGED: return label + " changed; pick it again";
+            case UNATTRIBUTED: return label + " can't be told apart from another agent's work";
             default: return label + " is no longer running";
         }
     }
