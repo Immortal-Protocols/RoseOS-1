@@ -85,11 +85,12 @@ def check_root(path):
     return data
 
 
-def payload_files(attestation_roots=None):
-    """{archive path: bytes} of everything the VM needs."""
+def payload_files(attestation_roots=None, model='muse', qwen_settings='proven'):
+    """{archive path: bytes} of everything the VM needs. ``model`` selects what the persistent slot serves (default
+    muse; qwen only when asked, MODELS-QWEN-SERVE-001)."""
     files = {}
     with tempfile.TemporaryDirectory() as tmp:
-        render_service.render(Path(tmp) / 'tree')
+        render_service.render(Path(tmp) / 'tree', model=model, qwen_settings=qwen_settings)
         for p in sorted((Path(tmp) / 'tree').rglob('*')):
             if p.is_file():
                 files['etc-rose-models/' + p.relative_to(Path(tmp) / 'tree').as_posix()] = p.read_bytes()
@@ -122,8 +123,8 @@ def commit():
         return 'unknown'
 
 
-def build(out_dir, attestation_roots=None, source=None):
-    files = payload_files(attestation_roots)
+def build(out_dir, attestation_roots=None, source=None, model='muse', qwen_settings='proven'):
+    files = payload_files(attestation_roots, model, qwen_settings)
     tar = tar_bytes(files)
     gz = io.BytesIO()
     with gzip.GzipFile(fileobj=gz, mode='wb', mtime=0, compresslevel=9) as z:
@@ -150,9 +151,12 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--attestation-roots', type=Path)
+    p.add_argument('--model', choices=render_service.MODELS, default='muse',
+                   help='what the persistent model slot serves (default muse; qwen only when selected)')
+    p.add_argument('--qwen-settings', choices=('proven', 'proposed'), default='proven')
     a = p.parse_args(argv)
     try:
-        m = build(a.out, a.attestation_roots)
+        m = build(a.out, a.attestation_roots, model=a.model, qwen_settings=a.qwen_settings)
     except Invalid as e:
         print(f'rejected: {e}', file=sys.stderr)
         return 2

@@ -54,6 +54,63 @@ python3 workspace/models/serving/service/build_bootstrap.py --out /tmp/rose-mode
   `payloadTarSha256` with the value Core reports for that commit; the build is deterministic.
 - **Roots:** omit `--attestation-roots` to defer them. The VM then reports `auth: waiting attestation_roots_missing`.
 
+## 2a. Model selection: Muse (default) or the staged Qwen (MODELS-QWEN-SERVE-001; source only, never run as the service)
+
+**Default:** Muse Glimmer is the default. The payload built without `--model` is byte-identical to before (tested).
+
+**Qwen:** only an explicit build selects it, and the same model slot then serves Qwen:
+
+```bash
+python3 workspace/models/serving/service/build_bootstrap.py --out /tmp/rose-models-qwen --model qwen \
+  --qwen-settings proven --attestation-roots <deployed roots dir>
+```
+
+**What changes with `--model qwen`** (an overlay; every other file, including the edge, auth, TLS, the Muse launch
+scripts and config, and every diagnostic mode, is unchanged and tested):
+
+- **`bin/launch-qwen`:**
+  - the same cached image and startup guard;
+  - host networking bound to `127.0.0.1:8000` only, behind the existing edge;
+  - `/mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0` mounted read-only;
+  - offline: `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, no usage stats;
+  - `vllm serve <staged dir> --served-model-name rose-qwen`.
+- **`bin/start-model`:** `verify_staged.py` checks the pinned rose_cloud manifest (sha256 `ebcfb082…`), every
+  file's size, and the hash of every non-weight file, then launches. Anything else exits 4, which systemd does not
+  restart. **There is no download branch.**
+- **`models-health`:** probes `rose-qwen` (the same readiness rule: `/v1/models` lists it, and a real completion
+  returns tokens). **`models-verify-full`** rehashes the staged weights daily.
+- **Unchanged names:** the unit (`muse-glimmer.service`) and container (`muse-glimmer`) keep their names. They are the
+  model slot that bootstrap's hold and stop logic, health and the edge already use; the unit description and the
+  service manifest say Qwen.
+
+**Settings:**
+- **`--qwen-settings proven`** (default) renders exactly the `vllm serve` flags of the original Mac's PR349 adapter run
+  and the PR350 warm runs (TP2, `--max-model-len 2048`, eager, one sequence, the vision limits). They are asserted
+  equal to `rose_cloud.qwen_gpu.SERVER_ARGS`.
+- **`--qwen-settings proposed`** adds `--max-model-len 8192` and `--reasoning-parser qwen3`. They are labelled **NOT
+  runtime-proven** in `bin/launch-qwen` and as `notRuntimeProven` in the service manifest. The Rose Models client needs
+  both (`rose-chat-core/tests/qwen_contract.rs`):
+  - with the proven flags, a thinking Qwen reply carries `<think>` inside `content`, and `local-agent-v1` refuses it;
+  - with the reasoning parser, the thinking goes to a separate field that the client never shows or replays.
+
+**Separate owner dependency (Product, `dev.pixel.models`):**
+- the app compiles `ModelsService.MODEL = "muse-glimmer"` (there are no settings since 0.2) and fails any reply from
+  another model with `model_identity_mismatch` (tested);
+- its default system prompt is Muse's `Reasoning strength: low`.
+
+So the app reaches Qwen only after a Product change of that constant (and, preferably, of the prompt line). The
+server never answers as `muse-glimmer`.
+
+**Operator implications** (runtime only by the original Mac operator; nothing here is activated):
+- a normal boot (no diagnostic id) with a `--model qwen` payload starts Qwen instead of Muse. That lifts the Muse hold
+  in favour of Qwen, which is an owner decision. Both models do not fit on the two A100s;
+- the edge, auth and TLS are unchanged, with no new port, firewall rule, IAM or credential;
+- Qwen loads in about 350–465 s (measured in the diagnostics) before health reports ready;
+- a diagnostic boot still holds the model exactly as today.
+
+**Not shown:** the proposed settings, the app's real prompts and envelopes on Qwen, the latency through the edge, and
+PR288's voice/conductor (not part of this profile).
+
 ## 3. What the VM does on every boot
 
 These stages are rerun-safe and each command has a time bound.
