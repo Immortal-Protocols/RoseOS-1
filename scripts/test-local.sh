@@ -228,6 +228,10 @@ java -cp "$JAVA_TESTS/TaskControl" dev.pixel.voice.TaskControlTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverview" \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/tests/WorkspaceOverviewTest.java
 java -cp "$JAVA_TESTS/WorkspaceOverview" dev.pixel.voice.WorkspaceOverviewTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverviewFeed" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverviewFeed.java workspace/rose-agent/app/tests/WorkspaceOverviewFeedTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverviewFeed" dev.pixel.voice.WorkspaceOverviewFeedTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RendererRecovery" \
  workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java workspace/rose-agent/app/tests/RendererRecoveryTest.java
 java -cp "$JAVA_TESTS/RendererRecovery" dev.pixel.voice.RendererRecoveryTest

@@ -9,6 +9,7 @@ import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.GradientDrawable;
@@ -21,6 +22,9 @@ import android.view.View;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import com.android.launcher3.R;
+import com.android.quickstep.RecentsActivity;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -79,6 +83,62 @@ public final class RoseAgentStrip extends LinearLayout {
     }
 
     private static final float IDLE = 0.35f;
+
+    /**
+     * The row's height when this context belongs to the fallback overview (RecentsActivity, whose layout holds the
+     * row), else 0: OverviewActionsView subtracts it so the action buttons sit below the row. The in-launcher overview
+     * is unchanged.
+     */
+    public static int reservedBelow(Context context) {
+        for (Context c = context; c != null; c = c instanceof ContextWrapper ? ((ContextWrapper) c).getBaseContext() : null) {
+            if (c instanceof RecentsActivity) {
+                return c.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
+            }
+            if (!(c instanceof ContextWrapper)) break;
+        }
+        return 0;
+    }
+
+    private final View.OnLayoutChangeListener relayout = (v, l, t, r, b, ol, ot, orr, ob) -> anchor();
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        View parent = (View) getParent();
+        parent.addOnLayoutChangeListener(relayout);
+        View buttons = parent.findViewById(R.id.action_buttons);
+        if (buttons != null) buttons.addOnLayoutChangeListener(relayout);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        View parent = (View) getParent();
+        if (parent != null) {
+            parent.removeOnLayoutChangeListener(relayout);
+            View buttons = parent.findViewById(R.id.action_buttons);
+            if (buttons != null) buttons.removeOnLayoutChangeListener(relayout);
+        }
+        super.onDetachedFromWindow();
+    }
+
+    /**
+     * Below the human cards and above the action buttons (the selected HiFi order): the row's bottom edge goes to the
+     * buttons' laid-out top, measured in the window, so it follows wherever Launcher3 placed them. Without visible
+     * buttons it stays at the bottom of its parent, where the layout put it. Only the row moves; no card or task does.
+     */
+    private void anchor() {
+        View parent = (View) getParent();
+        if (parent == null) return;
+        View buttons = parent.findViewById(R.id.action_buttons);
+        float shift = 0;
+        if (buttons != null && buttons.isShown() && buttons.getHeight() > 0) {
+            int[] at = new int[2], origin = new int[2];
+            buttons.getLocationInWindow(at);
+            parent.getLocationInWindow(origin);
+            shift = (at[1] - origin[1]) - getBottom();
+        }
+        if (getTranslationY() != shift) setTranslationY(shift);
+    }
 
     /**
      * Each entry starts from the first agent card (the HiFi agent carousel is placed again on every entry) and reads

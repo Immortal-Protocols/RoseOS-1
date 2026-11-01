@@ -107,8 +107,9 @@ public final class RoseConversationActivity extends Activity {
   row.setBackground(new TrayMaterial.Tray(getResources().getDisplayMetrics().density));row.setElevation(dp(12));
   primary=new Control(ink());primary.setOnClickListener(v->primary());row.addView(primary,new LinearLayout.LayoutParams(0,-2,1f));
   end=new Control(endInk());end.show(ConversationPresentation.Glyph.END,"End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
-  // Rose's apps: the existing bound workspace view of the shown task (openWorkspace); no simulated windows.
-  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","View this task's background workspace");agents.setOnClickListener(v->openWorkspace());showWatchState(TaskControl.watchState("",false,ctl));
+  // MANAGED-WORKSPACE-OVERVIEW-001: Rose's apps opens the managed workspace overview (one real controller workspace
+  // plus the local task list); the shown task's own View workspace button keeps the bound Watch route.
+  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","Open Rose's apps");agents.setOnClickListener(v->openOverview());
   row.addView(agents,new LinearLayout.LayoutParams(0,-2,1f));
   LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT));rp.topMargin=dp(8);bottom.addView(row,rp);
   FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);bp.leftMargin=bp.rightMargin=dp(ConversationPresentation.MARGIN);root.addView(bottom,bp);
@@ -116,6 +117,8 @@ public final class RoseConversationActivity extends Activity {
   more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});
    m.getMenu().add("Settings").setOnMenuItemClickListener(i->{startActivity(new Intent(MainActivity.ACTION_SETTINGS).setClass(this,MainActivity.class));return true;});m.show();});
   FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
+  overview=new WorkspaceOverviewPanel(this,WorkspaceOverviewPanel.State.INSTANCE);overview.bind(overviewSource(),overviewActions());
+  root.addView(overview,new FrameLayout.LayoutParams(-1,-1));
   setContentView(root);
  }
  TextView taskAction(String text,int color){TextView t=presentedText(15,color,"sans-serif-medium");t.setText(text);t.setGravity(Gravity.CENTER);t.setMinHeight(dp(44));
@@ -149,6 +152,7 @@ public final class RoseConversationActivity extends Activity {
    s==null?Float.NaN:RoseVisualState.fresh(s.trayOutputLevel,seen,now),reducedMotion(),resumed);
   presence.show(visual);caption.setText(RosePresenceModel.caption(visual));
   renderTask(s);
+  if(overview!=null)overview.refresh();
  }
  /** The current task from VoiceService's copy of the server's task projection, which outlives this
   * screen, voice sessions and navigation; returning here shows the same task. Read-only: no Stop. */
@@ -174,14 +178,14 @@ public final class RoseConversationActivity extends Activity {
    // margin+84), so no extra inset.
    stage.setPadding(0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
   presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
-  if(!t.visible){shownTaskId="";shownTaskActive=false;showWatchState(TaskControl.watchState("",false,ctl));return;}
+  if(!t.visible){shownTaskId="";shownTaskActive=false;return;}
   if(!t.id.equals(shownTaskId)){shownTaskId=t.id;presentedScroll.scrollTo(0,0);}
   taskEyebrow.setText(t.eyebrow);taskTitle.setText(t.title);
   taskBody.setVisibility(t.body.isEmpty()?View.GONE:View.VISIBLE);if(!t.body.isEmpty())TaskText.set(taskBody,t.body);
   taskNote.setVisibility(t.note.isEmpty()?View.GONE:View.VISIBLE);taskNote.setText(t.note);
   boolean running=available&&(state.equals("running")||state.equals("checking"));
   shownTaskActive=t.active();
-  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctl);boolean canWatch=ws.canWatch;showWatchState(ws);
+  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctl);boolean canWatch=ws.canWatch;
   boolean canStop=running&&stopPendingFor==null&&!stopInFlight;
   watch.setVisibility(canWatch?View.VISIBLE:View.GONE);stopTask.setVisibility(canStop?View.VISIBLE:View.GONE);
   taskActions.setVisibility(canWatch||canStop?View.VISIBLE:View.GONE);
@@ -203,7 +207,11 @@ public final class RoseConversationActivity extends Activity {
    try{Bundle reply=client.call("get_state",null,null);
     String raw=reply==null?null:reply.getString("result");if(raw==null)return null;
     org.json.JSONObject c;try{c=new org.json.JSONObject(raw);}catch(org.json.JSONException e){throw new TaskControl.InvalidReply();}
-    return new String[]{stateField(c,"status"),stateField(c,"sessionId"),stateField(c,"taskId")};
+    String[] f={stateField(c,"status"),stateField(c,"sessionId"),stateField(c,"taskId")};
+    // The overview card names the workspace's app; targetPackage is optional and never makes the read malformed.
+    Object pkg=c.opt("targetPackage");TaskControl.ControllerRead r=TaskControl.ControllerRead.of(f[0],f[1],f[2]);
+    ctlPackage=new String[]{r.key(),pkg instanceof String?(String)pkg:""};
+    return f;
    }finally{client.close();}
   });
  }
@@ -226,14 +234,70 @@ public final class RoseConversationActivity extends Activity {
    if(!ws.canWatch){Toast.makeText(this,ws.reason,Toast.LENGTH_LONG).show();return;}
    String[] binding=TaskControl.watchBinding(selected,selected.equals(shownTaskId),c);
    if(binding==null){stopMessage="That task’s workspace is no longer available.";return;}
-   try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity"))
-    .putExtra(TaskControl.EXTRA_WATCH_TASK_ID,binding[0]).putExtra(TaskControl.EXTRA_WATCH_SESSION_ID,binding[1]).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}
-   catch(Exception e){stopMessage="The workspace viewer couldn’t open.";}
+   if(!launchBoundViewer(binding[0],binding[1]))stopMessage="The workspace viewer couldn’t open.";
   });},"rose-watch-open").start();
  }
- /** Rose's apps: full strength when Watch can open, dimmed with the reason in its spoken name when it can't. */
- void showWatchState(TaskControl.WatchState ws){
-  agents.dimmed(!ws.canWatch,ws.canWatch?"View this task's background workspace":"Rose's apps. "+ws.reason);
+ /** The one viewer launch on this screen, always bound: the viewer attaches only while the controller's task id
+  * and session id both still equal these extras. Returns false when it couldn't open. */
+ boolean launchBoundViewer(String controllerTaskId,String sessionId){
+  try{startActivity(new Intent().setComponent(new android.content.ComponentName("dev.pixel.backgroundcontrol","dev.pixel.backgroundcontrol.AgentWorkspaceActivity"))
+    .putExtra(TaskControl.EXTRA_WATCH_TASK_ID,controllerTaskId).putExtra(TaskControl.EXTRA_WATCH_SESSION_ID,sessionId).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return true;}
+  catch(Exception e){return false;}
+ }
+
+ // ---------- Managed workspace overview (MANAGED-WORKSPACE-OVERVIEW-001) ----------
+ WorkspaceOverviewPanel overview;
+ /** {read key, targetPackage} of the latest controller read, published together: the package is used only for the
+  * read whose key it was taken with. */
+ volatile String[] ctlPackage={"",""};
+ void openOverview(){if(overview!=null)overview.open();}
+ /** Back closes the overview first; the work, its selection and the human's foreground app are unchanged. */
+ @Override public void onBackPressed(){if(overview!=null&&overview.isOpen()){overview.close();return;}super.onBackPressed();}
+ /** Live: the local Rose connection is up; its tasks come only from App Core's onLocalTasks list (PR321). */
+ boolean localLive(){VoiceService s=VoiceService.instance;return s!=null&&s.connected&&s.live;}
+ WorkspaceOverview.Workspace overviewWorkspace(TaskControl.ControllerRead r,WorkspaceOverview.Scope scope){
+  if(r==null)return WorkspaceOverview.Workspace.UNREADABLE;
+  if(r.failure==TaskControl.ReadFailure.PENDING)return WorkspaceOverview.Workspace.CHECKING;
+  if(r.failure!=TaskControl.ReadFailure.NONE)return WorkspaceOverview.Workspace.UNREADABLE;
+  String[] p=ctlPackage;String pkg=r.key().equals(p[0])?p[1]:"";
+  return WorkspaceOverview.Workspace.read(r.status,r.sessionId,r.taskId,pkg,appLabel(pkg),scope);
+ }
+ /** The app's visible label for the card; empty (shown as "an app") when it can't be read. Never logged. Cached for
+  * the last package, so the 150 ms refresh asks the package manager once per workspace app. */
+ String[] labelFor={"",""};
+ String appLabel(String pkg){
+  if(pkg.isEmpty())return "";
+  String[] l=labelFor;if(pkg.equals(l[0]))return l[1];
+  String label;try{label=String.valueOf(getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(pkg,0)));}catch(Exception e){label="";}
+  labelFor=new String[]{pkg,label};return label;
+ }
+ WorkspaceOverviewPanel.Source overviewSource(){
+  return new WorkspaceOverviewPanel.Source(){
+   public boolean connected(){return localLive();}
+   public WorkspaceOverview.Scope scope(){return WorkspaceOverviewFeed.scope();}
+   public java.util.List<WorkspaceOverview.Task> tasks(){return WorkspaceOverviewFeed.tasks();}
+   public WorkspaceOverview.Workspace workspace(){return overviewWorkspace(ctl,WorkspaceOverviewFeed.scope());}
+  };
+ }
+ /** No Stop transport reaches the Mac yet (LocalRoseLink sends no Stop and forwards no task_stop answer), so Stop
+  * stays unavailable. Watch re-reads the controller after the tap and opens the existing viewer, bound by its extras,
+  * only for the binding the row showed, still equal to the live session in all three fields. */
+ WorkspaceOverviewPanel.Actions overviewActions(){
+  return new WorkspaceOverviewPanel.Actions(){
+   public boolean stopRoute(){return false;}
+   public void stop(WorkspaceOverview.Identity task){}
+   public void watch(final WorkspaceOverview.Identity task,final WorkspaceOverview.Binding atTap){
+    if(watchOpening)return;watchOpening=true;
+    new Thread(()->{final TaskControl.ControllerRead c=controllerState();runOnUiThread(()->{
+     watchOpening=false;ctl=c;
+     if(isFinishing()||isDestroyed())return;
+     WorkspaceOverview.Scope scope=WorkspaceOverviewFeed.scope();
+     WorkspaceOverview.Binding b=WorkspaceOverview.watchBinding(task,atTap,localLive(),scope,overviewWorkspace(c,scope),WorkspaceOverviewFeed.tasks());
+     if(b==null){Toast.makeText(RoseConversationActivity.this,WorkspaceOverview.WATCH_MOVED_ON,Toast.LENGTH_LONG).show();overview.refresh();return;}
+     if(!launchBoundViewer(b.controllerTaskId,b.sessionId))Toast.makeText(RoseConversationActivity.this,"The workspace viewer couldn’t open.",Toast.LENGTH_LONG).show();
+    });},"rose-overview-watch").start();
+   }
+  };
  }
  /** Confirms Stop for the task shown now. The id is captured here, so a later task is never stopped by this dialog. */
  void confirmStop(){

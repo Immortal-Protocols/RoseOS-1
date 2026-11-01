@@ -75,6 +75,7 @@
             <testInclude>dev/pixel/voice/HomeGlassTile.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverview.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverviewView.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverviewPanel.java</testInclude>
             <testInclude>dev/pixel/voice/*RenderTest.java</testInclude>
           </testIncludes>
         </configuration>

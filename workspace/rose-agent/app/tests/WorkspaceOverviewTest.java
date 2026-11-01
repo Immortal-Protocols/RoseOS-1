@@ -33,6 +33,7 @@ public final class WorkspaceOverviewTest {
         completedWithoutSession();
         idleDisconnectedConfirmation();
         repeatedEntryAndBack();
+        noStopRoute();
         System.out.println("WorkspaceOverviewTest: " + checks + " checks passed");
     }
 
@@ -118,6 +119,11 @@ public final class WorkspaceOverviewTest {
         Model m = WorkspaceOverview.of(true, S1, ready(S1), before, sel, null);
         expect(m.selected != null && m.selected.canWatch, "selected and watchable");
         expect(WorkspaceOverview.watchBinding(sel, true, S1, ready(S1), before) != null, "the tap re-check passes on the fresh read");
+        expect(m.selected.binding != null && WorkspaceOverview.watchBinding(sel, m.selected.binding, true, S1, ready(S1), before) != null, "...with the binding captured at the tap");
+        Binding changed = new Binding(WS, "sess-9", PKG, S1);
+        List<Task> rebound = Arrays.asList(task("2", S1, Status.RUNNING, "Multiply 12 by 7", changed, 20));
+        expect(WorkspaceOverview.watchBinding(sel, m.selected.binding, true, S1, Workspace.read("ready", "sess-9", WS, PKG, "Calculator", S1), rebound) == null, "a binding changed since the tap is refused, even when it matches the live session");
+        expect(WorkspaceOverview.watchBinding(sel, null, true, S1, ready(S1), before) == null, "no captured binding opens nothing");
         // Fresh read at the tap shows the workspace moved on: no binding is substituted.
         Workspace moved = Workspace.read("ready", "sess-3", "rose-ws-n1-3-y", "y", "Clock", S1);
         expect(WorkspaceOverview.watchBinding(sel, true, S1, moved, before) == null, "never substitutes the open workspace");
@@ -188,7 +194,7 @@ public final class WorkspaceOverviewTest {
 
     static void idleDisconnectedConfirmation() {
         Model empty = WorkspaceOverview.of(true, S1, Workspace.read("idle", "", "", "", "", S1), new ArrayList<Task>(), null, null);
-        expect(empty.rows.isEmpty() && empty.empty.equals(WorkspaceOverview.EMPTY) && empty.card.place == Place.NONE, "idle");
+        expect(empty.rows.isEmpty() && empty.empty.equals(WorkspaceOverview.TASKS_NONE) && empty.card.place == Place.NONE, "idle");
         List<Task> one = Arrays.asList(task("2", S1, Status.RUNNING, "Multiply 12 by 7", bound(S1), 20));
         Model off = WorkspaceOverview.of(false, S1, ready(S1), one, null, null);
         expect(off.card.place == Place.DISCONNECTED && off.card.label.equals("Not connected"), "disconnected is not idle");
@@ -201,6 +207,16 @@ public final class WorkspaceOverviewTest {
         Model consent = WorkspaceOverview.of(true, S1, Workspace.read("consent_required", "", "", "", "", S1), one, null, null);
         expect(consent.card.label.equals("Waiting for your consent") && !consent.rows.get(0).canWatch, "consent");
         expect(WorkspaceOverview.of(true, S1, Workspace.read("strange", "", "", "", "", S1), one, null, null).card.place == Place.UNKNOWN, "unknown controller state is not relabelled");
+    }
+
+    /** Without an authoritative Stop route Stop is never offered; the row says so instead of failing silently. */
+    static void noStopRoute() {
+        List<Task> tasks = Arrays.asList(task("2", S1, Status.RUNNING, "Multiply 12 by 7", bound(S1), 20), task("1", S1, Status.DONE, "Add", null, 1));
+        Model m = WorkspaceOverview.of(true, S1, ready(S1), tasks, null, new Stop(), false);
+        expect(!row(m, "2").canStop && row(m, "2").stopNote.equals(WorkspaceOverview.STOP_NO_ROUTE), "no route: no Stop, with a reason");
+        expect(row(m, "2").canWatch, "Watch is independent of the Stop route");
+        expect(row(m, "1").stopNote.isEmpty(), "finished tasks need no Stop note");
+        expect(row(WorkspaceOverview.of(true, S1, ready(S1), tasks, null, new Stop(), true), "2").canStop, "with a route, running work is stoppable");
     }
 
     /** Entering, leaving with Back/Home and re-entering change nothing: same model, same Stop, same selection. */
