@@ -935,6 +935,72 @@ long contexts, throughput, or the 443 edge.
 
   Read `semantics` as the cancellation finding. It is not a pass or fail gate.
 
+## cloud-qwen-warm-once (CLOUD-QWEN-WARM-001; source only, has not run): one load, many sessions
+
+**Why:** each diagnostic so far cost a reset, the Muse stop and a ~400 s load (PR345: 348.9 s; PR348: 400.1 s). Nathan
+(21:58): "remember speed". `cloud-qwen-adapter-once` (PR349) already runs every test kind on one loaded engine. This
+mode keeps that engine loaded so later sessions cost seconds, without a reset.
+
+**How it runs** (bootstrap `cloud_qwen_warm_once`):
+1. **Prerequisites and controls:** the same prerequisites as the adapter mode (shared `qwen_prepare`) and the same
+   container controls (shared `qwen_argv`). The container is started **detached** (`-d`) as `rose-cloud-qwen-warm`,
+   with `"mode": "warm"` and the helper's deadline set to the load plus the window (870 + 7200 s). The container ends
+   itself at that deadline even if bootstrap does not.
+2. **Startup:** the helper checks isolation and inputs, writes the adapter bundle, and starts `vllm serve` on the
+   container's loopback. Once `/health` answers, it writes `/tmp/rose-qwen-gpu/state.json` and keeps the server up.
+   Bootstrap waits for that file (at most 900 s).
+3. **First session:** bootstrap runs the `full` case (the PR349 session) with `docker exec` and publishes it to
+   `rose-models/qwen-session` (`requestId: "first"`, `index: 0`). The `rose-models/diagnostic` receipt then shows
+   `phase: "serving"`, `readyAfterS`, and a compact first-session summary.
+4. **Request loop:** bootstrap polls ONE metadata key every 10 s:
+   `rose-models-qwen-session=<payload sha256>:<fresh id>:<case>`.
+   - A value counts only when it changes.
+   - It runs only if it names **this payload**, an id not used in this window (not the attempt id, not `first`), and
+     one of the payload's cases.
+   - Otherwise it is published as `ignored`: `malformed`, `other_payload` or `id_already_used`.
+   - Each accepted request runs `qwen_gpu.RUNNER` inside the container (`docker exec … python3 -I -B -c <RUNNER from
+     the payload> /tmp/rose-qwen-gpu <qwen dir> <case>`, at most 300 s). That is a new adapter session against the
+     loaded server: the tokenizer loads in the runner, with no model reload. Its receipt goes to
+     `rose-models/qwen-session`.
+5. **End:** the window (7200 s after the first session), 1800 s without a request, 24 sessions, or the container
+   disappearing. Then `docker rm -f`, a verified absence, and the final `rose-models/diagnostic` receipt
+   (`phase: "final"`, `sessions`, `ignored`, `endedBy`, `cleanup`). Inference stays held for the boot.
+
+**Cases** (`adapter_session.CASES`, in the attested payload; a request carries only the name):
+- `full`: the PR349 session, covering text, image, image history, fork, rewind, the stale image, the in-flight cancel
+  and the late cancel;
+- `text`: three text turns, for warm first-token and total timings;
+- `image`: an image turn and a follow-up, with the prompts compared;
+- `cancel`: the in-flight cancel with its gauge and probe evidence, and the late cancel.
+
+**What does not change:**
+- No code comes from metadata. A new or changed test still needs a new payload, built and attested, and one reset:
+  executing code delivered outside the payload would change the security model.
+- The same `--network none`, loopback-only server, CPU, RAM, tmpfs and shm limits, and the same single original Mac
+  operator.
+- `cloud-qwen-adapter-once` stays as the one-shot proof path.
+
+**Proposed operator packet** (within the expanded Qwen authority; runtime only by the original Mac operator):
+1. Build at the merge commit with the deployed roots, and record P. Confirm `qwen_gpu.py` and `adapter_session.py`
+   have the hashes Core reports.
+2. Set `rose-models-diagnostic=cloud-qwen-warm-once:<P>:<fresh id>`, and do one reset.
+3. Read `rose-models/diagnostic` until it shows `phase: "serving"`, then read `rose-models/qwen-session` for the first
+   session.
+4. For each further test, set the request key, then read `rose-models/qwen-session`; no reset:
+
+   ```bash
+   gcloud compute instances add-metadata models-glimmer-01 --project protocols-465723 --zone us-central1-f --metadata=rose-models-qwen-session=<P>:<fresh id>:<full|text|image|cancel>
+   ```
+
+5. The window ends by itself. The final `rose-models/diagnostic` shows `endedBy` and `cleanup`. The next reset without
+   a new diagnostic id starts Muse.
+
+**Exact-image-unverified, beyond the adapter mode's:**
+- that `docker exec` into the `--read-only`, `--cap-drop ALL` container runs `python3` as expected;
+- that metadata polling every 10 s from bootstrap is acceptable for the window;
+- that the startup script may stay in bootstrap for up to about 2.5 h on a diagnostic boot. Bootstrap returns only
+  when the window ends; the model stays held meanwhile.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through

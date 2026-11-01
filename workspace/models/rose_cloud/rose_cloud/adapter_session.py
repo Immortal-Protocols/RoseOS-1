@@ -196,3 +196,48 @@ def cancel_after_completion(seq) -> dict:
     gen.close()
     return {'tokens': len(out), 'lateCancelNoop': seq.tokens == after and seq.requests == requests,
             'workerJoined': seq.worker_stopped}
+
+
+# ----------------------------------------------------------------- warm-container cases (CLOUD-QWEN-WARM-001)
+def case_text(brain: VllmBrain, image, server: Server, clock=time.monotonic, sleep=time.sleep) -> dict:
+    """Three text turns on one sequence: per-turn first-token and total seconds on a warm engine."""
+    seq = brain.sequence('talker')
+    _drain(seq.append_text(brain.system_prefix(SYSTEM)))
+    r: dict = {}
+    for i, key in enumerate(('turn1', 'turn2', 'turn3')):
+        _drain(seq.append_text(_user(TURNS[(0, 2, 3)[i]])))
+        r[key] = _turn(seq, TURN_TOKENS, clock)
+    r['step'] = 'done'
+    return r
+
+
+def case_image(brain: VllmBrain, image, server: Server, clock=time.monotonic, sleep=time.sleep) -> dict:
+    """One image turn and a text follow-up with the image in history (the chat route, prompts compared)."""
+    seq = brain.sequence('talker')
+    _drain(seq.append_text(brain.system_prefix(SYSTEM)))
+    _drain(seq.append_text(f'<|im_start|>user\n{TURNS[1]}\n'))
+    r: dict = {'imageTokens': _drain(seq.append_image(image))}
+    _drain(seq.append_text(f'{IM_END}\n' + GEN_FAST))
+    r['turn2'] = _turn(seq, TURN_TOKENS, clock)
+    _drain(seq.append_text(_user(TURNS[2])))
+    r['turn3'] = _turn(seq, TURN_TOKENS, clock)
+    r['imagesInHistory'] = len(seq.images)
+    r['step'] = 'done'
+    return r
+
+
+def case_cancel(brain: VllmBrain, image, server: Server, clock=time.monotonic, sleep=time.sleep) -> dict:
+    """The in-flight cancel with its server-side evidence, then the cancel after completion."""
+    seq = brain.sequence('talker')
+    _drain(seq.append_text(brain.system_prefix(SYSTEM)))
+    r: dict = {'cancel': cancel_inflight(seq, server, clock, sleep), 'lateCancel': cancel_after_completion(seq)}
+    r['step'] = 'done'
+    return r
+
+
+def case_full(brain: VllmBrain, image, server: Server, clock=time.monotonic, sleep=time.sleep) -> dict:
+    return run_session(brain, image, server, clock, sleep)
+
+
+# The only cases a warm container runs: named here, in the attested payload; a request carries only the name.
+CASES = {'full': case_full, 'text': case_text, 'image': case_image, 'cancel': case_cancel}

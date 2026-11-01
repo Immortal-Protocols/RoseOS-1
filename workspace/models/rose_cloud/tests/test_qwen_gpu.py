@@ -478,6 +478,72 @@ class Adapter(Fixture):
         self.assertEqual(G.child_config('text'), {'engine': G.ENGINE, 'sampling': G.SAMPLING, 'prompt': G.PROMPT})
 
 
+class Warm(Adapter):
+    """Warm mode (CLOUD-QWEN-WARM-001): the server stays loaded until the helper's deadline, and RUNNER (what bootstrap
+    runs with `docker exec`) runs payload-defined cases against it, each a new adapter session, without a reload."""
+
+    def start_warm(self, deadline):
+        import threading
+        box = {}
+        t = threading.Thread(target=lambda: box.update(r=G.diagnose(
+            self.manifest, dict(self.limits, mode='warm', deadlineS=deadline,
+                                serverCommand=[sys.executable, str(self.extra / 'serve.py')]), bundle=self.bundle)))
+        t.start()
+        state = self.tmp / 'rose-qwen-gpu' / G.WARM_STATE
+        end = time.monotonic() + 20
+        while not state.exists() and time.monotonic() < end:
+            time.sleep(0.1)
+        return t, box, state
+
+    def runner(self, case):
+        import subprocess
+        out = subprocess.run([sys.executable, '-I', '-B', '-c', G.RUNNER, str(self.tmp / 'rose-qwen-gpu'),
+                              str(self.model), case, str(self.extra)], capture_output=True, text=True, timeout=120).stdout
+        line = out.strip().splitlines()[-1]
+        self.assertTrue(line.startswith(G.RUNNER_MARKER))
+        return json.loads(line[len(G.RUNNER_MARKER):])
+
+    def test_one_load_serves_several_cases_until_the_window_ends(self):
+        t, box, state = self.start_warm(deadline=40)
+        self.assertTrue(state.exists())
+        s = json.loads(state.read_text())
+        self.assertEqual((s['ready'], s['base']), (True, f'http://127.0.0.1:{self.port}'))
+        pid = int((self.extra / 'serve.pid').read_text())
+        starts = (self.extra / 'serve.argv').stat().st_mtime
+        # the fake replays its script in order; text uses the first three replies, image the next two
+        text = G.sanitize_run(self.runner('text'))
+        self.assertEqual((text['case'], text['step'], text['session']['step']), ('text', 'done', 'done'))
+        self.assertEqual([text['session'][k]['tokens'] for k in ('turn1', 'turn2', 'turn3')], [16, 4, 7])
+        image = G.sanitize_run(self.runner('image'))
+        self.assertEqual((image['step'], image['session']['imageTokens'], image['session']['turn2']['promptExact']),
+                         ('done', 64, True))
+        self.assertEqual(int((self.extra / 'serve.pid').read_text()), pid)  # the same server: no reload
+        self.assertEqual((self.extra / 'serve.argv').stat().st_mtime, starts)
+        bad = self.runner('rm -rf /')
+        self.assertEqual((bad['step'], bad['error']), ('tokenizer', 'KeyError'))  # only CASES; nothing else runs
+        self.assertIsNone(G.sanitize_run(bad)['case'])
+        t.join(60)
+        r = box['r']
+        self.assertEqual((r['mode'], r['stop']), ('warm', 'deadline'))  # the fixed window ended the container
+        time.sleep(0.2)
+        self.assertFalse(alive(pid))  # and the server with it
+        line = json.dumps([text, image, G.sanitize(r)])
+        for leak in ('Hi there', 'Red', 'colour', str(self.dir)):
+            self.assertNotIn(leak, line)
+
+    def test_runner_before_ready_and_cases_match_the_payload(self):
+        work = self.tmp / 'rose-qwen-gpu'
+        work.mkdir(parents=True, exist_ok=True)
+        (work / 'pkg' / 'rose_cloud').mkdir(parents=True)
+        for n, src in self.bundle.items():
+            (work / 'pkg' / 'rose_cloud' / n).write_text(src)
+        (work / 'pkg' / 'rose_cloud' / '__init__.py').write_text('')
+        r = self.runner('full')
+        self.assertEqual((r['step'], r['error']), ('state', 'FileNotFoundError'))  # no server yet: nothing runs
+        from rose_cloud import adapter_session
+        self.assertEqual(sorted(adapter_session.CASES), sorted(G.WARM_CASES))
+
+
 def alive(pid):
     try:
         with open(f'/proc/{pid}/stat') as f:

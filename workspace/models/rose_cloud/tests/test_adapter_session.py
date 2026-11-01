@@ -161,6 +161,28 @@ class Session(unittest.TestCase):
         self.assertFalse(c['noLateAppend'])
         self.assertGreater(c['appended'], c['tokensAtCancel'])
 
+    def test_warm_cases_are_bounded_sessions(self):
+        im_end = self.tok.encode('<|im_end|>')
+        cases = {'text': ([self.ids('a') + im_end] * 3, 3),
+                 'image': ([self.ids('Red') + im_end, self.ids('Sq') + im_end], 2),
+                 'cancel': ([self.ids('1, 2, 3, ' * 40), self.ids('y'), self.ids('ab')], 3)}
+        for name, (script, requests) in cases.items():
+            with self.subTest(name):
+                fake = FakeVllm(script, prompt_ids=chat_prompt_ids(self.tok), serial=True, metrics=True, delay_s=0.02)
+                self.addCleanup(fake.close)
+                r = A.CASES[name](VllmBrain(self.tok, fake.url, 'rose-brain', None, timeout_s=10), self.image,
+                                  A.Server(fake.url))
+                self.assertEqual((r['step'], len(fake.requests)), ('done', requests))
+                if name == 'image':
+                    self.assertEqual((r['imageTokens'], r['turn2']['promptExact'], r['turn3']['promptExact']),
+                                     (64, True, True))
+                if name == 'cancel':
+                    self.assertEqual((r['cancel']['semantics'], r['lateCancel']['lateCancelNoop']),
+                                     ('inflight_abort', True))
+                self.assertNotIn('Red', json.dumps(r))
+        self.assertIs(A.CASES['full'], A.case_full)
+        self.assertEqual(sorted(A.CASES), ['cancel', 'full', 'image', 'text'])
+
     def test_metrics_parser(self):
         fake = FakeVllm(metrics=True)
         self.addCleanup(fake.close)
