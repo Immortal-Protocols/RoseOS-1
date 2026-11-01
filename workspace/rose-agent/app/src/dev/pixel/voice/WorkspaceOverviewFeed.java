@@ -21,7 +21,18 @@ final class WorkspaceOverviewFeed {
  private static volatile List<WorkspaceOverview.Task> latest=Collections.emptyList();
  private static volatile String connection="";
 
- /** Replaces the list with one delivery. Malformed input is dropped whole (the previous list stays). */
+ /** The handoff entry point (contract for App Core's VoiceService bridge):
+  * <ul>
+  * <li>raw: exactly JSON.stringify(list) of one onLocalTasks delivery, unmodified (including "[]").</li>
+  * <li>Thread: any (the WebView JavaBridge thread is fine). Non-blocking, no Android calls; the parsed list is
+  * published as one immutable volatile snapshot that the overview reads on the UI thread.</li>
+  * <li>Validation: at most MAX_CHARS characters and MAX_TASKS items; strict JSON (MiniJson: no duplicate keys or
+  * trailing data, depth 32); a top-level array of objects, each with a non-empty key and status, all from one
+  * connection. Anything else is dropped whole and the previous list stays; nothing throws.</li>
+  * <li>Lifecycle: process-wide, replaced by each delivery. "[]" (close, replacement, unpairing) clears it. The bridge
+  * should also pass "[]" when its page or local connection is torn down without a delivery, so no earlier list
+  * outlives its connection.</li>
+  * </ul> */
  static void accept(String raw){
   Parsed p=parse(raw);if(p==null)return;
   latest=p.tasks;connection=p.connection;
