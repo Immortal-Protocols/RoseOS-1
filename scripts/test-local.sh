@@ -85,6 +85,8 @@ python3 scripts/tests/test_blazer_build_only.py
 python3 scripts/tests/test_blazer_integration.py
 # Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
 python3 scripts/tests/test_factory_package.py
+# Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
+python3 scripts/tests/test_rango_factory_observe.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -111,6 +113,9 @@ python3 -I workspace/models/rose_cloud/tests/test_contract.py
 python3 -I workspace/models/rose_cloud/tests/test_pr288_tasks.py
 python3 -I workspace/models/rose_cloud/tests/test_coop.py
 python3 -I workspace/models/rose_cloud/tests/test_speech_wire.py
+python3 -I workspace/models/rose_cloud/tests/test_preflight.py
+python3 -I workspace/models/rose_cloud/tests/test_listen.py
+python3 -I workspace/models/rose_cloud/tests/test_vision.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
 python3 workspace/models/serving/tests/test_local_profile.py
