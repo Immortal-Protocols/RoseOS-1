@@ -16,6 +16,10 @@ candidate that changes it would otherwise read as an owner change. For such a fi
 frameworks/base patch sequence produced at each earlier version of the candidate repository's os/patches (its git
 history, at most HISTORY_LIMIT versions) are recomputed from the project HEAD copy; when the retained bytes equal one,
 the file is replaced like a task-owned one and the receipt names the baseline commit. Anything else still conflicts.
+A file Rose copies verbatim from os/overlays has the same gap: the retained tree may hold an earlier overlay version
+that every candidate reproduced byte for byte (AgentStatusControls.java, unchanged from import until 2026110101). Bytes
+equal to an earlier version of the candidate repository's own os/overlays file at that same path (its git history, at
+most HISTORY_LIMIT versions) are likewise integration-reproduced, with the version commit in the receipt.
 Files a previous receipt installed that the candidate no longer changes are restored to HEAD on the same terms.
 Owner changes are never reset or wiped and candidate changes are never skipped. `adopt` records the current bytes of
 conflicting files as a task-owned baseline once, explicitly and with a reason (e.g. the hand-made P1 integration);
@@ -108,6 +112,20 @@ def historical_outputs(source, candidate, project, relative, limit=HISTORY_LIMIT
                         break
             if applied:
                 outputs.setdefault(sha((tree/relative).read_bytes()), commit)
+    return outputs
+
+def historical_overlays(candidate, relative, limit=HISTORY_LIMIT):
+    """{sha256: commit} of each version the candidate repository's os/overlays/<relative> had in its last `limit`
+    commits that changed it. apply-os-changes.py copies overlays verbatim to <relative>, so these are exactly the bytes
+    an earlier Rose integration installed there. Only that path's own history counts."""
+    overlay = f'os/overlays/{relative}'
+    log = subprocess.run(['git', '-C', str(candidate), 'log', '--format=%H', f'-n{limit}', '--', overlay],
+        capture_output=True, text=True)
+    outputs = {}
+    for commit in log.stdout.split() if log.returncode == 0 else []:
+        shown = subprocess.run(['git', '-C', str(candidate), 'show', f'{commit}:{overlay}'], capture_output=True)
+        if shown.returncode == 0:
+            outputs.setdefault(sha(shown.stdout), commit)
     return outputs
 
 def sparse_paths(candidate, project, extra):
@@ -229,6 +247,7 @@ def reconcile(source, candidate, release_dir, apply_args, receipt_dir, projects,
             for path in conflicts:
                 project = project_of(path, projects)
                 found = historical_outputs(source, candidate, project, path[len(project) + 1:]) if project else {}
+                found = {**historical_overlays(candidate, path), **found}
                 if found:
                     reproduced[path] = found
             if reproduced:
