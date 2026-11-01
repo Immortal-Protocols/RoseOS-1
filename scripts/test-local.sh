@@ -41,6 +41,7 @@ python3 os/background-control/tests/test_policy.py
 python3 os/background-control/tests/test_stop_wiring.py
 python3 os/background-control/tests/test_watch_wiring.py
 python3 os/background-control/tests/test_anyapp_wiring.py
+python3 os/background-control/tests/test_notification_wording.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
