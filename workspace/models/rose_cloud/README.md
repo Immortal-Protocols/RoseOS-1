@@ -746,6 +746,88 @@ across runs, not a correctness check.
   - `qwen: null`;
   - `stop` other than `done`.
 
+## cloud-qwen-vision-once (CLOUD-QWEN-VISION-001; source only, has not run in this mode)
+
+**Why:** the original Mac operator's PR345 text run succeeded at 21:07: TP2 FP8 text loaded in 348.9 s, 32 valid
+tokens generated in 5.9 s, no unsupported option or runtime error, isolation and positive container absence verified,
+both A100s RUNNING and Muse held. It used payload `f5bde894…dfda` and attempt `qwen-6baf1303bb984347b4ce`. That proves
+the bounded text path only, not vision or serving.
+
+**What changes:** `qwen_gpu.py` gains a vision mode, and bootstrap gains `cloud-qwen-vision-once`, which runs it in
+its own container (`rose-cloud-qwen-vision`).
+- **Unchanged:** the container controls, bounds, hold, isolation and input checks, and cleanup are identical to
+  `cloud-qwen-gpu-once`. The argv differs **only** in the container name and in `"mode": "vision"` in the limits.
+- **Text mode is the PR345 configuration, byte for byte:** the same `ENGINE`, `SAMPLING`, prompt, limits string,
+  container and messages. Its receipt only gains `mode: "text"`.
+
+**The vision request:**
+- **Engine:** `VISION_ENGINE` is `ENGINE` without `language_model_only` (so the vision tower loads), plus:
+  - `limit_mm_per_prompt={"image": {"count": 1, "width": 256, "height": 256}, "video": 0}`, which allows one image
+    and no video and makes the profiling image 256 × 256;
+  - `mm_processor_kwargs={"max_pixels": 65536}`.
+- **The image:** one synthetic 256 × 256 solid red (255, 0, 0) image, made in the child with Pillow. No file and no
+  download.
+- **The prompt:** raw Qwen chat format, with thinking turned off by an empty think block:
+  `<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>What is the colour of this image? Answer with one
+  word.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n`. It is sent as
+  `{"prompt": ..., "multi_modal_data": {"image": <PIL image>}}`, with the same greedy 32-token sampling.
+- **`done`** requires the prompt to have expanded the placeholder to 1–256 `<|image_pad|>` tokens. 64 are expected;
+  otherwise the stop is `vision_not_applied`.
+- **Receipt additions:** `imageTokens`, and `expectedWordSeen` (whether the decoded answer contains "red"). It is a
+  weak signal only and never gates `done`. The answer text never leaves the child.
+
+**Checked against upstream vLLM source** (v0.19.0 and v0.32.0):
+- `TextPrompt` with `multi_modal_data` is an accepted `LLM.generate` prompt;
+- `limit_mm_per_prompt: dict[str, int | dict[str, int]]` accepts both the count form and per-item dummy options
+  (`ImageDummyOptions` with `width`/`height`, `extra="forbid"`);
+- `mm_processor_kwargs` is an `EngineArgs` field;
+- `Qwen3_5MoeForConditionalGeneration` uses `Qwen3VLMultiModalProcessor`, whose image placeholder is
+  `<|vision_start|><|image_pad|><|vision_end|>`;
+- `Qwen3VLProcessingInfo._get_vision_info` applies `mm_kwargs["max_pixels"]` as the `longest_edge` override, and
+  counts vision tokens as `num_patches // merge_size**2`.
+- With 64 tokens per image, vLLM's "max_tokens_per_mm_item … is larger than max_num_batched_tokens" refusal and the
+  max_model_len check cannot trigger.
+
+**Feasibility corrections:**
+- The profiling image is bounded with the per-item dummy options. A count-only limit would profile the processor's
+  default largest image, whose token count can exceed a 2048-token context.
+- `min_pixels` is not passed: there is no source evidence that it is honoured.
+- `video: 0` keeps the video dummy, which uses 2048 frames by default, out of profiling.
+- Memory and time bounds are unchanged (64 GiB, 16 CPUs, 8 GiB tmpfs, 4 GiB shm, 900 s). The vision tower adds a
+  small amount of GPU memory over the measured text run.
+
+**Exact-image-unverified:**
+- whether the image's vLLM has these options (the helper refuses before loading if `EngineArgs` lacks any);
+- whether Pillow is importable (a missing one is reported as `ModuleNotFoundError` `PIL`);
+- whether `max_pixels` reaches the processor in that version (it is reported by `imageTokens`);
+- that `RequestOutput.prompt_token_ids` carries the expanded pads. Source shows positions in that list, not the
+  output construction. Without them the stop is `vision_not_applied`, never a false `done`;
+- the vision-tower load time and memory on the A100s;
+- whether the answer mentions the colour.
+
+**Not shown even by `done`:** vision quality, real screenshots, PR288's image resizing or chat-route template, more
+than one image, video, HTTP serving, or latency at serving settings.
+
+**Proposed operator packet** (within Nathan's expanded Qwen authority; runtime only by the original Mac operator):
+1. Build at the merge commit with the deployed attestation roots, and record P. Confirm `qwen_gpu.py` and
+   `manifest.json` have the hashes Core reports.
+2. Set `startup-script` and `rose-models-payload` from that build, plus
+   `rose-models-diagnostic=cloud-qwen-vision-once:<P>:<fresh id>`.
+3. Do one reset.
+4. Read `rose-models/diagnostic`.
+
+- **Consequences:** the same as `cloud-qwen-gpu-once`:
+  - the TLS interruption;
+  - Muse held, stopped and absent first;
+  - both A100s used for up to 900 s;
+  - staged data read-only;
+  - the next reset without a new id starts Muse.
+- **Stop conditions:**
+  - a `prerequisite` refusal;
+  - `cleanup` other than `removed`;
+  - `qwen: null`;
+  - `stop` other than `done`.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through

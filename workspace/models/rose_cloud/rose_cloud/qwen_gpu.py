@@ -22,6 +22,13 @@ script or container name. It has not run on a VM. In order, stopping at the firs
    loading the vision tower), then builds ``vllm.LLM`` (offline API: no HTTP server, no service port) with ENGINE and
    runs ONE generate of the fixed synthetic PROMPT with SAMPLING (greedy, at most 32 tokens).
 
+Vision mode (limits ``{"mode": "vision"}``, bootstrap's cloud-qwen-vision-once, CLOUD-QWEN-VISION-001): the same
+steps with VISION_ENGINE (the vision tower loaded instead of ``language_model_only``) and ONE request carrying one
+synthetic 256 x 256 solid-red image made in the child (no file, no download) with a fixed question. It is ``done`` only
+when the prompt expanded the one image placeholder to between 1 and MAX_IMAGE_TOKENS pad tokens
+(``vision_not_applied`` otherwise). ``expectedWordSeen`` says whether the decoded answer contains the colour word; the
+answer itself never leaves the child. Text mode (no ``mode``) is exactly the PR345 configuration.
+
 The receipt holds fixed tokens, counts, timings, the vLLM version, the quantization name, exception class names and
 the sha256 of the generated token ids. Never the generated text, a prompt, a log line, a path or an environment value.
 
@@ -46,8 +53,22 @@ ENGINE = {'tensor_parallel_size': 2, 'max_model_len': 2048, 'max_num_seqs': 1, '
           'enforce_eager': True, 'language_model_only': True, 'trust_remote_code': False, 'seed': 0,
           'distributed_executor_backend': 'mp', 'disable_log_stats': True}
 SAMPLING = {'max_tokens': 32, 'temperature': 0.0, 'seed': 0}
+# Vision mode (limits {"mode": "vision"}, CLOUD-QWEN-VISION-001): the same engine with the vision tower loaded instead of
+# language_model_only, at most one image and no video per prompt with a 256 x 256 profiling image (vLLM's
+# ImageDummyOptions), and the processor's max_pixels capped at 256 x 256 (Qwen3VLProcessingInfo._get_vision_info's
+# override) so an image is at most (256 / 32) ** 2 = 64 tokens, far inside the 2048-token context and batch budget. ONE request: a synthetic solid-colour image made in the child
+# (no file, no download) and a fixed question, raw Qwen chat format with thinking off, greedy, at most 32 tokens.
+VISION_ENGINE = {**{k: v for k, v in ENGINE.items() if k != 'language_model_only'},
+                 'limit_mm_per_prompt': {'image': {'count': 1, 'width': 256, 'height': 256}, 'video': 0},
+                 'mm_processor_kwargs': {'max_pixels': 256 * 256}}
+VISION = {'width': 256, 'height': 256, 'rgb': [255, 0, 0], 'expect': 'red',
+          'prompt': '<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>What is the colour of this image? '
+                    'Answer with one word.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'}
+IMAGE_PAD = '<|image_pad|>'
+MAX_IMAGE_TOKENS = 256  # (256 / 32) ** 2 = 64 expected; more means the size cap was not applied
 STOPS = ('done', 'bad_manifest', 'not_isolated', 'bad_inputs', 'engine_arg_unsupported', 'engine_failed',
-         'generate_failed', 'crashed', 'deadline')
+         'generate_failed', 'crashed', 'deadline', 'vision_not_applied', 'bad_mode')
+MODES = ('text', 'vision')
 STEPS = ('import', 'engine_args', 'load', 'generate', 'done')
 FINISH = ('length', 'stop', 'abort')
 TOKEN = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,63}$')
@@ -88,12 +109,24 @@ try:
         pass
     out['step'] = 'generate'
     tok = llm.get_tokenizer()
-    ids = list(tok.encode(cfg['prompt']))
-    out['promptTokens'] = len(ids)
+    vision = cfg.get('vision')
+    if vision:  # one synthetic image made here: nothing read from disk or network
+        from PIL import Image
+        image = Image.new('RGB', (vision['width'], vision['height']), tuple(vision['rgb']))
+        prompt = {'prompt': vision['prompt'], 'multi_modal_data': {'image': image}}
+    else:
+        ids = list(tok.encode(cfg['prompt']))
+        out['promptTokens'] = len(ids)
+        prompt = {'prompt_token_ids': ids}
     t = time.monotonic()
-    res = llm.generate([{'prompt_token_ids': ids}], vllm.SamplingParams(**cfg['sampling']), use_tqdm=False)
+    res = llm.generate([prompt], vllm.SamplingParams(**cfg['sampling']), use_tqdm=False)
     out['generateS'] = round(time.monotonic() - t, 1)
     first = res[0].outputs[0]
+    if vision:
+        pids = [int(x) for x in (getattr(res[0], 'prompt_token_ids', None) or [])]
+        out['promptTokens'] = len(pids)
+        out['imageTokens'] = pids.count(tok.convert_tokens_to_ids(vision['pad']))
+        out['expectedWordSeen'] = vision['expect'] in tok.decode(list(first.token_ids)).lower()  # a flag; no text
     toks = [int(x) for x in first.token_ids]
     out['generatedTokens'] = len(toks)
     out['finishReason'] = first.finish_reason
@@ -222,11 +255,19 @@ def child_env(work):
     return env
 
 
-def run_child(model_dir, env, extra, timeout):
+def child_config(mode):
+    """What the child runs. Text mode is exactly the PR345 configuration."""
+    if mode == 'vision':
+        return {'engine': VISION_ENGINE, 'sampling': SAMPLING, 'prompt': None,
+                'vision': {**VISION, 'pad': IMAGE_PAD}}
+    return {'engine': ENGINE, 'sampling': SAMPLING, 'prompt': PROMPT}
+
+
+def run_child(model_dir, env, extra, timeout, config):
     """(status, last stdout line). The child runs in its own session; at the deadline the whole group (engine workers
     included) is killed. stdout goes to the tmpfs and only its tail is read; stderr is discarded unread."""
     path = os.path.join(env['TMPDIR'], 'child.out')
-    cfg = json.dumps({'engine': ENGINE, 'sampling': SAMPLING, 'prompt': PROMPT})
+    cfg = json.dumps(config)
     with open(path, 'wb') as out:
         try:
             child = subprocess.Popen([sys.executable, '-I', '-B', '-c', CHILD, model_dir, cfg, extra], env=env,
@@ -260,7 +301,11 @@ def diagnose(manifest, limits, clock=time.monotonic):
     t0 = clock()
     deadline = t0 + float(limits['deadlineS'])
     env = Env(limits)
-    result = {'stop': None, 'elapsedS': 0, 'isolation': None, 'inputs': None, 'engine': None}
+    mode = limits.get('mode', 'text')
+    result = {'mode': mode, 'stop': None, 'elapsedS': 0, 'isolation': None, 'inputs': None, 'engine': None}
+    if mode not in MODES:
+        result['stop'] = 'bad_mode'
+        return result
     q = manifest.get('groups', {}).get('qwen')
     if not isinstance(q, dict) or q.get('repo') != REPO or q.get('revision') != REVISION or any(
             '..' in f[0].split('/') or f[0].startswith('/') for f in q.get('files', [])):
@@ -277,7 +322,7 @@ def diagnose(manifest, limits, clock=time.monotonic):
         return result
     work = os.path.join(env.tmp, 'rose-qwen-gpu')
     os.makedirs(work, exist_ok=True)
-    status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock())
+    status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), child_config(mode))
     engine = {'run': status}
     try:
         engine.update(json.loads(line) if line else {})
@@ -289,6 +334,9 @@ def diagnose(manifest, limits, clock=time.monotonic):
         result['stop'] = 'deadline'
     elif status == 'crashed':
         result['stop'] = 'crashed'
+    elif step == 'done' and status == 'ok' and mode == 'vision' and not (
+            isinstance(engine.get('imageTokens'), int) and 0 < engine['imageTokens'] <= MAX_IMAGE_TOKENS):
+        result['stop'] = 'vision_not_applied'  # no image placeholder expanded, or the size cap did not hold
     elif step == 'done' and status == 'ok':
         result['stop'] = 'done'
     elif step == 'engine_args' and engine.get('unsupported'):
@@ -327,6 +375,7 @@ def sanitize(raw):
     unsupported = get(e, 'unsupported')
     version = get(e, 'vllm')
     return {
+        'mode': raw.get('mode') if raw.get('mode') in MODES else None,
         'stop': raw.get('stop') if raw.get('stop') in STOPS else None,
         'elapsedS': _count(raw.get('elapsedS')),
         'isolation': None if not isinstance(i, dict) else {
@@ -342,7 +391,9 @@ def sanitize(raw):
             'run': e.get('run') if e.get('run') in ('ok', 'failed', 'crashed', 'timeout') else None,
             'step': e.get('step') if e.get('step') in STEPS else None,
             'vllm': version if version is None or (isinstance(version, str) and VERSION.match(version)) else 'other',
-            'unsupported': sorted({u for u in unsupported if u in ENGINE}) if isinstance(unsupported, list) else None,
+            'unsupported': (sorted({u for u in unsupported if u in ENGINE or u in VISION_ENGINE})
+                            if isinstance(unsupported, list) else None),
+            'imageTokens': _count(e.get('imageTokens')), 'expectedWordSeen': _flag(e.get('expectedWordSeen')),
             'loadS': _secs(e.get('loadS')), 'generateS': _secs(e.get('generateS')),
             'promptTokens': _count(e.get('promptTokens')), 'generatedTokens': _count(e.get('generatedTokens')),
             'finishReason': e.get('finishReason') if e.get('finishReason') in FINISH else None,
