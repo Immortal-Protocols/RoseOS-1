@@ -42,6 +42,21 @@ class TrayContractTest(unittest.TestCase):
         self.assertIn('} else micGlow.clear();', waves)
         self.assertIn('if (active) {\n                agentGlow.draw(', waves)
 
+    def test_connecting_is_drawn_and_animated_for_its_whole_span(self):
+        # The service publishes STATE only on change, and Connecting has connected=false and listening=false. The
+        # tray's active rule (AgentStatusControls.active, run by AgentStatusControlsTest) must cover the producer's
+        # active statuses, and the glow must animate for the span it is drawn; animating only while connected or
+        # listening froze the Connecting glow on one frame.
+        state = (APP/'ConversationState.java').read_text()
+        statuses = set(re.findall(r'"(Ready|Connecting|Listening|Muted|Disconnected)"',
+            state[state.index('String trayStatus('):].split('\n', 1)[0]))
+        self.assertEqual(statuses, {'Ready', 'Connecting', 'Listening', 'Muted', 'Disconnected'})
+        self.assertIn('return connected || listening || "Connecting".equals(status);', self.controls)
+        self.assertIn('active = AgentStatusControls.active(connected, listening, data.getString("status"));', self.tray)
+        waves = self.tray[self.tray.index('private final class Waves'):]
+        self.assertIn('if (active) postInvalidateOnAnimation();', waves)
+        self.assertNotIn('if (connected || listening) postInvalidateOnAnimation();', waves)
+
     def test_message_codes_match(self):
         codes = dict((name, int(value)) for name, value in
             re.findall(r'\b(REGISTER|UNREGISTER|START|MUTE|UNMUTE|END|STATE)=(\d+)', self.service))
