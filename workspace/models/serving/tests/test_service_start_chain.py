@@ -112,11 +112,11 @@ def free_port():
 class Installed:
     """The payload built and installed by stage_service under a temporary prefix."""
 
-    def __init__(self, test):
+    def __init__(self, test, model='muse', qwen_settings='proven'):
         self.dir = Path(tempfile.mkdtemp(prefix='rose-start-chain-'))
         test.addCleanup(shutil.rmtree, self.dir, True)
         build = self.dir / 'build'
-        BB.build(build, source='test')
+        BB.build(build, source='test', model=model, qwen_settings=qwen_settings)
         raw = gzip.decompress(base64.b64decode((build / 'rose-models-payload.b64').read_bytes()))
         self.payload = self.dir / 'payload'
         with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
@@ -316,6 +316,152 @@ class StartChain(unittest.TestCase):
         proc = self.systemd()
         self.assertEqual(self.wait_ready(proc), (True, 'ready'))
         self.assertEqual(len(self.docker_runs()), 1)
+
+
+def gitsha1(data):
+    import hashlib
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+class QwenStartChain(unittest.TestCase):
+    """MODELS-QWEN-SERVE-001: the payload built with --model qwen, installed by stage_service, and its model unit run
+    as systemd runs it: start-model verifies the staged files (verify_staged.py, against a fixture manifest whose pin
+    replaces the real one in the rendered script, as the roots are relocated), then launch-qwen runs the stand-in
+    container and server with the exact argv. The real manifest's files are 37.6 GB; nothing real is loaded."""
+
+    QWEN = json.loads((HERE.parent / 'qwen-fp8.json').read_text())
+
+    def setUp(self, settings='proven'):
+        self.vm = Installed(self, model='qwen', qwen_settings=settings)
+        self.port = free_port()
+        self.data = self.vm.prefix / 'mnt/models-data'
+        self.run_dir = self.vm.prefix / 'run/rose-models'
+        staged_rel = self.QWEN['model']['staged_dir'].split('/mnt/models-data/', 1)[1]
+        self.staged = self.data / staged_rel
+        self.staged.mkdir(parents=True)
+        files = {'config.json': b'{"model_type": "qwen3_5_moe"}', 'tokenizer.json': b'{}',
+                 'layers-0.safetensors': b'w' * 4096, 'model.safetensors.index.json': b'{"weight_map": {}}'}
+        entries = []
+        import hashlib
+        for name, data in files.items():
+            (self.staged / name).write_bytes(data)
+            weight = name.endswith('.safetensors') or name == 'model.safetensors.index.json'
+            entries.append([name, len(data), 'sha256' if weight else 'gitsha1',
+                            hashlib.sha256(data).hexdigest() if weight else gitsha1(data)])
+        manifest = {'stagingRoot': '/mnt/models-data/rose-cloud', 'groups': {'qwen': {
+            'repo': self.QWEN['model']['repo'], 'revision': self.QWEN['model']['revision'],
+            'dir': staged_rel.rsplit('/', 1)[1], 'files': entries}}}
+        text = json.dumps(manifest)
+        (self.vm.root / 'lib/rose_cloud/manifest.json').write_text(text)
+        pin = hashlib.sha256(text.encode()).hexdigest()
+        swaps = (('/etc/rose-models', str(self.vm.root)), ('/mnt/models-data', str(self.data)),
+                 ('/run/rose-models', str(self.run_dir)), ('--port 8000', f'--port {self.port}'),
+                 (self.QWEN['model']['manifest_sha256'], pin))
+        for name in ('start-model', 'launch-qwen'):
+            path = self.vm.root / 'bin' / name
+            text = path.read_text()
+            for old, new in swaps:
+                text = text.replace(old, new)
+            path.write_text(text)
+        self.fake = self.vm.dir / 'fakebin'
+        self.fake.mkdir()
+        for name, text in (('docker', FAKE_DOCKER), ('mountpoint', FAKE_MOUNTPOINT)):
+            (self.fake / name).write_text(text)
+            os.chmod(self.fake / name, 0o755)
+        (self.vm.dir / 'vllm.py').write_text(FAKE_VLLM)
+        self.log = self.vm.dir / 'docker.log'
+        self.env = {'PATH': f'{self.fake}:{SYSTEMD_PATH}', 'LANG': 'C.UTF-8', 'FAKE_LOG': str(self.log),
+                    'FAKE_VLLM': str(self.vm.dir / 'vllm.py'), 'FAKE_IMAGE': 'present', 'FAKE_MOUNTED': '1'}
+
+    systemd = StartChain.systemd
+    docker_runs = StartChain.docker_runs
+    phase = StartChain.phase
+    container_status = StartChain.container_status
+
+    def wait_ready(self, proc, name='rose-qwen'):
+        deadline, result = time.time() + 20, None
+        while time.time() < deadline:
+            result = H.probe(f'http://127.0.0.1:{self.port}', name)
+            if result[0] or proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        return result
+
+    def test_verified_staged_files_launch_qwen_offline_with_the_proven_flags(self):
+        proc = self.systemd()
+        self.assertEqual(self.wait_ready(proc), (True, 'ready'))  # health.py's probe, with the Qwen served name
+        self.assertEqual(H.probe(f'http://127.0.0.1:{self.port}', 'muse-glimmer')[0], False)  # never posing as Muse
+        run, = self.docker_runs()
+        sep = run.index('--')
+        limits, serve = json.loads(run[sep - 1]), run[sep + 1:]
+        staged = self.QWEN['model']['staged_dir'].replace('/mnt/models-data', str(self.data))
+        self.assertEqual(serve[:3], ['vllm', 'serve', staged])
+        self.assertEqual(serve[3:11], ['--served-model-name', 'rose-qwen', '--host', '127.0.0.1', '--port',
+                                       str(self.port), '--tensor-parallel-size', '2'])
+        self.assertEqual(serve[9:], self.QWEN['settings']['proven']['args'])  # exactly the runtime-proven flags
+        self.assertNotIn('--reasoning-parser', serve)
+        self.assertEqual(serve[serve.index('--max-model-len') + 1], '2048')
+        self.assertIn(f'{staged}:{staged}:ro', run)  # the staged files, read-only; no HF cache mount
+        self.assertFalse([a for a in run if '/hf:' in a])
+        for env in ('HF_HUB_OFFLINE=1', 'TRANSFORMERS_OFFLINE=1', 'VLLM_NO_USAGE_STATS=1'):
+            self.assertIn(env, run)
+        self.assertEqual((run[run.index('--network') + 1], run[run.index('--name') + 1]), ('host', 'muse-glimmer'))
+        self.assertEqual((limits['cache_dir'], limits['cache_free_min_bytes'], limits['gpu_count']), (staged, 0, 2))
+        self.assertEqual({k: v for k, v in self.phase().items() if k != 'at'},
+                         {'phase': 'launching_offline', 'verifyExit': 0, 'dataMounted': True, 'imagePresent': True})
+        self.assertEqual(json.loads((self.run_dir / 'verify-start.json').read_text())['result'], 'verified')
+        proc.terminate()
+        self.assertEqual(proc.wait(30), -15)
+
+    def test_refusals_reach_systemd_with_exit_4_and_no_container(self):
+        cfg = self.staged / 'config.json'
+        weight = self.staged / 'layers-0.safetensors'
+        cases = (('config tampered', lambda: cfg.write_bytes(b'{"model_type": "other"}'),
+                  lambda: cfg.write_bytes(b'{"model_type": "qwen3_5_moe"}'), {}, ('refused_storage', 4)),
+                 ('weight size', lambda: weight.write_bytes(b'w' * 10), lambda: weight.write_bytes(b'w' * 4096), {},
+                  ('refused_storage', 4)),
+                 ('weight missing', lambda: weight.rename(self.vm.dir / 'w'), lambda: (self.vm.dir / 'w').rename(weight),
+                  {}, ('refused_storage', 4)),
+                 ('data disk not mounted', None, None, {'FAKE_MOUNTED': '0'}, ('launching_offline', 0)),
+                 ('image missing', None, None, {'FAKE_IMAGE': 'absent'}, ('launching_offline', 0)))
+        for label, setup, undo, env, phase in cases:
+            with self.subTest(label):
+                self.log.unlink(missing_ok=True)
+                if setup:
+                    setup()
+                proc = self.systemd(**env)
+                self.assertEqual(proc.wait(30), 4)
+                self.assertEqual((self.phase()['phase'], self.phase()['verifyExit']), phase)
+                self.assertEqual(self.docker_runs(), [])
+                if undo:
+                    undo()
+        manifest = self.vm.root / 'lib/rose_cloud/manifest.json'
+        manifest.write_text(manifest.read_text() + ' ')  # not the pinned manifest any more
+        proc = self.systemd()
+        self.assertEqual((proc.wait(30), self.phase()['phase']), (4, 'refused_storage'))
+
+    def test_a_held_model_is_never_started(self):
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        (self.run_dir / 'model-hold').write_text('')
+        self.assertIsNone(self.systemd())
+        self.assertEqual(self.docker_runs(), [])
+
+
+class QwenProposed(unittest.TestCase):
+    def test_proposed_settings_are_labelled_and_only_on_request(self):
+        vm = Installed(self, model='qwen', qwen_settings='proposed')
+        script = (vm.root / 'bin/launch-qwen').read_text()
+        argv = shlex.split(script.rsplit('exec docker run ', 1)[1])
+        serve = argv[argv.index('--') + 1:]
+        self.assertEqual(serve[serve.index('--max-model-len') + 1], '8192')
+        self.assertEqual(serve[serve.index('--reasoning-parser') + 1], 'qwen3')
+        self.assertIn('NOT runtime-proven here: --max-model-len --reasoning-parser', script)
+        manifest = json.loads((vm.root / 'manifest.json').read_text())
+        self.assertEqual((manifest['qwenSettings'], manifest['notRuntimeProven']),
+                         ('proposed', ['--max-model-len', '--reasoning-parser']))
+        proven = Installed(self, model='qwen')
+        self.assertIn('NOT runtime-proven here: none', (proven.root / 'bin/launch-qwen').read_text())
+        self.assertEqual(json.loads((proven.root / 'manifest.json').read_text())['notRuntimeProven'], [])
 
 
 if __name__ == '__main__':
