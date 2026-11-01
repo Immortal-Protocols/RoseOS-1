@@ -7,13 +7,14 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
+import android.companion.virtual.VirtualDeviceManager;
+import android.companion.virtual.computercontrol.AutomatedPackageListener;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.GradientDrawable;
-import android.hardware.display.DisplayManager;
 import android.os.Process;
 import android.os.UserHandle;
 import android.util.AttributeSet;
@@ -26,15 +27,23 @@ import android.widget.TextView;
 import com.android.launcher3.R;
 import com.android.quickstep.RecentsActivity;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * RoseOS (#156): the agent row of the fallback overview, above Launcher3's own human-task carousel and scrolling
  * independently of it. Cards are Rose Agent's real running work (RoseAgentWork). Selecting one opens Rose's viewer of
  * that work only while it is the agent screen's current task. Uses only what this recents component already holds:
  * the platform lets the configured recents component read all tasks (ActivityTaskManagerService.isGetTasksAllowed)
- * and display owners are system-recorded. No permission, no provider read, no invented card.
+ * and receive its report of each ComputerControl session owner's automated packages
+ * (VirtualDeviceManagerService.checkCallerIsRecentsOrHomeRoleHolder). Rose's session display stays private: it is
+ * never listed to Launcher3 and nothing here makes it public. No permission, no provider read, no invented card.
  */
 public final class RoseAgentStrip extends LinearLayout {
     private static final String TAG = "RoseAgentStrip";
@@ -81,6 +90,74 @@ public final class RoseAgentStrip extends LinearLayout {
         status.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         addView(status);
         setContentDescription("Rose's background apps");
+        // Registered as early as the overview exists, so its report is in before the row is first shown. A refusal
+        // never fails the overview: read() retries it and the row names that step.
+        Automation automation = Automation.of(context);
+        automation.watch(this);
+        try {
+            automation.register();
+        } catch (RuntimeException e) {
+            // Named by read() at Step.AUTOMATION.
+        }
+    }
+
+    /**
+     * The platform's report, held for this process: VirtualDeviceManager.registerAutomatedPackageListener, which the
+     * platform allows only the recents component or the HOME role holder, sends the current state on registration and
+     * then each change, for every ComputerControl session owner. Only reports whose owner is exactly CONTROLLER are
+     * kept, per user; any other owner's are ignored. Registered once, as Launcher3's own AutomationRepositoryImpl is,
+     * and retried on the next read if it failed. A change refreshes the visible rows.
+     */
+    private static final class Automation implements AutomatedPackageListener {
+        private static Automation instance;
+        private final Context context;
+        private final Map<Integer, Set<String>> controller = new HashMap<>();
+        private final Set<Integer> reported = new HashSet<>();
+        private final List<WeakReference<RoseAgentStrip>> strips = new ArrayList<>();
+        private boolean registered;
+
+        private Automation(Context context) { this.context = context; }
+
+        static synchronized Automation of(Context context) {
+            if (instance == null) instance = new Automation(context.getApplicationContext());
+            return instance;
+        }
+
+        /** Throws when the platform refuses or has no virtual device service; read() names that step. */
+        synchronized void register() {
+            if (registered) return;
+            VirtualDeviceManager vdm = context.getSystemService(VirtualDeviceManager.class);
+            if (vdm == null) throw new IllegalStateException();
+            vdm.registerAutomatedPackageListener(Runnable::run, this);
+            registered = true;
+        }
+
+        synchronized void watch(RoseAgentStrip strip) { strips.add(new WeakReference<>(strip)); }
+
+        @Override
+        public void onAutomatedPackagesChanged(String automatingPackage, List<String> automatedPackages, UserHandle user) {
+            if (!RoseAgentWork.CONTROLLER.equals(automatingPackage)) return;
+            List<RoseAgentStrip> visible = new ArrayList<>();
+            synchronized (this) {
+                reported.add(user.getIdentifier());
+                if (automatedPackages.isEmpty()) controller.remove(user.getIdentifier());
+                else controller.put(user.getIdentifier(), new HashSet<>(automatedPackages));
+                for (int i = strips.size() - 1; i >= 0; i--) {
+                    RoseAgentStrip strip = strips.get(i).get();
+                    if (strip == null) strips.remove(i);
+                    else visible.add(strip);
+                }
+            }
+            for (RoseAgentStrip strip : visible) {
+                strip.post(() -> { if (strip.getWindowVisibility() == VISIBLE) strip.refresh(); });
+            }
+        }
+
+        synchronized RoseAgentWork.Automation forUser(int user) {
+            Set<String> packages = controller.get(user);
+            return new RoseAgentWork.Automation(reported.contains(user),
+                    packages == null ? Collections.emptySet() : packages);
+        }
     }
 
     private static final float IDLE = 0.35f;
@@ -184,9 +261,11 @@ public final class RoseAgentStrip extends LinearLayout {
     }
 
     /**
-     * The platform's running work, filtered to the controller's own displays and the current user before any label is
-     * looked up (RoseAgentWork.of, then labelled). A label that cannot be read shows the package name; only a failed
-     * controller, display or task read makes the row unavailable, named by its step (no exception text shown or kept).
+     * The platform's running work, filtered to the controller's own automated work and the current user before any
+     * label is looked up (RoseAgentWork.of, then labelled). A label that cannot be read shows the package name; only a
+     * failed controller, automation, task or display read makes the row unavailable, named by its step (no exception
+     * text shown or kept). DisplayManager.getDisplays() is not used: it never lists Rose's private session display to
+     * Launcher3 (Display.hasAccess), so it made the row say "No background work" while Rose worked.
      */
     private static RoseAgentWork read(Context context) {
         RoseAgentWork.Step step = RoseAgentWork.Step.CONTROLLER;
@@ -203,11 +282,10 @@ public final class RoseAgentStrip extends LinearLayout {
             } catch (PackageManager.NameNotFoundException e) {
                 controllerUid = -1;
             }
-            step = RoseAgentWork.Step.DISPLAYS;
-            List<RoseAgentWork.Display> displays = new ArrayList<>();
-            for (android.view.Display d : context.getSystemService(DisplayManager.class).getDisplays()) {
-                displays.add(new RoseAgentWork.Display(d.getDisplayId(), d.getOwnerUid()));
-            }
+            step = RoseAgentWork.Step.AUTOMATION;
+            Automation platform = Automation.of(context);
+            platform.register();
+            RoseAgentWork.Automation automation = platform.forUser(user);
             step = RoseAgentWork.Step.TASKS;
             List<RoseAgentWork.Task> tasks = new ArrayList<>();
             List<Integer> seenDisplays = new ArrayList<>();
@@ -219,7 +297,18 @@ public final class RoseAgentStrip extends LinearLayout {
                 seenDisplays.add(t.displayId);
                 tasks.add(new RoseAgentWork.Task(t.taskId, t.displayId, t.userId, pkg, pkg, top));
             }
-            return RoseAgentWork.of(controllerUid, user, displays, tasks).labelled(task ->
+            // Which of those displays belong to a virtual device (VirtualDeviceManagerService.getDeviceIdForDisplayId,
+            // which needs no permission and reveals no display): Rose's session display does; the default display,
+            // a physical one or an app's own virtual display does not.
+            step = RoseAgentWork.Step.DISPLAYS;
+            VirtualDeviceManager vdm = context.getSystemService(VirtualDeviceManager.class);
+            List<Integer> virtualDisplays = new ArrayList<>();
+            for (int id : seenDisplays) {
+                if (id > 0 && !virtualDisplays.contains(id) && vdm.getDeviceIdForDisplayId(id) != Context.DEVICE_ID_DEFAULT) {
+                    virtualDisplays.add(id);
+                }
+            }
+            return RoseAgentWork.of(controllerUid, user, automation, virtualDisplays, tasks).labelled(task ->
                     pm.getApplicationLabel(pm.getApplicationInfoAsUser(task.packageName, 0, task.userId)).toString());
         } catch (RuntimeException e) {
             Log.w(TAG, "Agent work unavailable at " + step + " (" + e.getClass().getSimpleName() + ")");
