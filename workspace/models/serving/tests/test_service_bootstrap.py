@@ -62,6 +62,7 @@ class FakeHost(B.Host):
         self.vision_rc, self.vision_out = 0, ''
         self.adapter_container = self.adapter_timeout = False
         self.adapter_rc, self.adapter_out = 0, ''
+        self.warm_container, self.warm_run_rc, self.warm_states, self.warm_runs = False, 0, [], {}
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -186,7 +187,8 @@ class FakeHost(B.Host):
                                             ('rose-cloud-validate', self.deps_container),
                                             ('rose-cloud-qwen-gpu', self.qwen_container),
                                             ('rose-cloud-qwen-vision', self.vision_container),
-                                            ('rose-cloud-qwen-adapter', self.adapter_container)) if alive]
+                                            ('rose-cloud-qwen-adapter', self.adapter_container),
+                                            ('rose-cloud-qwen-warm', self.warm_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -211,7 +213,24 @@ class FakeHost(B.Host):
                     self.vision_container = False
                 if argv[3] == 'rose-cloud-qwen-adapter' and not self.rm_fails:
                     self.adapter_container = False
+                if argv[3] == 'rose-cloud-qwen-warm' and not self.rm_fails:
+                    self.warm_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-qwen-warm' in argv:
+                self.events.append(('qwenwarm', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.warm_container = self.warm_run_rc == 0
+                return self.warm_run_rc, 'f00dfeed\n'
+            if argv[1] == 'exec' and argv[2] == 'rose-cloud-qwen-warm':
+                if not self.warm_container:
+                    return 1, ''
+                if argv[3] == 'cat':
+                    return self.warm_states.pop(0) if self.warm_states else (0, '{"ready": true}')
+                case = argv[-1]
+                self.events.append(('warmexec', case, list(argv), timeout))
+                default = 'ROSE-CLOUD-QWEN-SESSION ' + json.dumps({'case': case, 'step': 'done', 'session': {
+                    'step': 'done', 'cancel': {'semantics': 'inflight_abort'}}})
+                return self.warm_runs.get(case, (0, default + '\n'))
             if argv[1] == 'run' and 'rose-cloud-qwen-adapter' in argv:
                 self.events.append(('qwenadapter', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), timeout))
@@ -2569,6 +2588,164 @@ class CloudQwenAdapterOnce(DiagnosticFixture):
                     self.assertNotIn('text', s['turn1'])
                     self.assertEqual((s['turn1']['tokenSha256'], s['cancel']['semantics'], s['cancel']['fired']),
                                      (None, None, None))
+
+
+class CloudQwenWarmOnce(DiagnosticFixture):
+    """cloud-qwen-warm-once (CLOUD-QWEN-WARM-001): the adapter container started detached and kept loaded; the first
+    case, then payload-defined cases on fresh metadata requests, until the window, idle expiry or the session cap; then
+    removal with verified absence. The container and its exec runs are FakeHost's; the request key is FakeHost
+    metadata changed from the sleep hook (as an operator would set it between polls)."""
+
+    QWEN_DIR = CloudQwenGpuOnce.QWEN_DIR
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+        self.lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+
+    def warm(self, attempt='warm1', requests=(), **flags):
+        """``requests``: (poll number, metadata value) pairs set by the sleep hook."""
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        plan, polls = dict(requests), {'n': 0}
+
+        def operator(host):
+            polls['n'] += 1
+            if polls['n'] in plan:
+                host.md[B.QWEN_WARM_KEY] = plan[polls['n']]
+        self.host.on_sleep = operator
+        return self.boot(f'cloud-qwen-warm-once:{SHA}:{attempt}')
+
+    def sessions(self):
+        return [json.loads(e[1][len('ROSE-MODELS-QWEN-SESSION '):]) for e in self.host.events
+                if e[0] == 'publish' and e[1].startswith('ROSE-MODELS-QWEN-SESSION ')]
+
+    def test_one_load_then_requests_until_idle(self):
+        # an unchanged value is no new request; a replayed id after another value is refused
+        status, code = self.warm(requests=((2, f'{SHA}:req-1:text'), (4, f'{"1" * 64}:req-2:image'),
+                                           (6, f'{SHA}:req-1:text'), (8, f'{SHA}:req-3:evil'),
+                                           (10, f'{SHA}:req-4:cancel')))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(status)['diagnostic'],
+                         ('ok', 'inference held; Qwen warm container ended by idle after 2 request(s)'))
+        r = self.published()
+        self.assertEqual((r['check'], r['phase'], r['started'], r['ready'], r['sessions'], r['ignored'], r['endedBy'],
+                          r['cleanup']), ('cloud-qwen-warm-once', 'final', True, 'ready', 2, 3, 'idle', 'removed'))
+        self.assertEqual(r['first'], {'exitCode': 0, 'step': 'done', 'sessionStep': 'done',
+                                      'semantics': 'inflight_abort'})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'warmexec'], ['full', 'text', 'cancel'])
+        recs = self.sessions()
+        self.assertEqual([(x.get('requestId'), x.get('case'), x.get('index'), x.get('ignored')) for x in recs],
+                         [('first', 'full', 0, None), ('req-1', 'text', 1, None), (None, None, None, 'other_payload'),
+                          (None, None, None, 'id_already_used'), (None, None, None, 'malformed'),
+                          ('req-4', 'cancel', 2, None)])
+        self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
+        # one container start (detached), the same controls as the adapter container, the runner from the payload
+        (start,) = [e for e in self.host.events if e[0] == 'qwenwarm']
+        _, argv, active, container, held, timeout = start
+        bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_ADAPTER_FILES}, sort_keys=True)
+        expected = B.qwen_argv('rose-cloud-qwen-warm', RUNTIME['image_id'], self.QWEN_DIR,
+                               (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text(),
+                               B.qwen_gpu_limits(warm=True), bundle, detach=True)
+        self.assertEqual(argv, expected)
+        self.assertEqual(argv[:5], ['docker', 'run', '-d', '--rm', '--pull=never'])
+        adapter = B.qwen_argv('rose-cloud-qwen-adapter', RUNTIME['image_id'], self.QWEN_DIR,
+                              (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text(),
+                              B.qwen_gpu_limits(adapter=True), bundle)
+        self.assertEqual([a for a in argv if a not in ('-d', 'rose-cloud-qwen-warm', B.qwen_gpu_limits(warm=True))],
+                         [a for a in adapter if a not in ('rose-cloud-qwen-adapter', B.qwen_gpu_limits(adapter=True))])
+        self.assertEqual(json.loads(B.qwen_gpu_limits(warm=True)),
+                         {'deadlineS': 870 + 7200, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30, 'mode': 'warm'})
+        self.assertEqual((active, container, held), (False, False, True))
+        spec = __import__('importlib.util').util.spec_from_file_location('qg', self.lib / 'qwen_gpu.py')
+        qg = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(qg)
+        execs = [e for e in self.host.events if e[0] == 'warmexec']
+        self.assertEqual(execs[1][2], ['docker', 'exec', 'rose-cloud-qwen-warm', 'python3', '-I', '-B', '-c',
+                                       qg.RUNNER, '/tmp/rose-qwen-gpu', self.QWEN_DIR, 'text'])
+        self.assertEqual({e[3] for e in execs}, {B.QWEN_WARM_SESSION_S})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-warm'])
+        self.assertFalse(self.host.warm_container)
+        self.assertNoProvisioning()
+
+    def test_window_and_session_cap_end_it(self):
+        self.patch('QWEN_WARM_IDLE_S', 10 ** 6)
+        status, _ = self.warm('w-window')
+        self.assertEqual(self.published()['endedBy'], 'window')
+        self.assertGreaterEqual(self.host.now, B.QWEN_WARM_WINDOW_S)
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.host.model_active = self.host.model_container = True
+        self.patch('QWEN_WARM_MAX_SESSIONS', 2)
+        status, _ = self.warm('w-cap', requests=[(n, f'{SHA}:r{n}:text') for n in range(1, 10)])
+        r = self.published()
+        self.assertEqual((r['endedBy'], r['sessions']), ('max_sessions', 2))
+
+    def patch(self, name, value):
+        old = getattr(B, name)
+        setattr(B, name, value)
+        self.addCleanup(setattr, B, name, old)
+
+    def test_not_ready_gone_and_timeouts(self):
+        self.host.warm_states = [(1, '')] * 1000  # never ready
+        status, code = self.warm('w-slow')
+        r = self.published()
+        self.assertEqual((r['ready'], r['endedBy'], r['cleanup'], code), ('not_ready', 'not_ready', 'removed', 0))
+        self.assertEqual([e for e in self.host.events if e[0] == 'warmexec'], [])
+        self.host.warm_states = []
+        self.host.model_active = self.host.model_container = True
+        self.host.warm_run_rc = 125  # docker refused to start it
+        status, code = self.warm('w-nostart')
+        self.assertEqual((self.published()['started'], self.published()['endedBy']), (False, 'not_started'))
+        self.host.warm_run_rc = 0
+        self.host.model_active = self.host.model_container = True
+        self.host.warm_runs = {'full': (124, '')}  # the first session timed out: recorded, the loop still serves
+        status, code = self.warm('w-timeout', requests=((1, f'{SHA}:q1:image'),))
+        recs = self.sessions()
+        self.assertEqual((recs[0]['timedOut'], recs[0]['run'], recs[1]['case']), (True, None, 'image'))
+        self.host.warm_runs = {}
+        self.host.model_active = self.host.model_container = True
+
+        def vanish(host):
+            host.warm_container = False  # the container ended by itself (its own deadline, or a crash)
+            host.md[B.QWEN_WARM_KEY] = f'{SHA}:z1:text'
+        self.host.events.clear()
+        self.host.md[B.DIAG_KEY] = f'cloud-qwen-warm-once:{SHA}:w-gone'
+        self.host.on_sleep = vanish
+        self.boot()
+        self.assertEqual(self.published()['endedBy'], 'container_gone')
+        self.host.model_active = self.host.model_container = True
+        status, code = self.warm('w-rmfail', rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+
+    def test_reserved_and_own_ids_are_replays(self):
+        self.warm('w-own', requests=((1, f'{SHA}:first:text'), (2, f'{SHA}:w-own:text'), (3, f'{SHA}:fresh:text')))
+        self.assertEqual([(x.get('ignored'), x.get('requestId')) for x in self.sessions()],
+                         [(None, 'first'), ('id_already_used', None), ('id_already_used', None), (None, 'fresh')])
+
+    def test_hostile_runner_output_and_refusals(self):
+        hostile = 'ROSE-CLOUD-QWEN-SESSION ' + json.dumps({'case': 'full; x', 'step': 'done', 'reply': 'Red SECRET',
+                                                         'session': {'step': 'done', 'turn1': {'text': 'SECRET'},
+                                                                     'cancel': {'semantics': 'SECRET'}}})
+        self.warm('w-hostile', warm_runs={'full': (0, hostile + '\n'), 'text': (0, 'x' * 10000 + '\n')},
+                  requests=((1, f'{SHA}:h1:text'),))
+        recs = self.sessions()
+        self.assertNotIn('SECRET', json.dumps(recs))
+        self.assertEqual((recs[0]['run']['case'], recs[0]['run']['session']['cancel']['semantics']), (None, None))
+        self.assertIsNone(recs[1]['run'])  # no marker line
+        self.host.warm_runs = {}
+        self.host.model_active = self.host.model_container = True
+        (self.lib / 'adapter_session.py').unlink()
+        self.warm('w-nosrc')
+        self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')
+        self.assertNotIn('qwenwarm', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-warm-once:{SHA}:w1'))
+        self.host.model_active = self.host.model_container = True
+        self.warm('w-first', requests=((1, f'{SHA}:first:text'), (2, f'{SHA}:w-first:text')))
+        self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')  # still missing: refused
+        for bad in (f'{SHA}:Q1:text', f'{SHA}:q1:text;rm', f'{SHA}:q1:', f'{SHA[:-1]}:q1:text', f'{SHA}:q1:full\n'):
+            self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(bad))
 
 
 class HostValidate(unittest.TestCase):

@@ -69,7 +69,7 @@ MAX_IMAGE_TOKENS = 256  # (256 / 32) ** 2 = 64 expected; more means the size cap
 STOPS = ('done', 'bad_manifest', 'not_isolated', 'bad_inputs', 'engine_arg_unsupported', 'engine_failed',
          'generate_failed', 'crashed', 'deadline', 'vision_not_applied', 'bad_mode', 'bad_bundle', 'server_failed',
          'session_failed')
-MODES = ('text', 'vision', 'adapter')
+MODES = ('text', 'vision', 'adapter', 'warm')
 # Adapter mode (limits {"mode": "adapter"}, CLOUD-QWEN-ADAPTER-001): the real adapter (rose_cloud.vllm_brain) is an
 # HTTP client of vLLM's OpenAI server, so this mode starts `vllm serve` on the container's own loopback (the container
 # has --network none: nothing is published or reachable from outside) with the vision mode's engine bounds, the
@@ -87,6 +87,12 @@ SESSION_STEPS = ('turn1', 'turn2', 'turn3', 'fork', 'cancel', 'late_cancel', 'do
 SEMANTICS = ('inflight_abort', 'inflight_abort_probe_only', 'client_suppressed_only', 'completed_before_cancel',
              'unknown')
 TURN_KEYS = ('turn1', 'turn2', 'turn3', 'rewound', 'staleText')
+# Warm mode (limits {"mode": "warm"}, CLOUD-QWEN-WARM-001): the adapter mode's container, but after /health the server
+# stays loaded until the helper's deadline (bootstrap's fixed window) instead of running one session; bootstrap then
+# runs RUNNER inside the container with `docker exec` once per accepted request, naming one of WARM_CASES (the
+# payload's adapter_session.CASES). A request carries only a case name: no code ever comes from outside the payload.
+WARM_CASES = ('full', 'text', 'image', 'cancel')
+WARM_STATE = 'state.json'  # under the helper's work dir on the tmpfs: written once the server is healthy
 STEPS = ('import', 'engine_args', 'load', 'generate', 'done')
 FINISH = ('length', 'stop', 'abort')
 TOKEN = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,63}$')
@@ -208,6 +214,15 @@ try:
             pass
         time.sleep(1)
     out['serverReadyS'] = round(time.monotonic() - t, 1)
+    if cfg.get('warm'):  # keep the loaded server for RUNNER sessions until the parent's deadline kills the group
+        state = os.path.join(cfg['work'], cfg['state'])
+        with open(state + '.tmp', 'w') as f:
+            json.dump({'ready': True, 'base': base, 'serverReadyS': out['serverReadyS'], 'vllm': out['vllm']}, f)
+        os.replace(state + '.tmp', state)
+        while server.poll() is None:
+            time.sleep(5)
+        out['serverExit'] = server.returncode
+        emit(1)
     out['step'] = 'tokenizer'
     tok, chat_template = load_tokenizer(model)
     out['step'] = 'session'
@@ -223,6 +238,43 @@ except BaseException as e:
     emit(1)
 emit(0)
 '''
+
+
+RUNNER = r'''
+import json, os, sys
+work, model, case = sys.argv[1], sys.argv[2], sys.argv[3]
+os.environ.update({'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'HF_DATASETS_OFFLINE': '1',
+                   'HF_HUB_DISABLE_TELEMETRY': '1', 'TOKENIZERS_PARALLELISM': 'false', 'HOME': os.path.join(work, 'home'),
+                   'HF_HOME': os.path.join(work, 'hf'), 'XDG_CACHE_HOME': os.path.join(work, 'cache')})
+for key in [k for k in os.environ if 'PROXY' in k.upper()]:
+    del os.environ[key]
+sys.path[:0] = [p for p in (sys.argv[4] if len(sys.argv) > 4 else '', os.path.join(work, 'pkg')) if p]
+out = {'case': case, 'step': 'state', 'session': None, 'error': None, 'module': None}
+try:
+    with open(os.path.join(work, %(state)r)) as f:
+        state = json.load(f)
+    if not state.get('ready'):
+        raise RuntimeError('not ready')
+    out['step'] = 'tokenizer'
+    from rose_cloud.vllm_brain import VllmBrain, load_tokenizer
+    from rose_cloud import adapter_session
+    run = adapter_session.CASES[case]
+    tok, chat_template = load_tokenizer(model)
+    out['step'] = 'session'
+    from PIL import Image
+    image = Image.new('RGB', (%(w)d, %(h)d), %(rgb)r)
+    base = state['base']
+    out['session'] = run(VllmBrain(tok, base, 'rose-brain', chat_template, timeout_s=%(timeout)d), image,
+                         adapter_session.Server(base))
+    out['step'] = 'done'
+except BaseException as e:
+    out['error'] = type(e).__name__
+    out['module'] = getattr(e, 'name', None) if isinstance(e, ImportError) else None
+sys.stdout.write(%(marker)r + json.dumps(out, sort_keys=True, separators=(',', ':')) + '\n')
+sys.stdout.flush()
+''' % {'state': WARM_STATE, 'w': VISION['width'], 'h': VISION['height'], 'rgb': tuple(VISION['rgb']),
+       'timeout': ADAPTER_REQUEST_TIMEOUT_S, 'marker': 'ROSE-CLOUD-QWEN-SESSION '}
+RUNNER_MARKER = 'ROSE-CLOUD-QWEN-SESSION '
 
 
 class Env:
@@ -341,8 +393,9 @@ def child_env(work):
 
 def child_config(mode, limits=None):
     """What the child runs. Text mode is exactly the PR345 configuration."""
-    if mode == 'adapter':
-        return {'engine': VISION_ENGINE, 'server': SERVER_ARGS, 'port': ADAPTER_PORT,
+    if mode in ('adapter', 'warm'):
+        return {'engine': VISION_ENGINE, 'server': SERVER_ARGS, 'port': ADAPTER_PORT, 'warm': mode == 'warm',
+                'state': WARM_STATE,
                 'requestTimeoutS': ADAPTER_REQUEST_TIMEOUT_S, 'image': {k: VISION[k] for k in ('width', 'height', 'rgb')},
                 'serverCommand': (limits or {}).get('serverCommand')}  # a test hook; bootstrap never sets it
     if mode == 'vision':
@@ -428,13 +481,15 @@ def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
     work = os.path.join(env.tmp, 'rose-qwen-gpu')
     os.makedirs(work, exist_ok=True)
     pkg = None
-    if mode == 'adapter':
+    if mode in ('adapter', 'warm'):
         pkg = write_bundle(bundle, work)
         if pkg is None:
             result['stop'] = 'bad_bundle'
             return result
-    status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), child_config(mode, limits),
-                             pkg)
+    config = child_config(mode, limits)
+    if mode == 'warm':
+        config['work'] = work
+    status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), config, pkg)
     engine = {'run': status}
     try:
         engine.update(json.loads(line) if line else {})
@@ -451,9 +506,9 @@ def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
         result['stop'] = 'vision_not_applied'  # no image placeholder expanded, or the size cap did not hold
     elif step == 'done' and status == 'ok':
         result['stop'] = 'done'
-    elif mode == 'adapter' and step == 'server':
+    elif mode in ('adapter', 'warm') and step == 'server':
         result['stop'] = 'server_failed'
-    elif mode == 'adapter' and step in ('tokenizer', 'session'):
+    elif mode in ('adapter', 'warm') and step in ('tokenizer', 'session'):
         result['stop'] = 'session_failed'
     elif step == 'engine_args' and engine.get('unsupported'):
         result['stop'] = 'engine_arg_unsupported'
@@ -517,10 +572,20 @@ def sanitize(raw):
             'quantization': _match(e.get('quantization'), TOKEN), 'error': _match(e.get('error'), TOKEN),
             'module': _match(e.get('module'), MODULE)},
     }
-    if out['mode'] == 'adapter' and isinstance(out['engine'], dict):  # text and vision receipts are unchanged
+    if out['mode'] in ('adapter', 'warm') and isinstance(out['engine'], dict):  # text and vision receipts are unchanged
         out['engine'].update(serverReadyS=_secs(e.get('serverReadyS')), serverExit=_exit(e.get('serverExit')),
                              session=_session(e.get('session')))
     return out
+
+
+def sanitize_run(raw):
+    """One RUNNER line (a warm-container session): the case name and the session's allowlisted fields, or None."""
+    if not isinstance(raw, dict):
+        return None
+    return {'case': raw.get('case') if raw.get('case') in WARM_CASES else None,
+            'step': raw.get('step') if raw.get('step') in ('state', 'tokenizer', 'session', 'done') else None,
+            'error': _match(raw.get('error'), TOKEN), 'module': _match(raw.get('module'), MODULE),
+            'session': _session(raw.get('session'))}
 
 
 def _exit(v):
