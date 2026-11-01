@@ -267,11 +267,90 @@ docker run --rm --pull=never --runtime=runc --network none --name rose-cloud-pre
 
 None of these is retried without a new decision.
 
+## cloud-stage-once (CLOUD-STAGING-SOURCE-001; source only, has not run: running it is a separate runtime decision)
+
+**What it would stage:** exactly the pinned manifest, sha256 `ebcfb082a94bcae9c950eefab4b34a8fc736bfeb934c84a96360398afd09f3c3`
+(bootstrap refuses any other with `manifest_mismatch`). That is 59 files, 37,603,795,413 bytes:
+
+| Group | Files | Bytes |
+|---|---|---|
+| Qwen FP8 (`95a723d0…`) | 54 | 37,492,949,243 |
+| Phonon (`92741c5b…`) | 3 | 103,106,521 |
+| Zoey voice (`0ee17205…`) | 1 | 256,136 |
+| `ptts` 0.6.0 wheel | 1 | 7,483,513 |
+
+**How bootstrap runs it** (`serving/service/bootstrap.py`, `cloud_stage_once`):
+
+1. **Existing controls:** the same once-per-id metadata, payload digest, Muse hold, stop and positive container
+   absence as `cloud-preflight-once`. It also checks docker, runc, the exact image ID, repo digest `dbb04f5c…` and
+   `linux/amd64`, and that the data disk is mounted.
+2. **Staging directory:** it creates `/mnt/models-data/rose-cloud` if missing.
+3. **One container:**
+
+   ```
+   docker run --rm --pull=never --runtime=runc --network bridge --name rose-cloud-stage --cap-drop ALL \
+     --security-opt no-new-privileges -v /mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:rw \
+     --entrypoint python3 sha256:e90b8320… -c <lib/rose_cloud/stage.py> <manifest.json> \
+     '{"deadlineS": 3600, "maxBytes": 45000000000, "readTimeoutS": 30}'
+   ```
+
+   - **Isolation:** no GPU, no credentials or environment variables, and only the staging directory mounted.
+   - **Network:** the default bridge, outbound only.
+   - **Time limit:** Host.run allows 3600 + 120 s, then kills the container.
+4. **Cleanup and receipt:** `docker rm -f` plus a separate absence check (`removed`, `failed` or `unknown`). The
+   receipt is at most 4 KiB, in `rose-models/diagnostic`, and inference stays held.
+
+**What `stage.py` does** (stdlib only; `tests/test_stage.py` runs it against a local fixture server):
+
+- **Sources:** each file's one source is the Hub resolve URL at its pinned revision, or PyPI's exact URL for the
+  wheel (its sha256 matches the manifest).
+- **Allowlist:** https only, to `huggingface.co`, `us.aws.cdn.hf.co` and `files.pythonhosted.org`, for the first
+  request and every redirect (at most 5). These are the hosts a HEAD request showed from a development sandbox.
+  Any other host is refused with `redirect_refused`, and the allowlist would need a source change.
+- **No credentials:** none are ever sent. A 401 or 403 stops that file with `auth_required`.
+- **Existing files:** each one is verified. Exact files are kept. **Any differing file refuses the whole run before
+  any request**, and nothing changes.
+- **Free space:** the run needs remaining bytes plus 10% free, or it stops with `insufficient_space`.
+- **Fetching:** each file goes into `<name>.partial`, resuming an existing partial with a `Range` request. A server
+  that ignores `Range` stops that file with `range_refused`, and the partial is not touched.
+- **Size checks:** a Content-Length or body past the pinned size stops that file with `size_mismatch`.
+- **Hash check:** complete files are hashed (sha256, or git blob sha1 for the small Hub files). Only an exact match
+  is renamed into place; a mismatch stays `.partial` with `hash_mismatch`.
+- **Stops and partials:** the deadline and byte cap stop the run (`deadline`, `byte_cap`). **Partials are never
+  deleted**, so the next run resumes them.
+- **Receipt:** fixed tokens only, re-checked by `stage.sanitize`. It holds the stop reason, bytes in, elapsed
+  seconds, free and needed bytes, per-group counts (expected, present, downloaded, resumed, failed, bytes in) and
+  the first failure token per group. It never contains a URL, query, host, header or path.
+
+**Unverified** (needs the separately approved run):
+
+- the image's Python ssl and CA store;
+- the Hub's redirect hosts from us-central1;
+- Range support on the CDN;
+- whether 37.6 GB arrives within 60 minutes (that needs about 10.5 MB/s sustained);
+- docker bridge egress from the VM.
+
+**Proposed owner action** (NOT authorized; a separate runtime decision):
+
+- **Who:** only the original Mac operator, on `models-glimmer-01` (instance 2705251739288295377, us-central1-f).
+- **Steps:**
+  1. Build the payload at the merge commit with the deployed attestation roots, and record
+     `payloadTarSha256`.
+  2. Set the startup-script and payload metadata plus `rose-models-diagnostic=cloud-stage-once:<payloadTarSha256>:<fresh id>`.
+  3. Do one reset.
+  4. Read `rose-models/diagnostic`.
+- **What the reset costs:** the same TLS interruption as any reset, inference held for that boot, and the next reset
+  without a new id starts Muse.
+- **Limits:** at most 60 minutes, at most 45 GB inbound, and about 37.6 GB written under
+  `/mnt/models-data/rose-cloud`.
+- **Retries:** a `deadline` or `byte_cap` stop leaves partials for one later, separately approved rerun with a new
+  id.
+- **Disk:** nothing else on the disk changes. The staged files stay until their removal is separately approved.
+
 ## Later, separately approved (not part of this packet)
 
-1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash.
-   - **Channel:** there is no guest shell, so this needs its own bootstrap mode or another approved channel.
-   - **Network:** egress to `huggingface.co` and PyPI only; no credentials (all pins are public and not gated).
+1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through
+   `cloud-stage-once` (previous section). The source is in place; running it is a separate runtime decision.
 2. **Loopback text and speech trial**, about 30 minutes, about US$3.68 at US$7.35/h, excluding disk and network.
    - **vLLM:** in an image with vLLM ≥ 0.19.0 that the preflight shows registers `qwen3_5_moe` (offline,
      `--pull=never`), run `vllm serve /mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0
@@ -307,6 +386,10 @@ python3 -I tests/test_listen.py
 
 ```bash
 python3 -I tests/test_vision.py
+```
+
+```bash
+python3 -I tests/test_stage.py
 ```
 
 ```bash

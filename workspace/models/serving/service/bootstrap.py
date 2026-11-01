@@ -15,8 +15,8 @@ run in order and are rerun-safe: each first checks whether its result is already
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once|hf-probe-once|
-             cloud-preflight-once:<payload sha256>:<id>, once per id (see gpu_start_once, hf_probe_once,
-             cloud_preflight_once), and then
+             cloud-preflight-once|cloud-stage-once:<payload sha256>:<id>, once per id (see gpu_start_once,
+             hf_probe_once, cloud_preflight_once, cloud_stage_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -83,14 +83,20 @@ STATE = '/var/lib/rose-models/bootstrap'
 RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and its published evidence
 # Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=<mode>:<payload sha256>:<id>
 DIAG_KEY = 'attributes/rose-models-diagnostic'
-DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once):([0-9a-f]{64}):'
-                        r'([a-z0-9][a-z0-9-]{0,31})')
+DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once|cloud-stage-once):'
+                        r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
 # gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
 GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
 # hf-probe-once: lib/service/hf_probe.py in the pinned image, offline, no GPU, cache read-only, at most 120 s
 HF_PROBE_SECONDS, HF_PROBE_CONTAINER, HF_PROBE_LINE = 120, 'muse-glimmer-hfprobe', 4096
 # cloud-preflight-once: lib/rose_cloud/preflight.py in the pinned image, offline, no GPU, data disk read-only, 120 s
 CLOUD_SECONDS, CLOUD_CONTAINER, CLOUD_RECEIPT = 120, 'rose-cloud-preflight', 4096
+# cloud-stage-once (runs only when a separate runtime decision sets it): lib/rose_cloud/stage.py fetches the manifest
+# into STAGING (only that directory mounted, read-write), allowlisted https only, at most STAGE_SECONDS and
+# STAGE_MAX_BYTES inbound; the manifest must be the exact pinned one.
+STAGING, STAGE_CONTAINER = '/mnt/models-data/rose-cloud', 'rose-cloud-stage'
+STAGE_SECONDS, STAGE_MAX_BYTES, STAGE_GRACE_S = 3600, 45_000_000_000, 120
+STAGE_MANIFEST_SHA256 = 'ebcfb082a94bcae9c950eefab4b34a8fc736bfeb934c84a96360398afd09f3c3'
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
@@ -887,6 +893,8 @@ def stage_diagnostic(host, ctx):
         return hf_probe_once(host, ctx, attempt, image)
     if request[2] == 'cloud-preflight-once':
         return cloud_preflight_once(host, ctx, attempt, image)
+    if request[2] == 'cloud-stage-once':
+        return cloud_stage_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -1128,6 +1136,75 @@ def cloud_preflight_once(host, ctx, attempt, image):
         return 'inference held; cloud preflight ' + ('timed out' if result['timedOut'] else 'gave no result')
     complete = sorted(g for g, ok in result['probe']['filesComplete'].items() if ok)
     return f"inference held; cloud preflight done (complete groups: {', '.join(complete) or 'none'})"
+
+
+def stage_limits() -> str:
+    """The only limits cloud-stage-once passes: no test hooks (hubBase, sources, allowHttp, allowHosts)."""
+    return json.dumps({'deadlineS': STAGE_SECONDS, 'maxBytes': STAGE_MAX_BYTES, 'readTimeoutS': 30}, sort_keys=True)
+
+
+def cloud_stage_once(host, ctx, attempt, image):
+    """CLOUD-STAGING-SOURCE-001: fetch and verify the pinned manifest's files into STAGING, once. Same hold,
+    stop, positive absence, read-only prerequisites, image digest and data-disk checks as cloud-preflight-once; the
+    payload's manifest must hash to STAGE_MANIFEST_SHA256. Then one container: --pull=never, runc, the default bridge
+    network (outbound only; the script accepts https to its allowlisted hosts), no GPU, no credentials, all
+    capabilities dropped, only STAGING mounted read-write, at most STAGE_SECONDS (+grace) and STAGE_MAX_BYTES.
+    Existing exact files are kept, differing ones refuse the run, partials are kept for the next run. The container
+    is always removed and its absence verified; the receipt is at most CLOUD_RECEIPT bytes; inference stays held."""
+    result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'attemptId': attempt, 'check': 'cloud-stage-once', 'modelHeld': True, 'exitCode': None,
+              'timedOut': False, 'stage': None, 'cleanup': None}
+    refused = diagnostic_prerequisites(host, image)
+    if not refused:
+        ref = f"vllm/vllm-openai@{ctx['runtime']['image_digest']}"
+        facts, _ = image_identity(host, image)
+        if facts is None or facts['id'] != image or ref not in facts['repoDigests'] \
+                or facts['platform'] != 'linux/amd64':
+            refused = 'image_digest_mismatch'
+    if not refused and host.run(['mountpoint', '-q', DATA], 30)[0] != 0:
+        refused = 'data_not_mounted'
+    lib = Path(ctx['payload']) / 'etc-rose-models/lib/rose_cloud'
+    manifest_text = (lib / 'manifest.json').read_text() if not refused else ''
+    if not refused and hashlib.sha256(manifest_text.encode()).hexdigest() != STAGE_MANIFEST_SHA256:
+        refused = 'manifest_mismatch'
+    result['prerequisite'] = refused
+    if not refused:
+        spec = importlib.util.spec_from_file_location('rose_cloud_stage', lib / 'stage.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        source, manifest = (lib / 'stage.py').read_text(), json.loads(manifest_text)
+        host.path(STAGING).mkdir(parents=True, exist_ok=True)
+        argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'bridge',
+                '--name', STAGE_CONTAINER, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                '-v', f'{STAGING}:{STAGING}:rw', '--entrypoint', 'python3', image,
+                '-c', source, manifest_text, stage_limits()]
+        try:
+            code, out = host.run(argv, STAGE_SECONDS + STAGE_GRACE_S)
+        finally:
+            removed = host.run(['docker', 'rm', '-f', STAGE_CONTAINER], 30)[0]
+            left = container_names(host, STAGE_CONTAINER)
+        line = next((l for l in reversed(out.splitlines()) if l.startswith(module.MARKER)), None) \
+            if code != 124 else None
+        try:
+            stage = module.sanitize(json.loads(line[len(module.MARKER):]), manifest) \
+                if line and len(line) <= CLOUD_RECEIPT else None
+        except (ValueError, TypeError, AttributeError):
+            stage = None
+        result.update(exitCode=code if code != 124 else None, timedOut=code == 124, stage=stage,
+                      cleanup='unknown' if left is None else 'failed' if left else 'removed', cleanupRemoveExit=removed)
+    line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    if len(line) > CLOUD_RECEIPT:
+        result.update(stage=None, receiptTooLarge=True)
+        line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    host.put_guest_attribute('diagnostic', line)
+    host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    if refused:
+        raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
+    if result['cleanup'] != 'removed':
+        raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
+    if result['stage'] is None:
+        return 'inference held; cloud staging ' + ('timed out' if result['timedOut'] else 'gave no result')
+    return f"inference held; cloud staging stopped: {result['stage']['stop']}"
 
 
 def load_guard(payload):
