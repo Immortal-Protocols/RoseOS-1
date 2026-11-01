@@ -130,8 +130,8 @@ public final class RoseConversationActivity extends Activity {
 
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
- @Override protected void onResume(){super.onResume();resumed=true;notices.reset();handler.removeCallbacks(tick);handler.post(tick);}
- @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);if(presence!=null&&state!=null)presence.show(RoseVisualState.from(state,Float.NaN,Float.NaN,true,false));clearNotice();super.onPause();}
+ @Override protected void onResume(){super.onResume();resumed=true;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
+ @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);if(presence!=null&&state!=null)presence.show(RoseVisualState.from(state,Float.NaN,Float.NaN,true,false));if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
   VoiceService s=VoiceService.instance;
@@ -279,6 +279,32 @@ public final class RoseConversationActivity extends Activity {
   android.graphics.drawable.Drawable d;try{d=getPackageManager().getApplicationIcon(pkg);}catch(Exception e){d=null;}
   iconFor=new Object[]{pkg,d};return d;
  }
+ /** One read-only controller preview (#225, PR340 Controller.preview) for exactly the request's session and controller
+  * task, on this phone only. Off the UI thread. The JPEG is decoded only when within PR340's bounds and its declared size;
+  * nothing is stored, logged or sent anywhere, and any failure is an answer with no image (the card keeps its text). */
+ WorkspaceOverviewPreview.Response readPreview(WorkspaceOverviewPreview.Request r){
+  try{
+   android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
+   if(client==null)return WorkspaceOverviewPreview.Response.failed();
+   try{
+    Bundle extras=new Bundle();extras.putString("params",new org.json.JSONObject().put("sessionId",r.sessionId()).put("taskId",r.taskId()).toString());
+    Bundle reply=client.call("preview",null,extras);String raw=reply==null?null:reply.getString("result");
+    if(raw==null||raw.length()>WorkspaceOverviewPreview.MAX_BASE64+4096)return WorkspaceOverviewPreview.Response.failed();
+    org.json.JSONObject o=new org.json.JSONObject(raw);String status=o.optString("status","");
+    if(!"ok".equals(status))return new WorkspaceOverviewPreview.Response(status,null,null,null,0,0,0,null,0,null);
+    String b64=o.optString("imageBase64","");int w=o.optInt("width"),h=o.optInt("height");android.graphics.Bitmap image=null;int bytes=0;
+    if(!b64.isEmpty()&&b64.length()<=WorkspaceOverviewPreview.MAX_BASE64){
+     byte[] jpeg=android.util.Base64.decode(b64,android.util.Base64.NO_WRAP);bytes=jpeg.length;
+     android.graphics.BitmapFactory.Options bounds=new android.graphics.BitmapFactory.Options();bounds.inJustDecodeBounds=true;
+     android.graphics.BitmapFactory.decodeByteArray(jpeg,0,jpeg.length,bounds);
+     if(bounds.outWidth==w&&bounds.outHeight==h&&w>0&&h>0&&w<=WorkspaceOverviewPreview.MAX_WIDTH&&h<=WorkspaceOverviewPreview.MAX_HEIGHT)
+      image=android.graphics.BitmapFactory.decodeByteArray(jpeg,0,jpeg.length);
+    }
+    return new WorkspaceOverviewPreview.Response(status,o.optString("sessionId",""),o.optString("taskId",""),o.optString("targetPackage",""),
+     o.optLong("capturedAt",0),w,h,o.optString("mimeType",""),bytes,image);
+   }finally{client.close();}
+  }catch(Exception e){return WorkspaceOverviewPreview.Response.failed();}
+ }
  WorkspaceOverviewPanel.Source overviewSource(){
   return new WorkspaceOverviewPanel.Source(){
    public boolean connected(){return localLive();}
@@ -294,6 +320,10 @@ public final class RoseConversationActivity extends Activity {
   return new WorkspaceOverviewPanel.Actions(){
    public boolean stopRoute(){return false;}
    public void endCall(){send("end");}
+   public void requestPreview(final WorkspaceOverviewPreview.Request r){
+    new Thread(()->{final WorkspaceOverviewPreview.Response a=readPreview(r);
+     runOnUiThread(()->{if(!isFinishing()&&!isDestroyed()&&overview!=null)overview.previewAnswer(r,a);});},"rose-overview-preview").start();
+   }
    public void stop(WorkspaceOverview.Identity task){}
    public void watch(final WorkspaceOverview.Identity task,final WorkspaceOverview.Binding atTap){
     if(watchOpening)return;watchOpening=true;

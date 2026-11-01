@@ -177,3 +177,21 @@ test('Rose\'s apps opens the managed workspace overview: read-only tasks, one wo
  assert.match(block,/public void endCall\(\)\{send\("end"\);\}/);
  assert.match(block,/d=getPackageManager\(\)\.getApplicationIcon\(pkg\);/);
 });
+
+test('#225 live preview: the overview reads only the controller\'s local read-only preview, for the verified binding, and cancels on pause',()=>{
+ const activity=source('RoseConversationActivity.java');
+ const read=activity.slice(activity.indexOf('WorkspaceOverviewPreview.Response readPreview('),activity.indexOf('WorkspaceOverviewPanel.Source overviewSource()'));
+ assert.ok(read.length>200,'readPreview found');
+ assert.match(read,/client\.call\("preview",null,extras\)/,'PR340 provider call, local to this phone');
+ assert.match(read,/put\("sessionId",r\.sessionId\(\)\)\.put\("taskId",r\.taskId\(\)\)/,'exactly the request\'s session and controller task');
+ assert.ok(!/targetPackage",|displayId|packageName/.test(read.slice(0,read.indexOf('client.call('))),'no caller display or package override');
+ assert.match(read,/bounds\.inJustDecodeBounds=true/,'bounds checked before decoding');
+ assert.ok(!/Log\.|FileOutputStream|openFileOutput|SharedPreferences|getCacheDir|getFilesDir|HttpsURLConnection/.test(read),'never logged, stored or uploaded');
+ assert.match(activity,/if\(overview!=null\)\{if\(isFinishing\(\)\)overview\.teardown\(\);else overview\.pause\(\);\}/,'pause/finish cancels the preview');
+ assert.match(activity,/if\(overview!=null\)overview\.resume\(\);/);
+ assert.match(activity,/runOnUiThread\(\(\)->\{if\(!isFinishing\(\)&&!isDestroyed\(\)&&overview!=null\)overview\.previewAnswer\(r,a\);\}\)/,'answers land only on a live screen, through the gate');
+ const panel=source('WorkspaceOverviewPanel.java');
+ assert.match(panel,/WorkspaceOverview\.Binding target=m\.watchRow==null\?null:m\.watchRow\.binding;/,'only the verified binding is previewed');
+ assert.match(panel,/void close\(\)\{setVisibility\(GONE\);preview\.cancel\(\);\}/,'Back cancels');
+ assert.ok(!/preview/.test(source('PhoneControl.java').replace(/"preview"\.equals[^;]*;/,'').replace(/\/\/[^\n]*preview[^\n]*/g,'')),'no second preview route through PhoneControl');
+});

@@ -46,6 +46,8 @@ final class WorkspaceOverviewView extends LinearLayout {
  static final int CARD_DP=250,GAP_DP=12;
  private Listener listener;private Icons icons;private String lastKey="";
  private final TextView notice;
+ /** The workspace card's live image view while a verified frame is shown, and the frame it holds. */
+ private ImageView previewView;private android.graphics.Bitmap shown,preview;
 
  WorkspaceOverviewView(Context c){
   super(c);setOrientation(VERTICAL);
@@ -55,10 +57,17 @@ final class WorkspaceOverviewView extends LinearLayout {
  void setIcons(Icons i){icons=i;lastKey="";}
 
  /** Rebuilds only when the model's key changes, so repeated reads and re-entry redraw nothing. */
- void show(WorkspaceOverview.Model m){show(m,"");}
- /** note: the HiFi observe line under the grid (why the last tap opened nothing); empty hides it. */
- void show(WorkspaceOverview.Model m,String note){
-  if(m==null)return;String key=m.key()+"\n"+note;if(key.equals(lastKey))return;lastKey=key;
+ void show(WorkspaceOverview.Model m){show(m,"",null);}
+ void show(WorkspaceOverview.Model m,String note){show(m,note,null);}
+ /** note: the HiFi observe line under the grid (why the last tap opened nothing); empty hides it. preview: the
+  * workspace card's accepted live frame (WorkspaceOverviewPreview, already checked against the card's verified
+  * binding), or null for the text body. A new frame for the same card only swaps the image. */
+ void show(WorkspaceOverview.Model m,String note,WorkspaceOverviewPreview.Frame preview){
+  if(m==null)return;
+  android.graphics.Bitmap image=preview!=null&&preview.image instanceof android.graphics.Bitmap&&m.watchRow!=null?(android.graphics.Bitmap)preview.image:null;
+  String key=m.key()+"\n"+note+"\n"+(image!=null);
+  if(key.equals(lastKey)){if(image!=null&&previewView!=null&&shown!=image){previewView.setImageBitmap(image);shown=image;fitTop(previewView);}return;}
+  lastKey=key;previewView=null;shown=null;this.preview=image;
   removeAllViews();
   if(!m.empty.isEmpty()){
    TextView e=text(m.empty,15,INK2,false);e.setGravity(Gravity.CENTER);
@@ -88,10 +97,28 @@ final class WorkspaceOverviewView extends LinearLayout {
   WorkspaceOverview.Row linked=m.watchRow;
   String headline=linked!=null?linked.title:c.label,body=linked!=null?(linked.detail.isEmpty()?linked.state:linked.detail):c.detail;
   View card=card(icon==null?null:new ImageView(getContext()),icon,c.app,headline,body,c.dot,c.shortState,null,false,c.dot==WorkspaceOverview.Dot.STOPPED);
+  if(preview!=null&&linked!=null)showPreview((LinearLayout)card,c.app);
   card.setContentDescription("Rose’s workspace: "+c.app+", "+c.shortState+". "+(linked!=null?WorkspaceOverview.WATCH_OK:m.cardReason()));
   card.setOnClickListener(v->{if(listener!=null)listener.workspace();});
   card.setTag("workspace");
   return card;
+ }
+ /** Replaces the window card's text body with its live frame (HiFi .wbody content), top-aligned and cropped to the
+  * body like the HiFi's window content; the text stays as the spoken description. */
+ void showPreview(LinearLayout card,String app){
+  View body=card.getChildAt(1);LayoutParams lp=(LayoutParams)body.getLayoutParams();
+  FrameLayout frame=new FrameLayout(getContext());GradientDrawable bb=new GradientDrawable();bb.setColor(BODY);bb.setCornerRadius(dp(14));frame.setBackground(bb);frame.setClipToOutline(true);
+  ImageView img=new ImageView(getContext());img.setScaleType(ImageView.ScaleType.MATRIX);img.setImageBitmap(preview);
+  img.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitTop(img));
+  img.setContentDescription("Live view of Rose’s workspace in "+app);img.setTag("preview");
+  frame.addView(img,new FrameLayout.LayoutParams(-1,-1));
+  card.removeViewAt(1);card.addView(frame,1,lp);previewView=img;shown=preview;
+ }
+ /** Scales the frame to the body's width and pins its top (the app's top bar), cropping only the bottom. */
+ static void fitTop(ImageView img){
+  android.graphics.drawable.Drawable d=img.getDrawable();if(d==null||img.getWidth()==0||d.getIntrinsicWidth()<=0)return;
+  float s=Math.max(img.getWidth()/(float)d.getIntrinsicWidth(),img.getHeight()/(float)d.getIntrinsicHeight());
+  android.graphics.Matrix m=new android.graphics.Matrix();m.setScale(s,s);m.postTranslate((img.getWidth()-d.getIntrinsicWidth()*s)/2f,0);img.setImageMatrix(m);
  }
  /** A logical task: Rose's mark, its real goal, progress or result, state and its Stop (never an app window). */
  View taskCard(final WorkspaceOverview.Row r){

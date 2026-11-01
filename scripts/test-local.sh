@@ -238,6 +238,10 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverviewFeed.java workspace/rose-agent/app/tests/WorkspaceOverviewFeedTest.java
 java -cp "$JAVA_TESTS/WorkspaceOverviewFeed" dev.pixel.voice.WorkspaceOverviewFeedTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverviewPreview" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverviewPreview.java \
+ workspace/rose-agent/app/tests/WorkspaceOverviewPreviewTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverviewPreview" dev.pixel.voice.WorkspaceOverviewPreviewTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RendererRecovery" \
  workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java workspace/rose-agent/app/tests/RendererRecoveryTest.java
 java -cp "$JAVA_TESTS/RendererRecovery" dev.pixel.voice.RendererRecoveryTest
