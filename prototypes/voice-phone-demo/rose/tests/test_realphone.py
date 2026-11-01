@@ -83,6 +83,9 @@ class FakeLink:
             return {"status": "ok", "screenshotId": "f1", "width": SHOT[0], "height": SHOT[1],
                     "displayWidth": DISPLAY[0], "displayHeight": DISPLAY[1], "mimeType": "image/jpeg",
                     "imageBase64": _jpeg(SHOT), "packageName": SCREEN["packageName"]}
+        if action == "app_command":
+            # What Rose Agent answers on a phone without the background controller (PhoneControl).
+            return {"status": "unavailable", "reason": "App has no agent command provider"}
         if action == "touch_point":
             return {"status": "gesture_dispatched", "gestureId": "g1"}
         if action == "list_apps":
@@ -171,6 +174,18 @@ def vision_checks(bad: list) -> None:
     if display_point(1000, 1000, {"width": 540, "height": 1200, "displayWidth": 1080,
                                   "displayHeight": 2400}) != (1079, 2399):
         bad.append("display_point does not stay on the display")
+
+    # The send guard's reads (rose.tasks._refuse): the real names of a control and of what a
+    # point would touch, view-id hints marked "id:" (an icon-only Send has no text).
+    from rose.tasks import _worst_control
+    send_mark = next(e.mark for e in s.screen.elements if e.mark and "send" in e.label)
+    if _worst_control(s.control_labels(send_mark)) != "send":
+        bad.append(f"control_labels of the Send icon: {s.control_labels(send_mark)}")
+    at = s.labels_at(990 / 1080 * 1000, 2250 / 2400 * 1000)
+    if _worst_control(at) != "send" or s.labels_at(200 / 1080 * 1000, 350 / 2400 * 1000) != ["Alex"]:
+        bad.append(f"labels_at: {at}")
+    if s.labels_at(450 / 1080 * 1000, 530 / 2400 * 1000):
+        bad.append("labels_at read a password field")
 
     link.calls.clear()  # the "Alex" text (node 5) at display (200, 350) sits inside its row (node 4)
     r = s.tap_point(200 / 1080 * 1000, 350 / 2400 * 1000, "Alex")
@@ -328,6 +343,11 @@ def main() -> None:
         bad.append("a password field was shown")
     if s.route != ("com.google.android.apps.messaging", 7):
         bad.append(f"route {s.route}")
+    # This canned phone has no background controller (app_command answers "unavailable", as Rose
+    # Agent does there), so tasks stay on the visible screen exactly as before; rose.tests.test_background covers
+    # Rose's workspace.
+    if s.background or phone.background_available() or phone.workspace_app() is not None:
+        bad.append("a phone without the background controller went into workspace mode")
 
     link.calls.clear()
     r = s.type_text(1, "On my way")

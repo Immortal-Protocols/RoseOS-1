@@ -1,11 +1,19 @@
 """Phone agent and deep-think tasks against the real brain and the fake phone.
 
     .venv/bin/python -m rose.tests.test_tasks [--rounds 2] [--only a,b,c,d,x,e,race,cancel,update,think]
+    .venv/bin/python -m rose.tests.test_tasks --unit-only   # no model: the guards in code
+
+``unit_checks`` (always run first, no model, a few seconds) drives the real TaskManager with a
+scripted brain (one token per character, replies replayed from a script) on the fake phone and
+on a fake phone that plays the real one with Rose's workspace: apps the goal names (launcher
+taps, finish verification), the send guard and ``ready_to_send``, ``confirmed_send``,
+``on_screen``, workspace refusals, the two-failures hint, and that the fake phone's prompt and
+old ``start_phone(goal)`` call sites are unchanged.
 
 Loads the brain once (~21 GB, on the runtime thread) and prefills the agent
 prompt, then runs every scenario ``rounds`` times on a freshly reset phone:
-(a) text Sam, (b) alarm 6:30 AM Gym, (c) Do Not Disturb, (d) Maps (must fail
-gracefully), extra goals x1-x6 (new conversation, alarm off, calendar event,
+(a) text Sam, (b) alarm 6:30 AM Gym, (c) Do Not Disturb, (d) open Maps (a
+success that changes no data), extra goals x1-x6 (new conversation, alarm off, calendar event,
 setting already on, starting from another screen, Camera), (e) b and c at
 the same time, a list that shifts under the agent (race), cancel mid-task,
 update mid-task, and deep think (one normal
@@ -18,6 +26,7 @@ other jobs may share the GPU.
 from __future__ import annotations
 
 import argparse
+import collections
 import faulthandler
 import os
 import statistics
@@ -29,9 +38,10 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from rose.brain import Brain
 from rose.bus import Bus
-from rose.phone import INITIAL, Phone
+from rose.phone import INITIAL, ActionResult, Phone
 from rose.runtime import Runtime
-from rose.tasks import Task, TaskManager
+from rose.tasks import (CALL_PREFIX, PHONE_SYSTEM, REAL_PHONE_SYSTEM, Task, TaskManager, _fake_app,
+                        _final_control, _named_apps, _same_app)
 
 STEP_TARGET_MS = 800
 TEXT_TARGET_S = 4.0
@@ -131,7 +141,9 @@ def check_c(d: dict, task: Task) -> tuple[bool, str]:
 
 
 def check_d(d: dict, task: Task) -> tuple[bool, str]:
-    ok = d == INITIAL and task.status == "failed" and "map" in task.result.lower()
+    # The fake phone has had a working Maps since places were added: opening it is a success
+    # that changes no data (it used to be "must fail gracefully"; x6 Camera still checks that).
+    ok = d == INITIAL and task.status == "done" and "map" in task.result.lower()
     return ok, f"status {task.status}, data unchanged {d == INITIAL}"
 
 
@@ -374,13 +386,552 @@ def summary(h: Harness) -> None:
               f"{statistics.median(steps):.0f} max {max(steps)}, gpu ms median {statistics.median(gpu):.0f}")
 
 
+# ----- offline: the guards in code, with a scripted brain ---------------------
+_SPECIAL = {"<|im_end|>": "\ue000", "<|endoftext|>": "\ue001", "</think>": "\ue004"}
+
+
+class ScriptBrain:
+    """Just enough Brain for TaskManager: one token per character; each agent reply is replayed
+    from ``scripts`` (the next one starts when an observation ending in CALL_PREFIX goes in)."""
+
+    eos = {0xE000, 0xE001}
+
+    def __init__(self):
+        self.scripts: collections.deque[str] = collections.deque()
+        self.prompts: list[str] = []  # every observation appended, in order
+
+    def encode(self, text):
+        for k, v in _SPECIAL.items():
+            text = text.replace(k, v)
+        return [ord(ch) for ch in text]
+
+    def decode(self, ids):
+        text = "".join(chr(i) for i in ids)
+        for k, v in _SPECIAL.items():
+            text = text.replace(v, k)
+        return text
+
+    def system_prefix(self, system, tools=None):
+        return f"<|im_start|>system\n{system}<|im_end|>\n"
+
+    def sequence(self, name="seq"):
+        return ScriptSeq(self)
+
+
+class ScriptSeq:
+    def __init__(self, brain: ScriptBrain):
+        self.brain, self.tokens, self.last_image = brain, [], None
+        self.reply: list[int] = []
+        self.pos = 0
+
+    def fork(self, name):
+        seq = ScriptSeq(self.brain)
+        seq.tokens = list(self.tokens)
+        return seq
+
+    def mark(self):
+        return len(self.tokens)
+
+    def rewind(self, mark):
+        del self.tokens[mark:]
+
+    def prefill(self, ids, chunk=256):
+        # Forced tool-call syntax must be exactly what the script says next.
+        want = self.reply[self.pos:self.pos + len(ids)]
+        assert self.pos == 0 and not self.reply or want == list(ids), (
+            f"forced {self.brain.decode(ids)!r}, script has {self.brain.decode(want)!r}")
+        self.pos += len(ids) if self.reply else 0
+        self.tokens += ids
+        yield None
+
+    def append_text(self, text, chunk=256):
+        ids = self.brain.encode(text)
+        self.tokens += ids
+        if text.endswith(CALL_PREFIX):
+            self.brain.prompts.append(text)
+            script = self.brain.scripts.popleft() if self.brain.scripts else "<|im_end|>"
+            self.reply, self.pos = self.brain.encode(script), 0
+        yield None
+
+    def append_image(self, image, max_side=None, **kw):
+        raise AssertionError("no screenshots offline")
+
+    def generate(self, sampling, stop=None, cancel=None):
+        for _ in range(sampling.max_tokens):
+            tok = self.reply[self.pos] if self.pos < len(self.reply) else 0xE000
+            self.pos += 1
+            self.tokens.append(tok)
+            yield tok
+            if tok in self.brain.eos:
+                return
+
+
+def calls(*items: tuple) -> str:
+    """One scripted agent reply: calls as (name, {param: value}) in schema order, then the turn's end."""
+
+    text = "\n".join(f"<tool_call>\n<function={name}>\n"
+                     + "".join(f"<parameter={k}>\n{v}\n</parameter>\n" for k, v in params.items())
+                     + "</function>\n</tool_call>" for name, params in items)
+    return text.removeprefix(CALL_PREFIX) + "<|im_end|>"
+
+
+class WorkspacePhone:
+    """The fake phone dressed as the real one with Rose's workspace (RealPhone's background API).
+
+    Sessions are fake views; without ``on_screen`` they are "background" and Amazon is refused
+    the way rose.background words it. ``workspace_app()`` is the app open in the workspace."""
+
+    real = True
+    vision = False
+
+    def __init__(self, inner: Phone):
+        self.inner = inner
+        self.session_calls: list[tuple[str, bool]] = []
+        self.ws_app: str | None = None
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def apps(self):
+        from rose.phone import APPS
+        return [{"label": a, "packageName": f"com.example.{a.lower()}"} for a in APPS + ["Amazon"]]
+
+    def workspace_app(self):
+        return self.ws_app
+
+    def session(self, name, on_screen=False):
+        self.session_calls.append((name, on_screen))
+        return WorkspaceSession(self, self.inner.session(name), background=not on_screen)
+
+
+class WorkspaceSession:
+    def __init__(self, phone: WorkspacePhone, inner, background: bool):
+        self.phone, self.inner, self.background = phone, inner, background
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def tap(self, mark):
+        if self.background and self.phone.ws_app is None:
+            return ActionResult(False, "Rose's workspace has no app open; use open_app first.")
+        return self.inner.tap(mark)
+
+    def open_app(self, app):
+        if self.background and app.strip().lower() == "amazon":
+            return ActionResult(False, "Android doesn't let Rose open Amazon in her workspace; nothing was opened.")
+        r = self.inner.open_app(app)
+        if r.ok and self.background:
+            self.phone.ws_app = app.strip().title()
+        return r
+
+
+def _marks(phone: Phone, *steps) -> dict[str, int]:
+    """Element ids by label after walking ``steps`` (an app, then labels to tap) on a scratch view."""
+
+    view = phone.session("probe")
+    view.open_app(steps[0])
+    for label in steps[1:]:
+        view.tap(next(e.mark for e in phone.screen("probe").elements if e.label == label))
+    out = {e.label: e.mark for e in phone.screen("probe").elements if e.kind != "text"}
+    phone.close_session("probe")
+    return out
+
+
+def _draft_is(d, text: str, where: str) -> bool:
+    """ready_to_send names this draft and app (it also records which screen it was typed on)."""
+
+    return isinstance(d, dict) and d.get("text") == text and d.get("where") == where
+
+
+def unit_checks() -> list[str]:
+    """The guards in code, offline (no model). Returns the failures."""
+
+    bad: list[str] = []
+
+    def expect(name: str, ok: bool, detail: str = "") -> None:
+        print(f"  {'PASS' if ok else 'FAIL'} unit {name}{': ' + detail if detail and not ok else ''}")
+        if not ok:
+            bad.append(f"unit {name}: {detail}")
+
+    print("\n[unit] helpers")
+    apps = ["Calculator", "Amazon", "Maps", "Phone", "Messages", "Clock", "Settings", "Claude"]
+    for goal, want in [("Open Calculator and add 1 + 2 + ... + 50", ["Calculator"]),
+                       ("Open the Amazon app", ["Amazon"]), ("open the amazon app", ["Amazon"]),
+                       ("Open the Spotify app and play jazz", ["Spotify"]),  # named, not installed
+                       ("Open Code in the Claude menu", ["Claude"]), ("open google maps", ["Maps"]),
+                       ("text Sam on my phone that I'm late", []), ("set an alarm for 6:30 on Monday", []),
+                       ("text Sam that I'm in Settings", []), ("turn on Do Not Disturb", []),
+                       ("text Sam that I'm running ten minutes late", []), ("take a photo", []),
+                       ("add Dentist at 3 PM to my calendar", []), ("Open the same app again", [])]:
+        got = _named_apps(goal, apps)
+        expect(f"named apps {goal!r}", got == want, f"{got} != {want}")
+    for label, typed, want in [("Send", False, "send"), ("Send SMS", False, "send"), ("Post", False, "send"),
+                               ("Reply", False, ""), ("Reply", True, "send"), ("Sending options", True, ""),
+                               ("Posts", True, ""), ("Sent", True, ""), ("Buy now", False, "purchase"),
+                               ("Place your order", False, "purchase"), ("Pay", False, "purchase"),
+                               ("Proceed to checkout", False, "purchase"), ("PayPal", False, ""),
+                               ("Submit", False, "final"), ("Publish", False, "final"), ("Add to cart", False, ""),
+                               ("Message", True, ""), ("Send money", False, "purchase")]:
+        got = _final_control(label, typed)
+        expect(f"final control {label!r} typed={typed}", got == want, f"{got!r} != {want!r}")
+    # A calculation's success must show its answer (the Pixel 10 run that "calculated" 1225).
+    from rose.tasks import _press_keys, _Run, _unseen_number
+    from rose.phone import ActionResult, Element
+
+    class _Shown:
+        def __init__(self, tree: str):
+            self.tree = tree
+
+        def ui_tree(self) -> str:
+            return self.tree
+
+    calc = "Open the Calculator app and calculate the sum of numbers from 1 to 50."
+    for goal, summary, tree, ok in [
+            (calc, "I've calculated the sum, which is 1225.", 'Screen: Calculator\n  text "0"', False),
+            (calc, "The sum from 1 to 50 is 1,275.", 'Screen: Calculator\n  text "50×51÷2"\n  text "1275"', True),
+            ("What's 12 times 3 on the calculator?", "12 times 3 is 36.", 'text "36"', True),
+            ("Set an alarm for 6:30", "Your alarm is set for 6:30.", "", True),
+            ("Add milk to my shopping list", "I added milk to your list.", "", True)]:
+        why, _ = _unseen_number(goal, summary, _Shown(tree), _Run())
+        expect(f"unseen number {summary!r}", (why == "") == ok, why)
+    run = _Run()
+    _unseen_number(calc, "It is 1225.", _Shown(""), run)
+    expect("unseen number fails the second time", _unseen_number(calc, "It is 1225.", _Shown(""), run)[1] is not None)
+
+    class _Keys:
+        """A calculator screen: tapping a key appends it to the display."""
+
+        def __init__(self):
+            names = [str(d) for d in range(10)] + ["plus", "minus", "times", "divide", "equals", "point", "Send"]
+            self.screen = type("S", (), {"elements": [Element(f"k{i}", "button", n, (0, 0, 1, 1), mark=i + 1)
+                                                      for i, n in enumerate(names)]})()
+            self.tapped: list[str] = []
+
+        def tap(self, mark):
+            self.tapped.append(self.screen.elements[int(mark) - 1].label)
+            return ActionResult(True, "Tapped.", changed=True)
+
+    keys = _Keys()
+    r = _press_keys(keys, "50×51÷2=")
+    expect("press_keys taps each key by name", r.ok and keys.tapped == ["5", "0", "times", "5", "1", "divide", "2",
+                                                                       "equals"], f"{r.message} {keys.tapped}")
+    keys = _Keys()
+    expect("press_keys refuses non-keys", not _press_keys(keys, "Send").ok and not keys.tapped, str(keys.tapped))
+    keys = _Keys()
+    r = _press_keys(keys, "2^3")
+    expect("press_keys refuses unknown keys", not r.ok and not keys.tapped, r.message)
+    expect("same app", _same_app("Google Maps", "Maps") and _same_app("the Claude app", "Claude")
+           and not _same_app("Maps", "Messages"))
+    expect("fake app", _fake_app(("thread", "Sam Lee")) == "Messages" and _fake_app(("home",)) == "the home screen"
+           and _fake_app(("unavailable", "Camera")) == "Camera")
+    expect("real prompt: sends need a yes", "Tap Send only when the Goal says the user confirmed sending" in REAL_PHONE_SYSTEM
+           and "do not tap Send" not in REAL_PHONE_SYSTEM and "start with open_app" in REAL_PHONE_SYSTEM)
+    expect("fake prompt keeps tapping Send", "tap Send and finish" in PHONE_SYSTEM)
+
+    rt, bus = Runtime(), Bus()
+    brain = ScriptBrain()
+    events: dict[int, threading.Event] = {}  # by id(task): task ids restart in every TaskManager
+    events_lock = threading.Lock()
+
+    def done(task: Task) -> threading.Event:
+        with events_lock:
+            return events.setdefault(id(task), threading.Event())
+
+    def run(tm: TaskManager, goal: str, *replies: str, **kw) -> Task:
+        brain.scripts.extend(replies)
+        task = tm.start_phone(goal, **kw) if kw else tm.start_phone(goal)
+        ok = done(task).wait(30)
+        brain.scripts.clear()
+        if not ok:
+            tm.cancel(task.id)
+        return task
+
+    def results(task: Task) -> list[str]:
+        return [a["result"] for s in task.steps for a in s.get("actions", [])]
+
+    try:
+        fake = Phone(bus, vision=False)
+        tm = TaskManager(rt, brain, fake, bus, lambda t: done(t).set())
+        home = {e.label: e.mark for e in fake.screen().elements if e.kind != "text"}
+        thread = _marks(fake, "Messages", "Sam Lee")
+        fake.reset()
+
+        print("\n[unit] fake phone: old call sites and prompt")
+        t = run(tm, "turn on Do Not Disturb", calls(("finish", {"summary": "Done.", "success": "false"})))
+        first = brain.prompts[-1]
+        expect("start_phone(goal) still works", t.status == "failed" and not t.confirmed_send and not t.on_screen,
+               f"{t.status}")
+        expect("fake prompt unchanged", "Goal: turn on Do Not Disturb\nNow: " in first and "Screen:" not in
+               first.split("Now:")[0] and "confirmed" not in first, repr(first[-400:]))
+        d = t.to_dict()
+        expect("to_dict fields", all(k in d for k in ("ready_to_send", "confirmed_send", "on_screen", "background"))
+               and d["ready_to_send"] is None, str(d))
+        expect("guard off on the fake phone", tm.guard_sends is False)
+
+        print("\n[unit] apps the goal names")
+        fake.reset()
+        t = run(tm, "Open the Clock app",
+                calls(("tap", {"id": home["Maps"]})),  # the wrong icon on the home screen
+                calls(("finish", {"summary": "I opened the Clock app for you.", "success": "true"})),
+                calls(("open_app", {"app": "Clock"})),
+                calls(("finish", {"summary": "I opened the Clock app for you.", "success": "true"})))
+        res = results(t)
+        expect("launcher tap of another app refused", any("not Maps" in r and "open_app with Clock" in r for r in res)
+               and fake.route_of("task%d" % t.id) != ("maps",), str(res))
+        expect("finish refused while the home screen shows",
+               any("the screen shows the home screen" in r for r in res), str(res))
+        expect("finish accepted in Clock", t.status == "done" and t.result == "I opened the Clock app for you.",
+               f"{t.status}: {t.result}")
+        fake.reset()
+        t = run(tm, "Open the Clock app",
+                calls(("open_app", {"app": "Maps"})),
+                calls(("finish", {"summary": "I opened the Clock app for you.", "success": "true"})),
+                calls(("finish", {"summary": "I opened the Clock app for you.", "success": "true"})))
+        expect("false success in the wrong app ends failed", t.status == "failed"
+               and t.result == "I couldn't get Clock open; Maps is open instead.", f"{t.status}: {t.result}")
+        fake.reset()
+        t = run(tm, "Open the Clock app", calls(("tap", {"id": 98})), calls(("tap", {"id": 97})),
+                calls(("finish", {"summary": "I couldn't.", "success": "false"})))
+        res = results(t)
+        expect("two failures in a row: open_app hint", "open_app" not in res[0] and "use open_app with Clock" in res[1],
+               str(res))
+        fake.reset()
+        t = run(tm, "turn on Do Not Disturb", calls(("tap", {"id": home["Settings"]})),
+                calls(("finish", {"summary": "Done.", "success": "true"})))
+        expect("no app named: launcher taps and finishes as before", t.status == "done", f"{t.status} {results(t)}")
+
+        print("\n[unit] sends (the real phone's guard)")
+        tm.guard_sends = True
+        draft = "I'm running ten minutes late"
+        typing = calls(("type_text", {"id": thread["Message"], "text": draft}), ("tap", {"id": thread["Send"]}),
+                       ("finish", {"summary": "I told Sam you're running late.", "success": "true"}))
+        to_sam = [calls(("open_app", {"app": "Messages"})), calls(("tap", {"id": _marks(fake, "Messages")["Sam Lee"]}))]
+        fake.reset()
+        t = run(tm, "text Sam that I'm running ten minutes late", *to_sam, typing)
+        expect("Send refused without a yes", not _new_messages(fake.data, "Sam Lee"), str(_new_messages(fake.data, "Sam Lee")))
+        expect("ready_to_send", t.status == "done" and _draft_is(t.ready_to_send, draft, "Messages")
+               and t.result == "Your message is typed in Messages, ready to send."
+               and t.to_dict()["ready_to_send"] == t.ready_to_send, f"{t.status}: {t.result} {t.ready_to_send}")
+        fake.reset()
+        t = run(tm, "text Sam that I'm running ten minutes late", *to_sam, typing, confirmed_send=True)
+        new = _new_messages(fake.data, "Sam Lee")
+        expect("confirmed_send taps Send once", t.status == "done" and new == [("me", draft)] and t.ready_to_send is None
+               and t.confirmed_send, f"{t.status}: {t.result} {new}")
+        fake.reset()
+        t = run(tm, "text Sam that I'm running ten minutes late", *to_sam,
+                calls(("type_text", {"id": thread["Message"], "text": draft})),
+                calls(("finish", {"summary": "Your message to Sam is ready.", "success": "true"})))
+        expect("typed and finished: ready_to_send too", t.status == "done" and not _new_messages(fake.data, "Sam Lee")
+               and _draft_is(t.ready_to_send, draft, "Messages"), f"{t.status} {t.ready_to_send}")
+        tm.guard_sends = False
+
+        print("\n[unit] Rose's workspace and on_screen")
+        ws = WorkspacePhone(Phone(bus, vision=False))
+        tm2 = TaskManager(rt, brain, ws, bus, lambda t: done(t).set())
+        expect("guard on for a real phone", tm2.guard_sends is True)
+        t = run(tm2, "Open the Amazon app", calls(("open_app", {"app": "Amazon"})),
+                calls(("open_app", {"app": "Maps"})))
+        first = brain.prompts[-2] if len(brain.prompts) >= 2 else ""
+        expect("workspace refusal ends the task", t.status == "failed" and "in her workspace" in t.result
+               and len(t.steps) == 1 and t.background and ws.session_calls[-1][1] is False,
+               f"{t.status}: {t.result} steps {len(t.steps)} {ws.session_calls}")
+        expect("workspace prompt note", "Screen: Rose's own workspace" in brain.prompts[-1].split("Now:")[0]
+               or "Screen: Rose's own workspace" in first, repr(brain.prompts[-1][-300:]))
+        ws.ws_app = None
+        t = run(tm2, "Open the Clock app", calls(("tap", {"id": 99})),
+                calls(("open_app", {"app": "Clock"})),
+                calls(("finish", {"summary": "Clock is open in my workspace.", "success": "true"})))
+        expect("finish checks the workspace app", t.status == "done" and ws.ws_app == "Clock", f"{t.status}: {t.result}")
+        expect("a recoverable workspace failure does not end the task", len(t.steps) == 3, str(results(t)))
+        ws.ws_app = "Maps"
+        t = run(tm2, "Open the Clock app", calls(("finish", {"summary": "Done.", "success": "true"})),
+                calls(("finish", {"summary": "Done.", "success": "true"})))
+        expect("workspace on another app: success refused", t.status == "failed" and "Maps is open" in t.result,
+               f"{t.status}: {t.result}")
+        t = run(tm2, "Open the Amazon app", calls(("open_app", {"app": "Amazon"})),
+                calls(("finish", {"summary": "Done.", "success": "false"})), on_screen=True)
+        prompt = brain.prompts[-2]
+        expect("on_screen opens the visible screen", ws.session_calls[-1][1] is True and t.on_screen
+               and not t.background and "Screen: the user's own screen" in prompt, f"{ws.session_calls[-1]} {t.to_dict()}")
+        t = run(tm2, "text Sam that I'm late", calls(("finish", {"summary": "x", "success": "false"})),
+                confirmed_send=True)
+        expect("confirmed note on the real phone", "The user confirmed sending" in brain.prompts[-1], "")
+
+        # The whole stack below the talker: TaskManager -> RealPhone/RealSession -> Workspace ->
+        # test_background's FakeController (which enforces Controller.java's rules). No phone.
+        print("\n[unit] integrated: TaskManager on RealPhone with Rose's workspace")
+        import rose.realphone as realphone
+        from rose.tests import test_background as tb
+        settle, realphone.SETTLE_S = realphone.SETTLE_S, 0.0
+        try:
+            fc = tb.FakeController(tb.Clock())
+            rp, link = tb.real(fc)
+            rp.vision = False  # the scripted brain takes no screenshots
+            tm3 = TaskManager(rt, brain, rp, bus, lambda t: done(t).set())
+            t = run(tm3, "Open the Calculator app", calls(("open_app", {"app": "Calculator"})),
+                    calls(("finish", {"summary": "Calculator is open.", "success": "true"})))
+            starts = [c for c in fc.calls if c[0] == "start"]
+            expect("integrated: open_app runs in the workspace", t.status == "done" and t.background
+                   and rp.workspace_app() == "Calculator" and len(starts) == 1
+                   and not any(a == "open_app" for a, _ in link.visible),
+                   f"{t.status}: {t.result} bg={t.background} ws={rp.workspace_app()} starts={len(starts)} "
+                   f"visible={[a for a, _ in link.visible]}")
+            expect("integrated: workspace prompt note", any("Screen: Rose's own workspace" in p for p in brain.prompts[-2:]), "")
+            t = run(tm3, "Open the Clock app", calls(("finish", {"summary": "Done.", "success": "true"})),
+                    calls(("finish", {"summary": "Done.", "success": "true"})))
+            expect("integrated: success refused while Calculator is in the workspace",
+                   t.status == "failed" and "Calculator is open" in t.result, f"{t.status}: {t.result}")
+            t = run(tm3, "Add 1 + 2 in the Calculator app",
+                    calls(("finish", {"summary": "Calculator is still open.", "success": "true"})))
+            starts = [c for c in fc.calls if c[0] == "start"]
+            expect("integrated: a follow-up task continues in the same workspace",
+                   t.status == "done" and t.background and len(starts) == 1
+                   and "Screen: Calculator" in brain.prompts[-1], f"{t.status}: {t.result} starts={len(starts)}")
+            t = run(tm3, "Open the Calculator app", calls(("finish", {"summary": "x", "success": "false"})),
+                    on_screen=True)
+            expect("integrated: on_screen uses the visible screen", t.on_screen and not t.background
+                   and any(a == "inspect_ui" for a, _ in link.visible), f"{t.to_dict()}")
+            t = run(tm3, "Open the Amazon app", calls(("open_app", {"app": "Amazon"})),
+                    calls(("finish", {"summary": "Amazon is open.", "success": "true"})))
+            expect("integrated: 'the Amazon app' is Amazon Shopping on this phone",
+                   t.status == "done" and rp.workspace_app() == "Amazon Shopping", f"{t.status}: {t.result}")
+        finally:
+            realphone.SETTLE_S = settle
+
+        review_checks(expect, tm, fake, run, results, rt, brain, bus, done)
+    finally:
+        rt.stop()
+    return bad
+
+
+def review_checks(expect, tm, fake, run, results, rt, brain, bus, done) -> None:
+    """Checks for the review findings fixed after integration (no model, no phone)."""
+
+    from types import SimpleNamespace
+    from rose.phone import Element, Screen
+    from rose.tasks import (_Run, _app_matches, _draft_field, _message_goal, _worst_control)
+
+    print("\n[unit] review fixes: money, send controls, drafts, apps")
+    for label, want in [("Send Payment Now", "purchase"), ("Send $20", "purchase"), ("Payment", "purchase"),
+                        ("Transfer", "purchase"), ("Request ride", "purchase"), ("Book now", "purchase"),
+                        ("Reserve", "purchase"), ("Start free trial", "purchase"), ("Donate", "purchase"),
+                        ("Confirm UberX", "final"), ("Post Office", ""), ("Post office near me", ""),
+                        ("Send feedback", ""), ("Send message", "send"), ("Send to Sam", "send"),
+                        ("Send end-to-end encrypted message to Alexandra Konstantinopoulou-Smythe", "send")]:
+        got = _final_control(label, typed=True)
+        expect(f"final control {label!r}", got == want, f"{got!r} != {want!r}")
+    expect("view-id hints count a send anywhere", _worst_control(["id:ic send"]) == "send"
+           and _worst_control(["id:btn send button", "Pay"]) == "purchase" and _worst_control(["id:post office row"]) == "")
+    expect("a search is no message draft", not _message_goal("Search Maps for coffee and tell me the nearest one")
+           and _message_goal("tell Sam I'm late") and not _draft_field("Search here") and _draft_field("Text message"))
+    expect("a longer installed label is the named app", _app_matches("Amazon Shopping", "Amazon")
+           and _app_matches("Keep Notes", "the notes app") and not _app_matches("Maps", "Messages")
+           and _named_apps("Open the Amazon app", ["Amazon Shopping", "Maps"]) == ["Amazon Shopping"])
+
+    # The send guard judges the real node: an icon-only Send (view id ic_send) and a point tap
+    # on it are refused without a yes, whatever the agent calls them.
+    class Guarded:
+        name, background = "x", False
+
+        def __init__(self, names):
+            self.names = names
+
+        def control_labels(self, mark):
+            return self.names
+
+        def labels_at(self, x, y):
+            return self.names
+    old = tm.guard_sends
+    tm.guard_sends = True
+    try:
+        task = Task(1, "phone", "text Sam that I'm late")
+        for call in (SimpleNamespace(name="tap", arguments={"id": "3"}),
+                     SimpleNamespace(name="tap_point", arguments={"x": 900, "y": 950, "target": "paper plane icon"})):
+            r = _Run(typed="I'm late", typed_field="Text message", typed_where="Messages")
+            why, end, sending = tm._refuse(task, r, Guarded(["id:ic send"]), call, None)
+            expect(f"{call.name} on an icon-only Send is refused", bool(why) and not sending
+                   and end is not None and end[0] == "done", f"{why!r} {end}")
+        task.ready_to_send = None
+        r = _Run(typed="I'm late", typed_field="Text message")
+        why, _, _ = tm._refuse(task, r, Guarded([]), SimpleNamespace(name="tap_point", arguments={"x": 1, "y": 1}),
+                               None)
+        expect("a nameless tap after a typed message is refused", "no name" in why, why)
+        # Tapping a "Post Office" search result after typing the query: no send, no draft.
+        task = Task(2, "phone", "Find the nearest post office in Maps")
+        r = _Run(typed="post office", typed_field="Search here")
+        el = SimpleNamespace(label="Post Office", mark=4)
+        why, end, _ = tm._refuse(task, r, Guarded([]), SimpleNamespace(name="tap", arguments={"id": "4"}), el)
+        tm._note_draft(task, r, SimpleNamespace(background=False, route=("maps",), obs=None))
+        expect("a Post Office result is not a send", not why and end is None and task.ready_to_send is None,
+               f"{why!r} {task.ready_to_send}")
+
+        # A confirmed Send only while the approved draft is in the field, in the same workspace session.
+        class DraftPhone:
+            real = True
+            field = "I'm late"
+            session_id = "s1"
+
+            def screen(self, name=None):
+                return Screen("phone", "Messages", [Element("1", "field", "Text message", (0, 0, 1, 1),
+                                                            self.field, mark=1)])
+
+            def workspace_session_id(self):
+                return self.session_id
+        dp = DraftPhone()
+        tm_d = TaskManager(rt, brain, dp, bus, lambda t: done(t).set())
+        approved = {"text": "I'm late", "where": "Messages", "background": True, "on_screen": False, "session": "s1"}
+        task = Task(3, "phone", "Send the message typed in Messages: \"I'm late\"", confirmed_send=True,
+                    background=True, approved=approved)
+        sess = SimpleNamespace(name="task3", background=True)
+        expect("confirmed Send of the approved draft", tm_d._not_approved(task, _Run(), sess) == "")
+        dp.field = "I'm late, Mom"
+        expect("confirmed Send refused for another text", "approved" in tm_d._not_approved(task, _Run(), sess))
+        dp.field, dp.session_id = "I'm late", "s2"
+        expect("confirmed Send refused once the workspace changed", "no longer open" in
+               tm_d._not_approved(task, _Run(), sess))
+        dp.session_id = "s1"
+        expect("confirmed Send refused for a retyped other text", "not the message" in
+               tm_d._not_approved(task, _Run(typed="ok"), sess))
+
+        # _current_app never waits on the phone (it runs on the MLX thread).
+        class NoWait:
+            real = True
+
+            def cached_label(self, pkg):
+                return None
+
+            def app_label(self, pkg):
+                raise AssertionError("app_label would wait on the phone")
+        tm_n = TaskManager(rt, brain, NoWait(), bus, lambda t: done(t).set())
+        here = tm_n._current_app(SimpleNamespace(obs={"status": "ok", "packageName": "com.x.app"}, background=False))
+        expect("_current_app never loads the app list", here == "com.x.app", str(here))
+    finally:
+        tm.guard_sends = old
+
+    # A direct intent did the goal: no "use open_app with Spotify" refusal.
+    r = _Run(named=["Spotify"], direct_ok=True)
+    expect("a direct intent satisfies the named app",
+           tm._wrong_app(r, SimpleNamespace(route=("home",), obs=None, background=False)) == ("", None))
+    # A goal that names one app and correctly ends in another (fake phone, guard off).
+    fake.reset()
+    t = run(tm, "Text Sam from my Contacts", calls(("open_app", {"app": "Contacts"})),
+            calls(("tap", {"id": _marks(fake, "Contacts").get("Sam Lee", 1)})),
+            calls(("finish", {"summary": "Sam's thread is open.", "success": "true"})))
+    expect("Contacts then Messages is not a wrong app", t.status == "done", f"{t.status}: {t.result} {results(t)}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rounds", type=int, default=2)
     ap.add_argument("--only", default="a,b,c,d,x,e,race,cancel,update,think")
+    ap.add_argument("--unit-only", action="store_true", help="only the offline checks (no model)")
     args = ap.parse_args()
     only = set(args.only.split(","))
     faulthandler.dump_traceback_later(600, exit=True)
+    unit_bad = unit_checks()
+    if args.unit_only or unit_bad:
+        print("\nUNIT PASSED" if not unit_bad else "\nUNIT FAILED:\n  " + "\n  ".join(unit_bad))
+        return 0 if not unit_bad else 1
 
     h = Harness()
     print(f"brain loaded in {h.load_s:.1f} s; prompts prefilled in {h.prepare_s * 1000:.0f} ms")

@@ -26,6 +26,21 @@ otherwise collide; a refusal for that reason is retried once.
 ``RealSession.tap_point`` taps a point the model picked in the screenshot (0-1000 relative
 coordinates) through Rose Agent's ``touch_point``, for controls the tree lacks. Screenshots stay
 in memory: they are decoded here, given only to the local model, and never written or logged.
+
+Rose's workspace (background mode, on by default where the phone has it): RoseOS phones carry a
+background controller (``dev.pixel.backgroundcontrol``) that runs one app on a separate virtual
+display, so a task never drives the screen in the user's hand. ``RealPhone.background_available``
+probes it once (``get_state``; again after a reconnect) and a task's ``RealSession`` then runs in
+the workspace through ``rose.background.Workspace``: ``open_app`` starts (or reuses) a workspace
+for that app, taps/typing/scrolls/back/``tap_point`` become controller commands, the UI tree and
+screenshot come from the workspace (same rendered format, ids per observation), and ``home``
+closes it. The workspace stays open after a task, so a follow-up on the same app continues there;
+it closes on home, on another app, on the owner's Stop, after ``WORKSPACE_IDLE_S`` unused, and on
+reset. If Android refuses an app there, the action says so and nothing happens on the visible
+screen. A task runs on the visible screen only when started ``on_screen`` or when the phone has no
+controller (older phones, the Fold): then everything is exactly as above. Alarms, timers, media
+keys, music (audio is the user's) and directions (navigation is for the user) stay direct
+intents; ``search_places`` opens Maps in the workspace and types the query there.
 """
 
 from __future__ import annotations
@@ -36,6 +51,7 @@ import binascii
 import concurrent.futures
 import io
 import json
+import os
 import re
 import threading
 import time
@@ -44,6 +60,7 @@ from typing import Any, Callable
 
 from PIL import Image, ImageDraw
 
+from .background import CONTROLLER, CONTROLLER_STATES, WORKSPACE_IDLE_S, Workspace
 from .phone import ActionResult, Element, Screen, W, H, _parse_time
 
 MAX_ELEMENTS = 70   # rows shown to the agent per screen
@@ -55,7 +72,22 @@ SHOT_REUSE_S = 0.3  # look() reuses a screenshot this fresh instead of taking an
 ERROR_INTERVAL_TIME_SHORT = 3  # AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
 SHOT_WHY = {"locked": "the phone is locked", "secure_window": "this screen blocks screenshots",
             "accessibility_disabled": "Rose Agent phone controls are off",
-            "offline": "the phone is not connected", "unsupported": "this Android version cannot take one"}
+            "offline": "the phone is not connected", "unsupported": "this Android version cannot take one",
+            "no_background_app": "Rose's workspace is closed", "stopped_by_owner": "the owner stopped Rose's workspace",
+            "workspace_closed": "Rose's workspace closed", "timeout": "the phone did not answer in time"}
+# One controller operation. Rose Agent waits up to 20 s for an app_command result
+# (LocalRosePhone.RUNNING_WAIT_MS) and the controller's node checks are accessibility calls of up
+# to 5 s each (refresh, then the click), so wait longer than the phone does: a shorter wait loses
+# answers the phone still sends (seen on a Pixel 10: start and taps over 12 s). Workspace._start
+# also polls get_state if a start's reply is lost anyway.
+WS_CALL_TIMEOUT_S = 23.0
+BG_RETRY_S = 60.0   # a phone without the controller is probed again after this long
+MAPS = "com.google.android.apps.maps"
+LOCKED_SAY = "The phone is locked; unlock it and I'll continue."
+WS_TITLES = {"no_background_app": "Rose's workspace is closed (open_app opens an app there)",
+             "stopped_by_owner": "Rose's workspace was stopped by the owner",
+             "workspace_closed": "Rose's workspace closed (open_app opens the app there again)",
+             "locked": "Locked: the phone needs the user to unlock it"}
 
 
 class PhoneLink:
@@ -141,12 +173,18 @@ class PhoneLink:
 
 
 class RealSession:
-    """One task's view of the phone: its last observation and the actions that change it."""
+    """One task's view of the phone: its last observation and the actions that change it.
+
+    ``background`` (decided at the first blocking call, then fixed): the task runs in Rose's
+    workspace (``RealPhone.workspace``) instead of on the visible screen. ``on_screen=True``
+    sessions always use the visible screen."""
 
     blocking = True  # actions wait on the phone: run them off the MLX thread
 
-    def __init__(self, phone: "RealPhone", name: str):
+    def __init__(self, phone: "RealPhone", name: str, on_screen: bool = False):
         self.phone, self.name = phone, name
+        self.on_screen = bool(on_screen)
+        self._background: bool | None = None
         self.obs: dict = {}
         self.screen = Screen("phone", "Phone (not read yet)", [])
         self._nodes: dict[int, dict] = {}   # mark -> node
@@ -154,6 +192,27 @@ class RealSession:
         self.image: Image.Image | None = None  # the screenshot taken with obs (vision on)
         self.shot: dict = {}  # its status and sizes: width, height (image), displayWidth, displayHeight
         self._stale = False  # obs changed since the screenshot: ensure_image takes a new one
+
+    @property
+    def background(self) -> bool:
+        """This task works in Rose's workspace, not on the user's screen.
+
+        The first read may probe the phone (blocking: the task runner reads it in ``refresh``,
+        off the MLX thread); a definite answer is then fixed for the session. While the probe has
+        no definite answer (the phone is offline, ``get_state`` timed out, a transient error) this
+        is True and not kept: an unanswered probe never moves a task onto the user's screen.
+        The workspace calls then fail plainly ("not connected", "did not answer in time") and the
+        next read probes again."""
+
+        if self._background is None:
+            if self.on_screen:
+                self._background = False
+            else:
+                probe = self.phone.background_probe()
+                if probe is None:
+                    return True
+                self._background = probe
+        return self._background
 
     # ----- reads (never wait) ------------------------------------------
     @property
@@ -173,6 +232,40 @@ class RealSession:
         except (TypeError, ValueError):
             return None
 
+    def control_labels(self, mark) -> list[str]:
+        """Every name of the control ``mark`` taps: its node's and its click target's text,
+        description and view id ("ic_send" -> "ic send"). For the send guard, which judges the
+        real node rather than the label the agent sees (an icon-only Send has no text)."""
+
+        node = self._nodes.get(_int(mark))
+        if node is None:
+            return []
+        return _names_of(self._obs_nodes(), {node["id"], node["target"]})
+
+    def labels_at(self, x: float, y: float) -> list[str]:
+        """The names of what ``tap_point(x, y)`` would touch: the smallest node at the point and
+        every clickable node containing it (the control it belongs to). Never waits; [] when
+        there is no screenshot to map the point through."""
+
+        shot = self.shot
+        if self.image is None or not shot.get("width") or not shot.get("displayWidth"):
+            return []
+        try:
+            px, py = display_point(float(x), float(y), shot)
+        except (TypeError, ValueError):
+            return []
+        nodes = self._obs_nodes()
+        hit = self._node_at(px, py)
+        ids = {hit["id"]} if hit is not None else set()
+        for n in nodes.values():
+            b = n.get("bounds") or ()
+            if n.get("clickable") and len(b) == 4 and b[0] <= px < b[2] and b[1] <= py < b[3]:
+                ids.add(n["id"])
+        return _names_of(nodes, ids)
+
+    def _obs_nodes(self) -> dict:
+        return {n.get("id"): n for n in self.obs.get("nodes", [])} if self.obs.get("status") == "ok" else {}
+
     def look(self) -> Image.Image | None:
         """The screenshot that goes with the current UI tree (None without vision or when refused).
 
@@ -188,7 +281,10 @@ class RealSession:
 
     # ----- actions (wait on the phone) ---------------------------------
     def refresh(self) -> dict:
-        r = self.phone.link.call("inspect_ui")
+        if self.background:
+            r = self.phone.workspace.inspect()
+        else:
+            r = self.phone.link.call("inspect_ui")
         self._observe(r)
         self._capture()
         return r
@@ -213,7 +309,10 @@ class RealSession:
 
         Called once per observation, right before the model reads it, so a step's image and
         tree match and earlier calls of the same reply cost no screenshot. Vision on and the
-        screen readable only; otherwise ``shot`` says why there is none."""
+        screen readable only; otherwise ``shot`` says why there is none. In the workspace the
+        screenshot is taken first and the tree read again right after it (``Workspace.observe``):
+        the controller's screenshot clears its node map, and the agent then acts on that tree's
+        snapshot."""
 
         if not self._stale:
             return self.image
@@ -221,24 +320,53 @@ class RealSession:
         if self.obs.get("status") != "ok":
             self.shot = {"status": self.obs.get("status") or "unreadable"}
             return None
+        if self.background:
+            shot, tree = self.phone.workspace.observe()
+            self._observe(tree)
+            self.image, self.shot = self.phone._decode(shot)
+            return self.image
         self.image, self.shot = self.phone.capture()
         return self.image
+
+    def _cmd(self, action: str, **args: Any) -> dict:
+        """One screen command, in the workspace or on the visible screen."""
+
+        if self.background:
+            return self.phone.workspace.command(action, **args)
+        return self.phone.link.call(action, **args)
 
     def open_app(self, app: str) -> ActionResult:
         pkg, label = self.phone.resolve_app(app)
         if pkg is None:
             return ActionResult(False, f"No app called {app} on this phone.")
+        if self.background:
+            return self._open_in_workspace(pkg, label)
         r = self.phone.link.call("open_app", packageName=pkg)
         self._observed(r)
         ok = r.get("status") in ("opened", "launch_unverified")
         return ActionResult(ok, f"Opened {label}." if ok else _why(r), changed=ok)
+
+    def _open_in_workspace(self, pkg: str, label: str) -> ActionResult:
+        """Start (or reuse) Rose's workspace for ``pkg``; a refusal is said plainly, never worked around."""
+
+        r = self.phone.workspace.start(pkg)
+        ok = r.get("status") in ("opened", "launch_unverified")
+        if ok:
+            self._observed(r)
+            return ActionResult(True, f"Opened {label} in Rose's workspace.", changed=True)
+        self.refresh()
+        return ActionResult(False, _ws_why(r, label), changed=False)
 
     def tap(self, mark) -> ActionResult:
         el, node = self.element(mark), self._nodes.get(_int(mark))
         if el is None or node is None:
             return ActionResult(False, f"There is no [{mark}] on this screen.")
         label = node.get("label")
-        if label:
+        if self.background:
+            # The controller clicks the observed node itself (its clickable target); the workspace
+            # re-finds it on a fresh inspection first.
+            r = self._cmd("tap", snapshotId=self.obs.get("snapshotId"), nodeId=node["target"])
+        elif label:
             r = self.phone.link.call("tap_label", snapshotId=self.obs.get("snapshotId"), label=label,
                                      nodeId=node["id"])
             if r.get("status") in ("ambiguous_label", "label_target_mismatch", "label_not_found"):
@@ -258,7 +386,7 @@ class RealSession:
             return ActionResult(False, f"There is no [{mark}] on this screen.")
         if el.kind != "field":
             return ActionResult(False, f"[{mark}] is not a text field.")
-        r = self.phone.link.call("set_text", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"], text=text)
+        r = self._cmd("set_text", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"], text=text)
         return self._after(r, f"Typed into {el.label or 'the field'}.")
 
     def scroll(self, mark, direction: str = "forward") -> ActionResult:
@@ -266,34 +394,93 @@ class RealSession:
         if node is None:
             return ActionResult(False, f"There is no [{mark}] on this screen.")
         direction = "backward" if str(direction).lower() in ("backward", "up", "back") else "forward"
-        r = self.phone.link.call("scroll", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"],
-                                 direction=direction)
+        r = self._cmd("scroll", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"], direction=direction)
         return self._after(r, f"Scrolled {direction}.")
 
     def back(self) -> ActionResult:
+        if self.background:
+            return self._after(self.phone.workspace.command("back"), "Went back.")
         return self._after(self.phone.link.call("back"), "Went back.")
 
     def home(self) -> ActionResult:
+        if self.background:
+            # The workspace has no home screen: going home ends it (BackgroundPhone: home == stop).
+            r = self.phone.workspace.command("home")
+            return self._after(r, "Closed Rose's workspace.", settle=False)
         return self._after(self.phone.link.call("home"), "Went to the home screen.")
 
     def direct(self, action: str, **args: Any) -> ActionResult:
-        """Alarms, timers, directions, places and music by Android intent (no tapping)."""
+        """Alarms, timers, directions, places and music by Android intent (no tapping).
 
+        In the workspace, ``search_places`` opens Maps there and types the query (it only shows
+        results, so it belongs on Rose's screen). The rest stay intents on the phone itself:
+        alarms and timers skip the UI, music and media keys are audio the user hears, and
+        directions start navigation, which is for the user. Their result screen is not the
+        workspace's, so it is not taken as this session's observation."""
+
+        if self.background and action == "search_places":
+            return self._search_in_workspace(str(args.get("query", "")))
         r = self.phone.link.call(action, **args)
+        ok = r.get("status") in ("started", "action_accepted")
+        if self.background:
+            return ActionResult(ok, "Done on the phone itself (outside Rose's workspace)." if ok else _why(r),
+                                changed=ok)
         if isinstance(r.get("observation"), dict):
             self._observed(r)
-        ok = r.get("status") in ("started", "action_accepted")
         return ActionResult(ok, "Done; the screen now shows the result." if ok else _why(r), changed=ok)
+
+    def _search_in_workspace(self, query: str) -> ActionResult:
+        """Open Google Maps in the workspace, put ``query`` in its search box and submit it."""
+
+        label = self.phone.app_label(MAPS)
+        label = "Maps" if label == MAPS else label
+        ws = self.phone.workspace
+        r = ws.start(MAPS)
+        if r.get("status") not in ("opened", "launch_unverified"):
+            self.refresh()
+            return ActionResult(False, _ws_why(r, label))
+        obs = r.get("observation") or ws.inspect()
+        field = _search_field(obs)
+        if field is None:
+            box = next((n for n in obs.get("nodes") or [] if not n.get("password") and n.get("clickable")
+                        and "search" in " ".join(str(n.get(k) or "") for k in ("text", "description", "viewId")).lower()),
+                       None)
+            if box is not None:
+                ws.command("tap", snapshotId=obs.get("snapshotId"), nodeId=box["id"])
+                time.sleep(SETTLE_S)
+                obs = ws.inspect()
+                field = _search_field(obs)
+        if field is None:
+            self._observe(obs)
+            self._capture()
+            return ActionResult(False, f"Opened {label} in Rose's workspace, but found no search box there; "
+                                       "search on its screen.", changed=True)
+        typed = ws.command("set_text", snapshotId=obs.get("snapshotId"), nodeId=field["id"], text=query)
+        if typed.get("status") != "action_accepted":
+            self.refresh()
+            return ActionResult(False, f"Opened {label} in Rose's workspace, but typing the search failed: "
+                                       f"{_why(typed)}", changed=True)
+        time.sleep(SETTLE_S)
+        obs = ws.inspect()
+        field = _search_field(obs, query)
+        sent = field is not None and field.get("imeEnter") is not False and ws.command(
+            "ime_enter", snapshotId=obs.get("snapshotId"), nodeId=field["id"]).get("status") == "action_accepted"
+        res = self._after({"status": "action_accepted"}, f"Searched {label} for {query} in Rose's workspace; "
+                                                         "the screen now shows the results." if sent else
+                          f"Typed {query} into {label}'s search box in Rose's workspace; pick a suggestion "
+                          "or submit the search.")
+        return res
 
     def tap_point(self, x: float, y: float, target: str = "") -> ActionResult:
         """Tap a point of the screenshot: ``x``, ``y`` from 0 to 1000 (left to right, top to bottom).
 
         For something the screenshot shows but the tree lacks. The point is mapped from the
         screenshot (``width`` x ``height``) to display pixels (``displayWidth`` x
-        ``displayHeight``), and sent as Rose Agent's ``touch_point`` with the smallest enabled
-        node of this snapshot that contains it (Rose Agent only taps inside an observed node's
-        visible bounds, and never on a password field). Android only queues the touch, so the
-        result is unverified (``changed`` False): the next screenshot shows what it did.
+        ``displayHeight``; in the workspace, its virtual display), and sent as ``touch_point``
+        with the smallest enabled node of this snapshot that contains it (Rose Agent and the
+        workspace controller only tap inside an observed node's bounds, and never on a password
+        field). Android only queues the touch, so the result is unverified (``changed`` False):
+        the next screenshot shows what it did.
         """
 
         self.ensure_image()  # an earlier call of this reply changed the screen: map through the new one
@@ -308,8 +495,7 @@ class RealSession:
             return ActionResult(False, "Nothing of this app is at that point; tap something inside the app.")
         if node.get("password"):
             return ActionResult(False, "That is a password field; the user types passwords directly on the phone.")
-        r = self.phone.link.call("touch_point", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"],
-                                 x=px[0], y=px[1])
+        r = self._cmd("touch_point", snapshotId=self.obs.get("snapshotId"), nodeId=node["id"], x=px[0], y=px[1])
         what = f"Touched {target.strip() or 'the point'}"
         res = self._after(r, f"{what}; check the new screenshot to see whether it worked.")
         return ActionResult(res.ok, res.message, changed=False)
@@ -331,11 +517,12 @@ class RealSession:
                 best, area = n, a
         return best
 
-    def _after(self, r: dict, done: str) -> ActionResult:
+    def _after(self, r: dict, done: str, settle: bool = True) -> ActionResult:
         ok = r.get("status") in ("action_accepted", "gesture_dispatched")
-        time.sleep(SETTLE_S)
+        if settle:
+            time.sleep(SETTLE_S)
         self.refresh()
-        return ActionResult(ok, done if ok else _why(r), changed=ok)
+        return ActionResult(ok, done if ok else (_ws_why(r) if self.background else _why(r)), changed=ok)
 
     # ----- observation -> elements -------------------------------------
     def _observe(self, r: dict) -> None:
@@ -344,7 +531,8 @@ class RealSession:
         if status != "ok":
             title = {"locked": "Locked: the phone needs the user to unlock it",
                      "accessibility_disabled": "Rose Agent phone controls are off (Settings > Accessibility)",
-                     "offline": "Not connected"}.get(status, f"Unreadable ({status or 'no answer'})")
+                     "offline": "Not connected",
+                     **(WS_TITLES if self._background else {})}.get(status, f"Unreadable ({status or 'no answer'})")
             self.screen, self._nodes, self._by_mark = Screen("phone", title, []), {}, {}
             self.phone.touched(self)
             return
@@ -398,7 +586,16 @@ class RealPhone:
         self.listeners: list[Callable[[str, dict], None]] = []
         self.version = 0
         self.data: dict = {"contacts": [], "calendar": []}  # not read from the phone yet
-        self.link = PhoneLink(on_change=lambda: self._changed("link", {"connected": self.link.connected}))
+        # Rose's workspace (rose/background.py). ROSE_WORKSPACE=off keeps every task on the
+        # visible screen, as on phones without the controller.
+        self.use_workspace = os.environ.get("ROSE_WORKSPACE", "").strip().lower() not in ("0", "off", "no", "false")
+        # Its stage records go to the bus (dashboard, event log): ids and statuses only, no screen text.
+        self.workspace = Workspace(self._controller, in_use=self._workspace_in_use,
+                                   record=lambda rec: bus.emit("workspace", **rec) if bus is not None else None,
+                                   on_change=lambda: self._changed("workspace", {"app": self.workspace_app()}))
+        self._bg: tuple[bool, float] | None = None  # (controller answered, when probed)
+        self._bg_lock = threading.Lock()
+        self.link = PhoneLink(on_change=self._link_changed)
         self._sessions: dict[str, RealSession] = {}
         self._shown: RealSession | None = None
         self._apps: list[dict] = []
@@ -410,15 +607,26 @@ class RealPhone:
         self._last_shot: tuple[float, Image.Image | None, dict] = (float("-inf"), None, {})
 
     # ----- the fake Phone's surface ------------------------------------
-    def session(self, name: str) -> RealSession:
+    def session(self, name: str, on_screen: bool = False) -> RealSession:
+        """A task's view (made on first use; ``on_screen`` is fixed then).
+
+        ``on_screen`` False (the default): the task works in Rose's workspace when the phone has
+        one (``RealSession.background``); True: on the user's visible screen. Never blocks: a new
+        session only clears the workspace's owner-stop latch (a new task may reopen it)."""
+
         with self._lock:
-            if name not in self._sessions:
-                self._sessions[name] = RealSession(self, name)
-            return self._sessions[name]
+            s = self._sessions.get(name)
+            if s is None:
+                s = self._sessions[name] = RealSession(self, name, on_screen=on_screen)
+                if not on_screen:
+                    self.workspace.begin_task()
+            return s
 
     def close_session(self, name: str) -> None:
         with self._lock:
-            self._sessions.pop(name, None)
+            s = self._sessions.pop(name, None)
+        if s is not None and s._background:
+            self.workspace.touch()  # the workspace stays open for a follow-up; idle time starts now
 
     def screen(self, view: str | None = None) -> Screen:
         s = self._session_for(view)
@@ -443,6 +651,7 @@ class RealPhone:
         s = self._shown
         return {"version": self.version, "real": True, "connected": self.link.connected, "model": self.link.model,
                 "view": s.name if s else "main", "route": [str(r) for r in (s.route if s else ())],
+                "workspace": self.workspace_app(),
                 "screen": "phone", "title": s.screen.title if s else "Real phone", "toast": None, "banner": None,
                 "last_tap": None, "size": [W, H], "elements": [],
                 "status": {"time": time.strftime("%-I:%M"), "dnd": False, "wifi": True, "airplane": False}}
@@ -468,10 +677,11 @@ class RealPhone:
     png = screenshot_png
 
     def look(self, view: str | None = None) -> Image.Image | None:
-        """A fresh screenshot of the phone's screen, or None (locked, secure screen, offline).
+        """A fresh screenshot of the user's visible screen, or None (locked, secure screen, offline).
 
         Blocking (it waits on the phone): call it off the MLX thread. ``view`` is accepted for
-        the fake Phone's surface; the real phone has one screen. ``look_status`` says why the
+        the fake Phone's surface; this is always the visible screen (Rose's workspace is
+        ``look_workspace``). ``look_status`` says why the
         last call returned None. A screenshot another caller (a task step) took within
         ``SHOT_REUSE_S`` is reused rather than asking Android for another one. The image is only
         kept in memory.
@@ -537,7 +747,116 @@ class RealPhone:
         with self._lock:
             self._sessions.clear()
             self._shown = None
+        self._close_workspace_soon("reset")
         self._changed("reset", {})
+
+    def close(self) -> None:
+        """Rose is shutting down: close her workspace (blocking; call it off the server's loop)."""
+
+        if self.workspace.session is not None and self.link.connected:
+            self.workspace.close("shutdown")
+
+    def _close_workspace_soon(self, reason: str) -> None:
+        """Close the workspace on a worker thread: reset runs on threads that must not wait on the phone."""
+
+        if self.workspace.session is not None and self.link.connected:
+            threading.Thread(target=self.workspace.close, args=(reason,), name="rose-workspace-close",
+                             daemon=True).start()
+
+    # ----- Rose's workspace (rose/background.py) ----------------------------------------
+    def background_available(self) -> bool:
+        """The phone has Rose's workspace (its background controller answers ``get_state``).
+
+        Probed once and cached (a "no" is probed again after ``BG_RETRY_S``; everything again
+        after a reconnect). Blocking only while unknown: call it off the MLX thread then.
+        False while the phone is offline or when ROSE_WORKSPACE=off."""
+
+        return self.background_probe() is True
+
+    def background_probe(self) -> bool | None:
+        """``background_available`` with "don't know": True (the controller answered), False
+        (definitely absent: Rose Agent says "unavailable", or is too old to know app_command),
+        None (no definite answer: offline, a timeout, a transient error). Only a definite answer
+        is cached; "don't know" is asked again on the next call."""
+
+        if not self.use_workspace:
+            return False
+        if not self.link.connected:
+            return None
+        cached = self._bg
+        if cached is not None and (cached[0] or time.monotonic() - cached[1] < BG_RETRY_S):
+            return cached[0]
+        with self._bg_lock:
+            cached = self._bg
+            if cached is not None and (cached[0] or time.monotonic() - cached[1] < BG_RETRY_S):
+                return cached[0]
+            r = self.workspace.get_state()
+            status = r.get("status")
+            if status in CONTROLLER_STATES:
+                answer = True
+            elif status == "unavailable" or "unsupported phone action" in str(r.get("message") or "").lower():
+                answer = False  # no controller (older phones, the Fold) or an old Rose Agent
+            else:
+                return None  # offline, timeout, an error: unknown, ask again next time
+            self._bg = (answer, time.monotonic())
+            return answer
+
+    def workspace_app(self) -> str | None:
+        """The label of the app open in Rose's workspace, or None when it is closed (never waits)."""
+
+        s = self.workspace.session
+        if s is None:
+            return None
+        pkg = s.get("targetPackage") or ""
+        return next((str(a.get("label")) for a in self._apps if a.get("packageName") == pkg), pkg or None)
+
+    def look_workspace(self) -> Image.Image | None:
+        """A fresh screenshot of Rose's workspace, or None; ``look_status`` says why.
+
+        Blocking: call it off the MLX thread. Only the workspace's app is in it (the controller
+        is scoped to that one package). Kept in memory only."""
+
+        if not self.background_available():
+            self.look_status = "Rose's workspace is not available on this phone"
+            return None
+        r = self.workspace.screenshot()
+        image, info = self._decode(r)
+        if image is None:
+            status = info.get("status") or "error"
+            self.look_status = {"no_background_app": "Rose's workspace is closed",
+                                "workspace_closed": "Rose's workspace is closed",
+                                "stopped_by_owner": "the owner stopped Rose's workspace",
+                                "locked": "the phone is locked"}.get(status, f"Rose's workspace could not be "
+                                                                             f"captured ({status})")
+            return None
+        self.look_status = "ok"
+        return image
+
+    def background_status(self) -> dict:
+        """Read-only workspace state for /api/realphone (no phone call)."""
+
+        cached = self._bg
+        return {"enabled": self.use_workspace, "available": None if cached is None else cached[0],
+                "app": self.workspace_app(), "idleCloseS": self.workspace.idle_s, **self.workspace.state()}
+
+    def _controller(self, operation: str, params: dict) -> dict:
+        """One background-controller operation, as ``app_command`` over the link (the phone passes it on)."""
+
+        return self.link.call("app_command", timeout=WS_CALL_TIMEOUT_S, packageName=CONTROLLER,
+                              operation=operation, params=params)
+
+    def _workspace_in_use(self) -> bool:
+        with self._lock:
+            return any(s._background for s in self._sessions.values())
+
+    def _link_changed(self) -> None:
+        """Connected, disconnected or a new hello: probe the controller again, re-adopt its session.
+
+        Runs on the server's event loop, so nothing here waits on the phone."""
+
+        self._bg = None
+        self.workspace.forget()
+        self._changed("link", {"connected": self.link.connected})
 
     # ----- apps --------------------------------------------------------
     def apps(self) -> list[dict]:
@@ -546,6 +865,24 @@ class RealPhone:
             if r.get("status") == "ok" or r.get("apps"):
                 self._apps, self._apps_at = list(r.get("apps") or []), time.monotonic()
         return self._apps
+
+    def app_labels(self) -> list[str]:
+        """The labels of the apps already loaded from the phone (never waits: the talker
+        matches app names on its own thread). Empty until a task or resolve_app loads them."""
+
+        return [str(a.get("label")) for a in list(self._apps) if a.get("label")]
+
+    def cached_label(self, pkg: str) -> str | None:
+        """The label of ``pkg`` from the app list already loaded, or None (never waits: for the
+        task runner's guards, which run on the MLX thread)."""
+
+        return next((str(a.get("label")) for a in list(self._apps) if a.get("packageName") == pkg), None)
+
+    def workspace_session_id(self) -> str | None:
+        """The controller session Rose's workspace holds now, or None (never waits)."""
+
+        s = self.workspace.session
+        return s.get("sessionId") if s else None
 
     def app_label(self, pkg: str) -> str:
         """Called on an action's worker thread, so loading the app list here may wait."""
@@ -623,6 +960,70 @@ def _why(r: dict) -> str:
             "target_not_visible": "Nothing visible is at that spot.",
             "password_field": "That is a password field; the user types passwords directly on the phone.",
             "offline": message or "The phone is not connected."}.get(status, f"Failed ({status}). {message}".strip())
+
+
+def _ws_why(r: dict, label: str | None = None) -> str:
+    """A workspace result the agent reads (and Rose repeats): what happened, plainly."""
+
+    status = r.get("status") or "error"
+    app = label or "that app"
+    details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if status == "locked":
+        return LOCKED_SAY
+    if status == "background_target_not_allowed":
+        return f"Android doesn't let Rose open {app} in her workspace; nothing was opened."
+    if status == "background_consent_required":
+        return (f"Android needs the owner's consent on the phone before Rose can use {app} in her workspace; "
+                "nothing was opened.")
+    if status == "background_blocked":
+        return (f"{app} in Rose's workspace is waiting for the owner on the phone (Android blocked it); "
+                "the workspace is kept and continues once that is done.")
+    if status == "background_unavailable":
+        if details.get("status") in ("offline", "timeout", "disconnected"):
+            return _why(details)
+        return f"Rose's workspace could not open {app} ({details.get('status') or 'unavailable'}); nothing was opened."
+    if status == "stopped_by_owner":
+        return "The owner stopped Rose's workspace; it stays closed for this task."
+    if status == "no_background_app":
+        return "Rose's workspace has no app open; use open_app first."
+    if status == "workspace_closed":
+        return r.get("reason") or "Rose's workspace closed; use open_app to open the app there again."
+    if status == "not_executed":
+        return f"Not done: {r.get('reason') or 'the workspace refused it'}"
+    if status == "stale_screen":
+        return f"The screen changed before this action; check it again. {r.get('reason') or ''}".strip()
+    if status == "error" and r.get("error"):
+        # Controller exceptions ("java.lang.IllegalStateException: Background click rejected").
+        return f"Failed: {str(r['error']).rsplit(': ', 1)[-1]}"
+    return _why(r)
+
+
+def _search_field(obs: dict, text: str | None = None) -> dict | None:
+    """The search box of a Maps observation: an editable, non-password node (holding ``text``)."""
+
+    fields = [n for n in obs.get("nodes") or [] if n.get("editable") and not n.get("password")
+              and n.get("visible") is not False] if obs.get("status") == "ok" else []
+    if text is not None:
+        fields = [n for n in fields if _clean(n.get("text") or "") == _clean(text)] or \
+                 [n for n in fields if n.get("focused")] or fields
+    return fields[0] if fields else None
+
+
+def _names_of(nodes: dict, ids: set) -> list[str]:
+    """Text, description and view-id hint (as "id:<words>") of the nodes ``ids`` (no blanks, no
+    repeats)."""
+
+    out: list[str] = []
+    for i in ids:
+        n = nodes.get(i) or {}
+        if n.get("password"):
+            continue
+        hint = _hint(n.get("viewId"))
+        for v in (n.get("text"), n.get("description"), "id:" + hint if hint else ""):
+            v = _clean(v or "")
+            if v and v not in out:
+                out.append(v)
+    return out
 
 
 def _clean(s: str) -> str:
