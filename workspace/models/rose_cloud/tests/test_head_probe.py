@@ -312,7 +312,8 @@ class HeadProbe(unittest.TestCase):
         for u in urls:
             f.check(u)
         self.assertEqual(f.allow, S.ALLOW_HOSTS)
-        self.assertEqual(S.ALLOW_HOSTS, ('huggingface.co', 'us.aws.cdn.hf.co', 'files.pythonhosted.org'))
+        self.assertEqual(S.ALLOW_HOSTS, ('huggingface.co', 'us.aws.cdn.hf.co', 'us.gcp.cdn.hf.co',
+                                         'files.pythonhosted.org'))
         self.assertEqual(f.schemes, ('https',))
         self.assertEqual(S.MAX_REDIRECTS, 5)
 

@@ -304,9 +304,12 @@ None of these is retried without a new decision.
 
 - **Sources:** each file's one source is the Hub resolve URL at its pinned revision, or PyPI's exact URL for the
   wheel (its sha256 matches the manifest).
-- **Allowlist:** https only, to `huggingface.co`, `us.aws.cdn.hf.co` and `files.pythonhosted.org`, for the first
-  request and every redirect (at most 5). These are the hosts a HEAD request showed from a development sandbox.
-  Any other host is refused with `redirect_refused`, and the allowlist would need a source change.
+- **Allowlist:** https only, to exactly `huggingface.co`, `us.aws.cdn.hf.co`, `us.gcp.cdn.hf.co` and
+  `files.pythonhosted.org` (no wildcards or subdomains), for the first request and every redirect (at most 5). The
+  first, second and fourth are the hosts a HEAD request showed from a development sandbox. `us.gcp.cdn.hf.co` was
+  added alone by CLOUD-STAGING-ALLOW-GCP-CDN-001, after the approved `cloud-redirect-probe-once` run on the VM checked
+  all 59 sources: 14 were reachable and 45 were refused solely at that host. Any other host is still refused with
+  `redirect_refused`, and the allowlist needs a source change. A successful GET through it is still unproved.
 - **No credentials:** none are ever sent. A 401 or 403 stops that file with `auth_required`.
 - **Existing files:** each one is verified. Exact files are kept. **Any differing file refuses the whole run before
   any request**, and nothing changes.
@@ -393,8 +396,8 @@ guaranteed. This mode names the refused redirect destination without any staging
 `ebcfb082…f3c3`, 59 files):
 
 - one `HEAD` per file at its one pinned source; every redirect hop stays `HEAD`;
-- every hop is checked by the same `Fetcher.check`: https only, no userinfo, `ALLOW_HOSTS` unchanged
-  (`huggingface.co`, `us.aws.cdn.hf.co`, `files.pythonhosted.org`), at most `MAX_REDIRECTS` (5) hops;
+- every hop is checked by the same `Fetcher.check`: https only, no userinfo, `ALLOW_HOSTS` (the same list
+  `cloud-stage-once` uses), at most `MAX_REDIRECTS` (5) hops;
 - a refused destination is recorded (sanitized host, fixed reason, count, as in PR329) and **never requested**; the
   refused redirect response is closed unread;
 - **no response body is read** (http.client reads none for `HEAD`; responses are closed unread), even when a server
@@ -476,6 +479,9 @@ never keeps a URL, scheme, port, path, query, fragment, userinfo, header, body o
   - `probe: null`;
   - `stop` other than `done`.
 - **After that:** adding a named host to `ALLOW_HOSTS` is a separate source change and its own decision.
+- **Result** (approved run): all 59 sources were checked; 14 were reachable and 45 were refused solely at
+  `us.gcp.cdn.hf.co`. Container cleanup was verified. That host alone was then added to `ALLOW_HOSTS` by owner
+  approval (CLOUD-STAGING-ALLOW-GCP-CDN-001). HEAD only: GET success remains unproved.
 
 ## Later, separately approved (not part of this packet)
 

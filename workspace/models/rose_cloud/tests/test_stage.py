@@ -209,6 +209,32 @@ class Stage(unittest.TestCase):
         for url in ('https://huggingface.co/x', 'https://us.aws.cdn.hf.co/x', 'https://files.pythonhosted.org/x'):
             f.check(url)
 
+    def test_us_gcp_cdn_is_allowed_exactly_and_nothing_else_was_added(self):
+        self.assertEqual(S.ALLOW_HOSTS, ('huggingface.co', 'us.aws.cdn.hf.co', 'us.gcp.cdn.hf.co',
+                                         'files.pythonhosted.org'))
+        f = S.Fetcher({'deadlineS': 1, 'maxBytes': 1})
+        for url in ('https://us.gcp.cdn.hf.co/xet-bridge-us/abc?X-Amz-Signature=SECRET',
+                    'https://US.GCP.CDN.HF.CO./x', 'https://us.gcp.cdn.hf.co:443/x'):
+            f.check(url)
+        self.assertEqual(f.refusals(), ([], 0))
+        refused = (('http://us.gcp.cdn.hf.co/x', 'us.gcp.cdn.hf.co', 'scheme_not_https'),
+                   ('https://user:SECRET@us.gcp.cdn.hf.co/x', 'us.gcp.cdn.hf.co', 'userinfo'),
+                   ('https://x.us.gcp.cdn.hf.co/x', 'x.us.gcp.cdn.hf.co', 'host_not_allowed'),
+                   ('https://us.gcp.cdn.hf.co.evil.example/x', 'us.gcp.cdn.hf.co.evil.example', 'host_not_allowed'),
+                   ('https://evil-us.gcp.cdn.hf.co/x', 'evil-us.gcp.cdn.hf.co', 'host_not_allowed'),
+                   ('https://eu.gcp.cdn.hf.co/x', 'eu.gcp.cdn.hf.co', 'host_not_allowed'),
+                   ('https://us.gcp.cdn.hf.com/x', 'us.gcp.cdn.hf.com', 'host_not_allowed'),
+                   ('https://gcp.cdn.hf.co/x', 'gcp.cdn.hf.co', 'host_not_allowed'),
+                   ('https://cas-bridge.xethub.hf.co/x', 'cas-bridge.xethub.hf.co', 'host_not_allowed'))
+        for url, host, reason in refused:
+            with self.subTest(url=url):
+                f.refused.clear()
+                with self.assertRaises(S.FileFailure) as e:
+                    f.check(url)
+                self.assertEqual(str(e.exception), 'redirect_refused')
+                self.assertEqual(f.refusals()[0], [{'host': host, 'reason': reason, 'count': 1}])
+                self.assertNotIn('SECRET', json.dumps(f.refusals()))
+
     def test_byte_cap_and_deadline_keep_partials(self):
         r = self.run_stage(maxBytes=150_000)
         self.assertEqual(r['stop'], 'byte_cap')

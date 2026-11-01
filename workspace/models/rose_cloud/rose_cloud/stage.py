@@ -28,9 +28,9 @@ requested. No response body is read (http.client reads none for HEAD; responses 
 and existing files are never opened, nothing is written, and the run stops at deadlineS, enforced by a real-time alarm
 in main(). It prints one HEAD_MARKER line that sanitize_head() re-checks.
 
-Unverified until a separately approved run: the image's Python ssl/CA store, the Hub's redirect hosts from the VM's
-region (only the three hosts seen from a development sandbox are allowed), its Range support on those hosts, and
-the throughput needed to finish 37.6 GB inside the deadline.
+Unverified until a separately approved run: the image's Python ssl/CA store, GET (not only HEAD) success through the
+Hub's redirects from the VM's region (the approved HEAD probe found us.gcp.cdn.hf.co, now allowed), Range support on
+those hosts, and the throughput needed to finish 37.6 GB inside the deadline.
 """
 import hashlib
 import ipaddress
@@ -46,7 +46,9 @@ HUB = 'https://huggingface.co'
 SOURCES = {('ptts', 'ptts-0.6.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl'):
            'https://files.pythonhosted.org/packages/62/5f/2c68115af9499a1c8d4395850eb758efd95aca20bc351c8d969962a39c53/'
            'ptts-0.6.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl'}
-ALLOW_HOSTS = ('huggingface.co', 'us.aws.cdn.hf.co', 'files.pythonhosted.org')
+# us.gcp.cdn.hf.co (CLOUD-STAGING-ALLOW-GCP-CDN-001): the one destination the approved HEAD probe found refused for
+# 45 of 59 sources from the VM; added alone by owner approval. Exact hostnames only: no wildcard, no subdomain.
+ALLOW_HOSTS = ('huggingface.co', 'us.aws.cdn.hf.co', 'us.gcp.cdn.hf.co', 'files.pythonhosted.org')
 MAX_REDIRECTS = 5
 CHUNK = 1 << 20
 STOPS = ('done', 'refused_existing', 'insufficient_space', 'deadline', 'byte_cap', 'file_failures', 'bad_manifest')
