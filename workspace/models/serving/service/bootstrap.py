@@ -91,7 +91,7 @@ GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
 HF_PROBE_SECONDS, HF_PROBE_CONTAINER, HF_PROBE_LINE = 120, 'muse-glimmer-hfprobe', 4096
 # cloud-preflight-once: lib/rose_cloud/preflight.py in the pinned image, offline, no GPU, data disk read-only, 120 s
 CLOUD_SECONDS, CLOUD_CONTAINER, CLOUD_RECEIPT = 120, 'rose-cloud-preflight', 4096
-# cloud-stage-once (DRAFT, for a separate runtime decision): lib/rose_cloud/stage.py fetches the pinned manifest's files
+# cloud-stage-once (runs only when a separate runtime decision sets it): lib/rose_cloud/stage.py fetches the manifest
 # into STAGING (only that directory mounted, read-write), allowlisted https only, at most STAGE_SECONDS and
 # STAGE_MAX_BYTES inbound; the manifest must be the exact pinned one.
 STAGING, STAGE_CONTAINER = '/mnt/models-data/rose-cloud', 'rose-cloud-stage'
@@ -1144,7 +1144,7 @@ def stage_limits() -> str:
 
 
 def cloud_stage_once(host, ctx, attempt, image):
-    """CLOUD-STAGING-SOURCE-001 (DRAFT): fetch and verify the pinned manifest's files into STAGING, once. Same hold,
+    """CLOUD-STAGING-SOURCE-001: fetch and verify the pinned manifest's files into STAGING, once. Same hold,
     stop, positive absence, read-only prerequisites, image digest and data-disk checks as cloud-preflight-once; the
     payload's manifest must hash to STAGE_MANIFEST_SHA256. Then one container: --pull=never, runc, the default bridge
     network (outbound only; the script accepts https to its allowlisted hosts), no GPU, no credentials, all

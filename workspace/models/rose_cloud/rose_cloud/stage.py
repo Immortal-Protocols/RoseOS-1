@@ -4,7 +4,7 @@
   python3 -c <this source> <manifest JSON> <limits JSON>
 
 bootstrap's cloud-stage-once diagnostic would run it once in the exact cached image, with only the staging root
-mounted read-write and no credentials. It is source for a separate runtime decision; nothing here has run on a VM.
+mounted read-write and no credentials, when a separate runtime decision sets that mode. It has not run on a VM.
 
 For every manifest file, in manifest order:
 - an existing final file is verified (size, then sha256 or git blob sha1): if it matches it is kept; if it differs the

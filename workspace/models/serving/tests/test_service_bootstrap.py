@@ -1628,7 +1628,7 @@ class CloudPreflightOnce(DiagnosticFixture):
 
 
 class CloudStageOnce(DiagnosticFixture):
-    """cloud-stage-once (CLOUD-STAGING-SOURCE-001, DRAFT): the exact container, limits and controls. The stage line
+    """cloud-stage-once (CLOUD-STAGING-SOURCE-001): the exact container, limits and controls. The stage line
     comes from the payload's own stage.py run as a real subprocess on a case that needs no network (a differing
     existing file refuses the run before any fetch); the container is FakeHost's. Nothing downloads."""
 

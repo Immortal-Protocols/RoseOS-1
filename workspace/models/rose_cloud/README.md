@@ -267,7 +267,7 @@ docker run --rm --pull=never --runtime=runc --network none --name rose-cloud-pre
 
 None of these is retried without a new decision.
 
-## cloud-stage-once (DRAFT, CLOUD-STAGING-SOURCE-001; not merged, not activated, nothing downloaded)
+## cloud-stage-once (CLOUD-STAGING-SOURCE-001; source only, has not run: running it is a separate runtime decision)
 
 **What it would stage:** exactly the pinned manifest, sha256 `ebcfb082a94bcae9c950eefab4b34a8fc736bfeb934c84a96360398afd09f3c3`
 (bootstrap refuses any other with `manifest_mismatch`). That is 59 files, 37,603,795,413 bytes:
@@ -334,7 +334,7 @@ None of these is retried without a new decision.
 
 - **Who:** only the original Mac operator, on `models-glimmer-01` (instance 2705251739288295377, us-central1-f).
 - **Steps:**
-  1. Build the payload at the (future) merge commit with the deployed attestation roots, and record
+  1. Build the payload at the merge commit with the deployed attestation roots, and record
      `payloadTarSha256`.
   2. Set the startup-script and payload metadata plus `rose-models-diagnostic=cloud-stage-once:<payloadTarSha256>:<fresh id>`.
   3. Do one reset.
@@ -350,7 +350,7 @@ None of these is retried without a new decision.
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through
-   `cloud-stage-once` (next section; draft source, not merged or activated).
+   `cloud-stage-once` (previous section). The source is in place; running it is a separate runtime decision.
 2. **Loopback text and speech trial**, about 30 minutes, about US$3.68 at US$7.35/h, excluding disk and network.
    - **vLLM:** in an image with vLLM ≥ 0.19.0 that the preflight shows registers `qwen3_5_moe` (offline,
      `--pull=never`), run `vllm serve /mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0
