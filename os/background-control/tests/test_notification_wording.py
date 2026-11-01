@@ -30,5 +30,18 @@ class NotificationWordingTest(unittest.TestCase):
         self.assertIn('.setContentTitle("Rose Agent is using an app").setContentText("Unlock to see or stop it")', CONTROLLER)
 
 
+class ControlScreenWordingTest(unittest.TestCase):
+    """The control screen's viewer button opens the same unbound viewer, which is full screen while automatic
+    picture-in-picture is off (ViewerPresentation.AUTOMATIC_PIP = false), so it no longer offers a floating view."""
+    MAIN = (Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol/MainActivity.java').read_text()
+    PRESENTATION = (Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol/ViewerPresentation.java').read_text()
+
+    def test_button_says_what_it_opens(self):
+        self.assertIn('static final boolean AUTOMATIC_PIP = false;', self.PRESENTATION)
+        self.assertIn('viewer.setText("Watch agent view full screen");viewer.setOnClickListener(v->{try{startActivity('
+                      'new android.content.Intent(this,AgentPipActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));}'
+                      'catch(RuntimeException e){notice.failed("Agent view",e);show();}});', self.MAIN)
+        self.assertNotIn('floating', self.MAIN.lower())
+
 if __name__ == '__main__':
     unittest.main()
