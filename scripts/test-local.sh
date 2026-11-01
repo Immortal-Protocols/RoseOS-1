@@ -129,6 +129,8 @@ python3 -I workspace/models/rose_cloud/tests/test_stage.py
 python3 -I workspace/models/rose_cloud/tests/test_head_probe.py
 # Offline dependency/config validation helper against a synthetic wheel and stand-in modules (no model, no network).
 python3 -I workspace/models/rose_cloud/tests/test_validate.py
+# One-shot Qwen text GPU diagnostic helper against a stand-in vllm package (no GPU, model or network).
+python3 -I workspace/models/rose_cloud/tests/test_qwen_gpu.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
 python3 workspace/models/serving/tests/test_local_profile.py
