@@ -19,9 +19,16 @@ DIMENS = 'quickstep/res/values/rose_agent_strip.xml'
 PINNED = {'fallback_recents_activity.xml': '8df1879fb83e2a9f5b11b657a498e6153504171cb702f859d136f37ab968a9f7',
     'OverviewComponentObserver.java': 'a94703d973e14ba8e1f43ab07d7eacaa0e32f8b5668d16bff1c6843dd4877893',
     'BaseContainerInterface.java': 'a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829',
-    'FallbackActivityInterface.java': 'dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa'}
+    'FallbackActivityInterface.java': 'dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa',
+    'OverviewActionsView.java': '7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f'}
 TARGETS = {'fallback_recents_activity.xml': LAYOUT, 'BaseContainerInterface.java': f'{QUICKSTEP}/BaseContainerInterface.java',
-    'FallbackActivityInterface.java': f'{QUICKSTEP}/FallbackActivityInterface.java'}
+    'FallbackActivityInterface.java': f'{QUICKSTEP}/FallbackActivityInterface.java',
+    'OverviewActionsView.java': f'{QUICKSTEP}/views/OverviewActionsView.java'}
+# The stock lines the patch replaces, and nothing else: the fallback's claimed space below the cards, and the phone
+# actions bar's task-aligned bottom margin (now less the same space).
+REPLACED = ['-                    overviewActionsClaimedSpace,',
+    '-        // Align to bottom of task Rect.',
+    '-                - mDp.getOverviewProfile().getActionsHeight();']
 
 def patched_tree(test):
     tree = Path(tempfile.mkdtemp(prefix='launcher3-'))
@@ -50,36 +57,60 @@ class RoseSwitcherTest(unittest.TestCase):
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'),
             'the human carousel stays; the agent row is added beside it')
         removed = [l for l in PATCH.read_text().splitlines() if l.startswith('-') and not l.startswith('---')]
-        self.assertEqual(removed, ['-                    /* claimedSpaceAbove= */0,'],
-            'only the hard-coded zero claimed space is replaced; nothing else of the stock overview is removed')
+        self.assertEqual(removed, REPLACED, 'only these stock lines are replaced; nothing else of the overview is removed')
 
-    def test_the_carousel_is_laid_out_below_the_agent_row_not_under_it(self):
-        """47accce sizes overview cards from DeviceProfile and insets (BaseContainerInterface.calculateTaskSize), not from
-        the view's bounds, with claimedSpaceAbove hard-coded to 0, so an overlay margin could never move them. The
-        fallback overview now claims the row's whole extent; the in-launcher overview is unchanged."""
+    def test_the_agent_row_sits_below_the_human_cards_and_above_the_actions(self):
+        """The selected HiFi (ce126f56) order: human carousel, then the agent carousel. At 47accce the phone overview
+        sizes cards from DeviceProfile and insets (BaseContainerInterface.calculateTaskSize, claimedSpaceBelow =
+        dp.getOverviewActionsClaimedSpace()) and OverviewActionsView anchors the buttons to the task rect's bottom
+        (getBottomMargin: heightPx - taskSize.bottom - actionsTopMargin - actionsHeight). The fallback overview now claims
+        the row's height below the cards, the buttons keep that space free, and the row is placed on the buttons' top."""
         tree = patched_tree(self)
         layout = (tree/LAYOUT).read_text()
         strip = layout[layout.index('<com.android.quickstep.fallback.RoseAgentStrip'):]
         strip = strip[:strip.index('/>')]
         self.assertIn('android:layout_height="@dimen/rose_agent_strip_height"', strip)
-        self.assertIn('android:layout_marginTop="@dimen/rose_agent_strip_top_margin"', strip)
-        self.assertNotIn('wrap_content', strip.split('layout_width')[1], 'a fixed height, the one that is claimed')
+        self.assertIn('android:layout_gravity="bottom"', strip)
+        self.assertNotIn('layout_marginTop', strip)
+        self.assertNotIn('rose_agent_strip_top_margin', PATCH.read_text(), 'no fixed offset from the top any more')
         import re
         dimens = dict(re.findall(r'<dimen name="(\w+)">(\d+)dp</dimen>', (tree/DIMENS).read_text()))
-        self.assertEqual(set(dimens), {'rose_agent_strip_top_margin', 'rose_agent_strip_height'})
+        self.assertEqual(set(dimens), {'rose_agent_strip_height'})
         base = (tree/f'{QUICKSTEP}/BaseContainerInterface.java').read_text()
         size = base[base.index('public final void calculateTaskSize('):base.index('private void calculateLargeTileSize(')]
-        self.assertIn('/* claimedSpaceAbove= */ getOverviewClaimedSpaceAbove(context),', size)
-        self.assertIn('protected int getOverviewClaimedSpaceAbove(Context context) {\n        return 0;\n    }', base)
+        self.assertIn('/* claimedSpaceAbove= */0,', size, 'nothing claimed above the cards')
+        self.assertIn('overviewActionsClaimedSpace + getOverviewClaimedSpaceBelow(context),', size)
+        self.assertIn('protected int getOverviewClaimedSpaceBelow(Context context) {\n        return 0;\n    }', base)
+        self.assertLess(size.index('isLargeScreen()'), size.index('getOverviewClaimedSpaceBelow'), 'phone path only')
         fallback = (tree/f'{QUICKSTEP}/FallbackActivityInterface.java').read_text()
-        override = fallback[fallback.index('protected int getOverviewClaimedSpaceAbove(Context context) {'):]
-        override = override[:override.index('}')]
-        self.assertIn('R.dimen.rose_agent_strip_top_margin', override)
-        self.assertIn('R.dimen.rose_agent_strip_height', override)
+        override = fallback[fallback.index('protected int getOverviewClaimedSpaceBelow(Context context) {'):]
+        self.assertIn('R.dimen.rose_agent_strip_height', override[:override.index('}')])
         self.assertIn('import com.android.launcher3.R;', fallback)
-        self.assertEqual(fallback.count('getOverviewClaimedSpaceAbove'), 1)
-        # The row's content fits its fixed height: padding 12 + title ~18 + card 72 + status ~18 dp.
+        actions = (tree/f'{QUICKSTEP}/views/OverviewActionsView.java').read_text()
+        margin = actions[actions.index('private int getBottomMargin() {'):actions.index('public void updateDimension(')]
+        phone = margin[margin.index('// Align to bottom of task Rect.'):]
+        self.assertIn('- RoseAgentStrip.reservedBelow(getContext());', phone)
+        self.assertLess(margin.index('isLargeScreen()'), margin.index('RoseAgentStrip.reservedBelow'),
+            'the large-screen margin is unchanged')
+        self.assertIn('import com.android.quickstep.fallback.RoseAgentStrip;', actions)
+        row = (OVERLAY/'RoseAgentStrip.java').read_text()
+        reserved = row[row.index('public static int reservedBelow(Context context) {'):row.index('private final View.OnLayoutChangeListener')]
+        self.assertIn('if (c instanceof RecentsActivity) {', reserved, 'only the fallback overview reserves it')
+        self.assertIn('R.dimen.rose_agent_strip_height', reserved)
+        self.assertIn('return 0;', reserved)
+        anchor = row[row.index('private void anchor() {'):row.index('void refresh() {')]
+        self.assertIn('parent.findViewById(R.id.action_buttons)', anchor)
+        self.assertIn('buttons.getLocationInWindow(at);', anchor)
+        self.assertIn('shift = (at[1] - origin[1]) - getBottom();', anchor, 'the row ends on the buttons top')
+        self.assertIn('setTranslationY(shift)', anchor)
+        for moved in ('setTranslationY', 'offsetTopAndBottom'):
+            self.assertEqual(row.count(moved), 1 if moved == 'setTranslationY' else 0, 'only the row itself moves')
+        self.assertIn('parent.addOnLayoutChangeListener(relayout);', row)
+        self.assertIn('parent.removeOnLayoutChangeListener(relayout);', row)
         self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 18 + 72 + 18)
+        layout_actions = layout.index('android:id="@+id/overview_actions_view"')
+        self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'))
+        self.assertLess(layout_actions, layout.index('RoseAgentStrip'), 'declared after the actions so it draws above them')
 
     def test_labels_are_looked_up_only_for_kept_work_and_a_failure_names_only_its_step(self):
         strip = (OVERLAY/'RoseAgentStrip.java').read_text()
@@ -135,6 +166,11 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public abstract android.content.res.Resources getResources(); }',
             'android/os/UserHandle.java': 'package android.os; public final class UserHandle { '
                 'public static UserHandle of(int u){return null;} }',
+            'com/android/launcher3/R.java': 'package com.android.launcher3; public final class R { '
+                'public static final class dimen { public static final int rose_agent_strip_height = 1; } '
+                'public static final class id { public static final int action_buttons = 2; } }',
+            'com/android/quickstep/RecentsActivity.java': 'package com.android.quickstep; '
+                'public class RecentsActivity extends android.app.Activity {}',
             'com/android/launcher3/util/Executors.java': 'package com.android.launcher3.util; public class Executors { '
                 'public static final java.util.concurrent.Executor UI_HELPER_EXECUTOR = Runnable::run; }',
         }
@@ -241,7 +277,7 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertEqual(select.count('startActivityAsUser('), 1, 'a selection only asks the viewer for that work')
         # The human carousel's selection is Launcher3's own: the patch removes nothing else of the overview.
         removed = [l for l in PATCH.read_text().splitlines() if l.startswith('-') and not l.startswith('---')]
-        self.assertEqual(removed, ['-                    /* claimedSpaceAbove= */0,'])
+        self.assertEqual(removed, REPLACED)
 
     def test_the_row_still_fits_its_claimed_height(self):
         # padding 12 + link row ~18 + card 72 + status ~18 dp, inside the claimed rose_agent_strip_height.

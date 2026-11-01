@@ -1,58 +1,57 @@
 diff --git a/quickstep/res/layout/fallback_recents_activity.xml b/quickstep/res/layout/fallback_recents_activity.xml
-index 65f606a..bda4354 100644
+index 65f606a..e068d38 100644
 --- a/quickstep/res/layout/fallback_recents_activity.xml
 +++ b/quickstep/res/layout/fallback_recents_activity.xml
 @@ -57,5 +57,15 @@
              layout="@layout/overview_empty_recents_message"
              android:visibility="gone"/>
  
-+        <!-- RoseOS (#156): Rose Agent's running work, above the human-task carousel; scrolls on its own. Its fixed
-+             extent (top margin + height) is the space FallbackActivityInterface claims above the task cards, so the
-+             carousel is laid out below it instead of drawing over it. -->
++        <!-- RoseOS (#156): Rose Agent's running work, the selected HiFi's smaller agent carousel BELOW the human-task
++             carousel; scrolls on its own. FallbackActivityInterface claims its height below the task cards,
++             OverviewActionsView keeps that space free above the action buttons, and the row places its bottom
++             edge at the buttons' laid-out top (RoseAgentStrip.anchor). -->
 +        <com.android.quickstep.fallback.RoseAgentStrip
 +            android:id="@+id/rose_agent_strip"
 +            android:layout_width="match_parent"
 +            android:layout_height="@dimen/rose_agent_strip_height"
-+            android:layout_gravity="top"
-+            android:layout_marginTop="@dimen/rose_agent_strip_top_margin" />
++            android:layout_gravity="bottom" />
 +
      </com.android.quickstep.fallback.RecentsDragLayer>
  </com.android.launcher3.LauncherRootView>
 diff --git a/quickstep/res/values/rose_agent_strip.xml b/quickstep/res/values/rose_agent_strip.xml
 new file mode 100644
-index 0000000..5f218d3
+index 0000000..bbd6949
 --- /dev/null
 +++ b/quickstep/res/values/rose_agent_strip.xml
-@@ -0,0 +1,7 @@
+@@ -0,0 +1,6 @@
 +<?xml version="1.0" encoding="utf-8"?>
-+<!-- RoseOS (#156): the agent row's fixed extent in the fallback overview. FallbackActivityInterface claims
-+     top margin + height above the task cards; the layout uses the same two values. -->
++<!-- RoseOS (#156): the agent row's fixed height in the fallback overview. FallbackActivityInterface claims it below
++     the task cards and OverviewActionsView keeps it free above the action buttons; the layout uses the same value. -->
 +<resources>
-+    <dimen name="rose_agent_strip_top_margin">40dp</dimen>
 +    <dimen name="rose_agent_strip_height">136dp</dimen>
 +</resources>
 diff --git a/quickstep/src/com/android/quickstep/BaseContainerInterface.java b/quickstep/src/com/android/quickstep/BaseContainerInterface.java
-index 37eac47..e99632d 100644
+index 37eac47..fbcab76 100644
 --- a/quickstep/src/com/android/quickstep/BaseContainerInterface.java
 +++ b/quickstep/src/com/android/quickstep/BaseContainerInterface.java
-@@ -398,7 +398,7 @@ public abstract class BaseContainerInterface<STATE_TYPE extends BaseState<STATE_
-             calculateTaskSizeInternal(
+@@ -399,7 +399,7 @@ public abstract class BaseContainerInterface<STATE_TYPE extends BaseState<STATE_
                      context,
                      dp,
--                    /* claimedSpaceAbove= */0,
-+                    /* claimedSpaceAbove= */ getOverviewClaimedSpaceAbove(context),
-                     overviewActionsClaimedSpace,
+                     /* claimedSpaceAbove= */0,
+-                    overviewActionsClaimedSpace,
++                    overviewActionsClaimedSpace + getOverviewClaimedSpaceBelow(context),
                      res.getDimensionPixelSize(R.dimen.overview_minimum_next_prev_size) + taskMargin,
                      maxScale,
+                     Gravity.CENTER,
 @@ -408,6 +408,14 @@ public abstract class BaseContainerInterface<STATE_TYPE extends BaseState<STATE_
          }
      }
  
 +    /**
-+     * RoseOS (#156): space above the task cards that this container's own overview layout uses. None by default, so
-+     * the in-launcher overview is unchanged; the fallback overview claims its agent row.
++     * RoseOS (#156): space this container's own overview layout uses between the task cards and the overview actions.
++     * None by default, so the in-launcher overview is unchanged; the fallback overview claims its agent row.
 +     */
-+    protected int getOverviewClaimedSpaceAbove(Context context) {
++    protected int getOverviewClaimedSpaceBelow(Context context) {
 +        return 0;
 +    }
 +
@@ -60,7 +59,7 @@ index 37eac47..e99632d 100644
          Resources res = context.getResources();
          float maxScale = res.getFloat(R.dimen.overview_max_scale);
 diff --git a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-index d9f14ac..fc78ab0 100644
+index d9f14ac..2b8ce81 100644
 --- a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
 +++ b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
 @@ -33,6 +33,7 @@ import androidx.annotation.Nullable;
@@ -71,17 +70,44 @@ index d9f14ac..fc78ab0 100644
  import com.android.launcher3.dagger.LauncherAppSingleton;
  import com.android.launcher3.display.DisplayController;
  import com.android.launcher3.statemanager.StateManager;
-@@ -72,6 +73,13 @@ public final class FallbackActivityInterface extends
+@@ -72,6 +73,12 @@ public final class FallbackActivityInterface extends
          super(false, DEFAULT, BACKGROUND_APP, taskAnimationManagerRepo.get(DEFAULT_DISPLAY));
      }
  
-+    /** RoseOS (#156): the fallback overview's agent row (RoseAgentStrip) sits above the task cards. */
++    /** RoseOS (#156): the fallback overview's agent row (RoseAgentStrip) sits below the task cards. */
 +    @Override
-+    protected int getOverviewClaimedSpaceAbove(Context context) {
-+        return context.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_top_margin)
-+                + context.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
++    protected int getOverviewClaimedSpaceBelow(Context context) {
++        return context.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
 +    }
 +
      /** 2 */
      @Override
      public int getSwipeUpDestinationAndLength(DeviceProfile dp, Context context, Rect outRect,
+diff --git a/quickstep/src/com/android/quickstep/views/OverviewActionsView.java b/quickstep/src/com/android/quickstep/views/OverviewActionsView.java
+index 13c6ffe..997f8c8 100644
+--- a/quickstep/src/com/android/quickstep/views/OverviewActionsView.java
++++ b/quickstep/src/com/android/quickstep/views/OverviewActionsView.java
+@@ -39,6 +39,7 @@ import com.android.launcher3.display.DisplayController;
+ import com.android.launcher3.util.MultiValueAlpha;
+ import com.android.launcher3.util.NavigationMode;
+ import com.android.quickstep.TaskOverlayFactory.OverlayUICallbacks;
++import com.android.quickstep.fallback.RoseAgentStrip;
+ import com.android.quickstep.util.LayoutUtils;
+ import com.android.wm.shell.shared.TypefaceUtils;
+ import com.android.wm.shell.shared.TypefaceUtils.FontFamily;
+@@ -421,11 +422,13 @@ public class OverviewActionsView<T extends OverlayUICallbacks> extends FrameLayo
+             return modalTaskbarHeight + mDp.getOverviewProfile().getActionsTopMarginPx();
+         }
+ 
+-        // Align to bottom of task Rect.
++        // Align to bottom of task Rect. RoseOS (#156): in the fallback overview the agent row's claimed height lies
++        // between them, so the buttons sit below that row instead of on the cards.
+         return mDp.getDeviceProperties().getHeightPx()
+                 - mTaskSize.bottom
+                 - mDp.getOverviewProfile().getActionsTopMarginPx()
+-                - mDp.getOverviewProfile().getActionsHeight();
++                - mDp.getOverviewProfile().getActionsHeight()
++                - RoseAgentStrip.reservedBelow(getContext());
+     }
+ 
+     /**
