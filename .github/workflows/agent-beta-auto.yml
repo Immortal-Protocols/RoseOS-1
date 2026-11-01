@@ -2,7 +2,7 @@ name: Agent Beta auto-release
 
 # AGENT-BETA-AUTO part B. After a successful push-to-main 'App offline tests' run (the Rose Agent suites), dispatch the
 # existing os-release.yml app-only route once for that exact tested SHA with apps=auto (scripts/agent-beta-auto.py).
-# Secret-free: only the job's short-lived GITHUB_TOKEN with actions:write. Inert unless the repository variable
+# Secret-free: only the job's short-lived GITHUB_TOKEN (actions:write, contents:read). Inert unless the repository variable
 # AGENT_BETA_AUTO is 'on'. Releases are serialized with every OS run by os-release's FIFO queue and host lock.
 
 on:
@@ -24,7 +24,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      actions: write
+      actions: write  # owner-approved (Nathan, 2026-11-01): dispatch os-release.yml and read run state
+      contents: read  # checkout of this private repository and the compare API for the unchanged-content skip
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

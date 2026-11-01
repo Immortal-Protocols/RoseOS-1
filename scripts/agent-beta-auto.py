@@ -14,7 +14,11 @@ every OS run.
   - the CI run, read back from the API rather than trusted from the event, is 'App offline tests' from
     .github/workflows/app-tests.yml, event push, branch main, completed with conclusion success;
   - no newer push-to-main run of that CI is pending or succeeded (coalescing: the newest tested SHA releases once);
-  - no os-release run already carries this SHA's auto run-name (duplicate events).
+  - no os-release run already carries this SHA's auto run-name (duplicate events);
+  - Rose Agent sources (os/latest-beta/allocation.json, dev.pixel.voice) changed since the newest successful
+    'Agent Beta auto <sha>' run, read from the compare API; unchanged content is skipped before any host starts.
+    A first auto release, an unreadable or truncated (300+ files) comparison or a non-ancestor dispatches anyway:
+    the builder's allocator still skips sources that are already published.
 It dispatches once. An uncertain outcome is looked for once and otherwise fails visibly; it never retries blindly.
 
   dispatch   env: GITHUB_API_URL, GITHUB_REPOSITORY, GH_TOKEN, CI_RUN_ID, AGENT_BETA_AUTO
@@ -22,6 +26,7 @@ Exit status: 0 dispatched or deliberately not dispatched, 1 refused or uncertain
 """
 import argparse
 import json
+from pathlib import Path
 import re
 import sys
 import time
@@ -31,6 +36,9 @@ import urllib.request
 WORKFLOW = 'os-release.yml'
 CI_NAME, CI_PATH = 'App offline tests', '.github/workflows/app-tests.yml'
 SHA = re.compile(r'[0-9a-f]{40}')
+ROOT = Path(__file__).resolve().parents[1]
+ALLOCATION = 'os/latest-beta/allocation.json'
+AUTO_PREFIX = 'Agent Beta auto '
 
 
 class Refused(Exception):
@@ -80,18 +88,49 @@ def decide(ci, newer_runs, existing_titles, switch):
     return sha, None
 
 
-def dispatch(env, opener=urllib.request.urlopen, pause=time.sleep):
+def voice_sources(root=ROOT):
+    cfg = json.loads((Path(root)/ALLOCATION).read_text())
+    return next(p['sources'] for p in cfg['packages'] if p['packageName'] == 'dev.pixel.voice')
+
+
+def unchanged_since(env, sha, release_runs, sources, opener):
+    """The SHA of the newest successful auto run when nothing under the Rose Agent sources changed since it, else None."""
+    done = [r for r in release_runs if isinstance(r.get('id'), int) and r.get('status') == 'completed'
+            and r.get('conclusion') == 'success' and str(r.get('display_title', '')).startswith(AUTO_PREFIX)]
+    if not done:
+        return None
+    previous = max(done, key=lambda r: r['id'])['display_title'][len(AUTO_PREFIX):]
+    if not SHA.fullmatch(previous):
+        return None
+    try:
+        data = read(env, f'/compare/{previous}...{sha}', opener, 'compare')
+    except Refused:
+        return None
+    files = data.get('files')
+    if data.get('status') not in ('ahead', 'identical') or not isinstance(files, list) or len(files) >= 300:
+        return None
+    roots = [s.rstrip('/') for s in sources]
+    changed = [f.get('filename', '') for f in files if any(f.get('filename', '') == r or f.get('filename', '').startswith(r + '/') for r in roots)]
+    return None if changed else previous
+
+
+def dispatch(env, opener=urllib.request.urlopen, pause=time.sleep, sources=None):
     run_id = env.get('CI_RUN_ID', '')
     if not run_id.isdigit():
         raise Refused('invalid: CI_RUN_ID')
     ci = read(env, f'/actions/runs/{run_id}', opener, 'ci_run')
     runs = read(env, '/actions/workflows/app-tests.yml/runs?branch=main&event=push&per_page=50', opener, 'ci_runs')
     newer = [r for r in runs.get('workflow_runs', []) if isinstance(r.get('id'), int) and r['id'] > int(run_id)]
-    titles_of = lambda: {r.get('display_title') for r in read(env,
-        f'/actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&per_page=100', opener, 'release_runs').get('workflow_runs', [])}
-    sha, reason = decide(ci, newer, titles_of(), env.get('AGENT_BETA_AUTO', ''))
+    release_runs = lambda: read(env, f'/actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&per_page=100', opener,
+        'release_runs').get('workflow_runs', [])
+    titles_of = lambda: {r.get('display_title') for r in release_runs()}
+    runs_now = release_runs()
+    sha, reason = decide(ci, newer, {r.get('display_title') for r in runs_now}, env.get('AGENT_BETA_AUTO', ''))
     if sha is None:
         return None, reason
+    previous = unchanged_since(env, sha, runs_now, voice_sources() if sources is None else sources, opener)
+    if previous:
+        return None, f'unchanged: no Rose Agent source changed since {AUTO_PREFIX}{previous}'
     body = {'ref': 'main', 'inputs': {'mode': 'app-only', 'candidate_sha': sha, 'apps': 'auto', 'app_publish': 'true'}}
     try:
         status, _ = api(env, 'POST', f'/actions/workflows/{WORKFLOW}/dispatches', body, opener=opener)

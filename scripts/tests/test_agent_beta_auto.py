@@ -37,8 +37,9 @@ class Response:
 
 
 class FakeGitHub:
-    def __init__(self, ci=CI, ci_runs=(), release_runs=(), dispatch=204, appear=True):
+    def __init__(self, ci=CI, ci_runs=(), release_runs=(), dispatch=204, appear=True, compare=None):
         self.ci, self.ci_runs, self.release_runs, self.dispatch, self.appear = ci, list(ci_runs), list(release_runs), dispatch, appear
+        self.compare = compare
         self.calls = []
 
     def __call__(self, request, timeout):
@@ -57,6 +58,8 @@ class FakeGitHub:
             return Response(200, {'workflow_runs': [CI, *self.ci_runs]})
         if '/actions/workflows/os-release.yml/runs' in url:
             return Response(200, {'workflow_runs': self.release_runs})
+        if '/compare/' in url and self.compare is not None:
+            return Response(200, self.compare)
         return Response(404)
 
     def posts(self):
@@ -66,6 +69,29 @@ class FakeGitHub:
 class Dispatch(unittest.TestCase):
     def run_dispatch(self, gh, **env):
         return aba.dispatch(dict(ENV, **env), opener=gh, pause=lambda s: None)
+
+    def test_unchanged_rose_agent_sources_since_the_last_auto_release_are_skipped_before_any_host(self):
+        prev = 'c' * 40
+        done = {'id': 900, 'display_title': aba.run_name(prev), 'status': 'completed', 'conclusion': 'success'}
+        docs = {'status': 'ahead', 'files': [{'filename': 'README.md'}, {'filename': 'os/overlays/x.java'}]}
+        gh = FakeGitHub(release_runs=[done], compare=docs)
+        self.assertEqual(self.run_dispatch(gh), (None, f'unchanged: no Rose Agent source changed since {aba.run_name(prev)}'))
+        self.assertEqual(gh.posts(), [])
+        self.assertTrue(any(c[1].endswith(f'/compare/{prev}...{SHA}') for c in gh.calls))
+        self.assertEqual(aba.voice_sources(), ['workspace/rose-agent', 'workspace/pixel-clipboard', 'workspace/experiments',
+                                               'scripts/host-app-build.py'])
+        for compare, runs, why in (
+                ({'status': 'ahead', 'files': [{'filename': 'workspace/rose-agent/app/Main.java'}]}, [done], 'changed'),
+                ({'status': 'ahead', 'files': [{'filename': 'scripts/host-app-build.py'}]}, [done], 'build script'),
+                ({'status': 'ahead', 'files': [{'filename': 'README.md'}] * 300}, [done], 'truncated'),
+                ({'status': 'diverged', 'files': []}, [done], 'not an ancestor'),
+                (None, [done], 'unreadable comparison'),
+                (docs, [dict(done, conclusion='failure')], 'the last auto run failed'),
+                (docs, [], 'first auto release')):
+            with self.subTest(why=why):
+                gh = FakeGitHub(release_runs=list(runs), compare=compare)
+                self.assertEqual(self.run_dispatch(gh), (SHA, None), why)
+                self.assertEqual(len(gh.posts()), 1)
 
     def test_a_healthy_main_ci_dispatches_the_app_route_once_for_the_tested_sha(self):
         gh = FakeGitHub()
@@ -131,7 +157,7 @@ class Workflow(unittest.TestCase):
     def test_trigger_permissions_and_switch(self):
         self.assertIn("on:\n  workflow_run:\n    workflows: ['App offline tests']\n    types: [completed]\n    branches: [main]\n", WORKFLOW)
         self.assertIn('\npermissions: {}\n', WORKFLOW)
-        self.assertEqual(re.findall(r'(?m)^      ([\w-]+): (read|write)$', WORKFLOW), [('actions', 'write')])
+        self.assertEqual(re.findall(r'(?m)^      ([\w-]+): (read|write)\b', WORKFLOW), [('actions', 'write'), ('contents', 'read')])
         for absent in ('secrets.', 'id-token', 'contents: write', 'pull_request_target', 'workflow_call'):
             self.assertNotIn(absent, WORKFLOW)
         self.assertIn('AGENT_BETA_AUTO: ${{ vars.AGENT_BETA_AUTO }}', WORKFLOW)
