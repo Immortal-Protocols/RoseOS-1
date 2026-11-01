@@ -9,6 +9,8 @@ on:
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
       - 'scripts/release-chain.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe_workflow.py'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -118,6 +120,8 @@ on:
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
       - 'scripts/release-chain.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe_workflow.py'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -252,6 +256,7 @@ jobs:
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_release_chain.py
+          python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py

@@ -8,6 +8,10 @@ node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
 node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
+# Local Rose task events from the real PR318 producer, through the local() provider bridge.
+node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
+# Local Rose task list from the producer through the page and bridge into the native overview feed (LOCAL-TASK-FEED-002).
+node --test workspace/rose-agent/tests/local-task-feed.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
@@ -86,6 +90,9 @@ python3 scripts/tests/test_blazer_build_only.py
 python3 scripts/tests/test_blazer_integration.py
 # Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
 python3 scripts/tests/test_factory_package.py
+# Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
+python3 scripts/tests/test_rango_factory_observe.py
+python3 scripts/tests/test_rango_factory_observe_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -112,6 +119,9 @@ python3 -I workspace/models/rose_cloud/tests/test_contract.py
 python3 -I workspace/models/rose_cloud/tests/test_pr288_tasks.py
 python3 -I workspace/models/rose_cloud/tests/test_coop.py
 python3 -I workspace/models/rose_cloud/tests/test_speech_wire.py
+python3 -I workspace/models/rose_cloud/tests/test_preflight.py
+python3 -I workspace/models/rose_cloud/tests/test_listen.py
+python3 -I workspace/models/rose_cloud/tests/test_vision.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
 python3 workspace/models/serving/tests/test_local_profile.py
@@ -216,6 +226,13 @@ java -cp "$JAVA_TESTS/TaskPresentation" dev.pixel.voice.TaskPresentationTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TaskControl" \
  workspace/rose-agent/app/src/dev/pixel/voice/TaskControl.java workspace/rose-agent/app/tests/TaskControlTest.java
 java -cp "$JAVA_TESTS/TaskControl" dev.pixel.voice.TaskControlTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverview" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/tests/WorkspaceOverviewTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverview" dev.pixel.voice.WorkspaceOverviewTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverviewFeed" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverviewFeed.java workspace/rose-agent/app/tests/WorkspaceOverviewFeedTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverviewFeed" dev.pixel.voice.WorkspaceOverviewFeedTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RendererRecovery" \
  workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java workspace/rose-agent/app/tests/RendererRecoveryTest.java
 java -cp "$JAVA_TESTS/RendererRecovery" dev.pixel.voice.RendererRecoveryTest

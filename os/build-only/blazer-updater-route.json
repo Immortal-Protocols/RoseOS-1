@@ -1,0 +1,15 @@
+{
+  "schema": "roseos.blazer-updater-route.v1",
+  "device": "blazer",
+  "updaterUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/",
+  "releaseIndex": "https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases",
+  "publishedChannel": "stable",
+  "producerContract": {
+    "tag": "blazer-{build}",
+    "metadataAsset": "blazer-stable",
+    "otaAsset": "blazer-ota_update-{build}.zip",
+    "metadataLine": "{build} {buildDateUtc} blazer stable"
+  },
+  "owner": "Dev Infra / Release",
+  "approvalRef": "phone:6cc2a194-7c22-4b63-bc65-a3961d986858; reply-to:379e0772-6bb6-4790-92a2-6e84b7a8b4c4; 2026-11-01T00:12:25Z"
+}

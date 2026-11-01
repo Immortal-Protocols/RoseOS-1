@@ -9,6 +9,16 @@ on:
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
+      - 'os/overlays/**'
+      - 'os/patches/**'
+      - 'os/tests/test_tray_contract.py'
+      - 'os/tests/AgentStatusControlsTest.java'
+      - 'os/tests/AgentTrayLinkTest.java'
+      - 'os/tests/test_rose_switcher.py'
+      - 'os/tests/RoseAgentWorkTest.java'
+      - 'os/tests/fixtures/rose-switcher/**'
+      - 'scripts/apply-os-changes.py'
+      - 'os/devices/pixel10.json'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   push:
@@ -18,6 +28,16 @@ on:
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
+      - 'os/overlays/**'
+      - 'os/patches/**'
+      - 'os/tests/test_tray_contract.py'
+      - 'os/tests/AgentStatusControlsTest.java'
+      - 'os/tests/AgentTrayLinkTest.java'
+      - 'os/tests/test_rose_switcher.py'
+      - 'os/tests/RoseAgentWorkTest.java'
+      - 'os/tests/fixtures/rose-switcher/**'
+      - 'scripts/apply-os-changes.py'
+      - 'os/devices/pixel10.json'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   workflow_dispatch:
@@ -57,11 +77,13 @@ jobs:
           echo "$RUNNER_TEMP/pr288-venv/bin" >> "$GITHUB_PATH"
       - name: Offline suite
         run: bash scripts/test-local.sh
-      - name: Models PR288 cases executed, not skipped
+      - name: Models PR288 cases executed, not skipped (only the unpinned jinja2 render case may skip)
         run: |
           set -euo pipefail
-          for t in test_vllm_brain test_contract test_pr288_tasks test_coop test_speech_wire; do
+          for t in test_vllm_brain test_contract test_pr288_tasks test_coop test_speech_wire test_preflight test_listen test_vision; do
             out="$(python3 -I "workspace/models/rose_cloud/tests/$t.py" -v 2>&1)" || { printf '%s\n' "$out"; exit 1; }
             printf '%s\n' "$out" | grep -E '^(Ran|OK|FAILED)'
-            if grep -q 'skipped' <<<"$out"; then printf '%s\n' "$out" | grep skipped; echo "$t skipped cases" >&2; exit 1; fi
+            # The only skip allowed: test_vision's jinja2 render case (jinja2 is not a pinned PR288 dependency).
+            skips="$(grep -E " \.\.\. skipped '" <<<"$out" | grep -v "^RAW_TEMPLATE with jinja2 .* skipped 'jinja2 not installed'$" || true)"
+            if [[ -n "$skips" ]]; then printf '%s\n' "$skips"; echo "$t skipped cases" >&2; exit 1; fi
           done

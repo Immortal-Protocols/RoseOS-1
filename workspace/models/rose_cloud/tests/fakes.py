@@ -13,7 +13,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-SPECIALS = ['<|im_start|>', '<|im_end|>', '<|endoftext|>', '<tool_call>', '</tool_call>', '<think>', '</think>']
+SPECIALS = ['<|im_start|>', '<|im_end|>', '<|endoftext|>', '<tool_call>', '</tool_call>', '<think>', '</think>',
+            '<|vision_start|>', '<|image_pad|>', '<|vision_end|>']
 
 
 class CharTokenizer:
@@ -47,12 +48,14 @@ class FakeVllm:
     """Scripted completions server on 127.0.0.1. ``script`` is a list of token-id lists, one per request."""
 
     def __init__(self, script=(), mode='ids', chunk=1, delay_s=0.0, status=200, send_stop=True, raw=None,
-                 header_delay_s=0.0, stall_at=None, stall_s=0.0):
+                 header_delay_s=0.0, stall_at=None, stall_s=0.0, prompt_ids=None):
         self.script = [list(s) for s in script]
         self.mode, self.chunk, self.delay_s, self.status, self.send_stop, self.raw = (
             mode, chunk, delay_s, status, send_stop, raw)
         self.header_delay_s, self.stall_at, self.stall_s = header_delay_s, stall_at, stall_s
         self.requests: list[dict] = []
+        self.paths: list[str] = []
+        self.prompt_ids = prompt_ids  # chat route: f(body) -> the prompt_token_ids the first chunk reports
         self.aborted = 0
         self.sent: list[int] = []  # tokens written to the socket, all requests
         fake = self
@@ -66,6 +69,7 @@ class FakeVllm:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 fake.requests.append(body)
+                fake.paths.append(self.path)
                 time.sleep(fake.header_delay_s)  # vLLM still queueing or prefilling: no headers yet
                 if fake.status != 200:
                     data = b'{"error": "SECRET-TEXT /root/.cache"}'
@@ -103,6 +107,11 @@ class FakeVllm:
         return b'data: ' + json.dumps({'id': 'cmpl-x', 'object': 'text_completion', 'choices': [choice]}).encode()
 
     def serve(self, out, body):
+        if 'messages' in body and self.prompt_ids is not None:
+            first = {'id': 'chatcmpl-x', 'object': 'chat.completion.chunk', 'prompt_token_ids': self.prompt_ids(body),
+                     'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': ''}}]}
+            out.write(b'data: ' + json.dumps(first).encode() + b'\n\n')
+            out.flush()
         tokens = self.script.pop(0) if self.script else []
         stop = set(body.get('stop_token_ids') or [])
         emitted, finish, reason = [], 'length', None

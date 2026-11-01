@@ -30,6 +30,9 @@ on:
       - 'scripts/tests/test_blazer_build_only.py'
       - 'scripts/blazer_integration.py'
       - 'scripts/tests/test_blazer_integration.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe.py'
+      - 'os/retained-rango/release.json'
       - 'os/tests/test_blazer_flavor.py'
       - 'os/flavors/**'
       - 'os/fold-port/**'
@@ -63,6 +66,9 @@ on:
       - 'scripts/tests/test_blazer_build_only.py'
       - 'scripts/blazer_integration.py'
       - 'scripts/tests/test_blazer_integration.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe.py'
+      - 'os/retained-rango/release.json'
       - 'os/tests/test_blazer_flavor.py'
       - 'os/flavors/**'
       - 'os/fold-port/**'
@@ -93,6 +99,8 @@ jobs:
           python3 os/tests/test_blazer_flavor.py -v
           python3 scripts/tests/test_blazer_build_only.py -v
           python3 scripts/tests/test_blazer_integration.py -v
+      - name: Rango factory observer tests (synthetic packages, fake fastboot)
+        run: python3 scripts/tests/test_rango_factory_observe.py -v
       - name: Rango build-only tests (synthetic tree, fake runner)
         run: python3 scripts/tests/test_rango_build_only.py -v
       - name: Rango output collector tests (synthetic output tree, no build or tools run)

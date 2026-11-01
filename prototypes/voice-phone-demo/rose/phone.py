@@ -233,10 +233,30 @@ class Phone:
             self.views[name] = v
         return v
 
-    def session(self, name: str) -> PhoneSession:
+    def session(self, name: str, on_screen: bool = False) -> PhoneSession:
+        """A task's display. ``on_screen`` is accepted for the real phone's surface: the fake
+        phone has no separate workspace, so every task works on its own view as before."""
+
         with self._lock:
             self._view(name)
         return PhoneSession(self, name)
+
+    # ----- Rose's workspace: the real phone's background screen (rose/background.py). The fake
+    # phone has none, so these keep the eval's behaviour unchanged.
+    def background_available(self) -> bool:
+        return False
+
+    def app_labels(self) -> list[str]:
+        """The fake phone's app labels (RealPhone.app_labels() on the real one)."""
+
+        return list(APPS)
+
+    def workspace_app(self) -> str | None:
+        return None
+
+    def look_workspace(self) -> Image.Image | None:
+        self.look_status = "the fake phone has no separate workspace"
+        return None
 
     def close_session(self, name: str) -> None:
         """Drop a task's view; if it is on show, it becomes the main screen."""
@@ -925,6 +945,8 @@ def _search_places(places: list[dict], query: str) -> list[dict]:
 
 class PhoneSession:
     """One task's display on the shared phone."""
+
+    background = False  # never Rose's workspace (the real phone's RealSession may be)
 
     def __init__(self, phone: Phone, name: str):
         self.phone, self.name = phone, name

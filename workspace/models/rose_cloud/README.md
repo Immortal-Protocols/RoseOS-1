@@ -1,4 +1,4 @@
-# Rose on the cloud VM (MODELS-ROSE-CLOUD-001, -002, -003)
+# Rose on the cloud VM (MODELS-ROSE-CLOUD-001 to -004, CLOUD-VISION-001)
 
 The goal is to run the same Rose system and client as PR288 on `models-glimmer-01`, which has two A100 40 GB GPUs.
 PR288 is pinned at `e1b702ee3b8a6bf656b5cc59bd765787622ae543` and was merged into main as `39b57db` with these paths
@@ -20,11 +20,113 @@ any VM.**
 |---|---|
 | Phone link (`rose/remote.py`) | **Reused unchanged.** It runs on Linux in `test_contract.py`: pair, signed `/hello`, replay refused. |
 | Scheduler (`rose/runtime.py`) | **Reused unchanged** through `nomlx.py`. Network and synthesis waits run on workers (`pump.py`), and only strictly higher-priority jobs run while a job waits (`coop.py`). Tested in `test_coop.py`. |
-| Brain (`vllm_brain.py`) | **Real adapter**, using token-id `/v1/completions` streaming. It has been tested against a stand-in server only. Vision is unsupported. |
+| Brain (`vllm_brain.py`) | **Real adapter**, using token-id `/v1/completions` streaming for text. Sequences that hold a screenshot go to the chat route (next section). It has been tested against a stand-in server only. |
 | Speaker (`phonon.py`, `speech.py`) | The `ptts` provider sits behind PR288's unchanged `Speaker` and `/ws/audio`. **FIXTURE:** a stand-in engine and PR288's `FakeTransport` player. No real synthesis has run. |
 | Preflight (`preflight.py` + bootstrap `cloud-preflight-once`) | **Source and tests only**, covered in `test_preflight.py` and the bootstrap/render suites. |
-| Listener (Silero, smart-turn, Nemotron, Parakeet) | **Unsupported.** This is the next slice: reuse PR288's 16 kHz endpointing and the exact upstream model revisions. |
-| Phone endpoint, auth, network, vision | **Not in scope yet.** Each needs explicit scope (see the last section). |
+| Listener (`listen.py`) | PR288's `Listener` runs **unchanged**, with its sample-clock endpointing, early transcript and its cancellation, partials and echo guard. `listen.bind` gives it Linux providers for the same four models (table below). **FIXTURE:** `test_listen.py` uses an energy VAD and scripted recognizers. No model file, onnxruntime or recognizer weights are present here, so no real recognition has run. |
+| Phone endpoint, auth, network | **Not in scope yet.** Each needs explicit scope (see the last section). |
+
+## Images: PR288's talker look and phone-agent screenshots (`vllm_brain.py`)
+
+PR288 calls `Sequence.append_image(pil_image)` and reads `last_image`. The talker's look and the phone agent's
+screenshots then go through these steps:
+
+1. **Resize locally.** The image is resized exactly as PR288's `Brain.image_size` does: long side at most 768 px,
+   both sides on the 32 px grid, bicubic. This reproduces PR288's measured table: 1248×1972 gives 360 tokens at 768.
+2. **Encode** it as PNG.
+3. **Append the image tokens.** The sequence gets `<|vision_start|>`, (h/32)·(w/32) `<|image_pad|>` tokens and
+   `<|vision_end|>`, the same tokens PR288 appends.
+4. **Send by the chat route.** `/v1/completions` cannot carry an image, so `generate` on a sequence holding images
+   uses `/v1/chat/completions`. It sends one user message whose content parts are the decoded text between images
+   and the images as `data:image/png;base64` URLs. `RAW_TEMPLATE` renders those parts back verbatim, with one
+   `<|vision_start|><|image_pad|><|vision_end|>` per image and no roles or generation prompt. vLLM's processor then
+   expands each pad.
+5. **Check the prompt.** The server's `prompt_token_ids` (first stream chunk) are compared with the client's tokens.
+   The result is recorded in `last_prompt_exact`; `strict_prompt=True` makes a mismatch an error.
+6. **Keep text-only requests unchanged.** Sequences without images still use token-id completions.
+
+**Preserved:**
+
+- **Cancellation:** the same worker and socket shutdown as text. A look closed midway adds nothing.
+- **Identity:** an image belongs to its sequence and fork. Rewinding past an image drops it, so it is never sent
+  later. `session_id` is passed when the brain has one.
+- **Bounds:** inputs over 50 Mpx and non-images are refused before any pixel work. PNGs are at most 8 MiB, and each
+  sequence holds at most 16 images.
+- **Priorities:** LISTEN still runs while a vision request waits.
+
+**Backend differences** (stated, not hidden):
+
+- **Not token-exact.** Text in an image request is decoded and re-tokenized by the server. Sampled tokens may not
+  re-tokenize identically, so the request is not token-exact like the completions route. `last_prompt_exact` shows
+  when that happened.
+- **Image positions.** vLLM computes M-RoPE image positions itself, and `Sequence.pos` stays `len(tokens)`.
+- **Latency.** The vision encode and prefill run on the server at the next `generate`, so `last_image.encode_ms` and
+  `prefill_ms` are 0. Every image request resends every image, mitigated only by vLLM's caches. PR288's phone-agent
+  `_Reply` makes one request per decoded token. Nothing here reproduces MLX's resident image cache, its rewind costs
+  or its per-unit vision scheduling.
+
+**Server requirements** (`contract.BRAIN_PREREQUISITES`). These are proposals: not verified on the VM's image and not
+staged.
+
+| Requirement | Notes |
+|---|---|
+| Vision tower loaded | The server must **not** use `--language-model-only`. That flag saves memory but makes the brain text-only: `VllmBrain(vision=False)` refuses images. |
+| `--chat-template <file from write_raw_template>` | The template is set on the server, not sent per request. vLLM main refuses request templates unless `--trust-request-chat-template`, which stays off. |
+| `--chat-template-content-format openai` | |
+| `--limit-mm-per-prompt '{"image": 16, "video": 0}'` | |
+
+**Not shown:** what the model sees, its answers about a screen, image-processor parity with mlx-vlm, and latency.
+The tests (`tests/test_vision.py`) use synthetic images, the stand-in server and a jinja2 render of `RAW_TEMPLATE`.
+
+## Listener providers (`rose_cloud/listen.py`; proposals, nothing staged)
+
+| PR288 role (MLX on the Mac) | Linux provider | Pinned upstream input (the MLX file's base) |
+|---|---|---|
+| VAD: `mlx-community/silero-vad`, PR288's `SileroCPU` in NumPy | **PR288's `SileroCPU` unchanged**, on the same weights file read with NumPy (`read_safetensors`): the same arithmetic | `mlx-community/silero-vad@7bc17f22…`: `config.json`, `model.safetensors` (2.18 MB, sha256 `185e0bc3…`) |
+| End of turn: `mlx-community/smart-turn-v3` | `SmartTurn`: onnxruntime, with the official preprocessing from `pipecat-ai/smart-turn` (`inference.py`, `audio_utils.py`): last 8 s, left zero pad, `WhisperFeatureExtractor(chunk_length=8)`, sigmoid output | `pipecat-ai/smart-turn-v3@f766f81d…/smart-turn-v3.2-gpu.onnx` (32.4 MB, sha256 `ab8dc64b…`). The MLX config names this file as its `source_onnx`. |
+| Final ASR: `mlx-community/parakeet-tdt-0.6b-v3` | `Parakeet`: transformers `AutoModelForTDT`, `processor.decode(..., skip_special_tokens=True)` (model card) | `nvidia/parakeet-tdt-0.6b-v3@541d1f99…`: 6 files, `model.safetensors` 2.51 GB (sha256 `3a202636…`) |
+| Streaming ASR: `mlx-community/nemotron-3.5-asr-streaming-0.6b`, `att_context_size [56, 0]` | `NemotronStreaming`: transformers `AutoModelForRNNT` cache-aware streaming (model card), with `set_num_lookahead_tokens(0)` | `nvidia/nemotron-3.5-asr-streaming-0.6b@ea30d66d…`: 6 files, `model.safetensors` 2.55 GB (sha256 `9eebdd65…`) |
+
+**Libraries** (`listen.LIBRARIES`):
+
+- transformers ≥ 5.13.0. Nemotron needs that version per its card. `AutoModelForTDT` and `AutoModelForRNNT` are both
+  present in the released 5.22.1, checked locally by import only.
+- onnxruntime 1.31.1, which needs Python ≥ 3.11 (cp312 manylinux wheel sha256 `1f3dea47…`).
+- torch, matching the host (CUDA for GPU).
+- numpy.
+
+None of these is installed or pinned in the cached serving image. The image has transformers 5.15.0, per the PR289
+probe receipt. Every file is checked against its pin by `listen.check_inputs` before anything loads, and nothing is
+downloaded.
+
+**Scheduling:**
+
+- **Smart-turn and Parakeet:** these run inside PR288's LISTEN jobs. Their work happens on a worker thread while the
+  job waits through `coop.Waiter`. Nothing outranks LISTEN, so the job holds the runtime thread for the model's
+  duration, as GPU work does on the Mac.
+- **Cancellation:** cancelling the job ends the wait at once, and the result is dropped. PR288 does this when speech
+  resumes during a dip.
+- **Streaming session:** decoding runs on the session's own thread, and `step` never waits. `_queued` and `_encoded`
+  report only text ready to collect. Otherwise PR288's loop would spin at LISTEN priority and starve the talker; an
+  earlier draft did exactly that, and `test_listen` caught it.
+
+**Mute semantics** (PR288 and its client):
+
+- **Rose's output:** while her audio is audible, PR288's echo guard raises the speech-start bar
+  (`set_rose_audible`, driven by `Speaker.on_audible`).
+- **Microphone mute on the phone:** the phone sends zero frames (`LocalRoseLink`), so the sample clock keeps running
+  and a pending turn still commits on time. Both are tested.
+
+**Not proven (needs real files, libraries and hardware, and a separate approval):**
+
+- recognition accuracy;
+- latency on the VM's CPU or GPU;
+- whether the transformers streaming loop matches mlx-audio's chunking for `[56, 0]`;
+- smart-turn numerics through onnxruntime;
+- phone audio over the signed `/ws/audio` link.
+
+The listener files are not yet in `manifest.json`, which is unchanged because it ships inside the CLOUD-003 payload
+digest. Adding them is a later manifest and payload update.
 
 ## Pinned bring-up manifest: `rose_cloud/manifest.json` (a proposal; nothing is staged or approved)
 
@@ -183,7 +285,7 @@ None of these is retried without a new decision.
    - **Network:** a firewall rule or edge route.
    - **Pairing:** QR pairing from the phone, which is a phone action.
    - **Auth:** the phone's device key and the server pin. No new IAM.
-   - These each need explicit scope, and so do Linux ASR (next) and vision.
+   - These each need explicit scope.
 
 ## Tests
 
@@ -197,6 +299,14 @@ python3 -I tests/test_contract.py
 
 ```bash
 python3 -I tests/test_preflight.py
+```
+
+```bash
+python3 -I tests/test_listen.py
+```
+
+```bash
+python3 -I tests/test_vision.py
 ```
 
 ```bash
@@ -223,4 +333,5 @@ python3 -I ../serving/tests/test_service_render.py
   PR288's dependencies. Without them they are skipped, with the reason printed.
 - **Preflight tests:** `test_preflight.py` runs the real script as a subprocess through bootstrap's own `Host.run`,
   covering a hung probe killed at the deadline, noisy stdout, and staged files present, wrong or missing.
-- **Fixtures:** the vLLM, `ptts` and file trees in those tests are fixtures, not the serving image.
+- **Fixtures:** the vLLM, `ptts` and file trees in those tests are fixtures, not the serving image. The VAD,
+  recognizers and decoder in `test_listen.py` are fixtures too, not recognition.

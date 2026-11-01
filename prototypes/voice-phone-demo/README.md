@@ -71,6 +71,19 @@ label and tap them by position. On-screen text is treated as data, never as
 instructions. Screenshots stay in memory only: never written to disk or logs.
 With the fake phone, vision is off by default so the eval stays fast.
 
+**She works in her own workspace.** On RoseOS phones, Rose's tasks run in a
+separate background workspace (the phone's `dev.pixel.backgroundcontrol`
+controller: one app on a virtual display, with a floating viewer and a
+notification whose **Stop** ends it), not on the screen in your hand. The
+workspace stays open after a task, so "open Calculator" and then "add 1 to
+50" continue in the same app; it closes when the task goes home, opens
+another app, after 3 minutes unused, or when you press Stop (she does not
+reopen it for that task). If Android does not allow an app in the workspace,
+she says so and nothing is opened; she uses your visible screen only when you
+ask to see it happen, or on phones without the controller. Alarms, timers,
+music and directions stay direct intents. `ROSE_WORKSPACE=off` turns the
+workspace off. Details: `rose/background.py` and [DESIGN.md](rose/DESIGN.md).
+
 ## Models (all local, MLX, one process)
 
 | Part | Model | Cost on this Mac |
@@ -193,7 +206,7 @@ Module tests: `python -m rose.tests.test_listener`, `test_speaker`,
 `test_tasks`, `test_conductor` (each loads the models it needs; the
 listener and conductor tests start with quick checks of the text rules that
 once went wrong).
-`test_realphone`, `test_remote` and `test_qr` need no models (`test_qr` decodes with ZXing
+`test_realphone`, `test_background`, `test_remote` and `test_qr` need no models (`test_qr` decodes with ZXing
 and needs `java`).
 
 ## Not verified
@@ -222,6 +235,7 @@ and needs `java`).
 - `rose/tasks.py`, `rose/phone.py`: phone agent, deep thinking, the fake phone
 - `rose/app.py`, `rose/web/`: server and dashboard (`--ui-only` replays a scripted demo without models)
 - `rose/realphone.py`: the real phone (Rose Agent) behind the fake phone's interface
+- `rose/background.py`: Rose's workspace, the phone's background controller (port of `BackgroundPhone`)
 - `rose/remote.py`, `rose/qr.py`, `rose/pair.py`: Wi-Fi/Tailscale listener, QR pairing, pairing CLI ([REMOTE.md](REMOTE.md))
 - `rose/eval/`: end-to-end scenarios and metrics; `rose/tests/`: module tests
 - `scripts/rose.sh`, `scripts/setup.sh`, `scripts/bench_*.py`, `scripts/eval_talker.py`, `scripts/rose_drive.py`,

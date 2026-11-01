@@ -94,6 +94,22 @@ it, or the phone cannot reach port 8443.
   addresses, never codes, nonces or signatures. Losing the TLS files changes
   the pin, so every phone must pair again.
 
+## Rose's workspace over the link
+
+Rose's tasks drive the phone's background controller
+(`dev.pixel.backgroundcontrol`, `rose/background.py`) with the same signed
+link: each operation is an ordinary phone command,
+`{"action": "app_command", "packageName": "dev.pixel.backgroundcontrol",
+"operation": "get_state"|"start"|"command"|"stop", "params": {...}}`, which
+Rose Agent passes to the controller unchanged. No new port, endpoint or
+permission is involved. While the phone is locked or its screen is off, Rose
+Agent refuses `start` and `command` (status `locked`) unless the owner allowed
+app control while locked; Rose reports that and waits for the owner. After a
+reconnect Rose asks `get_state` again and continues in the workspace that is
+still open. `GET /api/realphone` (localhost only) shows the workspace as Rose
+sees it under `background`; `?look=workspace` adds the controller's own
+`get_state` (read-only).
+
 ## Wire reference
 
 - QR / deep link:
