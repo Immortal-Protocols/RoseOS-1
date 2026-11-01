@@ -47,6 +47,29 @@ final class RoseAgentWork {
         this.state = state; this.items = Collections.unmodifiableList(items); this.reason = reason;
     }
 
+    /** The selected HiFi's empty agent carousel (ce126f56 renderSwitcher: "No background work"). */
+    static final String EMPTY = "No background work";
+
+    /**
+     * How many items are their display's current screen: the apps Rose is actually working in now, as the platform
+     * reports it (front task of a controller-owned display). Tasks behind them are Rose's background apps, not active.
+     */
+    int working() {
+        int n = 0;
+        for (Task t : items) if (t.topOfDisplay) n++;
+        return n;
+    }
+
+    /**
+     * The HiFi link label between the carousels: "N tasks in progress" from working(), "No active work" when Rose has
+     * background apps but none is current, nothing when there is no agent work or it could not be read.
+     */
+    String linkLabel() {
+        if (state != State.AVAILABLE) return "";
+        int n = working();
+        return n > 0 ? n + (n == 1 ? " task in progress" : " tasks in progress") : "No active work";
+    }
+
     static RoseAgentWork unavailable(String reason) {
         return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), reason);
     }
@@ -97,7 +120,7 @@ final class RoseAgentWork {
         for (Task t : tasks) {
             if (t.userId == currentUser && owned.contains(t.displayId) && !CONTROLLER.equals(t.packageName)) items.add(t);
         }
-        if (items.isEmpty()) return new RoseAgentWork(State.EMPTY, items, "Rose is not working in any app");
+        if (items.isEmpty()) return new RoseAgentWork(State.EMPTY, items, EMPTY);
         return new RoseAgentWork(State.AVAILABLE, items, null);
     }
 

@@ -73,6 +73,8 @@
             <testInclude>dev/pixel/voice/ConversationState.java</testInclude>
             <testInclude>dev/pixel/voice/TrayMaterial.java</testInclude>
             <testInclude>dev/pixel/voice/HomeGlassTile.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverview.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverviewView.java</testInclude>
             <testInclude>dev/pixel/voice/*RenderTest.java</testInclude>
           </testIncludes>
         </configuration>

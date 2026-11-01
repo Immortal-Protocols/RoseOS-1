@@ -7,6 +7,16 @@ final class AgentStatusControls {
     private float downX, downY;
     private long downAt;
     void cancel() { target = 0; }
+
+    /**
+     * A v1 STATE describes a session from Connecting until it ends. Connecting has connected=false and
+     * listening=false (AgentTrayService), so the status string is what marks it. The tray draws, animates
+     * and offers End for exactly this span; an idle Ready or Disconnected state draws nothing.
+     */
+    static boolean active(boolean connected, boolean listening, String status) {
+        return connected || listening || "Connecting".equals(status);
+    }
+
     int touch(int action, int pointers, float x, float y, long at, int hit,
             boolean active, boolean muted, int slop) {
         if (pointers != 1 || action == 3) { cancel(); return 0; }
