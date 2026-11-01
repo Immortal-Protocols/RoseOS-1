@@ -1717,6 +1717,25 @@ class CloudStageOnce(DiagnosticFixture):
                 else:
                     self.assertIsNone(stage)
 
+    def test_refused_hosts_reach_the_receipt_as_hostnames_only(self):
+        marker = 'ROSE-CLOUD-STAGE '
+        long_host = '.'.join(['a' * 63] * 3) + '.' + 'b' * 61  # 253 characters, the DNS maximum
+        raw = {'stop': 'file_failures', 'bytesIn': 24245215, 'refusedOther': 3, 'refusedHosts': [
+            {'host': 'CDN-LFS.Example.', 'reason': 'host_not_allowed', 'count': 45},
+            {'host': 'https://evil.example/x?X-Amz-Signature=SECRET', 'reason': 'host_not_allowed', 'count': 1},
+            {'host': None, 'reason': 'malformed', 'count': 1}] + [
+            {'host': long_host, 'reason': 'host_not_allowed', 'count': 1 << 40}] * 6}
+        self.probe('refused', stage_out=marker + json.dumps(raw) + '\n')
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        self.assertNotIn('SECRET', line)
+        self.assertNotIn('X-Amz', line)
+        stage = self.published()['stage']
+        self.assertEqual(stage['refusedHosts'][:2], [{'host': 'cdn-lfs.example', 'reason': 'host_not_allowed',
+                                                      'count': 45},
+                                                     {'host': None, 'reason': 'malformed', 'count': 1}])
+        self.assertEqual((len(stage['refusedHosts']), stage['refusedOther']), (4, 3))
+
     def test_refusals_once_per_id_and_default_boot(self):
         for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
                                          ('nodocker', dict(docker_down=True), 'docker_unavailable')):

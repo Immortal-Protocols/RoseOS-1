@@ -247,8 +247,8 @@ class Stage(unittest.TestCase):
             sys.stdout.write = real
         line = ''.join(out).strip()
         self.assertTrue(line.startswith(S.MARKER))
-        for secret in ('SECRET', 'localhost', '127.0.0.1', str(self.dir), 'http'):
-            self.assertNotIn(secret, line)
+        for secret in ('SECRET', 'sig=', '/redirected', str(self.srv.port), '127.0.0.1', str(self.dir), 'http'):
+            self.assertNotIn(secret, line)  # the refused HOST is reported (next test); nothing else of the URL
         r = S.sanitize(json.loads(line[len(S.MARKER):]), self.manifest)
         self.assertEqual(r['firstFailure']['qwen'], 'redirect_refused')
         self.assertLess(len(json.dumps(r)), 2048)
@@ -256,6 +256,88 @@ class Stage(unittest.TestCase):
                               'firstFailure': {'qwen': 'https://evil/SECRET'}}, self.manifest)
         self.assertEqual((hostile['stop'], hostile['bytesIn'], hostile['groups']['qwen']['failed'],
                           hostile['firstFailure']['qwen']), (None, None, None, None))
+
+    def test_refused_redirect_reports_the_sanitized_host_and_reason(self):
+        key = '/hub/org/m/resolve/r1/model.safetensors'
+        self.srv.mode[key] = 'redirect_bad'  # 302 to http://localhost:<port>/redirected...?sig=SECRET
+        r = self.run_stage()
+        self.assertEqual(r['firstFailure']['qwen'], 'redirect_refused')
+        self.assertEqual((r['refusedHosts'], r['refusedOther']),
+                         ([{'host': 'localhost', 'reason': 'host_not_allowed', 'count': 1}], 0))
+        self.assertNotIn('/redirected' + key, [p for p, _, _ in self.srv.requests])  # still never followed
+        self.assertEqual(S.sanitize(r, self.manifest)['refusedHosts'], r['refusedHosts'])
+
+    def test_refusal_reasons_and_host_normalization(self):
+        f = S.Fetcher({'deadlineS': 1, 'maxBytes': 1})
+        cases = (
+            ('https://cas-bridge.xethub.hf.co/x/y?X-Amz-Signature=SECRET#frag', 'cas-bridge.xethub.hf.co',
+             'host_not_allowed'),
+            ('https://EVIL.Example./a', 'evil.example', 'host_not_allowed'),
+            ('http://huggingface.co/x', 'huggingface.co', 'scheme_not_https'),
+            ('https://user:SECRET@huggingface.co/x', 'huggingface.co', 'userinfo'),
+            ('https://:SECRET@evil.example/x', 'evil.example', 'userinfo'),
+            ('ftp://files.pythonhosted.org/x', 'files.pythonhosted.org', 'scheme_not_https'),
+            ('https://[2001:DB8::1]/x', '2001:db8::1', 'host_not_allowed'),
+            ('https://10.0.0.7:8443/x', '10.0.0.7', 'host_not_allowed'),
+            ('https://xn--bcher-kva.example/x', 'xn--bcher-kva.example', 'host_not_allowed'),
+            ('https://bad_host!/SECRET', None, 'malformed'),
+            ('https://%65vil.example/x', None, 'malformed'),
+            ('https://huggingface.co:99999/x', None, 'malformed'),
+            ('https://' + 'a' * 64 + '.example/x', None, 'malformed'),
+            ('https://' + '.'.join(['a' * 63] * 5) + '/x', None, 'malformed'),
+            ('https://[::1/x', None, 'malformed'),
+            ('/relative/SECRET', None, 'malformed'),
+            ('https://h.example/' + 'x' * 9000, None, 'malformed'),
+        )
+        for url, host, reason in cases:
+            with self.subTest(url=url[:60]):
+                f.refused.clear()
+                with self.assertRaises(S.FileFailure) as e:
+                    f.check(url)
+                self.assertEqual(str(e.exception), 'redirect_refused')  # same refusal as before
+                self.assertEqual(f.refusals()[0], [{'host': host, 'reason': reason, 'count': 1}])
+                self.assertNotIn('SECRET', json.dumps(f.refusals()))
+        with self.assertRaises(S.FileFailure):
+            f.check(None)
+        f.refused.clear()
+        f.check('https://huggingface.co/ok')  # allowed: nothing recorded
+        self.assertEqual(f.refusals(), ([], 0))
+
+    def test_refusal_collection_is_bounded(self):
+        f = S.Fetcher({'deadlineS': 1, 'maxBytes': 1})
+        for i in range(7):
+            for _ in range(i + 1):
+                with self.assertRaises(S.FileFailure):
+                    f.check(f'https://h{i}.example/x')
+        hosts, other = f.refusals()
+        self.assertEqual([h['host'] for h in hosts], ['h3.example', 'h2.example', 'h1.example', 'h0.example'])
+        self.assertEqual([h['count'] for h in hosts], [4, 3, 2, 1])
+        self.assertEqual(other, 5 + 6 + 7)  # the hosts past the first four, counted only
+
+    def test_sanitize_drops_anything_that_is_not_a_host(self):
+        raw = {'stop': 'file_failures', 'refusedOther': 2, 'refusedHosts': [
+            {'host': 'https://evil.example/x?sig=SECRET', 'reason': 'host_not_allowed', 'count': 1},
+            {'host': 'user:SECRET@evil.example', 'reason': 'userinfo', 'count': 1},
+            {'host': 'evil.example:443', 'reason': 'host_not_allowed', 'count': 1},
+            {'host': 'ok.example', 'reason': 'not_a_reason', 'count': 1},
+            {'host': 'ok.example', 'reason': 'host_not_allowed', 'count': -3},
+            {'host': 'CDN.Example.', 'reason': 'host_not_allowed', 'count': 45},
+            {'host': None, 'reason': 'malformed', 'count': 2},
+            'https://SECRET',
+        ] + [{'host': f'x{i}.example', 'reason': 'host_not_allowed', 'count': 1} for i in range(10)]}
+        r = S.sanitize(raw, self.manifest)
+        self.assertEqual(r['refusedHosts'][:2], [{'host': 'cdn.example', 'reason': 'host_not_allowed', 'count': 45},
+                                                 {'host': None, 'reason': 'malformed', 'count': 2}])
+        self.assertEqual(len(r['refusedHosts']), S.MAX_REFUSED_HOSTS)
+        self.assertEqual(r['refusedOther'], 2)
+        self.assertNotIn('SECRET', json.dumps(r))
+        self.assertNotIn(':443', json.dumps(r))
+        self.assertEqual(S.sanitize({'refusedHosts': 'https://SECRET'}, self.manifest)['refusedHosts'], [])
+        worst = S.sanitize({'stop': 'file_failures', 'refusedOther': 1 << 40, 'refusedHosts': [
+            {'host': '.'.join(['a' * 63] * 3) + '.' + 'b' * 61, 'reason': 'host_not_allowed', 'count': 1 << 40}] * 9},
+            MANIFEST)
+        self.assertEqual(len(worst['refusedHosts']), 4)
+        self.assertLess(len(json.dumps(worst, separators=(',', ':'))), 2600)  # leaves room in the 4 KiB receipt
 
     def test_hung_transfer_is_killed_by_the_bootstrap_deadline_and_partial_kept(self):
         import bootstrap as B
@@ -284,7 +366,8 @@ class Stage(unittest.TestCase):
     def test_stdlib_only_at_module_level(self):
         import ast
         top = [n for n in ast.parse(SOURCE).body if isinstance(n, (ast.Import, ast.ImportFrom))]
-        self.assertEqual({a.name for n in top for a in n.names}, {'hashlib', 'json', 'os', 'sys', 'time'})
+        self.assertEqual({a.name for n in top for a in n.names},
+                         {'hashlib', 'ipaddress', 'json', 'os', 're', 'sys', 'time'})
 
 
 if __name__ == '__main__':
