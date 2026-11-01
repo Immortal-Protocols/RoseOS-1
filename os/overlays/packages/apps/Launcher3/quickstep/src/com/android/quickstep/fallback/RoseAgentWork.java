@@ -5,8 +5,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,12 +26,18 @@ import java.util.Set;
  * displays, per user. Those reports come from the non-finishing activities on each owner's session displays
  * (DisplayWindowPolicyControllerHelper.onRunningActivityChanged), and only ComputerControl sessions create a virtual
  * device with DEVICE_PROFILE_COMPUTER_CONTROL (VirtualDeviceManagerService), whose displays getVirtualDevices() lists
- * without any permission. A task counts when it is this user's, on a COMPUTER_CONTROL device's display, not the
- * controller itself, and its package is reported automated for this user by CONTROLLER and by no other session owner:
- * then the session owning that display can only be the controller's. The same package on another app's virtual
- * display (not a ComputerControl device) is never Rose's work; one that another session owner also reports cannot be
- * attributed, so it is no card and the row says so. The controller still binds a selection to its own session
- * display (agent-pip WatchBinding.fromSelection). The
+ * without any permission. Ownership is decided per session device, never per package (#156 initial load): a
+ * device is a candidate when every one of this user's tasks on it is a package CONTROLLER reports automating for this
+ * user. CONTROLLER's report is the union of the activities on its own session displays, so each of its devices with
+ * this user's work is a candidate; a device running any app CONTROLLER does not report is another owner's. Cards are
+ * published only when exactly one candidate exists: then it is CONTROLLER's, whatever other owners have reported so
+ * far. The platform's reports carry no snapshot-complete marker, sequence number or device id
+ * (AutomatedPackagesRepository), so two candidates (another agent running the same apps, whose report may not have
+ * arrived), a non-empty report with no candidate (a report still in flight), a report that arrives during a read or a
+ * truncated task list are not resolved by guessing or waiting: nothing is attributed and the row says Rose's work
+ * can't be confirmed. A package another owner also reports stays unattributed even on the one candidate. The same
+ * package on another app's virtual display (not a ComputerControl device) is never Rose's work. The controller still
+ * binds a selection to its own session display (agent-pip WatchBinding.fromSelection). The
  * signer-gated AgentProvider is not read. Nothing is invented: no such task is a truthful empty state, a failed query
  * an unavailable state, and work the platform has not reported yet is said to be not reported, never "none".
  * Pure logic, no Android types.
@@ -88,6 +96,8 @@ final class RoseAgentWork {
     static final String NOT_REPORTED = "Rose's work has not been reported yet";
     /** Some work on an agent screen is in an app another agent also automates, so it is not shown as Rose's. */
     static final String UNATTRIBUTED = "Some agent work can't be told apart from another agent's";
+    /** The platform's reports and the running tasks do not yet prove which agent screen is Rose's. */
+    static final String UNCONFIRMED = "Rose's work can't be confirmed right now";
 
     /**
      * How many items are their display's current screen: the apps Rose is actually working in now, as the platform
@@ -150,30 +160,55 @@ final class RoseAgentWork {
      * controllerUid: the uid of CONTROLLER for the current user, or -1 when it is not installed for that user.
      * currentUser: only that user's agent work is shown (user/profile boundary).
      * automation: what the platform reported for currentUser.
-     * sessionDisplays: the displays of the virtual devices whose platform-set profile is DEVICE_PROFILE_COMPUTER_CONTROL.
+     * sessionDevices: display id to device id, for the virtual devices whose platform-set profile is
+     * DEVICE_PROFILE_COMPUTER_CONTROL.
+     * complete: false when the task list may be truncated, so a device of CONTROLLER could be missing from it.
      */
-    static RoseAgentWork of(int controllerUid, int currentUser, Automation automation, Collection<Integer> sessionDisplays,
-            List<Task> tasks) {
+    static RoseAgentWork of(int controllerUid, int currentUser, Automation automation, Map<Integer, Integer> sessionDevices,
+            List<Task> tasks, boolean complete) {
         if (controllerUid < 0) return unavailable("Rose agent control is not installed for this user");
-        if (automation == null || sessionDisplays == null || tasks == null) {
+        if (automation == null || sessionDevices == null || tasks == null) {
             return unavailable("Running work could not be read");
         }
-        List<Task> items = new ArrayList<>(), shared = new ArrayList<>();
-        boolean candidates = false;
+        // This user's tasks on session displays, by device, the controller's own tasks included: they too are on
+        // its displays and in its report.
+        Map<Integer, List<Task>> byDevice = new LinkedHashMap<>();
         for (Task t : tasks) {
-            if (t.userId != currentUser || t.displayId <= 0 || !sessionDisplays.contains(t.displayId)
-                    || CONTROLLER.equals(t.packageName)) {
-                continue;
-            }
-            candidates = true;
-            if (!automation.packages.contains(t.packageName)) continue;
-            if (automation.others.contains(t.packageName)) shared.add(t);
-            else items.add(t);
+            Integer device = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;
+            if (t.userId != currentUser || device == null) continue;
+            byDevice.computeIfAbsent(device, k -> new ArrayList<>()).add(t);
         }
-        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, shared, shared.isEmpty() ? null : UNATTRIBUTED);
-        if (!shared.isEmpty()) return new RoseAgentWork(State.UNAVAILABLE, items, shared, UNATTRIBUTED);
-        if (candidates && !automation.reported) return unavailable(NOT_REPORTED);
+        if (byDevice.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
+        if (!automation.reported) return unavailable(NOT_REPORTED);
+        if (!complete) return unavailable(UNCONFIRMED);
+        List<List<Task>> candidates = new ArrayList<>();
+        for (List<Task> work : byDevice.values()) {
+            boolean candidate = true;
+            for (Task t : work) candidate &= automation.packages.contains(t.packageName);
+            if (candidate) candidates.add(work);
+        }
+        if (candidates.isEmpty()) {
+            // A non-empty report with none of its devices visible is a report still in flight, not "no work".
+            return automation.packages.isEmpty() ? new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY)
+                    : unavailable(UNCONFIRMED);
+        }
+        List<Task> items = new ArrayList<>(), held = new ArrayList<>();
+        for (List<Task> work : candidates) {
+            for (Task t : work) {
+                if (CONTROLLER.equals(t.packageName)) continue;
+                if (candidates.size() > 1 || automation.others.contains(t.packageName)) held.add(t);
+                else items.add(t);
+            }
+        }
+        if (candidates.size() > 1) return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), held, UNCONFIRMED);
+        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, held, held.isEmpty() ? null : UNATTRIBUTED);
+        if (!held.isEmpty()) return new RoseAgentWork(State.UNAVAILABLE, items, held, UNATTRIBUTED);
         return new RoseAgentWork(State.EMPTY, items, EMPTY);
+    }
+
+    /** A report arrived while the platform was being read: the read is not one consistent state. */
+    static RoseAgentWork unconfirmed() {
+        return unavailable(UNCONFIRMED);
     }
 
     enum Open { WATCH, NOT_CURRENT, CHANGED, UNATTRIBUTED, GONE }
@@ -208,7 +243,7 @@ final class RoseAgentWork {
             case WATCH: return null;
             case NOT_CURRENT: return label + " is not on Rose's screen right now";
             case CHANGED: return label + " changed; pick it again";
-            case UNATTRIBUTED: return label + " can't be told apart from another agent's work";
+            case UNATTRIBUTED: return label + " can't be confirmed as Rose's work";
             default: return label + " is no longer running";
         }
     }

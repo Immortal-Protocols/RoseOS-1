@@ -115,10 +115,10 @@ class RoseSwitcherTest(unittest.TestCase):
     def test_labels_are_looked_up_only_for_kept_work_and_a_failure_names_only_its_step(self):
         strip = (OVERLAY/'RoseAgentStrip.java').read_text()
         read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
-        tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(64)'):read.index('RoseAgentWork.of(')]
+        tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'):read.index('RoseAgentWork.of(')]
         self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
         self.assertNotIn('getApplicationLabel', tasks)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDisplays, tasks).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDevices, tasks, complete).labelled(', read)
         self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
         for step in ('CONTROLLER', 'AUTOMATION', 'TASKS', 'DISPLAYS'):
             self.assertIn(f'RoseAgentWork.Step.{step}', read)
@@ -158,7 +158,8 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public java.util.List<VirtualDevice> getVirtualDevices(){return null;} }',
             'android/companion/virtual/VirtualDevice.java': 'package android.companion.virtual; '
                 'public final class VirtualDevice { public static final int DEVICE_PROFILE_COMPUTER_CONTROL = 1; '
-                'public int getDeviceProfile(){return 0;} public int[] getDisplayIds(){return null;} }',
+                'public int getDeviceProfile(){return 0;} public int getDeviceId(){return 0;} '
+                'public int[] getDisplayIds(){return null;} }',
             'android/companion/virtual/computercontrol/AutomatedPackageListener.java':
                 'package android.companion.virtual.computercontrol; public interface AutomatedPackageListener { '
                 'void onAutomatedPackagesChanged(String automatingPackage, java.util.List<String> automatedPackages, '
@@ -200,7 +201,7 @@ class RoseSwitcherTest(unittest.TestCase):
         for banned in ('AgentProvider', 'getContentResolver', 'content://', 'requestPermissions', 'grantRuntimePermission',
                 'checkSignatures', 'startActivityFromRecents', 'moveTaskToFront', 'dev.pixel.voice'):
             self.assertNotIn(banned, strip, banned)
-        self.assertIn('ActivityTaskManager.getInstance().getTasks(64)', strip)
+        self.assertIn('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)', strip)
         self.assertIn('vdm.registerAutomatedPackageListener(Runnable::run, this);', strip)
         select = strip[strip.index('private void select('):strip.index('private TextView text(')]
         # #156 M004: the tap re-reads off the UI thread, the newest tap wins, the decision uses that fresh read, and
@@ -333,7 +334,7 @@ class ControllerReadPermissionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
         self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDisplays, tasks).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDevices, tasks, complete).labelled(', read)
         self.assertIn('platform.forUser(user)', read)
         # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
         self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
@@ -461,8 +462,9 @@ class PrivateControllerDisplayTest(unittest.TestCase):
             'a refused or missing registration is named at its own step on every read')
         self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getVirtualDevices()'))
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('if (candidates && !automation.reported) return unavailable(NOT_REPORTED);', work,
-            'unreported work is never shown as "No background work"')
+        self.assertLess(work.index('if (byDevice.isEmpty()) return new RoseAgentWork(State.EMPTY'),
+            work.index('if (!automation.reported) return unavailable(NOT_REPORTED);'),
+            'unreported session work is never shown as "No background work"')
 
 class CrossDisplayAttributionTest(unittest.TestCase):
     """#156 disclosed gap after PR337: a package Rose automates can also run on another app's virtual display (or on
@@ -513,15 +515,74 @@ class CrossDisplayAttributionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertNotIn('getDeviceIdForDisplayId', code, 'any virtual device display is no longer enough')
         self.assertIn('if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;', read)
-        self.assertIn('for (int id : device.getDisplayIds()) if (id > 0) sessionDisplays.add(id);', read)
+        self.assertIn('for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());', read)
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('if (!automation.packages.contains(t.packageName)) continue;\n'
-            '            if (automation.others.contains(t.packageName)) shared.add(t);\n'
-            '            else items.add(t);', work)
+        self.assertIn('if (candidates.size() > 1 || automation.others.contains(t.packageName)) held.add(t);', work)
         self.assertIn('for (Task t : fresh.unattributed) if (t.taskId == card.taskId) return Open.UNATTRIBUTED;', work)
         show = code[code.index('private void show(RoseAgentWork next) {'):code.index('private void select(')]
         self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unattributed tasks are never cards')
         self.assertNotIn('unattributed', show)
+
+class InitialLoadAttributionTest(unittest.TestCase):
+    """#156 initial load after PR338: the platform posts one report per owner and user with no completion marker, so a
+    card published from the controller's report before another owner's arrived was false attribution (old-fails on
+    66dbe45: two cards for mail on displays 7 and 11). There is no existing barrier or attested owner/display channel
+    (pinned below); the row now decides per session device and fails closed where the reports do not prove it."""
+    PINNED = {'IAutomatedPackageListener.aidl': 'f517dec31a738885227ffb7271be38f14f5acc904e3a164ca624e52ef153a5da',
+        'IVirtualDevice.aidl': '421c9834ce90837521d7ee990353562509b5ed1c59f2fe9e8af0678289141521',
+        'TaskInfo.java': '6c63deec3f2d8f23a5fb7cf616f803738a361909c506d33f68f933f3aedb2f8f',
+        'VirtualDeviceManager.java': '71fcaaea4eb03c53c6f89b4803c56014fe31218acef5a3d396ffc143e7185e1f'}
+    method = staticmethod(PrivateControllerDisplayTest.method)
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in self.PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_the_platform_offers_no_snapshot_barrier_sequence_or_owner_per_display(self):
+        import re
+        aidl = (FIXTURES/'IAutomatedPackageListener.aidl').read_text()
+        self.assertIn('oneway interface IAutomatedPackageListener {', aidl)
+        body = re.sub(r'/\*.*?\*/', '', aidl[aidl.index('oneway interface'):], flags=re.S)
+        self.assertEqual(re.findall(r'void (\w+)\(', body), ['onAutomatedPackagesChanged'], 'one callback, no "complete"')
+        self.assertEqual(re.sub(r'\s+', ' ', body[body.index('('):body.index(')') + 1]),
+            '( in String automatingPackage, in List<String> automatedPackages, in UserHandle user)',
+            'no device id, display id, sequence or generation')
+        repo = (FIXTURES/'AutomatedPackagesRepository.java').read_text()
+        snapshot = self.method(repo, 'public void registerAutomatedPackageListener(IAutomatedPackageListener listener) {')
+        self.assertEqual(snapshot.count('mHandler.post('), 1, 'one post per (owner, user) entry, inside the loop')
+        self.assertLess(snapshot.index('for (int j = 0; j < userToPackages.size(); ++j) {'), snapshot.index('mHandler.post('))
+        client = (FIXTURES/'VirtualDeviceManager.java').read_text()
+        delegate = client[client.index('private static class AutomatedPackageListenerDelegate'):
+            client.index('private static class LocalComputerControlConsentManager')]
+        self.assertIn('mExecutor.execute(() -> mListener.onAutomatedPackagesChanged(', delegate, 'forwarded as is')
+        device = re.sub(r'/\*.*?\*/', '', (FIXTURES/'IVirtualDevice.aidl').read_text(), flags=re.S)
+        for owner in ('getOwnerPackageName', 'getOwnerUid', 'getOwner('):
+            self.assertNotIn(owner, device)
+        public = (FIXTURES/'VirtualDevice.java').read_text()
+        self.assertNotIn('getOwner', public)
+        task = (FIXTURES/'TaskInfo.java').read_text()
+        for field in ('launchedFrom', 'ownerUid', 'ownerPackage', 'deviceId'):
+            self.assertNotIn(field, task, f'TaskInfo carries no {field}')
+
+    def test_the_row_fails_closed_where_ownership_is_not_proven(self):
+        work = (OVERLAY/'RoseAgentWork.java').read_text()
+        decide = work[work.index('static RoseAgentWork of(int controllerUid'):work.index('static RoseAgentWork unconfirmed()')]
+        self.assertIn('Integer device = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;', decide)
+        self.assertIn('for (Task t : work) candidate &= automation.packages.contains(t.packageName);', decide,
+            'a device is a candidate only if every one of its tasks is in the controller\'s report')
+        self.assertIn('if (!complete) return unavailable(UNCONFIRMED);', decide)
+        self.assertIn(': unavailable(UNCONFIRMED);', decide, 'a report with no visible device is in flight, not empty')
+        self.assertIn('if (candidates.size() > 1) return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), held, UNCONFIRMED);',
+            decide)
+        for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
+            self.assertNotIn(timed, ControllerReadPermissionTest.code(), f'{timed}: no guessed delay')
+        strip = (OVERLAY/'RoseAgentStrip.java').read_text()
+        read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
+        self.assertLess(read.index('long generation = platform.generation();'), read.index('platform.forUser(user)'))
+        self.assertLess(read.index('vdm.getVirtualDevices()'), read.index('if (platform.generation() != generation) return RoseAgentWork.unconfirmed();'))
+        self.assertIn('boolean complete = running.size() < TASK_LIMIT;', read)
+        callback = strip[strip.index('public void onAutomatedPackagesChanged('):strip.index('synchronized RoseAgentWork.Automation forUser(')]
+        self.assertLess(callback.index('generation++;'), callback.index('strip.refresh();'), 'every report re-reads')
 
 if __name__ == '__main__':
     unittest.main()

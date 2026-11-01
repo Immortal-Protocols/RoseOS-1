@@ -118,6 +118,8 @@ public final class RoseAgentStrip extends LinearLayout {
         private final Set<Integer> reported = new HashSet<>();
         private final List<WeakReference<RoseAgentStrip>> strips = new ArrayList<>();
         private boolean registered;
+        /** Counts every report, so a read can tell that one arrived while it was reading the platform. */
+        private long generation;
 
         private Automation(Context context) { this.context = context; }
 
@@ -143,6 +145,7 @@ public final class RoseAgentStrip extends LinearLayout {
             List<RoseAgentStrip> visible = new ArrayList<>();
             synchronized (this) {
                 int id = user.getIdentifier();
+                generation++;
                 if (RoseAgentWork.CONTROLLER.equals(automatingPackage)) reported.add(id);
                 Map<Integer, Set<String>> byUser = owners.computeIfAbsent(automatingPackage, k -> new HashMap<>());
                 if (automatedPackages == null || automatedPackages.isEmpty()) byUser.remove(id);
@@ -169,9 +172,12 @@ public final class RoseAgentStrip extends LinearLayout {
             }
             return new RoseAgentWork.Automation(reported.contains(user), packages, others);
         }
+
+        synchronized long generation() { return generation; }
     }
 
     private static final float IDLE = 0.35f;
+    private static final int TASK_LIMIT = 64;
 
     /**
      * The row's height when this context belongs to the fallback overview (RecentsActivity, whose layout holds the
@@ -296,12 +302,16 @@ public final class RoseAgentStrip extends LinearLayout {
             step = RoseAgentWork.Step.AUTOMATION;
             Automation platform = Automation.of(context);
             platform.register();
+            long generation = platform.generation();
             RoseAgentWork.Automation automation = platform.forUser(user);
             step = RoseAgentWork.Step.TASKS;
             List<RoseAgentWork.Task> tasks = new ArrayList<>();
             List<Integer> seenDisplays = new ArrayList<>();
-            // getTasks lists tasks front to back, so the first task met on a display is its current screen.
-            for (ActivityManager.RunningTaskInfo t : ActivityTaskManager.getInstance().getTasks(64)) {
+            // getTasks lists tasks front to back, so the first task met on a display is its current screen. A full
+            // list may be truncated, and a missing device of the controller would make another one look unique.
+            List<ActivityManager.RunningTaskInfo> running = ActivityTaskManager.getInstance().getTasks(TASK_LIMIT);
+            boolean complete = running.size() < TASK_LIMIT;
+            for (ActivityManager.RunningTaskInfo t : running) {
                 if (t.topActivity == null) continue;
                 String pkg = t.topActivity.getPackageName();
                 boolean top = !seenDisplays.contains(t.displayId);
@@ -313,12 +323,14 @@ public final class RoseAgentStrip extends LinearLayout {
             // getDisplayIds() need no permission. Another app's virtual display (streaming, casting) is not one.
             step = RoseAgentWork.Step.DISPLAYS;
             VirtualDeviceManager vdm = context.getSystemService(VirtualDeviceManager.class);
-            List<Integer> sessionDisplays = new ArrayList<>();
+            Map<Integer, Integer> sessionDevices = new HashMap<>();
             for (VirtualDevice device : vdm.getVirtualDevices()) {
                 if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;
-                for (int id : device.getDisplayIds()) if (id > 0) sessionDisplays.add(id);
+                for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());
             }
-            return RoseAgentWork.of(controllerUid, user, automation, sessionDisplays, tasks).labelled(task ->
+            // A report that arrived during these reads means they are not one state; that report refreshes the row.
+            if (platform.generation() != generation) return RoseAgentWork.unconfirmed();
+            return RoseAgentWork.of(controllerUid, user, automation, sessionDevices, tasks, complete).labelled(task ->
                     pm.getApplicationLabel(pm.getApplicationInfoAsUser(task.packageName, 0, task.userId)).toString());
         } catch (RuntimeException e) {
             Log.w(TAG, "Agent work unavailable at " + step + " (" + e.getClass().getSimpleName() + ")");
