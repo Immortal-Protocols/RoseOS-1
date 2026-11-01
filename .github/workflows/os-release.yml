@@ -161,6 +161,11 @@ jobs:
             # The retained Rango route pins its device, product and build in os/retained-rango/release.json; no input pins.
             [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
             [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" ]]
+          elif [[ "$MODE" == app-only && "$APPS" == auto ]]; then
+            # AGENT-BETA-AUTO: the dispatched app route pins exactly one main commit; the builder allocates the Rose Agent
+            # version under the shared lock and no OS build identity exists, so no build number or BUILD_DATETIME pin is
+            # admitted. The exact-commit-on-main check below still applies.
+            [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" ]]
           elif [[ "$MODE" == rango-factory-observe ]]; then
             # FOLD-OBSERVE-WIRE-001: read-only observation; every binding is committed, the recipe is this workflow commit.
             # No pins, resume, promotion, campaign, publication, signing profile, enrollment or recovery input is admitted.

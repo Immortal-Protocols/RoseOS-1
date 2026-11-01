@@ -170,5 +170,71 @@ class Workflow(unittest.TestCase):
         self.assertEqual(aba.run_name(SHA), f'Agent Beta auto {SHA}')
 
 
+class RealGuard(unittest.TestCase):
+    """The whole os-release guard step 'Candidate is an exact commit on main', run with the dispatcher's own payload.
+    git is a stub that answers only the exact-commit-on-main ancestry check (MAIN_SHAS); everything else is the real
+    step and the real helpers it calls (release-pipeline resolve_device, release-chain check)."""
+    # os-release.yml workflow_dispatch input defaults, as the workflow's top-level env sees them.
+    DEFAULTS = {'MODE': 'latest-beta', 'ROSE_DEVICE': 'frankel', 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '',
+                'CHANNEL': 'beta', 'APPS': '', 'RESUME_STAGE': 'none', 'RESUME_UNSIGNED_SHA256': '', 'RESUME_SOURCE_RUN': '',
+                'RESUME_SIGNED_SHA256': '', 'REUSE_BINDING': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '',
+                'ROSE_RANGO_PUBLISH': 'false', 'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '', 'CAMPAIGN': '',
+                'PROMOTE': 'false', 'APP_PUBLISH': 'false', 'ALPHA_RECOVER': 'false'}
+    INPUT_ENV = {'mode': 'MODE', 'candidate_sha': 'CANDIDATE_SHA', 'apps': 'APPS', 'app_publish': 'APP_PUBLISH',
+                 'build_number': 'BUILD_NUMBER', 'build_timestamp': 'BUILD_TIMESTAMP', 'promote': 'PROMOTE',
+                 'campaign': 'CAMPAIGN', 'resume_failed_stage': 'RESUME_STAGE'}
+
+    def step(self):
+        guard = OS_RELEASE.split('\n  guard:\n', 1)[1]
+        match = re.search(r'      - name: Candidate is an exact commit on main\n.*?        run: \|\n((?:          [^\n]*\n)+)', guard, re.S)
+        self.assertIn('git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main', match[1], 'the exact-commit check is part of the step')
+        return 'set -euo pipefail\n' + '\n'.join(line[10:] for line in match[1].splitlines()) + '\n'
+
+    def run_guard(self, inputs, on_main=(SHA,)):
+        import os
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            git = Path(tmp)/'git'
+            git.write_text('#!/bin/sh\n[ "$1 $2 $4" = "merge-base --is-ancestor origin/main" ] || exit 97\n'
+                           'case " $MAIN_SHAS " in *" $3 "*) exit 0;; *) exit 1;; esac\n')
+            git.chmod(0o755)
+            env = dict(self.DEFAULTS, PATH=f'{tmp}:{os.environ["PATH"]}', GITHUB_SHA='f' * 40, MAIN_SHAS=' '.join(on_main))
+            for key, value in inputs.items():
+                env[self.INPUT_ENV[key]] = value
+            return subprocess.run(['bash', '-c', self.step()], env=env, cwd=ROOT, capture_output=True, text=True).returncode
+
+    def payload(self, **change):
+        gh = FakeGitHub()
+        aba.dispatch(dict(ENV), opener=gh, pause=lambda s: None)
+        (_, _, body), = gh.posts()
+        self.assertEqual(body['ref'], 'main')
+        return dict(body['inputs'], **change)
+
+    def test_the_dispatchers_exact_payload_passes_the_real_guard(self):
+        self.assertEqual(self.run_guard(self.payload()), 0)
+
+    def test_stale_malformed_or_pinned_auto_requests_are_refused(self):
+        for name, inputs, on_main in (
+                ('candidate not on main (stale or foreign)', self.payload(), ()),
+                ('short sha', self.payload(candidate_sha=SHA[:39]), (SHA[:39],)),
+                ('branch name', self.payload(candidate_sha='main'), ('main',)),
+                ('uppercase sha', self.payload(candidate_sha=SHA.upper()), (SHA.upper(),)),
+                ('empty candidate', self.payload(candidate_sha=''), ('',)),
+                ('build pin on auto', self.payload(build_number='2026110101'), (SHA,)),
+                ('timestamp pin on auto', self.payload(build_timestamp='1793550000'), (SHA,)),
+                ('auto outside app-only', self.payload(mode='os-release'), (SHA,)),
+                ('promotion', self.payload(promote='true'), (SHA,)),
+                ('campaign', self.payload(campaign='start'), (SHA,)),
+                ('resume', self.payload(resume_failed_stage='sign'), (SHA,))):
+            with self.subTest(name):
+                self.assertNotEqual(self.run_guard(inputs, on_main), 0, name)
+
+    def test_explicit_app_only_keeps_its_pins(self):
+        explicit = {'mode': 'app-only', 'candidate_sha': SHA, 'apps': '[["dev.pixel.voice", 400]]'}
+        self.assertNotEqual(self.run_guard(explicit), 0, 'explicit app-only still needs its build pins')
+        self.assertEqual(self.run_guard(dict(explicit, build_number='2026110101', build_timestamp='1793550000')), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
