@@ -789,6 +789,18 @@ span.well{cursor:default}
 /* Glass lenses (3) also sit over the wallpaper: light muted symbol for contrast. */
 .screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]{color:#ffc2cd;background-color:rgba(232,80,100,.3)}
 
+/* ---------- HIFI delta 01 (2026-11-01): measured contrast/state-clarity fixes only ---------- */
+/* 3 — voice-on symbol was navy on a dark lens (2.7:1); light symbol like the other wallpaper options. */
+.screen[data-tray="3"] #home-tray #tray-voice{color:#fff;filter:drop-shadow(0 1px 1px rgba(10,25,50,.4))}
+/* 7 — muted tint was a square box touching the slab edges; inset rounded pill inside its segment. */
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]{background-color:transparent;box-shadow:-1px 0 0 rgba(255,255,255,.45)}
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]::before{display:block;content:'';position:absolute;inset:3px 10px;border-radius:20px;padding:0;
+  background:rgba(232,80,100,.28);box-shadow:inset 0 0 0 1.5px rgba(255,170,185,.6);-webkit-mask:none;mask:none;opacity:1;z-index:0}
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]::after{right:16px;top:6px}
+.screen[data-tray="7"] #home-tray #tray-voice svg{position:relative;z-index:1}
+/* 9 — end-call X on the grey satin lens was 2.9:1; deeper coral. */
+.screen[data-tray="9"] #rose-end .end svg{color:#b8321f}
+
 </style></head>
 <body>
 <div class="page">
