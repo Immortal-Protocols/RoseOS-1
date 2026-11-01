@@ -840,6 +840,17 @@ class Server:
             if obj is not None and hasattr(obj, method):
                 with contextlib.suppress(Exception):
                     getattr(obj, method)()
+        # Close Rose's workspace on the phone (RealPhone.close() waits on the link: on a worker
+        # thread, bounded, so a slow or gone phone cannot hold up the exit). The fake phone has none.
+        close = getattr(self.phone, "close", None)
+        if callable(close):
+            def close_quietly() -> None:
+                with contextlib.suppress(Exception):
+                    close()
+
+            t = threading.Thread(target=close_quietly, name="workspace-close", daemon=True)
+            t.start()
+            t.join(3.0)
 
     def _make_transport(self) -> Any:
         a = self.args
@@ -1195,18 +1206,25 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
 
     @app.get("/api/realphone")
     def phone_status(look: str = "") -> Response:
-        """Real phone link status; look=apps|screen adds a read-only observation (never an action)."""
+        """Real phone link status; look=apps|screen|workspace adds a read-only observation
+        (never an action; workspace is the background controller's state)."""
 
         if not isinstance(server.phone, RealPhone):
             return _json({"real": False})
         link = server.phone.link
-        out: dict = {"real": True, "connected": link.connected, "model": link.model}
+        out: dict = {"real": True, "connected": link.connected, "model": link.model,
+                     # Rose's workspace as Rose sees it (cached, no phone call): the app open there,
+                     # its session, why it last closed, seconds until the idle close.
+                     "background": server.phone.background_status()}
         if link.connected:
             out["control"] = link.call("control_status", timeout=8)
             if look == "apps":
                 out["apps"] = link.call("list_apps", timeout=8)
             elif look == "screen":
                 out["screen"] = link.call("inspect_ui", timeout=8)
+            elif look == "workspace":
+                out["workspace"] = link.call("app_command", timeout=8, packageName="dev.pixel.backgroundcontrol",
+                                             operation="get_state", params={})
         return _json(out)
 
     @app.websocket("/ws/phone")
