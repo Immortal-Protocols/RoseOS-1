@@ -165,7 +165,7 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public void startActivityAsUser(Intent i, android.os.UserHandle u) {} '
                 'public abstract android.content.res.Resources getResources(); }',
             'android/os/UserHandle.java': 'package android.os; public final class UserHandle { '
-                'public static UserHandle of(int u){return null;} }',
+                'public static UserHandle of(int u){return null;} public int getIdentifier(){return 0;} }',
             'com/android/launcher3/R.java': 'package com.android.launcher3; public final class R { '
                 'public static final class dimen { public static final int rose_agent_strip_height = 1; } '
                 'public static final class id { public static final int action_buttons = 2; } }',
@@ -286,6 +286,48 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
         self.assertGreaterEqual(height, 12 + 18 + 72 + 18)
         self.assertNotIn('title = text(', self.STRIP, 'the HiFi link row replaces the old static title')
+
+class ControllerReadPermissionTest(unittest.TestCase):
+    """Owner report: the switcher showed "Rose's work could not be read (controller)". The controller step was
+    ActivityManager.getCurrentUser(), which reaches ActivityManagerService.getCurrentUserId() ->
+    UserController.getCurrentUserIdChecked() -> checkGetCurrentUserPermissions() (frameworks/base 84183aff): a
+    SecurityException unless the caller holds INTERACT_ACROSS_USERS or INTERACT_ACROSS_USERS_FULL. Launcher3 47accce
+    requests neither (its pinned manifests below), so every read failed at that step."""
+    MANIFESTS = {'Launcher3-AndroidManifest.xml': '72405b81a9b05834565dbe53018209896c82b82c7d6510ef34e898481c3d7d7b',
+        'Launcher3-AndroidManifest-common.xml': 'a13db12d6b1656af6247356fc2f3b039dd2f0bb81a8837e8db5f4e2130bf3607',
+        'Launcher3-quickstep-AndroidManifest.xml': '63aad650b57cc3953a3243bddcdae0f7b29fee9e0fa3a13b0de26ee0fad9213f'}
+
+    @staticmethod
+    def code():
+        """RoseAgentStrip without comments: what actually runs."""
+        import re
+        text = (OVERLAY/'RoseAgentStrip.java').read_text()
+        text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+        return '\n'.join(line.split('//')[0] for line in text.splitlines())
+
+    def test_launcher3_holds_no_cross_user_permission(self):
+        for name, digest in self.MANIFESTS.items():
+            data = (FIXTURES/name).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest, name)
+            for permission in ('android.permission.INTERACT_ACROSS_USERS"', 'INTERACT_ACROSS_USERS_FULL'):
+                self.assertNotIn(permission.encode(), data, f'{name} would grant {permission}')
+        self.assertIn(b'android.permission.QUERY_ALL_PACKAGES', (FIXTURES/'Launcher3-quickstep-AndroidManifest.xml').read_bytes(),
+            'package visibility for the controller lookup is held')
+
+    def test_the_row_reads_only_its_own_user_and_needs_no_cross_user_call(self):
+        code = self.code()
+        for needs_permission in ('getCurrentUser(', 'getCurrentUserId(', 'getUsers(', 'getProfiles(', 'UserHandle.ALL',
+                'UserHandle.USER_ALL', 'createContextAsUser'):
+            self.assertNotIn(needs_permission, code, needs_permission)
+        read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
+        self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
+        self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, displays, tasks).labelled(', read)
+        # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
+        self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
+        self.assertIn('UserHandle.of(card.userId)', code)
+        import re
+        self.assertEqual(len(re.findall(r'AsUser\(', code)), 3, 'exactly these same-user calls')
 
 if __name__ == '__main__':
     unittest.main()

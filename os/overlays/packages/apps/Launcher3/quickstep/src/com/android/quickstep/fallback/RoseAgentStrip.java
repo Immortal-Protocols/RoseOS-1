@@ -14,6 +14,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
+import android.os.Process;
 import android.os.UserHandle;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -190,7 +191,11 @@ public final class RoseAgentStrip extends LinearLayout {
     private static RoseAgentWork read(Context context) {
         RoseAgentWork.Step step = RoseAgentWork.Step.CONTROLLER;
         try {
-            int user = ActivityManager.getCurrentUser();
+            // This overview's own user: the fallback overview runs in the foreground user's Launcher3. Not
+            // ActivityManager.getCurrentUser(), which needs INTERACT_ACROSS_USERS(_FULL) (UserController
+            // .checkGetCurrentUserPermissions) that Launcher3 does not hold, so it always threw here and the row read
+            // "Rose's work could not be read (controller)". Every lookup below then stays within this user.
+            int user = Process.myUserHandle().getIdentifier();
             PackageManager pm = context.getPackageManager();
             int controllerUid;
             try {
