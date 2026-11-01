@@ -3,6 +3,7 @@ the pinned fallback layout (Launcher3 47accce), runs the pure RoseAgentWork deci
 boundaries. Source and fixture logic only: no Launcher3 build, emulator or device."""
 from pathlib import Path
 import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -118,9 +119,9 @@ class RoseSwitcherTest(unittest.TestCase):
         tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'):read.index('RoseAgentWork.of(')]
         self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
         self.assertNotIn('getApplicationLabel', tasks)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDevices, tasks, complete).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(', read)
         self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
-        for step in ('CONTROLLER', 'AUTOMATION', 'TASKS', 'DISPLAYS'):
+        for step in ('CONTROLLER', 'OWNERSHIP', 'TASKS', 'DISPLAYS'):
             self.assertIn(f'RoseAgentWork.Step.{step}', read)
         self.assertIn('return RoseAgentWork.failed(step);', read)
         self.assertNotIn('getMessage', read, 'no exception text in the status or the log')
@@ -163,7 +164,9 @@ class RoseSwitcherTest(unittest.TestCase):
             'android/companion/virtual/computercontrol/AutomatedPackageListener.java':
                 'package android.companion.virtual.computercontrol; public interface AutomatedPackageListener { '
                 'void onAutomatedPackagesChanged(String automatingPackage, java.util.List<String> automatedPackages, '
-                'android.os.UserHandle user); }',
+                'android.os.UserHandle user); '
+                'default void onAutomatedDevicesChanged(long generation, int[] deviceIds, String[] ownerPackages, '
+                'int[] ownerUids) {} }',
             'android/content/pm/PackageManager.java': 'package android.content.pm; public abstract class PackageManager { '
                 'public static class NameNotFoundException extends Exception {} '
                 'public abstract int getPackageUidAsUser(String p, int u) throws NameNotFoundException; '
@@ -334,8 +337,8 @@ class ControllerReadPermissionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
         self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, sessionDevices, tasks, complete).labelled(', read)
-        self.assertIn('platform.forUser(user)', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(', read)
+        self.assertIn('RoseAgentWork.Owners owners = platform.owners();', read)
         # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
         self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
         self.assertIn('UserHandle.of(card.userId)', code)
@@ -436,34 +439,31 @@ class PrivateControllerDisplayTest(unittest.TestCase):
         self.assertNotIn('hasAccess', tasks)
         self.assertNotIn('isPrivate', tasks)
 
-    def test_only_the_exact_controllers_report_for_this_user_is_kept_and_failures_stay_named(self):
+    def test_only_the_platforms_device_ownership_is_kept_and_failures_stay_named(self):
         strip = (OVERLAY/'RoseAgentStrip.java').read_text()
-        holder = strip[strip.index('private static final class Automation implements AutomatedPackageListener {'):
+        holder = strip[strip.index('private static final class Sessions implements AutomatedPackageListener {'):
             strip.index('private static final float IDLE')]
-        callback = holder[holder.index('public void onAutomatedPackagesChanged('):holder.index('synchronized RoseAgentWork.Automation forUser(')]
-        self.assertIn('if (RoseAgentWork.CONTROLLER.equals(automatingPackage)) reported.add(id);', callback,
-            'only the exact controller\'s report makes its absence meaningful')
-        self.assertIn('else byUser.put(id, new HashSet<>(automatedPackages));', callback)
-        self.assertIn('if (automatedPackages == null || automatedPackages.isEmpty()) byUser.remove(id);', callback)
-        users = holder[holder.index('synchronized RoseAgentWork.Automation forUser('):]
-        self.assertIn('Set<String> automated = owner.getValue().get(user);', users, 'only this user\'s reports')
-        self.assertIn('if (RoseAgentWork.CONTROLLER.equals(owner.getKey())) packages = automated;', users)
-        self.assertIn('else others.addAll(automated);', users)
-        self.assertIn('if (strip.getWindowVisibility() == VISIBLE) strip.refresh();', callback, 'a change re-reads')
-        self.assertIn('new RoseAgentWork.Automation(reported.contains(user),', holder)
-        self.assertIn('if (registered) return;', holder)
-        self.assertIn('if (vdm == null) throw new IllegalStateException();', holder)
+        packages = holder[holder.index('public void onAutomatedPackagesChanged('):holder.index('public void onAutomatedDevicesChanged(')]
+        self.assertNotIn(';', re.sub(r'//.*', '', packages.split('{', 1)[1]), 'package reports attribute nothing')
+        devices = holder[holder.index('public void onAutomatedDevicesChanged('):holder.index('synchronized RoseAgentWork.Owners owners()')]
+        self.assertIn('if (!ownership.accept(snapshotGeneration, deviceIds, ownerPackages, ownerUids)) return;', devices)
+        self.assertLess(devices.index('generation++;'), devices.index('strip.refresh();'), 'every applied change re-reads')
+        register = holder[holder.index('synchronized void register() {'):holder.index('synchronized void watch(')]
+        self.assertIn('if (registered) return;', register)
+        self.assertIn('if (vdm == null) throw new IllegalStateException();', register)
+        self.assertLess(register.index('ownership.reset();'), register.index('vdm.registerAutomatedPackageListener(Runnable::run, this);'),
+            'each registration starts from nothing')
         constructor = strip[strip.index('public RoseAgentStrip(Context context, AttributeSet attrs) {'):
-            strip.index('private static final class Automation')]
-        self.assertIn('try {\n            automation.register();\n        } catch (RuntimeException e) {', constructor,
+            strip.index('private static final class Sessions')]
+        self.assertIn('try {\n            sessions.register();\n        } catch (RuntimeException e) {', constructor,
             'a refusal never fails the overview')
         read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
-        self.assertLess(read.index('step = RoseAgentWork.Step.AUTOMATION;'), read.index('platform.register();'),
+        self.assertLess(read.index('step = RoseAgentWork.Step.OWNERSHIP;'), read.index('platform.register();'),
             'a refused or missing registration is named at its own step on every read')
         self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getVirtualDevices()'))
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertLess(work.index('if (byDevice.isEmpty()) return new RoseAgentWork(State.EMPTY'),
-            work.index('if (!automation.reported) return unavailable(NOT_REPORTED);'),
+        self.assertLess(work.index('if (session.isEmpty()) return new RoseAgentWork(State.EMPTY'),
+            work.index('if (!owners.received) return unavailable(NOT_REPORTED);'),
             'unreported session work is never shown as "No background work"')
 
 class CrossDisplayAttributionTest(unittest.TestCase):
@@ -510,24 +510,29 @@ class CrossDisplayAttributionTest(unittest.TestCase):
             '        // deviceOwnerPackageName.', repo)
         # So a task on a session display is in its owner's report; reported by CONTROLLER alone, that owner is it.
 
-    def test_the_row_uses_only_session_devices_and_never_attributes_a_shared_package(self):
+    def test_the_row_uses_only_session_devices_and_attributes_by_device_owner(self):
         code = ControllerReadPermissionTest.code()
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertNotIn('getDeviceIdForDisplayId', code, 'any virtual device display is no longer enough')
         self.assertIn('if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;', read)
         self.assertIn('for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());', read)
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('if (candidates.size() > 1 || automation.others.contains(t.packageName)) held.add(t);', work)
+        self.assertIn('Owner owner = device == null ? null : owners.byDevice.get(device);', work)
+        self.assertIn('if (!CONTROLLER.equals(owner.packageName) || owner.uid != controllerUid) continue;', work,
+            'exact controller package and this user\'s controller uid')
+        for heuristic in ('candidate', 'others', 'automation.packages'):
+            self.assertNotIn(heuristic, re.sub(r'/\*.*?\*/', '', work, flags=re.S), f'{heuristic}: no package attribution')
         self.assertIn('for (Task t : fresh.unattributed) if (t.taskId == card.taskId) return Open.UNATTRIBUTED;', work)
         show = code[code.index('private void show(RoseAgentWork next) {'):code.index('private void select(')]
-        self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unattributed tasks are never cards')
+        self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unconfirmed tasks are never cards')
         self.assertNotIn('unattributed', show)
 
 class InitialLoadAttributionTest(unittest.TestCase):
     """#156 initial load after PR338: the platform posts one report per owner and user with no completion marker, so a
     card published from the controller's report before another owner's arrived was false attribution (old-fails on
     66dbe45: two cards for mail on displays 7 and 11). There is no existing barrier or attested owner/display channel
-    (pinned below); the row now decides per session device and fails closed where the reports do not prove it."""
+    (pinned below: upstream 84183aff). The agreed producer contract (onAutomatedDevicesChanged) adds complete,
+    generation-numbered device-ownership snapshots; the row attributes only through them."""
     PINNED = {'IAutomatedPackageListener.aidl': 'f517dec31a738885227ffb7271be38f14f5acc904e3a164ca624e52ef153a5da',
         'IVirtualDevice.aidl': '421c9834ce90837521d7ee990353562509b5ed1c59f2fe9e8af0678289141521',
         'TaskInfo.java': '6c63deec3f2d8f23a5fb7cf616f803738a361909c506d33f68f933f3aedb2f8f',
@@ -564,25 +569,99 @@ class InitialLoadAttributionTest(unittest.TestCase):
         for field in ('launchedFrom', 'ownerUid', 'ownerPackage', 'deviceId'):
             self.assertNotIn(field, task, f'TaskInfo carries no {field}')
 
-    def test_the_row_fails_closed_where_ownership_is_not_proven(self):
+    def test_the_row_fails_closed_where_ownership_is_not_reported(self):
         work = (OVERLAY/'RoseAgentWork.java').read_text()
         decide = work[work.index('static RoseAgentWork of(int controllerUid'):work.index('static RoseAgentWork unconfirmed()')]
-        self.assertIn('Integer device = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;', decide)
-        self.assertIn('for (Task t : work) candidate &= automation.packages.contains(t.packageName);', decide,
-            'a device is a candidate only if every one of its tasks is in the controller\'s report')
+        self.assertIn('if (owners.malformed) return failed(Step.OWNERSHIP);', decide)
         self.assertIn('if (!complete) return unavailable(UNCONFIRMED);', decide)
-        self.assertIn(': unavailable(UNCONFIRMED);', decide, 'a report with no visible device is in flight, not empty')
-        self.assertIn('if (candidates.size() > 1) return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), held, UNCONFIRMED);',
-            decide)
+        self.assertIn('if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);', decide)
+        self.assertIn('if (owner == null) {\n                if (!CONTROLLER.equals(t.packageName)) held.add(t);', decide,
+            'missing ownership is held as unconfirmed, never a card')
         for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
             self.assertNotIn(timed, ControllerReadPermissionTest.code(), f'{timed}: no guessed delay')
         strip = (OVERLAY/'RoseAgentStrip.java').read_text()
         read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
-        self.assertLess(read.index('long generation = platform.generation();'), read.index('platform.forUser(user)'))
+        self.assertLess(read.index('long generation = platform.generation();'), read.index('platform.owners();'))
+        self.assertLess(read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'), read.index('vdm.getVirtualDevices()'),
+            'tasks first, then the devices, so a live session display a task is on is listed')
         self.assertLess(read.index('vdm.getVirtualDevices()'), read.index('if (platform.generation() != generation) return RoseAgentWork.unconfirmed();'))
         self.assertIn('boolean complete = running.size() < TASK_LIMIT;', read)
-        callback = strip[strip.index('public void onAutomatedPackagesChanged('):strip.index('synchronized RoseAgentWork.Automation forUser(')]
-        self.assertLess(callback.index('generation++;'), callback.index('strip.refresh();'), 'every report re-reads')
+        self.assertIn('List<Integer> released = platform.released(sessionDevices.keySet());', read)
+
+class AutomatedDevicesConsumerTest(unittest.TestCase):
+    """#156 consumer of the contract agreed with OS Core (relayed 19:51:27Z): AutomatedPackageListener
+    .onAutomatedDevicesChanged(long generation, int[] deviceIds, String[] ownerPackages, int[] ownerUids), a complete
+    snapshot per callback, sent on registration even when empty, generation rising on every content change. OS Core owns
+    the producer (background-control-modern-frameworks-base.patch, test_automated_devices_contract.py); this side owns
+    RoseAgentStrip/RoseAgentWork and the consumer half of the paired scenarios."""
+    SCENARIOS = FIXTURES/'automated-devices-scenarios.json'
+    PRODUCER = ROOT/'os/patches/background-control-modern-frameworks-base.patch'
+
+    @staticmethod
+    def encode(values):
+        if values is None:
+            return '~'
+        return f'{len(values)}:' + ','.join('^' if v is None else str(v) for v in values)
+
+    def test_the_paired_scenarios_replay_through_the_production_decision(self):
+        import json
+        data = json.loads(self.SCENARIOS.read_text())
+        lines = []
+        for sc in data['scenarios']:
+            lines.append(f"S\t{sc['name']}")
+            for event in sc['events']:
+                if event.get('reset'):
+                    lines.append('R')
+                else:
+                    gen, ids, pkgs, uids = event['snapshot']
+                    lines.append('\t'.join(['G', str(gen), self.encode(ids), self.encode(pkgs), self.encode(uids)]))
+            for display, device in sc['sessionDevices'].items():
+                lines.append(f'D\t{display}\t{device}')
+            lines += [f'L\t{d}' for d in sc['released']]
+            lines += ['\t'.join(['T'] + [str(v).lower() if isinstance(v, bool) else str(v) for v in t]) for t in sc['tasks']]
+            lines.append('E')
+        out = Path(tempfile.mkdtemp(prefix='rose-scenarios-'))
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseAgentWork.java'), str(ROOT/'os/tests/RoseAgentScenarios.java')],
+            check=True, capture_output=True)
+        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseAgentScenarios',
+            str(data['controllerUid']), str(data['user'])], input='\n'.join(lines) + '\n', capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        got = [l for l in result.stdout.splitlines() if '|' in l]
+        self.assertEqual(len(got), len(data['scenarios']))
+        for sc, line in zip(data['scenarios'], got):
+            name, state, cards, held, reason = line.split('|')
+            want = sc['expect']
+            with self.subTest(scenario=sc['name']):
+                self.assertEqual(name, sc['name'])
+                self.assertEqual(state, want['state'])
+                self.assertEqual(cards, ','.join(map(str, want['cards'])))
+                self.assertEqual(held, ','.join(map(str, want['unconfirmed'])))
+                self.assertEqual(reason, '~' if want['reason'] is None else want['reason'])
+        names = ' '.join(sc['name'] for sc in data['scenarios'])
+        for paired in ('1a ', '1b ', '2 ', '3 ', '4 ', '5 ', '6 ', '7 ', '8 ', '9 ', 'malformed'):
+            self.assertIn(paired, names, f'paired scenario {paired.strip()} is covered')
+
+    def test_the_consumer_overrides_exactly_the_agreed_callback(self):
+        strip = (OVERLAY/'RoseAgentStrip.java').read_text()
+        self.assertIn('@Override\n        public void onAutomatedDevicesChanged(long snapshotGeneration, int[] deviceIds, '
+            'String[] ownerPackages,\n                int[] ownerUids) {', strip)
+        self.assertEqual(strip.count('registerAutomatedPackageListener('), 1, 'the existing registration, nothing new')
+        for absent in ('VIRTUAL_DISPLAY_FLAG_PUBLIC', 'getDisplays(', 'requestPermissions', 'postDelayed'):
+            self.assertNotIn(absent, ControllerReadPermissionTest.code(), absent)
+
+    def test_the_producer_patch_declares_the_agreed_callback_before_the_consumer_ships(self):
+        """Merge gate: the consumer overrides onAutomatedDevicesChanged, so it must not reach a build whose platform
+        does not declare it. Fails until OS Core's producer hunks are on this branch's base."""
+        added = '\n'.join(l[1:] for l in self.PRODUCER.read_text().splitlines() if l.startswith('+') and not l.startswith('+++'))
+        flat = re.sub(r'\s+', ' ', added)
+        self.assertRegex(flat, r'void onAutomatedDevicesChanged\( ?long \w+, in int\[\] \w+, in String\[\] \w+, in int\[\] \w+\)',
+            'IAutomatedPackageListener (oneway AIDL) declares the agreed callback')
+        self.assertRegex(flat, r'default void onAutomatedDevicesChanged\( ?long \w+, (@NonNull )?int\[\] \w+, (@NonNull )?'
+            r'String\[\] \w+, (@NonNull )?int\[\] \w+\) ?\{ ?\}',
+            'AutomatedPackageListener declares it as a default no-op')
+        self.assertRegex(flat, r'mListener\.onAutomatedDevicesChanged\(', 'the client delegate forwards it')
 
 if __name__ == '__main__':
     unittest.main()

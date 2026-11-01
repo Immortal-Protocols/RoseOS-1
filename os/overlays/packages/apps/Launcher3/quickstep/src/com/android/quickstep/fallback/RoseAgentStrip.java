@@ -30,7 +30,6 @@ import com.android.quickstep.RecentsActivity;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -42,7 +41,7 @@ import java.util.Set;
  * independently of it. Cards are Rose Agent's real running work (RoseAgentWork). Selecting one opens Rose's viewer of
  * that work only while it is the agent screen's current task. Uses only what this recents component already holds:
  * the platform lets the configured recents component read all tasks (ActivityTaskManagerService.isGetTasksAllowed)
- * and receive its report of each ComputerControl session owner's automated packages
+ * and receive its complete snapshots of which owner each ComputerControl session device belongs to
  * (VirtualDeviceManagerService.checkCallerIsRecentsOrHomeRoleHolder). Rose's session display stays private: it is
  * never listed to Launcher3 and nothing here makes it public. No permission, no provider read, no invented card.
  */
@@ -93,38 +92,40 @@ public final class RoseAgentStrip extends LinearLayout {
         setContentDescription("Rose's background apps");
         // Registered as early as the overview exists, so its report is in before the row is first shown. A refusal
         // never fails the overview: read() retries it and the row names that step.
-        Automation automation = Automation.of(context);
-        automation.watch(this);
+        Sessions sessions = Sessions.of(context);
+        sessions.watch(this);
         try {
-            automation.register();
+            sessions.register();
         } catch (RuntimeException e) {
-            // Named by read() at Step.AUTOMATION.
+            // Named by read() at Step.OWNERSHIP.
         }
     }
 
     /**
-     * The platform's report, held for this process: VirtualDeviceManager.registerAutomatedPackageListener, which the
-     * platform allows only the recents component or the HOME role holder, sends the current state on registration and
-     * then each change, for every ComputerControl session owner. Kept per owner and user, in memory only: the row shows
-     * only what exactly CONTROLLER automates, and another owner's report only stops a package both automate from being
-     * attributed to Rose. Registered once, as Launcher3's own AutomationRepositoryImpl is, and retried on the next read
-     * if it failed. Any change refreshes the visible rows.
+     * The platform's session-device ownership, held for this process. VirtualDeviceManager
+     * .registerAutomatedPackageListener (allowed only for the recents component or the HOME role holder) sends a
+     * complete snapshot of this user's ComputerControl session devices running apps on registration, even when empty,
+     * and again on every change (onAutomatedDevicesChanged). RoseAgentWork.Ownership applies them: the first valid one
+     * per registration, then only higher generations; a malformed one is never partly applied. The package reports
+     * (onAutomatedPackagesChanged) are not used for attribution. Registered once, as Launcher3's own
+     * AutomationRepositoryImpl is, retried on the next read if it failed, with a fresh baseline each time. Any applied
+     * change refreshes the visible rows. Session displays once seen are remembered (ids are never reused), so a task
+     * left on a released one is held as unconfirmed instead of looking like another app's display.
      */
-    private static final class Automation implements AutomatedPackageListener {
-        private static Automation instance;
+    private static final class Sessions implements AutomatedPackageListener {
+        private static Sessions instance;
         private final Context context;
-        /** owner package -> user -> automated packages, as last reported. */
-        private final Map<String, Map<Integer, Set<String>>> owners = new HashMap<>();
-        private final Set<Integer> reported = new HashSet<>();
+        private final RoseAgentWork.Ownership ownership = new RoseAgentWork.Ownership();
+        private final Set<Integer> seenSessionDisplays = new HashSet<>();
         private final List<WeakReference<RoseAgentStrip>> strips = new ArrayList<>();
         private boolean registered;
-        /** Counts every report, so a read can tell that one arrived while it was reading the platform. */
+        /** Counts every applied change, so a read can tell that one arrived while it was reading the platform. */
         private long generation;
 
-        private Automation(Context context) { this.context = context; }
+        private Sessions(Context context) { this.context = context; }
 
-        static synchronized Automation of(Context context) {
-            if (instance == null) instance = new Automation(context.getApplicationContext());
+        static synchronized Sessions of(Context context) {
+            if (instance == null) instance = new Sessions(context.getApplicationContext());
             return instance;
         }
 
@@ -133,6 +134,8 @@ public final class RoseAgentStrip extends LinearLayout {
             if (registered) return;
             VirtualDeviceManager vdm = context.getSystemService(VirtualDeviceManager.class);
             if (vdm == null) throw new IllegalStateException();
+            ownership.reset();
+            generation++;
             vdm.registerAutomatedPackageListener(Runnable::run, this);
             registered = true;
         }
@@ -141,16 +144,16 @@ public final class RoseAgentStrip extends LinearLayout {
 
         @Override
         public void onAutomatedPackagesChanged(String automatingPackage, List<String> automatedPackages, UserHandle user) {
-            if (automatingPackage == null || user == null) return;
+            // Not used for attribution: ownership comes only from onAutomatedDevicesChanged.
+        }
+
+        @Override
+        public void onAutomatedDevicesChanged(long snapshotGeneration, int[] deviceIds, String[] ownerPackages,
+                int[] ownerUids) {
             List<RoseAgentStrip> visible = new ArrayList<>();
             synchronized (this) {
-                int id = user.getIdentifier();
+                if (!ownership.accept(snapshotGeneration, deviceIds, ownerPackages, ownerUids)) return;
                 generation++;
-                if (RoseAgentWork.CONTROLLER.equals(automatingPackage)) reported.add(id);
-                Map<Integer, Set<String>> byUser = owners.computeIfAbsent(automatingPackage, k -> new HashMap<>());
-                if (automatedPackages == null || automatedPackages.isEmpty()) byUser.remove(id);
-                else byUser.put(id, new HashSet<>(automatedPackages));
-                if (byUser.isEmpty()) owners.remove(automatingPackage);
                 for (int i = strips.size() - 1; i >= 0; i--) {
                     RoseAgentStrip strip = strips.get(i).get();
                     if (strip == null) strips.remove(i);
@@ -162,15 +165,14 @@ public final class RoseAgentStrip extends LinearLayout {
             }
         }
 
-        synchronized RoseAgentWork.Automation forUser(int user) {
-            Set<String> packages = Collections.emptySet(), others = new HashSet<>();
-            for (Map.Entry<String, Map<Integer, Set<String>>> owner : owners.entrySet()) {
-                Set<String> automated = owner.getValue().get(user);
-                if (automated == null) continue;
-                if (RoseAgentWork.CONTROLLER.equals(owner.getKey())) packages = automated;
-                else others.addAll(automated);
-            }
-            return new RoseAgentWork.Automation(reported.contains(user), packages, others);
+        synchronized RoseAgentWork.Owners owners() { return ownership.snapshot(); }
+
+        /** The session displays seen before and not listed now; remembers the ones listed now. */
+        synchronized List<Integer> released(Set<Integer> current) {
+            List<Integer> gone = new ArrayList<>();
+            for (int id : seenSessionDisplays) if (!current.contains(id)) gone.add(id);
+            seenSessionDisplays.addAll(current);
+            return gone;
         }
 
         synchronized long generation() { return generation; }
@@ -299,16 +301,16 @@ public final class RoseAgentStrip extends LinearLayout {
             } catch (PackageManager.NameNotFoundException e) {
                 controllerUid = -1;
             }
-            step = RoseAgentWork.Step.AUTOMATION;
-            Automation platform = Automation.of(context);
+            step = RoseAgentWork.Step.OWNERSHIP;
+            Sessions platform = Sessions.of(context);
             platform.register();
             long generation = platform.generation();
-            RoseAgentWork.Automation automation = platform.forUser(user);
+            RoseAgentWork.Owners owners = platform.owners();
             step = RoseAgentWork.Step.TASKS;
             List<RoseAgentWork.Task> tasks = new ArrayList<>();
             List<Integer> seenDisplays = new ArrayList<>();
             // getTasks lists tasks front to back, so the first task met on a display is its current screen. A full
-            // list may be truncated, and a missing device of the controller would make another one look unique.
+            // list may be truncated, so the row could not say it shows all of Rose's work.
             List<ActivityManager.RunningTaskInfo> running = ActivityTaskManager.getInstance().getTasks(TASK_LIMIT);
             boolean complete = running.size() < TASK_LIMIT;
             for (ActivityManager.RunningTaskInfo t : running) {
@@ -318,8 +320,9 @@ public final class RoseAgentStrip extends LinearLayout {
                 seenDisplays.add(t.displayId);
                 tasks.add(new RoseAgentWork.Task(t.taskId, t.displayId, t.userId, pkg, pkg, top));
             }
-            // The displays of ComputerControl session devices: only the platform's session path creates a virtual
-            // device with DEVICE_PROFILE_COMPUTER_CONTROL (VirtualDeviceManagerService), and getVirtualDevices() and
+            // The displays of ComputerControl session devices, read after the tasks so every live session display a
+            // task is on is listed: only the platform's session path creates a virtual device with
+            // DEVICE_PROFILE_COMPUTER_CONTROL (VirtualDeviceManagerService), and getVirtualDevices() and
             // getDisplayIds() need no permission. Another app's virtual display (streaming, casting) is not one.
             step = RoseAgentWork.Step.DISPLAYS;
             VirtualDeviceManager vdm = context.getSystemService(VirtualDeviceManager.class);
@@ -328,9 +331,10 @@ public final class RoseAgentStrip extends LinearLayout {
                 if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;
                 for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());
             }
-            // A report that arrived during these reads means they are not one state; that report refreshes the row.
+            List<Integer> released = platform.released(sessionDevices.keySet());
+            // A snapshot applied during these reads means they are not one state; that snapshot refreshes the row.
             if (platform.generation() != generation) return RoseAgentWork.unconfirmed();
-            return RoseAgentWork.of(controllerUid, user, automation, sessionDevices, tasks, complete).labelled(task ->
+            return RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(task ->
                     pm.getApplicationLabel(pm.getApplicationInfoAsUser(task.packageName, 0, task.userId)).toString());
         } catch (RuntimeException e) {
             Log.w(TAG, "Agent work unavailable at " + step + " (" + e.getClass().getSimpleName() + ")");
