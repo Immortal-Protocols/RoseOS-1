@@ -118,9 +118,9 @@ class RoseSwitcherTest(unittest.TestCase):
         tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(64)'):read.index('RoseAgentWork.of(')]
         self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
         self.assertNotIn('getApplicationLabel', tasks)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, displays, tasks).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, virtualDisplays, tasks).labelled(', read)
         self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
-        for step in ('CONTROLLER', 'DISPLAYS', 'TASKS'):
+        for step in ('CONTROLLER', 'AUTOMATION', 'TASKS', 'DISPLAYS'):
             self.assertIn(f'RoseAgentWork.Step.{step}', read)
         self.assertIn('return RoseAgentWork.failed(step);', read)
         self.assertNotIn('getMessage', read, 'no exception text in the status or the log')
@@ -152,14 +152,22 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public static int getCurrentUser(){return 0;} public static class RunningTaskInfo extends TaskInfo {} }',
             'android/app/TaskInfo.java': 'package android.app; public class TaskInfo { public int userId, taskId, '
                 'displayId; public android.content.ComponentName topActivity; }',
-            'android/view/Display.java': 'package android.view; public final class Display { '
-                'public int getDisplayId(){return 0;} public int getOwnerUid(){return 0;} }',
+            'android/companion/virtual/VirtualDeviceManager.java': 'package android.companion.virtual; '
+                'public final class VirtualDeviceManager { public void registerAutomatedPackageListener('
+                'java.util.concurrent.Executor e, android.companion.virtual.computercontrol.AutomatedPackageListener l) {} '
+                'public int getDeviceIdForDisplayId(int displayId){return 0;} }',
+            'android/companion/virtual/computercontrol/AutomatedPackageListener.java':
+                'package android.companion.virtual.computercontrol; public interface AutomatedPackageListener { '
+                'void onAutomatedPackagesChanged(String automatingPackage, java.util.List<String> automatedPackages, '
+                'android.os.UserHandle user); }',
             'android/content/pm/PackageManager.java': 'package android.content.pm; public abstract class PackageManager { '
                 'public static class NameNotFoundException extends Exception {} '
                 'public abstract int getPackageUidAsUser(String p, int u) throws NameNotFoundException; '
                 'public abstract ApplicationInfo getApplicationInfoAsUser(String p, int f, int u) throws NameNotFoundException; '
                 'public abstract CharSequence getApplicationLabel(ApplicationInfo i); }',
             'android/content/Context.java': 'package android.content; public abstract class Context { '
+                'public static final int DEVICE_ID_DEFAULT = 0; '
+                'public abstract Context getApplicationContext(); '
                 'public abstract android.content.pm.PackageManager getPackageManager(); '
                 'public abstract <T> T getSystemService(Class<T> c); '
                 'public void startActivityAsUser(Intent i, android.os.UserHandle u) {} '
@@ -190,7 +198,7 @@ class RoseSwitcherTest(unittest.TestCase):
                 'checkSignatures', 'startActivityFromRecents', 'moveTaskToFront', 'dev.pixel.voice'):
             self.assertNotIn(banned, strip, banned)
         self.assertIn('ActivityTaskManager.getInstance().getTasks(64)', strip)
-        self.assertIn('d.getOwnerUid()', strip)
+        self.assertIn('vdm.registerAutomatedPackageListener(Runnable::run, this);', strip)
         select = strip[strip.index('private void select('):strip.index('private TextView text(')]
         # #156 M004: the tap re-reads off the UI thread, the newest tap wins, the decision uses that fresh read, and
         # only a selection request (display + package) is sent: never an unbound viewer, never a task id as a Rose id.
@@ -322,12 +330,133 @@ class ControllerReadPermissionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
         self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, displays, tasks).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, automation, virtualDisplays, tasks).labelled(', read)
+        self.assertIn('platform.forUser(user)', read)
         # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
         self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
         self.assertIn('UserHandle.of(card.userId)', code)
         import re
         self.assertEqual(len(re.findall(r'AsUser\(', code)), 3, 'exactly these same-user calls')
+
+class PrivateControllerDisplayTest(unittest.TestCase):
+    """App Core's finding (#156): Rose's ComputerControl session display is private, so DisplayManager.getDisplays()
+    never lists it to Launcher3 and the row read "No background work" while Rose worked (the old read keyed on that
+    list; reproduced against eee21d1's RoseAgentWork). Verified here on frameworks/base 84183aff, byte for byte from
+    GrapheneOS platform_frameworks_base. The fix leaves the display private and adds no permission: it uses the
+    platform's own report to the recents component."""
+    PINNED = {'Display.java': '266257a7e246a8db480c176520900c38f08bd62d9f480490c90b894b9936aca4',
+        'VirtualDisplayAdapter.java': '61d80f52cb8cf90136c17c1ca0b8a434d294f9a6241b61397076e504995588d9',
+        'AutomatedPackagesRepository.java': 'f2b05ab0175a387a29ae9c4c3ba1781df1e9b4d7c013eeeab3460365bbdeecc0',
+        'AutomatedPackageListener.java': 'e39e3f93a046664ae045473c2bebd3a7c856cc58ff22a7019bd722ac2f3b0fe3',
+        'VirtualDeviceManagerService.java': '2ce9b1b44835e5ed2ee3e66a1cfe49d5d976e9961f605787ba7bf116850afd2e',
+        'VirtualDeviceImpl.java': 'c7ad5bcd9dfda3735522c6bf0e737d0c8e7fd36cf3450f37a049962e8b6c40c8',
+        'RunningTasks.java': '5679fb6251dc7f5a6b38685bd47f03fdebe0ab2c11376bdf59e9fe0745618925'}
+    SESSION = ROOT/'os/tests/fixtures/background-control/ComputerControlSessionImpl.java'
+
+    @staticmethod
+    def source(name):
+        return (FIXTURES/name).read_text()
+
+    @staticmethod
+    def method(text, signature):
+        """From the signature to the closing brace at the signature line's own indentation."""
+        start = text.index(signature)
+        indent = text[text.rindex('\n', 0, start) + 1:start]
+        assert indent.strip() == '', 'the signature starts its line'
+        return text[start:text.index('\n' + indent + '}\n', start)]
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in self.PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_the_session_display_is_private_and_hidden_from_launcher3(self):
+        config = self.method(self.SESSION.read_text(), 'private static VirtualDisplayConfig createSessionDisplayConfig(')
+        flags = config[config.index('final int displayFlags ='):config.index(';', config.index('final int displayFlags ='))]
+        self.assertEqual(flags.split('=', 1)[1].split(), ['DisplayManager.VIRTUAL_DISPLAY_FLAG_TRUSTED', '|',
+            'DisplayManager.VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED'], 'no VIRTUAL_DISPLAY_FLAG_PUBLIC')
+        self.assertIn('if ((mFlags & VIRTUAL_DISPLAY_FLAG_PUBLIC) == 0) {\n'
+            '                    mInfo.flags |= DisplayDeviceInfo.FLAG_PRIVATE;', self.source('VirtualDisplayAdapter.java'))
+        rule = self.method(self.source('Display.java'), 'public static boolean hasAccess(int uid, int flags, int ownerUid, int displayId)')
+        for clause in ('(flags & Display.FLAG_PRIVATE) == 0', 'uid == ownerUid', 'uid == Process.SYSTEM_UID', 'uid == 0',
+                'isUidPresentOnDisplay(uid, displayId)'):
+            self.assertIn(clause, rule)
+        self.assertEqual(rule.count('||'), 4, 'exactly those five ways to see a display')
+        # Launcher3 is not the owner, system, root or on the display: under that rule it never sees display 7.
+        def has_access(uid, private, owner, present):
+            return not private or uid in (owner, 1000, 0) or uid in present
+        self.assertFalse(has_access(10050, True, 10123, {10200}))
+        self.assertTrue(has_access(10050, False, -1, set()), 'the default display stays listed')
+
+    def test_the_row_no_longer_depends_on_the_display_list_and_keeps_it_private(self):
+        code = ControllerReadPermissionTest.code()
+        for gone in ('getDisplays(', 'getOwnerUid(', 'DisplayManager', 'RoseAgentWork.Display'):
+            self.assertNotIn(gone, code, f'{gone}: the private display is never listed to Launcher3')
+        for bypass in ('VIRTUAL_DISPLAY_FLAG_PUBLIC', 'FLAG_PRIVATE', 'isUidPresentOnDisplay', 'createVirtualDisplay',
+                'ACCESS_COMPUTER_CONTROL', 'CREATE_VIRTUAL_DEVICE', 'ADD_TRUSTED_DISPLAY', 'CAPTURE_VIDEO_OUTPUT'):
+            self.assertNotIn(bypass, code, bypass)
+        patch = PATCH.read_text()
+        self.assertNotIn('AndroidManifest', patch, 'no manifest, so no new permission')
+        self.assertNotIn('uses-permission', patch)
+        import re
+        work = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
+        self.assertNotIn('getDisplays(', work)
+
+    def test_the_report_is_the_platforms_and_only_the_recents_component_receives_it(self):
+        service = self.source('VirtualDeviceManagerService.java')
+        register = self.method(service, 'public void registerAutomatedPackageListener(IAutomatedPackageListener listener) {')
+        self.assertIn('checkCallerIsRecentsOrHomeRoleHolder();', register)
+        check = self.method(service, 'private void checkCallerIsRecentsOrHomeRoleHolder() {')
+        self.assertIn('if (mActivityTaskManagerInternal.isCallerRecents(callingUid)) {', check)
+        self.assertIn('throw new SecurityException("Caller is neither recents, nor a HOME role holder.");', check)
+        # Updated only for ComputerControl sessions, keyed by the device owner's package.
+        changed = self.method(service, 'void onRunningAppsChanged(int deviceId, @NonNull String deviceOwnerPackageName,')
+        self.assertIn('if (mComputerControlSessionProcessor.isComputerControlSession(deviceId)) {\n'
+            '            mAutomatedPackagesRepository.update(deviceId, deviceOwnerPackageName, uidPackagePairs);', changed)
+        device = self.source('VirtualDeviceImpl.java')
+        self.assertIn('mOwnerPackageName = Objects.requireNonNull(attributionSource.getPackageName());', device)
+        self.assertIn('mDeviceId, mOwnerPackageName, runningUids, newAllRunningUidPackagePairs);', device)
+        repo = self.source('AutomatedPackagesRepository.java')
+        snapshot = self.method(repo, 'public void registerAutomatedPackageListener(IAutomatedPackageListener listener) {')
+        self.assertIn('// Immediately dispatch the currently automated packages.', snapshot)
+        self.assertIn('listener.onAutomatedPackagesChanged(ownerPackage, packages, user);', snapshot)
+        self.assertIn('notifyAutomatedPackagesChanged(deviceOwnerPackageName, packagesToReport, userId);', repo)
+        self.assertIn('? Collections.emptyList()', repo, 'an ended session is reported as an empty list')
+        listener = self.source('AutomatedPackageListener.java')
+        self.assertIn('void onAutomatedPackagesChanged(\n            @NonNull String automatingPackage,', listener)
+        # The display check needs no permission and returns only a device id.
+        lookup = self.method(service, 'public int getDeviceIdForDisplayId(int displayId) {\n            VirtualDeviceImpl')
+        self.assertNotIn('enforce', lookup)
+        self.assertNotIn('check', lookup)
+        # Tasks on a private display are listed to the recents component: no display-access filter in RunningTasks.
+        tasks = self.source('RunningTasks.java')
+        self.assertNotIn('hasAccess', tasks)
+        self.assertNotIn('isPrivate', tasks)
+
+    def test_only_the_exact_controllers_report_for_this_user_is_kept_and_failures_stay_named(self):
+        strip = (OVERLAY/'RoseAgentStrip.java').read_text()
+        holder = strip[strip.index('private static final class Automation implements AutomatedPackageListener {'):
+            strip.index('private static final float IDLE')]
+        callback = holder[holder.index('public void onAutomatedPackagesChanged('):holder.index('synchronized RoseAgentWork.Automation forUser(')]
+        self.assertLess(callback.index('if (!RoseAgentWork.CONTROLLER.equals(automatingPackage)) return;'),
+            callback.index('reported.add(user.getIdentifier());'), 'another owner is ignored before anything is kept')
+        self.assertIn('controller.put(user.getIdentifier(), new HashSet<>(automatedPackages));', callback)
+        self.assertIn('if (automatedPackages.isEmpty()) controller.remove(user.getIdentifier());', callback)
+        self.assertIn('if (strip.getWindowVisibility() == VISIBLE) strip.refresh();', callback, 'a change re-reads')
+        self.assertIn('new RoseAgentWork.Automation(reported.contains(user),', holder)
+        self.assertIn('if (registered) return;', holder)
+        self.assertIn('if (vdm == null) throw new IllegalStateException();', holder)
+        constructor = strip[strip.index('public RoseAgentStrip(Context context, AttributeSet attrs) {'):
+            strip.index('private static final class Automation')]
+        self.assertIn('try {\n            automation.register();\n        } catch (RuntimeException e) {', constructor,
+            'a refusal never fails the overview')
+        read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
+        self.assertLess(read.index('step = RoseAgentWork.Step.AUTOMATION;'), read.index('platform.register();'),
+            'a refused or missing registration is named at its own step on every read')
+        self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getDeviceIdForDisplayId(id)'))
+        self.assertIn('vdm.getDeviceIdForDisplayId(id) != Context.DEVICE_ID_DEFAULT', read)
+        work = (OVERLAY/'RoseAgentWork.java').read_text()
+        self.assertIn('if (candidates && !automation.reported) return unavailable(NOT_REPORTED);', work,
+            'unreported work is never shown as "No background work"')
 
 if __name__ == '__main__':
     unittest.main()
