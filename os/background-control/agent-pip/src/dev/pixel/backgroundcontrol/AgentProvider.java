@@ -9,6 +9,7 @@ public final class AgentProvider extends ContentProvider {
    case "list_apps":result=Controller.apps(getContext());break;
    case "start":result=Controller.start(getContext(),p);break;
    case "get_state":result=Controller.state(getContext());break;
+   case "preview":result=Controller.preview(getContext(),p);break; // Rose Agent's own overview only (#225); not in capabilities
    case "command":result=Controller.command(getContext(),p);break;
    case "stop":result=Controller.agentStop(getContext(),p);break;
    default:throw new IllegalArgumentException("Unknown background operation");
