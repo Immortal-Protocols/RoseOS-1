@@ -143,6 +143,37 @@ public final class Controller {
  static void checkPoint(int x,int max){if(x<0||x>=max)throw new IllegalArgumentException("Point outside background display");}
  static void swipe(JSONArray p)throws Exception{for(int i=0;i<4;i++)checkPoint(p.getInt(i),i%2==0?width:height);session.getClass().getMethod("swipe",int.class,int.class,int.class,int.class).invoke(session,p.getInt(0),p.getInt(1),p.getInt(2),p.getInt(3));}
  static JSONObject base()throws Exception{return new JSONObject().put("status","ok").put("sessionId",id).put("targetPackage",target).put("snapshotId",snapshotId).put("width",width).put("height",height).put("scope","background_target").put("packageName",target).put("validForMs",30000).put("displayWidth",width).put("displayHeight",height).put("observedPackage",observed==null?target:observed).put("anyAppControl",anyApp);}
+ /** Rose Agent's own read-only preview of the live session (#225, PreviewPolicy): one bounded JPEG of the session's
+  * own display, refused with one fixed word unless the caller names the live session and its task. Unlike capture()
+  * it is never the agent's observation: the node map, snapshot id/time, width/height, operation count and observed app
+  * are left exactly as they were, so the agent's next action keeps its freshness, and no snapshot id is returned.
+  * Secure windows are already blanked by the platform (the session display is not VIRTUAL_DISPLAY_FLAG_SECURE). Not
+  * advertised in capabilities, and refused on Rose Agent's app_command (Mac) path. */
+ static long lastPreview;
+ static synchronized JSONObject preview(Context c,JSONObject p)throws Exception{
+  String requestedSession=p.isNull("sessionId")?"":p.optString("sessionId",""),requestedTask=p.isNull("taskId")?"":p.optString("taskId","");
+  long now=SystemClock.elapsedRealtime();
+  String refused=PreviewPolicy.refusal(requestedSession,requestedTask,locked(c),session!=null,status,blocked,now-started>DEADLINE,id,taskId,now,lastPreview);
+  if(refused!=null)return new JSONObject().put("status",refused);
+  lastPreview=now;
+  Image image;try{image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);}catch(Throwable e){image=null;}
+  if(image==null)return new JSONObject().put("status",PreviewPolicy.NO_FRAME);
+  Bitmap all=null,crop=null,small=null;
+  try{
+   int w=image.getWidth(),h=image.getHeight();int[] size=PreviewPolicy.size(w,h);
+   if(size==null)return new JSONObject().put("status",PreviewPolicy.NO_FRAME);
+   Image.Plane plane=image.getPlanes()[0];
+   all=Bitmap.createBitmap(plane.getRowStride()/plane.getPixelStride(),h,Bitmap.Config.ARGB_8888);all.copyPixelsFromBuffer(plane.getBuffer());
+   crop=Bitmap.createBitmap(all,0,0,w,h);small=Bitmap.createScaledBitmap(crop,size[0],size[1],true);
+   ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] jpeg=null;
+   for(int quality:PreviewPolicy.QUALITIES){out.reset();small.compress(Bitmap.CompressFormat.JPEG,quality,out);if(PreviewPolicy.fits(out.size())){jpeg=out.toByteArray();break;}}
+   if(jpeg==null)return new JSONObject().put("status",PreviewPolicy.NO_FRAME);
+   return new JSONObject().put("status",PreviewPolicy.OK).put("sessionId",id).put("taskId",taskId).put("targetPackage",target)
+    .put("capturedAt",System.currentTimeMillis()).put("width",small.getWidth()).put("height",small.getHeight())
+    .put("mimeType","image/jpeg").put("imageBase64",android.util.Base64.encodeToString(jpeg,android.util.Base64.NO_WRAP));
+  }catch(Throwable e){return new JSONObject().put("status",PreviewPolicy.NO_FRAME);}
+  finally{if(small!=null&&small!=crop)small.recycle();if(crop!=null&&crop!=all)crop.recycle();if(all!=null)all.recycle();image.close();}
+ }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");
   Bitmap all=null,crop=null,encoded=null;
