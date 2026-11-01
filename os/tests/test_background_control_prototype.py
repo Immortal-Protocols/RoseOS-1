@@ -47,7 +47,9 @@ class BackgroundControlPrototypeTest(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(cls.tree)], check=True)
         cls.applied = []
         for patch in BACKGROUND_FRAMEWORK_PATCHES:
-            result = subprocess.run(['git', '-C', str(cls.tree), 'apply', f'--include={SOURCE}/*',
+            # The automated-device snapshot hunk (#156) has its own fixtures: os/tests/test_automated_devices_contract.py.
+            result = subprocess.run(['git', '-C', str(cls.tree), 'apply',
+                f'--exclude={SOURCE}/AutomatedPackagesRepository.java', f'--include={SOURCE}/*',
                 str(ROOT/'os/patches'/patch)], capture_output=True, text=True)
             cls.applied.append((patch, result.returncode, result.stderr))
         read = lambda name: (cls.tree/SOURCE/name).read_text()
