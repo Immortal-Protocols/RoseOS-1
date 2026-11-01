@@ -4,43 +4,33 @@ package com.android.quickstep.fallback;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * RoseOS (#156): which running tasks are Rose Agent's work, for the agent row of the fallback overview.
  *
  * Rose holds HOME, so Launcher3 Quickstep shows its fallback overview (OverviewComponentObserver). Its existing human
  * task carousel is unchanged; this adds the agent row. Agent work is identified only by system-attested facts, never
- * by names an app chose. The session's display is private (ComputerControlSessionImpl creates it without
- * VIRTUAL_DISPLAY_FLAG_PUBLIC, so VirtualDisplayAdapter marks it FLAG_PRIVATE and Display.hasAccess lists it only to
- * its owner, system, root or a uid on it): DisplayManager.getDisplays() never shows it to Launcher3, and its isolation
- * stays as it is. Instead the platform's own report to the recents component is used
- * (VirtualDeviceManager.registerAutomatedPackageListener, allowed by checkCallerIsRecentsOrHomeRoleHolder, the same
- * channel Launcher3's AutomationRepositoryImpl uses): for each ComputerControl session owner, the session owner package
- * VirtualDeviceImpl recorded from its allowlisted AttributionSource, and the packages running on that owner's session
- * displays, per user. Those reports come from the non-finishing activities on each owner's session displays
- * (DisplayWindowPolicyControllerHelper.onRunningActivityChanged), and only ComputerControl sessions create a virtual
- * device with DEVICE_PROFILE_COMPUTER_CONTROL (VirtualDeviceManagerService), whose displays getVirtualDevices() lists
- * without any permission. Ownership is decided per session device, never per package (#156 initial load): a
- * device is a candidate when every one of this user's tasks on it is a package CONTROLLER reports automating for this
- * user. CONTROLLER's report is the union of the activities on its own session displays, so each of its devices with
- * this user's work is a candidate; a device running any app CONTROLLER does not report is another owner's. Cards are
- * published only when exactly one candidate exists: then it is CONTROLLER's, whatever other owners have reported so
- * far. The platform's reports carry no snapshot-complete marker, sequence number or device id
- * (AutomatedPackagesRepository), so two candidates (another agent running the same apps, whose report may not have
- * arrived), a non-empty report with no candidate (a report still in flight), a report that arrives during a read or a
- * truncated task list are not resolved by guessing or waiting: nothing is attributed and the row says Rose's work
- * can't be confirmed. A package another owner also reports stays unattributed even on the one candidate. The same
- * package on another app's virtual display (not a ComputerControl device) is never Rose's work. The controller still
- * binds a selection to its own session display (agent-pip WatchBinding.fromSelection). The
- * signer-gated AgentProvider is not read. Nothing is invented: no such task is a truthful empty state, a failed query
- * an unavailable state, and work the platform has not reported yet is said to be not reported, never "none".
- * Pure logic, no Android types.
+ * by names an app chose, and never by package coincidence. The session's display stays private (ComputerControlSession
+ * creates it without VIRTUAL_DISPLAY_FLAG_PUBLIC; DisplayManager.getDisplays() never lists it to Launcher3).
+ *
+ * Ownership comes from the platform's device-ownership snapshot to the recents component
+ * (AutomatedPackageListener.onAutomatedDevicesChanged, the contract agreed with OS Core for #156): each callback is the
+ * complete set of this user's ComputerControl session devices currently running apps, with the owner package and uid
+ * the platform recorded for each, and a generation that rises on every change. Device ids and display ids are never
+ * reused and a device's owner never changes, so task -> display -> device -> owner is a fact once known, whatever the
+ * order in which apps or reports change. The display -> device map is the platform's own (getVirtualDevices(), whose
+ * profile DEVICE_PROFILE_COMPUTER_CONTROL only session devices have).
+ *
+ * A task is Rose's when it is this user's, on a display of a session device the snapshot says CONTROLLER owns with
+ * CONTROLLER's own uid, and is not the controller itself. Nothing is guessed: before the first valid snapshot the row
+ * says not reported; a session task whose device or display ownership is missing is held as unconfirmed, never a card
+ * and never "none"; a malformed snapshot is not applied and the row says ownership could not be read. The controller
+ * still binds a selection to its own session display (agent-pip WatchBinding.fromSelection). Pure logic, no Android
+ * types.
  */
 final class RoseAgentWork {
     static final String CONTROLLER = "dev.pixel.backgroundcontrol";
@@ -58,26 +48,77 @@ final class RoseAgentWork {
         }
     }
 
+    /** A session device's owner as the platform recorded it. */
+    static final class Owner {
+        final String packageName;
+        final int uid;
+        Owner(String packageName, int uid) { this.packageName = packageName; this.uid = uid; }
+    }
+
     /**
-     * What the platform has reported for one user. reported: a report for CONTROLLER and that user arrived since this
-     * process registered (the platform sends the current state on registration, then each change; an empty list means
-     * its session ended). Before that, absence is not evidence of no work. packages: what CONTROLLER automates.
-     * others: what any other ComputerControl session owner automates for that user (never shown; it only stops a
-     * shared package from being attributed to Rose).
+     * The ownership the platform has reported, as applied by Ownership. received: a valid snapshot was applied since
+     * this registration. malformed: the last snapshot was rejected, so nothing is known until a valid one arrives.
      */
-    static final class Automation {
-        final boolean reported;
-        final Set<String> packages, others;
-        Automation(boolean reported, Collection<String> packages, Collection<String> others) {
-            this.reported = reported;
-            this.packages = Collections.unmodifiableSet(new HashSet<>(packages));
-            this.others = Collections.unmodifiableSet(new HashSet<>(others));
+    static final class Owners {
+        static final Owners NONE = new Owners(false, false, Collections.emptyMap());
+        final boolean received, malformed;
+        final Map<Integer, Owner> byDevice;
+        Owners(boolean received, boolean malformed, Map<Integer, Owner> byDevice) {
+            this.received = received; this.malformed = malformed;
+            this.byDevice = Collections.unmodifiableMap(new HashMap<>(byDevice));
+        }
+    }
+
+    /**
+     * Applies the platform's snapshots in order. Not thread-safe: the strip's holder serializes it. Per registration
+     * the first valid snapshot is applied whatever its generation; after that only a higher generation (a repeated or
+     * lower one is a duplicate or out of order). A malformed snapshot (missing or unequal arrays, a duplicate device,
+     * a missing owner package, a negative uid, a generation below 1) is never partly applied: the known ownership is
+     * dropped and the generation baseline stays where it was.
+     */
+    static final class Ownership {
+        private boolean baseline, malformed;
+        private long generation;
+        private Map<Integer, Owner> owners = new HashMap<>();
+
+        /** A new registration: nothing is known until its first valid snapshot. */
+        void reset() {
+            baseline = false; malformed = false; generation = 0; owners = new HashMap<>();
+        }
+
+        /** True when what is known changed (the row should be read again). */
+        boolean accept(long gen, int[] deviceIds, String[] ownerPackages, int[] ownerUids) {
+            Map<Integer, Owner> next = parse(gen, deviceIds, ownerPackages, ownerUids);
+            if (next == null) {
+                boolean changed = !malformed || !owners.isEmpty();
+                malformed = true;
+                owners = new HashMap<>();
+                return changed;
+            }
+            if (baseline && gen <= generation) return false;
+            baseline = true; malformed = false; generation = gen; owners = next;
+            return true;
+        }
+
+        Owners snapshot() {
+            return new Owners(baseline && !malformed, malformed, owners);
+        }
+
+        private static Map<Integer, Owner> parse(long gen, int[] deviceIds, String[] packages, int[] uids) {
+            if (gen < 1 || deviceIds == null || packages == null || uids == null) return null;
+            if (deviceIds.length != packages.length || deviceIds.length != uids.length) return null;
+            Map<Integer, Owner> out = new HashMap<>();
+            for (int i = 0; i < deviceIds.length; i++) {
+                if (packages[i] == null || packages[i].isEmpty() || uids[i] < 0) return null;
+                if (out.put(deviceIds[i], new Owner(packages[i], uids[i])) != null) return null;
+            }
+            return out;
         }
     }
 
     final State state;
     final List<Task> items;
-    /** Tasks on a session display whose package another session owner also automates: never cards. */
+    /** Session tasks whose ownership the platform has not confirmed: never cards, and selecting one is refused. */
     final List<Task> unattributed;
     final String reason;
 
@@ -92,11 +133,9 @@ final class RoseAgentWork {
 
     /** The selected HiFi's empty agent carousel (ce126f56 renderSwitcher: "No background work"). */
     static final String EMPTY = "No background work";
-    /** Running work exists on a virtual display, but the platform has not yet reported what Rose automates. */
+    /** Work runs on an agent screen, but the platform has not reported session ownership since registration. */
     static final String NOT_REPORTED = "Rose's work has not been reported yet";
-    /** Some work on an agent screen is in an app another agent also automates, so it is not shown as Rose's. */
-    static final String UNATTRIBUTED = "Some agent work can't be told apart from another agent's";
-    /** The platform's reports and the running tasks do not yet prove which agent screen is Rose's. */
+    /** An agent screen's ownership is not (or no longer) in the platform's report. */
     static final String UNCONFIRMED = "Rose's work can't be confirmed right now";
 
     /**
@@ -124,7 +163,7 @@ final class RoseAgentWork {
     }
 
     /** Which platform read failed: a fixed word for the status and log, never the exception's own text. */
-    enum Step { CONTROLLER, AUTOMATION, TASKS, DISPLAYS }
+    enum Step { CONTROLLER, OWNERSHIP, TASKS, DISPLAYS }
 
     static RoseAgentWork failed(Step step) {
         return unavailable("Rose's work could not be read (" + step.name().toLowerCase(Locale.ROOT) + ")");
@@ -137,7 +176,7 @@ final class RoseAgentWork {
 
     /**
      * This work with each kept item's app label, looked up only after of() has filtered to the controller's own
-     * automated work and the current user. A lookup that fails or is empty shows the package name: it never drops, adds
+     * session devices and the current user. A lookup that fails or is empty shows the package name: it never drops, adds
      * or reorders an item, and never turns the work unavailable.
      */
     RoseAgentWork labelled(Labels labels) {
@@ -159,50 +198,40 @@ final class RoseAgentWork {
     /**
      * controllerUid: the uid of CONTROLLER for the current user, or -1 when it is not installed for that user.
      * currentUser: only that user's agent work is shown (user/profile boundary).
-     * automation: what the platform reported for currentUser.
+     * owners: the applied ownership snapshot.
      * sessionDevices: display id to device id, for the virtual devices whose platform-set profile is
-     * DEVICE_PROFILE_COMPUTER_CONTROL.
-     * complete: false when the task list may be truncated, so a device of CONTROLLER could be missing from it.
+     * DEVICE_PROFILE_COMPUTER_CONTROL, as read now.
+     * releasedDisplays: session displays seen in an earlier read and no longer listed (ids are never reused).
+     * complete: false when the task list may be truncated.
      */
-    static RoseAgentWork of(int controllerUid, int currentUser, Automation automation, Map<Integer, Integer> sessionDevices,
-            List<Task> tasks, boolean complete) {
+    static RoseAgentWork of(int controllerUid, int currentUser, Owners owners, Map<Integer, Integer> sessionDevices,
+            Collection<Integer> releasedDisplays, List<Task> tasks, boolean complete) {
         if (controllerUid < 0) return unavailable("Rose agent control is not installed for this user");
-        if (automation == null || sessionDevices == null || tasks == null) {
+        if (owners == null || sessionDevices == null || releasedDisplays == null || tasks == null) {
             return unavailable("Running work could not be read");
         }
-        // This user's tasks on session displays, by device, the controller's own tasks included: they too are on
-        // its displays and in its report.
-        Map<Integer, List<Task>> byDevice = new LinkedHashMap<>();
+        if (owners.malformed) return failed(Step.OWNERSHIP);
+        List<Task> session = new ArrayList<>();
         for (Task t : tasks) {
-            Integer device = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;
-            if (t.userId != currentUser || device == null) continue;
-            byDevice.computeIfAbsent(device, k -> new ArrayList<>()).add(t);
+            if (t.userId != currentUser || t.displayId <= 0) continue;
+            if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);
         }
-        if (byDevice.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
-        if (!automation.reported) return unavailable(NOT_REPORTED);
+        if (session.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
+        if (!owners.received) return unavailable(NOT_REPORTED);
         if (!complete) return unavailable(UNCONFIRMED);
-        List<List<Task>> candidates = new ArrayList<>();
-        for (List<Task> work : byDevice.values()) {
-            boolean candidate = true;
-            for (Task t : work) candidate &= automation.packages.contains(t.packageName);
-            if (candidate) candidates.add(work);
-        }
-        if (candidates.isEmpty()) {
-            // A non-empty report with none of its devices visible is a report still in flight, not "no work".
-            return automation.packages.isEmpty() ? new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY)
-                    : unavailable(UNCONFIRMED);
-        }
         List<Task> items = new ArrayList<>(), held = new ArrayList<>();
-        for (List<Task> work : candidates) {
-            for (Task t : work) {
-                if (CONTROLLER.equals(t.packageName)) continue;
-                if (candidates.size() > 1 || automation.others.contains(t.packageName)) held.add(t);
-                else items.add(t);
+        for (Task t : session) {
+            Integer device = sessionDevices.get(t.displayId);
+            Owner owner = device == null ? null : owners.byDevice.get(device);
+            if (owner == null) {
+                if (!CONTROLLER.equals(t.packageName)) held.add(t);
+                continue;
             }
+            if (!CONTROLLER.equals(owner.packageName) || owner.uid != controllerUid) continue;
+            if (!CONTROLLER.equals(t.packageName)) items.add(t);
         }
-        if (candidates.size() > 1) return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), held, UNCONFIRMED);
-        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, held, held.isEmpty() ? null : UNATTRIBUTED);
-        if (!held.isEmpty()) return new RoseAgentWork(State.UNAVAILABLE, items, held, UNATTRIBUTED);
+        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, held, held.isEmpty() ? null : UNCONFIRMED);
+        if (!held.isEmpty()) return new RoseAgentWork(State.UNAVAILABLE, items, held, UNCONFIRMED);
         return new RoseAgentWork(State.EMPTY, items, EMPTY);
     }
 
