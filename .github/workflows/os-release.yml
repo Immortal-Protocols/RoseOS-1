@@ -1,6 +1,6 @@
 name: Build & publish latest Pixel 10
 # RELEASE020: a campaign run carries its campaign in the run name; scripts/release-chain.py finds successors by it.
-run-name: ${{ inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || 'Build & publish latest Pixel 10' }}
+run-name: ${{ inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || 'Build & publish latest Pixel 10' }}
 
 # Build, sign, verify and publish one Frankel candidate on the existing builder. The default mode, latest-beta, is the
 # normal button (OCT30-INFRA-S014): it needs no input. Every other mode and input is advanced. Proposed setup is
