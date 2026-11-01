@@ -178,8 +178,9 @@
  // validated projection leaves here: never steps, screen text, a typed draft or other raw fields. A logical task is
  // scoped by the Mac server's lifetime: by its `server` instance id when the producer sends one, otherwise by its start
  // time (ids restart per run); a new connection (re-pair, replacement) starts an empty list. Its workspace binding is
- // ONLY the producer's explicit `workspace` {controllerTaskId, sessionId, targetPackage}: the controller taskId is a
- // workspace generation that several logical tasks share, so a binding is never inferred from whatever is open.
+ // ONLY the producer's explicit `workspace` {controllerTaskId, sessionId, targetPackage}, honoured only under contract 1
+ // with a server id: the controller taskId is a workspace generation that several logical tasks share, so a binding is
+ // never inferred from whatever is open. `connection` names this link connection (a new one per local() start).
  // A terminal status is final; identical snapshots are dropped. Delivered only while live; [] once on close.
  // Read-only: no Stop or command reaches the Mac from here, and nothing joins the backend task projection.
  const LOCAL_TASK_KINDS=new Set(['phone','think']),LOCAL_TASK_STATES=new Set(['running','done','failed','cancelled']);
@@ -189,22 +190,22 @@
   if(!w||typeof w!=='object'||!ident(w.controllerTaskId,128)||!ident(w.sessionId,128)||typeof w.targetPackage!=='string'||!/^[A-Za-z][\w]*(\.[A-Za-z][\w]*)+$/.test(w.targetPackage)||w.targetPackage.length>255)return null;
   return {controllerTaskId:w.controllerTaskId,sessionId:w.sessionId,targetPackage:w.targetPackage};
  }
- function localTask(t){
+ function localTask(t,connection=''){
   if(!t||typeof t!=='object'||!Number.isSafeInteger(t.id)||t.id<1||!LOCAL_TASK_KINDS.has(t.kind)||!LOCAL_TASK_STATES.has(t.status)||typeof t.goal!=='string'||typeof t.started!=='number'||!Number.isFinite(t.started))return null;
   if(t.server!==undefined&&!ident(t.server,64))return null;
   const text=v=>typeof v==='string'?v.slice(0,500):'',running=t.status==='running';
   return {key:(t.server?t.server+'#':'@'+t.started+'#')+t.id,id:t.id,server:t.server||null,kind:t.kind,goal:text(t.goal),status:t.status,detail:running?text(t.detail):'',result:running?'':text(t.result),
    background:t.background===true,onScreen:t.on_screen===true,awaitingSend:t.status==='done'&&!!t.ready_to_send,started:t.started,finished:typeof t.finished==='number'&&Number.isFinite(t.finished)?t.finished:null,
-   binding:localBinding(t.workspace)};
+   contract:t.contract===1?1:null,connection,binding:t.contract===1&&t.server?localBinding(t.workspace):null};
  }
- function localTasks(callback,keep=20){
+ function localTasks(callback,keep=20,connection=''){
   const deliver=callback&&(list=>{try{callback(list);}catch(e){console.warn('local task consumer failed');}});
   const tasks=new Map();let open=true,live=false,sent='[]';
   const copy=t=>({...t,binding:t.binding&&{...t.binding}});
   const publish=()=>{if(!open||!live||!deliver)return;const list=[...tasks.values()].sort((a,b)=>a.started-b.started||a.id-b.id),sig=JSON.stringify(list);if(sig===sent)return;sent=sig;deliver(list.map(copy));};
   const trim=()=>{const ended=[...tasks.values()].filter(t=>t.status!=='running').sort((a,b)=>(a.finished||0)-(b.finished||0)||a.started-b.started);while(ended.length>keep)tasks.delete(ended.shift().key);};
   return {
-   accept(raw){if(!open)return false;const t=localTask(raw);if(!t)return false;const prev=tasks.get(t.key);if(prev&&prev.status!=='running')return false;tasks.set(t.key,t);trim();publish();return true;},
+   accept(raw){if(!open)return false;const t=localTask(raw,connection);if(!t)return false;const prev=tasks.get(t.key);if(prev&&prev.status!=='running')return false;tasks.set(t.key,t);trim();publish();return true;},
    live(){live=true;publish();},
    end(){if(!open)return;open=false;tasks.clear();if(live&&deliver&&sent!=='[]')deliver([]);}
   };
@@ -226,17 +227,27 @@
   if(!sameBinding(task.binding,{controllerTaskId:controller.taskId,sessionId:controller.sessionId,targetPackage:controller.targetPackage}))return no('workspace_changed');
   return {watch:true,stop:true,reason:''};
  }
- // A Stop request for one local task, by key: an ACK means stopping, never stopped. Only the task's own terminal event
- // ends it; no terminal event before the deadline is "unconfirmed" (it may still be running). Duplicate taps and ACKs
- // change nothing; the task disappearing (connection ended) is "unknown". Pure: the caller sends and reports.
- function localStop(key,{timeoutMs=10000,now=Date.now()}={}){
-  let state='requested',ackId=null;const deadline=now+timeoutMs;
+ // A Stop request for one local task, by key and request id. The producer's answer (contract 1:
+ // {kind:'task_stop', request, server, id, status: accepted|not_running|refused|replaced|stale}) is taken only for this
+ // request and task: accepted means stopping, never stopped. Only the task's own cancelled event is stopped; no terminal
+ // event by the deadline is unconfirmed (it may still be running). Duplicate taps and answers change nothing; the task
+ // disappearing (connection ended) is unknown. Pure: the caller sends the request and passes answers and lists in.
+ const STOP_ANSWERS={accepted:'stopping',not_running:'not_running',refused:'refused',replaced:'replaced',stale:'replaced'};
+ function localStop(key,{request='',timeoutMs=10000,now=Date.now()}={}){
+  let state='requested';const deadline=now+timeoutMs,final=new Set(['stopped','ended','unknown','not_running','refused','replaced']);
+  const answer=a=>{
+   if(state!=='requested'||!a||typeof a!=='object')return state;
+   if(a.request!==undefined&&a.request!==request)return state;
+   if(a.server!==undefined||a.id!==undefined){const k=(a.server?a.server+'#':'')+a.id;if(!key.endsWith('#'+a.id)||(a.server&&k!==key))return state;}
+   const next=STOP_ANSWERS[a.status];if(next)state=next;return state;
+  };
   return {
-   get state(){return state;},
-   request(){return state==='requested'||state==='stopping'?'duplicate':state;},
-   ack(id){if(state!=='requested')return state;ackId=id??null;state='stopping';return state;},
+   get state(){return state;},request,
+   tap(){return state==='requested'||state==='stopping'?'duplicate':state;},
+   answer,
+   ack(){return answer({status:'accepted'});},
    observe(list,at=Date.now()){
-    if(state==='stopped'||state==='ended'||state==='unknown')return state;
+    if(final.has(state))return state;
     const task=Array.isArray(list)?list.find(t=>t&&t.key===key):null;
     if(!task)state='unknown';else if(task.status==='cancelled')state='stopped';else if(task.status!=='running')state='ended';
     else if(at>=deadline)state='unconfirmed';
@@ -248,9 +259,10 @@
  // USB before that (LocalRoseConnection). The native LocalRoseLink does the audio
  // (voice-call capture with Android's echo canceller; a player that reports what was actually heard)
  // and Rose listens, decides, speaks and drives the phone herself, so this maps its events onto the contract.
+ let localConnections=0;
  function local(o){
   return new Promise((resolve,reject)=>{
-   let input=0,output=0,live=false,closed=false;const seen=new Set(),tasks=localTasks(o.onLocalTasks);
+   let input=0,output=0,live=false,closed=false;const seen=new Set(),tasks=localTasks(o.onLocalTasks,20,'c'+(++localConnections)+'-'+Math.random().toString(36).slice(2,10));
    const handle={close:async()=>{closed=true;root.localRoseEvent=null;root.Native?.localRoseStop();tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
    const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
    const unpaired='Not paired: open the menu and choose Pair with Mac';

@@ -46,7 +46,8 @@ test('ordered producer events become one current, validated list after live',asy
  // Privacy: steps, screen text, the model's reply and the typed draft never leave the provider.
  const all=JSON.stringify(p.lists);
  for(const secret of ['secret model reply','Messages: Sam Lee','Running late, sorry!','steps','ready_to_send','confirmed_send'])assert.ok(!all.includes(secret),'not forwarded: '+secret);
- assert.deepEqual(Object.keys(a).sort(),['awaitingSend','background','binding','detail','finished','goal','id','key','kind','onScreen','result','server','started','status']);
+ assert.deepEqual(Object.keys(a).sort(),['awaitingSend','background','binding','connection','contract','detail','finished','goal','id','key','kind','onScreen','result','server','started','status']);
+ assert.match(a.connection,/^c\d+-[a-z0-9]+$/);assert.ok(final.every(x=>x.connection===a.connection&&x.contract===null));
  assert.ok(final.every(x=>x.binding===null&&x.server===null),'PR318 sends no workspace binding or server instance: none is inferred');
  // Read-only: no Stop or task command, nothing joins the backend projection; the handle keeps its contract.
  assert.equal(p.backend.length,0);assert.ok(!p.calls.some(c=>c[0]==='stopTask'));
@@ -130,14 +131,18 @@ const VP=()=>{const c={console,Map,Set,Promise,JSON,Number,Math,Date,setTimeout,
 const WS={controllerTaskId:'rose-ws-ab12cd34-1-com.google.android.apps.messaging',sessionId:'s-1',targetPackage:'com.google.android.apps.messaging'};
 const ctl=(b,status='ready')=>({status,sessionId:b.sessionId,taskId:b.controllerTaskId,targetPackage:b.targetPackage});
 const plain=x=>JSON.parse(JSON.stringify(x));
-const bound=(m,extra)=>({type:'task',task:{...m.task,...extra}});
+const bound=(m,extra)=>({type:'task',task:{...m.task,contract:1,...extra}});
 
 test('missing binding: listed with its status, but Watch and Stop are unavailable',()=>{
  const vp=VP(),t=plain(vp.localTask(produced[1].task));
  assert.equal(t.binding,null);
  assert.deepEqual(plain(vp.localTaskActions({key:t.key,binding:null},[t],ctl(WS))),{watch:false,stop:false,reason:'unbound'},'never the workspace that happens to be open');
  for(const bad of [{...WS,sessionId:''},{...WS,controllerTaskId:7},{...WS,targetPackage:'not a package'},{controllerTaskId:WS.controllerTaskId},'rose-ws-1',null])
-  assert.equal(vp.localTask({...produced[1].task,workspace:bad}).binding,null,'malformed binding is no binding');
+  assert.equal(vp.localTask({...produced[1].task,contract:1,server:'srv-a',workspace:bad}).binding,null,'malformed binding is no binding');
+ // A binding needs contract 1 and a server scope: without either it is absent, never trusted.
+ assert.equal(vp.localTask({...produced[1].task,server:'srv-a',workspace:WS}).binding,null,'no contract version');
+ assert.equal(vp.localTask({...produced[1].task,contract:2,server:'srv-a',workspace:WS}).binding,null,'unknown contract version');
+ assert.equal(vp.localTask({...produced[1].task,contract:1,workspace:WS}).binding,null,'no server scope');
 });
 
 test('two logical tasks sharing one workspace are separate tasks with the same binding',async()=>{
@@ -158,8 +163,8 @@ test('two logical tasks sharing one workspace are separate tasks with the same b
 });
 
 test('replacement during selection: a changed binding, a new workspace generation or a gone task never opens',()=>{
- const vp=VP(),t=plain(vp.localTask({...produced[1].task,server:'srv-a',workspace:WS})),sel={key:t.key,binding:t.binding};
- const moved=plain(vp.localTask({...produced[1].task,server:'srv-a',workspace:{...WS,sessionId:'s-2'}}));
+ const vp=VP(),t=plain(vp.localTask({...produced[1].task,contract:1,server:'srv-a',workspace:WS})),sel={key:t.key,binding:t.binding};
+ const moved=plain(vp.localTask({...produced[1].task,contract:1,server:'srv-a',workspace:{...WS,sessionId:'s-2'}}));
  assert.equal(vp.localTaskActions(sel,[moved],ctl(moved.binding)).reason,'replaced','the task moved to another session after the tap');
  const next={...WS,controllerTaskId:'rose-ws-ab12cd34-2-com.android.chrome',sessionId:'s-9',targetPackage:'com.android.chrome'};
  assert.equal(vp.localTaskActions(sel,[t],ctl(next)).reason,'workspace_changed','the controller now holds another generation');
@@ -195,14 +200,14 @@ test('server restart, re-pair and stale reconnect with reused ids never merge ta
 });
 
 test('Stop: an ACK is stopping, duplicates change nothing, timeout is unconfirmed, only the task\'s own event ends it',()=>{
- const vp=VP(),t=plain(vp.localTask({...produced[1].task,server:'srv-a',workspace:WS})),key=t.key;
+ const vp=VP(),t=plain(vp.localTask({...produced[1].task,contract:1,server:'srv-a',workspace:WS})),key=t.key;
  const s=vp.localStop(key,{timeoutMs:1000,now:0});
- assert.equal(s.state,'requested');assert.equal(s.request(),'duplicate','a second tap sends nothing');
+ assert.equal(s.state,'requested');assert.equal(s.tap(),'duplicate','a second tap sends nothing');
  assert.equal(s.ack('a1'),'stopping');assert.equal(s.ack('a1'),'stopping');assert.equal(s.ack('a2'),'stopping','duplicate ACKs change nothing');
- assert.equal(s.request(),'duplicate');
+ assert.equal(s.tap(),'duplicate');
  assert.equal(s.observe([t],500),'stopping','an ACK is never stopped');
  assert.equal(s.observe([t],1000),'unconfirmed','no terminal event by the deadline: it may still be running');
- const cancelled=plain(vp.localTask({...produced[5].task,id:t.id,started:produced[1].task.started,server:'srv-a',workspace:WS}));
+ const cancelled=plain(vp.localTask({...produced[5].task,id:t.id,started:produced[1].task.started,contract:1,server:'srv-a',workspace:WS}));
  assert.equal(cancelled.key,key);
  assert.equal(s.observe([cancelled],1500),'stopped','its own cancelled event confirms, even after the deadline');
  assert.equal(s.observe([t],1600),'stopped','final');
@@ -220,5 +225,27 @@ test('completed results stay readable without a live session, and do not depend 
  const list=p.last(),vp=p.context.VoiceProviders;
  assert.deepEqual(list.map(t=>[t.id,t.status,t.result]),[[1,'done','Typed the reply; waiting for you to say send.'],[2,'cancelled','Cancelled.'],[3,'failed','Something went wrong with that task.']]);
  for(const t of list)assert.equal(vp.localTaskActions({key:t.key,binding:t.binding},list,ctl(WS,'idle')).reason,'finished');
+});
+
+test('Stop answers (proposed contract 1) are taken only for this request and task',()=>{
+ const vp=VP(),key='srv-a#1',mk=()=>vp.localStop(key,{request:'r1',timeoutMs:1000,now:0});
+ let s=mk();
+ assert.equal(s.answer({kind:'task_stop',request:'r0',server:'srv-a',id:1,status:'accepted'}),'requested','another request is ignored');
+ assert.equal(s.answer({kind:'task_stop',request:'r1',server:'srv-b',id:1,status:'accepted'}),'requested','another server\'s task with the same id is ignored');
+ assert.equal(s.answer({kind:'task_stop',request:'r1',server:'srv-a',id:2,status:'accepted'}),'requested','another task is ignored');
+ assert.equal(s.answer({kind:'task_stop',request:'r1',server:'srv-a',id:1,status:'accepted'}),'stopping');
+ assert.equal(s.answer({kind:'task_stop',request:'r1',server:'srv-a',id:1,status:'refused'}),'stopping','a duplicate or late answer changes nothing');
+ for(const [status,state] of [['not_running','not_running'],['refused','refused'],['replaced','replaced'],['stale','replaced'],['weird','requested']]){
+  s=mk();assert.equal(s.answer({request:'r1',server:'srv-a',id:1,status}),state,status);
+ }
+ s=mk();s.answer({request:'r1',server:'srv-a',id:1,status:'replaced'});
+ assert.equal(s.observe([{key,status:'cancelled'}],5),'replaced','a refused Stop is final: a later cancel of a reused id never settles it');
+});
+
+test('each connection has its own scope id; a re-paired connection never shares it',async()=>{
+ const p=page();live(p);await p.started;p.send(bound(produced[0],{server:'srv-a',workspace:WS}));
+ const q=page();live(q);await q.started;q.send(bound(produced[0],{server:'srv-a',workspace:WS}));
+ assert.notEqual(p.last()[0].connection,q.last()[0].connection);
+ assert.deepEqual(p.last()[0].binding,WS);
 });
 
