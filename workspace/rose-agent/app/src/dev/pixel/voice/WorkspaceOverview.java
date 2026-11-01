@@ -187,7 +187,8 @@ final class WorkspaceOverview {
  static final int MAX_ROWS=6;
 
  /** The overview from the link's state, the controller read, the task list and the owner's selection/Stop.
-  * connected: the link to Rose is up; scope: the current server lifetime and pairing. Pure: changes nothing. */
+  * connected: the link to Rose is up; scope: the current server lifetime and pairing. The only state it touches is
+  * the owner's Stop, settled from the task list (Stop.observe); it never starts, stops or opens anything. */
  static Model of(boolean connected,Scope scope,Workspace ws,List<Task> tasks,Identity selected,Stop stop){
   if(ws==null)ws=Workspace.UNREADABLE;if(scope==null)scope=Scope.UNKNOWN;
   List<Task> list=new ArrayList<>();if(tasks!=null)for(Task t:tasks)if(t!=null&&!t.id.isEmpty())list.add(t);
