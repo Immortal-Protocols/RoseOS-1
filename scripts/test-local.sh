@@ -87,6 +87,7 @@ python3 scripts/tests/test_blazer_integration.py
 python3 scripts/tests/test_factory_package.py
 # Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
 python3 scripts/tests/test_rango_factory_observe.py
+python3 scripts/tests/test_rango_factory_observe_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
