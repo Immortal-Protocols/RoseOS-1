@@ -338,7 +338,9 @@ None of these is retried without a new decision.
   not a hostname.
 - **What did not change:** the allowlist, the refusal itself and what follows it (nothing). There are no retries.
 
-**Smallest safe next diagnostic** (proposal only; not executed or authorized):
+**Smallest safe next diagnostic** (proposal only; not executed or authorized). Superseded by
+`cloud-redirect-probe-once` (next section), which names the refused destination with HEAD requests only and no
+staging attempt; this stage-based variant remains only for reference:
 
 - **Who:** the original Mac operator, once.
 - **Steps:**
@@ -382,6 +384,99 @@ None of these is retried without a new decision.
   id.
 - **Disk:** nothing else on the disk changes. The staged files stay until their removal is separately approved.
 
+## cloud-redirect-probe-once (CLOUD-REDIRECT-HEAD-001; source only, has not run: running it is a separate runtime decision)
+
+**Why:** `cloud-stage-once` still permits 45 GB and 3600 s (3720 s for its container), so a near-zero download is not
+guaranteed. This mode names the refused redirect destination without any staging attempt.
+
+**What it runs:** the same `stage.py`, in HEAD-only mode (`head_probe`), over the same pinned manifest (sha256
+`ebcfb082…f3c3`, 59 files):
+
+- one `HEAD` per file at its one pinned source; every redirect hop stays `HEAD`;
+- every hop is checked by the same `Fetcher.check`: https only, no userinfo, `ALLOW_HOSTS` unchanged
+  (`huggingface.co`, `us.aws.cdn.hf.co`, `files.pythonhosted.org`), at most `MAX_REDIRECTS` (5) hops;
+- a refused destination is recorded (sanitized host, fixed reason, count, as in PR329) and **never requested**; the
+  refused redirect response is closed unread;
+- **no response body is read** (http.client reads none for `HEAD`; responses are closed unread), even when a server
+  sends one;
+- **nothing is written**: the staging root, existing files and partials are never opened, and the container has a
+  read-only root filesystem with nothing mounted;
+- no retries, no credentials, no new hosts, dependencies, permissions, model configuration or network policy.
+
+**How bootstrap runs it** (`serving/service/bootstrap.py`, `cloud_redirect_probe_once`): the same hold, model stop,
+positive container absence, read-only prerequisites, image digest and pinned-manifest checks as `cloud-stage-once`
+(no data-disk mount is needed). Then one container:
+
+```
+docker run --rm --pull=never --runtime=runc --network bridge --name rose-cloud-redirect-probe --cap-drop ALL
+  --security-opt no-new-privileges --read-only --entrypoint python3 <pinned image id>
+  -c <stage.py> <manifest.json> {"deadlineS":100,"maxBytes":0,"mode":"head","readTimeoutS":10}
+```
+
+**Time budget:**
+
+- **The diagnostic cap is 120 s:** the container is killed at `PROBE_SECONDS` = 120 (no grace).
+  - Inside it, the helper stops itself at 100 s through a real-time alarm, so it still prints a receipt.
+  - Each socket operation is bounded by min(10 s, time left), including on redirect hops.
+- **Not counted in the 120 s** (boot and cleanup overhead, each step already bounded):
+  - **The reset and boot** up to the bootstrap.
+  - **Before the container:**
+    - stopping the model (`systemctl stop` ≤ 180 s);
+    - the positive-absence wait (≤ 120 s);
+    - `docker info` and `docker image inspect` (≤ 60 s each) and the image identity inspect (≤ 60 s).
+  - **After the container:**
+    - `docker rm -f` (≤ 30 s) and the `docker ps` absence check (≤ 30 s);
+    - the guest-attribute write (≤ 10 s).
+  - Typically these take seconds, but they have not been measured for this payload.
+
+**Receipt** (`rose-models/diagnostic` and the serial line `ROSE-MODELS-DIAGNOSTIC`, at most 4096 bytes):
+
+```
+{"schema":"rose-models-diagnostic/1","check":"cloud-redirect-probe-once","payloadSha256":…,"bootId":…,
+ "attemptId":…,"modelHeld":true,"prerequisite":null|<category>,"exitCode":…,"timedOut":…,
+ "cleanup":"removed"|"failed"|"unknown","cleanupRemoveExit":…,
+ "probe":{"mode":"head","stop":"done"|"deadline"|"bad_manifest","elapsedS":…,
+          "groups":{<group>:{"expected","reachable","refused","failed"}},
+          "firstFailure":{<group>:redirect_refused|redirect_limit|auth_required|http_error|size_mismatch|network|null},
+          "refusedHosts":[{"host":<hostname>|null,"reason":host_not_allowed|scheme_not_https|userinfo|malformed,
+                           "count":…}] (at most 4),"refusedOther":…}|null}
+```
+
+`sanitize_head` (the allowlist bootstrap re-applies) keeps only these fixed tokens, bounded counts and hostnames. It
+never keeps a URL, scheme, port, path, query, fragment, userinfo, header, body or exception text.
+
+**Unverified** (needs the separately approved run):
+
+- whether the Hub answers `HEAD` on `resolve` with the same redirect target as `GET` from the VM's region;
+- whether an allowed CDN that signs per method answers `HEAD` (that would show as `auth_required` on an allowed host,
+  not as a refusal);
+- the image's ssl/CA store;
+- docker bridge egress.
+
+**Proposed owner action** (NOT authorized; a separate runtime decision):
+
+- **Who:** only the original Mac operator, on `models-glimmer-01`.
+- **Payload contract:**
+  1. Build at the merge commit with the deployed attestation roots (`build_bootstrap.py --attestation-roots
+     <deployed roots dir>`). Record `payloadTarSha256` (P). Confirm the payload lists
+     `etc-rose-models/lib/rose_cloud/stage.py` and `manifest.json` with the hashes Core reports.
+  2. Set the metadata `startup-script` and `rose-models-payload` from that build, plus
+     `rose-models-diagnostic=cloud-redirect-probe-once:<P>:<fresh id>`. The id is lower-case letters, digits and `-`,
+     at most 32 characters, and must never have been used before.
+  3. Do one reset.
+  4. Read `rose-models/diagnostic`.
+- **Consequences:**
+  - the same TLS and auth interruption as any reset;
+  - Muse inference is held for that boot;
+  - the id is then used, so the **next** reset without a new diagnostic id boots normally and starts Muse;
+  - nothing is staged, downloaded or written to the data disk.
+- **Stop conditions** (none is retried without a new decision):
+  - a `prerequisite` refusal;
+  - `cleanup` other than `removed`;
+  - `probe: null`;
+  - `stop` other than `done`.
+- **After that:** adding a named host to `ALLOW_HOSTS` is a separate source change and its own decision.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through
@@ -413,6 +508,14 @@ python3 -I tests/test_contract.py
 
 ```bash
 python3 -I tests/test_preflight.py
+```
+
+```bash
+python3 -I tests/test_stage.py
+```
+
+```bash
+python3 -I tests/test_head_probe.py
 ```
 
 ```bash

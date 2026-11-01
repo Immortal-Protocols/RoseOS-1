@@ -15,8 +15,8 @@ run in order and are rerun-safe: each first checks whether its result is already
   nginx      the installed binary's sha256 equals the pin; the distro nginx unit is disabled
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once|hf-probe-once|
-             cloud-preflight-once|cloud-stage-once:<payload sha256>:<id>, once per id (see gpu_start_once,
-             hf_probe_once, cloud_preflight_once, cloud_stage_once), and then
+             cloud-preflight-once|cloud-stage-once|cloud-redirect-probe-once:<payload sha256>:<id>, once per id (see
+             gpu_start_once, hf_probe_once, cloud_preflight_once, cloud_stage_once, cloud_redirect_probe_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -83,8 +83,8 @@ STATE = '/var/lib/rose-models/bootstrap'
 RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and its published evidence
 # Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=<mode>:<payload sha256>:<id>
 DIAG_KEY = 'attributes/rose-models-diagnostic'
-DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once|cloud-stage-once):'
-                        r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once|cloud-stage-once|'
+                        r'cloud-redirect-probe-once):([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
 # gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
 GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
 # hf-probe-once: lib/service/hf_probe.py in the pinned image, offline, no GPU, cache read-only, at most 120 s
@@ -97,6 +97,11 @@ CLOUD_SECONDS, CLOUD_CONTAINER, CLOUD_RECEIPT = 120, 'rose-cloud-preflight', 409
 STAGING, STAGE_CONTAINER = '/mnt/models-data/rose-cloud', 'rose-cloud-stage'
 STAGE_SECONDS, STAGE_MAX_BYTES, STAGE_GRACE_S = 3600, 45_000_000_000, 120
 STAGE_MANIFEST_SHA256 = 'ebcfb082a94bcae9c950eefab4b34a8fc736bfeb934c84a96360398afd09f3c3'
+# cloud-redirect-probe-once (CLOUD-REDIRECT-HEAD-001; runs only when a separate runtime decision sets it): the same
+# stage.py in HEAD-only mode names the refused redirect destination without staging. One HEAD per pinned manifest file,
+# the same allowlist and redirect checks; no body read, nothing mounted, read-only root filesystem. The container is
+# killed at PROBE_SECONDS (the diagnostic cap, no grace); the helper stops itself earlier, at PROBE_HELPER_S.
+PROBE_CONTAINER, PROBE_SECONDS, PROBE_HELPER_S, PROBE_READ_TIMEOUT_S = 'rose-cloud-redirect-probe', 120, 100, 10
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
@@ -895,6 +900,8 @@ def stage_diagnostic(host, ctx):
         return cloud_preflight_once(host, ctx, attempt, image)
     if request[2] == 'cloud-stage-once':
         return cloud_stage_once(host, ctx, attempt, image)
+    if request[2] == 'cloud-redirect-probe-once':
+        return cloud_redirect_probe_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -1205,6 +1212,73 @@ def cloud_stage_once(host, ctx, attempt, image):
     if result['stage'] is None:
         return 'inference held; cloud staging ' + ('timed out' if result['timedOut'] else 'gave no result')
     return f"inference held; cloud staging stopped: {result['stage']['stop']}"
+
+
+def probe_limits() -> str:
+    """The only limits cloud-redirect-probe-once passes: HEAD mode, no test hooks, no byte budget (no body is read)."""
+    return json.dumps({'mode': 'head', 'deadlineS': PROBE_HELPER_S, 'maxBytes': 0,
+                       'readTimeoutS': PROBE_READ_TIMEOUT_S}, sort_keys=True)
+
+
+def cloud_redirect_probe_once(host, ctx, attempt, image):
+    """CLOUD-REDIRECT-HEAD-001: name the destination cloud-stage-once refused, without staging. Same hold, stop,
+    positive absence, read-only prerequisites, image digest and pinned-manifest checks as cloud-stage-once (no data
+    disk is needed). Then one container: --pull=never, runc, the default bridge network (outbound only), no GPU, no
+    credentials, all capabilities dropped, a read-only root filesystem and NOTHING mounted, running stage.py with
+    probe_limits(): one HEAD per manifest file, redirects checked against the same allowlist, refused destinations
+    never requested, no body read. Killed at PROBE_SECONDS. The container is always removed and its absence verified;
+    the receipt is at most CLOUD_RECEIPT bytes; inference stays held."""
+    result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'attemptId': attempt, 'check': 'cloud-redirect-probe-once', 'modelHeld': True, 'exitCode': None,
+              'timedOut': False, 'probe': None, 'cleanup': None}
+    refused = diagnostic_prerequisites(host, image)
+    if not refused:
+        ref = f"vllm/vllm-openai@{ctx['runtime']['image_digest']}"
+        facts, _ = image_identity(host, image)
+        if facts is None or facts['id'] != image or ref not in facts['repoDigests'] \
+                or facts['platform'] != 'linux/amd64':
+            refused = 'image_digest_mismatch'
+    lib = Path(ctx['payload']) / 'etc-rose-models/lib/rose_cloud'
+    manifest_text = (lib / 'manifest.json').read_text() if not refused else ''
+    if not refused and hashlib.sha256(manifest_text.encode()).hexdigest() != STAGE_MANIFEST_SHA256:
+        refused = 'manifest_mismatch'
+    result['prerequisite'] = refused
+    if not refused:
+        spec = importlib.util.spec_from_file_location('rose_cloud_stage', lib / 'stage.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        source, manifest = (lib / 'stage.py').read_text(), json.loads(manifest_text)
+        argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'bridge',
+                '--name', PROBE_CONTAINER, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
+                '--entrypoint', 'python3', image, '-c', source, manifest_text, probe_limits()]
+        try:
+            code, out = host.run(argv, PROBE_SECONDS)
+        finally:
+            removed = host.run(['docker', 'rm', '-f', PROBE_CONTAINER], 30)[0]
+            left = container_names(host, PROBE_CONTAINER)
+        line = next((l for l in reversed(out.splitlines()) if l.startswith(module.HEAD_MARKER)), None) \
+            if code != 124 else None
+        try:
+            probe = module.sanitize_head(json.loads(line[len(module.HEAD_MARKER):]), manifest) \
+                if line and len(line) <= CLOUD_RECEIPT else None
+        except (ValueError, TypeError, AttributeError):
+            probe = None
+        result.update(exitCode=code if code != 124 else None, timedOut=code == 124, probe=probe,
+                      cleanup='unknown' if left is None else 'failed' if left else 'removed', cleanupRemoveExit=removed)
+    line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    if len(line) > CLOUD_RECEIPT:
+        result.update(probe=None, receiptTooLarge=True)
+        line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+    host.put_guest_attribute('diagnostic', line)
+    host.publish('ROSE-MODELS-DIAGNOSTIC ' + line)
+    if refused:
+        raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
+    if result['cleanup'] != 'removed':
+        raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
+    if result['probe'] is None:
+        return 'inference held; redirect probe ' + ('timed out' if result['timedOut'] else 'gave no result')
+    return (f"inference held; redirect probe stopped: {result['probe']['stop']} "
+            f"({len(result['probe']['refusedHosts'])} refused destination(s) in rose-models/diagnostic)")
 
 
 def load_guard(payload):
