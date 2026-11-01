@@ -46,7 +46,8 @@ test('ordered producer events become one current, validated list after live',asy
  // Privacy: steps, screen text, the model's reply and the typed draft never leave the provider.
  const all=JSON.stringify(p.lists);
  for(const secret of ['secret model reply','Messages: Sam Lee','Running late, sorry!','steps','ready_to_send','confirmed_send'])assert.ok(!all.includes(secret),'not forwarded: '+secret);
- assert.deepEqual(Object.keys(a).sort(),['awaitingSend','background','detail','finished','goal','id','key','kind','onScreen','result','started','status']);
+ assert.deepEqual(Object.keys(a).sort(),['awaitingSend','background','binding','detail','finished','goal','id','key','kind','onScreen','result','server','started','status']);
+ assert.ok(final.every(x=>x.binding===null&&x.server===null),'PR318 sends no workspace binding or server instance: none is inferred');
  // Read-only: no Stop or task command, nothing joins the backend projection; the handle keeps its contract.
  assert.equal(p.backend.length,0);assert.ok(!p.calls.some(c=>c[0]==='stopTask'));
  assert.deepEqual(Object.keys(handle).sort(),['close','inputLevel','outputLevel','sendContext','sendMessage','setMuted']);
@@ -120,5 +121,104 @@ test('a throwing consumer never stops the link from closing or the provider from
  assert.deepEqual(calls,['tasks','message']);
  await handle.close();
  assert.ok(p.calls.some(c=>c[0]==='stop'),'the native link stopped despite the throwing consumer');
+});
+
+// --- Workspace binding (App lead correction): the controller taskId is a reusable workspace generation, so a logical
+// task is bound ONLY by the producer's explicit `workspace`. `server` and `workspace` below are the PROPOSED producer
+// fields (synthetic additions to real producer events), not something PR318 emits today.
+const VP=()=>{const c={console,Map,Set,Promise,JSON,Number,Math,Date,setTimeout,clearTimeout};c.window=c;vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'voice-providers.js'),'utf8'),c);return c.VoiceProviders;};
+const WS={controllerTaskId:'rose-ws-ab12cd34-1-com.google.android.apps.messaging',sessionId:'s-1',targetPackage:'com.google.android.apps.messaging'};
+const ctl=(b,status='ready')=>({status,sessionId:b.sessionId,taskId:b.controllerTaskId,targetPackage:b.targetPackage});
+const plain=x=>JSON.parse(JSON.stringify(x));
+const bound=(m,extra)=>({type:'task',task:{...m.task,...extra}});
+
+test('missing binding: listed with its status, but Watch and Stop are unavailable',()=>{
+ const vp=VP(),t=plain(vp.localTask(produced[1].task));
+ assert.equal(t.binding,null);
+ assert.deepEqual(plain(vp.localTaskActions({key:t.key,binding:null},[t],ctl(WS))),{watch:false,stop:false,reason:'unbound'},'never the workspace that happens to be open');
+ for(const bad of [{...WS,sessionId:''},{...WS,controllerTaskId:7},{...WS,targetPackage:'not a package'},{controllerTaskId:WS.controllerTaskId},'rose-ws-1',null])
+  assert.equal(vp.localTask({...produced[1].task,workspace:bad}).binding,null,'malformed binding is no binding');
+});
+
+test('two logical tasks sharing one workspace are separate tasks with the same binding',async()=>{
+ const p=page();live(p);await p.started;
+ p.send(bound(produced[0],{server:'srv-a',workspace:WS}));
+ p.send(bound(produced[3],{server:'srv-a',workspace:WS,id:2}));
+ const list=p.last(),[a,b]=list;
+ assert.equal(list.length,2);assert.notEqual(a.key,b.key);assert.deepEqual(a.binding,b.binding);
+ const vp=p.context.VoiceProviders;
+ assert.equal(vp.localTaskActions({key:a.key,binding:a.binding},list,ctl(WS)).watch,true);
+ assert.equal(vp.localTaskActions({key:b.key,binding:b.binding},list,ctl(WS)).watch,true);
+ // The first finishes in the shared workspace: its result stays, without a live session; the second is still watchable.
+ p.send(bound(produced[2],{server:'srv-a',workspace:WS}));
+ const after=p.last();
+ assert.equal(after.find(t=>t.id===1).result,'Typed the reply; waiting for you to say send.');
+ assert.deepEqual(plain(vp.localTaskActions({key:a.key,binding:a.binding},after,ctl(WS))),{watch:false,stop:false,reason:'finished'});
+ assert.equal(vp.localTaskActions({key:b.key,binding:b.binding},after,ctl(WS)).watch,true);
+});
+
+test('replacement during selection: a changed binding, a new workspace generation or a gone task never opens',()=>{
+ const vp=VP(),t=plain(vp.localTask({...produced[1].task,server:'srv-a',workspace:WS})),sel={key:t.key,binding:t.binding};
+ const moved=plain(vp.localTask({...produced[1].task,server:'srv-a',workspace:{...WS,sessionId:'s-2'}}));
+ assert.equal(vp.localTaskActions(sel,[moved],ctl(moved.binding)).reason,'replaced','the task moved to another session after the tap');
+ const next={...WS,controllerTaskId:'rose-ws-ab12cd34-2-com.android.chrome',sessionId:'s-9',targetPackage:'com.android.chrome'};
+ assert.equal(vp.localTaskActions(sel,[t],ctl(next)).reason,'workspace_changed','the controller now holds another generation');
+ assert.equal(vp.localTaskActions(sel,[t],{...ctl(WS),targetPackage:'com.android.chrome'}).reason,'workspace_changed','all three fields must match');
+ assert.equal(vp.localTaskActions(sel,[t],{...ctl(WS),sessionId:'s-2'}).reason,'workspace_changed');
+ assert.equal(vp.localTaskActions(sel,[t],ctl(WS,'idle')).reason,'no_workspace');
+ assert.equal(vp.localTaskActions(sel,[t],ctl(WS,'stopped')).reason,'no_workspace');
+ assert.equal(vp.localTaskActions(sel,[t],null).reason,'controller_unknown');
+ assert.equal(vp.localTaskActions(sel,[],ctl(WS)).reason,'gone');
+ assert.deepEqual(plain(vp.localTaskActions(sel,[t],ctl(WS,'blocked'))),{watch:true,stop:true,reason:''});
+});
+
+test('server restart, re-pair and stale reconnect with reused ids never merge tasks',async()=>{
+ // Restart: the same id from another server instance is another task, even if a running snapshot follows a done one.
+ const p=page();live(p);await p.started;
+ p.send(bound(produced[2],{server:'srv-a',workspace:WS}));
+ p.send(bound(produced[0],{server:'srv-b',workspace:{...WS,controllerTaskId:'rose-ws-ffff0000-1-com.google.android.apps.messaging',sessionId:'s-7'}}));
+ const list=p.last();
+ assert.deepEqual(list.map(t=>[t.key,t.status]),[['srv-a#1','done'],['srv-b#1','running']]);
+ // Without a server id the restart is still told apart by start time (PR318 today).
+ assert.notEqual(produced[0].task.started,produced[8].task.started);
+ // Re-pair / replacement: the old connection ends (one []), its stale handler is inert, and a new connection starts empty.
+ const oldHandler=p.context.localRoseEvent;p.send({type:'closed',code:'4001'});
+ assert.deepEqual(p.last(),[]);const n=p.lists.length;
+ oldHandler(bound(produced[1],{server:'srv-a',workspace:WS}));assert.equal(p.lists.length,n);
+ const q=page();live(q);await q.started;assert.equal(q.lists.length,0,'a new connection inherits nothing');
+ // Stale reconnect: a running snapshot of srv-a#1 after its done event is refused.
+ const r=page();live(r);await r.started;
+ r.send(bound(produced[2],{server:'srv-a',workspace:WS}));r.send({type:'status',status:'reconnecting'});r.send(bound(produced[1],{server:'srv-a',workspace:WS}));
+ assert.equal(r.last()[0].status,'done');assert.equal(r.lists.length,1);
+ // A malformed server id is refused rather than merged.
+ r.send(bound(produced[3],{server:'has space'}));assert.equal(r.lists.length,1);
+});
+
+test('Stop: an ACK is stopping, duplicates change nothing, timeout is unconfirmed, only the task\'s own event ends it',()=>{
+ const vp=VP(),t=plain(vp.localTask({...produced[1].task,server:'srv-a',workspace:WS})),key=t.key;
+ const s=vp.localStop(key,{timeoutMs:1000,now:0});
+ assert.equal(s.state,'requested');assert.equal(s.request(),'duplicate','a second tap sends nothing');
+ assert.equal(s.ack('a1'),'stopping');assert.equal(s.ack('a1'),'stopping');assert.equal(s.ack('a2'),'stopping','duplicate ACKs change nothing');
+ assert.equal(s.request(),'duplicate');
+ assert.equal(s.observe([t],500),'stopping','an ACK is never stopped');
+ assert.equal(s.observe([t],1000),'unconfirmed','no terminal event by the deadline: it may still be running');
+ const cancelled=plain(vp.localTask({...produced[5].task,id:t.id,started:produced[1].task.started,server:'srv-a',workspace:WS}));
+ assert.equal(cancelled.key,key);
+ assert.equal(s.observe([cancelled],1500),'stopped','its own cancelled event confirms, even after the deadline');
+ assert.equal(s.observe([t],1600),'stopped','final');
+ const e=vp.localStop(key,{timeoutMs:1000,now:0});e.ack();
+ assert.equal(e.observe([{...cancelled,status:'done'}],10),'ended','finished on its own: not claimed as stopped');
+ const u=vp.localStop(key,{timeoutMs:1000,now:0});
+ assert.equal(u.observe([],10),'unknown','connection ended: nothing is claimed');
+ const other=vp.localStop(key,{timeoutMs:1000,now:0});
+ assert.equal(other.observe([{...cancelled,key:'srv-b#1'}],10),'unknown','another server\'s task with the same id never confirms');
+});
+
+test('completed results stay readable without a live session, and do not depend on the workspace',async()=>{
+ const p=page();live(p);await p.started;
+ for(const m of produced.slice(0,8))p.send(bound(m,{server:'srv-a'}));
+ const list=p.last(),vp=p.context.VoiceProviders;
+ assert.deepEqual(list.map(t=>[t.id,t.status,t.result]),[[1,'done','Typed the reply; waiting for you to say send.'],[2,'cancelled','Cancelled.'],[3,'failed','Something went wrong with that task.']]);
+ for(const t of list)assert.equal(vp.localTaskActions({key:t.key,binding:t.binding},list,ctl(WS,'idle')).reason,'finished');
 });
 
