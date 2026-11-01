@@ -191,6 +191,28 @@ class AdmitTest(Fixture):
         with self.assertRaisesRegex(bi.Failed, 'exists'):
             self.admit()
 
+class ApprovedRouteTest(Fixture):
+    """FAM-BLAZER-ROUTE-006: the checked-in route is Nathan's approved Blazer Beta route (approvalRef below), checked by
+    the same check_route and admitted end to end. A source route file only: not a published feed or runtime acceptance."""
+    def test_checked_in_route_is_the_approved_blazer_route(self):
+        path = ROOT/'os/build-only/blazer-updater-route.json'
+        route, record = bi.check_route(path)
+        self.assertEqual(route, {'schema': 'roseos.blazer-updater-route.v1', 'device': 'blazer',
+            'updaterUrl': 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/',
+            'releaseIndex': 'https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases', 'publishedChannel': 'stable',
+            'producerContract': bi.PRODUCER, 'owner': 'Dev Infra / Release',
+            'approvalRef': 'phone:6cc2a194-7c22-4b63-bc65-a3961d986858; reply-to:379e0772-6bb6-4790-92a2-6e84b7a8b4c4; '
+                '2026-11-01T00:12:25Z'})
+        self.assertEqual(record['sha256'], hashlib.sha256(path.read_bytes()).hexdigest())
+        # Frankel keeps its Latest route; Blazer never reads releases/latest.
+        frankel = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['host']['integrate']['reconcile']['applyArgs']
+        self.assertEqual(frankel[frankel.index('--updater-url') + 1],
+            'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/')
+        self.assertNotIn('/latest/', route['updaterUrl'])
+        record, out = self.admit(route=path)
+        self.assertEqual((record['updaterRoute']['updaterUrl'], record['updaterRoute']['sha256']),
+            (route['updaterUrl'], hashlib.sha256(path.read_bytes()).hexdigest()))
+
 class RenderTest(Fixture):
     def test_renders_the_host_reconcile_config_from_operator_paths(self):
         record, out = self.admit()
