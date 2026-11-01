@@ -33,6 +33,7 @@ public final class WorkspaceOverviewTest {
         completedWithoutSession();
         idleDisconnectedConfirmation();
         repeatedEntryAndBack();
+        noStopRoute();
         System.out.println("WorkspaceOverviewTest: " + checks + " checks passed");
     }
 
@@ -201,6 +202,16 @@ public final class WorkspaceOverviewTest {
         Model consent = WorkspaceOverview.of(true, S1, Workspace.read("consent_required", "", "", "", "", S1), one, null, null);
         expect(consent.card.label.equals("Waiting for your consent") && !consent.rows.get(0).canWatch, "consent");
         expect(WorkspaceOverview.of(true, S1, Workspace.read("strange", "", "", "", "", S1), one, null, null).card.place == Place.UNKNOWN, "unknown controller state is not relabelled");
+    }
+
+    /** Without an authoritative Stop route Stop is never offered; the row says so instead of failing silently. */
+    static void noStopRoute() {
+        List<Task> tasks = Arrays.asList(task("2", S1, Status.RUNNING, "Multiply 12 by 7", bound(S1), 20), task("1", S1, Status.DONE, "Add", null, 1));
+        Model m = WorkspaceOverview.of(true, S1, ready(S1), tasks, null, new Stop(), false);
+        expect(!row(m, "2").canStop && row(m, "2").stopNote.equals(WorkspaceOverview.STOP_NO_ROUTE), "no route: no Stop, with a reason");
+        expect(row(m, "2").canWatch, "Watch is independent of the Stop route");
+        expect(row(m, "1").stopNote.isEmpty(), "finished tasks need no Stop note");
+        expect(row(WorkspaceOverview.of(true, S1, ready(S1), tasks, null, new Stop(), true), "2").canStop, "with a route, running work is stoppable");
     }
 
     /** Entering, leaving with Back/Home and re-entering change nothing: same model, same Stop, same selection. */

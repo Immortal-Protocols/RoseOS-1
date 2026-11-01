@@ -45,6 +45,7 @@ final class WorkspaceOverview {
  static final String STOP_DONE="Stopped.";
  static final String STOP_NOT_RUNNING="That task wasn’t running any more, so nothing was stopped.";
  static final String STOP_REFUSED="Rose couldn’t stop this task. It may still be running.";
+ static final String STOP_NO_ROUTE="Stop isn’t available for this task here yet.";
  static final String STOP_REPLACED="That task was replaced, so nothing else was stopped.";
 
  // ---------- Inputs ----------
@@ -190,6 +191,11 @@ final class WorkspaceOverview {
   * connected: the link to Rose is up; scope: the current server lifetime and pairing. The only state it touches is
   * the owner's Stop, settled from the task list (Stop.observe); it never starts, stops or opens anything. */
  static Model of(boolean connected,Scope scope,Workspace ws,List<Task> tasks,Identity selected,Stop stop){
+  return of(connected,scope,ws,tasks,selected,stop,true);
+ }
+ /** stopRoute: an authoritative Stop route with an answer exists for these tasks. Without one Stop is never offered
+  * (the selected row says so) rather than sent somewhere that cannot confirm it. */
+ static Model of(boolean connected,Scope scope,Workspace ws,List<Task> tasks,Identity selected,Stop stop,boolean stopRoute){
   if(ws==null)ws=Workspace.UNREADABLE;if(scope==null)scope=Scope.UNKNOWN;
   List<Task> list=new ArrayList<>();if(tasks!=null)for(Task t:tasks)if(t!=null&&!t.id.isEmpty())list.add(t);
   if(stop!=null)stop.observe(list);
@@ -214,7 +220,8 @@ final class WorkspaceOverview {
    String stopNote=mine?stop.note():"";
    boolean stopping=mine&&stop.pending();
    // Only running work is stoppable: a task holding a draft for the owner's yes has already finished (PR318 done).
-   boolean canStop=connected&&t.status==Status.RUNNING&&t.scope.same(scope)&&!stopPending;
+   boolean canStop=stopRoute&&connected&&t.status==Status.RUNNING&&t.scope.same(scope)&&!stopPending;
+   if(!stopRoute&&t.status==Status.RUNNING&&stopNote.isEmpty())stopNote=STOP_NO_ROUTE;
    Dot dot=stopping?Dot.STOPPING:dot(t.status);
    String state=stopping?STOP_STOPPING:label(t.status);
    Row r=new Row(t.identity(),dot,title(t),state,t.active()?t.activity:"",t.result,canWatch,canWatch?WATCH_OK:reason,canStop,stopNote,
