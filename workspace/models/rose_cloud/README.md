@@ -483,6 +483,123 @@ never keeps a URL, scheme, port, path, query, fragment, userinfo, header, body o
   `us.gcp.cdn.hf.co`. Container cleanup was verified. That host alone was then added to `ALLOW_HOSTS` by owner
   approval (CLOUD-STAGING-ALLOW-GCP-CDN-001). HEAD only: GET success remains unproved.
 
+## cloud-validate-once (CLOUD-DEPS-VALIDATE-001; source only, has not run: running it is a separate runtime decision)
+
+**Why:** the approved staging attempt verified all 59 files (37,579,550,198 bytes downloaded in 305 s, zero
+failures, cleanup verified). Staging does not show dependency or model-config compatibility. `preflight.py` reads
+metadata, source text and the wheel's type stub; it imports nothing that is not already installed.
+
+**What `validate.py` does** (stdlib only at module level; `tests/test_validate.py` runs it against a synthetic
+wheel, a real `pip --no-index --no-deps --target` install into a temp dir, and stand-in `ptts`/`transformers`):
+
+1. **Isolation, checked from inside before anything else** (otherwise `stop: not_isolated` and nothing is
+   installed, imported or loaded):
+   - `/tmp` is a tmpfs of at most `tmpMaxBytes` (512 MiB), measured with `statvfs`, and is not `noexec`;
+   - `/` and the staging root are mounted read-only (`/proc/self/mounts`);
+   - the only network interface is `lo`;
+   - no `/dev/nvidia*` device exists.
+2. **Inputs** (otherwise `stop: bad_inputs`):
+   - the wheel's sha256 equals the pin `6efb197e73af258e278e90fcc771f36022c5123e9ecca2fca50ae90472caa60c`, which is
+     also the manifest's;
+   - the 11 non-weight Qwen files (config, tokenizer, processor, template, licence; under 24 MiB) match their
+     manifest size and hash;
+   - safetensors weights and their index are never opened.
+3. **ptts:**
+   - `python -I -B -m pip install --isolated --no-index --no-deps --no-cache-dir --no-compile --target
+     /tmp/rose-validate/site <wheel>`;
+   - the wheel's `Requires-Dist` names are checked against the image's installed distributions (`numpy`, the only
+     pinned one; any other name is counted, never fetched);
+   - in a child process: `import ptts`, `TTS.stream` and `TTS.add_voice` are callable, and `available_quants()`
+     lists `f32`. No `TTS(...)` is constructed, so no model loads and nothing is synthesized.
+4. **Qwen,** in a child process with `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`:
+   `AutoConfig`/`AutoTokenizer`/`AutoProcessor.from_pretrained(<staged dir>, local_files_only=True,
+   trust_remote_code=False)`. It checks that `model_type` is `qwen3_5_moe` and the architecture is
+   `Qwen3_5MoeForConditionalGeneration`, then records the tokenizer fast/chat-template flags and the processor
+   class. No model class, weights or inference.
+
+**Child processes:**
+- they run with `python -I -B`, with HOME, TMPDIR, HF_HOME and XDG_CACHE_HOME under `/tmp/rose-validate`;
+- their time limits are 120 s for pip, 60 s for ptts and 150 s for Qwen, each cut to the time left of the helper's
+  270 s;
+- a crash (for example SIGILL without AVX2) is the category `crashed`, and a hang is `timeout`.
+
+**How bootstrap runs it** (`cloud_validate_once`):
+- **Checks before the container:** the same hold, model stop, positive container absence, read-only prerequisites,
+  image digest, data-disk and pinned-manifest checks as `cloud-stage-once`. The staging root must already exist,
+  otherwise the run is refused as `staging_missing`; Docker would otherwise create the bind source.
+- **The container:**
+
+  ```
+  docker run --rm --pull=never --runtime=runc --network none --name rose-cloud-validate --cap-drop ALL
+    --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,exec,nosuid,nodev,size=536870912,mode=1777
+    --cpus 2 --memory 4294967296 --memory-swap 4294967296
+    -v /mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:ro --entrypoint python3 <pinned image id>
+    -c <validate.py> <manifest.json> {"deadlineS":270,"tmpMaxBytes":536870912}
+  ```
+
+**Time and storage bounds:**
+- **The diagnostic cap is 300 s:** the container is killed at 300 s, and the helper stops itself at 270 s.
+- **Outside the cap, each step already bounded:**
+  - the reset and boot;
+  - the model stop (≤ 180 s) and absence wait (≤ 120 s);
+  - `docker info` and `docker image inspect` (≤ 60 s each), the image identity inspect (≤ 60 s) and `mountpoint`
+    (≤ 30 s);
+  - `docker rm -f` (≤ 30 s) and `docker ps` (≤ 30 s);
+  - the guest attribute (≤ 10 s).
+- **Writable storage** is the 512 MiB tmpfs only, which counts against the 4 GiB memory limit. It goes when the
+  container is removed, and the staged files cannot be written.
+
+**Receipt** (`rose-models/diagnostic`, at most 4096 bytes), `validate`, re-checked by `validate.sanitize`:
+- **Run:** `stop` (`done`, `not_isolated`, `bad_inputs`, `deadline` or `bad_manifest`), `elapsedS` and
+  `tmpUsedBytes`.
+- **Isolation flags** and `tmpBytes`.
+- **Inputs:** `wheelSha256`, and the Qwen file counts.
+- **ptts:**
+  - `install` and `import` status, each `ok`, `failed`, `crashed`, `timeout`, `skipped` or `pip_unavailable`;
+  - `version`;
+  - the `stream`, `addVoice` and `f32` flags;
+  - `requires.numpy`, `otherRequires` and `siteBytes`;
+  - an exception class name and a missing module's import name.
+- **Qwen:** `run`, the `transformers` version, each step's status, the `modelType`, `architecture`,
+  `tokenizerFast` and `chatTemplate` flags, `processorClass`, and per-step exception class and missing-module names.
+- Never a message, path, file content or environment value.
+
+**Unresolved assumptions** (shown only by the approved run):
+- the image ships `pip`; otherwise `install: pip_unavailable`, and the Qwen check still runs;
+- pip accepts the `manylinux2014_x86_64`/`abi3` wheel on the image's Python and glibc;
+- the image's `numpy` satisfies ptts at import time;
+- the ptts extension loads from an exec tmpfs under `--cap-drop ALL`;
+- the VM's CPU passes ptts's x86-64-v3 requirement inside the container;
+- the image's `transformers` knows `qwen3_5_moe` without remote code, and its Qwen processor's own imports (for
+  example `torchvision` or `PIL`) are present;
+- 4 GiB holds `import transformers` plus a processor;
+- Docker accepts `exec` in `--tmpfs` options on the VM's version;
+- whether `TTS.stream`/`add_voice` are visible on the class (pyo3 methods) rather than only on instances. If not,
+  the receipt shows `false`, and that is a check finding, not proof of absence.
+
+**Not shown even by success:** that weights load, that vLLM serves the model, that ptts synthesizes, or any audio
+or latency.
+
+**Proposed operator packet** (NOT authorized; a separate runtime decision):
+- **Who:** only the original Mac operator, on `models-glimmer-01`.
+- **Steps:**
+  1. Build at the merge commit with the deployed attestation roots, and record `payloadTarSha256` (P). Confirm the
+     payload lists `etc-rose-models/lib/rose_cloud/validate.py` and `manifest.json` with the hashes Core reports.
+  2. Set `startup-script` and `rose-models-payload` from that build, plus
+     `rose-models-diagnostic=cloud-validate-once:<P>:<fresh id>`.
+  3. Do one reset.
+  4. Read `rose-models/diagnostic`.
+- **Consequences:**
+  - the usual TLS and auth interruption;
+  - Muse inference is held for that boot, and the **next** reset without a new id starts Muse;
+  - both A100s stay running and unused;
+  - no download, no data-disk write and no model load.
+- **Stop conditions** (none is retried without a new decision):
+  - a `prerequisite` refusal;
+  - `cleanup` other than `removed`;
+  - `validate: null`;
+  - `stop` other than `done`.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through
