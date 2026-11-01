@@ -1,10 +1,10 @@
 {
- "generatedAt": "3a6f5106fc4a39d9b433f8bd6248378880f30949",
+ "generatedAt": "d87d973440747e8b224a526e9c73c7d430b61a12",
  "schemaVersion": 1,
  "units": {
   "02013e48dd411d95": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/RosePresence\"  workspa",
-   "id": 95,
+   "id": 99,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/RosePresenceModel.java",
@@ -37,7 +37,7 @@
   },
   "04d930ee576aed44": {
    "command": "python3 scripts/tests/test_models_signing_bootstrap.py",
-   "id": 63,
+   "id": 64,
    "inputs": [
     ".github/workflows/release-verification.yml",
     ".gitignore",
@@ -51,7 +51,7 @@
   },
   "08742f923df98372": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/AgentTrayLink\"  os/ove",
-   "id": 89,
+   "id": 93,
    "inputs": [
     "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
     "os/tests/AgentTrayLinkTest.java"
@@ -75,7 +75,7 @@
   },
   "0a619b5ff1aa3bae": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/ConversationPresentati",
-   "id": 96,
+   "id": 100,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/ConversationPresentation.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java",
@@ -84,7 +84,7 @@
   },
   "0b9754fc2d15eb4f": {
    "command": "python3 -I workspace/models/rose_cloud/tests/test_vllm_brain.py",
-   "id": 76,
+   "id": 77,
    "inputs": [
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/coop.py",
@@ -128,7 +128,7 @@
   },
   "11581c61e0d58357": {
    "command": "python3 scripts/tests/test_emulator_alpha.py",
-   "id": 67,
+   "id": 68,
    "inputs": [
     ".github/workflows/os-release.yml",
     "os/alpha/cuttlefish-alpha-099-from-f21bf683.patch",
@@ -206,7 +206,7 @@
   },
   "13b32c6d80586dda": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/Button\"  workspace/ros",
-   "id": 114,
+   "id": 118,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java",
     "workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java"
@@ -271,6 +271,18 @@
     "scripts/tests/test_release_pipeline.py"
    ]
   },
+  "1f3261c1adf1006a": {
+   "command": "python3 -I workspace/models/rose_cloud/tests/test_listen.py",
+   "id": 83,
+   "inputs": [
+    "workspace/models/rose_cloud/rose_cloud/__init__.py",
+    "workspace/models/rose_cloud/rose_cloud/coop.py",
+    "workspace/models/rose_cloud/rose_cloud/listen.py",
+    "workspace/models/rose_cloud/rose_cloud/phonon.py",
+    "workspace/models/rose_cloud/rose_cloud/pump.py",
+    "workspace/models/rose_cloud/tests/test_listen.py"
+   ]
+  },
   "20c932c40b4a787d": {
    "command": "python3 os/tests/test_tray_contract.py",
    "id": 18,
@@ -287,7 +299,7 @@
   },
   "238c74476c227d79": {
    "command": "python3 workspace/models/serving/tests/test_render_upload.py",
-   "id": 82,
+   "id": 86,
    "inputs": [
     "workspace/models/serving/capacity.py",
     "workspace/models/serving/muse-glimmer-30b.json",
@@ -298,7 +310,7 @@
   },
   "2459fafd08e8f9e0": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/DockLabel\"  workspace/",
-   "id": 102,
+   "id": 106,
    "inputs": [
     "workspace/rose-agent/app/assets/fonts/nunito.ttf",
     "workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java",
@@ -307,7 +319,7 @@
   },
   "2711d65491e5d39c": {
    "command": "python3 scripts/tests/test_alpha_apk_diagnostic.py",
-   "id": 69,
+   "id": 70,
    "inputs": [
     ".github/workflows/os-release.yml",
     "scripts/alpha-apk-diagnostic.py",
@@ -318,7 +330,7 @@
   },
   "27d21d209cb37f6c": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/AgentStatusControls\"  ",
-   "id": 88,
+   "id": 92,
    "inputs": [
     "os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
     "os/tests/AgentStatusControlsTest.java"
@@ -326,7 +338,7 @@
   },
   "2f0bebe66eb78d94": {
    "command": "python3 -I workspace/models/rose_cloud/tests/test_pr288_tasks.py",
-   "id": 78,
+   "id": 79,
    "inputs": [
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/coop.py",
@@ -339,7 +351,7 @@
   },
   "38366a7924ca8b15": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/PhoneCommandGate\"  wor",
-   "id": 113,
+   "id": 117,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/PhoneCommandGate.java",
     "workspace/rose-agent/app/tests/PhoneCommandGateTest.java"
@@ -388,6 +400,7 @@
     "os/background-control/agent/src/dev/pixel/backgroundcontrol/StopReceiver.java",
     "os/build-only/README.md",
     "os/build-only/blazer-reconcile.json",
+    "os/build-only/blazer-updater-route.json",
     "os/build-only/blazer.json",
     "os/build-only/rango-isolated.json",
     "os/build-only/rango-reconcile-next.json",
@@ -504,7 +517,7 @@
   },
   "3b190c6a5cd89775": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/TaskControl\"  workspac",
-   "id": 110,
+   "id": 114,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/TaskControl.java",
     "workspace/rose-agent/app/tests/TaskControlTest.java"
@@ -512,7 +525,7 @@
   },
   "3b697a592b8e8f29": {
    "command": "python3 scripts/tests/test_alpha_source.py",
-   "id": 68,
+   "id": 69,
    "inputs": [
     "os/alpha/cuttlefish-product-contract.json",
     "os/patches/cuttlefish-alpha-no-updater.patch",
@@ -525,7 +538,7 @@
   },
   "3bc2be7017f759cc": {
    "command": "python3 qa/models/test_fixture_server.py",
-   "id": 73,
+   "id": 74,
    "inputs": [
     "qa/models/fixture_server.py",
     "qa/models/test_fixture_server.py"
@@ -533,7 +546,7 @@
   },
   "3d4f4dabb2fb206d": {
    "command": "python3 workspace/models/serving/tests/test_startup_guard.py",
-   "id": 81,
+   "id": 85,
    "inputs": [
     "workspace/models/serving/capacity.py",
     "workspace/models/serving/muse-glimmer-30b.json",
@@ -544,7 +557,7 @@
   },
   "3eb465bc62fd7f43": {
    "command": "python3 -I workspace/models/rose_cloud/tests/test_speech_wire.py",
-   "id": 80,
+   "id": 81,
    "inputs": [
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/coop.py",
@@ -556,7 +569,7 @@
   },
   "3ee3a89a77872b1a": {
    "command": "python3 workspace/models/serving/tests/test_local_profile.py",
-   "id": 83,
+   "id": 87,
    "inputs": [
     "workspace/models/serving/capacity.py",
     "workspace/models/serving/muse-glimmer-30b.json",
@@ -751,7 +764,7 @@
   },
   "4587d5edcc7d7880": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/RoseChannels\"  os/over",
-   "id": 90,
+   "id": 94,
    "inputs": [
     "os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java",
     "os/tests/RoseChannelsTest.java"
@@ -759,7 +772,7 @@
   },
   "463d74234aec42c4": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/RendererRecovery\"  wor",
-   "id": 111,
+   "id": 115,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java",
     "workspace/rose-agent/app/tests/RendererRecoveryTest.java"
@@ -767,7 +780,7 @@
   },
   "49ba640633aaaae6": {
    "command": "python3 scripts/tests/test_fold_bootstrap_proof.py",
-   "id": 61,
+   "id": 62,
    "inputs": [
     ".github/workflows/os-release.yml",
     ".github/workflows/release-verification.yml",
@@ -784,7 +797,7 @@
   },
   "4b0e40051cc440f5": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/HomeOverview\"  workspa",
-   "id": 100,
+   "id": 104,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/HomeOverview.java",
     "workspace/rose-agent/app/tests/HomeOverviewTest.java"
@@ -800,7 +813,7 @@
   },
   "51c4e62433be9bf1": {
    "command": "python3 scripts/tests/test_alpha_runtime.py",
-   "id": 66,
+   "id": 67,
    "inputs": [
     ".github/workflows/alpha-runtime.yml",
     ".github/workflows/os-release.yml",
@@ -904,6 +917,7 @@
     "os/background-control/tests/test_watch_wiring.py",
     "os/build-only/README.md",
     "os/build-only/blazer-reconcile.json",
+    "os/build-only/blazer-updater-route.json",
     "os/build-only/blazer.json",
     "os/build-only/rango-isolated.json",
     "os/build-only/rango-reconcile-next.json",
@@ -1264,6 +1278,7 @@
     "scripts/prepare-model-catalog.py",
     "scripts/rango-build-only.py",
     "scripts/rango-collect.py",
+    "scripts/rango-factory-observe.py",
     "scripts/rango-local-inputs.py",
     "scripts/rango-retained.py",
     "scripts/release-allocate.py",
@@ -1367,6 +1382,7 @@
     "scripts/tests/test_permission_apex.py",
     "scripts/tests/test_rango_build_only.py",
     "scripts/tests/test_rango_collect.py",
+    "scripts/tests/test_rango_factory_observe.py",
     "scripts/tests/test_rango_local_inputs.py",
     "scripts/tests/test_rango_retained.py",
     "scripts/tests/test_release_acceptance.py",
@@ -1491,6 +1507,7 @@
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/contract.py",
     "workspace/models/rose_cloud/rose_cloud/coop.py",
+    "workspace/models/rose_cloud/rose_cloud/listen.py",
     "workspace/models/rose_cloud/rose_cloud/manifest.json",
     "workspace/models/rose_cloud/rose_cloud/nomlx.py",
     "workspace/models/rose_cloud/rose_cloud/phonon.py",
@@ -1503,9 +1520,11 @@
     "workspace/models/rose_cloud/tests/fakes.py",
     "workspace/models/rose_cloud/tests/test_contract.py",
     "workspace/models/rose_cloud/tests/test_coop.py",
+    "workspace/models/rose_cloud/tests/test_listen.py",
     "workspace/models/rose_cloud/tests/test_pr288_tasks.py",
     "workspace/models/rose_cloud/tests/test_preflight.py",
     "workspace/models/rose_cloud/tests/test_speech_wire.py",
+    "workspace/models/rose_cloud/tests/test_vision.py",
     "workspace/models/rose_cloud/tests/test_vllm_brain.py",
     "workspace/models/serving/README.md",
     "workspace/models/serving/android-inference-prerequisites.md",
@@ -2299,7 +2318,7 @@
   },
   "5b77319d8c899d48": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/RoseReleases\"  os/over",
-   "id": 91,
+   "id": 95,
    "inputs": [
     "os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java",
     "os/tests/RoseReleasesTest.java"
@@ -2339,6 +2358,7 @@
    "id": 58,
    "inputs": [
     "os/build-only/blazer-reconcile.json",
+    "os/build-only/blazer-updater-route.json",
     "os/build-only/rango-isolated.json",
     "os/build-only/rango-reconcile-next.json",
     "os/build-only/rango-reconcile.json",
@@ -2354,7 +2374,7 @@
   },
   "666531b267f4f1d0": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/PublicApkDownload\"  wo",
-   "id": 105,
+   "id": 109,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/PublicApkDownload.java",
     "workspace/rose-agent/app/tests/PublicApkDownloadTest.java"
@@ -2372,7 +2392,7 @@
   },
   "69621df8715fa608": {
    "command": "python3 os/tests/test_cuttlefish_alpha_product.py",
-   "id": 84,
+   "id": 88,
    "inputs": [
     ".gitignore",
     "os/alpha/cuttlefish-alpha-099-from-f21bf683.patch",
@@ -2413,7 +2433,7 @@
   },
   "69ca8771c2575b52": {
    "command": "python3 -I workspace/models/rose_cloud/tests/test_coop.py",
-   "id": 79,
+   "id": 80,
    "inputs": [
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/coop.py",
@@ -2426,7 +2446,7 @@
   },
   "6bd24860e962d97c": {
    "command": "python3 os/tests/test_device_contract.py",
-   "id": 85,
+   "id": 89,
    "inputs": [
     "os/devices/pixel10.json",
     "os/patches/agent-tray-build-make.patch",
@@ -2515,7 +2535,7 @@
   },
   "77251b33cbb981da": {
    "command": "for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip AnyAppControl",
-   "id": 87,
+   "id": 91,
    "inputs": [
     "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/AnyAppControl.java",
     "os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/LabelTargets.java",
@@ -2545,7 +2565,7 @@
   },
   "7c5599ca2ce1da97": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/HomeReuse\"  workspace/",
-   "id": 98,
+   "id": 102,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/HomeReuse.java",
     "workspace/rose-agent/app/tests/HomeReuseTest.java"
@@ -2600,7 +2620,7 @@
   },
   "7d7f56d239d64ec8": {
    "command": "python3 scripts/tests/test_models_apk_signing.py",
-   "id": 64,
+   "id": 65,
    "inputs": [
     ".github/workflows/os-release.yml",
     ".github/workflows/release-verification.yml",
@@ -2622,7 +2642,7 @@
   },
   "80121f141a3ab1c7": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/HomePages\"  workspace/",
-   "id": 99,
+   "id": 103,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/HomePages.java",
     "workspace/rose-agent/app/tests/HomePagesTest.java"
@@ -2680,7 +2700,7 @@
   },
   "859b7cc3c68e2d06": {
    "command": "python3 -I workspace/models/rose_cloud/tests/test_contract.py",
-   "id": 77,
+   "id": 78,
    "inputs": [
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/contract.py",
@@ -2706,6 +2726,21 @@
     "scripts/signing-bootstrap.py",
     "scripts/test-local.sh",
     "scripts/tests/test_signing_tool_observation.py"
+   ]
+  },
+  "85b995dd1ed23bf6": {
+   "command": "python3 -I workspace/models/rose_cloud/tests/test_preflight.py",
+   "id": 82,
+   "inputs": [
+    "workspace/models/rose_cloud/rose_cloud/__init__.py",
+    "workspace/models/rose_cloud/rose_cloud/contract.py",
+    "workspace/models/rose_cloud/rose_cloud/coop.py",
+    "workspace/models/rose_cloud/rose_cloud/manifest.json",
+    "workspace/models/rose_cloud/rose_cloud/phonon.py",
+    "workspace/models/rose_cloud/rose_cloud/preflight.py",
+    "workspace/models/rose_cloud/rose_cloud/pump.py",
+    "workspace/models/rose_cloud/tests/test_preflight.py",
+    "workspace/models/serving/service/bootstrap.py"
    ]
   },
   "85c9deb7b75aa386": {
@@ -2746,7 +2781,7 @@
   },
   "865269d603255322": {
    "command": "python3 scripts/tests/test_fold_tool_proof.py",
-   "id": 62,
+   "id": 63,
    "inputs": [
     "os/signing-bootstrap/profiles.json",
     "scripts/fold_tool_proof.py",
@@ -2845,6 +2880,7 @@
     "os/background-control/tests/test_watch_wiring.py",
     "os/build-only/README.md",
     "os/build-only/blazer-reconcile.json",
+    "os/build-only/blazer-updater-route.json",
     "os/build-only/blazer.json",
     "os/build-only/rango-isolated.json",
     "os/build-only/rango-reconcile-next.json",
@@ -3205,6 +3241,7 @@
     "scripts/prepare-model-catalog.py",
     "scripts/rango-build-only.py",
     "scripts/rango-collect.py",
+    "scripts/rango-factory-observe.py",
     "scripts/rango-local-inputs.py",
     "scripts/rango-retained.py",
     "scripts/release-allocate.py",
@@ -3308,6 +3345,7 @@
     "scripts/tests/test_permission_apex.py",
     "scripts/tests/test_rango_build_only.py",
     "scripts/tests/test_rango_collect.py",
+    "scripts/tests/test_rango_factory_observe.py",
     "scripts/tests/test_rango_local_inputs.py",
     "scripts/tests/test_rango_retained.py",
     "scripts/tests/test_release_acceptance.py",
@@ -3432,6 +3470,7 @@
     "workspace/models/rose_cloud/rose_cloud/__init__.py",
     "workspace/models/rose_cloud/rose_cloud/contract.py",
     "workspace/models/rose_cloud/rose_cloud/coop.py",
+    "workspace/models/rose_cloud/rose_cloud/listen.py",
     "workspace/models/rose_cloud/rose_cloud/manifest.json",
     "workspace/models/rose_cloud/rose_cloud/nomlx.py",
     "workspace/models/rose_cloud/rose_cloud/phonon.py",
@@ -3444,9 +3483,11 @@
     "workspace/models/rose_cloud/tests/fakes.py",
     "workspace/models/rose_cloud/tests/test_contract.py",
     "workspace/models/rose_cloud/tests/test_coop.py",
+    "workspace/models/rose_cloud/tests/test_listen.py",
     "workspace/models/rose_cloud/tests/test_pr288_tasks.py",
     "workspace/models/rose_cloud/tests/test_preflight.py",
     "workspace/models/rose_cloud/tests/test_speech_wire.py",
+    "workspace/models/rose_cloud/tests/test_vision.py",
     "workspace/models/rose_cloud/tests/test_vllm_brain.py",
     "workspace/models/serving/README.md",
     "workspace/models/serving/android-inference-prerequisites.md",
@@ -4180,7 +4221,7 @@
   },
   "89f23994b8904065": {
    "command": "python3 scripts/tests/test_alpha_image_package_scan.py",
-   "id": 70,
+   "id": 71,
    "inputs": [
     "scripts/alpha_image.py",
     "scripts/tests/test_alpha_image_package_scan.py"
@@ -4406,7 +4447,7 @@
   },
   "9a5ad6daad0b3f0b": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/TaskPresentation\"  wor",
-   "id": 109,
+   "id": 113,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/TaskPresentation.java",
     "workspace/rose-agent/app/tests/TaskPresentationTest.java"
@@ -4470,7 +4511,7 @@
   },
   "a83a8bd691f5d7a0": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/HomeEntry\"  workspace/",
-   "id": 97,
+   "id": 101,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/HomeEntry.java",
     "workspace/rose-agent/app/tests/HomeEntryTest.java"
@@ -4487,7 +4528,7 @@
   },
   "aa72a59d2a80d57b": {
    "command": "python3 scripts/tests/test_alpha_verify_retained.py",
-   "id": 71,
+   "id": 72,
    "inputs": [
     ".github/workflows/os-release.yml",
     "scripts/alpha-verify-retained.py",
@@ -4507,7 +4548,7 @@
   },
   "ab7528c7a19d9201": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/CallbackOwner\"  worksp",
-   "id": 112,
+   "id": 116,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/CallbackOwner.java",
     "workspace/rose-agent/app/tests/CallbackOwnerTest.java"
@@ -4515,7 +4556,7 @@
   },
   "ac27951ff6265ab7": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/HomeRose\"  workspace/r",
-   "id": 94,
+   "id": 98,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/HomeRose.java",
@@ -4637,7 +4678,7 @@
   },
   "c7dbdfd400dc3bc4": {
    "command": "python3 scripts/tests/test_rose_verify.py",
-   "id": 72,
+   "id": 73,
    "inputs": [
     "os/alpha/cuttlefish-product-contract.json",
     "os/release-pipeline/frankel.json",
@@ -4652,9 +4693,21 @@
     "workspace/rose-agent/app/src/dev/pixel/voice/RoseHomeView.java"
    ]
   },
+  "c8756a2fe28df344": {
+   "command": "python3 -I workspace/models/rose_cloud/tests/test_vision.py",
+   "id": 84,
+   "inputs": [
+    "workspace/models/rose_cloud/rose_cloud/__init__.py",
+    "workspace/models/rose_cloud/rose_cloud/coop.py",
+    "workspace/models/rose_cloud/rose_cloud/pump.py",
+    "workspace/models/rose_cloud/rose_cloud/vllm_brain.py",
+    "workspace/models/rose_cloud/tests/fakes.py",
+    "workspace/models/rose_cloud/tests/test_vision.py"
+   ]
+  },
   "c8e729cd68d6cd4f": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/SelfUpdate\"  workspace",
-   "id": 104,
+   "id": 108,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/SelfUpdate.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/UpdateCheck.java",
@@ -4663,7 +4716,7 @@
   },
   "ca7ebc8056db2d20": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/ConversationState\"  wo",
-   "id": 92,
+   "id": 96,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java",
     "workspace/rose-agent/app/tests/ConversationStateTest.java"
@@ -4699,7 +4752,7 @@
   },
   "d4161bc04b3808d4": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/DirectUpdate\"  workspa",
-   "id": 106,
+   "id": 110,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java",
@@ -4784,7 +4837,7 @@
   },
   "da3ae1ba5cf5f3d9": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/RoseVisualState\"  work",
-   "id": 93,
+   "id": 97,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java",
@@ -4793,7 +4846,7 @@
   },
   "dc3e81969ee6768a": {
    "command": "python3 workspace/models/serving/tests/test_serving_config.py",
-   "id": 75,
+   "id": 76,
    "inputs": [
     "workspace/models/serving/capacity.py",
     "workspace/models/serving/muse-glimmer-30b.json",
@@ -4802,7 +4855,7 @@
   },
   "dc7edf21848881fe": {
    "command": "node --test workspace/rose-agent/delivery/catalog.test.mjs",
-   "id": 86,
+   "id": 90,
    "inputs": [
     "os/release-pipeline/frankel.json",
     "workspace/rose-agent/delivery/catalog.mjs",
@@ -4920,7 +4973,7 @@
   },
   "e47952c965684b58": {
    "command": "python3 qa/systemui-trial/test_trial_plan.py",
-   "id": 74,
+   "id": 75,
    "inputs": [
     "os/tests/persistent-app-experiment/trial_preflight.py",
     "qa/systemui-trial/test_trial_plan.py",
@@ -4941,7 +4994,7 @@
   },
   "eec775fd88ae8cf3": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/UpdateRecovery\"  works",
-   "id": 108,
+   "id": 112,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java",
@@ -4952,7 +5005,7 @@
   },
   "f20cf77820eee33d": {
    "command": "python3 scripts/tests/test_signing_bootstrap.py",
-   "id": 60,
+   "id": 61,
    "inputs": [
     ".github/workflows/os-release.yml",
     ".github/workflows/release-verification.yml",
@@ -4979,7 +5032,7 @@
   },
   "f2810e9e002be006": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/DirectUpdateChannel\"  ",
-   "id": 107,
+   "id": 111,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java",
     "workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java",
@@ -4990,7 +5043,7 @@
   },
   "f446a0e9bf3db434": {
    "command": "python3 scripts/tests/test_models_publication.py",
-   "id": 65,
+   "id": 66,
    "inputs": [
     ".github/workflows/models-publish.yml",
     "os/models-signing/models-sign.json",
@@ -5012,7 +5065,7 @@
   },
   "fb5a7be05437f3ba": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/HomeAppLayout\"  worksp",
-   "id": 101,
+   "id": 105,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java",
     "workspace/rose-agent/app/tests/HomeAppLayoutTest.java"
@@ -5029,10 +5082,32 @@
   },
   "ff705e0c883e2402": {
    "command": "java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d \"$JAVA_TESTS/UpdateCheck\"  workspac",
-   "id": 103,
+   "id": 107,
    "inputs": [
     "workspace/rose-agent/app/src/dev/pixel/voice/UpdateCheck.java",
     "workspace/rose-agent/app/tests/UpdateCheckTest.java"
+   ]
+  },
+  "ffecca74e42a9e37": {
+   "command": "python3 scripts/tests/test_rango_factory_observe.py",
+   "id": 60,
+   "inputs": [
+    "os/devices/pixel10.json",
+    "os/flavors/blazer.json",
+    "os/flavors/frankel.json",
+    "os/flavors/rango.json",
+    "os/release-pipeline/frankel.json",
+    "os/retained-rango/release.json",
+    "os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices/rango/firmware/android-info.txt",
+    "scripts/factory-package.py",
+    "scripts/rango-factory-observe.py",
+    "scripts/release_receipts.py",
+    "scripts/tests/fixtures/factory-package/device_common-1f5ba267/clear-factory-images-variables.sh",
+    "scripts/tests/fixtures/factory-package/device_common-1f5ba267/generate-factory-images-common.sh",
+    "scripts/tests/fixtures/factory-package/platform_system_core-322ff512/PROVENANCE.json",
+    "scripts/tests/fixtures/factory-package/platform_system_core-322ff512/fastboot-excerpt.json",
+    "scripts/tests/fixtures/permission-apex/script/generate-release.sh",
+    "scripts/tests/test_rango_factory_observe.py"
    ]
   }
  }
