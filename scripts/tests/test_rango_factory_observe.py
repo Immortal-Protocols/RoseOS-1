@@ -279,6 +279,20 @@ class Observe(unittest.TestCase):
             tools = otatools({'bin/fastboot': elf(), 'lib64/x.so': b'y'}, links={'bin/fastboot'})
             self.assertRefused('archive_unsafe: otatools bin/fastboot is not a regular member', Tree(self, tools=tools))
 
+    def test_open_checked_admits_names_only_links_for_target_files_only(self):
+        fp, _ = obs.factory_package()
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(tmp, ignore_errors=True))
+        path = tmp/'tf.zip'
+        path.write_bytes(target_files(ANDROID_LINKS, links=set(ANDROID_LINKS)))
+        strict = {'problems': [], 'missing': []}
+        self.assertIsNone(fp.open_checked(path, 'artifact', strict))  # the default (install archive) stays link-free
+        self.assertEqual(sorted(strict['problems']), sorted(f'link-entry:artifact:{n}' for n in ANDROID_LINKS))
+        names_only = {'problems': [], 'missing': []}
+        with fp.open_checked(path, 'target-files', names_only, names_only_links=True) as archive:
+            self.assertIn('VENDOR/bin/gpioinfo', archive.namelist())
+        self.assertEqual((names_only['problems'], names_only['linkEntries']), ([], len(ANDROID_LINKS)))
+
     def test_path_traversal_and_unsafe_members_refuse(self):
         tools = otatools(dict(json.loads('{}'), **{'bin/fastboot': elf(), '../escape': b'x'}))
         self.assertRefused('archive_unsafe: otatools member path', Tree(self, tools=tools))
