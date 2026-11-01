@@ -21,6 +21,13 @@ The run stops at ``deadlineS`` or once ``maxBytes`` have been read. It prints on
 for refused destinations, at most MAX_REFUSED_HOSTS sanitized hostnames with a fixed reason and a count. Never a URL,
 scheme, userinfo, port, path, query, fragment, header, path outside the manifest's names, or exception text.
 
+HEAD-only mode (CLOUD-REDIRECT-HEAD-001): limits ``{"mode": "head", ...}`` run head_probe() instead: one HEAD request
+per manifest file at the same pinned source, every redirect checked by the same Fetcher.check (ALLOW_HOSTS, https only,
+no userinfo, at most MAX_REDIRECTS hops). A refused destination is recorded (sanitized host, reason, count) and never
+requested. No response body is read (http.client reads none for HEAD; responses are closed unread), the staging root
+and existing files are never opened, nothing is written, and the run stops at deadlineS, enforced by a real-time alarm
+in main(). It prints one HEAD_MARKER line that sanitize_head() re-checks.
+
 Unverified until a separately approved run: the image's Python ssl/CA store, the Hub's redirect hosts from the VM's
 region (only the three hosts seen from a development sandbox are allowed), its Range support on those hosts, and
 the throughput needed to finish 37.6 GB inside the deadline.
@@ -53,6 +60,12 @@ REFUSAL_REASONS = ('host_not_allowed', 'scheme_not_https', 'userinfo', 'malforme
 MAX_REFUSED_HOSTS = 4
 MAX_URL_CHARS = 8192
 _LABEL = re.compile(r'^(?!-)[a-z0-9-]{1,63}(?<!-)$')
+# HEAD-only probe receipt: per group, files expected, reachable (final 2xx on allowed hosts), refused (a redirect to a
+# destination Fetcher.check refuses) and failed; the first failure per group as a fixed token.
+HEAD_MARKER = 'ROSE-CLOUD-HEAD '
+HEAD_KEYS = ('expected', 'reachable', 'refused', 'failed')
+HEAD_STOPS = ('done', 'deadline', 'bad_manifest')
+HEAD_FAILURES = ('redirect_refused', 'redirect_limit', 'auth_required', 'http_error', 'size_mismatch', 'network')
 
 
 def clean_host(host):
@@ -119,10 +132,26 @@ class Fetcher:
         self.clock, self.bytes_in = clock, 0
         self.refused = {}  # (host or None, reason) -> count, at most MAX_REFUSED_HOSTS keys
         self.refused_other = 0
+        self.head_only, self.hops = limits.get('mode') == 'head', 0
         fetcher = self
 
         class Hop(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if fetcher.head_only:
+                    fetcher.hops += 1
+                    left = fetcher.deadline - fetcher.clock()
+                    try:
+                        if left <= 0:
+                            raise Stop('deadline')
+                        fetcher.check(newurl)
+                    except (Stop, FileFailure):
+                        fp.close()  # the redirect response is closed unread; the destination is never requested
+                        raise
+                    req.timeout = min(fetcher.timeout, left)  # http_error_302 opens the next hop with req.timeout
+                    new = super().redirect_request(req, fp, code, msg, headers, newurl)
+                    if new is not None:
+                        new.method = 'HEAD'  # a HEAD stays a HEAD on every hop, whatever this Python's default
+                    return new
                 fetcher.check(newurl)
                 new = super().redirect_request(req, fp, code, msg, headers, newurl)
                 if new is not None and req.get_header('Range'):
@@ -183,6 +212,32 @@ class Fetcher:
             raise
         except (OSError, ValueError):
             raise FileFailure('network') from None
+
+    def head(self, url):
+        """One HEAD request (the redirects Hop checks): (status, Content-Length or None). No body is ever read."""
+        import http.client
+        import urllib.error
+        import urllib.request
+        self.check(url)
+        left = self.deadline - self.clock()
+        if left <= 0:
+            raise Stop('deadline')
+        self.hops = 0
+        try:
+            resp = self.opener.open(urllib.request.Request(url, method='HEAD'), timeout=min(self.timeout, left))
+        except urllib.error.HTTPError as e:
+            e.close()
+            if 300 <= e.code < 400:
+                raise FileFailure('redirect_limit' if self.hops > MAX_REDIRECTS else 'http_error') from None
+            raise FileFailure('auth_required' if e.code in (401, 403) else 'http_error') from None
+        except (FileFailure, Stop):
+            raise
+        except (OSError, ValueError, http.client.HTTPException):
+            raise FileFailure('network') from None
+        try:
+            return getattr(resp, 'status', 200), resp.headers.get('Content-Length')
+        finally:
+            resp.close()  # unread
 
     def pull(self, url, part, size, kind, digest):
         """Fetch into ``part`` (resuming it), then True if the whole file hashes to ``digest``."""
@@ -295,6 +350,62 @@ def stage(manifest, limits, clock=time.monotonic):
     return result
 
 
+def head_probe(manifest, limits, clock=time.monotonic):
+    """HEAD-only refused-destination probe: see the module docstring. Touches no file and reads no body."""
+    t0 = clock()
+    groups = manifest['groups']
+    counts = {g: dict.fromkeys(HEAD_KEYS, 0) for g in groups}
+    failures = {g: None for g in groups}
+    result = {'mode': 'head', 'stop': None, 'elapsedS': 0, 'groups': counts, 'firstFailure': failures,
+              'refusedHosts': [], 'refusedOther': 0}
+    plan = []
+    for name, group in groups.items():
+        for rel, size, *_ in group['files']:
+            if '..' in rel.split('/') or rel.startswith('/'):
+                result['stop'] = 'bad_manifest'
+                return result
+            counts[name]['expected'] += 1
+            plan.append((name, group, rel, size))
+    fetcher = Fetcher(dict(limits, mode='head'), clock)
+    try:
+        for name, group, rel, size in plan:
+            try:
+                status, length = fetcher.head(url_for(name, group, rel, limits))
+                if status == 200 and length is not None and (not length.isdigit() or int(length) != size):
+                    raise FileFailure('size_mismatch')
+            except FileFailure as e:
+                counts[name]['refused' if str(e) == 'redirect_refused' else 'failed'] += 1
+                failures[name] = failures[name] or str(e)
+                continue
+            counts[name]['reachable'] += 1
+        result['stop'] = 'done'
+    except Stop as s:
+        result['stop'] = str(s)
+    result['refusedHosts'], result['refusedOther'] = fetcher.refusals()
+    result['elapsedS'] = round(clock() - t0)
+    return result
+
+
+def head_main(manifest, limits):
+    """head_probe under a real-time alarm at deadlineS, so no blocking socket call can outlive the deadline."""
+    import signal
+
+    def expire(*_):
+        raise Stop('deadline')
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, float(limits['deadlineS']))
+    try:
+        return head_probe(manifest, limits)
+    except Stop:  # the alarm landed outside head_probe's own handler
+        return {'mode': 'head', 'stop': 'deadline'}
+    except OSError:
+        return {'mode': 'head', 'stop': None}
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 # ----------------------------------------------------------------- the allowlist bootstrap re-applies
 def _count(v):
     return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 1 << 50 else None
@@ -312,6 +423,24 @@ def sanitize(raw, manifest):
         'groups': {n: {k: _count((g.get(n) if isinstance(g.get(n), dict) else {}).get(k)) for k in GROUP_KEYS}
                    for n in manifest['groups']},
         'firstFailure': {n: f.get(n) if f.get(n) in FAILURES else None for n in manifest['groups']},
+        'refusedHosts': _refused(raw.get('refusedHosts')),
+        'refusedOther': _count(raw.get('refusedOther')),
+    }
+
+
+def sanitize_head(raw, manifest):
+    """The HEAD-only receipt with only fixed tokens, bounded counts and _refused() hostnames."""
+    if not isinstance(raw, dict) or raw.get('mode') != 'head':
+        return None
+    g = raw.get('groups') if isinstance(raw.get('groups'), dict) else {}
+    f = raw.get('firstFailure') if isinstance(raw.get('firstFailure'), dict) else {}
+    return {
+        'mode': 'head',
+        'stop': raw.get('stop') if raw.get('stop') in HEAD_STOPS else None,
+        'elapsedS': _count(raw.get('elapsedS')),
+        'groups': {n: {k: _count((g.get(n) if isinstance(g.get(n), dict) else {}).get(k)) for k in HEAD_KEYS}
+                   for n in manifest['groups']},
+        'firstFailure': {n: f.get(n) if f.get(n) in HEAD_FAILURES else None for n in manifest['groups']},
         'refusedHosts': _refused(raw.get('refusedHosts')),
         'refusedOther': _count(raw.get('refusedOther')),
     }
@@ -337,6 +466,13 @@ def main(argv):
     if len(argv) != 2:
         raise SystemExit(__doc__)
     manifest, limits = json.loads(argv[0]), json.loads(argv[1])
+    if limits.get('mode') == 'head':
+        try:
+            result = head_main(manifest, limits)
+        except Stop:  # the alarm fired while head_main was disarming it
+            result = {'mode': 'head', 'stop': 'deadline'}
+        print(HEAD_MARKER + json.dumps(result, sort_keys=True, separators=(',', ':')), flush=True)
+        return
     try:
         result = stage(manifest, limits)
     except OSError:

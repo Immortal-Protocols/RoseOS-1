@@ -52,6 +52,8 @@ class FakeHost(B.Host):
         self.cloud_rc, self.cloud_out = 0, ''
         self.stage_container = self.stage_timeout = False
         self.stage_rc, self.stage_out = 0, ''
+        self.redirect_container = self.redirect_timeout = False
+        self.redirect_rc, self.redirect_out = 0, ''
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -171,7 +173,8 @@ class FakeHost(B.Host):
                                             ('muse-glimmer-validate', self.validate_container),
                                             ('muse-glimmer-hfprobe', self.probe_container),
                                             ('rose-cloud-preflight', self.cloud_container),
-                                            ('rose-cloud-stage', self.stage_container)) if alive]
+                                            ('rose-cloud-stage', self.stage_container),
+                                            ('rose-cloud-redirect-probe', self.redirect_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -186,7 +189,17 @@ class FakeHost(B.Host):
                     self.cloud_container = False
                 if argv[3] == 'rose-cloud-stage' and not self.rm_fails:
                     self.stage_container = False
+                if argv[3] == 'rose-cloud-redirect-probe' and not self.rm_fails:
+                    self.redirect_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-redirect-probe' in argv:
+                self.events.append(('redirectprobe', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), self.path(B.STAGING).exists(), timeout))
+                self.redirect_container = True
+                if self.redirect_timeout:
+                    return 124, ''
+                self.redirect_container = self.leave_container
+                return self.redirect_rc, self.redirect_out
             if argv[1] == 'run' and 'rose-cloud-stage' in argv:
                 self.events.append(('cloudstage', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), self.path(B.STAGING).is_dir()))
@@ -1768,6 +1781,176 @@ class CloudStageOnce(DiagnosticFixture):
         self.assertNotIn('cloudstage', [e[0] for e in self.host.events])
         self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-stage-once:{SHA}:s1'))
         self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-stage:{SHA}:s1'))
+
+
+class CloudRedirectProbeOnce(DiagnosticFixture):
+    """cloud-redirect-probe-once (CLOUD-REDIRECT-HEAD-001): the exact container, limits and controls. The probe line
+    comes from the payload's own stage.py run as a real subprocess in HEAD mode over the real pinned manifest, against
+    a local server that redirects every file to a refused CDN-like host (test-only hubBase/sources/allowHosts; nothing
+    leaves 127.0.0.1). The container is FakeHost's."""
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-redirect-probe-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        seen = []
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_HEAD(self):
+                seen.append(self.command)
+                self.send_response(302)
+                self.send_header('Location', 'https://CAS-Bridge.XetHub.hf.co/xet-bridge-us/abc?X-Amz-Signature=SECRET'
+                                             '&X-Amz-Credential=SECRET')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+            do_GET = do_HEAD
+
+        srv = ThreadingHTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        wheel = manifest['groups']['ptts']['files'][0][0]
+        base = f'http://127.0.0.1:{srv.server_address[1]}'
+        limits = dict(json.loads(B.probe_limits()), hubBase=base + '/hub', allowHosts=['127.0.0.1'], allowHttp=True,
+                      sources={f'ptts/{wheel}': f'{base}/pypi/{wheel}'})
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'stage.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, ['HEAD'] * 59)  # one HEAD per pinned file; no GET, no follow
+        return 'pip notice on stdout\n' + out
+
+    def test_exact_container_limits_and_hold(self):
+        status, code = self.probe('head', redirect_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; redirect probe stopped: done '
+                                 '(1 refused destination(s) in rose-models/diagnostic)'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        for leak in ('SECRET', 'X-Amz', 'xet-bridge-us', 'abc', '127.0.0.1', 'https'):
+            self.assertNotIn(leak, line)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['timedOut'], r['exitCode']),
+                         ('cloud-redirect-probe-once', 'removed', None, True, False, 0))
+        self.assertEqual((r['probe']['mode'], r['probe']['stop'], r['probe']['refusedHosts'], r['probe']['refusedOther']),
+                         ('head', 'done', [{'host': 'cas-bridge.xethub.hf.co', 'reason': 'host_not_allowed',
+                                            'count': 59}], 0))
+        self.assertEqual(r['probe']['groups']['qwen'], {'expected': 54, 'reachable': 0, 'refused': 54, 'failed': 0})
+        _, argv, active, container, held, staging, timeout = next(e for e in self.host.events
+                                                                  if e[0] == 'redirectprobe')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'bridge',
+                                '--name', 'rose-cloud-redirect-probe', '--cap-drop', 'ALL', '--security-opt',
+                                'no-new-privileges', '--read-only', '--entrypoint', 'python3', RUNTIME['image_id'],
+                                '-c', (lib / 'stage.py').read_text(), (lib / 'manifest.json').read_text(),
+                                B.probe_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'mode': 'head', 'deadlineS': 100, 'maxBytes': 0, 'readTimeoutS': 10})
+        self.assertEqual(timeout, 120)  # the diagnostic cap: the container is killed at 120 s, no grace
+        self.assertLess(json.loads(argv[-1])['deadlineS'], timeout)
+        for forbidden in ('--gpus', '--privileged', '-e', '--env', '-v', '--volume', '--mount', '--network=host', 'host',
+                          '--cap-add'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if a.startswith('/')], [])  # nothing mounted
+        self.assertEqual((active, container, held, staging), (False, False, True, False))  # no staging dir created
+        self.assertFalse(self.host.path(B.STAGING).exists())
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'redirectprobe', 'cloudstage', 'rm')],
+                         ['stop', 'redirectprobe', 'rm'])
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_manifest_must_be_the_pinned_one(self):
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        m.write_text(m.read_text().replace('"apache-2.0"', '"other"', 1))
+        status, code = self.probe('edited')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_prerequisite_missing'), 1))
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', redirect_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['probe'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; redirect probe timed out'))
+        self.assertFalse(self.host.redirect_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', redirect_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-HEAD '
+        long_host = '.'.join(['a' * 63] * 3) + '.' + 'b' * 61
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'mode': 'head', 'stop': 'done; rm -rf /', 'elapsedS': 'SECRET',
+                                                 'firstFailure': {'qwen': 'https://x/?sig=SECRET'},
+                                                 'refusedHosts': [{'host': 'https://x/?sig=SECRET',
+                                                                   'reason': 'host_not_allowed', 'count': 1}]})),
+                ('worst', marker + json.dumps({'mode': 'head', 'stop': 'deadline', 'refusedOther': 1 << 40,
+                                               'refusedHosts': [{'host': long_host, 'reason': 'host_not_allowed',
+                                                                 'count': 1 << 40}] * 9})),
+                ('stage', 'ROSE-CLOUD-STAGE ' + json.dumps({'stop': 'done'})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, redirect_out=out + '\n', redirect_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                probe = self.published()['probe']
+                if attempt == 'hostile':
+                    self.assertEqual((probe['stop'], probe['elapsedS'], probe['firstFailure']['qwen'],
+                                      probe['refusedHosts']), (None, None, None, []))
+                elif attempt == 'worst':
+                    self.assertEqual((len(probe['refusedHosts']), probe['refusedOther']), (4, 1 << 40))
+                else:
+                    self.assertIsNone(probe)
+
+    def test_refusals_once_per_id_and_default_boot(self):
+        self.probe('nodocker', docker_down=True)
+        self.assertEqual(self.published()['prerequisite'], 'docker_unavailable')
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+        self.host.docker_down = False
+        self.host.model_active = self.host.model_container = True
+        self.probe('unmounted', data_mounted=False, redirect_out='')  # no data disk needed: nothing is mounted
+        self.assertIsNone(self.published()['prerequisite'])
+        self.host.data_mounted = True
+        self.host.model_active = self.host.model_container = True
+        saved = dict(self.host.images)
+        self.host.images.update({k: (v[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *v[2:]) for k, v in saved.items()})
+        self.probe('digest')
+        self.assertEqual(self.published()['prerequisite'], 'image_digest_mismatch')
+        self.host.images.update(saved)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', redirect_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-redirect-probe-once:{SHA}:r1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-redirect-probe:{SHA}:r1'))
+        for mode in ('offline-validate', 'gpu-start-once', 'hf-probe-once', 'cloud-preflight-once', 'cloud-stage-once'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:r1'))  # existing modes unchanged
+        self.assertEqual(json.loads(B.stage_limits()), {'deadlineS': 3600, 'maxBytes': 45_000_000_000,
+                                                       'readTimeoutS': 30})
 
 
 class HostValidate(unittest.TestCase):
