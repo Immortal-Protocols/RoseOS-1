@@ -62,7 +62,7 @@ public final class RoseAgentWorkTest {
 
         RoseAgentWork empty = RoseAgentWork.of(controller, 0, Arrays.asList(new RoseAgentWork.Display(0, -1)), tasks);
         expect(empty.state == RoseAgentWork.State.EMPTY && empty.items.isEmpty()
-            && "Rose is not working in any app".equals(empty.reason), "No agent display is a truthful empty state");
+            && "No background work".equals(empty.reason) && empty.linkLabel().isEmpty(), "No agent display is a truthful empty state");
         RoseAgentWork spoof = RoseAgentWork.of(controller, 0, Arrays.asList(new RoseAgentWork.Display(9, 10999)), tasks);
         expect(spoof.state == RoseAgentWork.State.EMPTY, "Another owner's display never counts");
         expect(RoseAgentWork.of(-1, 0, displays, tasks).state == RoseAgentWork.State.UNAVAILABLE,
@@ -99,6 +99,21 @@ public final class RoseAgentWorkTest {
             && "Rose's work could not be read (controller)".equals(RoseAgentWork.failed(RoseAgentWork.Step.CONTROLLER).reason)
             && "Rose's work could not be read (displays)".equals(RoseAgentWork.failed(RoseAgentWork.Step.DISPLAYS).reason),
             "A failed platform read names its step with a fixed word");
+
+        // The HiFi link between the carousels counts only Rose's current screens, from the platform read.
+        expect(work.working() == 1 && "1 task in progress".equals(work.linkLabel()),
+            "Mail is Rose's current screen; Maps is behind it, a background app, not in progress");
+        RoseAgentWork two = RoseAgentWork.of(controller, 0, Arrays.asList(new RoseAgentWork.Display(7, controller),
+            new RoseAgentWork.Display(8, controller)), Arrays.asList(task(2, 7, 0, "com.example.mail", true),
+            task(3, 8, 0, "com.example.maps", true), task(4, 8, 0, "com.example.chat", false)));
+        expect(two.working() == 2 && "2 tasks in progress".equals(two.linkLabel()), "Two agent screens, two in progress");
+        RoseAgentWork idle = RoseAgentWork.of(controller, 0, displays, Arrays.asList(
+            task(6, 7, 0, RoseAgentWork.CONTROLLER, true), task(3, 7, 0, "com.example.maps", false)));
+        expect(idle.state == RoseAgentWork.State.AVAILABLE && idle.working() == 0 && "No active work".equals(idle.linkLabel()),
+            "Background apps with the controller itself in front: shown, but nothing claimed in progress");
+        expect(RoseAgentWork.failed(RoseAgentWork.Step.TASKS).linkLabel().isEmpty()
+            && RoseAgentWork.failed(RoseAgentWork.Step.TASKS).working() == 0, "An unreadable state claims no work");
+        expect(work.labelled(t -> "x").working() == work.working(), "Labels never change what is in progress");
         System.out.println("RoseAgentWorkTest: " + checks + " checks passed");
     }
 }
