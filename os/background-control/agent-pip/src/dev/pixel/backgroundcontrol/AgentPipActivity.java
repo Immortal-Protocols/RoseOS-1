@@ -19,8 +19,9 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 import java.lang.reflect.Method;
 
-/** A PiP presentation of the existing session. Closing it never closes the agent. A Watch from Rose
- * Agent binds it to one task and session (WatchBinding); it then closes rather than show any other. */
+/** The viewer of the existing session, full screen by default (automatic picture-in-picture is off; see
+ * ViewerPresentation). Closing it never closes the agent. A Watch from Rose Agent binds it to one task and session
+ * (WatchBinding); it then closes rather than show any other. */
 public final class AgentPipActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private View mirror;
@@ -30,7 +31,7 @@ public final class AgentPipActivity extends Activity {
     private boolean visible;
     private WatchBinding binding = WatchBinding.UNBOUND;
     private WatchBinding attachedBinding;
-    // Full screen for an explicit Watch; picture-in-picture for the automatic show and unbound reopens (ViewerPresentation).
+    // Full screen for every entry while automatic picture-in-picture is off (ViewerPresentation.AUTOMATIC_PIP).
     private ViewerPresentation.Mode presentation;
 
     @Override public void onCreate(Bundle saved) {
@@ -41,7 +42,9 @@ public final class AgentPipActivity extends Activity {
         if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
         presentation = recreated ? ViewerPresentation.restore(saved.getString(KEY_PRESENTATION))
             : ViewerPresentation.forEntry(binding.mode == WatchBinding.Mode.BOUND, null);
-        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+        // Only the floating presentation needs picture-in-picture; the full-screen viewer works without it.
+        if (ViewerPresentation.entersPip(presentation)
+                && !getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             fail("Picture-in-picture is unavailable on this phone", null);
             return;
         }
@@ -85,7 +88,8 @@ public final class AgentPipActivity extends Activity {
         double ratio = Math.max(100.0 / 239, Math.min(239.0 / 100, (double) width / height));
         PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
             .setAspectRatio(new Rational((int) Math.round(ratio * 10000), 10000))
-            .setAutoEnterEnabled(true)
+            // Leaving a full-screen viewer (Home, another app) never floats it on its own.
+            .setAutoEnterEnabled(ViewerPresentation.AUTOMATIC_PIP)
             .setSeamlessResizeEnabled(false);
         Rect bounds = new Rect();
         if (frame != null && frame.getGlobalVisibleRect(bounds)) builder.setSourceRectHint(bounds);
@@ -106,8 +110,8 @@ public final class AgentPipActivity extends Activity {
         WatchBinding incoming = fromIntent(intent);
         binding = WatchBinding.next(binding, incoming);
         if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
-        // An explicit Watch is shown full screen and is never pushed back into the floating view here; launching the
-        // viewer's task brings it out of picture-in-picture. An unbound reopen keeps the current presentation.
+        // Every entry is shown full screen and is never pushed back into the floating view here; launching the viewer's
+        // task brings it out of picture-in-picture.
         presentation = ViewerPresentation.forEntry(incoming.mode == WatchBinding.Mode.BOUND, presentation);
         if (visible) { handler.removeCallbacks(refresh); handler.post(refresh); }
         if (frame != null && ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());

@@ -14,8 +14,12 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import org.json.JSONObject;
 
-/** Reveals the existing phone viewer once when a background session becomes ready. */
+/** Could reveal the existing phone viewer once, in picture-in-picture, when a background session becomes ready.
+ * Off by default (AUTO-PIP-OFF-330): the work continues in the background and the viewer opens only when the owner asks
+ * (a Watch from Rose's apps or the overview, or the session notification). The state is in memory only, so a fresh
+ * install and an upgraded phone start the same way. */
 final class AutoAgentPip {
+    static final boolean ENABLED = false;
     private static final String CONTROLLER = "dev.pixel.backgroundcontrol";
     private static final ComponentName VIEWER = new ComponentName(CONTROLLER,
         CONTROLLER + ".AgentWorkspaceActivity");
@@ -25,6 +29,7 @@ final class AutoAgentPip {
     private static String error = "";
 
     static synchronized void observe(Context context, String operation, JSONObject result) {
+        if (!ENABLED) return;
         if (!(operation.equals("start") || operation.equals("get_state"))
                 || !result.optString("status").equals("ready")) return;
         final String session = result.optString("sessionId");
@@ -88,7 +93,7 @@ final class AutoAgentPip {
                 }
             }
         }
-        return new JSONObject().put("autoShow", true).put("phase", phase)
+        return new JSONObject().put("autoShow", ENABLED).put("phase", phase)
             .put("sessionId", requestedSession).put("visibleInAccessibility", visible)
             .put("visibilityNote", "Protected viewer windows may be absent from accessibility")
             .put("error", error);
