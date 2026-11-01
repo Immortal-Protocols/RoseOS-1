@@ -329,7 +329,8 @@ None of these is retried without a new decision.
 - **What the receipt now adds:** `refusedHosts`, up to 4 entries of `{host, reason, count}`, plus a `refusedOther`
   count.
 - **`host`:** the lower-cased hostname (no trailing dot, DNS syntax, at most 253 characters) or a normalized IP
-  literal. It is `null` when the URL is malformed. The scheme, userinfo, port, path, query (signed CDN URLs carry
+  literal without an IPv6 zone id (a zone id is free text, so such a URL counts as `malformed`). It is `null` when
+  the URL is malformed. The scheme, userinfo, port, path, query (signed CDN URLs carry
   their signature there), fragment and headers are never kept.
 - **`reason`:** one of `host_not_allowed`, `scheme_not_https`, `userinfo` or `malformed`.
 - **Bounds:** URLs over 8192 characters count as `malformed`.

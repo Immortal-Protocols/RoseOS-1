@@ -60,6 +60,8 @@ def clean_host(host):
     if not isinstance(host, str):
         return None
     host = host.strip().lower().rstrip('.')
+    if '%' in host:
+        return None  # an IPv6 zone/scope id is free text: never a hostname token
     try:
         return str(ipaddress.ip_address(host))
     except ValueError:

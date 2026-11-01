@@ -286,6 +286,8 @@ class Stage(unittest.TestCase):
             ('https://' + 'a' * 64 + '.example/x', None, 'malformed'),
             ('https://' + '.'.join(['a' * 63] * 5) + '/x', None, 'malformed'),
             ('https://[::1/x', None, 'malformed'),
+            ('https://[fe80::1%25SECRET]/x', None, 'malformed'),  # a zone id is free text, never kept
+            ('https://[fe80::1%SECRET]/x', None, 'malformed'),
             ('/relative/SECRET', None, 'malformed'),
             ('https://h.example/' + 'x' * 9000, None, 'malformed'),
         )
@@ -319,6 +321,7 @@ class Stage(unittest.TestCase):
             {'host': 'https://evil.example/x?sig=SECRET', 'reason': 'host_not_allowed', 'count': 1},
             {'host': 'user:SECRET@evil.example', 'reason': 'userinfo', 'count': 1},
             {'host': 'evil.example:443', 'reason': 'host_not_allowed', 'count': 1},
+            {'host': 'fe80::1%SECRET' + 'z' * 5000, 'reason': 'host_not_allowed', 'count': 1},
             {'host': 'ok.example', 'reason': 'not_a_reason', 'count': 1},
             {'host': 'ok.example', 'reason': 'host_not_allowed', 'count': -3},
             {'host': 'CDN.Example.', 'reason': 'host_not_allowed', 'count': 45},
