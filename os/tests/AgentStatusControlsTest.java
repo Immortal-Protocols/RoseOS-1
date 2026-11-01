@@ -20,6 +20,14 @@ public final class AgentStatusControlsTest {
     }
 
     public static void main(String[] args) {
+        // v1 STATE as AgentTrayService sends it (ConversationState.tray*): active is Connecting through End.
+        expect("Connecting is active", 1, AgentStatusControls.active(false, false, "Connecting") ? 1 : 0);
+        expect("Listening is active", 1, AgentStatusControls.active(true, true, "Listening") ? 1 : 0);
+        expect("Muted is active", 1, AgentStatusControls.active(true, false, "Muted") ? 1 : 0);
+        expect("Ready is idle", 0, AgentStatusControls.active(false, false, "Ready") ? 1 : 0);
+        expect("Disconnected is idle", 0, AgentStatusControls.active(false, false, "Disconnected") ? 1 : 0);
+        expect("missing status is idle", 0, AgentStatusControls.active(false, false, null) ? 1 : 0);
+
         AgentStatusControls c = new AgentStatusControls();
         expect("idle agent tap starts", START, tap(c, AGENT, AGENT, 100, false, false));
         expect("idle mic tap starts", START, tap(c, MIC, MIC, 100, false, false));

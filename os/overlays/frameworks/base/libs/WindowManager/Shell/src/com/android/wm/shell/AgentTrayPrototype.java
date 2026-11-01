@@ -89,7 +89,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         listening = data.getBoolean("listening");
         muted = data.getBoolean("muted");
         connected = data.getBoolean("connected");
-        active = connected || listening || "Connecting".equals(data.getString("status"));
+        active = AgentStatusControls.active(connected, listening, data.getString("status"));
         input = data.getFloat("inputLevel", 0);
         output = data.getFloat("outputLevel", 0);
         observed = data.getLong("audioObservedAt", 0);
@@ -274,7 +274,9 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
                 micGlow.draw(canvas,rightStart,0,glowWidth,getHeight(),
                         fresh ? input : 0,now/1000f+1.7f,elapsed,false);
             } else micGlow.clear();
-            if (connected || listening) postInvalidateOnAnimation();
+            // The service sends STATE only on change, so a Connecting glow drawn once would freeze; animate
+            // for the whole active span, the same span the glow is drawn for.
+            if (active) postInvalidateOnAnimation();
         }
     }
 
