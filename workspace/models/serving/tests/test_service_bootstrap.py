@@ -60,6 +60,8 @@ class FakeHost(B.Host):
         self.qwen_rc, self.qwen_out = 0, ''
         self.vision_container = self.vision_timeout = False
         self.vision_rc, self.vision_out = 0, ''
+        self.adapter_container = self.adapter_timeout = False
+        self.adapter_rc, self.adapter_out = 0, ''
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -183,7 +185,8 @@ class FakeHost(B.Host):
                                             ('rose-cloud-redirect-probe', self.redirect_container),
                                             ('rose-cloud-validate', self.deps_container),
                                             ('rose-cloud-qwen-gpu', self.qwen_container),
-                                            ('rose-cloud-qwen-vision', self.vision_container)) if alive]
+                                            ('rose-cloud-qwen-vision', self.vision_container),
+                                            ('rose-cloud-qwen-adapter', self.adapter_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -206,7 +209,17 @@ class FakeHost(B.Host):
                     self.qwen_container = False
                 if argv[3] == 'rose-cloud-qwen-vision' and not self.rm_fails:
                     self.vision_container = False
+                if argv[3] == 'rose-cloud-qwen-adapter' and not self.rm_fails:
+                    self.adapter_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-qwen-adapter' in argv:
+                self.events.append(('qwenadapter', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.adapter_container = True
+                if self.adapter_timeout:
+                    return 124, ''
+                self.adapter_container = self.leave_container
+                return self.adapter_rc, self.adapter_out
             if argv[1] == 'run' and 'rose-cloud-qwen-vision' in argv:
                 self.events.append(('qwenvision', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), timeout))
@@ -2430,6 +2443,132 @@ class CloudQwenVisionOnce(DiagnosticFixture):
                     self.assertNotIn('answer', q['engine'])
                 else:
                     self.assertIsNone(q)
+
+
+class CloudQwenAdapterOnce(DiagnosticFixture):
+    """cloud-qwen-adapter-once (CLOUD-QWEN-ADAPTER-001): cloud-qwen-gpu-once's container controls and bounds, its own
+    container, the helper in adapter mode with the payload's adapter sources as a bundle argument. The helper line
+    comes from the payload's own qwen_gpu.py (adapter mode) run as a real subprocess on a path that refuses before
+    any server or vLLM import."""
+
+    QWEN_DIR = CloudQwenGpuOnce.QWEN_DIR
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+        self.lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-qwen-adapter-once:{SHA}:{attempt}')
+
+    def bundle(self):
+        return json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_ADAPTER_FILES}, sort_keys=True)
+
+    def real_line(self):
+        fx = self.tmp / 'adapter-fixture'
+        for d in (fx / 'net' / 'lo', fx / 'net' / 'eth0', fx / 'dev', fx / 'tmp', fx / 'shm'):
+            d.mkdir(parents=True, exist_ok=True)
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw 0 0\n")
+        limits = dict(json.loads(B.qwen_gpu_limits(adapter=True)), mountsFile=str(fx / 'mounts'),
+                      netDir=str(fx / 'net'), devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'), shmRoot=str(fx / 'shm'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (self.lib / 'qwen_gpu.py').read_text(),
+                                  (self.lib / 'manifest.json').read_text(), json.dumps(limits), self.bundle()], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])  # refused before the bundle, a server or vLLM
+        return out
+
+    def test_exact_container_and_bundle(self):
+        status, code = self.probe('adapter', adapter_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; Qwen adapter session stopped: not_isolated'), 0))
+        r = json.loads(self.host.guest['diagnostic'])
+        self.assertEqual((r['check'], r['cleanup'], r['qwen']['mode'], r['qwen']['stop']),
+                         ('cloud-qwen-adapter-once', 'removed', 'adapter', 'not_isolated'))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'qwenadapter')
+        self.assertEqual(argv[argv.index('--name') + 1], 'rose-cloud-qwen-adapter')
+        self.assertEqual(json.loads(argv[-2]), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30,
+                                                'mode': 'adapter'})
+        self.assertEqual(argv[-1], self.bundle())
+        self.assertEqual(sorted(json.loads(argv[-1])), sorted(B.QWEN_ADAPTER_FILES))
+        text_argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all', '--network', 'none',
+                     '--name', 'rose-cloud-qwen-adapter', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                     '--read-only', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777',
+                     '--shm-size', '4294967296', '--cpus', '16', '--memory', '68719476736',
+                     '--memory-swap', '68719476736', '-v', f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro',
+                     '--entrypoint', 'python3', RUNTIME['image_id'], '-c', (self.lib / 'qwen_gpu.py').read_text(),
+                     (self.lib / 'manifest.json').read_text()]
+        self.assertEqual(argv[:-2], text_argv)  # the same controls and bounds; no -p/--publish, no host network
+        self.assertLess(max(len(a) for a in argv), 128 * 1024)  # each argument under Linux's per-argument limit
+        self.assertEqual(timeout, 900)
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'qwenadapter', 'qwengpu', 'qwenvision',
+                                                                       'rm')], ['stop', 'qwenadapter', 'rm'])
+        self.assertNoProvisioning()
+
+    def test_refusals_and_once_per_id(self):
+        (self.lib / 'pump.py').unlink()
+        self.probe('nosrc')
+        self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')
+        self.assertNotIn('qwenadapter', [e[0] for e in self.host.events])
+        self.host.model_active = self.host.model_container = True
+        self.host.path(self.QWEN_DIR).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-adapter-once:{SHA}:a1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-adapter:{SHA}:a1'))
+        self.assertEqual(json.loads(B.qwen_gpu_limits()), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30,
+                                                           'shmMaxBytes': 4 << 30})  # PR345 text limits unchanged
+
+    def test_timeout_cleanup_and_hostile_or_worst_case_lines(self):
+        status, _ = self.probe('slow', adapter_timeout=True)
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; Qwen adapter session timed out'))
+        self.assertEqual(self.published()['cleanup'], 'removed')
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', adapter_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-QWEN-GPU '
+        turn = {'tokens': 1 << 40, 'endedWithImEnd': True, 'firstTokenS': 999999.9, 'totalS': 999999.9,
+                'promptExact': True, 'tokenSha256': 'f' * 64}
+        worst = {'mode': 'adapter', 'stop': 'done', 'elapsedS': 1 << 40, 'engine': {
+            'run': 'ok', 'step': 'done', 'vllm': '9' * 32, 'unsupported': [], 'serverReadyS': 999999.9,
+            'serverExit': -255, 'error': 'E' * 64, 'module': 'm' * 64, 'session': {
+                'step': 'done', 'imageTokens': 1 << 40, 'imagesInHistory': 1 << 40,
+                **{k: turn for k in ('turn1', 'turn2', 'turn3', 'rewound', 'staleText')},
+                'history': {'rewindExact': True, 'forkUntouched': True, 'staleImageDropped': True,
+                            'staleRequestSent': True, 'forkImages': 1 << 40},
+                'cancel': {'fired': True, 'noLateAppend': True, 'workerJoined': True, 'tokensAtCancel': 1 << 40,
+                           'appended': 1 << 40, 'probeTokens': 1 << 40, 'clientStopS': 999999.9,
+                           'requestS': 999999.9, 'runningAfter': 999999.9, 'idleAfterS': 999999.9,
+                           'probeS': 999999.9, 'semantics': 'inflight_abort_probe_only'},
+                'lateCancel': {'tokens': 1 << 40, 'lateCancelNoop': True, 'workerJoined': True}}},
+            'isolation': {k: True for k in ('ok', 'tmpfs', 'tmpBounded', 'tmpExec', 'shmBounded', 'rootReadOnly',
+                                            'modelReadOnly', 'networkOnlyLo')},
+            'inputs': {'qwenFiles': {'expected': 11, 'verified': 11, 'missing': 0, 'mismatch': 0},
+                       'weights': {'expected': 43, 'sizeOk': 43, 'missing': 0, 'sizeMismatch': 0}}}
+        hostile = {'mode': 'adapter', 'stop': 'done', 'engine': {'step': 'done', 'session': {
+            'step': 'done', 'reply': 'Red SECRET', 'turn1': {'tokens': 3, 'text': 'SECRET', 'tokenSha256': 'SECRET'},
+            'cancel': {'semantics': 'aborted SECRET', 'fired': 'SECRET'}, 'prompt': 'SECRET'}}}
+        for attempt, raw in (('worst', worst), ('hostile', hostile)):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, adapter_out=marker + json.dumps(raw) + '\n', adapter_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                self.assertNotIn('SECRET', line)
+                q = self.published()['qwen']
+                if attempt == 'worst':
+                    self.assertIsNotNone(q)  # the full worst-case session receipt fits in 4 KiB
+                    self.assertEqual(q['engine']['session']['cancel']['semantics'], 'inflight_abort_probe_only')
+                else:
+                    s = q['engine']['session']
+                    self.assertNotIn('reply', s)
+                    self.assertNotIn('text', s['turn1'])
+                    self.assertEqual((s['turn1']['tokenSha256'], s['cancel']['semantics'], s['cancel']['fired']),
+                                     (None, None, None))
 
 
 class HostValidate(unittest.TestCase):

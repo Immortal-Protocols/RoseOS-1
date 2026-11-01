@@ -91,8 +91,11 @@ def _drain(units):
         return done.value
 
 
-def run_session(brain: VllmBrain, image, server: Server, clock=time.monotonic, sleep=time.sleep) -> dict:
-    r: dict = {'step': 'turn1'}
+def run_session(brain: VllmBrain, image, server: Server, clock=time.monotonic, sleep=time.sleep,
+                into: dict | None = None) -> dict:
+    """Fills and returns ``into`` (so a caller keeps what was measured if a later step raises)."""
+    r: dict = into if into is not None else {}
+    r['step'] = 'turn1'
     seq = brain.sequence('talker')
     _drain(seq.append_text(brain.system_prefix(SYSTEM)))
     _drain(seq.append_text(_user(TURNS[0])))

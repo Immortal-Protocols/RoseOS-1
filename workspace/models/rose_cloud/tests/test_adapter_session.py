@@ -7,9 +7,7 @@ generating after a disconnect. It tests the adapter's behaviour and the session'
 
 from __future__ import annotations
 
-import base64
 import json
-import struct
 import sys
 import time
 import unittest
@@ -18,7 +16,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE.parent), str(HERE)]
 
-from fakes import CharTokenizer, FakeVllm  # noqa: E402
+from fakes import CharTokenizer, FakeVllm, chat_prompt_ids  # noqa: E402
 from rose_cloud import adapter_session as A  # noqa: E402
 from rose_cloud.vllm_brain import VllmBrain  # noqa: E402
 
@@ -28,23 +26,6 @@ except ImportError:  # pragma: no cover - PR288's environment and CI have Pillow
     Image = None
 
 TEMPLATE = None  # CharTokenizer renders its own chat format
-
-
-def server_prompt_ids(tok):
-    """What vLLM's processor would report as prompt_token_ids for a chat-route body rendered by RAW_TEMPLATE."""
-    vs, pad, ve = (tok.encode(t)[0] for t in ('<|vision_start|>', '<|image_pad|>', '<|vision_end|>'))
-
-    def ids(body):
-        out = []
-        for part in body['messages'][0]['content']:
-            if part['type'] == 'text':
-                out += tok.encode(part['text'])
-            else:
-                png = base64.b64decode(part['image_url']['url'].split(',', 1)[1])
-                w, h = struct.unpack('>II', png[16:24])
-                out += [vs] + [pad] * ((w // 32) * (h // 32)) + [ve]
-        return out
-    return ids
 
 
 @unittest.skipIf(Image is None, 'Pillow is needed for the synthetic image')
@@ -69,7 +50,7 @@ class Session(unittest.TestCase):
 
     def run_session(self, **fake_kw):
         script = fake_kw.pop('script', None) or self.script()
-        fake = FakeVllm(script, prompt_ids=server_prompt_ids(self.tok), **fake_kw)
+        fake = FakeVllm(script, prompt_ids=chat_prompt_ids(self.tok), **fake_kw)
         self.addCleanup(fake.close)
         brain = VllmBrain(self.tok, fake.url, 'rose-brain', TEMPLATE, timeout_s=10)
         return fake, A.run_session(brain, self.image, A.Server(fake.url, timeout_s=2))
@@ -139,6 +120,46 @@ class Session(unittest.TestCase):
         with self.assertRaises(ServerError):
             A.run_session(brain, self.image, A.Server(fake.url))
         self.assertEqual(len(fake.requests), 1)  # nothing retried
+
+    def test_adapter_regressions_are_reported_not_masked(self):
+        from rose_cloud import vllm_brain as V
+        real_rewind = V.VllmSequence.rewind
+
+        def sticky_rewind(seq, mark):  # a regression: the rewound image is kept (and would be sent again)
+            images = list(seq.images)
+            real_rewind(seq, mark)
+            seq.images = images
+        V.VllmSequence.rewind = sticky_rewind
+        self.addCleanup(setattr, V.VllmSequence, 'rewind', real_rewind)
+        fake = FakeVllm(self.script(), prompt_ids=chat_prompt_ids(self.tok), serial=True, metrics=True, delay_s=0.02)
+        self.addCleanup(fake.close)
+        r = A.run_session(VllmBrain(self.tok, fake.url, 'rose-brain', None, timeout_s=10), self.image,
+                          A.Server(fake.url))
+        self.assertFalse(r['history']['staleImageDropped'])
+        V.VllmSequence.rewind = real_rewind
+
+        class LateSeq:  # a regression: tokens keep arriving after the cancel fired
+            def __init__(self):
+                self.tokens, self.worker_stopped, self.requests = [], True, 0
+
+            def append_text(self, text):
+                self.tokens.append(0)
+                yield None
+
+            def generate(self, sampling, stop=None, cancel=None):
+                for i in range(sampling.max_tokens):
+                    self.tokens.append(i)
+                    yield i
+                    if cancel is not None and cancel() and i > A.CANCEL_AFTER + 2:
+                        return
+
+            def fork(self, name):
+                return LateSeq()
+
+        c = A.cancel_inflight(LateSeq(), A.Server(fake.url))
+        self.assertTrue(c['fired'])
+        self.assertFalse(c['noLateAppend'])
+        self.assertGreater(c['appended'], c['tokensAtCancel'])
 
     def test_metrics_parser(self):
         fake = FakeVllm(metrics=True)

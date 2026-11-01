@@ -49,7 +49,7 @@ class FakeVllm:
 
     def __init__(self, script=(), mode='ids', chunk=1, delay_s=0.0, status=200, send_stop=True, raw=None,
                  header_delay_s=0.0, stall_at=None, stall_s=0.0, prompt_ids=None, serial=False,
-                 ignore_disconnect=False, metrics=False):
+                 ignore_disconnect=False, metrics=False, port=0):
         self.script = [list(s) for s in script]
         self.mode, self.chunk, self.delay_s, self.status, self.send_stop, self.raw = (
             mode, chunk, delay_s, status, send_stop, raw)
@@ -74,6 +74,11 @@ class FakeVllm:
                 pass
 
             def do_GET(self):
+                if self.path == '/health':
+                    self.send_response(200)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
                 if self.path != '/metrics' or not fake.metrics:
                     self.send_response(404)
                     self.send_header('Content-Length', '0')
@@ -121,7 +126,7 @@ class FakeVllm:
                 finally:
                     fake.running -= 1
 
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
         self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -168,3 +173,23 @@ class FakeVllm:
             time.sleep(self.delay_s)
         out.write(self.event([], finish, reason) + b'\n\n' + b'data: [DONE]\n\n')
         out.flush()
+
+
+def chat_prompt_ids(tok):
+    """What vLLM's processor would report as prompt_token_ids for a chat-route body rendered by RAW_TEMPLATE: the
+    text parts' tokens and, per image, vision_start + (w/32)*(h/32) image pads + vision_end."""
+    import base64
+    import struct
+    vs, pad, ve = (tok.encode(t)[0] for t in ('<|vision_start|>', '<|image_pad|>', '<|vision_end|>'))
+
+    def ids(body):
+        out = []
+        for part in body['messages'][0]['content']:
+            if part['type'] == 'text':
+                out += tok.encode(part['text'])
+            else:
+                png = base64.b64decode(part['image_url']['url'].split(',', 1)[1])
+                w, h = struct.unpack('>II', png[16:24])
+                out += [vs] + [pad] * ((w // 32) * (h // 32)) + [ve]
+        return out
+    return ids

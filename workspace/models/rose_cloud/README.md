@@ -828,6 +828,113 @@ than one image, video, HTTP serving, or latency at serving settings.
   - `qwen: null`;
   - `stop` other than `done`.
 
+## cloud-qwen-adapter-once (CLOUD-QWEN-ADAPTER-001; source only, has not run in this mode)
+
+**Why:** PR348's vision run succeeded at 21:40: load in 400.1 s, 64 image tokens, 2 valid tokens, the colour flag
+passed, cleanup verified, Muse held. It used vLLM's offline API, not the adapter Rose actually uses.
+`rose_cloud/vllm_brain.py` (`VllmBrain`/`VllmSequence`) is an **HTTP client** of vLLM's OpenAI server:
+- it uses `/v1/completions` for text, and `/v1/chat/completions` with `RAW_TEMPLATE` once a sequence holds an image;
+- cancellation is client-side: the `cancel` callable or closing the generator stops reading and shuts the socket
+  down, and nothing produced afterwards is appended;
+- whether vLLM then aborts the request is server behaviour the adapter cannot prove by itself.
+
+**What the mode does:** `qwen_gpu.py` adapter mode, run by bootstrap's `cloud-qwen-adapter-once` in its own
+container `rose-cloud-qwen-adapter`.
+- **Unchanged:** the same container controls and bounds as the text and vision modes. The argv equals theirs
+  except for the container name, `"mode": "adapter"`, and one more argument: the payload's `vllm_brain.py`, `coop.py`,
+  `pump.py` and `adapter_session.py` as a JSON bundle. That bundle is written to the tmpfs and imported from there.
+- **Steps inside the container:**
+  1. it refuses if `EngineArgs` lacks any vision option;
+  2. it starts `vllm serve <qwen dir> --served-model-name rose-brain --host 127.0.0.1 --port 18000 --chat-template
+     <RAW_TEMPLATE on the tmpfs>` with the vision mode's bounds:
+     - `--tensor-parallel-size 2 --max-model-len 2048 --max-num-seqs 1 --gpu-memory-utilization 0.9`;
+     - `--enforce-eager --seed 0 --distributed-executor-backend mp`;
+     - `--limit-mm-per-prompt {"image": {"count": 1, "height": 256, "width": 256}, "video": 0}`;
+     - `--mm-processor-kwargs {"max_pixels": 65536}` and `--chat-template-content-format openai`;
+     - no `--disable-log-stats`, so `/metrics` stays on;
+  3. it waits for `/health`, loads the tokenizer from the staged files, and runs `adapter_session.run_session`
+     once with a synthetic 256 × 256 red image;
+  4. the server's process group is killed at the end, and the container is removed and confirmed absent.
+- **The server port:** it listens only on the container's loopback; `--network none` means nothing is published
+  and nothing outside can reach it. This is the one change from the offline modes, and it is required because the
+  adapter is an HTTP client.
+
+**The session** (`rose_cloud/adapter_session.py`; synthetic text and image only; every request greedy and bounded):
+1. **Turn 1, text:** the model's own system prefix and a user turn, at most 16 tokens, on the completions route.
+2. **Turn 2, image:** a user turn holding the image, on the chat route. The server's `prompt_token_ids` are
+   compared with the client's (`promptExact`).
+3. **Turn 3:** text with the image still in history, still on the chat route and still compared.
+4. **History:**
+   - fork after turn 3, then rewind the original to before turn 3 and generate; the fork must be untouched and the
+     rewound request exact;
+   - then rewind to before the image: the image must be dropped (`staleImageDropped`) and the next request must
+     use the text route again.
+5. **Cancellation in flight:** a request of up to 256 tokens, cancelled through `cancel` after 3 tokens.
+   - **Client side** (measured directly): no token appended after the cancel (`noLateAppend`), the worker thread
+     joined, and `clientStopS`.
+   - **Server side** (evidence, never assumed):
+     - the `vllm:num_requests_running` gauge returning to 0 within 20 s;
+     - a 1-token probe. With `--max-num-seqs 1`, a request still generating would hold the probe for the remaining
+       ~250 tokens.
+   - **`semantics`:**
+     - `inflight_abort`: the gauge reads 0 and the probe is under 15 s;
+     - `inflight_abort_probe_only`: no gauge, and the probe is fast;
+     - `client_suppressed_only`: the gauge is above 0 or the probe was slow. The client dropped the tokens but the
+       server kept generating;
+     - `completed_before_cancel`: the request finished before the cancel fired;
+     - `unknown` otherwise.
+6. **Cancel after completion:** a 2-token request that finishes, then the cancel. The sequence and the request
+   count must not change (`lateCancelNoop`). That is a no-op, not an abort.
+
+**Receipt** (re-checked by `qwen_gpu.sanitize`; the worst case is tested at ≤ 4096 bytes): `serverReadyS`,
+`serverExit`, and the session's step, `imageTokens` and `imagesInHistory`.
+- **Per turn:** token count, `endedWithImEnd`, first-token and total seconds, `promptExact`, and the sha256 of the
+  token ids.
+- **History:** the history flags.
+- **Cancellation:** the cancel counts, flags, seconds, gauge reading and probe, and `semantics`.
+- **Late cancel:** the late-cancel flags.
+- **Never** prompt, reply or image content.
+
+**Contract findings:**
+- `VllmBrain` has no server-side cancel call. Its cancel ends the HTTP stream, and an abort depends on vLLM
+  noticing the disconnect, which is what this session measures.
+- A cancel that arrives after the last token is a no-op by design.
+- Nothing in the adapter retries.
+
+**Exact-image-unverified:**
+- the image's `vllm serve` CLI accepts these flags, and its `/health` and `/metrics` paths are as above;
+- the chat route accepts `return_token_ids` and `continue_final_message`, and reports `prompt_token_ids` in the first
+  chunk (if not, `promptExact` stays `null`);
+- whether vLLM aborts on a client disconnect at that version (reported, not assumed);
+- that the server load (one more process than the offline modes) fits in 870 s and 64 GiB;
+- the `return_token_ids` support that `contract.BRAIN_PREREQUISITES` lists.
+
+**Not shown even by `done`:** PR288's conductor, runtime scheduling or audio, real screenshots, more than one image,
+long contexts, throughput, or the 443 edge.
+
+**Proposed operator packet** (within Nathan's expanded Qwen authority; runtime only by the original Mac operator):
+1. Build at the merge commit with the deployed attestation roots, and record P. Confirm the payload lists
+   `etc-rose-models/lib/rose_cloud/qwen_gpu.py`, `vllm_brain.py`, `coop.py`, `pump.py`, `adapter_session.py` and
+   `manifest.json` with the hashes Core reports.
+2. Set `startup-script` and `rose-models-payload` from that build, plus
+   `rose-models-diagnostic=cloud-qwen-adapter-once:<P>:<fresh id>`.
+3. Do one reset.
+4. Read `rose-models/diagnostic`.
+
+- **Consequences:**
+  - the TLS interruption;
+  - Muse held, stopped and absent first;
+  - both A100s used for up to 900 s;
+  - staged data read-only;
+  - the next reset without a new id starts Muse.
+- **Stop conditions:**
+  - a `prerequisite` refusal;
+  - `cleanup` other than `removed`;
+  - `qwen: null`;
+  - `stop` other than `done`.
+
+  Read `semantics` as the cancellation finding. It is not a pass or fail gate.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through

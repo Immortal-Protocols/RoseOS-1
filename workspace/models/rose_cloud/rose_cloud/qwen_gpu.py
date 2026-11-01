@@ -67,8 +67,26 @@ VISION = {'width': 256, 'height': 256, 'rgb': [255, 0, 0], 'expect': 'red',
 IMAGE_PAD = '<|image_pad|>'
 MAX_IMAGE_TOKENS = 256  # (256 / 32) ** 2 = 64 expected; more means the size cap was not applied
 STOPS = ('done', 'bad_manifest', 'not_isolated', 'bad_inputs', 'engine_arg_unsupported', 'engine_failed',
-         'generate_failed', 'crashed', 'deadline', 'vision_not_applied', 'bad_mode')
-MODES = ('text', 'vision')
+         'generate_failed', 'crashed', 'deadline', 'vision_not_applied', 'bad_mode', 'bad_bundle', 'server_failed',
+         'session_failed')
+MODES = ('text', 'vision', 'adapter')
+# Adapter mode (limits {"mode": "adapter"}, CLOUD-QWEN-ADAPTER-001): the real adapter (rose_cloud.vllm_brain) is an
+# HTTP client of vLLM's OpenAI server, so this mode starts `vllm serve` on the container's own loopback (the container
+# has --network none: nothing is published or reachable from outside) with the vision mode's engine bounds, the
+# adapter's RAW_TEMPLATE and metrics on, waits for /health, and runs adapter_session.run_session once. The adapter
+# sources come from the payload as a bundle (main's third argument) of exactly ADAPTER_FILES.
+ADAPTER_FILES = ('vllm_brain.py', 'coop.py', 'pump.py', 'adapter_session.py')
+ADAPTER_PORT, ADAPTER_REQUEST_TIMEOUT_S = 18000, 60
+SERVER_ARGS = ['--tensor-parallel-size', '2', '--max-model-len', '2048', '--max-num-seqs', '1',
+               '--gpu-memory-utilization', '0.9', '--enforce-eager', '--seed', '0', '--distributed-executor-backend',
+               'mp', '--limit-mm-per-prompt', json.dumps(VISION_ENGINE['limit_mm_per_prompt'], sort_keys=True),
+               '--mm-processor-kwargs', json.dumps(VISION_ENGINE['mm_processor_kwargs'], sort_keys=True),
+               '--chat-template-content-format', 'openai']
+ADAPTER_STEPS = ('import', 'engine_args', 'server', 'tokenizer', 'session', 'done')
+SESSION_STEPS = ('turn1', 'turn2', 'turn3', 'fork', 'cancel', 'late_cancel', 'done')
+SEMANTICS = ('inflight_abort', 'inflight_abort_probe_only', 'client_suppressed_only', 'completed_before_cancel',
+             'unknown')
+TURN_KEYS = ('turn1', 'turn2', 'turn3', 'rewound', 'staleText')
 STEPS = ('import', 'engine_args', 'load', 'generate', 'done')
 FINISH = ('length', 'stop', 'abort')
 TOKEN = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,63}$')
@@ -132,6 +150,72 @@ try:
     out['finishReason'] = first.finish_reason
     out['outputSha256'] = hashlib.sha256(json.dumps(toks).encode()).hexdigest()
     out['inVocab'] = all(0 <= x < len(tok) for x in toks)
+    out['step'] = 'done'
+except BaseException as e:
+    out['error'] = type(e).__name__
+    out['module'] = getattr(e, 'name', None) if isinstance(e, ImportError) else None
+    emit(1)
+emit(0)
+'''
+
+
+ADAPTER_CHILD = r'''
+import json, os, shutil, subprocess, sys, time, urllib.request
+model, cfg, extra, pkg = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3], sys.argv[4]
+sys.path[:0] = [p for p in (extra, pkg) if p]
+out = {'step': 'import', 'vllm': None, 'unsupported': [], 'serverReadyS': None, 'serverExit': None, 'session': None,
+       'error': None, 'module': None}
+server = None
+def emit(code):
+    if server is not None and server.poll() is None:
+        try:
+            server.kill()
+        except OSError:
+            pass
+    sys.stdout.write(json.dumps(out) + '\n')
+    sys.stdout.flush()
+    os._exit(code)  # the parent kills the whole group (server and engine workers) either way
+try:
+    import vllm
+    from vllm.engine.arg_utils import EngineArgs
+    out['vllm'] = getattr(vllm, '__version__', None)
+    out['step'] = 'engine_args'
+    fields = getattr(EngineArgs, '__dataclass_fields__', None) or {}
+    out['unsupported'] = sorted(k for k in cfg['engine'] if k not in fields)
+    if out['unsupported']:
+        emit(3)
+    out['step'] = 'server'
+    from rose_cloud.vllm_brain import RAW_TEMPLATE, VllmBrain, load_tokenizer
+    from rose_cloud import adapter_session
+    template_path = os.path.join(os.environ['TMPDIR'], 'raw_template.jinja')
+    with open(template_path, 'w') as f:
+        f.write(RAW_TEMPLATE)
+    base = 'http://127.0.0.1:%d' % cfg['port']
+    command = cfg.get('serverCommand') or [shutil.which('vllm') or 'vllm']
+    t = time.monotonic()
+    server = subprocess.Popen(command + ['serve', model, '--served-model-name', 'rose-brain', '--host', '127.0.0.1',
+                                         '--port', str(cfg['port']), '--chat-template', template_path] + cfg['server'],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    while True:
+        if server.poll() is not None:
+            out['serverExit'] = server.returncode
+            emit(1)
+        try:
+            with urllib.request.urlopen(base + '/health', timeout=5) as r:
+                if r.status == 200:
+                    break
+        except Exception:
+            pass
+        time.sleep(1)
+    out['serverReadyS'] = round(time.monotonic() - t, 1)
+    out['step'] = 'tokenizer'
+    tok, chat_template = load_tokenizer(model)
+    out['step'] = 'session'
+    from PIL import Image
+    image = Image.new('RGB', (cfg['image']['width'], cfg['image']['height']), tuple(cfg['image']['rgb']))
+    brain = VllmBrain(tok, base, 'rose-brain', chat_template, timeout_s=cfg['requestTimeoutS'])
+    out['session'] = {}
+    adapter_session.run_session(brain, image, adapter_session.Server(base), into=out['session'])
     out['step'] = 'done'
 except BaseException as e:
     out['error'] = type(e).__name__
@@ -255,22 +339,28 @@ def child_env(work):
     return env
 
 
-def child_config(mode):
+def child_config(mode, limits=None):
     """What the child runs. Text mode is exactly the PR345 configuration."""
+    if mode == 'adapter':
+        return {'engine': VISION_ENGINE, 'server': SERVER_ARGS, 'port': ADAPTER_PORT,
+                'requestTimeoutS': ADAPTER_REQUEST_TIMEOUT_S, 'image': {k: VISION[k] for k in ('width', 'height', 'rgb')},
+                'serverCommand': (limits or {}).get('serverCommand')}  # a test hook; bootstrap never sets it
     if mode == 'vision':
         return {'engine': VISION_ENGINE, 'sampling': SAMPLING, 'prompt': None,
                 'vision': {**VISION, 'pad': IMAGE_PAD}}
     return {'engine': ENGINE, 'sampling': SAMPLING, 'prompt': PROMPT}
 
 
-def run_child(model_dir, env, extra, timeout, config):
+def run_child(model_dir, env, extra, timeout, config, pkg=None):
     """(status, last stdout line). The child runs in its own session; at the deadline the whole group (engine workers
     included) is killed. stdout goes to the tmpfs and only its tail is read; stderr is discarded unread."""
     path = os.path.join(env['TMPDIR'], 'child.out')
     cfg = json.dumps(config)
     with open(path, 'wb') as out:
         try:
-            child = subprocess.Popen([sys.executable, '-I', '-B', '-c', CHILD, model_dir, cfg, extra], env=env,
+            argv = ([sys.executable, '-I', '-B', '-c', ADAPTER_CHILD, model_dir, cfg, extra, pkg] if pkg else
+                    [sys.executable, '-I', '-B', '-c', CHILD, model_dir, cfg, extra])
+            child = subprocess.Popen(argv, env=env,
                                      stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.DEVNULL,
                                      start_new_session=True)
         except OSError:
@@ -297,7 +387,22 @@ def run_child(model_dir, env, extra, timeout, config):
     return status, lines[-1] if lines else None
 
 
-def diagnose(manifest, limits, clock=time.monotonic):
+def write_bundle(bundle, work):
+    """The adapter sources into work/pkg/rose_cloud (the tmpfs); None unless the bundle is exactly ADAPTER_FILES."""
+    if not isinstance(bundle, dict) or sorted(bundle) != sorted(ADAPTER_FILES) or not all(
+            isinstance(v, str) and len(v) < 1 << 20 for v in bundle.values()):
+        return None
+    pkg = os.path.join(work, 'pkg')
+    os.makedirs(os.path.join(pkg, 'rose_cloud'), exist_ok=True)
+    with open(os.path.join(pkg, 'rose_cloud', '__init__.py'), 'w') as f:
+        f.write('')
+    for name, source in bundle.items():
+        with open(os.path.join(pkg, 'rose_cloud', name), 'w') as f:
+            f.write(source)
+    return pkg
+
+
+def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
     t0 = clock()
     deadline = t0 + float(limits['deadlineS'])
     env = Env(limits)
@@ -322,7 +427,14 @@ def diagnose(manifest, limits, clock=time.monotonic):
         return result
     work = os.path.join(env.tmp, 'rose-qwen-gpu')
     os.makedirs(work, exist_ok=True)
-    status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), child_config(mode))
+    pkg = None
+    if mode == 'adapter':
+        pkg = write_bundle(bundle, work)
+        if pkg is None:
+            result['stop'] = 'bad_bundle'
+            return result
+    status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), child_config(mode, limits),
+                             pkg)
     engine = {'run': status}
     try:
         engine.update(json.loads(line) if line else {})
@@ -339,6 +451,10 @@ def diagnose(manifest, limits, clock=time.monotonic):
         result['stop'] = 'vision_not_applied'  # no image placeholder expanded, or the size cap did not hold
     elif step == 'done' and status == 'ok':
         result['stop'] = 'done'
+    elif mode == 'adapter' and step == 'server':
+        result['stop'] = 'server_failed'
+    elif mode == 'adapter' and step in ('tokenizer', 'session'):
+        result['stop'] = 'session_failed'
     elif step == 'engine_args' and engine.get('unsupported'):
         result['stop'] = 'engine_arg_unsupported'
     elif step == 'generate':
@@ -374,7 +490,7 @@ def sanitize(raw):
     i, n, e = (raw.get(k) for k in ('isolation', 'inputs', 'engine'))
     unsupported = get(e, 'unsupported')
     version = get(e, 'vllm')
-    return {
+    out = {
         'mode': raw.get('mode') if raw.get('mode') in MODES else None,
         'stop': raw.get('stop') if raw.get('stop') in STOPS else None,
         'elapsedS': _count(raw.get('elapsedS')),
@@ -389,7 +505,7 @@ def sanitize(raw):
                                                                        'sizeMismatch')}},
         'engine': None if not isinstance(e, dict) else {
             'run': e.get('run') if e.get('run') in ('ok', 'failed', 'crashed', 'timeout') else None,
-            'step': e.get('step') if e.get('step') in STEPS else None,
+            'step': e.get('step') if e.get('step') in STEPS or e.get('step') in ADAPTER_STEPS else None,
             'vllm': version if version is None or (isinstance(version, str) and VERSION.match(version)) else 'other',
             'unsupported': (sorted({u for u in unsupported if u in ENGINE or u in VISION_ENGINE})
                             if isinstance(unsupported, list) else None),
@@ -401,14 +517,54 @@ def sanitize(raw):
             'quantization': _match(e.get('quantization'), TOKEN), 'error': _match(e.get('error'), TOKEN),
             'module': _match(e.get('module'), MODULE)},
     }
+    if out['mode'] == 'adapter' and isinstance(out['engine'], dict):  # text and vision receipts are unchanged
+        out['engine'].update(serverReadyS=_secs(e.get('serverReadyS')), serverExit=_exit(e.get('serverExit')),
+                             session=_session(e.get('session')))
+    return out
+
+
+def _exit(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and -255 <= v <= 255 else None
+
+
+def _session(s):
+    """adapter_session.run_session's result: counts, flags, seconds, token hashes and fixed tokens only."""
+    if not isinstance(s, dict):
+        return None
+    get = lambda d, k: d.get(k) if isinstance(d, dict) else None  # noqa: E731
+    turn = lambda t: None if not isinstance(t, dict) else {  # noqa: E731
+        'tokens': _count(t.get('tokens')), 'endedWithImEnd': _flag(t.get('endedWithImEnd')),
+        'firstTokenS': _secs(t.get('firstTokenS')), 'totalS': _secs(t.get('totalS')),
+        'promptExact': _flag(t.get('promptExact')), 'tokenSha256': _match(t.get('tokenSha256'), HEX64)}
+    h, c, late = s.get('history'), s.get('cancel'), s.get('lateCancel')
+    return {
+        'step': s.get('step') if s.get('step') in SESSION_STEPS else None,
+        'imageTokens': _count(s.get('imageTokens')), 'imagesInHistory': _count(s.get('imagesInHistory')),
+        **{k: turn(s.get(k)) for k in TURN_KEYS},
+        'history': None if not isinstance(h, dict) else {
+            **{k: _flag(h.get(k)) for k in ('rewindExact', 'forkUntouched', 'staleImageDropped', 'staleRequestSent')},
+            'forkImages': _count(h.get('forkImages'))},
+        'cancel': None if not isinstance(c, dict) else {
+            **{k: _flag(c.get(k)) for k in ('fired', 'noLateAppend', 'workerJoined')},
+            **{k: _count(c.get(k)) for k in ('tokensAtCancel', 'appended', 'probeTokens')},
+            **{k: _secs(c.get(k)) for k in ('clientStopS', 'requestS', 'runningAfter', 'idleAfterS', 'probeS')},
+            'semantics': c.get('semantics') if c.get('semantics') in SEMANTICS else None},
+        'lateCancel': None if not isinstance(late, dict) else {
+            'tokens': _count(get(late, 'tokens')), 'lateCancelNoop': _flag(get(late, 'lateCancelNoop')),
+            'workerJoined': _flag(get(late, 'workerJoined'))},
+    }
 
 
 def main(argv):
-    if len(argv) != 2:
+    if len(argv) not in (2, 3):
         raise SystemExit(__doc__)
     manifest, limits = json.loads(argv[0]), json.loads(argv[1])
     try:
-        result = diagnose(manifest, limits)
+        bundle = json.loads(argv[2]) if len(argv) == 3 else None
+    except ValueError:
+        bundle = None
+    try:
+        result = diagnose(manifest, limits, bundle=bundle)
     except OSError:
         result = {'stop': None}
     print(MARKER + json.dumps(result, sort_keys=True, separators=(',', ':')), flush=True)

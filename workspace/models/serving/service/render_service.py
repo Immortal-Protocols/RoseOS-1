@@ -49,7 +49,8 @@ LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
                           'unit_facts.py', 'hf_probe.py')},
              'lib/startup_guard.py': SERVING / 'startup_guard.py',
              **{f'lib/rose_cloud/{n}': SERVING.parent / 'rose_cloud' / 'rose_cloud' / n
-                for n in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py', 'qwen_gpu.py')}}
+                for n in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py', 'qwen_gpu.py', 'vllm_brain.py', 'coop.py',
+                          'pump.py', 'adapter_session.py')}}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
 
