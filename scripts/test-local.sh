@@ -132,6 +132,8 @@ python3 -I workspace/models/rose_cloud/tests/test_head_probe.py
 python3 -I workspace/models/rose_cloud/tests/test_validate.py
 # One-shot Qwen text GPU diagnostic helper against a stand-in vllm package (no GPU, model or network).
 python3 -I workspace/models/rose_cloud/tests/test_qwen_gpu.py
+# One bounded live adapter session (multi-turn, image history, cancellation) against a stand-in vLLM server.
+python3 -I workspace/models/rose_cloud/tests/test_adapter_session.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
 python3 workspace/models/serving/tests/test_local_profile.py

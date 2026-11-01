@@ -16,9 +16,9 @@ run in order and are rerun-safe: each first checks whether its result is already
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once|hf-probe-once|
              cloud-preflight-once|cloud-stage-once|cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once|
-             cloud-qwen-vision-once:<payload sha256>:<id>, once per id (see gpu_start_once, hf_probe_once,
-             cloud_preflight_once, cloud_stage_once, cloud_redirect_probe_once, cloud_validate_once,
-             cloud_qwen_gpu_once, cloud_qwen_vision_once), and then
+             cloud-qwen-vision-once|cloud-qwen-adapter-once:<payload sha256>:<id>, once per id (see gpu_start_once,
+             hf_probe_once, cloud_preflight_once, cloud_stage_once, cloud_redirect_probe_once, cloud_validate_once,
+             cloud_qwen_gpu_once, cloud_qwen_vision_once, cloud_qwen_adapter_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -86,8 +86,8 @@ RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and
 # Diagnostic branch (explicit, one attempt per id): metadata rose-models-diagnostic=<mode>:<payload sha256>:<id>
 DIAG_KEY = 'attributes/rose-models-diagnostic'
 DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once|cloud-stage-once|'
-                        r'cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once|cloud-qwen-vision-once):'
-                        r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
+                        r'cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once|cloud-qwen-vision-once|'
+                        r'cloud-qwen-adapter-once):([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31})')
 # gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
 GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
 # hf-probe-once: lib/service/hf_probe.py in the pinned image, offline, no GPU, cache read-only, at most 120 s
@@ -123,6 +123,11 @@ QWEN_GPU_TMP_BYTES, QWEN_GPU_SHM_BYTES, QWEN_GPU_CPUS, QWEN_GPU_MEMORY = 8 << 30
 # cloud-qwen-vision-once (CLOUD-QWEN-VISION-001): the same helper, container controls and bounds in vision mode (the
 # vision tower loaded, one synthetic image, one request of at most 32 tokens), in its own container.
 QWEN_VISION_CONTAINER = 'rose-cloud-qwen-vision'
+# cloud-qwen-adapter-once (CLOUD-QWEN-ADAPTER-001): the same container controls and bounds; the helper starts vLLM's
+# OpenAI server on the container's own loopback (--network none: unpublished, unreachable from outside) and drives one
+# bounded session through the real adapter (QWEN_ADAPTER_FILES, passed as a bundle argument), in its own container.
+QWEN_ADAPTER_CONTAINER = 'rose-cloud-qwen-adapter'
+QWEN_ADAPTER_FILES = ('vllm_brain.py', 'coop.py', 'pump.py', 'adapter_session.py')
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
@@ -929,6 +934,8 @@ def stage_diagnostic(host, ctx):
         return cloud_qwen_gpu_once(host, ctx, attempt, image)
     if request[2] == 'cloud-qwen-vision-once':
         return cloud_qwen_vision_once(host, ctx, attempt, image)
+    if request[2] == 'cloud-qwen-adapter-once':
+        return cloud_qwen_adapter_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -1381,13 +1388,22 @@ def cloud_validate_once(host, ctx, attempt, image):
     return f"inference held; dependency validation stopped: {result['validate']['stop']}"
 
 
-def qwen_gpu_limits(vision=False) -> str:
-    """The only limits cloud-qwen-gpu-once (text) and cloud-qwen-vision-once pass: no test hooks (mountsFile, netDir,
-    devDir, tmpRoot, shmRoot, extraPath). Text mode is exactly the PR345 limits."""
+def qwen_gpu_limits(vision=False, adapter=False) -> str:
+    """The only limits cloud-qwen-gpu-once (text), cloud-qwen-vision-once and cloud-qwen-adapter-once pass: no test
+    hooks (mountsFile, netDir, devDir, tmpRoot, shmRoot, extraPath, serverCommand). Text mode is exactly the PR345
+    limits."""
     limits = {'deadlineS': QWEN_GPU_HELPER_S, 'tmpMaxBytes': QWEN_GPU_TMP_BYTES, 'shmMaxBytes': QWEN_GPU_SHM_BYTES}
     if vision:
         limits['mode'] = 'vision'
+    if adapter:
+        limits['mode'] = 'adapter'
     return json.dumps(limits, sort_keys=True)
+
+
+def cloud_qwen_adapter_once(host, ctx, attempt, image):
+    """CLOUD-QWEN-ADAPTER-001: cloud_qwen_gpu_once's controls, bounds, hold and cleanup with the helper in adapter
+    mode, in its own container."""
+    return cloud_qwen_gpu_once(host, ctx, attempt, image, adapter=True)
 
 
 def cloud_qwen_vision_once(host, ctx, attempt, image):
@@ -1396,7 +1412,7 @@ def cloud_qwen_vision_once(host, ctx, attempt, image):
     return cloud_qwen_gpu_once(host, ctx, attempt, image, vision=True)
 
 
-def cloud_qwen_gpu_once(host, ctx, attempt, image, vision=False):
+def cloud_qwen_gpu_once(host, ctx, attempt, image, vision=False, adapter=False):
     """CLOUD-QWEN-GPU-001: one offline text load and one fixed request of the staged Qwen FP8 model on both A100s
     (rose_cloud/qwen_gpu.py). Same hold, stop, positive absence, read-only prerequisites, image digest, data-disk and
     pinned-manifest checks as cloud-validate-once; the staged Qwen directory must already exist. Then one container:
@@ -1407,7 +1423,8 @@ def cloud_qwen_gpu_once(host, ctx, attempt, image, vision=False):
     always removed and its absence verified; the receipt is at most CLOUD_RECEIPT bytes; inference stays held; no
     retry."""
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
-              'attemptId': attempt, 'check': 'cloud-qwen-vision-once' if vision else 'cloud-qwen-gpu-once',
+              'attemptId': attempt, 'check': ('cloud-qwen-adapter-once' if adapter else 'cloud-qwen-vision-once'
+                                              if vision else 'cloud-qwen-gpu-once'),
               'modelHeld': True, 'exitCode': None,
               'timedOut': False, 'qwen': None, 'cleanup': None}
     refused = diagnostic_prerequisites(host, image)
@@ -1426,20 +1443,26 @@ def cloud_qwen_gpu_once(host, ctx, attempt, image, vision=False):
     model_dir = f"{STAGING}/{json.loads(manifest_text)['groups']['qwen']['dir']}" if not refused else None
     if not refused and not host.path(model_dir).is_dir():
         refused = 'staging_missing'
+    bundle = None
+    if not refused and adapter:
+        try:
+            bundle = json.dumps({n: (lib / n).read_text() for n in QWEN_ADAPTER_FILES}, sort_keys=True)
+        except OSError:
+            refused = 'adapter_sources_missing'
     result['prerequisite'] = refused
     if not refused:
         spec = importlib.util.spec_from_file_location('rose_cloud_qwen_gpu', lib / 'qwen_gpu.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         source = (lib / 'qwen_gpu.py').read_text()
-        container = QWEN_VISION_CONTAINER if vision else QWEN_GPU_CONTAINER
+        container = QWEN_ADAPTER_CONTAINER if adapter else QWEN_VISION_CONTAINER if vision else QWEN_GPU_CONTAINER
         argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all', '--network', 'none',
                 '--name', container, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
                 '--tmpfs', f'/tmp:rw,exec,nosuid,nodev,size={QWEN_GPU_TMP_BYTES},mode=1777',
                 '--shm-size', str(QWEN_GPU_SHM_BYTES), '--cpus', QWEN_GPU_CPUS,
                 '--memory', str(QWEN_GPU_MEMORY), '--memory-swap', str(QWEN_GPU_MEMORY),
                 '-v', f'{model_dir}:{model_dir}:ro', '--entrypoint', 'python3', image,
-                '-c', source, manifest_text, qwen_gpu_limits(vision)]
+                '-c', source, manifest_text, qwen_gpu_limits(vision, adapter)] + ([bundle] if bundle else [])
         try:
             code, out = host.run(argv, QWEN_GPU_SECONDS)
         finally:
@@ -1464,7 +1487,7 @@ def cloud_qwen_gpu_once(host, ctx, attempt, image, vision=False):
         raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
     if result['cleanup'] != 'removed':
         raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
-    what = 'Qwen vision check' if vision else 'Qwen GPU check'
+    what = 'Qwen adapter session' if adapter else 'Qwen vision check' if vision else 'Qwen GPU check'
     if result['qwen'] is None:
         return f'inference held; {what} ' + ('timed out' if result['timedOut'] else 'gave no result')
     return f"inference held; {what} stopped: {result['qwen']['stop']}"

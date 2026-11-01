@@ -339,6 +339,153 @@ class Vision(Fixture):
         self.assertEqual(r['engine']['module'], 'PIL')
 
 
+FAKE_SERVE = '''
+import json, os, sys, time
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from fakes import CharTokenizer, FakeVllm, chat_prompt_ids
+args = sys.argv[1:]
+with open(os.path.join(HERE, 'serve.argv'), 'w') as f:
+    json.dump(args, f)
+with open(os.path.join(HERE, 'serve.pid'), 'w') as f:
+    f.write(str(os.getpid()))
+mode = json.load(open(os.path.join(HERE, 'serve.mode')))
+if mode.get('die'):
+    sys.exit(7)
+if mode.get('never_ready'):
+    time.sleep(300)
+tok = CharTokenizer()
+ids, im_end = tok.encode, tok.encode('<|im_end|>')
+script = [ids('Hi there friend') + im_end, ids('Red') + im_end, ids('Square') + im_end, ids('Sunny') + im_end,
+          ids('Fine') + im_end, ids('1, 2, 3, ' * 40), ids('y'), ids('ab')]
+FakeVllm(script, prompt_ids=chat_prompt_ids(tok), serial=True, metrics=True, delay_s=0.02,
+         port=int(args[args.index('--port') + 1]))
+time.sleep(300)
+'''
+
+TRANSFORMERS_CHAR = '''
+from fakes import CharTokenizer
+class AutoTokenizer:
+    @staticmethod
+    def from_pretrained(model, local_files_only=False, trust_remote_code=True):
+        assert local_files_only and not trust_remote_code
+        return CharTokenizer()
+'''
+
+
+def free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+class Adapter(Fixture):
+    """Adapter mode (CLOUD-QWEN-ADAPTER-001): the real vllm_brain/adapter_session sources from the bundle, a stand-in
+    `vllm serve` (tests/fakes.FakeVllm over real HTTP on loopback), a stand-in tokenizer."""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            import PIL  # noqa: F401
+        except ImportError:  # pragma: no cover
+            self.skipTest('Pillow is needed for the synthetic image')
+        shutil.rmtree(self.extra / 'PIL')  # the real Pillow: the adapter encodes a real PNG
+        shutil.copy(HERE / 'fakes.py', self.extra / 'fakes.py')
+        (self.extra / 'transformers').mkdir()
+        (self.extra / 'transformers' / '__init__.py').write_text(TRANSFORMERS_CHAR)
+        (self.extra / 'serve.py').write_text(FAKE_SERVE)
+        self.serve_mode({})
+        self.bundle = {n: (ROOT / 'rose_cloud' / n).read_text() for n in G.ADAPTER_FILES}
+        port = free_port()
+        old = G.ADAPTER_PORT
+        G.ADAPTER_PORT = port
+        self.addCleanup(setattr, G, 'ADAPTER_PORT', old)
+        self.port = port
+
+    def serve_mode(self, mode):
+        (self.extra / 'serve.mode').write_text(json.dumps(mode))
+
+    def run_adapter(self, **limits):
+        return G.diagnose(self.manifest, dict(self.limits, mode='adapter',
+                                              serverCommand=[sys.executable, str(self.extra / 'serve.py')], **limits),
+                          bundle=self.bundle)
+
+    def test_one_session_through_the_real_adapter(self):
+        r = self.run_adapter()
+        self.assertEqual((r['mode'], r['stop']), ('adapter', 'done'))
+        e = G.sanitize(r)['engine']
+        self.assertEqual((e['step'], e['unsupported']), ('done', []))
+        sess = e['session']
+        self.assertEqual((sess['step'], sess['imageTokens'], sess['imagesInHistory']), ('done', 64, 1))
+        self.assertEqual((sess['turn2']['promptExact'], sess['turn3']['promptExact']), (True, True))
+        self.assertEqual(sess['history'], {'rewindExact': True, 'forkUntouched': True, 'staleImageDropped': True,
+                                           'staleRequestSent': True, 'forkImages': 1})
+        self.assertEqual((sess['cancel']['semantics'], sess['cancel']['noLateAppend'], sess['cancel']['runningAfter'],
+                          sess['lateCancel']['lateCancelNoop']), ('inflight_abort', True, 0.0, True))
+        argv = json.loads((self.extra / 'serve.argv').read_text())
+        tmpl = argv[argv.index('--chat-template') + 1]
+        self.assertTrue(tmpl.startswith(str(self.tmp)))  # the adapter's RAW_TEMPLATE, written on the tmpfs
+        self.assertEqual(argv, ['serve', str(self.model), '--served-model-name', 'rose-brain', '--host', '127.0.0.1',
+                                '--port', str(self.port), '--chat-template', tmpl] + G.SERVER_ARGS)
+        self.assertEqual(G.SERVER_ARGS, ['--tensor-parallel-size', '2', '--max-model-len', '2048', '--max-num-seqs', '1',
+                                         '--gpu-memory-utilization', '0.9', '--enforce-eager', '--seed', '0',
+                                         '--distributed-executor-backend', 'mp', '--limit-mm-per-prompt',
+                                         '{"image": {"count": 1, "height": 256, "width": 256}, "video": 0}',
+                                         '--mm-processor-kwargs', '{"max_pixels": 65536}',
+                                         '--chat-template-content-format', 'openai'])
+        self.assertNotIn('--language-model-only', argv)
+        self.assertNotIn('--disable-log-stats', argv)  # the running gauge stays on for the cancel evidence
+        self.assertNotIn('0.0.0.0', argv)
+        line = json.dumps(G.sanitize(r))
+        for leak in ('Hi there', 'Square', 'colour', 'Rose', 'base64', str(self.dir)):
+            self.assertNotIn(leak, line)
+        self.assertLess(len(line), 3500)
+        pid = int((self.extra / 'serve.pid').read_text())
+        time.sleep(0.2)
+        self.assertFalse(alive(pid))  # the server died with the group
+
+    def test_server_failures_and_deadline(self):
+        self.serve_mode({'die': True})
+        r = self.run_adapter()
+        self.assertEqual((r['stop'], r['engine']['serverExit']), ('server_failed', 7))
+        self.serve_mode({'never_ready': True})
+        t = time.monotonic()
+        r = self.run_adapter(deadlineS=5)
+        self.assertLess(time.monotonic() - t, 12)
+        self.assertEqual(r['stop'], 'deadline')
+        time.sleep(0.2)
+        self.assertFalse(alive(int((self.extra / 'serve.pid').read_text())))  # killed with the group
+
+    def test_refusals_before_any_server(self):
+        self.mode({'drop': ['mm_processor_kwargs']})
+        r = self.run_adapter()
+        self.assertEqual((r['stop'], r['engine']['unsupported']), ('engine_arg_unsupported', ['mm_processor_kwargs']))
+        self.assertFalse((self.extra / 'serve.argv').exists())
+        self.mode({})
+        for bundle in (None, {}, dict(self.bundle, extra='x'), {k: v for k, v in self.bundle.items()
+                                                               if k != 'pump.py'}):
+            r = G.diagnose(self.manifest, dict(self.limits, mode='adapter'), bundle=bundle)
+            self.assertEqual((r['stop'], r['engine']), ('bad_bundle', None))
+        self.assertFalse((self.extra / 'serve.argv').exists())
+
+    def test_text_and_vision_receipts_unchanged(self):
+        r = self.diagnose()
+        self.assertEqual(set(G.sanitize(r)['engine']), {'run', 'step', 'vllm', 'unsupported', 'imageTokens',
+                                                        'expectedWordSeen', 'loadS', 'generateS', 'promptTokens',
+                                                        'generatedTokens', 'finishReason', 'outputSha256', 'inVocab',
+                                                        'quantization', 'error', 'module'})
+        self.assertEqual(G.child_config('text'), {'engine': G.ENGINE, 'sampling': G.SAMPLING, 'prompt': G.PROMPT})
+
+
+def alive(pid):
+    try:
+        with open(f'/proc/{pid}/stat') as f:
+            return f.read().split()[2] != 'Z'
+    except OSError:
+        return False
+
+
 class Refusals(Fixture):
     def assertNothingRan(self, r):
         self.assertIsNone(r['engine'])
