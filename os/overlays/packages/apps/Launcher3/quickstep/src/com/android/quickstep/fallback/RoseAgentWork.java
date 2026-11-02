@@ -27,12 +27,11 @@ import java.util.TreeSet;
  * order in which apps or reports change. The display -> device map is the platform's own (getVirtualDevices(), whose
  * profile DEVICE_PROFILE_COMPUTER_CONTROL only session devices have).
  *
- * A task is Rose's when it is this user's, on a display of a session device the snapshot says CONTROLLER owns with
- * CONTROLLER's own uid, and is not the controller itself. Nothing is guessed: before the first valid snapshot the row
- * says not reported; a session task whose device or display ownership is missing is held as unconfirmed, never a card
- * and never "none"; a malformed snapshot is not applied and the row says ownership could not be read. The controller
- * still binds a selection to its own session display (agent-pip WatchBinding.fromSelection). Pure logic, no Android
- * types.
+ * Rose's apps are the apps the platform's apps snapshot lists on the session devices CONTROLLER owns with CONTROLLER's
+ * own uid (see of()); a task of this user on one of those devices' displays only attaches a member's live view and
+ * selection. Nothing is guessed: before the first valid snapshot the row says not reported; a malformed snapshot is
+ * not applied and the row says ownership could not be read. The controller binds a selection to the session that owns
+ * that display or refuses it (agent-pip WatchBinding.fromSelection). Pure logic, no Android types.
  */
 final class RoseAgentWork {
     static final String CONTROLLER = "dev.pixel.backgroundcontrol";
@@ -212,6 +211,8 @@ final class RoseAgentWork {
     static final String NOT_REPORTED = "Rose's work has not been reported yet";
     /** An agent screen's ownership is not (or no longer) in the platform's report. */
     static final String UNCONFIRMED = "Rose's work can't be confirmed right now";
+    /** One app on two of Rose's session devices: neither device's list can be confirmed as that app's. */
+    static final String DUPLICATE = "Rose's apps can't be confirmed: one app is on two of Rose's screens";
     /** Nothing of Rose's screens is listed while the phone is locked (the common #156/#225 contract). */
     static final String LOCKED = "Unlock your phone to see Rose's apps";
     /** A member app with no task of its own in the platform's task list (its activity is inside another task). */
@@ -278,11 +279,14 @@ final class RoseAgentWork {
      * The common #156/#225 contract, agreed with App Core and Home: membership and its completeness come only from the
      * platform's atomic apps snapshot (onAutomatedDeviceAppsChanged, the same repository, lock and global generation
      * as App Core's getOwnedAutomatedDevices), for the devices owned by exactly CONTROLLER with this user's controller
-     * uid. No such device: confirmed empty. Exactly one, complete: its apps, the controller itself excluded (none left:
-     * empty). More than one, or any incomplete (another user's activity omitted): cannot confirm, no app cards. Before
-     * the first valid snapshot: not reported; a malformed one: could not be read. Running tasks never add, remove or
-     * hold back a member; they only attach a member's live view and selection (its front-most task on that device's
-     * display). A member with no visible task has no preview, which says so and claims no reason.
+     * uid. Every such device counts, whether or not a controller session is still bound to it (a failed close or a
+     * replacement leaves an owned device that still runs apps). The controller itself is removed first. No device, or
+     * no app left: confirmed empty. Every device complete and no app on two devices: the apps of all of them. Any
+     * device incomplete (another user's activity omitted): cannot confirm; an app on two devices: cannot confirm
+     * (App Core's duplicate_package); never a partial list and never empty. Before the first valid snapshot: not
+     * reported; a malformed one: could not be read. Running tasks never add, remove or hold back a member; they only
+     * attach a member's live view and selection (its front-most task on its own device's display). A member with no
+     * visible task has no preview, which says so and claims no reason.
      *
      * controllerUid: the uid of CONTROLLER for the current user, or -1 when it is not installed for that user.
      * currentUser: only that user's tasks are attached.
@@ -301,26 +305,38 @@ final class RoseAgentWork {
             Owner o = e.getValue();
             if (CONTROLLER.equals(o.packageName) && o.uid == controllerUid) rose.add(e.getKey());
         }
-        if (rose.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
-        if (rose.size() > 1 || owners.incompleteDevices.contains(rose.get(0))) return unavailable(UNCONFIRMED);
-        int device = rose.get(0);
-        Set<String> members = new TreeSet<>(owners.appsByDevice.getOrDefault(device, Collections.emptySet()));
-        members.remove(CONTROLLER);
-        if (members.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
-        // Attach each member's front-most task on this device's displays (getTasks is front to back).
+        Collections.sort(rose);
+        for (int device : rose) {
+            if (owners.incompleteDevices.contains(device)) return unavailable(UNCONFIRMED);
+        }
+        // Each member's device: the controller is removed first, so its own activity on two devices is no duplicate.
+        Map<String, Integer> deviceOf = new HashMap<>();
+        for (int device : rose) {
+            for (String pkg : owners.appsByDevice.getOrDefault(device, Collections.emptySet())) {
+                if (CONTROLLER.equals(pkg)) continue;
+                if (deviceOf.put(pkg, device) != null) return unavailable(DUPLICATE);
+            }
+        }
+        if (deviceOf.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
+        // Per device, in device order: each member's front-most task on its own device's displays (getTasks is front
+        // to back), then its members without one. A task never attaches to a member of another device.
         List<Task> items = new ArrayList<>();
-        Set<String> attached = new HashSet<>();
-        for (Task t : tasks) {
-            Integer on = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;
-            if (on == null || on != device || t.userId != currentUser) continue;
-            if (members.contains(t.packageName) && attached.add(t.packageName)) items.add(t);
-        }
-        int display = 0;
-        for (Map.Entry<Integer, Integer> e : sessionDevices.entrySet()) {
-            if (e.getValue() == device && (display == 0 || e.getKey() < display)) display = e.getKey();
-        }
-        for (String pkg : members) {
-            if (!attached.contains(pkg)) items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));
+        for (int device : rose) {
+            Set<String> members = new TreeSet<>(owners.appsByDevice.getOrDefault(device, Collections.emptySet()));
+            members.remove(CONTROLLER);
+            Set<String> attached = new HashSet<>();
+            for (Task t : tasks) {
+                Integer on = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;
+                if (on == null || on.intValue() != device || t.userId != currentUser) continue;
+                if (members.contains(t.packageName) && attached.add(t.packageName)) items.add(t);
+            }
+            int display = 0;
+            for (Map.Entry<Integer, Integer> e : sessionDevices.entrySet()) {
+                if (e.getValue() == device && (display == 0 || e.getKey() < display)) display = e.getKey();
+            }
+            for (String pkg : members) {
+                if (!attached.contains(pkg)) items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));
+            }
         }
         return new RoseAgentWork(State.AVAILABLE, items, null);
     }
