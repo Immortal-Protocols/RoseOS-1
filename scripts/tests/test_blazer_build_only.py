@@ -601,8 +601,9 @@ class SourceRunTest(Fixture):
         os.chmod(readonly, 0o555)
         self.addCleanup(bb.alpha_source.make_removable, self.tmp)
 
-    def run_source(self, recipe=None, out='r', available=10 ** 15, target=None):
-        code = bb.run(recipe or self.synthetic, 'source', self.op(source_root=str(target or self.target)), self.tmp/out,
+    def run_source(self, recipe=None, out='r', available=10 ** 15, target=None, **op):
+        op = dict({'download_dir': None, 'node': None}, **op)  # the source stage depends on sourceRoot only
+        code = bb.run(recipe or self.synthetic, 'source', self.op(source_root=str(target or self.target), **op), self.tmp/out,
             now=lambda: 0, statvfs=available if callable(available) else fs(available), lock_probe=lambda path: True,
             root=self.root)
         done = self.tmp/out/'completed.json'
@@ -651,7 +652,8 @@ class SourceRunTest(Fixture):
         copied, original = os.lstat(t/'device/google/blazer/device.mk'), os.lstat(self.production/'device/google/blazer/device.mk')
         self.assertNotEqual((copied.st_dev, copied.st_ino), (original.st_dev, original.st_ino), 'new inodes, never hardlinks')
         self.assertEqual((oct(t.parent.stat().st_mode & 0o777), done['createdParent']), ('0o700', True))
-        self.assertEqual([n.name for n in t.parent.iterdir()], ['source'], 'no staging is left')
+        self.assertEqual(sorted(n.name for n in t.parent.iterdir()), ['source', 'source.selection.tsv'],
+                         'no staging is left; the selection record sits beside the tree, never inside it')
         self.assertEqual(done['partial'] if 'partial' in done else None, None)
         self.assertEqual(done['copied']['entries'], done['selection']['entries'])
         self.assertRegex(done['selectionSha256'], '^[0-9a-f]{64}$')
@@ -701,6 +703,139 @@ class SourceRunTest(Fixture):
         self.assertEqual(Path(done['stagingLeft']).parent, self.target.parent)
         self.assertIn(f'interrupted construction left {Path(done["stagingLeft"]).name}',
                       self.problems('source', source_root=str(self.target)))
+        self.unverified(done)
+
+    def records(self, path):
+        """Selection-record lines as (path, type, rest...) with the escapes undone; raw bytes for paths."""
+        unescape = lambda field: field.replace(b'\\t', b'\t').replace(b'\\n', b'\n').replace(b'\\r', b'\r') \
+            .replace(b'\\\\', b'\\')
+        lines = Path(path).read_bytes().split(b'\n')
+        self.assertEqual(lines[-1], b'', 'every line ends with a newline')
+        return [[unescape(f) for f in line.split(b'\t')] for line in lines[:-1]]
+
+    def test_source_stage_needs_only_the_source_root(self):
+        bare = self.op(source_root=str(self.target), download_dir=None, node=None, jobs=None)
+        report = bb.preflight(self.synthetic, 'source', bare, statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        self.assertEqual((report['ready'], report['problems']), (True, []))
+        self.assertIn('source', bb.commands(self.synthetic, bare, self.root))
+        code, done = self.run_source()
+        self.assertEqual((code, done['complete']), (0, True), done)
+
+    def test_selection_record_keeps_the_copied_bytes_beside_the_tree(self):
+        code, done = self.run_source()
+        self.assertEqual(code, 0, done)
+        self.unverified(done)  # the PR395 guard still holds: no truthy verified or manifest field
+        record = done['selectionRecord']
+        path = Path(record['path'])
+        self.assertEqual(path, self.target.parent/'source.selection.tsv')
+        self.assertNotIn(self.target, path.parents, 'never inside the tree it describes')
+        self.assertEqual((bb.sha256_file(path), record['sha256'], record['bytes'], record['lines']),
+                         (done['selectionSha256'], done['selectionSha256'], path.stat().st_size, done['copied']['entries']))
+        self.assertLessEqual(record['bytes'], done['selection']['selectionRecordBoundBytes'])
+        self.assertEqual(oct(path.stat().st_mode & 0o777), '0o400', 'write-once: read-only once complete')
+        rows = self.records(path)
+        self.assertEqual(len(rows), done['selection']['entries'])
+        for row in rows:
+            rel = Path(os.fsdecode(row[0]))
+            copied = self.target/rel
+            kind = row[1].decode()
+            if kind == 'file':
+                self.assertEqual((int(row[3]), row[4].decode()), (copied.stat().st_size, bb.sha256_file(copied)), rel)
+                self.assertEqual(int(row[2], 8), os.lstat(copied).st_mode & 0o7777)
+            elif kind == 'link':
+                self.assertEqual(row[2], os.fsencode(os.readlink(copied)), rel)
+            else:
+                self.assertEqual((kind, int(row[2], 8)), ('dir', os.lstat(copied).st_mode & 0o7777), rel)
+        # Later stages change the tree by design; the record still names the original bytes.
+        original = self.records(path)
+        (self.target/'device/google/blazer/device.mk').chmod(0o644)
+        (self.target/'device/google/blazer/device.mk').write_text('changed by a later stage\n')
+        (self.target/'out-blazer-lunch').mkdir()
+        self.assertEqual((self.records(path), bb.sha256_file(path)), (original, done['selectionSha256']))
+        line = next(r for r in original if r[0] == b'device/google/blazer/device.mk')
+        self.assertEqual(line[4].decode(), bb.sha256_file(self.production/'device/google/blazer/device.mk'))
+        # Write-once: a second source run refuses on the record even after the tree is moved away.
+        self.target.rename(self.target.with_name('moved'))
+        self.assertIn('selection record is never replaced', self.problems('source', source_root=str(self.target)))
+
+    def test_selection_record_encodes_awkward_names_without_refusing_them(self):
+        names = ['tab\there', 'new\nline', 'back\\slash', 'carriage\rreturn']
+        odd = self.production/'odd'
+        odd.mkdir()
+        for name in names:
+            (odd/name).write_text(name)
+        raw = os.path.join(os.fsencode(odd), b'latin1-\xff')
+        with open(raw, 'wb') as handle:
+            handle.write(b'not utf-8 name')
+        os.symlink('tab\there', odd/'link\nname')
+        code, done = self.run_source()
+        self.assertEqual(code, 0, done)
+        rows = self.records(done['selectionRecord']['path'])
+        self.assertEqual(len(rows), done['selection']['entries'], 'one unambiguous line per entry')
+        paths = {row[0] for row in rows}
+        for name in names:
+            self.assertIn(b'odd/' + name.encode(), paths)
+        self.assertIn(b'odd/latin1-\xff', paths)
+        link = next(r for r in rows if r[0] == b'odd/link\nname')
+        self.assertEqual((link[1], link[2]), (b'link', b'tab\there'))
+        self.assertTrue(os.path.exists(os.path.join(os.fsencode(self.target), b'odd/latin1-\xff')))
+        self.assertEqual(bb.record_field('a\\b\tc\nd\re'), b'a\\\\b\\tc\\nd\\re')
+
+    def test_record_bound_covers_the_worst_case_line(self):
+        entries = [{'type': 'link', 'path': '\t' * 1000, 'text': '\n' * 1000, 'kind': 'relative'},
+                   {'type': 'file', 'path': '\\' * 1000, 'mode': 0o644, 'size': 10 ** 12},
+                   {'type': 'dir', 'path': 'd', 'mode': 0o755}]
+        written = sum(len(bb.record_line(e, e['text'] if e['type'] == 'link' else ('0' * 64 if e['type'] == 'file' else None)))
+                      for e in entries)
+        self.assertLessEqual(written, bb.record_bound(entries, self.target, 1))
+        self.assertEqual(bb.record_bound(entries, self.target, 4096) % 4096, 0)
+        code, done = self.run_source(out='p')
+        sel = done['selection']
+        self.assertEqual(sel['projectedBytes'], sel['selectionRecordBoundBytes']
+                         + bb.projected_bytes(bb.source_selection(self.synthetic, self.production, self.root)['entries'], 1))
+
+    def test_the_staged_record_is_owner_only_while_copying(self):
+        seen = []
+        def look(source, destination, entry):
+            staged = list(self.target.parent.glob('.source-staging-*.selection.tsv'))
+            seen.extend(oct(p.stat().st_mode & 0o777) for p in staged)
+            return bb.alpha_source.copy_file(source, destination, entry)
+        ok, done = self.construct(copier=look)
+        self.assertTrue(ok, done)
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {'0o600'})
+
+    def test_a_stop_after_the_tree_is_placed_keeps_tree_and_record_together(self):
+        rename = os.rename
+        def then_term(src, dst, *a, **k):
+            result = rename(src, dst, *a, **k)
+            if Path(dst) == self.target:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return result
+        os.rename = then_term
+        try:
+            ok, done = self.construct()
+        finally:
+            os.rename = rename
+        self.assertFalse(ok)
+        self.assertEqual((done['stopped'], done['targetExists'], done['selectionRecordExists']), ('SIGTERM', True, True), done)
+        self.assertTrue((self.target.parent/'source.selection.tsv').is_file())
+        self.unverified(done)
+
+    def test_a_failed_tree_rename_leaves_no_record_without_its_tree(self):
+        rename = os.rename
+        def fail_tree(src, dst, *a, **k):
+            if Path(dst) == self.target:
+                raise OSError(5, 'synthetic rename failure')
+            return rename(src, dst, *a, **k)
+        os.rename = fail_tree
+        try:
+            ok, done = self.construct()
+        finally:
+            os.rename = rename
+        self.assertEqual((ok, done['stagingRemoved'], done['selectionRecordExists'], done['targetExists']), (False, True, False, False))
+        self.assertIn('synthetic rename failure', done['stopped'])
+        self.assertEqual(sorted(p.name for p in self.target.parent.iterdir()) if self.target.parent.exists() else [], [])
         self.unverified(done)
 
     def test_projection_is_dense_and_block_rounded(self):
