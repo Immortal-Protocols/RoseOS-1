@@ -23,6 +23,13 @@ import java.util.List;
  * above, marked incomplete. A session the controller still holds but could not release (cleanup_failed) is never a
  * genuine empty (session_unreleased), whatever its retained binder answers.
  *
+ * Preferred source, independent of any session (ComputerControlExtensions.getOwnedAutomatedDevices, PR374): the platform's
+ * snapshot of every session device the controller owns in its user, the same repository and generation Launcher3's
+ * listener reads. One rule on that snapshot, shared with Launcher3: no device is genuine empty; exactly one device lists
+ * its apps (complete only when the device is: other_user_omitted otherwise); more than one is multiple_devices, never
+ * complete and with no members. A failed-close or replacement device stays listed until the platform removes it, so
+ * attested apps are shown whatever the session's state; the session status is only informational then.
+ *
  * Rendering contract shared with Launcher3 and Home (#156/#225 parity, qa/parity/current-apps-parity.json):
  * complete with apps shows exactly those apps; complete and empty is genuine empty; anything not complete shows no app
  * cards and an explicit cannot-confirm status. Pure logic, no Android types. */
@@ -55,7 +62,53 @@ final class CurrentApps {
    * nothing can be confirmed, and certainly not a genuine empty. */
   SESSION_UNRELEASED = "session_unreleased";
  /** Where the members came from. */
- static final String PLATFORM = "platform", SESSION_WINDOWS = "session_windows";
+ static final String PLATFORM = "platform", SESSION_WINDOWS = "session_windows", OWNED_DEVICES = "owned_devices";
+ static final String MULTIPLE_DEVICES = "multiple_devices";
+
+ /** The platform's owned-device snapshot (the agreed PR374 Bundle keys), validated. */
+ static final class Owned {
+  final long generation;final int[] deviceIds;final boolean[] deviceComplete;final List<List<String>> apps;
+  Owned(long generation, int[] deviceIds, boolean[] deviceComplete, List<List<String>> apps) {
+   this.generation = generation;this.deviceIds = deviceIds;this.deviceComplete = deviceComplete;this.apps = apps;
+  }
+ }
+
+ /** The Bundle's values as read ("generation" long, "deviceIds" int[], "deviceComplete" boolean[], "appDeviceIds"
+  * int[], "appPackageNames" String[]), or null when any is missing or of another type, the parallel arrays differ in
+  * length, a device id repeats, an app names an unlisted device, or a package name is empty. */
+ static Owned owned(Object generation, Object deviceIds, Object deviceComplete, Object appDeviceIds, Object appPackageNames) {
+  if (!(generation instanceof Long) || !(deviceIds instanceof int[]) || !(deviceComplete instanceof boolean[])
+    || !(appDeviceIds instanceof int[]) || !(appPackageNames instanceof String[])) return null;
+  int[] ids = (int[]) deviceIds, appIds = (int[]) appDeviceIds;boolean[] complete = (boolean[]) deviceComplete;String[] names = (String[]) appPackageNames;
+  if (ids.length != complete.length || appIds.length != names.length) return null;
+  List<List<String>> apps = new ArrayList<>();
+  for (int i = 0; i < ids.length; i++) {
+   for (int j = 0; j < i; j++) if (ids[j] == ids[i]) return null;
+   apps.add(new ArrayList<String>());
+  }
+  for (int k = 0; k < appIds.length; k++) {
+   if (names[k] == null || names[k].isEmpty()) return null;
+   int at = -1;for (int i = 0; i < ids.length; i++) if (ids[i] == appIds[k]) at = i;
+   if (at < 0) return null;
+   if (!apps.get(at).contains(names[k])) apps.get(at).add(names[k]);
+  }
+  return new Owned((Long) generation, ids.clone(), complete.clone(), apps);
+ }
+
+ /** Membership from the owned-device snapshot, whatever the session's state (see the class comment). front: the live
+  * session display's application windows, null when not read; target: the live session's target, for the flag. */
+ static Result of(boolean locked, String target, Owned owned, List<String> front, String controller) {
+  if (locked) return new Result(LOCKED, new ArrayList<App>(), false, LOCKED, OWNED_DEVICES);
+  if (owned.deviceIds.length == 0) return new Result(NONE, new ArrayList<App>(), true, "", OWNED_DEVICES);
+  if (owned.deviceIds.length > 1) return new Result(LIVE, new ArrayList<App>(), false, MULTIPLE_DEVICES, OWNED_DEVICES);
+  List<String> members = owned.apps.get(0);List<App> apps = new ArrayList<>();
+  if (front != null) for (String p : front)
+   if (p != null && members.contains(p) && !p.equals(controller) && !contains(apps, p)) apps.add(new App(p, true, p.equals(target)));
+  List<String> rest = new ArrayList<>(members);Collections.sort(rest);
+  for (String p : rest) if (!p.equals(controller) && !contains(apps, p)) apps.add(new App(p, false, p.equals(target)));
+  boolean complete = owned.deviceComplete[0];
+  return new Result(LIVE, apps, complete, complete ? "" : OTHER_USER_OMITTED, OWNED_DEVICES);
+ }
 
  /** The platform's answer for the session's own device (the agreed Bundle keys), validated. */
  static final class Platform {

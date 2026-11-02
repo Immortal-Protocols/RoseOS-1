@@ -138,6 +138,28 @@ public final class CurrentAppsTest {
         expect(!CurrentApps.signature(a, "s1", "ready").equals(CurrentApps.signature(b2, "s2", "ready")), "a replacement session whose platform generation restarted is still a change");
         expect(!CurrentApps.signature(a, "s1", "ready").equals(CurrentApps.signature(a, "s1", "blocked")), "the session status is part of what the consumer sees");
         expect(CurrentApps.signature(closed, "s1", "ready").equals(CurrentApps.signature(closed, null, null)), "closed: no session, no session status");
+        // Owned-device snapshot (PR374 getOwnedAutomatedDevices): validated, then one rule shared with Launcher3.
+        CurrentApps.Owned one = CurrentApps.owned(20L, new int[] {7}, new boolean[] {true}, new int[] {7, 7}, new String[] {MAPS, AMAZON});
+        expect(one != null && one.generation == 20L && one.apps.get(0).equals(Arrays.asList(MAPS, AMAZON)), "valid snapshot");
+        Object[][] badOwned = {
+            {20, new int[] {7}, new boolean[] {true}, new int[0], new String[0]}, {20L, new long[] {7}, new boolean[] {true}, new int[0], new String[0]},
+            {20L, new int[] {7}, new boolean[] {true, true}, new int[0], new String[0]}, {20L, new int[] {7}, new boolean[] {true}, new int[] {7}, new String[0]},
+            {20L, new int[] {7, 7}, new boolean[] {true, true}, new int[0], new String[0]}, {20L, new int[] {7}, new boolean[] {true}, new int[] {9}, new String[] {MAPS}},
+            {20L, new int[] {7}, new boolean[] {true}, new int[] {7}, new String[] {""}}, {20L, new int[] {7}, new boolean[] {true}, new int[] {7}, new String[] {null}},
+            {null, new int[0], new boolean[0], new int[0], new String[0]}};
+        for (Object[] b : badOwned) expect(CurrentApps.owned(b[0], b[1], b[2], b[3], b[4]) == null, "malformed owned snapshot refused");
+        CurrentApps.Result o1 = CurrentApps.of(false, MAPS, one, Arrays.asList(AMAZON), CONTROLLER);
+        expect(CurrentApps.LIVE.equals(o1.status) && o1.complete && CurrentApps.OWNED_DEVICES.equals(o1.source) && names(o1).equals(Arrays.asList(AMAZON + "*", MAPS + "!")), "one complete device: its apps, front first");
+        CurrentApps.Result none0 = CurrentApps.of(false, null, CurrentApps.owned(21L, new int[0], new boolean[0], new int[0], new String[0]), null, CONTROLLER);
+        expect(CurrentApps.NONE.equals(none0.status) && none0.complete && none0.apps.isEmpty(), "no device: genuine empty");
+        CurrentApps.Result two = CurrentApps.of(false, MAPS, CurrentApps.owned(22L, new int[] {7, 9}, new boolean[] {true, true}, new int[] {7, 9}, new String[] {MAPS, AMAZON}), null, CONTROLLER);
+        expect(!two.complete && CurrentApps.MULTIPLE_DEVICES.equals(two.incompleteReason) && two.apps.isEmpty(), "more than one device: cannot confirm, no members");
+        CurrentApps.Result partialOwned = CurrentApps.of(false, MAPS, CurrentApps.owned(23L, new int[] {7}, new boolean[] {false}, new int[] {7}, new String[] {MAPS}), null, CONTROLLER);
+        expect(!partialOwned.complete && CurrentApps.OTHER_USER_OMITTED.equals(partialOwned.incompleteReason), "incomplete device: other user omitted");
+        CurrentApps.Result controllerOnly = CurrentApps.of(false, null, CurrentApps.owned(24L, new int[] {7}, new boolean[] {true}, new int[] {7}, new String[] {CONTROLLER}), null, CONTROLLER);
+        expect(CurrentApps.LIVE.equals(controllerOnly.status) && controllerOnly.complete && controllerOnly.apps.isEmpty(), "controller-only device: no members");
+        expect(CurrentApps.LOCKED.equals(CurrentApps.of(true, MAPS, one, null, CONTROLLER).status), "locked lists nothing");
+        expect(names(CurrentApps.of(false, null, one, null, CONTROLLER)).equals(Arrays.asList(AMAZON, MAPS)), "no live session (failed close): the attested apps, sorted, none front or target");
         System.out.println("CurrentAppsTest: " + checks + " checks passed");
     }
 }

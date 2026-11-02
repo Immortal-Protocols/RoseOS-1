@@ -9,7 +9,7 @@
  "inputs": {
   "platform": "the per-device view both sources come from: devices[{owner: controller|other, complete, apps}] (PR361 listener / getAutomatedApps). null: no paired platform state (controller-only case).",
   "controllerReply": "the phone-local call(\"current_apps\") reply App Core derives from it (PR364 shape). null: a case only Launcher3 can see.",
-  "controllerInputs": "optional: the controller state App Core's test (os/background-control/tests/test_current_apps_parity.py) runs through the production controller CurrentApps; the reply it produces must match controllerReply's status, sessionStatus, complete, incompleteReason, source and apps (packageName/front/target, in order). sessionId, taskId and generation are illustrative."
+  "controllerInputs": "optional: the controller state App Core's test (os/background-control/tests/test_current_apps_parity.py) runs through the production controller CurrentApps; the reply it produces must match controllerReply's status, sessionStatus, complete, incompleteReason, source and apps (packageName/front/target, in order). sessionId, taskId and generation are illustrative. owned: the PR374 owned-device snapshot as typed values (A int[], Z boolean[]), or null when unavailable."
  },
  "cases": [
   {
@@ -767,6 +767,641 @@
     "category": "cannot_confirm",
     "apps": []
    }
+  },
+  {
+   "name": "owned_front_and_hidden_apps",
+   "note": "PR374 owned-device snapshot: one complete device; the hidden app is a member.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.google.android.apps.maps"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps",
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": true,
+      "target": false
+     },
+     {
+      "packageName": "com.android.calculator2",
+      "front": false,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2",
+     "com.google.android.apps.maps"
+    ]
+   }
+  },
+  {
+   "name": "owned_no_device",
+   "platform": {
+    "devices": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": false,
+    "status": "idle",
+    "blocked": false,
+    "target": null,
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      []
+     ],
+     "deviceComplete": [
+      "Z",
+      []
+     ],
+     "appDeviceIds": [
+      "A",
+      []
+     ],
+     "appPackageNames": [
+      "S",
+      []
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_controller_only_device",
+   "note": "A device whose only app is the controller has no members: genuine_empty on both surfaces (Product confirmation).",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "dev.pixel.backgroundcontrol"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "dev.pixel.backgroundcontrol"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_other_user_activity",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": false,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       false
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "other_user_omitted",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_lingering_unreleased_device",
+   "note": "Closes knownGaps lingering_unreleased_device: the controller holds an unreleased session (cleanup_failed); the platform still lists its device, so both surfaces show its attested apps. sessionStatus is informational.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "cleanup_failed",
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": false,
+      "target": false
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.google.android.apps.maps"
+    ]
+   }
+  },
+  {
+   "name": "owned_unreleased_device_removed",
+   "note": "The unreleased session's device has actually been removed: the platform lists nothing, so genuine_empty on both surfaces.",
+   "platform": {
+    "devices": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      []
+     ],
+     "deviceComplete": [
+      "Z",
+      []
+     ],
+     "appDeviceIds": [
+      "A",
+      []
+     ],
+     "appPackageNames": [
+      "S",
+      []
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_replacement_old_and_new_devices",
+   "note": "Closes knownGaps replacement_old_and_new_devices: two controller-owned devices on both surfaces, so cannot_confirm, no members.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps",
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "multiple_devices",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_snapshot_malformed_falls_back",
+   "note": "A malformed owned snapshot (an app on an unlisted device) is refused; the controller falls back to the per-session answer, marked by its own source.",
+   "platform": {
+    "malformed": true
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "behind_front_unlisted",
+    "source": "session_windows",
+    "snapshotGeneration": null,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_locked",
+   "platform": {
+    "locked": true
+   },
+   "controllerInputs": {
+    "locked": true,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "locked",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "locked",
+    "source": "session_windows",
+    "snapshotGeneration": null,
+    "apps": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
   }
  ],
  "sequences": [
@@ -872,7 +1507,9 @@
    },
    "launcherCategory": "cards",
    "homeCategory": "cannot_confirm",
-   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract)."
+   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract).",
+   "appliesWhen": "only when the owned-device snapshot is unavailable (an OS build before PR374, or the read failed): the controller then falls back to its per-session view",
+   "closedBy": "owned_lingering_unreleased_device"
   },
   {
    "name": "replacement_old_and_new_devices",
@@ -949,11 +1586,13 @@
    },
    "launcherCategory": "cannot_confirm",
    "homeCategory": "cards",
-   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract)."
+   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract).",
+   "appliesWhen": "only when the owned-device snapshot is unavailable (an OS build before PR374, or the read failed): the controller then falls back to its per-session view",
+   "closedBy": "owned_replacement_old_and_new_devices"
   }
  ],
  "ownerDeviceViewContract": {
-  "status": "proposed to OS Core; not implemented; no framework edit until agreed",
+  "status": "implemented by OS Core PR374 (merged 43b960f); consumed by the controller's current_apps (source owned_devices)",
   "method": "public android.os.Bundle getOwnedAutomatedDevices() on the existing extensions entry the controller already uses (com.android.extensions.computercontrol.ComputerControlExtensions), reflective like the rest; it needs no session object, so it also answers after a failed close or between sessions",
   "caller": "Binder.getCallingUid(): only devices whose recorded owner uid equals the caller's uid are returned; never another owner's device, package or count; no permission, role or exemption",
   "user": "the caller's own user only (UserHandle.getUserId(callingUid)); another user's activity on a listed device is omitted and that device's deviceComplete is false",
@@ -972,6 +1611,7 @@
   "alternativesConsidered": {
    "retainedSessionGetAutomatedApps": "Does not close either gap. lingering_unreleased_device: PR361 ComputerControlSessionImpl.close sets the sticky mAutomatedAppsClosed before the device is torn down, so after a failed close the retained session answers closed with no apps while Launcher3 still lists the device; Home would show genuine_empty and hide controlled apps. replacement_old_and_new_devices: after a successful close the controller holds no binder for the old device at all.",
    "releasingSignal": "Could make lingering_unreleased_device fail closed on both sides (Launcher3 marks a releasing device cannot_confirm), but not replacement_old_and_new_devices, where the controller has no view of the old device; it also needs a new per-device state in the listener."
-  }
+  },
+  "homeGate": "for source owned_devices, Home shows cards when complete, status live and apps non-empty, whatever sessionStatus says (it may be cleanup_failed, or null with no session held); ready/blocked/launching gates only the platform and session_windows sources"
  }
 }
