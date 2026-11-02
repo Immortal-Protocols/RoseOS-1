@@ -2,9 +2,11 @@
 device-wide and refuses a same-owner, same-name request while an earlier session is still listed. Neither onClosed nor
 an empty owned-device snapshot proves a closed session unlisted (its release can throw after onClosed is due; OS Core
 MULTI-SESSION-CONSULT); Android's admission does: requestComputerControlSession is synchronous and its same-name check
-holds the session-list lock. So the controller sends one request per start at the earliest point (every session it
-closed reported onClosed, no earlier request unanswered), with no timer and no retry, keeps each closed session's handle
-unconfirmed until a later request returns normally, and reports Android's refusal with a fixed reason. cleanup_failed is
+holds the session-list lock, and every platform callback for a request follows that check. So the controller sends one
+request per start at the earliest point (every session it closed reported onClosed, no earlier request unanswered), with
+no timer and no retry, keeps each closed session's handle unconfirmed until Android's first callback for a later request
+(a bare normal return proves nothing: with no service it is a silent no-op), and reports Android's refusal with a fixed
+reason. cleanup_failed is
 held, never cleared; the fixed name (which makes the admission cover every earlier session) and every reply key are
 unchanged. Real simultaneous apps are not claimed: that needs a platform change."""
 from pathlib import Path
@@ -13,6 +15,7 @@ import unittest
 
 SRC = Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol'
 CONTROLLER = (SRC/'Controller.java').read_text()
+REPLACEMENT = (SRC/'Replacement.java').read_text()
 
 
 def span(start, end):
@@ -35,17 +38,30 @@ class ReplacementWiringTest(unittest.TestCase):
         self.assertEqual(CONTROLLER.count('"requestSession"'), 1, 'exactly one request call: no retry')
         self.assertIn('synchronized(Controller.class){if(token!=generation)return;replacement.requested(token);}\n    type.getMethod("requestSession",', START)
 
-    def test_only_a_normal_return_of_the_one_request_is_admission(self):
+    def test_admission_is_only_the_first_platform_callback(self):
+        switch = START.index('switch(method.getName()){case "onSessionCreated":case "onSessionCreationFailed":case "onSessionPending":'
+                             'replacement.admitted(token);replacement.answered(token);break;')
+        guard = START.index('if(token!=generation){')
+        self.assertLess(switch, guard, 'a late or stale callback still attests: it is counted before the generation check')
+        self.assertEqual(CONTROLLER.count('replacement.admitted('), 1, 'admission comes from nowhere else')
+        # Not from requestSession's return (silent with no service), not from a call that threw.
         call = START.index('type.getMethod("requestSession",')
-        admitted = START.index('synchronized(Controller.class){replacement.admitted(token);}')
         catch = START.index('}catch(Throwable e){synchronized(Controller.class){replacement.answered(token);')
-        self.assertLess(call, admitted)
-        self.assertLess(admitted, catch, 'a refused (thrown) request is never admission')
-        self.assertEqual(CONTROLLER.count('replacement.admitted('), 1)
+        self.assertNotIn('replacement.admitted(', START[call:catch])
+        self.assertNotIn('replacement.admitted(', START[catch:])
         # onClosed and the owned-device snapshot never clear an unconfirmed session.
         for hook in (LIFECYCLE, span('static synchronized JSONObject currentApps(', 'static JSONObject capture()')):
             self.assertNotIn('replacement.admitted(', hook)
         self.assertEqual(CONTROLLER.count('replacement.closed(token)'), 2, 'onClosed and onSessionClosed only mark the earliest point')
+
+    def test_an_unanswered_request_is_reported_and_never_empty(self):
+        reason = span('static String reason(Context c)', '\n')
+        self.assertIn('if("starting".equals(status)){String w=pending!=null&&pendingToken==generation?replacement.blocker()'
+                      ':replacement.unanswered(generation)?Replacement.REQUEST_UNANSWERED:"";if(!w.isEmpty())return w;}', reason)
+        # current_apps reads Replacement.releasing(), which counts an unanswered request: unknown, never empty.
+        self.assertIn(':CurrentApps.of(locked,session!=null||replacement.releasing(),status,blocked,target,front,c.getPackageName());', CONTROLLER)
+        self.assertIn('boolean releasing(){return !unconfirmed.isEmpty()||!unanswered.isEmpty();}', REPLACEMENT)
+        self.assertIn('String blocker(){return !unanswered.isEmpty()?REQUEST_UNANSWERED:!awaiting.isEmpty()?REPLACING:"";}', REPLACEMENT)
 
     def test_dispatch_waits_for_the_platform_and_drops_older_starts(self):
         self.assertEqual(DISPATCH.strip(), 'static void dispatch(){if(pending==null)return;if(pendingToken!=generation){pending=null;return;}'
@@ -63,7 +79,7 @@ class ReplacementWiringTest(unittest.TestCase):
 
     def test_every_answer_and_close_is_counted_before_the_generation_check(self):
         answered = START.index('switch(method.getName()){case "onSessionCreated":case "onSessionCreationFailed":case "onSessionPending":'
-                               'replacement.answered(token);break;case "onSessionClosed":replacement.closed(token);break;}')
+                               'replacement.admitted(token);replacement.answered(token);break;case "onSessionClosed":replacement.closed(token);break;}')
         stale = START.index('if(token!=generation){if(method.getName().equals("onSessionCreated")){args[0].getClass().getMethod("close")'
                             '.invoke(args[0]);replacement.closing(token,args[0]);}dispatch();return null;}')
         self.assertLess(answered, stale)
@@ -75,10 +91,10 @@ class ReplacementWiringTest(unittest.TestCase):
     def test_refusals_are_named_and_states_stay_compatible(self):
         self.assertIn('status=AnyAppControl.targetRefused(error)?"target_not_allowed":Replacement.listed(error)?"rejected":"failed";', START)
         reason = span('static String reason(Context c)', '\n')
-        self.assertIn('if("starting".equals(status)&&pending!=null&&pendingToken==generation)return Replacement.REPLACING;', reason)
+        self.assertIn('return w;}', reason)
         self.assertIn('if("rejected".equals(status))return Replacement.reason(error);', reason)
         # Waiting is the existing non-terminal "starting" (callers already wait on it); no new status word.
-        for word in ('status="replacing"', 'status="unavailable"', 'status=Replacement'):
+        for word in ('status="replacing"', 'status="request_unanswered"', 'status="unavailable"', 'status=Replacement'):
             self.assertNotIn(word, CONTROLLER)
         state = span('static synchronized JSONObject state(Context c)', '\n')
         self.assertEqual(re.findall(r'\.put\("(\w+)"', state), ['status', 'sessionId', 'targetPackage', 'error', 'reason', 'deviceLocked', 'blocked',
