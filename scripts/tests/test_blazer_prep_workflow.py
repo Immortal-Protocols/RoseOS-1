@@ -356,19 +356,19 @@ class Ownership(unittest.TestCase):
     """The controller and cleanup commands as written in the workflow, run against the fake builder adapter."""
     def commands(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package'\n        run: (.+)$", controller)[1]
-        record = re.search(r"(?m)^        if: always\(\) && \(inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package'\)\n        run: (.+)$", controller)[1]
-        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package'\n        env:\n          STARTED: \$\{\{ needs.controller"
+        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect'\n        run: (.+)$", controller)[1]
+        record = re.search(r"(?m)^        if: always\(\) && \(inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect'\)\n        run: (.+)$", controller)[1]
+        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect'\n        env:\n          STARTED: \$\{\{ needs.controller"
                          r".outputs.started \}\}\n        run: (.+)$", cleanup)[1]
         return start, record, stop
 
     def test_workflow_routes_only_blazer_prep_through_ownership(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
         self.assertIn("    outputs:\n      started: ${{ steps.ownership.outputs.started }}\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
+        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
+        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
         self.assertEqual(len(re.findall(r'release-pipeline.py (?:start|stop)-builder', controller + cleanup)), 4)
-        self.assertIn('rango-factory-observe, blazer-prep, rango-factory-package, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn('rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", cleanup)
         start, record, stop = self.commands()
         self.assertEqual(start, 'python3 scripts/release-pipeline.py start-builder --ownership-record "$RUNNER_TEMP/builder-ownership.json"')
