@@ -174,7 +174,9 @@ class RoseSwitcherTest(unittest.TestCase):
                 'void onAutomatedPackagesChanged(String automatingPackage, java.util.List<String> automatedPackages, '
                 'android.os.UserHandle user); '
                 'default void onAutomatedDevicesChanged(long generation, int[] deviceIds, String[] ownerPackages, '
-                'int[] ownerUids) {} }',
+                'int[] ownerUids) {} '
+                'default void onAutomatedDeviceAppsChanged(long generation, int[] deviceIds, String[] ownerPackages, '
+                'int[] ownerUids, boolean[] deviceComplete, int[] appDeviceIds, String[] appPackageNames) {} }',
             'android/content/pm/PackageManager.java': 'package android.content.pm; public abstract class PackageManager { '
                 'public static class NameNotFoundException extends Exception {} '
                 'public abstract int getPackageUidAsUser(String p, int u) throws NameNotFoundException; '
@@ -218,7 +220,8 @@ class RoseSwitcherTest(unittest.TestCase):
         # #156 M004: the tap re-reads off the UI thread, the newest tap wins, the decision uses that fresh read, and
         # only a selection request (display + package) is sent: never an unbound viewer, never a task id as a Rose id.
         self.assertIn('int token = ++selection;', select)
-        self.assertIn('UI_HELPER_EXECUTOR.execute(() -> {\n            RoseAgentWork fresh = read(context);', select)
+        self.assertIn('UI_HELPER_EXECUTOR.execute(() -> {\n            RoseAgentWork platform = read(context);', select)
+        self.assertIn('RoseAgentWork fresh = locked ? RoseAgentWork.locked() : platform;', select)
         self.assertIn('if (token != selection) {\n                    release(frames);\n                    return;', select)
         self.assertLess(select.index('RoseAgentWork.decide(card, fresh)'), select.index('startActivityAsUser'))
         self.assertIn('if (notice != null) {', select)
@@ -473,9 +476,10 @@ class PrivateControllerDisplayTest(unittest.TestCase):
             'a refused or missing registration is named at its own step on every read')
         self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getVirtualDevices()'))
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertLess(work.index('if (session.isEmpty()) return new RoseAgentWork(State.EMPTY'),
-            work.index('if (!owners.received) return unavailable(NOT_REPORTED);'),
+        self.assertIn('if (!owners.received || !owners.appsReceived) return unavailable(NOT_REPORTED);', work,
             'unreported session work is never shown as "No background work"')
+        self.assertIn('if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);', work,
+            'a read between the two callbacks of one dispatch is unconfirmed')
 
 class CrossDisplayAttributionTest(unittest.TestCase):
     """#156 disclosed gap after PR337: a package Rose automates can also run on another app's virtual display (or on
@@ -533,7 +537,7 @@ class CrossDisplayAttributionTest(unittest.TestCase):
             'exact controller package and this user\'s controller uid')
         for heuristic in ('candidate', 'others', 'automation.packages'):
             self.assertNotIn(heuristic, re.sub(r'/\*.*?\*/', '', work, flags=re.S), f'{heuristic}: no package attribution')
-        self.assertIn('for (Task t : fresh.unattributed) if (t.taskId == card.taskId) return Open.UNATTRIBUTED;', work)
+        self.assertIn('for (Task t : fresh.unattributed) if (same(t, card)) return Open.UNATTRIBUTED;', work)
         show = code[code.index('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {'):code.index('private void select(')]
         self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unconfirmed tasks are never cards')
         self.assertNotIn('unattributed', show)
@@ -583,8 +587,8 @@ class InitialLoadAttributionTest(unittest.TestCase):
     def test_the_row_fails_closed_where_ownership_is_not_reported(self):
         work = (OVERLAY/'RoseAgentWork.java').read_text()
         decide = work[work.index('static RoseAgentWork of(int controllerUid'):work.index('static RoseAgentWork unconfirmed()')]
-        self.assertIn('if (owners.malformed) return failed(Step.OWNERSHIP);', decide)
-        self.assertIn('if (!complete) return unavailable(UNCONFIRMED);', decide)
+        self.assertIn('if (owners.malformed || owners.appsMalformed) return failed(Step.OWNERSHIP);', decide)
+        self.assertIn('if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);', decide)
         self.assertIn('if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);', decide)
         self.assertIn('if (owner == null) {\n                if (!CONTROLLER.equals(t.packageName)) held.add(t);', decide,
             'missing ownership is held as unconfirmed, never a card')
@@ -630,9 +634,26 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
             for event in sc['events']:
                 if event.get('reset'):
                     lines.append('R')
+                    continue
+                gen, ids, pkgs, uids = event['snapshot']
+                lines.append('\t'.join(['G', str(gen), self.encode(ids), self.encode(pkgs), self.encode(uids)]))
+                if event.get('appsMissing'):
+                    continue  # the dispatch's second callback has not arrived
+                # The same dispatch's per-device apps: given explicitly, or (when the producer is current) the
+                # scenario's tasks of the owner's user on that device.
+                if 'apps' in event:
+                    pairs = event['apps']
                 else:
-                    gen, ids, pkgs, uids = event['snapshot']
-                    lines.append('\t'.join(['G', str(gen), self.encode(ids), self.encode(pkgs), self.encode(uids)]))
+                    owner_user = {d: (u // 100000) for d, u in zip(ids or [], uids or []) if isinstance(u, int)}
+                    shown = {int(k): v for k, v in sc['sessionDevices'].items()}
+                    pairs = sorted({(shown[t[1]], t[3]) for t in sc['tasks']
+                        if t[1] in shown and shown[t[1]] in owner_user and t[2] == owner_user[shown[t[1]]]})
+                    pairs = [list(x) for x in pairs]
+                complete = event.get('complete', [True] * len(ids or []))
+                agen = event.get('appsGeneration', gen)
+                lines.append('\t'.join(['A', str(agen), self.encode(ids), self.encode(pkgs), self.encode(uids),
+                    self.encode([str(c).lower() for c in complete] if complete is not None else None),
+                    self.encode([a[0] for a in pairs]), self.encode([a[1] for a in pairs])]))
             for display, device in sc['sessionDevices'].items():
                 lines.append(f'D\t{display}\t{device}')
             lines += [f'L\t{d}' for d in sc['released']]
@@ -657,6 +678,14 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
                 self.assertEqual(cards, ','.join(map(str, want['cards'])))
                 self.assertEqual(held, ','.join(map(str, want['unconfirmed'])))
                 self.assertEqual(reason, '~' if want['reason'] is None else want['reason'])
+        # The common contract: every scenario names its class, only 'cards' shows a card, and each class is covered.
+        for sc in data['scenarios']:
+            want = sc['expect']
+            with self.subTest(contract=sc['name']):
+                self.assertIn(want['contract'], ('cards', 'empty', 'loading', 'cannot_confirm', 'unreadable'))
+                self.assertEqual(bool(want['cards']), want['contract'] == 'cards')
+        self.assertEqual({sc['expect']['contract'] for sc in data['scenarios']},
+            {'cards', 'empty', 'loading', 'cannot_confirm', 'unreadable'})
         names = ' '.join(sc['name'] for sc in data['scenarios'])
         for paired in ('1a ', '1b ', '2 ', '3 ', '4 ', '5 ', '6 ', '7 ', '8 ', '9 ', 'malformed'):
             self.assertIn(paired, names, f'paired scenario {paired.strip()} is covered')
@@ -680,6 +709,16 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
             r'String\[\] \w+, (@NonNull )?int\[\] \w+\) ?\{ ?\}',
             'AutomatedPackageListener declares it as a default no-op')
         self.assertRegex(flat, r'mListener\.onAutomatedDevicesChanged\(', 'the client delegate forwards it')
+        # #156 parity (PR361): the same dispatch's per-device apps.
+        self.assertRegex(flat, r'void onAutomatedDeviceAppsChanged\( ?long \w+, in int\[\] \w+, in String\[\] \w+, '
+            r'in int\[\] \w+, in boolean\[\] \w+, in int\[\] \w+, in String\[\] \w+\)')
+        self.assertRegex(flat, r'default void onAutomatedDeviceAppsChanged\( ?long \w+, (@NonNull )?int\[\] \w+, '
+            r'(@NonNull )?String\[\] \w+, (@NonNull )?int\[\] \w+, (@NonNull )?boolean\[\] \w+, (@NonNull )?int\[\] \w+, '
+            r'(@NonNull )?String\[\] \w+\) ?\{ ?\}')
+        self.assertRegex(flat, r'mListener\.onAutomatedDeviceAppsChanged\(')
+        self.assertRegex(flat, r'listener\.onAutomatedDevicesChanged\( generation, snapshot\.deviceIds, snapshot\.ownerPackages, '
+            r'snapshot\.ownerUids\); listener\.onAutomatedDeviceAppsChanged\(generation,',
+            'both callbacks of one dispatch, devices first, one generation')
 
 class LivePreviewTest(unittest.TestCase):
     """#156 owner acceptance: each of Rose's cards shows an updating view of the app's actual contents, never an icon,
@@ -748,7 +787,10 @@ class LivePreviewTest(unittest.TestCase):
         self.assertIn('} finally {\n            if (snapshot != null) snapshot.closeBuffer();', frame)
         self.assertIn('return null;', frame.split('catch')[1], 'a failed capture gives no frame')
         refresh = code[code.index('void refresh() {'):code.index('private static boolean locked(')]
-        self.assertLess(refresh.index('RoseAgentWork next = read(context);'), refresh.index('capture(next, locked, framePx)'),
+        self.assertIn('RoseAgentWork next = locked ? RoseAgentWork.locked() : read(context);', refresh,
+            'locked: no app is listed (the common contract), so nothing is read or captured')
+        self.assertLess(refresh.index('RoseAgentWork next = locked ? RoseAgentWork.locked() : read(context);'),
+            refresh.index('capture(next, locked, framePx)'),
             'frames are taken for the cards of this very read')
         show = code[code.index('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {'):
             code.index('private void select(')]
@@ -776,6 +818,24 @@ class LivePreviewTest(unittest.TestCase):
         tree = patched_tree(self)
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
         self.assertEqual(height, 160, 'the claimed space grows only by the preview body')
+
+class DeviceAppsParityTest(unittest.TestCase):
+    """#156 parity (PR361 on main): membership is the platform's per-device app list, front or hidden, the same source
+    App Core's session-owner getAutomatedApps reads. Source contract for the consumer only."""
+
+    def test_the_strip_applies_the_apps_callback_and_never_captures_a_member_without_a_task(self):
+        strip = (OVERLAY/'RoseAgentStrip.java').read_text()
+        self.assertIn('public void onAutomatedDeviceAppsChanged(long snapshotGeneration, int[] deviceIds, String[] ownerPackages,\n'
+            '                int[] ownerUids, boolean[] deviceComplete, int[] appDeviceIds, String[] appPackageNames) {', strip)
+        self.assertIn('if (!ownership.acceptApps(snapshotGeneration, deviceIds, ownerPackages, ownerUids, deviceComplete,', strip)
+        self.assertIn('if (task.taskId == RoseAgentWork.NO_TASK) continue;', strip)
+        work = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
+        self.assertIn('if (apps == null || !apps.contains(t.packageName)) {\n                held.add(t);', work,
+            'a running task whose app is not listed is never a card')
+        self.assertIn('items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));', work)
+        for history in ('completed', 'finished', 'history', 'lastResult', 'result'):
+            self.assertNotIn(history, work.split('static RoseAgentWork of(')[1].split('static RoseAgentWork unconfirmed()')[0],
+                f'{history}: membership never reads task history')
 
 if __name__ == '__main__':
     unittest.main()

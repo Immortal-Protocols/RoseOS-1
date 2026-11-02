@@ -1,118 +1,1359 @@
 {
-  "contract": "#156 AutomatedPackageListener.onAutomatedDevicesChanged(long generation, int[] deviceIds, String[] ownerPackages, int[] ownerUids), relayed to OS Core 19:51:27Z",
-  "controller": "dev.pixel.backgroundcontrol",
-  "controllerUid": 10123,
-  "user": 0,
-  "note": "Consumer half: snapshots are what the producer sends (complete, per registration, generation rising on every change); sessionDevices is getVirtualDevices() COMPUTER_CONTROL display->device as read; released are session displays seen before and gone now. expect is the Launcher3 row. Synthetic ids and packages, not captured output.",
-  "scenarios": [
-    {"name": "1a initial empty snapshot, no session task",
-     "events": [{"snapshot": [1, [], [], []]}],
-     "sessionDevices": {}, "released": [],
-     "tasks": [[1, 0, 0, "com.human.app", true]],
-     "expect": {"state": "EMPTY", "cards": [], "unconfirmed": [], "reason": "No background work"}},
-    {"name": "1b initial empty snapshot, a session task before its ownership arrives",
-     "events": [{"snapshot": [1, [], [], []]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [2], "reason": "Rose's work can't be confirmed right now"}},
-    {"name": "1a initial snapshot at generation 0 (nothing changed since boot), no session task",
-     "events": [{"snapshot": [0, [], [], []]}],
-     "sessionDevices": {}, "released": [],
-     "tasks": [[1, 0, 0, "com.human.app", true]],
-     "expect": {"state": "EMPTY", "cards": [], "unconfirmed": [], "reason": "No background work"}},
-    {"name": "1b initial snapshot at generation 0, then Rose's session at generation 1",
-     "events": [{"snapshot": [0, [], [], []]}, {"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [2], "unconfirmed": [], "reason": null}},
-    {"name": "1c registered, no snapshot yet",
-     "events": [],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [], "reason": "Rose's work has not been reported yet"}},
-    {"name": "2 Rose's session alone",
-     "events": [{"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true], [3, 7, 0, "com.example.maps", false]],
-     "expect": {"state": "AVAILABLE", "cards": [2, 3], "unconfirmed": [], "reason": null}},
-    {"name": "3 another owner runs the same app on a second session device",
-     "events": [{"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [10123]]},
-                {"snapshot": [2, [7, 11], ["dev.pixel.backgroundcontrol", "com.other.agent"], [10123, 10456]]}],
-     "sessionDevices": {"7": 7, "11": 11}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true], [9, 11, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [2], "unconfirmed": [], "reason": null}},
-    {"name": "3 the other device's ownership not yet reported",
-     "events": [{"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {"7": 7, "11": 11}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true], [9, 11, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [2], "unconfirmed": [9], "reason": "Rose's work can't be confirmed right now"}},
-    {"name": "4 Rose's session closed, stale entry, the other device's task",
-     "events": [{"snapshot": [3, [7, 11], ["dev.pixel.backgroundcontrol", "com.other.agent"], [10123, 10456]]}],
-     "sessionDevices": {"11": 11}, "released": [7],
-     "tasks": [[9, 11, 0, "com.example.mail", true]],
-     "expect": {"state": "EMPTY", "cards": [], "unconfirmed": [], "reason": "No background work"}},
-    {"name": "5 released session display still holding a task",
-     "events": [{"snapshot": [3, [7], ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {}, "released": [7],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [2], "reason": "Rose's work can't be confirmed right now"}},
-    {"name": "6 equal or lower generation ignored",
-     "events": [{"snapshot": [5, [7], ["dev.pixel.backgroundcontrol"], [10123]]},
-                {"snapshot": [5, [7], ["com.other.agent"], [10456]]},
-                {"snapshot": [4, [], [], []]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [2], "unconfirmed": [], "reason": null}},
-    {"name": "7 reconnect clears state; not reported until the new initial snapshot",
-     "events": [{"snapshot": [9, [7], ["dev.pixel.backgroundcontrol"], [10123]]}, {"reset": true}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [], "reason": "Rose's work has not been reported yet"}},
-    {"name": "7 the new service lifetime's initial snapshot restores, lower generation",
-     "events": [{"snapshot": [9, [7], ["dev.pixel.backgroundcontrol"], [10123]]}, {"reset": true},
-                {"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [2], "unconfirmed": [], "reason": null}},
-    {"name": "8 another user's controller session (that user's uid)",
-     "events": [{"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [1010123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "EMPTY", "cards": [], "unconfirmed": [], "reason": "No background work"}},
-    {"name": "9 simultaneous app swap across two owners",
-     "events": [{"snapshot": [2, [7, 11], ["dev.pixel.backgroundcontrol", "com.other.agent"], [10123, 10456]]}],
-     "sessionDevices": {"7": 7, "11": 11}, "released": [],
-     "tasks": [[5, 7, 0, "com.example.maps", true], [9, 11, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [5], "unconfirmed": [], "reason": null}},
-    {"name": "malformed: unequal arrays",
-     "events": [{"snapshot": [1, [7], ["dev.pixel.backgroundcontrol"], [10123]]},
-                {"snapshot": [2, [7, 8], ["dev.pixel.backgroundcontrol"], [10123, 10123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [], "reason": "Rose's work could not be read (ownership)"}},
-    {"name": "malformed: null array",
-     "events": [{"snapshot": [2, null, ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [], "reason": "Rose's work could not be read (ownership)"}},
-    {"name": "malformed: duplicate device",
-     "events": [{"snapshot": [2, [7, 7], ["dev.pixel.backgroundcontrol", "com.other.agent"], [10123, 10456]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [], "reason": "Rose's work could not be read (ownership)"}},
-    {"name": "malformed: empty owner package, negative uid, negative generation",
-     "events": [{"snapshot": [1, [7], [""], [10123]]}, {"snapshot": [2, [7], ["dev.pixel.backgroundcontrol"], [-1]]},
-                {"snapshot": [-1, [], [], []]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "UNAVAILABLE", "cards": [], "unconfirmed": [], "reason": "Rose's work could not be read (ownership)"}},
-    {"name": "malformed then valid: baseline kept, next higher generation restores",
-     "events": [{"snapshot": [3, [7], ["dev.pixel.backgroundcontrol"], [10123]]},
-                {"snapshot": [4, [7], [null], [10123]]},
-                {"snapshot": [3, [7], ["dev.pixel.backgroundcontrol"], [10123]]},
-                {"snapshot": [4, [7], ["dev.pixel.backgroundcontrol"], [10123]]}],
-     "sessionDevices": {"7": 7}, "released": [],
-     "tasks": [[2, 7, 0, "com.example.mail", true]],
-     "expect": {"state": "AVAILABLE", "cards": [2], "unconfirmed": [], "reason": null}}
-  ]
+ "contract": "#156/#225 common rendering contract (Home, App Core, OS Product), one class per scenario: cards (a complete same-user list, shown whole), empty (complete and empty: genuine 'No background work'), loading (not reported yet), cannot_confirm (any part of Rose's scope incomplete, in flight or more than one Rose session: no app cards), unreadable (malformed or failed read: no app cards), locked (no app cards). No class except cards shows an app card.",
+ "controller": "dev.pixel.backgroundcontrol",
+ "controllerUid": 10123,
+ "user": 0,
+ "note": "Consumer half: snapshots are what the producer sends (complete, per registration, generation rising on every change); sessionDevices is getVirtualDevices() COMPUTER_CONTROL display->device as read; released are session displays seen before and gone now. expect is the Launcher3 row. Synthetic ids and packages, not captured output. Each device snapshot is followed by the same dispatch's onAutomatedDeviceAppsChanged at the same generation: its apps are given explicitly, or (when the producer is current) are the scenario's tasks of the owner's user on that device; appsMissing means the second callback has not arrived yet.",
+ "scenarios": [
+  {
+   "name": "1a initial empty snapshot, no session task",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [],
+      [],
+      []
+     ]
+    }
+   ],
+   "sessionDevices": {},
+   "released": [],
+   "tasks": [
+    [
+     1,
+     0,
+     0,
+     "com.human.app",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "EMPTY",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "No background work",
+    "contract": "empty"
+   }
+  },
+  {
+   "name": "1b initial empty snapshot, a session task before its ownership arrives",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [],
+      [],
+      []
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     2
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "1a initial snapshot at generation 0 (nothing changed since boot), no session task",
+   "events": [
+    {
+     "snapshot": [
+      0,
+      [],
+      [],
+      []
+     ]
+    }
+   ],
+   "sessionDevices": {},
+   "released": [],
+   "tasks": [
+    [
+     1,
+     0,
+     0,
+     "com.human.app",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "EMPTY",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "No background work",
+    "contract": "empty"
+   }
+  },
+  {
+   "name": "1b initial snapshot at generation 0, then Rose's session at generation 1",
+   "events": [
+    {
+     "snapshot": [
+      0,
+      [],
+      [],
+      []
+     ]
+    },
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "1c registered, no snapshot yet",
+   "events": [],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work has not been reported yet",
+    "contract": "loading"
+   }
+  },
+  {
+   "name": "2 Rose's session alone",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     3,
+     7,
+     0,
+     "com.example.maps",
+     false
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2,
+     3
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "3 another owner runs the same app on a second session device",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      2,
+      [
+       7,
+       11
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "com.other.agent"
+      ],
+      [
+       10123,
+       10456
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "11": 11
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     9,
+     11,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "3 the other device's ownership not yet reported",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "11": 11
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     9,
+     11,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     9,
+     2
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "4 Rose's session closed, stale entry, the other device's task",
+   "events": [
+    {
+     "snapshot": [
+      3,
+      [
+       7,
+       11
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "com.other.agent"
+      ],
+      [
+       10123,
+       10456
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "11": 11
+   },
+   "released": [
+    7
+   ],
+   "tasks": [
+    [
+     9,
+     11,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "EMPTY",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "No background work",
+    "contract": "empty"
+   }
+  },
+  {
+   "name": "5 released session display still holding a task",
+   "events": [
+    {
+     "snapshot": [
+      3,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {},
+   "released": [
+    7
+   ],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     2
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "6 equal or lower generation ignored",
+   "events": [
+    {
+     "snapshot": [
+      5,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      5,
+      [
+       7
+      ],
+      [
+       "com.other.agent"
+      ],
+      [
+       10456
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      4,
+      [],
+      [],
+      []
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "7 reconnect clears state; not reported until the new initial snapshot",
+   "events": [
+    {
+     "snapshot": [
+      9,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "reset": true
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work has not been reported yet",
+    "contract": "loading"
+   }
+  },
+  {
+   "name": "7 the new service lifetime's initial snapshot restores, lower generation",
+   "events": [
+    {
+     "snapshot": [
+      9,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "reset": true
+    },
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "8 another user's controller session (that user's uid)",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       1010123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "EMPTY",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "No background work",
+    "contract": "empty"
+   }
+  },
+  {
+   "name": "9 simultaneous app swap across two owners",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7,
+       11
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "com.other.agent"
+      ],
+      [
+       10123,
+       10456
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "11": 11
+   },
+   "released": [],
+   "tasks": [
+    [
+     5,
+     7,
+     0,
+     "com.example.maps",
+     true
+    ],
+    [
+     9,
+     11,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     5
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "malformed: unequal arrays",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      2,
+      [
+       7,
+       8
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123,
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "malformed: null array",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      null,
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "malformed: duplicate device",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7,
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "com.other.agent"
+      ],
+      [
+       10123,
+       10456
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "malformed: empty owner package, negative uid, negative generation",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7
+      ],
+      [
+       ""
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       -1
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      -1,
+      [],
+      [],
+      []
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "malformed then valid: baseline kept, next higher generation restores",
+   "events": [
+    {
+     "snapshot": [
+      3,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      4,
+      [
+       7
+      ],
+      [
+       null
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      3,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      4,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "parity: a hidden member app with no task of its own is a card, never live",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       7,
+       "com.example.mail"
+      ],
+      [
+       7,
+       "com.example.notes"
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2,
+     -1
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "parity: a running task whose app is not yet listed is unconfirmed",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       7,
+       "com.example.mail"
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     9,
+     7,
+     0,
+     "com.example.chat",
+     true
+    ],
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     false
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     9,
+     2
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "parity: devices arrived, their apps not yet (mid-dispatch)",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "appsMissing": true
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work has not been reported yet",
+    "contract": "loading"
+   }
+  },
+  {
+   "name": "parity: apps one generation behind the devices",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ]
+    },
+    {
+     "snapshot": [
+      3,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "appsMissing": true
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "parity: another user's activity on Rose's device (deviceComplete false)",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       7,
+       "com.example.mail"
+      ]
+     ],
+     "complete": [
+      false
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     2
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "parity malformed: an app on an unlisted device",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       11,
+       "com.example.mail"
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "parity malformed: deviceComplete of another length",
+   "events": [
+    {
+     "snapshot": [
+      2,
+      [
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       7,
+       "com.example.mail"
+      ]
+     ],
+     "complete": [
+      true,
+      true
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "contract: two Rose session devices, each complete",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7,
+       8
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123,
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "8": 8
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     5,
+     8,
+     0,
+     "com.example.maps",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     2,
+     5
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
+   }
+  }
+ ]
 }
