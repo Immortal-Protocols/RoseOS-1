@@ -24,14 +24,16 @@ one recorded tested user (--user, default the current foreground user, resolved 
             explicit Rose HOME launch, Rose -> conversation -> Back, the launcher-icon entry and HOME again, with
             screenshots, UI dumps and (where Pillow is installed) a comparison of each Home screenshot
   compare   SCREENSHOT --out DIR: a screenshot against the reference wallpaper (Home cover crop at 62% 30%), black-screen detection
-            and a side-by-side image for human review
+            and a side-by-side image for human review; --home oxblood --reference RASTER compares an Oxblood (#410) Home
+            with a raster of its field instead (cover, centre top); without a raster only black-screen detection
 Exit status: 0 ok, 1 check failed, 2 invalid input, 4 setup missing.
 
 Expectation schema (schemaVersion 1; unknown keys, nulls and malformed values are rejected):
   {"schemaVersion": 1, "kind": "rose-verify-expectation", "label": str, "channel": "alpha"|"beta"|"app",
    "candidate": 40-hex source SHA, "build": digits (optional), "target": {str: str} (device/lunch/...),
    "apps": [{"package": str, "version": int >= 1, "sha256": 64-hex, "imagePath": "partition/path.apk" (needed by --extract-apps)}],
-   "appSignerSha256": 64-hex, "avbPublicKeySha256": 64-hex (optional), "basis": str (where each value came from)}
+   "appSignerSha256": 64-hex, "avbPublicKeySha256": 64-hex (optional), "basis": str (where each value came from),
+   "home": "hifi-wallpaper"|"oxblood" (optional: the reference the candidate's Home implements; absent = hifi-wallpaper)}
 """
 import argparse
 import bz2
@@ -69,13 +71,33 @@ REFERENCE = {
                       'Rose-HiFi.html --wallpaper. Earlier Agent builds ship the Rose-Fold-v3 image (461 x 1024, '
                       '409c0dbfa309dbd56f97a59b04223532e9931ae5c5c4625d3567b77a9c56d8c5) and fail this check truthfully',
 }
+# #410: builds whose Home draws the Oxblood field (OxbloodField.HOME) implement the frozen Oxblood reference instead.
+# Its field is procedural vector artwork with no raster in the product; rose-verify does not render SVG, so a
+# comparison needs a caller-supplied raster of fieldPath (docs/VERIFY.md). The wallpaper above stays the reference of
+# every build whose Home draws it.
+OXBLOOD = {
+    'prototype': 'Rose-HiFi.html at f6503a0d00db674d9f5c38dc79758ff61cc26c82/prototypes/rose-hifi (Git blob '
+                 '5b9c6c89aa72319cb3afe4744e401c8fe11762ef; #410)',
+    'contract': 'qa/oxblood/oxblood-contract.json fields.home (#414)',
+    'status': 'Implementation reference for builds whose Home draws OxbloodField.HOME; rendered and native visual '
+              'acceptance remain open',
+    'fieldPath': 'prototypes/rose-hifi/src/assets/oxblood-home.svg',
+    'fieldBlob': 'e07c4586ad2c9c26a19dce6d9434a0f35dbc6ea5',
+    'fieldSha256': '7ba8d8bc374ff0ef4e4672473eefaac61a08eaf1ef739082642d40a0d850d3f1',
+    'placement': 'background-size cover, background-position center top (oxblood.css; contract: scale = '
+                 'max(W/390, H/844), centred horizontally, top-aligned)',
+    'nativeRenderer': 'workspace/rose-agent/app/src/dev/pixel/voice/OxbloodField.java (HOME)',
+}
+HOME_SURFACES = ('hifi-wallpaper', 'oxblood')
+OXBLOOD_HOME = 'new OxbloodField(OxbloodField.HOME)'  # MainActivity's pager background on Oxblood builds
 # Image paths of the contract apps (os/alpha/cuttlefish-product-contract.json imageExpectations, docs/OS-RELEASE.md).
 APP_PATHS = {
     'dev.pixel.voice': ('product', 'app/RosePreinstall_dev_pixel_voice/RosePreinstall_dev_pixel_voice.apk'),
     'dev.pixel.calculator.agent': ('product', 'app/RosePreinstall_dev_pixel_calculator_agent/RosePreinstall_dev_pixel_calculator_agent.apk'),
     'dev.pixel.backgroundcontrol': ('system_ext', 'priv-app/PixelBackgroundControl/PixelBackgroundControl.apk'),
 }
-DEX_MARKERS = ['MainActivity', 'RoseHomeView', 'RoseConversationActivity', 'LauncherPager', 'PairingActivity']
+DEX_MARKERS = ['MainActivity', 'RoseHomeView', 'RoseConversationActivity', 'LauncherPager', 'PairingActivity',
+               'OxbloodField']
 EMULATOR_DEVICES = ('vsoc_',)
 ROSE_HOME_MARKER = 'rose_home_role_selected'  # per-user Settings.Secure marker of the OS default-HOME selection
 HOME = 'android.intent.category.HOME'
@@ -102,7 +124,7 @@ def check(name, ok, detail=None):
 
 
 EXPECTATION_KEYS = {'schemaVersion', 'kind', 'label', 'channel', 'candidate', 'build', 'target', 'apps',
-                    'appSignerSha256', 'avbPublicKeySha256', 'basis'}
+                    'appSignerSha256', 'avbPublicKeySha256', 'basis', 'home'}
 HEX64 = re.compile(r'[0-9a-f]{64}')
 
 
@@ -155,13 +177,16 @@ def load_expectation(path):
         if 'imagePath' in app and (not isinstance(app['imagePath'], str) or
                                    not re.fullmatch(r'(product|system_ext|system|vendor)/\S+\.apk', app['imagePath'])):
             errors.append(f'apps[{i}].imagePath must be partition/path.apk')
+    if 'home' in data and data['home'] not in HOME_SURFACES:
+        errors.append('home must be ' + ' or '.join(HOME_SURFACES))
     if errors:
         raise Fail(f'expectation {path} rejected: ' + '; '.join(errors))
     return dict(data, path=str(path), fileSha256=sha256(path))
 
 
 def expectation_summary(e):
-    return None if e is None else {k: e.get(k) for k in ('label', 'channel', 'candidate', 'build', 'path', 'fileSha256')}
+    return None if e is None else {k: e.get(k) for k in ('label', 'channel', 'candidate', 'build', 'home', 'path',
+                                                         'fileSha256')}
 
 
 def image_location(app):
@@ -190,6 +215,7 @@ def expected():
                                  'Pixel overlays not established)'},
         },
         'reference': REFERENCE,
+        'oxbloodReference': OXBLOOD,
     }
 
 
@@ -331,8 +357,14 @@ def inspect_apk(tools, apk, expectation=None):
         result['checks'].append(check('MainActivity declares HOME and LAUNCHER',
                                       'dev.pixel.voice.MainActivity' in result['homeActivities'] and
                                       'dev.pixel.voice.MainActivity' in result['launcherActivities']))
+        # Class presence only: which reference this build's Home is compared with (an expectation's home names it).
+        result['homeSurfaceFromDex'] = 'oxblood' if result['dex']['classes']['OxbloodField'] else 'not-oxblood'
     if expectation is None:
         return result
+    if badging['packageName'] == 'dev.pixel.voice' and 'home' in expectation:
+        result['checks'].append(check('expected Home surface (OxbloodField compiled in)',
+                                      (expectation['home'] == 'oxblood') == result['dex']['classes']['OxbloodField'],
+                                      {'expected': expectation['home'], 'actual': result['homeSurfaceFromDex']}))
     entry = next((a for a in expectation['apps'] if a['package'] == badging['packageName']), None)
     result['checks'].append(check(f'{badging["packageName"]} listed in expectation', entry is not None, expectation['label']))
     if entry:
@@ -739,6 +771,7 @@ def source(rev):
             if 'if(!DeviceIdentity.paired(this))startActivity(new Intent(this,PairingActivity.class))' in main else None,
         },
         'wallpaperSha256': wallpaper,
+        'homeSurface': 'oxblood' if OXBLOOD_HOME in main else 'not-oxblood',
         'checks': [check('Reference wallpaper bytes', wallpaper == REFERENCE['wallpaperSha256']),
                    check('MainActivity declares HOME', f'{package}.MainActivity' in with_category(activities, HOME))],
         'runtime': {'performed': False, 'reason': 'source inspection only; no build or device'},
@@ -778,35 +811,59 @@ def cover_box(bw, bh, width, height, x=HOME_CROP['x'], y=HOME_CROP['y']):
     return (0, top, bw, top + crop)
 
 
-def cover_crop(image, width, height):
-    """The Home wallpaper as RoseHomeView draws it over a width x height area (cover_box), resized to that area."""
-    return image.crop(cover_box(image.width, image.height, width, height)).resize((width, height))
+def cover_crop(image, width, height, crop=None):
+    """The Home wallpaper as RoseHomeView draws it over a width x height area (cover_box), resized to that area; crop
+    names another cover position (OXBLOOD_CROP)."""
+    crop = crop or HOME_CROP
+    return image.crop(cover_box(image.width, image.height, width, height, crop['x'], crop['y'])).resize((width, height))
 
 
-def compare(screenshot, out, reference=None, label='screenshot'):
+# Oxblood Home's field placement: OxbloodField.onBoundsChange (cover, centred across, top-aligned), the frozen
+# oxblood.css .wall background-position center top.
+OXBLOOD_CROP = {'x': .5, 'y': 0., 'source': 'workspace/rose-agent/app/src/dev/pixel/voice/OxbloodField.java '
+                'onBoundsChange (cover, centred across, top-aligned)'}
+
+
+def compare(screenshot, out, reference=None, label='screenshot', home='hifi-wallpaper'):
+    """home names the reference the candidate's Home implements: hifi-wallpaper (REFERENCE, the default reference
+    image) or oxblood (OXBLOOD: only against a caller-supplied raster of its field; without one, black-screen
+    detection only, never a match)."""
+    if home not in HOME_SURFACES:
+        raise Fail(f'home must be one of {", ".join(HOME_SURFACES)}', 2)
     try:
         from PIL import Image, ImageChops
     except ImportError:
         raise Fail('screenshot comparison needs Pillow', 4)
-    ref_path = Path(reference) if reference else ROOT/WALLPAPER
     shot = Image.open(screenshot).convert('RGB')
-    with Image.open(ref_path) as source:
-        reference_image = source.convert('RGB')
-    ref = cover_crop(reference_image, *shot.size)
     grid = (27, 48)
     small_shot = shot.resize(grid, Image.BOX)
-    small_ref = ref.resize(grid, Image.BOX)
-    shot_px, ref_px = (list(zip(*[iter(img.tobytes())] * 3)) for img in (small_shot, small_ref))
+    shot_px = list(zip(*[iter(small_shot.tobytes())] * 3))
     lum = [sum(p) / 3 for p in shot_px]
     lum_sorted = sorted(lum)
     mean_lum = sum(lum) / len(lum)
     p95 = lum_sorted[int(len(lum_sorted) * .95)]
+    black = mean_lum < 20 and p95 < 40
+    result = {'kind': 'screenshot-comparison', 'home': home, 'screenshot': str(screenshot),
+              'screenshotSha256': sha256(screenshot), 'size': list(shot.size)}
+    if home == 'oxblood' and reference is None:
+        return {**result, 'reference': None, 'referenceBasis': OXBLOOD,
+                'meanLuminance': round(mean_lum, 1), 'p95Luminance': round(p95, 1),
+                'verdict': 'black-screen' if black else 'not-compared',
+                'note': 'No raster of the Oxblood field was given (--reference, docs/VERIFY.md) and rose-verify does '
+                        'not render SVG: black-screen detection only. The Home wallpaper is not this build\'s Home.'}
+    crop = OXBLOOD_CROP if home == 'oxblood' else HOME_CROP
+    ref_path = Path(reference) if reference else ROOT/WALLPAPER
+    with Image.open(ref_path) as source:
+        reference_image = source.convert('RGB')
+    ref = cover_crop(reference_image, *shot.size, crop)
+    small_ref = ref.resize(grid, Image.BOX)
+    ref_px = list(zip(*[iter(small_ref.tobytes())] * 3))
     cells = [sum(abs(a - b) for a, b in zip(p, q)) / 3 for p, q in zip(shot_px, ref_px)]
     coverage = sum(c <= 40 for c in cells) / len(cells)
-    if mean_lum < 20 and p95 < 40:
+    if black:
         verdict = 'black-screen'
     elif coverage >= .5:
-        verdict = 'wallpaper-consistent'
+        verdict = 'field-consistent' if home == 'oxblood' else 'wallpaper-consistent'
     else:
         verdict = 'differs-from-reference'
     out = Path(out)
@@ -817,14 +874,19 @@ def compare(screenshot, out, reference=None, label='screenshot'):
         side.paste(img, (i * shot.width, 0))
     side_path = out/f'{label}-vs-reference.png'
     side.save(side_path)
-    return {'kind': 'screenshot-comparison', 'screenshot': str(screenshot), 'screenshotSha256': sha256(screenshot),
-            'size': list(shot.size), 'reference': str(ref_path), 'referenceSha256': sha256(ref_path),
-            'referenceCrop': {'kind': 'cover', 'x': HOME_CROP['x'], 'y': HOME_CROP['y'], 'source': HOME_CROP['source'],
-                              'box': list(cover_box(*reference_image.size, *shot.size))},
-            'meanLuminance': round(mean_lum, 1), 'p95Luminance': round(p95, 1),
-            'wallpaperCellCoverage': round(coverage, 3), 'verdict': verdict, 'sideBySide': str(side_path),
-            'note': 'Heuristic over a 27x48 grid (cells within 40 levels of the cover-cropped wallpaper); '
-                    'overlays lower coverage. A human reviews the side-by-side image before any visual claim.'}
+    result.update({'reference': str(ref_path), 'referenceSha256': sha256(ref_path),
+                   'referenceCrop': {'kind': 'cover', 'x': crop['x'], 'y': crop['y'], 'source': crop['source'],
+                                     'box': list(cover_box(*reference_image.size, *shot.size, crop['x'], crop['y']))},
+                   'meanLuminance': round(mean_lum, 1), 'p95Luminance': round(p95, 1),
+                   'wallpaperCellCoverage': round(coverage, 3), 'verdict': verdict, 'sideBySide': str(side_path),
+                   'note': f'Heuristic over a 27x48 grid (cells within 40 levels of the cover-cropped '
+                           f'{"field raster" if home == "oxblood" else "wallpaper"}); '
+                           'overlays lower coverage. A human reviews the side-by-side image before any visual claim.'})
+    if home == 'oxblood':
+        result['referenceBasis'] = OXBLOOD
+        result['referenceProvenance'] = ('caller-supplied raster of the Oxblood field; rose-verify checks neither its '
+                                         'renderer nor its source: record both with the result')
+    return result
 
 
 # ---------- runtime ----------
@@ -921,6 +983,9 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
         raise Fail('--user must be current or a numeric user id')
     out = outside_repo(out)
     out.mkdir(parents=True, exist_ok=True)
+    # The reference Home screenshots are compared with: the expectation's home, else the wallpaper (expectations
+    # recorded before #410 name none; their builds' Home draws it).
+    home_surface = expectation.get('home', 'hifi-wallpaper')
     adb = Adb(serial, adb_path)
     keys = ['ro.product.device', 'ro.product.name', 'ro.hardware', 'ro.build.fingerprint', 'ro.build.type',
             'ro.build.version.sdk', 'ro.build.version.release', 'ro.product.cpu.abi', 'ro.product.cpu.abilist',
@@ -989,6 +1054,8 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
                                      'markerNote': 'Set by builds with os/patches/rose-home-role-permission.patch on '
                                                    'the first start of each full user (once per user; see '
                                                    'docs/OS-INTEGRATION.md). Absent on builds without it.'},
+              'homeReference': {'surface': home_surface, 'selection': 'expectation home' if 'home' in expectation
+                                else 'the expectation names no home: hifi-wallpaper'},
               'checks': checks, 'artifacts': {}}
     checks.append(check(f'HOME role held by Rose Agent for user {tested}', 'dev.pixel.voice' in result['home']['roleHolders'],
                         result['home']['roleHolders']))
@@ -1016,7 +1083,7 @@ def runtime(serial, handback, out, expectation, user='current', interactive=Fals
             """The heuristic comparison, or unavailable when this host cannot run it (the PNG is kept for a local
             `compare`). Never a visual verdict on its own."""
             try:
-                step['comparison'] = compare(shot, out, label=step['step'])
+                step['comparison'] = compare(shot, out, label=step['step'], home=home_surface)
             except Fail as err:
                 if err.code != 4:
                     raise
@@ -1101,7 +1168,9 @@ def main(argv=None):
     c = sub.add_parser('compare')
     c.add_argument('screenshot')
     c.add_argument('--out', required=True)
-    c.add_argument('--reference')
+    c.add_argument('--reference', help='reference image; for --home oxblood a raster of the Oxblood field')
+    c.add_argument('--home', choices=HOME_SURFACES, default='hifi-wallpaper',
+                   help="the reference the candidate's Home implements (docs/VERIFY.md)")
     for p in (e, r, a, rt):
         p.add_argument('--expect', metavar='FILE', help='candidate expectation (schema in the module docstring)')
     for p in (r, a, s, rt, c):
@@ -1128,7 +1197,8 @@ def main(argv=None):
             result = runtime(args.serial, args.handback, args.out, expectation, args.user, args.interactive,
                              args.physical_device, args.adb)
         else:
-            result = compare(args.screenshot, args.out, args.reference, label=Path(args.screenshot).stem)
+            result = compare(args.screenshot, args.out, args.reference, label=Path(args.screenshot).stem,
+                             home=args.home)
     except Fail as err:
         print(f'rose-verify: {err}', file=sys.stderr)
         return err.code
