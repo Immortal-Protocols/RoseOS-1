@@ -74,7 +74,7 @@ class Pins(unittest.TestCase):
         self.assertEqual(pins['fastbootSha256'], 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9')
         result = wire('check')
         self.assertEqual((result.returncode, result.stdout),
-            (0, 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=312\n'))
+            (0, 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=297\n'))
 
     def test_drift_from_any_committed_source_refuses(self):
         for name, change in (('otatools', {'sha256': 'a' * 64}), ('releaseScript', {'sha256': 'b' * 64}),
@@ -91,8 +91,9 @@ class Pins(unittest.TestCase):
     def test_bounds_cover_every_step_and_are_not_a_measurement(self):
         bounds, minutes = wiring.check()
         self.assertEqual(bounds, {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900})
-        self.assertEqual(wiring.INSTALLER, {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 60})
-        self.assertEqual(minutes, 312)  # 237 before the installer export: +900 s staging, +30 s kill, +60 min upload
+        self.assertEqual(wiring.INSTALLER, {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45})
+        self.assertEqual(minutes, 297)  # the approved total including the private export (900 s + 30 s staging, 45-min upload)
+        self.assertLessEqual(bounds['stageSeconds'] + 30 + wiring.INSTALLER['uploadMinutes'] * 60, 3630)
         self.assertGreater(bounds['packageSeconds'], 3600 + 10)  # beyond the helper's 60-min generation and kill grace
         self.assertGreaterEqual(bounds['classifySeconds'], 2 * 3600)  # two tool calls, each 3600 s in the helper
         self.assertGreaterEqual(minutes * 60, sum(bounds.values()) + 4 * 30 + wiring.INSTALLER['uploadMinutes'] * 60)
@@ -284,7 +285,7 @@ class Job(unittest.TestCase):
         (bin_dir/'python3').write_text('#!/bin/sh\nprintf "%s\\n" "$CHECK_OUTPUT"\n')
         (bin_dir/'python3').chmod(0o755)
         text = script(step(self.job, 'Recheck the pins and bounds on the builder'))
-        good = 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=312'
+        good = 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=297'
         def run(**env):
             base = {'PATH': f'{bin_dir}:/usr/bin:/bin', 'RUNNER_TEMP': str(self.tmp), 'CHECK_OUTPUT': good,
                     'PACKAGE_SECONDS': '5400', 'OBSERVE_SECONDS': '900', 'CLASSIFY_SECONDS': '7200', 'STAGE_SECONDS': '900'}
@@ -371,13 +372,13 @@ class InstallerExport(unittest.TestCase):
             'wiring.py stage-installer --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"\n')
         self.assertNotIn('if:', stage)  # only after inspection succeeded (classify 0 or 3)
         artifact = step(self.job, 'Private installer artifact (exactly SHA256SUMS and the ZIP)')
-        self.assertEqual(artifact, '        id: installer-artifact\n        timeout-minutes: 60\n'
+        self.assertEqual(artifact, '        id: installer-artifact\n        timeout-minutes: 45\n'
             '        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n        with:\n'
             '          name: rango-install-2026103001-${{ github.run_id }}-${{ github.run_attempt }}\n'
             '          path: |\n            ${{ steps.installer.outputs.root }}/SHA256SUMS\n'
             '            ${{ steps.installer.outputs.root }}/package/rango-install-2026103001.zip\n'
             '          retention-days: 3\n          if-no-files-found: error\n          compression-level: 0\n')
-        self.assertEqual(wiring.INSTALLER['uploadMinutes'], 60)
+        self.assertEqual(wiring.INSTALLER['uploadMinutes'], 45)
         self.assertEqual(self.job.count('actions/upload-artifact@'), 2)  # the installer and the unchanged reports
 
     def test_stage_prints_only_the_root_for_the_artifact_paths(self):

@@ -1108,7 +1108,7 @@ jobs:
     # sha256 checks against the helper receipt pass, the installer (exactly SHA256SUMS and the ZIP; 3 days). Never the
     # capped raw log or the target-files; nothing is published. contents: read only: no OIDC token, signer login, secret,
     # signing, download, install, phone action or publication. Time: per-step wrapper ceilings from the hosted guard
-    # (package 5400 s, observe 900 s, classify 7200 s, stage 900 s, each +30 s kill; upload 60 min; job 312 min), not
+    # (package 5400 s, observe 900 s, classify 7200 s, stage 900 s, each +30 s kill; upload 45 min; job 297 min), not
     # measurements or a guaranteed stop. 128 GiB free is the helper's precondition, not a usage cap. Cleanup stops the
     # builder only if this run's controller started it.
     # Runtime is not approved.
@@ -1147,7 +1147,7 @@ jobs:
         run: timeout --kill-after=30s "${STAGE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py stage-installer --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Private installer artifact (exactly SHA256SUMS and the ZIP)
         id: installer-artifact
-        timeout-minutes: 60
+        timeout-minutes: 45
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rango-install-2026103001-${{ github.run_id }}-${{ github.run_attempt }}

@@ -67,7 +67,8 @@ INSTALL = f'{DEVICE}-install-{BUILD}.zip'
 # 3600 s by the helper, two expected (simg2img, lpunpack).
 BOUNDS = {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900}
 # The private installer artifact (actions/upload-artifact): proposed source bounds, not a measured size or duration.
-INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 60}
+# Staging (900 s + 30 s kill) and the 45-min upload keep the approved job total at 297 minutes.
+INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45}
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
 UPLOAD = {'package/factory-package-receipt.json': 'factory-package-receipt.json',
