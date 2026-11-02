@@ -61,8 +61,9 @@ PINS = {
                  'sha256': '22d62464ff3fa74fe3fa2b4c118bba116bc3a3aa504feddcdcf38fc3f3cbb664'},
     'releaseScript': {'path': f'{PRODUCTION}/script/generate-release.sh',
                       'sha256': '01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311'},
-    'avbPkmd': {'path': f'{PRODUCTION}/releases/{BUILD}/public/avb_pkmd.bin',
-                'sha256': 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27'},
+    # No external avb_pkmd.bin: the helper derives the public AVB key from the pinned signed target-files'
+    # IMAGES/vbmeta.img into its own --out and requires this flavor sha256 (run 41503782772: no retained public file).
+    'avbPkmd': {'sha256': 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27'},
     'fastbootSha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9',
 }
 TASK_PARENT = '/home/pixelbuild/rose-actions'
@@ -115,7 +116,7 @@ def check(root=ROOT, pins=PINS):
     release = pointer(root, 'os/retained-rango/release.json', 'target')
     if (release['device'], release['build']) != (DEVICE, BUILD):
         raise Invalid('the pinned build is not os/retained-rango/release.json target')
-    for name in ('targetFiles', 'otatools', 'releaseScript', 'avbPkmd'):
+    for name in ('targetFiles', 'otatools', 'releaseScript'):
         path = pins[name]['path']
         if not path.startswith(PRODUCTION + '/') or os.path.normpath(path) != path:
             raise Invalid(f'{name} must be a normalized path inside the production tree (read only)')
@@ -144,7 +145,7 @@ def package_argv(root_dir, root=ROOT, pins=PINS):
             '--target-files', pins['targetFiles']['path'], '--target-files-sha256', pins['targetFiles']['sha256'],
             '--otatools', pins['otatools']['path'], '--otatools-sha256', pins['otatools']['sha256'],
             '--release-script', pins['releaseScript']['path'], '--release-script-sha256', pins['releaseScript']['sha256'],
-            '--avb-pkmd', pins['avbPkmd']['path'], '--fastboot-sha256', pins['fastbootSha256'],
+            '--fastboot-sha256', pins['fastbootSha256'],
             '--lock', lock_path(root), '--out', str(root_dir/'package')]
 
 
