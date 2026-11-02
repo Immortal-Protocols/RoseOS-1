@@ -104,30 +104,22 @@ final class CurrentApps {
   return null;
  }
 
- /** The interim source (until App Core's contract): the controller's own get_state session, which the controller
-  * starts, owns and closes. status/sessionId/taskId/targetPackage as read; failure: the read failed (fixed word).
-  * One app while a session is live with a known package; none when idle/stopped/closed/failed. preview is set only
-  * from an explicitly verified binding for exactly this session (never from whichever workspace is open). */
+ /** The interim source (until App Core's attested contract): the controller's own get_state session, which the
+  * controller starts, owns and closes. With no live session there is no session display, so nothing is under
+  * control (authoritatively empty). A live session reports only its target, never the apps behind it on its display,
+  * so its membership is not attested complete: INCOMPLETE (the explicit unavailable/loading state), never a partial
+  * list presented as every app. Read failures keep their fixed word. verified is no longer used for membership: live
+  * view comes with the attested contract's own handle. */
  static Snapshot fromController(String registration,long generation,String failure,String status,String sessionId,String controllerTaskId,
    String targetPackage,WorkspaceOverview.Binding verified){
   if(failure!=null&&!failure.isEmpty())return Snapshot.unavailable(registration,generation,failure);
-  String st=nz(status);
-  if(st.isEmpty())return Snapshot.unavailable(registration,generation,UNREADABLE);
-  String state;
-  switch(st){
-   case "ready":state=STATE_RUNNING;break;
-   case "launching":case "starting":case "scheduled":state=STATE_STARTING;break;
-   case "blocked":state=STATE_WAITING;break;
+  switch(nz(status)){
    case "idle":case "stopped":case "closed":case "user_stopped":case "cleanup_failed":case "failed":case "rejected":case "target_not_allowed":case "consent_required":
     return new Snapshot(registration,generation,true,"",Collections.<App>emptyList());
+   case "ready":case "launching":case "starting":case "scheduled":case "blocked":
+    return Snapshot.unavailable(registration,generation,INCOMPLETE);
    default:return Snapshot.unavailable(registration,generation,UNREADABLE);
   }
-  if(nz(sessionId).isEmpty()||nz(targetPackage).isEmpty())return Snapshot.unavailable(registration,generation,UNREADABLE);
-  Preview preview=null;
-  if(verified!=null&&verified.sessionId.equals(sessionId)&&verified.controllerTaskId.equals(nz(controllerTaskId))&&verified.targetPackage.equals(targetPackage))
-   preview=new Preview(sessionId,controllerTaskId);
-  List<App> one=new ArrayList<>();one.add(new App(sessionId+"/"+targetPackage,targetPackage,state,preview));
-  return new Snapshot(registration,generation,true,"",one);
  }
  /** The overview's words for an unavailable state (fixed; never identifiers). */
  static String text(String reason){

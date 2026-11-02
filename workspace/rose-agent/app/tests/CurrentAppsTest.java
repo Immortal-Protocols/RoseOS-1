@@ -83,31 +83,26 @@ public final class CurrentAppsTest {
         }
         expect(CurrentApps.text(CurrentApps.LOCKED).contains("Unlock") && !CurrentApps.text("anything").isEmpty(), "fixed words for every reason");
 
-        // Interim adapter: the controller's own session is the only member; task history never is.
+        // Interim adapter: no session is authoritatively empty; a live session is not attested complete.
         WorkspaceOverview.Scope s = new WorkspaceOverview.Scope("srv", "c1");
-        Snapshot live = CurrentApps.fromController("ctl", 1, null, "ready", "s-1", "rose-ws-1-calc", "com.android.calculator2", null);
-        expect(live.available && live.apps.size() == 1 && live.apps.get(0).packageName.equals("com.android.calculator2") && live.apps.get(0).preview == null, "live session: one app, no preview without a verified binding");
-        for (String st : new String[]{"idle", "stopped", "closed", "user_stopped", "failed", "rejected", "cleanup_failed", "target_not_allowed", "consent_required"})
-            expect(CurrentApps.fromController("ctl", 1, null, st, "", "", "", null).apps.isEmpty(), st + ": no app running under control");
-        expect(CurrentApps.fromController("ctl", 1, null, "blocked", "s-1", "t", "com.x", null).apps.get(0).state.equals(CurrentApps.STATE_WAITING), "blocked: still running, waiting");
-        expect(!CurrentApps.fromController("ctl", 1, "denied", null, null, null, null, null).available, "read failed: unavailable, never 'none'");
-        expect(!CurrentApps.fromController("ctl", 1, null, "weird", "s", "t", "p", null).available, "unknown status: unavailable");
-        expect(!CurrentApps.fromController("ctl", 1, null, "ready", "s-1", "t", "", null).available, "live session without a package: unavailable");
         WorkspaceOverview.Binding verified = new WorkspaceOverview.Binding("rose-ws-1-calc", "s-1", "com.android.calculator2", s);
-        Preview pv = CurrentApps.fromController("ctl", 1, null, "ready", "s-1", "rose-ws-1-calc", "com.android.calculator2", verified).apps.get(0).preview;
-        expect(pv != null && pv.sessionId.equals("s-1") && pv.controllerTaskId.equals("rose-ws-1-calc"), "a verified binding for exactly this session enables its preview");
-        WorkspaceOverview.Binding other = new WorkspaceOverview.Binding("rose-ws-2-maps", "s-2", "com.google.android.apps.maps", s);
-        expect(CurrentApps.fromController("ctl", 1, null, "ready", "s-1", "rose-ws-1-calc", "com.android.calculator2", other).apps.get(0).preview == null, "another session's binding never enables it");
-        for (WorkspaceOverview.Binding near : new WorkspaceOverview.Binding[]{
-                new WorkspaceOverview.Binding("rose-ws-1-calc", "s-OLD", "com.android.calculator2", s),
-                new WorkspaceOverview.Binding("rose-ws-OLD", "s-1", "com.android.calculator2", s),
-                new WorkspaceOverview.Binding("rose-ws-1-calc", "s-1", "com.other", s)})
-            expect(CurrentApps.fromController("ctl", 1, null, "ready", "s-1", "rose-ws-1-calc", "com.android.calculator2", near).apps.get(0).preview == null, "a binding differing in one field never enables the preview");
+        for (String st : new String[]{"ready", "launching", "starting", "scheduled", "blocked"}) {
+            Snapshot live = CurrentApps.fromController("ctl", 1, null, st, "s-1", "rose-ws-1-calc", "com.android.calculator2", verified);
+            expect(!live.available && live.reason.equals(CurrentApps.INCOMPLETE) && live.apps.isEmpty(), st + ": target-only membership is never shown as every app");
+        }
+        for (String st : new String[]{"idle", "stopped", "closed", "user_stopped", "failed", "rejected", "cleanup_failed", "target_not_allowed", "consent_required"}) {
+            Snapshot none = CurrentApps.fromController("ctl", 1, null, st, "", "", "", null);
+            expect(none.available && none.apps.isEmpty(), st + ": no session display, nothing under control");
+        }
+        expect(!CurrentApps.fromController("ctl", 1, "denied", null, null, null, null, null).available, "read failed: unavailable, never 'none'");
+        expect(CurrentApps.fromController("ctl", 1, CurrentApps.NOT_INSTALLED, null, null, null, null, null).reason.equals(CurrentApps.NOT_INSTALLED), "failure word kept");
+        expect(CurrentApps.fromController("ctl", 1, null, "weird", "s", "t", "p", null).reason.equals(CurrentApps.UNREADABLE), "unknown status: unavailable");
+        expect(CurrentApps.fromController("ctl", 1, null, null, null, null, null, null).reason.equals(CurrentApps.UNREADABLE), "no status: unavailable");
         Tracker life = new Tracker();
         life.apply(CurrentApps.fromController("ctl", 1, null, "ready", "s-1", "t", "com.android.calculator2", null));
-        expect(life.apps().size() == 1, "launch through the controller");
+        expect(life.state() == State.UNAVAILABLE && life.reason().equals(CurrentApps.INCOMPLETE), "launch through the controller: can't confirm, not a partial list");
         life.apply(CurrentApps.fromController("ctl", 2, null, "stopped", null, null, null, null));
-        expect(life.apps().isEmpty() && life.state() == State.EMPTY, "released through the controller: gone at once");
+        expect(life.apps().isEmpty() && life.state() == State.EMPTY, "released through the controller: none");
         System.out.println("CurrentAppsTest: " + checks + " checks passed");
     }
 }
