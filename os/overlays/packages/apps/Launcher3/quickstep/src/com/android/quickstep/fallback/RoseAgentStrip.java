@@ -16,6 +16,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Process;
 import android.os.RemoteException;
@@ -33,6 +34,7 @@ import android.widget.TextView;
 import android.window.TaskSnapshot;
 import android.window.TaskSnapshotManager;
 import com.android.launcher3.R;
+import com.android.launcher3.views.ScrimView;
 import com.android.quickstep.RecentsActivity;
 
 import java.lang.ref.WeakReference;
@@ -274,6 +276,23 @@ public final class RoseAgentStrip extends LinearLayout {
 
     private final View.OnLayoutChangeListener relayout = (v, l, t, r, b, ol, ot, orr, ob) -> anchor();
 
+    /**
+     * #410: the switcher's Oxblood field (RoseOxbloodField, the contract's fields.rose) drawn on the fallback overview's
+     * own scrim through its public drawing-controller seam, after the scrim's background colour and at that colour's
+     * current opacity. So the field follows every overview state the scrim already animates (opaque in the overview,
+     * transparent while an app is in front or going Home) without any new state logic. Nothing else in the fallback
+     * overview uses this seam (only the in-launcher All Apps does, on its own scrim).
+     */
+    private final RoseOxbloodField field = new RoseOxbloodField();
+    private ScrimView scrim;
+    private final ScrimView.ScrimDrawingController fieldOnScrim = (canvas, scale, bottomOffset) -> {
+        ScrimView on = scrim;
+        if (on == null) return;
+        field.setBounds(0, 0, on.getWidth(), on.getHeight());
+        field.setAlpha(Color.alpha(on.getBackgroundColor()));
+        field.draw(canvas);
+    };
+
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -281,6 +300,11 @@ public final class RoseAgentStrip extends LinearLayout {
         parent.addOnLayoutChangeListener(relayout);
         View buttons = parent.findViewById(R.id.action_buttons);
         if (buttons != null) buttons.addOnLayoutChangeListener(relayout);
+        View found = parent.findViewById(R.id.scrim_view);
+        if (found instanceof ScrimView) {
+            scrim = (ScrimView) found;
+            scrim.setDrawingController(fieldOnScrim);
+        }
     }
 
     @Override
@@ -290,6 +314,10 @@ public final class RoseAgentStrip extends LinearLayout {
             parent.removeOnLayoutChangeListener(relayout);
             View buttons = parent.findViewById(R.id.action_buttons);
             if (buttons != null) buttons.removeOnLayoutChangeListener(relayout);
+        }
+        if (scrim != null) {
+            scrim.setDrawingController(null);
+            scrim = null;
         }
         removeCallbacks(previewTick);
         generation++;

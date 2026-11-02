@@ -1,0 +1,155 @@
+/* Copyright 2026. SPDX-License-Identifier: Apache-2.0 */
+package com.android.quickstep.fallback;
+
+import android.graphics.BlurMaskFilter;
+import android.graphics.Canvas;
+import android.graphics.ColorFilter;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PixelFormat;
+import android.graphics.RadialGradient;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
+
+/**
+ * RoseOS (#410): the switcher's Oxblood field, OS Product's own Launcher3 renderer of the contract's fields.rose
+ * (qa/oxblood/oxblood-contract.json; switcher.field.kind "rose"), the pinned prototypes/rose-hifi asset
+ * src/assets/oxblood-rose.svg at f6503a0d (blob de9f42a1). Launcher3 cannot link Rose Agent's OxbloodField, so this is
+ * a separate implementation of the same artwork, drawn shape for shape from the SVG (viewBox 390x844):
+ * <ul>
+ * <li>base: vertical gradient #120a0d, #0e080b at .6, #12060a;</li>
+ * <li>glass sheet: polygon (390,118) (390,292) (295,580), gradient from its box's top right to bottom left,
+ * #8a3a4c at .35 to 0, and its hairline (390,292)-(295,580) #ffb3bd at .7, 1 wide;</li>
+ * <li>crimson plane: polygon (295,580) (390,515) (390,844) (123,844) (206,642), gradient from its box's top left to
+ * bottom right, #7a1428 at .9, #36020d at .45, #1a0207;</li>
+ * <li>lit edge (206,642)-(295,580)-(390,515): #ffc4c8 4 wide at .5 with a soft blur (stdDeviation 3), then 1.2 wide;
+ * the lower hairline (206,642)-(123,844) #c2384c at .55, 1 wide;</li>
+ * <li>glint: circle at (295,580), r 26, radial #fff0f0 at .9 to #ff8a9a at 0.</li>
+ * </ul>
+ * Placement is the contract's: scale = max(W/390, H/844), centred across, top-aligned. Gradients in the SVG are in
+ * each shape's objectBoundingBox, so each is built in unit space and mapped to its box with a local matrix. Static
+ * artwork: nothing animates, so reduced motion changes nothing. Pure Android graphics; no state, no I/O.
+ */
+final class RoseOxbloodField extends Drawable {
+    static final float VIEW_W = 390, VIEW_H = 844;
+    static final int[] BASE = {0xFF120A0D, 0xFF0E080B, 0xFF12060A};
+    static final float[] BASE_STOPS = {0f, .6f, 1f};
+    static final float[] SHEET = {390, 118, 390, 292, 295, 580};
+    static final float[] PLANE = {295, 580, 390, 515, 390, 844, 123, 844, 206, 642};
+    static final int[] SHEET_COLORS = {0x598A3A4C, 0x008A3A4C};
+    static final int[] PLANE_COLORS = {0xE67A1428, 0xFF36020D, 0xFF1A0207};
+    static final float[] PLANE_STOPS = {0f, .45f, 1f};
+    static final int SHEET_LINE = 0xB3FFB3BD, EDGE_GLOW = 0x80FFC4C8, EDGE = 0xFFFFC4C8, LOWER_LINE = 0x8CC2384C;
+    static final int[] GLINT = {0xE6FFF0F0, 0x00FF8A9A};
+    static final float GLINT_X = 295, GLINT_Y = 580, GLINT_R = 26, BLUR_STD_DEV = 3;
+
+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+    private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path sheet = polygon(SHEET), plane = polygon(PLANE);
+    private final Path edge = new Path(), lower = new Path(), sheetLine = new Path();
+    private final Shader base, sheetShader, planeShader, glint;
+    private final BlurMaskFilter soft;
+    private int alpha = 255;
+
+    RoseOxbloodField() {
+        base = new LinearGradient(0, 0, 0, VIEW_H, BASE, BASE_STOPS, Shader.TileMode.CLAMP);
+        // objectBoundingBox gradients: (1,0)->(0,1) and (0,0)->(1,1) in unit space, mapped onto each polygon's box.
+        sheetShader = new LinearGradient(1, 0, 0, 1, SHEET_COLORS, null, Shader.TileMode.CLAMP);
+        sheetShader.setLocalMatrix(box(SHEET));
+        planeShader = new LinearGradient(0, 0, 1, 1, PLANE_COLORS, PLANE_STOPS, Shader.TileMode.CLAMP);
+        planeShader.setLocalMatrix(box(PLANE));
+        glint = new RadialGradient(GLINT_X, GLINT_Y, GLINT_R, GLINT, null, Shader.TileMode.CLAMP);
+        // SVG feGaussianBlur stdDeviation 3 as a blur mask; Skia converts a blur radius r to sigma = 0.57735 r + 0.5.
+        soft = new BlurMaskFilter((BLUR_STD_DEV - 0.5f) / 0.57735f, BlurMaskFilter.Blur.NORMAL);
+        edge.moveTo(206, 642);
+        edge.lineTo(295, 580);
+        edge.lineTo(390, 515);
+        lower.moveTo(206, 642);
+        lower.lineTo(123, 844);
+        sheetLine.moveTo(390, 292);
+        sheetLine.lineTo(295, 580);
+        line.setStyle(Paint.Style.STROKE);
+    }
+
+    private static Path polygon(float[] points) {
+        Path path = new Path();
+        path.moveTo(points[0], points[1]);
+        for (int i = 2; i < points.length; i += 2) path.lineTo(points[i], points[i + 1]);
+        path.close();
+        return path;
+    }
+
+    /** Maps the unit square onto the bounding box of the given polygon. */
+    static Matrix box(float[] points) {
+        RectF r = bounds(points);
+        Matrix m = new Matrix();
+        m.setScale(r.width(), r.height());
+        m.postTranslate(r.left, r.top);
+        return m;
+    }
+
+    static RectF bounds(float[] points) {
+        RectF r = new RectF(points[0], points[1], points[0], points[1]);
+        for (int i = 2; i < points.length; i += 2) r.union(points[i], points[i + 1]);
+        return r;
+    }
+
+    /** The contract's placement: scale = max(W/390, H/844), centred across, top-aligned. */
+    static float scale(int width, int height) { return Math.max(width / VIEW_W, height / VIEW_H); }
+
+    static float offsetX(int width, float scale) { return (width - VIEW_W * scale) / 2f; }
+
+    @Override
+    public void draw(Canvas canvas) {
+        Rect b = getBounds();
+        if (b.isEmpty() || alpha == 0) return;
+        int save = canvas.save();
+        canvas.clipRect(b);
+        float s = scale(b.width(), b.height());
+        canvas.translate(b.left + offsetX(b.width(), s), b.top);
+        canvas.scale(s, s);
+        paint.setAlpha(255);
+        paint.setShader(base);
+        paint.setAlpha(alpha);
+        canvas.drawRect(0, 0, VIEW_W, VIEW_H, paint);
+        paint.setShader(sheetShader);
+        paint.setAlpha(alpha);
+        canvas.drawPath(sheet, paint);
+        stroke(canvas, sheetLine, SHEET_LINE, 1f, null);
+        paint.setShader(planeShader);
+        paint.setAlpha(alpha);
+        canvas.drawPath(plane, paint);
+        stroke(canvas, edge, EDGE_GLOW, 4f, soft);
+        stroke(canvas, edge, EDGE, 1.2f, null);
+        stroke(canvas, lower, LOWER_LINE, 1f, null);
+        paint.setShader(glint);
+        paint.setAlpha(alpha);
+        canvas.drawCircle(GLINT_X, GLINT_Y, GLINT_R, paint);
+        paint.setShader(null);
+        canvas.restoreToCount(save);
+    }
+
+    private void stroke(Canvas canvas, Path path, int color, float width, BlurMaskFilter filter) {
+        line.setColor(color);
+        line.setAlpha(Math.round((color >>> 24) * alpha / 255f));
+        line.setStrokeWidth(width);
+        line.setMaskFilter(filter);
+        canvas.drawPath(path, line);
+    }
+
+    @Override public void setAlpha(int alpha) {
+        int clamped = Math.max(0, Math.min(255, alpha));
+        if (clamped != this.alpha) {
+            this.alpha = clamped;
+            invalidateSelf();
+        }
+    }
+
+    @Override public int getAlpha() { return alpha; }
+    @Override public void setColorFilter(ColorFilter colorFilter) { paint.setColorFilter(colorFilter); }
+    @Override public int getOpacity() { return alpha == 255 ? PixelFormat.OPAQUE : PixelFormat.TRANSLUCENT; }
+}
