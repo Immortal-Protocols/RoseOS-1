@@ -42,6 +42,25 @@ public final class SelfUpdateTest {
         expect(SelfUpdate.verify(ID, 302, SELF, 301, ID, ID, SELF, 302, 4096, ID, 4096, SELF, 302, false) != null, "Different signer");
         expect(ok(302) != null && ok(303) != null, "Installed version caught up or passed it: nothing to install");
 
+        // #407: bytes that match the published update but are not the offered Rose Agent are still rejected, and the
+        // reason names what Android actually read, so an unreadable archive, another package and another versionCode
+        // are never one indistinguishable message (the reported 'isn't the offered Rose Agent version' covered all three).
+        String unreadable = SelfUpdate.verify(ID, 340, SELF, 338, ID, ID, SELF, 340, 4096, ID, 4096, null, -1, true);
+        String otherPackage = SelfUpdate.verify(ID, 340, SELF, 338, ID, ID, SELF, 340, 4096, ID, 4096, "dev.pixel.other", 340, true);
+        String otherVersion = SelfUpdate.verify(ID, 340, SELF, 338, ID, ID, SELF, 340, 4096, ID, 4096, SELF, 338, true);
+        expect(unreadable != null && otherPackage != null && otherVersion != null, "every one is still rejected");
+        expect(unreadable.equals("Android couldn’t read the downloaded app, so version 340 wasn’t checked or installed."),
+               "an archive Android cannot parse says so: " + unreadable);
+        expect(otherPackage.equals("The downloaded app is dev.pixel.other, not Rose Agent."), "another package is named: " + otherPackage);
+        expect(otherVersion.equals("The downloaded app is version 338, not the offered version 340."), "the APK's own versionCode is named: " + otherVersion);
+        expect(!unreadable.equals(otherPackage) && !otherPackage.equals(otherVersion) && !unreadable.equals(otherVersion), "three distinct reasons");
+        // The archive checks still come after the download is bound to the published bytes, and before the signer.
+        expect(SelfUpdate.verify(ID, 340, SELF, 338, ID, ID, SELF, 340, 4096, OTHER_ID, 4096, SELF, 338, true).equals("The download didn’t match the published update."),
+               "bytes other than the published ones are rejected first");
+        expect(SelfUpdate.verify(ID, 340, SELF, 338, ID, ID, SELF, 340, 4096, ID, 4096, SELF, 340, false).equals("The downloaded app isn’t signed like the installed Rose Agent."),
+               "the right package and version with another signer is still refused");
+        expect(SelfUpdate.verify(ID, 340, SELF, 338, ID, ID, SELF, 340, 4096, ID, 4096, SELF, 340, true) == null, "the matching 340 over 338 is accepted");
+
         // Immediately before commit.
         expect(SelfUpdate.beforeCommit(302, 301, false) == null, "Still idle and newer: commit");
         expect(SelfUpdate.beforeCommit(302, 301, true).contains("call started"), "A call that began during the download is not interrupted");
