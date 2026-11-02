@@ -138,6 +138,7 @@ def load_flavor(name, root=ROOT):
         raise ContractError(f'{name}: install-mode declarations must be factory wipe+unlock, OTA no wipe')
     check_peer_identities(name, pinned_avb_key(flavor, root), root)
     check_readiness(name, flavor)
+    check_historical(name, flavor, root)
     return flavor
 
 def check_peer_identities(name, pinned, root):
@@ -159,6 +160,45 @@ def check_peer_identities(name, pinned, root):
             raise ContractError(f'{name}: signer_collision: the pinned AVB key equals the {peer} key')
 
 READINESS_FLAGS = ('buildReady', 'factoryReady', 'phoneValidated')
+
+HISTORICAL_FORBIDDEN = {'buildReady', 'factoryReady', 'phoneValidated', 'ready', 'readiness', 'safe', 'validated'}
+
+def check_historical(name, flavor, root):
+    """Optional inventory.historicalObservations: identity facts from an already-authorized past inspection. Each entry
+    must say it is historical, name its source and what it does not establish, carry only lowercase sha256 digests, make
+    no readiness or safety claim, and any `sha256From` pointer must resolve to the same digest. It is never a names-only
+    observation and never changes classify or readiness."""
+    entries = flavor['inventory'].get('historicalObservations')
+    if entries is None:
+        return
+    if type(entries) is not list:
+        raise ContractError(f'{name}: inventory.historicalObservations must be a list')
+    def walk(node, where):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in HISTORICAL_FORBIDDEN:
+                    raise ContractError(f'{name}: {where}.{key}: a historical observation makes no readiness or safety claim')
+                if key.lower().endswith('sha256') and (type(value) is not str or not HEX64.fullmatch(value)):
+                    raise ContractError(f'{name}: {where}.{key} is not a sha256')
+                if key == 'sha256From':
+                    if type(value) is not str:
+                        raise ContractError(f'{name}: {where}.sha256From is not text')
+                    resolved = resolve_sha256_pointer(value, root, f'{name}: {where}.sha256From')
+                    if resolved is None or resolved != node.get('sha256'):
+                        raise ContractError(f'{name}: {where}.sha256From {value!r} does not equal its sha256')
+                walk(value, f'{where}.{key}')
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f'{where}[{index}]')
+    for index, entry in enumerate(entries):
+        where = f'historicalObservations[{index}]'
+        if type(entry) is not dict or entry.get('historical') is not True or type(entry.get('source')) is not str \
+                or not entry['source'].strip():
+            raise ContractError(f'{name}: {where} must be an object with historical: true and a source')
+        limits = entry.get('doesNotEstablish')
+        if type(limits) is not list or not limits or any(type(x) is not str or not x.strip() for x in limits):
+            raise ContractError(f'{name}: {where}.doesNotEstablish must list what the observation does not establish')
+        walk(entry, where)
 
 def check_readiness(name, flavor):
     """The optional readiness declaration: strict booleans and a list of receipt references. Source cannot carry a
@@ -250,6 +290,11 @@ def strict_avb_pin(identity, root, label):
     source = identity.get('avbPublicKeySha256From')
     if source is not None and type(source) is not str:
         raise ContractError(f'{label}: avbPublicKeySha256From is not text')
+    return resolve_sha256_pointer(source, root, f'{label}: avbPublicKeySha256From')
+
+def resolve_sha256_pointer(source, root, label):
+    """'FILE dotted.field' in a checked-in JSON source naming one lowercase sha256; anything else that is not such a
+    pointer is None, and a pointer that does not resolve to a sha256 refuses."""
     match = re.fullmatch(r'(os/[\w./-]+\.json) ([\w.]+)', source or '')
     if not match:
         return None
@@ -258,9 +303,9 @@ def strict_avb_pin(identity, root, label):
         for key in match.group(2).split('.'):
             value = value[key]
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise ContractError(f'{label}: avbPublicKeySha256From {source!r} does not resolve ({type(error).__name__})') from None
+        raise ContractError(f'{label} {source!r} does not resolve ({type(error).__name__})') from None
     if type(value) is not str or not HEX64.fullmatch(value):
-        raise ContractError(f'{label}: avbPublicKeySha256From {source!r} is not a sha256')
+        raise ContractError(f'{label} {source!r} is not a sha256')
     return value
 
 def member_digest(archive, name):

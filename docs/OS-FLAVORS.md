@@ -1,7 +1,8 @@
 # OS flavors and install artifacts
 
 FLAVOR001, FLAVOR002 and FOLD-FACTORY-003 to -005. A flavor is one device build of RoseOS with its own install-artifact
-contract: `os/flavors/frankel.json` (Pixel 10) and `os/flavors/rango.json` (Pixel 10 Pro Fold).
+contract: `os/flavors/frankel.json` (Pixel 10), `os/flavors/rango.json` (Pixel 10 Pro Fold) and
+`os/flavors/blazer.json` (Pixel 10 Pro).
 `scripts/factory-package.py` loads a contract, decides what a candidate artifact is, verifies a
 factory install archive in three separate tiers, and packages it only when all three pass.
 Everything here is offline. Nothing flashes, wipes, relocks, generates keys or publishes.
@@ -150,10 +151,34 @@ acceptance) and phone validation are four different claims.
 |---|---|---|---|
 | frankel 2026102901 (Beta) | OTA | no | — |
 | rango 2026103001 (release 429262439, OTA `2613738b…1bbf`) | OTA | **no** | no |
+| blazer (no build) | — | no | no |
 
 `rango-2026103001` is OTA-only. Its notes' "manual installation" can only mean an in-place OTA
 on a matching installed build. Published bytes and receipts are unchanged. The Fold incident's
 cause and permanence remain unverified.
+
+**Historical observations** (`inventory.historicalObservations`). These are identity facts from
+original Infra's authorized artifact inspection. They are not current claims, not a names-only
+`observe` output, and they never change `classify` or readiness. The loader requires
+`historical: true`, a `source`, a non-empty `doesNotEstablish`, lowercase sha256 digests and no
+readiness or safety keys, and every `sha256From` pointer must resolve to the same digest.
+- **Rango**: Fold run 41265984964, artifact 13067510533 (ZIP `2f51fbc8…4d58`).
+  - Build 2026103001 signed target-files `73db76e5…0baf0`: 4,927,914,252 bytes, 2,874 real members,
+    including bootloader, radio and firmware.
+  - otatools `22d62464…b664`, equal to `os/retained-rango/release.json`.
+  - fastboot `f18fdc8b…47a9`, `--version` exit 0, `37.0.0-2026103001`.
+  - Firmware member hashes are not a carried-partition mapping, an optimized install archive or super
+    validation.
+  - The archive SSH signing identity stays null. The AVB pin `aee94794…` is not that key.
+- **Blazer**: Pro run 41255851279, artifact 13063685882 (ZIP `8218c267…7d5e`).
+  - Observed: the build-only configuration, kernel and adevtool vendor pins.
+  - Absent: the factory image `blazer-cp3a.261005.005-factory-cd7d12c2.zip` (`cd7d12c2…18e3`), the
+    unpacked factory, `vendor/google_devices/blazer`, product registration and firmware metadata.
+  - Not executed: lunch and make. Node version unknown.
+  - The build route is the existing `os/build-only/blazer.json` recipe (`scripts/blazer-build-only.py`),
+    `blazer-reconcile.json` integration (`scripts/blazer_integration.py`) and
+    `blazer-updater-route.json`. `buildRoute` references them without duplicating them.
+  - The recipe's operator capacity allowances are still null and unresolved; this adds no new gate.
 
 **Test evidence is synthetic.** Tests use fresh throwaway OpenSSH keys, the real AOSP `simg2img`
 where the runner has it (otherwise a double that decodes the real sparse format), and an
