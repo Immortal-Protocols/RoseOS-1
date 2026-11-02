@@ -58,14 +58,33 @@ final class RoseFan {
         return Math.max(0, Math.min(count - 1, current + delta));
     }
 
-    /** The card nearest to a scroll position (the scroll that centres card i is i * pitch). */
-    static int nearest(int scrollX, int pitch, int count) {
-        if (count <= 0 || pitch <= 0) return 0;
-        return Math.max(0, Math.min(count - 1, Math.round(scrollX / (float) pitch)));
+    /**
+     * The card whose centre is nearest the viewport's centre: centres are where the cards actually are (scroll content
+     * coordinates), so it holds in either layout direction (right-to-left lays the first card out on the right).
+     */
+    static int nearest(float[] centres, float viewportCentre) {
+        int best = 0;
+        float bestDistance = Float.MAX_VALUE;
+        for (int i = 0; centres != null && i < centres.length; i++) {
+            float distance = Math.abs(centres[i] - viewportCentre);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+        return best;
     }
 
-    /** The scroll that centres card index (padding of (viewport - card) / 2 on each side lets both ends centre). */
-    static int scrollFor(int index, int pitch) { return Math.max(0, index) * Math.max(0, pitch); }
+    /** The scroll that puts a card's centre at the viewport's centre; never negative. */
+    static int scrollToCentre(float cardCentre, int viewportWidth) {
+        return Math.max(0, Math.round(cardCentre - viewportWidth / 2f));
+    }
+
+    /**
+     * A visual step (+1 = toward the right of the screen) as a step in card order: right-to-left lays later cards out
+     * to the left, so a step to the right is one card back.
+     */
+    static int orderStep(int visualStep, boolean rtl) { return rtl ? -visualStep : visualStep; }
 
     /** Side padding that lets the first and last cards reach the centre. */
     static int sidePadding(int viewportWidth, int cardWidth) { return Math.max(0, (viewportWidth - cardWidth) / 2); }

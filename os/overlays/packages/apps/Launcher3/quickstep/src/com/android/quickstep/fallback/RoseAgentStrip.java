@@ -94,7 +94,8 @@ public final class RoseAgentStrip extends LinearLayout {
         link = text("", 13);
         link.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         row.addView(link);
-        addView(row, new LayoutParams(LayoutParams.MATCH_PARENT, dp(LINK_ROW_DP)));
+        row.setMinimumHeight(dp(LINK_ROW_DP));
+        addView(row, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
         scroller = new RoseAgentFan(context);
         cards = new LinearLayout(context);
         cards.setOrientation(HORIZONTAL);
@@ -213,8 +214,6 @@ public final class RoseAgentStrip extends LinearLayout {
     private static final int TASK_LIMIT = 64;
     /** How often a visible live view is captured again: at most once a second, like the controller's own preview. */
     private static final long PREVIEW_INTERVAL_MS = 1000;
-    /** The live view's area of a Rose card, above its name (RoseFan.CARD_HEIGHT_DP, less the name line). */
-    private static final int PREVIEW_HEIGHT_DP = 112;
     private static final int LINK_ROW_DP = 22, PEARL_DP = 18;
     /**
      * Oxblood materials: Launcher3's own copy of the shared contract (qa/oxblood/oxblood-contract.json, written by Home;
@@ -266,6 +265,7 @@ public final class RoseAgentStrip extends LinearLayout {
         }
         removeCallbacks(previewTick);
         generation++;
+        selection++;
         clearCards();
         super.onDetachedFromWindow();
     }
@@ -300,9 +300,10 @@ public final class RoseAgentStrip extends LinearLayout {
             scroller.unplace();
             refresh();
         } else {
-            // Leaving: no capture continues, no pending read lands, and no frame stays to be shown again on return.
+            // Leaving: no capture continues, no pending read or tap lands, and no frame stays to be shown on return.
             removeCallbacks(previewTick);
             generation++;
+            selection++;
             clearCards();
             setWorking(false);
         }
@@ -493,7 +494,8 @@ public final class RoseAgentStrip extends LinearLayout {
         // Rebound in place: the previous frames are no longer on any card, so they are released now.
         if (same) release(previous);
         shownKeys = keys;
-        if (!scroller.placed()) scroller.place(RoseFan.initial(keys.size()));
+        // Placed afresh once the first cards of this entry arrive (an empty or unconfirmed read places nothing).
+        if (!scroller.placed()) { if (!keys.isEmpty()) scroller.place(RoseFan.initial(keys.size())); }
         else if (!same) scroller.place(RoseFan.keep(before, centred, keys));
         // Capture again only while a live view is on screen; the row keeps re-reading membership at the same time.
         if (getWindowVisibility() == VISIBLE && next.hasLiveView(locked)) postDelayed(previewTick, PREVIEW_INTERVAL_MS);
@@ -511,6 +513,7 @@ public final class RoseAgentStrip extends LinearLayout {
         card.setClipToOutline(true);
         card.setElevation(dp(6));
         card.setAccessibilityDelegate(scroller.centreOnFocus());
+        card.setOnFocusChangeListener(scroller.centreOnKeyFocus());
         return card;
     }
 
@@ -534,7 +537,8 @@ public final class RoseAgentStrip extends LinearLayout {
             none.setPadding(dp(8), 0, dp(8), 0);
             body = none;
         }
-        card.addView(body, new LayoutParams(LayoutParams.MATCH_PARENT, dp(PREVIEW_HEIGHT_DP)));
+        // The live view takes what the name leaves, so a large font never pushes the name out of the card.
+        card.addView(body, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f));
         TextView name = text(task.label, 13);
         name.setGravity(Gravity.CENTER);
         name.setSingleLine(true);

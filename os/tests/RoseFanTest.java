@@ -49,7 +49,17 @@ public final class RoseFanTest {
         expect(RoseFan.sidePadding(384, 124) == 130, "folded side padding 130");
         expect(RoseFan.sidePadding(748, 124) == 312, "unfolded side padding 312");
         expect(RoseFan.sidePadding(100, 124) == 0, "never negative");
-        expect(RoseFan.scrollFor(2, 124) == 248 && RoseFan.scrollFor(-1, 124) == 0, "scroll that centres a card");
+        // Where cards actually are (scroll content coordinates): folded, padding 130, card i centred at 192 + 124i.
+        float[] ltr = {192, 316, 440, 564, 688};
+        expect(RoseFan.scrollToCentre(440, 384) == 248 && RoseFan.scrollToCentre(100, 384) == 0, "scroll that centres a card");
+        expect(RoseFan.nearest(ltr, 248 + 192) == 2 && RoseFan.nearest(ltr, 185 + 192) == 1
+                && RoseFan.nearest(ltr, 187 + 192) == 2, "the nearest card to the viewport centre");
+        // Right to left lays the first card out on the right: the same rule finds it by position, not by index.
+        float[] rtl = {688, 564, 440, 316, 192};
+        expect(RoseFan.nearest(rtl, 688) == 0 && RoseFan.nearest(rtl, 192) == 4, "right to left: by position");
+        expect(RoseFan.orderStep(1, false) == 1 && RoseFan.orderStep(1, true) == -1 && RoseFan.orderStep(-1, true) == 1,
+                "a step to the right is the next card left to right, the previous one right to left");
+        expect(RoseFan.nearest(new float[0], 10) == 0 && RoseFan.nearest(null, 10) == 0, "no cards: the first");
 
         // Entry: the second card when there are three or more (the document), else the first.
         expect(RoseFan.initial(0) == 0 && RoseFan.initial(1) == 0 && RoseFan.initial(2) == 0, "fewer than three: first");
@@ -59,14 +69,11 @@ public final class RoseFanTest {
         expect(RoseFan.step(0, -1, 3) == 0 && RoseFan.step(2, 1, 3) == 2 && RoseFan.step(1, 1, 3) == 2,
                 "one card, clamped at both ends");
         expect(RoseFan.step(5, 0, 3) == 2 && RoseFan.step(0, 1, 0) == 0, "an index past the end, or no cards, clamps");
-        expect(RoseFan.nearest(248, 124, 8) == 2 && RoseFan.nearest(185, 124, 8) == 1 && RoseFan.nearest(186, 124, 8) == 2,
-                "a release settles on the nearest card");
-        expect(RoseFan.nearest(-40, 124, 8) == 0 && RoseFan.nearest(5000, 124, 8) == 7 && RoseFan.nearest(10, 0, 3) == 0,
-                "past either end, or no pitch: clamped");
         // A drag interrupted by a cancel (or repeated before it settles) still ends exactly on a card.
         for (int x = -200; x <= 1200; x += 7) {
-            int i = RoseFan.nearest(x, 124, 8);
-            expect(RoseFan.scrollFor(i, 124) % 124 == 0 && i >= 0 && i < 8, "every position settles on a card");
+            int i = RoseFan.nearest(ltr, x + 192);
+            int settled = RoseFan.scrollToCentre(ltr[i], 384);
+            expect(i >= 0 && i < ltr.length && (settled == 0 || (settled - 0) % 124 == 0), "every position settles on a card");
         }
 
         // Cards that change while shown: the centred card keeps its place by identity, else the nearest index.

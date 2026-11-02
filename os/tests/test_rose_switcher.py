@@ -824,10 +824,11 @@ class LivePreviewTest(unittest.TestCase):
         self.assertIn('if (!same) clearCards();', show)
         visibility = code[code.index('protected void onWindowVisibilityChanged(int visibility) {'):code.index('private void setWorking(')]
         hidden = visibility.split('} else {')[1]
-        for step in ('removeCallbacks(previewTick);', 'generation++;', 'clearCards();'):
+        for step in ('removeCallbacks(previewTick);', 'generation++;', 'selection++;', 'clearCards();'):
             self.assertIn(step, hidden, f'leaving the overview: {step}')
         detached = code[code.index('protected void onDetachedFromWindow() {'):code.index('private void anchor()')]
         self.assertIn('clearCards();', detached)
+        self.assertIn('selection++;', detached, 'a tap whose read lands after leaving neither shows frames nor opens')
         locked = code[code.index('private static boolean locked(Context context) {'):code.index('private static Map<Integer, Bitmap> capture(')]
         self.assertIn('return keyguard == null || keyguard.isKeyguardLocked();', locked)
         self.assertIn('return true;', locked.split('catch')[1], 'an unreadable lock state counts as locked')
@@ -1010,10 +1011,12 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
     def test_every_release_cancel_and_fling_settles_exactly_on_a_card(self):
         touch = self.FAN[self.FAN.index('public boolean onTouchEvent('):self.FAN.index('public boolean executeKeyEvent(')]
         self.assertIn('if (action == MotionEvent.ACTION_DOWN) flung = false;', touch, 'each gesture starts unflung')
+        self.assertIn('if (event.getActionMasked() == MotionEvent.ACTION_DOWN) flung = false;\n        return super.onInterceptTouchEvent(event);',
+            self.FAN, 'also when the gesture starts on a card (onTouchEvent then never sees its ACTION_DOWN)')
         self.assertIn('if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) && !flung) '
             'settle(centred());', touch, 'a drag released or cancelled (e.g. by the system gesture) settles on a card')
         fling = self.FAN[self.FAN.index('public void fling(int velocityX)'):self.FAN.index('public boolean onTouchEvent(')]
-        self.assertIn('settle(centred() + (velocityX > 0 ? 1 : velocityX < 0 ? -1 : 0));', fling,
+        self.assertIn('settle(centred() + RoseFan.orderStep(velocityX > 0 ? 1 : velocityX < 0 ? -1 : 0, rtl()));', fling,
             'a fling moves one card, never skipping work')
         self.assertNotIn('super.fling', fling, 'no free momentum that could stop between cards')
 
@@ -1026,8 +1029,17 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
 
     def test_keys_step_one_card_clamped_and_accessibility_focus_centres(self):
         keys = self.FAN[self.FAN.index('public boolean executeKeyEvent('):self.FAN.index('void focused(View card)')]
-        self.assertIn('int target = RoseFan.step(centred(), delta, count());', keys)
-        self.assertIn('if (getLayoutDirection() == LAYOUT_DIRECTION_RTL) delta = -delta;', keys)
+        self.assertIn('case KeyEvent.KEYCODE_DPAD_LEFT: step = RoseFan.orderStep(-1, rtl()); break;', keys)
+        self.assertIn('return event.getAction() == KeyEvent.ACTION_DOWN && move(step);', keys,
+            'one card per key; at an end the key is not taken, so focus can leave the row')
+        move = self.FAN[self.FAN.index('private boolean move(int orderStep)'):self.FAN.index('protected void onMeasure(')]
+        self.assertIn('int from = focused != null ? cards.indexOfChild(focused) : centred();', move)
+        self.assertIn('if (target == from) return false;', move)
+        for action in ('ACTION_SCROLL_FORWARD) return move(1);', 'ACTION_SCROLL_BACKWARD) return move(-1);',
+                'accessibilityActionScrollRight) return move(RoseFan.orderStep(1, rtl()));'):
+            self.assertIn(action, self.FAN, 'a screen reader scroll moves exactly one card')
+        self.assertIn('move(RoseFan.orderStep(h > 0 ? 1 : -1, rtl()));', self.FAN, 'a wheel notch moves one card')
+        self.assertIn('card.setOnFocusChangeListener(scroller.centreOnKeyFocus());', self.STRIP)
         self.assertIn('if (eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) focused(host);', self.FAN)
         self.assertIn('card.setAccessibilityDelegate(scroller.centreOnFocus());', self.STRIP)
         self.assertIn('card.setContentDescription(', self.STRIP, 'every card keeps its spoken name and state')
@@ -1043,7 +1055,9 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
         show = self.STRIP[self.STRIP.index('private void show(RoseAgentWork next'):self.STRIP.index('private LinearLayout card()')]
         self.assertIn('boolean same = keys.equals(before) && cards.getChildCount() == keys.size();', show)
         self.assertIn('LinearLayout card = same ? (LinearLayout) cards.getChildAt(index) : card();', show)
-        self.assertIn('if (!scroller.placed()) scroller.place(RoseFan.initial(keys.size()));', show)
+        self.assertIn('if (!scroller.placed()) { if (!keys.isEmpty()) scroller.place(RoseFan.initial(keys.size())); }', show)
+        self.assertIn('return RoseFan.scrollToCentre(centres[RoseFan.step(index, 0, centres.length)], getWidth());',
+            self.FAN, 'index to scroll from where the card is laid out, so right to left places the right card')
         self.assertIn('else if (!same) scroller.place(RoseFan.keep(before, centred, keys));', show)
         self.assertIn('return task.displayId + "/" + task.userId + "/" + task.packageName;', self.STRIP,
             'a card is the same card by display, user and package, as RoseAgentWork.decide matches it')
