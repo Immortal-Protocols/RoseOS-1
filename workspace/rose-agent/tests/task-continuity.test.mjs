@@ -155,9 +155,16 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  assert.match(activity,/agents\.setOnClickListener\(v->openOverview\(\)\)/,'the well opens the overview');
  assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,ivory\?new ConversationDrawing\.IvoryBackground\(this\):null,statusInset\(\)\)/);
  assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
- // Membership: the controller's own session read as one complete snapshot, a new registration per screen.
- assert.match(block,/final String appsRegistration="controller-"\+java\.util\.UUID\.randomUUID\(\);/);
- assert.match(block,/return CurrentApps\.fromController\(appsRegistration,appsGeneration,failure,r\.status,r\.sessionId,r\.taskId,pkg,m\.watchRow==null\?null:m\.watchRow\.binding\);/,'tasks are consulted only for an explicitly verified binding');
+ // Membership: App Core's phone-local current_apps (PR355), one complete reply per read, shown only when attested.
+ const read=block.slice(block.indexOf('CurrentApps.Snapshot readCurrentApps()'));
+ assert.match(read,/client\.call\("current_apps",null,extras\)/,'the controller\'s own phone-local membership call');
+ assert.match(read,/extras\.putString\("params","\{\}"\)/,'no parameters: no caller display or package override');
+ assert.match(read,/return CurrentApps\.fromReply\(reg,/,'every reply goes through the attestation rules');
+ assert.match(block,/String reg="current_apps-"\+\(\+\+appsReads\);/,'each read is its own registration (serial reads)');
+ assert.match(block,/if\(epoch==appsEpoch\)appsSnapshot=s;/,'a read from before re-entry never lands');
+ assert.match(block,/void openOverview\(\)\{appsEpoch\+\+;appsSnapshot=null;appsPolledAt=0;/,'re-entry starts from a fresh read');
+ assert.match(activity,/if\(overview!=null&&overview\.isOpen\(\)\)\{pollApps\(\);overview\.refresh\(\);\}/,'read only while the overview is open');
+ assert.ok(!/WorkspaceOverviewFeed\.tasks\(\)/.test(block.slice(0,block.indexOf('WorkspaceOverviewPanel.Actions overviewActions()'))),'membership never reads task history');
  assert.match(block,/public CurrentApps\.Snapshot currentApps\(\)\{return RoseConversationActivity\.this\.currentApps\(\);\}/);
  assert.ok(!/taskStateJson/.test(block),'the overview never reads the backend task projection');
  assert.ok(!/task\/stop|sendStop|localRoseStop|stopRoute/.test(block),'the overview sends no Stop');
