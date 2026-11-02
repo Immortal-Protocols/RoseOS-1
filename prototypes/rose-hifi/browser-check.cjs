@@ -373,6 +373,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     await page.locator('#rose-mic').click(); await settle(200);
     let ox = await st();
     check('mic mute keeps call and work', ox.muted && ox.connection === 'connected' && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    const workHit = await page.evaluate(() => { const w = document.getElementById('rose-work').getBoundingClientRect(); return document.elementFromPoint(w.left + w.width / 2, w.top + w.height / 2).closest('#rose-work') !== null; });
+    check('Muted notice never covers the Background Work entry', workHit);
     await page.locator('#rose-work').click(); await settle(500);
     ox = await st();
     check('work entry opens Rose’s apps without ending the call', ox.view === 'agents' && ox.connection === 'connected');

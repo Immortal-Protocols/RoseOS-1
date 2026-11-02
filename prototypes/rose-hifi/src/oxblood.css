@@ -174,3 +174,12 @@
 #device[data-theme=oxblood] .agents-surface{padding-bottom:132px;
   -webkit-mask-image:linear-gradient(#000 calc(100% - 132px),transparent calc(100% - 84px));mask-image:linear-gradient(#000 calc(100% - 132px),transparent calc(100% - 84px))}
 #device[data-theme=oxblood] .detail-frame>*{filter:none}
+/* Notices keep clear of the header row: the date on Home and the Background Work button in Rose. */
+#device[data-theme=oxblood] .notices{top:100px}
+#device[data-theme=oxblood] .screen[data-view=rose] .notices{top:118px;right:var(--margin);left:auto}
+#device[data-theme=oxblood] .screen.locked .notices{top:300px}
+/* Explicit (not inherited) tray visibility keyed to the view's data-active: Chromium occasionally kept
+   a stale inherited visibility:hidden on the skewed, animated tray after the view became active
+   (1/24 runs in headless Chromium 153), leaving mic/end untappable. */
+#device[data-theme=oxblood] .view[data-active=true] .tray{visibility:visible}
+#device[data-theme=oxblood] .view[data-active=false] .tray{visibility:hidden}
