@@ -244,6 +244,56 @@ public final class RoseAgentWorkTest {
         expect(idle.state == RoseAgentWork.State.AVAILABLE && idle.working() == 0 && "No active work".equals(idle.linkLabel()),
             "Background apps with the controller itself in front: shown, nothing claimed in progress");
         expect(RoseAgentWork.failed(RoseAgentWork.Step.TASKS).linkLabel().isEmpty(), "An unreadable state claims no work");
+        // Live view (#156): only Rose's front cards are captured, never while locked; anything else says why.
+        RoseAgentWork.Task front = task(2, 7, 0, "com.example.mail", true), behind = task(3, 7, 0, "com.example.maps", false);
+        expect(RoseAgentWork.preview(front, false) == RoseAgentWork.Preview.CAPTURE
+            && RoseAgentWork.preview(behind, false) == RoseAgentWork.Preview.BEHIND
+            && RoseAgentWork.preview(front, true) == RoseAgentWork.Preview.LOCKED
+            && RoseAgentWork.preview(behind, true) == RoseAgentWork.Preview.LOCKED, "Which cards may be captured");
+        expect(RoseAgentWork.previewText(RoseAgentWork.Preview.CAPTURE, true) == null
+            && RoseAgentWork.PREVIEW_NONE.equals(RoseAgentWork.previewText(RoseAgentWork.Preview.CAPTURE, false))
+            && RoseAgentWork.PREVIEW_BEHIND.equals(RoseAgentWork.previewText(RoseAgentWork.Preview.BEHIND, false))
+            && RoseAgentWork.PREVIEW_LOCKED.equals(RoseAgentWork.previewText(RoseAgentWork.Preview.LOCKED, true))
+            && RoseAgentWork.PREVIEW_LOCKED.equals(RoseAgentWork.previewText(RoseAgentWork.Preview.LOCKED, false)),
+            "A frame only when this read captured one; otherwise the honest reason, never an older frame");
+        expect(work.hasLiveView(false) && !work.hasLiveView(true), "Rose's front card is captured only while unlocked");
+        expect(!loading.hasLiveView(false) && !threeEarly.unattributed.isEmpty() && ids(threeEarly.items).equals(Arrays.asList(2)),
+            "Unconfirmed tasks are never captured (only items are)");
+        expect(!work(rose, devices(7, 7), Arrays.asList(task(6, 7, 0, RoseAgentWork.CONTROLLER, true),
+            task(3, 7, 0, "com.example.maps", false))).hasLiveView(false), "Nothing in front of Rose's screen to capture");
+
+        // Lifecycle, one ledger, successive reads: membership is the platform's current state at each read, never history.
+        RoseAgentWork.Ownership life = new RoseAgentWork.Ownership();
+        life.accept(1, new int[] {7}, new String[] {RoseAgentWork.CONTROLLER}, new int[] {CONTROLLER_UID});
+        RoseAgentWork launched = work(life.snapshot(), devices(7, 7), Arrays.asList(task(2, 7, 0, "com.example.mail", true)));
+        expect(ids(launched.items).equals(Arrays.asList(2)) && launched.hasLiveView(false), "launch: the app appears, live");
+        RoseAgentWork second = work(life.snapshot(), devices(7, 7), Arrays.asList(task(3, 7, 0, "com.example.maps", true),
+            task(2, 7, 0, "com.example.mail", false)));
+        expect(ids(second.items).equals(Arrays.asList(3, 2)) && RoseAgentWork.preview(second.items.get(1), false)
+            == RoseAgentWork.Preview.BEHIND, "a second app on the same session device appears; the first is behind it");
+        RoseAgentWork changed = work(life.snapshot(), devices(7, 7), Arrays.asList(task(3, 7, 0, "com.example.maps", true),
+            task(2, 7, 0, "com.example.mail", false)));
+        expect(ids(changed.items).equals(ids(second.items)), "content change: same members; the frame is captured afresh per read");
+        RoseAgentWork closed = work(life.snapshot(), devices(7, 7), Arrays.asList(task(2, 7, 0, "com.example.mail", true)));
+        expect(ids(closed.items).equals(Arrays.asList(2)), "close: the closed app is gone at once");
+        life.accept(2, new int[0], new String[0], new int[0]);
+        RoseAgentWork releasedControl = RoseAgentWork.of(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
+            Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
+        expect(releasedControl.items.isEmpty() && !releasedControl.hasLiveView(false),
+            "control released (session closed, display released): no card and no capture, even if the task lingers");
+        RoseAgentWork gone2 = RoseAgentWork.of(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
+            Collections.emptyList(), true);
+        RoseAgentWork reentry = RoseAgentWork.of(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
+            Collections.emptyList(), true);
+        expect(gone2.state == RoseAgentWork.State.EMPTY && reentry.state == RoseAgentWork.State.EMPTY && reentry.items.isEmpty(),
+            "re-entry and recreation do not resurrect the old card: each read keeps nothing");
+        life.reset();
+        RoseAgentWork reconnected = work(life.snapshot(), devices(8, 8), Arrays.asList(task(4, 8, 0, "com.example.chat", true)));
+        expect(reconnected.items.isEmpty() && RoseAgentWork.NOT_REPORTED.equals(reconnected.reason),
+            "reconnect: not reported until the new registration's snapshot");
+        life.accept(1, new int[] {8}, new String[] {RoseAgentWork.CONTROLLER}, new int[] {CONTROLLER_UID});
+        expect(ids(work(life.snapshot(), devices(8, 8), Arrays.asList(task(4, 8, 0, "com.example.chat", true))).items)
+            .equals(Arrays.asList(4)), "after reconnect only the new session's app, never the old one");
         System.out.println("RoseAgentWorkTest: " + checks + " checks passed");
     }
 }

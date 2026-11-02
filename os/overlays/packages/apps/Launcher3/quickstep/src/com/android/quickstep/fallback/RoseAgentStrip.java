@@ -7,6 +7,7 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
+import android.app.KeyguardManager;
 import android.companion.virtual.VirtualDevice;
 import android.companion.virtual.VirtualDeviceManager;
 import android.companion.virtual.computercontrol.AutomatedPackageListener;
@@ -15,16 +16,21 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Process;
+import android.os.RemoteException;
 import android.os.UserHandle;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.window.TaskSnapshot;
+import android.window.TaskSnapshotManager;
 import com.android.launcher3.R;
 import com.android.quickstep.RecentsActivity;
 
@@ -56,6 +62,10 @@ public final class RoseAgentStrip extends LinearLayout {
     private final LinearLayout cards;
     private ObjectAnimator pulse;
     private int generation, selection;
+    /** The frames on screen now, all from the read that built the cards; released when replaced or hidden. */
+    private Map<Integer, Bitmap> shownFrames = new HashMap<>();
+    /** Re-reads the platform while a live view is on screen; never decides membership or attribution. */
+    private final Runnable previewTick = this::refresh;
 
     public RoseAgentStrip(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -144,16 +154,25 @@ public final class RoseAgentStrip extends LinearLayout {
 
         @Override
         public void onAutomatedPackagesChanged(String automatingPackage, List<String> automatedPackages, UserHandle user) {
-            // Not used for attribution: ownership comes only from onAutomatedDevicesChanged.
+            // Never used for attribution (ownership comes only from onAutomatedDevicesChanged). An app starting or
+            // stopping on a session device that already runs apps changes no device snapshot, so this only re-reads
+            // the visible rows, which then decide from the platform's own state.
+            refreshStrips();
         }
 
         @Override
         public void onAutomatedDevicesChanged(long snapshotGeneration, int[] deviceIds, String[] ownerPackages,
                 int[] ownerUids) {
-            List<RoseAgentStrip> visible = new ArrayList<>();
             synchronized (this) {
                 if (!ownership.accept(snapshotGeneration, deviceIds, ownerPackages, ownerUids)) return;
                 generation++;
+            }
+            refreshStrips();
+        }
+
+        private void refreshStrips() {
+            List<RoseAgentStrip> visible = new ArrayList<>();
+            synchronized (this) {
                 for (int i = strips.size() - 1; i >= 0; i--) {
                     RoseAgentStrip strip = strips.get(i).get();
                     if (strip == null) strips.remove(i);
@@ -180,6 +199,9 @@ public final class RoseAgentStrip extends LinearLayout {
 
     private static final float IDLE = 0.35f;
     private static final int TASK_LIMIT = 64;
+    /** How often a visible live view is captured again: at most once a second, like the controller's own preview. */
+    private static final long PREVIEW_INTERVAL_MS = 1000;
+    private static final int PREVIEW_HEIGHT_DP = 64;
 
     /**
      * The row's height when this context belongs to the fallback overview (RecentsActivity, whose layout holds the
@@ -215,6 +237,9 @@ public final class RoseAgentStrip extends LinearLayout {
             View buttons = parent.findViewById(R.id.action_buttons);
             if (buttons != null) buttons.removeOnLayoutChangeListener(relayout);
         }
+        removeCallbacks(previewTick);
+        generation++;
+        clearCards();
         super.onDetachedFromWindow();
     }
 
@@ -248,6 +273,10 @@ public final class RoseAgentStrip extends LinearLayout {
             scroller.scrollTo(0, 0);
             refresh();
         } else {
+            // Leaving: no capture continues, no pending read lands, and no frame stays to be shown again on return.
+            removeCallbacks(previewTick);
+            generation++;
+            clearCards();
             setWorking(false);
         }
     }
@@ -272,11 +301,78 @@ public final class RoseAgentStrip extends LinearLayout {
     /** Reads the platform state off the UI thread; the newest read wins. */
     void refresh() {
         int token = ++generation;
+        removeCallbacks(previewTick);
         Context context = getContext();
+        int framePx = dp(PREVIEW_HEIGHT_DP);
         UI_HELPER_EXECUTOR.execute(() -> {
             RoseAgentWork next = read(context);
-            post(() -> { if (token == generation) show(next); });
+            boolean locked = locked(context);
+            Map<Integer, Bitmap> frames = capture(next, locked, framePx);
+            post(() -> {
+                if (token == generation) show(next, frames, locked);
+                else release(frames);
+            });
         });
+    }
+
+    /** Fail closed: a lock state that cannot be read counts as locked. */
+    private static boolean locked(Context context) {
+        try {
+            KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
+            return keyguard == null || keyguard.isKeyguardLocked();
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
+
+    /**
+     * Fresh frames for this read's own cards only: Rose's items whose preview is CAPTURE (the front task of a session
+     * display, phone unlocked). Each is TaskSnapshotManager.takeTaskSnapshot(taskId, updateCache false, low
+     * resolution): the platform's real current content, not stored in the recents cache, with secure windows
+     * redacted, and nothing foregrounded or sent to the agent. A task with no frame has none: nothing older is reused.
+     */
+    private static Map<Integer, Bitmap> capture(RoseAgentWork work, boolean locked, int framePx) {
+        Map<Integer, Bitmap> frames = new HashMap<>();
+        if (work.state != RoseAgentWork.State.AVAILABLE) return frames;
+        for (RoseAgentWork.Task task : work.items) {
+            if (RoseAgentWork.preview(task, locked) != RoseAgentWork.Preview.CAPTURE) continue;
+            Bitmap frame = frame(task.taskId, framePx);
+            if (frame != null) frames.put(task.taskId, frame);
+        }
+        return frames;
+    }
+
+    private static Bitmap frame(int taskId, int framePx) {
+        TaskSnapshot snapshot = null;
+        try {
+            snapshot = TaskSnapshotManager.getInstance().takeTaskSnapshot(taskId, false /* updateCache */,
+                    true /* lowResolution */);
+            if (snapshot == null || !snapshot.isBufferValid()) return null;
+            Bitmap wrapped = snapshot.wrapToBitmap(snapshot.getColorSpace());
+            if (wrapped == null || wrapped.getHeight() <= 0) return null;
+            Bitmap copy = wrapped.copy(Bitmap.Config.ARGB_8888, false);
+            wrapped.recycle();
+            if (copy == null) return null;
+            int width = Math.max(1, Math.round(copy.getWidth() * (framePx / (float) copy.getHeight())));
+            Bitmap scaled = Bitmap.createScaledBitmap(copy, width, framePx, true);
+            if (scaled != copy) copy.recycle();
+            return scaled;
+        } catch (RemoteException | RuntimeException e) {
+            Log.w(TAG, "Live view unavailable (" + e.getClass().getSimpleName() + ")");
+            return null;
+        } finally {
+            if (snapshot != null) snapshot.closeBuffer();
+        }
+    }
+
+    private static void release(Map<Integer, Bitmap> frames) {
+        for (Bitmap frame : frames.values()) frame.recycle();
+        frames.clear();
+    }
+
+    private void clearCards() {
+        cards.removeAllViews();
+        release(shownFrames);
     }
 
     /**
@@ -342,17 +438,37 @@ public final class RoseAgentStrip extends LinearLayout {
         }
     }
 
-    private void show(RoseAgentWork next) {
-        cards.removeAllViews();
+    /** Cards only from this read, each with the frame captured for it in this read or the reason it has none. */
+    private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {
+        clearCards();
+        shownFrames = frames;
         status.setText(next.reason == null ? "" : next.reason);
         link.setText(next.linkLabel());
         setWorking(next.working() > 0 && getWindowVisibility() == VISIBLE);
         for (RoseAgentWork.Task task : next.items) {
-            TextView card = text(task.label, 15);
-            card.setGravity(Gravity.CENTER);
-            card.setMinWidth(dp(120));
-            card.setMinHeight(dp(72));
-            card.setPadding(dp(16), dp(12), dp(16), dp(12));
+            LinearLayout card = new LinearLayout(getContext());
+            card.setOrientation(VERTICAL);
+            card.setGravity(Gravity.CENTER_HORIZONTAL);
+            card.setMinimumWidth(dp(120));
+            card.setMinimumHeight(dp(96));
+            card.setPadding(dp(12), dp(8), dp(12), dp(8));
+            Bitmap frame = frames.get(task.taskId);
+            String why = RoseAgentWork.previewText(RoseAgentWork.preview(task, locked), frame != null);
+            View body;
+            if (why == null) {
+                ImageView live = new ImageView(getContext());
+                live.setImageBitmap(frame);
+                live.setAdjustViewBounds(true);
+                body = live;
+            } else {
+                TextView none = text(why, 12);
+                none.setGravity(Gravity.CENTER);
+                body = none;
+            }
+            card.addView(body, new LayoutParams(LayoutParams.WRAP_CONTENT, dp(PREVIEW_HEIGHT_DP)));
+            TextView name = text(task.label, 15);
+            name.setGravity(Gravity.CENTER);
+            card.addView(name);
             GradientDrawable shape = new GradientDrawable();
             shape.setCornerRadius(dp(18));
             // The card Rose is working in now is marked; background apps stay plain.
@@ -361,10 +477,13 @@ public final class RoseAgentStrip extends LinearLayout {
             card.setBackground(shape);
             LayoutParams lp = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
             lp.setMarginEnd(dp(10));
-            card.setContentDescription(task.label + (task.topOfDisplay ? ", Rose is working in it now" : ", in Rose's background"));
+            card.setContentDescription(task.label + (task.topOfDisplay ? ", Rose is working in it now" : ", in Rose's background")
+                    + (why == null ? ", live view" : ", " + why));
             card.setOnClickListener(v -> select(task));
             cards.addView(card, lp);
         }
+        // Capture again only while a live view is on screen; the row keeps re-reading membership at the same time.
+        if (getWindowVisibility() == VISIBLE && next.hasLiveView(locked)) postDelayed(previewTick, PREVIEW_INTERVAL_MS);
     }
 
     /**
@@ -375,11 +494,18 @@ public final class RoseAgentStrip extends LinearLayout {
     private void select(RoseAgentWork.Task card) {
         int token = ++selection;
         Context context = getContext();
+        int framePx = dp(PREVIEW_HEIGHT_DP);
         UI_HELPER_EXECUTOR.execute(() -> {
             RoseAgentWork fresh = read(context);
+            boolean locked = locked(context);
+            Map<Integer, Bitmap> frames = capture(fresh, locked, framePx);
             post(() -> {
-                if (token != selection) return;
-                show(fresh);
+                if (token != selection) {
+                    release(frames);
+                    return;
+                }
+                removeCallbacks(previewTick);
+                show(fresh, frames, locked);
                 RoseAgentWork.Open result = RoseAgentWork.decide(card, fresh);
                 String notice = RoseAgentWork.describe(result, card.label);
                 if (notice != null) {

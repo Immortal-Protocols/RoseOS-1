@@ -108,7 +108,7 @@ class RoseSwitcherTest(unittest.TestCase):
             self.assertEqual(row.count(moved), 1 if moved == 'setTranslationY' else 0, 'only the row itself moves')
         self.assertIn('parent.addOnLayoutChangeListener(relayout);', row)
         self.assertIn('parent.removeOnLayoutChangeListener(relayout);', row)
-        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 18 + 72 + 18)
+        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 18 + 96 + 18)
         layout_actions = layout.index('android:id="@+id/overview_actions_view"')
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'))
         self.assertLess(layout_actions, layout.index('RoseAgentStrip'), 'declared after the actions so it draws above them')
@@ -157,6 +157,14 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public final class VirtualDeviceManager { public void registerAutomatedPackageListener('
                 'java.util.concurrent.Executor e, android.companion.virtual.computercontrol.AutomatedPackageListener l) {} '
                 'public java.util.List<VirtualDevice> getVirtualDevices(){return null;} }',
+            'android/window/TaskSnapshot.java': 'package android.window; public class TaskSnapshot { '
+                'public boolean isBufferValid(){return false;} public android.graphics.ColorSpace getColorSpace(){return null;} '
+                'public android.graphics.Bitmap wrapToBitmap(android.graphics.ColorSpace c){return null;} '
+                'public void closeBuffer(){} }',
+            'android/window/TaskSnapshotManager.java': 'package android.window; public class TaskSnapshotManager { '
+                'public static TaskSnapshotManager getInstance(){return null;} '
+                'public TaskSnapshot takeTaskSnapshot(int taskId, boolean updateCache, boolean lowResolution) '
+                'throws android.os.RemoteException {return null;} }',
             'android/companion/virtual/VirtualDevice.java': 'package android.companion.virtual; '
                 'public final class VirtualDevice { public static final int DEVICE_PROFILE_COMPUTER_CONTROL = 1; '
                 'public int getDeviceProfile(){return 0;} public int getDeviceId(){return 0;} '
@@ -211,7 +219,7 @@ class RoseSwitcherTest(unittest.TestCase):
         # only a selection request (display + package) is sent: never an unbound viewer, never a task id as a Rose id.
         self.assertIn('int token = ++selection;', select)
         self.assertIn('UI_HELPER_EXECUTOR.execute(() -> {\n            RoseAgentWork fresh = read(context);', select)
-        self.assertIn('if (token != selection) return;', select)
+        self.assertIn('if (token != selection) {\n                    release(frames);\n                    return;', select)
         self.assertLess(select.index('RoseAgentWork.decide(card, fresh)'), select.index('startActivityAsUser'))
         self.assertIn('if (notice != null) {', select)
         self.assertIn('.putExtra(RoseAgentWork.EXTRA_SELECT_DISPLAY, card.displayId)', select)
@@ -262,10 +270,11 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertIn('setWorking(false);', visibility.split('} else {')[1])
         refresh = self.body('void refresh() {', 'private static RoseAgentWork read(')
         self.assertIn('int token = ++generation;', refresh)
-        self.assertIn('if (token == generation) show(next);', refresh, 'the newest read wins on re-entry')
+        self.assertIn('if (token == generation) show(next, frames, locked);\n                else release(frames);', refresh,
+            'the newest read wins on re-entry; an older one\'s frames are released, never shown')
 
     def test_the_connector_reflects_only_actual_work(self):
-        show = self.body('private void show(RoseAgentWork next) {', 'private void select(')
+        show = self.body('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {', 'private void select(')
         self.assertIn('link.setText(next.linkLabel());', show)
         self.assertIn('setWorking(next.working() > 0 && getWindowVisibility() == VISIBLE);', show)
         working = self.body('private void setWorking(boolean working) {', 'void refresh() {')
@@ -276,7 +285,7 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertIn('Rose is working in it now', show)
 
     def test_empty_and_error_states_invent_nothing(self):
-        show = self.body('private void show(RoseAgentWork next) {', 'private void select(')
+        show = self.body('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {', 'private void select(')
         self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'cards come only from the read')
         self.assertEqual(show.count('cards.addView('), 1)
         work = (OVERLAY/'RoseAgentWork.java').read_text()
@@ -295,11 +304,11 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertEqual(removed, REPLACED)
 
     def test_the_row_still_fits_its_claimed_height(self):
-        # padding 12 + link row ~18 + card 72 + status ~18 dp, inside the claimed rose_agent_strip_height.
+        # padding 12 + link row ~18 + card 96 (live view 64 + label) + status ~18 dp, inside the claimed height.
         import re
         tree = patched_tree(self)
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
-        self.assertGreaterEqual(height, 12 + 18 + 72 + 18)
+        self.assertGreaterEqual(height, 12 + 18 + 96 + 18)
         self.assertNotIn('title = text(', self.STRIP, 'the HiFi link row replaces the old static title')
 
 class ControllerReadPermissionTest(unittest.TestCase):
@@ -444,7 +453,9 @@ class PrivateControllerDisplayTest(unittest.TestCase):
         holder = strip[strip.index('private static final class Sessions implements AutomatedPackageListener {'):
             strip.index('private static final float IDLE')]
         packages = holder[holder.index('public void onAutomatedPackagesChanged('):holder.index('public void onAutomatedDevicesChanged(')]
-        self.assertNotIn(';', re.sub(r'//.*', '', packages.split('{', 1)[1]), 'package reports attribute nothing')
+        statements = [l.strip() for l in re.sub(r'//.*', '', packages.split('{', 1)[1]).splitlines() if l.strip()]
+        self.assertEqual(statements[0], 'refreshStrips();', 'package reports only re-read the visible rows')
+        self.assertEqual(statements[1], '}', 'and change no ownership or membership state')
         devices = holder[holder.index('public void onAutomatedDevicesChanged('):holder.index('synchronized RoseAgentWork.Owners owners()')]
         self.assertIn('if (!ownership.accept(snapshotGeneration, deviceIds, ownerPackages, ownerUids)) return;', devices)
         self.assertLess(devices.index('generation++;'), devices.index('strip.refresh();'), 'every applied change re-reads')
@@ -523,7 +534,7 @@ class CrossDisplayAttributionTest(unittest.TestCase):
         for heuristic in ('candidate', 'others', 'automation.packages'):
             self.assertNotIn(heuristic, re.sub(r'/\*.*?\*/', '', work, flags=re.S), f'{heuristic}: no package attribution')
         self.assertIn('for (Task t : fresh.unattributed) if (t.taskId == card.taskId) return Open.UNATTRIBUTED;', work)
-        show = code[code.index('private void show(RoseAgentWork next) {'):code.index('private void select(')]
+        show = code[code.index('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {'):code.index('private void select(')]
         self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unconfirmed tasks are never cards')
         self.assertNotIn('unattributed', show)
 
@@ -577,8 +588,15 @@ class InitialLoadAttributionTest(unittest.TestCase):
         self.assertIn('if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);', decide)
         self.assertIn('if (owner == null) {\n                if (!CONTROLLER.equals(t.packageName)) held.add(t);', decide,
             'missing ownership is held as unconfirmed, never a card')
+        decision = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
         for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
-            self.assertNotIn(timed, ControllerReadPermissionTest.code(), f'{timed}: no guessed delay')
+            self.assertNotIn(timed, decision, f'{timed}: no time in the attribution decision')
+        code = ControllerReadPermissionTest.code()
+        for timed in ('Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
+            self.assertNotIn(timed, code, f'{timed}: no guessed delay in the row')
+        self.assertEqual(code.count('postDelayed('), 1, 'one cadence: the live-view re-capture while it is on screen')
+        self.assertIn('if (getWindowVisibility() == VISIBLE && next.hasLiveView(locked)) postDelayed(previewTick, '
+            'PREVIEW_INTERVAL_MS);', code)
         strip = (OVERLAY/'RoseAgentStrip.java').read_text()
         read = strip[strip.index('private static RoseAgentWork read('):strip.index('private void show(')]
         self.assertLess(read.index('long generation = platform.generation();'), read.index('platform.owners();'))
@@ -648,7 +666,7 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
         self.assertIn('@Override\n        public void onAutomatedDevicesChanged(long snapshotGeneration, int[] deviceIds, '
             'String[] ownerPackages,\n                int[] ownerUids) {', strip)
         self.assertEqual(strip.count('registerAutomatedPackageListener('), 1, 'the existing registration, nothing new')
-        for absent in ('VIRTUAL_DISPLAY_FLAG_PUBLIC', 'getDisplays(', 'requestPermissions', 'postDelayed'):
+        for absent in ('VIRTUAL_DISPLAY_FLAG_PUBLIC', 'getDisplays(', 'requestPermissions'):
             self.assertNotIn(absent, ControllerReadPermissionTest.code(), absent)
 
     def test_the_producer_patch_declares_the_agreed_callback_before_the_consumer_ships(self):
@@ -662,6 +680,102 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
             r'String\[\] \w+, (@NonNull )?int\[\] \w+\) ?\{ ?\}',
             'AutomatedPackageListener declares it as a default no-op')
         self.assertRegex(flat, r'mListener\.onAutomatedDevicesChanged\(', 'the client delegate forwards it')
+
+class LivePreviewTest(unittest.TestCase):
+    """#156 owner acceptance: each of Rose's cards shows an updating view of the app's actual contents, never an icon,
+    canned image or stale screenshot labelled live; the preview never mutates the agent's snapshot or execution and
+    never foregrounds the app; lock and secure-content protection hold; unavailable capture says so. The platform path
+    (frameworks/base 84183aff, pinned) is TaskSnapshotManager.takeTaskSnapshot(taskId, updateCache false, low
+    resolution), which Launcher3 Quickstep's existing MANAGE_ACTIVITY_TASKS + READ_FRAME_BUFFER already permit.
+    Source and fixture evidence only: no frame was captured on a device here."""
+    PINNED = {'SnapshotController.java': '6d690ac2fb74c42ef7163a06a90ee901e8cebfbd262438a58fdefd6ac2df0bc5',
+        'AbsAppSnapshotController.java': '2730ed03693283d21b6404e363fe40fe3ac0fcbb62efc09a771c8c56c8a7ef28',
+        'ScreenCaptureInternal.java': '57f806c099f803ce45d3b1981e3fb3cf531386b8918fd1897c99a3c04639e48e',
+        'ScreenCapture.java': '2cf75e91d8ea82e5524e7b71e60bf4539ba3560dcd0bc2e0ac14f6c356a10d72',
+        'TaskSnapshotManager.java': '0d3f536d81fb2ff1c3ae461e6749d4e6e889cc12ff9a99620f2c06885124b04a',
+        'TaskSnapshot.java': '318ad5a2368bb6bc75665c36f7d45d3f704860d331257766663e10499230b31c',
+        'ActivityManagerWrapper.java': '370515816e25ef854329b60dd21a1646749ad57ea7f1ccc7bf15b4c81f346dc4',
+        'ActivityTaskManagerService.java': '28d200431fd4a7289e3bf8f27d60f0c9472a8912da0211cf3bd5773eee170330'}
+    method = staticmethod(PrivateControllerDisplayTest.method)
+
+    @staticmethod
+    def source(name):
+        return (FIXTURES/name).read_text()
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in self.PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_the_platform_path_is_permitted_fresh_uncached_redacting_and_visible_only(self):
+        atms = self.source('ActivityTaskManagerService.java')
+        gate = atms[atms.index('public ITaskSnapshotManager getTaskSnapshotManager() {') - 120:
+            atms.index('public ITaskSnapshotManager getTaskSnapshotManager() {')]
+        self.assertIn('@EnforcePermission(allOf = {MANAGE_ACTIVITY_TASKS, READ_FRAME_BUFFER})', gate)
+        manifest = (FIXTURES/'Launcher3-quickstep-AndroidManifest.xml').read_text()
+        for held in ('android.permission.MANAGE_ACTIVITY_TASKS', 'android.permission.READ_FRAME_BUFFER'):
+            self.assertIn(f'<uses-permission android:name="{held}"/>', manifest, f'{held} is already held')
+        client = self.source('TaskSnapshotManager.java')
+        self.assertIn('return ActivityTaskManager.getService().getTaskSnapshotManager();', client)
+        self.assertIn('return takeTaskSnapshot(taskId, updateCache, lowResolution, false /* includeDecors */);', client)
+        take = self.method(self.source('SnapshotController.java'), 'public TaskSnapshot takeTaskSnapshot(int taskId, boolean updateCache,')
+        self.assertIn('if (task == null || !task.isVisible()) {', take, 'a task that is not visible gives no frame')
+        self.assertIn("snapshot will always be taken and the snapshot won't be put into", take)
+        self.assertIn('freshSnapshot = mTaskSnapshotController.snapshot(task, includeDecors);', take.split('} else {')[1])
+        self.assertIn('ScreenCaptureInternal.captureLayersExcluding(', self.source('AbsAppSnapshotController.java'))
+        exclude = self.method(self.source('ScreenCaptureInternal.java'), 'public static ScreenshotHardwareBuffer captureLayersExcluding(')
+        self.assertNotIn('setSecureContentPolicy', exclude, 'the default secure-content policy applies')
+        self.assertIn('public static final int SECURE_CONTENT_POLICY_REDACT = 0;', self.source('ScreenCapture.java'),
+            'the default (0) blacks out secure windows; they are never captured')
+        snapshot = self.source('TaskSnapshot.java')
+        for member in ('public Bitmap wrapToBitmap(@Nullable ColorSpace colorSpace) {', 'public void closeBuffer() {',
+                'public boolean isBufferValid() {', 'public ColorSpace getColorSpace() {'):
+            self.assertIn(member, snapshot)
+        wrapper = self.method(self.source('ActivityManagerWrapper.java'), 'public ThumbnailData takeTaskThumbnail(int taskId) {')
+        self.assertIn('true /* updateCache */', wrapper, 'Launcher3\'s own helper writes the recents cache, so it is not used')
+
+    def test_the_row_captures_only_roses_front_cards_fresh_and_never_reuses_a_frame(self):
+        code = ControllerReadPermissionTest.code()
+        self.assertEqual(code.count('takeTaskSnapshot('), 1)
+        self.assertIn('TaskSnapshotManager.getInstance().takeTaskSnapshot(taskId, false ,\n                    true );', code)
+        for stale in ('takeTaskThumbnail', 'getTaskThumbnail', 'getTaskSnapshot(', 'ThumbnailCache', 'getApplicationIcon',
+                'loadIcon', 'getActivityIcon', 'setImageResource', 'setImageDrawable'):
+            self.assertNotIn(stale, code, f'{stale}: no cached thumbnail or icon is shown as a live view')
+        capture = code[code.index('private static Map<Integer, Bitmap> capture('):code.index('private static Bitmap frame(')]
+        self.assertIn('if (work.state != RoseAgentWork.State.AVAILABLE) return frames;', capture)
+        self.assertIn('for (RoseAgentWork.Task task : work.items) {', capture, "only Rose's attested cards")
+        self.assertIn('if (RoseAgentWork.preview(task, locked) != RoseAgentWork.Preview.CAPTURE) continue;', capture)
+        frame = code[code.index('private static Bitmap frame('):code.index('private static void release(')]
+        self.assertIn('} finally {\n            if (snapshot != null) snapshot.closeBuffer();', frame)
+        self.assertIn('return null;', frame.split('catch')[1], 'a failed capture gives no frame')
+        refresh = code[code.index('void refresh() {'):code.index('private static boolean locked(')]
+        self.assertLess(refresh.index('RoseAgentWork next = read(context);'), refresh.index('capture(next, locked, framePx)'),
+            'frames are taken for the cards of this very read')
+        show = code[code.index('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {'):
+            code.index('private void select(')]
+        self.assertLess(show.index('clearCards();'), show.index('shownFrames = frames;'), 'the previous frames are released')
+        self.assertIn('Bitmap frame = frames.get(task.taskId);', show)
+        self.assertIn('String why = RoseAgentWork.previewText(RoseAgentWork.preview(task, locked), frame != null);', show)
+        self.assertIn('if (why == null) {\n                ImageView live = new ImageView(getContext());', show)
+        visibility = code[code.index('protected void onWindowVisibilityChanged(int visibility) {'):code.index('private void setWorking(')]
+        hidden = visibility.split('} else {')[1]
+        for step in ('removeCallbacks(previewTick);', 'generation++;', 'clearCards();'):
+            self.assertIn(step, hidden, f'leaving the overview: {step}')
+        detached = code[code.index('protected void onDetachedFromWindow() {'):code.index('private void anchor()')]
+        self.assertIn('clearCards();', detached)
+        locked = code[code.index('private static boolean locked(Context context) {'):code.index('private static Map<Integer, Bitmap> capture(')]
+        self.assertIn('return keyguard == null || keyguard.isKeyguardLocked();', locked)
+        self.assertIn('return true;', locked.split('catch')[1], 'an unreadable lock state counts as locked')
+        for mutating in ('moveTaskToFront', 'startActivityFromRecents', 'setFocusedRootTask', 'requestScreenshot',
+                'AgentProvider', 'getContentResolver'):
+            self.assertNotIn(mutating, code, f'{mutating}: the preview never touches the agent or foregrounds the app')
+
+    def test_the_hifi_card_keeps_its_place_and_auto_pip_stays_off(self):
+        code = ControllerReadPermissionTest.code()
+        self.assertNotIn('enterPictureInPictureMode', code)
+        self.assertNotIn('PictureInPicture', code)
+        tree = patched_tree(self)
+        height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
+        self.assertEqual(height, 160, 'the claimed space grows only by the preview body')
 
 if __name__ == '__main__':
     unittest.main()
