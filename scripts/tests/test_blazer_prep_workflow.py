@@ -197,39 +197,87 @@ class Wiring(unittest.TestCase):
 
 
 class Inspect(unittest.TestCase):
-    """The metadata-only inspect route: only bound host facts, the helper's own bound, a 20-minute job."""
+    """The metadata-only inspect route: the proposed candidate root of this run (never a binding), only bound host facts,
+    the helper's own bound and a 20-minute job. No lock-only inspection."""
+    ROOT_TEMPLATE = '/home/pixelbuild/rose-actions/blazer-prep-{run_id}-{attempt}'
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
 
-    def test_unbound_inspect_passes_only_host_and_lock_with_its_own_bounds(self):
+    def binding(self, **candidates):
+        record = None if candidates.get('absent') else {**BINDING['inspectCandidates'], **candidates}
+        path = self.tmp/'binding.json'
+        path.write_text(json.dumps({**BINDING, 'inspectCandidates': record}))
+        return path
+
+    def test_committed_candidates_are_a_proposal_only_and_prep_stays_unbound(self):
+        record = BINDING['inspectCandidates']
+        self.assertEqual((record['rootTemplate'], record['verified'], record['binding']), (self.ROOT_TEMPLATE, False, False))
+        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
+        for stage in ('download', 'vendor', 'lunch'):  # candidates never satisfy a preparation stage
+            self.assertEqual(wire('check', '--stage', stage).returncode, 4, stage)
+
+    def test_inspect_passes_host_lock_and_this_runs_candidate_root_with_its_own_bounds(self):
         result = wire('check', '--stage', 'inspect')
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=960\njob_minutes=20\n'))
-        tail, outer, minutes = wiring.resolve('inspect')
-        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--max-entries', '200000', '--max-seconds', '900'])
-        helper = wiring.helper()
-        self.assertLessEqual(900, helper.INSPECT_MAX_SECONDS)
+        tail, outer, minutes = wiring.resolve('inspect', run_id='41400000000', attempt='2')
+        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--candidate-root',
+            '/home/pixelbuild/rose-actions/blazer-prep-41400000000-2', '--max-entries', '200000', '--max-seconds', '900'])
+        self.assertLessEqual(900, wiring.helper().INSPECT_MAX_SECONDS)
         self.assertLessEqual(outer + 30, minutes * 60 - 180)  # kill grace and checkout fit inside the 20-minute job
-        self.assertFalse({'--stage', '--receipt-dir', '--source-root', '--download-dir', '--node'} & set(tail))
+        self.assertFalse({'--stage', '--receipt-dir', '--source-root', '--download-dir', '--node', '--candidate-node',
+                          '--candidate-node-from-path', '--reference-source-root'} & set(tail))
+
+    def test_no_lock_only_inspection_and_malformed_candidates_refuse(self):
+        result = wire('check', '--stage', 'inspect', '--binding', str(self.binding(absent=True)))
+        self.assertEqual(result.returncode, 4)
+        self.assertIn('lock-only inspection is not offered', result.stderr)
+        for change in ({'verified': True}, {'binding': True}, {'rootTemplate': '/home/pixelbuild/rose-actions/fixed'},
+                       {'rootTemplate': '/home/pixelbuild/rose-actions/{run_id}-{run_id}-{attempt}'},
+                       {'rootTemplate': '/home/pixelbuild/{run_id}/x-{attempt}'}, {'rootTemplate': '/srv/blazer-{run_id}-{attempt}'},
+                       {'rootTemplate': '/home/pixelbuild/grapheneos-2026100600/x-{run_id}-{attempt}'},
+                       {'rootTemplate': 'home/pixelbuild/x-{run_id}-{attempt}'}, {'rootTemplate': '/home/pixelbuild/x-{run_id}-{attempt}-{other}'},
+                       {'extra': 1}):
+            with self.subTest(change=change):
+                self.assertEqual(wire('check', '--stage', 'inspect', '--binding', str(self.binding(**change))).returncode, 2)
+        for run_id, attempt in (('', '1'), ('1', ''), ('0', '1'), ('1x', '1'), ('-1', '1'), ('1', '01')):
+            with self.subTest(run_id=run_id, attempt=attempt):
+                self.assertEqual(wire('run', '--stage', 'inspect', '--receipt-dir', str(self.tmp/'r'), '--run-id', run_id,
+                    '--attempt', attempt).returncode, 2)
+        self.assertEqual(wire('run', '--stage', 'inspect', '--receipt-dir', str(self.tmp/'r')).returncode, 2)
+        self.assertEqual(wire('check', '--stage', 'inspect', '--run-id', '1', '--attempt', '1').returncode, 2)
+        self.assertFalse((self.tmp/'r').exists())
 
     def test_bound_facts_are_inspected_and_still_validated(self):
-        tail, _, _ = wiring.resolve('inspect', bound(self.tmp, downloadDir=None))
+        tail, _, _ = wiring.resolve('inspect', bound(self.tmp, downloadDir=None), run_id='5', attempt='1')
         self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--source-root', '/srv/rose-blazer/src',
-            '--node', '/usr/bin/node', '--max-entries', '200000', '--max-seconds', '900'])
+            '--node', '/usr/bin/node', '--candidate-root', '/home/pixelbuild/rose-actions/blazer-prep-5-1',
+            '--max-entries', '200000', '--max-seconds', '900'])
         for change in ({'sourceRoot': PRODUCTION}, {'node': '/usr/bin/nodejs'}, {'downloadDir': 'rel'}):
             self.assertEqual(wire('check', '--stage', 'inspect', '--binding', str(bound(self.tmp, **change))).returncode, 2, change)
 
-    def test_real_helper_inspect_writes_one_metadata_only_receipt_and_refuses_reuse(self):
+    def test_real_helper_inspect_writes_one_metadata_only_v2_receipt_and_refuses_reuse(self):
         receipts = self.tmp/'run'
-        result = wire('run', '--stage', 'inspect', '--receipt-dir', str(receipts))
+        argv = ('run', '--stage', 'inspect', '--receipt-dir', str(receipts), '--run-id', '41400000000', '--attempt', '1')
+        result = wire(*argv)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['inspection.json'])
         report = json.loads((receipts/'inspection.json').read_text())
-        self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'], report['writes']),
-            ('roseos.blazer-preparation-inspection.v1', True, 0, False, False))
-        self.assertEqual(set(report['paths']), {'lock'})
+        self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'],
+                          report['writes'], report['enablesPreparation']),
+                         ('roseos.blazer-preparation-inspection.v2', True, 0, False, False, False))
+        self.assertEqual(report['bound'], {'sourceRoot': None, 'downloadDir': None, 'node': None})
+        candidates = report['candidates']
+        self.assertEqual((candidates['proposed'], candidates['verified'], candidates['binding']), (True, False, False))
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41400000000-1'
+        self.assertEqual(candidates['root']['path'], root)
+        self.assertEqual({k: candidates[k]['path'] for k in ('sourceRoot', 'downloadDir', 'receiptsDir')},
+            {'sourceRoot': root + '/source', 'downloadDir': root + '/downloads', 'receiptsDir': root + '/receipts'})
+        self.assertTrue(report['reference']['isProduction'])
+        self.assertIn('runner', report['node'])
+        self.assertIsNone(report['node']['candidate'])
         self.assertEqual(report['limits'], {'maxEntries': 200000, 'maxSeconds': 900})
-        again = wire('run', '--stage', 'inspect', '--receipt-dir', str(receipts))
-        self.assertEqual(again.returncode, 2)
+        self.assertEqual(wire(*argv).returncode, 2)
         self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['inspection.json'])
 
 
@@ -263,7 +311,8 @@ class Job(unittest.TestCase):
         for name in ('python3', 'timeout'):
             (bin_dir/name).chmod(0o755)
         env = {'PATH': f'{bin_dir}:/usr/bin:/bin', 'LOG': str(log), 'OUTER_SECONDS': outer, 'CHECK_OUTPUT': check_output,
-            'BLAZER_PREP_STAGE': 'vendor', 'TASK_RUN': '/runner/tmp/blazer-prep-1-1/run'}
+            'BLAZER_PREP_STAGE': 'vendor', 'TASK_RUN': '/runner/tmp/blazer-prep-1-1/run', 'GITHUB_RUN_ID': '41400000000',
+            'GITHUB_RUN_ATTEMPT': '1'}
         result = subprocess.run(['bash', '-c', script(step(self.job, 'Preparation stage (bounded, under the shared lock)'))],
             env=env, capture_output=True)
         calls = log.read_text().splitlines() if log.exists() else []
@@ -275,7 +324,7 @@ class Job(unittest.TestCase):
         self.assertEqual(code_, 0)
         self.assertEqual(calls, ['python3 scripts/blazer-prep-wiring.py check --stage vendor',
             'timeout --kill-after=30s 11100s python3 scripts/blazer-prep-wiring.py run --stage vendor --receipt-dir '
-            '/runner/tmp/blazer-prep-1-1/run'])
+            '/runner/tmp/blazer-prep-1-1/run --run-id 41400000000 --attempt 1'])
         for outer, check in (('1080', 'outer_seconds=11100\njob_minutes=196'), ('', 'outer_seconds=11100'),
                              ('11100s', 'outer_seconds=11100'), ('0', 'outer_seconds=0')):
             code_, calls = self.stage(outer, check)

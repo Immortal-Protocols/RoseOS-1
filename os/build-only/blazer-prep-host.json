@@ -6,5 +6,11 @@
   "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
   "sourceRoot": null,
   "downloadDir": null,
-  "node": null
+  "node": null,
+  "inspectCandidates": {
+    "rootTemplate": "/home/pixelbuild/rose-actions/blazer-prep-{run_id}-{attempt}",
+    "verified": false,
+    "binding": false,
+    "basis": "Proposed inspection candidate only (Chief/Infra 2026-11-02): blazer-build-only.py inspect --candidate-root derives source, downloads and receipts under it and reports metadata; not known to exist, not approved and never a preparation binding. sourceRoot, downloadDir and node above stay null until verified."
+  }
 }

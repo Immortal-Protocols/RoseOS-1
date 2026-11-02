@@ -1023,7 +1023,8 @@ jobs:
     # signing, secret, OIDC token or publication; contents: read only. Time: the helper's own stage timeout, the outer
     # timeout (+300 s, +30 s kill) and the job (+10 min), all derived from os/build-only/blazer.json by the hosted guard.
     # inspect (metadata only): the helper's --max-seconds 900, the outer 960 s (+30 s kill) and a 20-minute job; it passes
-    # only bound host facts and its stdout is the write-once inspection.json receipt.
+    # the bound host facts (none yet) and the proposed --candidate-root of this run (never a binding; refused when no
+    # candidates are committed), and its stdout is the write-once inspection.json receipt.
     # Cleanup stops the builder only if this run's controller started it. Runtime is not approved.
     needs: [guard, controller]
     if: inputs.mode == 'blazer-prep'
@@ -1049,7 +1050,7 @@ jobs:
           set -euo pipefail
           [[ "$OUTER_SECONDS" =~ ^[1-9][0-9]{0,5}$ ]]
           python3 scripts/blazer-prep-wiring.py check --stage "$BLAZER_PREP_STAGE" | grep -qx "outer_seconds=$OUTER_SECONDS"
-          timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/blazer-prep-wiring.py run --stage "$BLAZER_PREP_STAGE" --receipt-dir "$TASK_RUN"
+          timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/blazer-prep-wiring.py run --stage "$BLAZER_PREP_STAGE" --receipt-dir "$TASK_RUN" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - name: Allowlisted JSON receipts only
         if: always()
         run: |
