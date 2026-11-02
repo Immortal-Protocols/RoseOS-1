@@ -184,10 +184,12 @@ def classify_argv(root_dir, pins=PINS, firmware=False):
             '--work-dir', str(root_dir/'classify-work'), '--build', BUILD]
 
 
-def firmware_observe(root_dir, run_id, attempt, runner=subprocess.run):
+def firmware_observe(root_dir, run_id, attempt, runner=subprocess.run, require_package=True):
     """Run the firmware observer once; keep its exit and sanitized one-line result write-once. Returns the step status:
-    0 for an observation (exit 0 with a new regular output) or a refusal (exit 3 with none), otherwise failure."""
-    packaged(root_dir)
+    0 for an observation (exit 0 with a new regular output) or a refusal (exit 3 with none), otherwise failure. The
+    inspect-only mode passes require_package=False: it verified a retained archive instead of packaging one."""
+    if require_package:
+        packaged(root_dir)
     inspection, output = root_dir/'inspection', root_dir/'inspection/firmware-observation.json'
     if inspection.is_symlink() or not inspection.is_dir():
         raise Invalid('the target-files observation step did not run: nothing to observe into')
