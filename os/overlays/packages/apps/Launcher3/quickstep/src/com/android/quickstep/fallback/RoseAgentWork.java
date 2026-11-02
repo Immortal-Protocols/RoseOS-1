@@ -206,8 +206,8 @@ final class RoseAgentWork {
     static final String NOT_REPORTED = "Rose's work has not been reported yet";
     /** An agent screen's ownership is not (or no longer) in the platform's report. */
     static final String UNCONFIRMED = "Rose's work can't be confirmed right now";
-    /** A Rose screen also shows another user's activity, which the platform never reports here. */
-    static final String INCOMPLETE = "Some of Rose's work belongs to another user and isn't shown";
+    /** Nothing of Rose's screens is listed while the phone is locked (the common #156/#225 contract). */
+    static final String LOCKED = "Unlock your phone to see Rose's apps";
     /** A member app with no task of its own in the platform's task list (its activity is inside another task). */
     static final int NO_TASK = -1;
 
@@ -304,7 +304,7 @@ final class RoseAgentWork {
         }
         boolean consistent = owners.received && owners.appsReceived && owners.appsGeneration == owners.generation;
         if (session.isEmpty() && !roseApps) {
-            if (consistent && partial) return unavailable(INCOMPLETE);
+            if (consistent && partial) return unavailable(UNCONFIRMED);
             // No session task and no Rose app: truthfully empty, unless a Rose device is listed whose apps are not
             // yet known for this generation (then not reported or unconfirmed, below).
             if (!owners.received || rose.isEmpty() || consistent) {
@@ -352,16 +352,28 @@ final class RoseAgentWork {
                 items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));
             }
         }
-        String reason = !held.isEmpty() ? UNCONFIRMED : partial ? INCOMPLETE : null;
-        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, held, reason);
-        if (!held.isEmpty()) return new RoseAgentWork(State.UNAVAILABLE, items, held, UNCONFIRMED);
-        if (partial) return unavailable(INCOMPLETE);
+        // The common #156/#225 rendering contract (agreed with Home and App Core): a membership shown is the whole
+        // membership. Any part of Rose's scope that is not attested complete (an unconfirmed or in-flight task, a device
+        // that also runs another user's activity, or more than one Rose session device, which App Core's single-session
+        // transport cannot describe) shows no app cards and says Rose's work can't be confirmed; selecting a held task
+        // is refused. Complete and empty is genuinely empty; complete is shown.
+        if (!held.isEmpty() || partial || rose.size() > 1) {
+            List<Task> refused = new ArrayList<>(held);
+            refused.addAll(items);
+            return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), refused, UNCONFIRMED);
+        }
+        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, held, null);
         return new RoseAgentWork(State.EMPTY, items, EMPTY);
     }
 
     /** A report arrived while the platform was being read: the read is not one consistent state. */
     static RoseAgentWork unconfirmed() {
         return unavailable(UNCONFIRMED);
+    }
+
+    /** The phone is locked: no app is listed and nothing is captured. */
+    static RoseAgentWork locked() {
+        return unavailable(LOCKED);
     }
 
     enum Open { WATCH, NOT_CURRENT, CHANGED, UNATTRIBUTED, GONE }

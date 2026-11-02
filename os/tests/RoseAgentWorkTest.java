@@ -135,9 +135,9 @@ public final class RoseAgentWorkTest {
         expect(ids(three.items).equals(Arrays.asList(2)) && three.reason == null && three.unattributed.isEmpty(),
             "3: the other owner's device is never Rose's; no package coincidence");
         RoseAgentWork threeEarly = work(rose, devices(7, 7, 11, 11), sameApp);
-        expect(ids(threeEarly.items).equals(Arrays.asList(2)) && ids(threeEarly.unattributed).equals(Arrays.asList(9))
-            && RoseAgentWork.UNCONFIRMED.equals(threeEarly.reason),
-            "3: before the other device's ownership arrives it is held as unconfirmed, never Rose's card");
+        expect(threeEarly.items.isEmpty() && threeEarly.state == RoseAgentWork.State.UNAVAILABLE
+            && ids(threeEarly.unattributed).equals(Arrays.asList(9, 2)) && RoseAgentWork.UNCONFIRMED.equals(threeEarly.reason),
+            "3: before the other device's ownership arrives nothing is shown (common contract), never a partial row");
         // 4. Rose's session closed: the stale entry has no task on it and gives no card.
         expect(work(rose, devices(11, 11), Arrays.asList(task(9, 11, 0, "com.example.mail", true))).items.isEmpty(),
             "4: a stale owner entry never makes another device's task Rose's");
@@ -263,7 +263,7 @@ public final class RoseAgentWorkTest {
         expect(labelled.items.get(1).taskId == 3 && labelled.items.get(1).displayId == 7 && labelled.items.get(1).userId == 0
             && !labelled.items.get(1).topOfDisplay, "Every boundary fact is kept");
         expect(RoseAgentWork.decide(labelled.items.get(0), labelled) == RoseAgentWork.Open.WATCH, "Selection still works");
-        expect(threeEarly.labelled(t -> "x").unattributed.size() == 1, "Labels keep the unconfirmed facts");
+        expect(threeEarly.labelled(t -> "x") == threeEarly, "An unconfirmed row looks no label up");
         List<Integer> lookups = new ArrayList<>();
         expect(loading.labelled(t -> { lookups.add(t.taskId); return "x"; }) == loading && lookups.isEmpty(),
             "Unconfirmed work looks nothing up");
@@ -291,8 +291,8 @@ public final class RoseAgentWorkTest {
             && RoseAgentWork.PREVIEW_LOCKED.equals(RoseAgentWork.previewText(RoseAgentWork.Preview.LOCKED, false)),
             "A frame only when this read captured one; otherwise the honest reason, never an older frame");
         expect(work.hasLiveView(false) && !work.hasLiveView(true), "Rose's front card is captured only while unlocked");
-        expect(!loading.hasLiveView(false) && !threeEarly.unattributed.isEmpty() && ids(threeEarly.items).equals(Arrays.asList(2)),
-            "Unconfirmed tasks are never captured (only items are)");
+        expect(!loading.hasLiveView(false) && !threeEarly.hasLiveView(false),
+            "Unconfirmed tasks are never captured (only a complete row's items are)");
         expect(!work(rose, devices(7, 7), Arrays.asList(task(6, 7, 0, RoseAgentWork.CONTROLLER, true),
             task(3, 7, 0, "com.example.maps", false))).hasLiveView(false), "Nothing in front of Rose's screen to capture");
 
@@ -353,9 +353,9 @@ public final class RoseAgentWorkTest {
         // A task on Rose's device whose app is not (yet) in the platform's list is in flight: held, not a card.
         RoseAgentWork inFlightApp = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
             Arrays.asList(task(9, 7, 0, "com.example.chat", true), task(2, 7, 0, "com.example.mail", false)), true);
-        expect(ids(inFlightApp.items).contains(2) && !ids(inFlightApp.items).contains(9)
-            && ids(inFlightApp.unattributed).equals(Arrays.asList(9)) && RoseAgentWork.UNCONFIRMED.equals(inFlightApp.reason),
-            "an unlisted running task is unconfirmed, the listed apps stay");
+        expect(inFlightApp.items.isEmpty() && ids(inFlightApp.unattributed).equals(Arrays.asList(9, 2, -1, -1))
+            && RoseAgentWork.UNCONFIRMED.equals(inFlightApp.reason),
+            "an unlisted running task makes the whole row unconfirmed (common contract): no partial cards");
         // A read between the two callbacks of one dispatch (devices at 5, apps still at 4) is not one state.
         par.accept(5, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
         RoseAgentWork between = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
@@ -384,14 +384,16 @@ public final class RoseAgentWorkTest {
             new int[] {7}, new String[] {"com.example.mail"});
         RoseAgentWork partly2 = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
             Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
-        expect(ids(partly2.items).equals(Arrays.asList(2)) && RoseAgentWork.INCOMPLETE.equals(partly2.reason),
-            "incomplete device: the attested apps with an explicit note, never claimed complete");
+        expect(partly2.items.isEmpty() && partly2.state == RoseAgentWork.State.UNAVAILABLE
+            && RoseAgentWork.UNCONFIRMED.equals(partly2.reason) && ids(partly2.unattributed).equals(Arrays.asList(2))
+            && RoseAgentWork.decide(task(2, 7, 0, "com.example.mail", true), partly2) == RoseAgentWork.Open.UNATTRIBUTED,
+            "incomplete device (common contract): no app cards, cannot-confirm status, selection refused");
         par.accept(8, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
         par.acceptApps(8, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {false},
             new int[0], new String[0]);
         RoseAgentWork onlyOther = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
             Collections.emptyList(), true);
-        expect(onlyOther.state == RoseAgentWork.State.UNAVAILABLE && RoseAgentWork.INCOMPLETE.equals(onlyOther.reason),
+        expect(onlyOther.state == RoseAgentWork.State.UNAVAILABLE && RoseAgentWork.UNCONFIRMED.equals(onlyOther.reason),
             "only another user's activity on Rose's device: unavailable, not \"No background work\"");
         // Malformed per-device apps are never partly applied; the row names the step and the baseline is kept.
         Object[][] badApps = {
@@ -426,13 +428,29 @@ public final class RoseAgentWorkTest {
             new boolean[] {true, true}, new int[] {7, 8}, new String[] {"com.example.notes", "com.example.docs"});
         RoseAgentWork placed = RoseAgentWork.of(CONTROLLER_UID, 0, twoDev.snapshot(), devices(7, 7), Collections.emptyList(),
             Collections.emptyList(), true);
-        RoseAgentWork.Task notesCard = placed.items.get(0);
-        expect(placed.items.size() == 1 && notesCard.packageName.equals("com.example.notes") && placed.unattributed.size() == 1
-            && placed.unattributed.get(0).packageName.equals("com.example.docs")
-            && RoseAgentWork.decide(notesCard, placed) == RoseAgentWork.Open.NOT_CURRENT,
-            "a member whose device has no known display is unconfirmed; the placed one is not refused in its name");
+        RoseAgentWork.Task notesCard = new RoseAgentWork.Task(RoseAgentWork.NO_TASK, 7, 0, "com.example.notes", "Notes", false);
+        expect(placed.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(placed.reason) && placed.unattributed.size() == 2
+            && RoseAgentWork.decide(notesCard, placed) == RoseAgentWork.Open.UNATTRIBUTED,
+            "two Rose session devices (not one controller session) and an unplaceable member: no cards, refused");
         expect(RoseAgentWork.decide(new RoseAgentWork.Task(RoseAgentWork.NO_TASK, 0, 0, "com.example.docs", "Docs", false),
             placed) == RoseAgentWork.Open.UNATTRIBUTED, "and the unconfirmed one is refused as unconfirmed");
+
+        // The common #156/#225 rendering contract (Home, App Core, OS Product): complete is shown, complete-empty is
+        // genuinely empty, anything else shows no app cards with an explicit status.
+        RoseAgentWork.Ownership pair = new RoseAgentWork.Ownership();
+        pair.accept(1, new int[] {7, 8}, new String[] {C, C}, new int[] {CONTROLLER_UID, CONTROLLER_UID});
+        pair.acceptApps(1, new int[] {7, 8}, new String[] {C, C}, new int[] {CONTROLLER_UID, CONTROLLER_UID},
+            new boolean[] {true, true}, new int[] {7, 8}, new String[] {"com.example.mail", "com.example.maps"});
+        RoseAgentWork twoSessionsRow = RoseAgentWork.of(CONTROLLER_UID, 0, pair.snapshot(), devices(7, 7, 8, 8),
+            Collections.emptyList(), Arrays.asList(task(2, 7, 0, "com.example.mail", true), task(5, 8, 0, "com.example.maps", true)), true);
+        expect(twoSessionsRow.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(twoSessionsRow.reason),
+            "two Rose session devices, each complete: App Core's single-session transport cannot describe them, so neither "
+            + "surface shows cards (no surface shows more or fewer apps than the other)");
+        RoseAgentWork lockedRow = RoseAgentWork.locked();
+        expect(lockedRow.items.isEmpty() && lockedRow.state == RoseAgentWork.State.UNAVAILABLE
+            && RoseAgentWork.LOCKED.equals(lockedRow.reason) && !lockedRow.hasLiveView(false), "locked: no app cards, said so");
+        expect(RoseAgentWork.EMPTY.equals(work(roseOwns(), devices(), Collections.emptyList()).reason),
+            "complete and empty: genuinely empty");
 
         par.reset();
         expect(!par.snapshot().received && !par.snapshot().appsReceived && par.snapshot().appsByDevice.isEmpty(),

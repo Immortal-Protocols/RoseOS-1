@@ -322,8 +322,9 @@ public final class RoseAgentStrip extends LinearLayout {
         Context context = getContext();
         int framePx = dp(PREVIEW_HEIGHT_DP);
         UI_HELPER_EXECUTOR.execute(() -> {
-            RoseAgentWork next = read(context);
             boolean locked = locked(context);
+            // Locked: nothing of Rose's screens is listed (the common #156/#225 contract), so nothing is read either.
+            RoseAgentWork next = locked ? RoseAgentWork.locked() : read(context);
             Map<Integer, Bitmap> frames = capture(next, locked, framePx);
             post(() -> {
                 if (token == generation) show(next, frames, locked);
@@ -514,8 +515,9 @@ public final class RoseAgentStrip extends LinearLayout {
         Context context = getContext();
         int framePx = dp(PREVIEW_HEIGHT_DP);
         UI_HELPER_EXECUTOR.execute(() -> {
-            RoseAgentWork fresh = read(context);
+            RoseAgentWork platform = read(context);
             boolean locked = locked(context);
+            RoseAgentWork fresh = locked ? RoseAgentWork.locked() : platform;
             Map<Integer, Bitmap> frames = capture(fresh, locked, framePx);
             post(() -> {
                 if (token != selection) {

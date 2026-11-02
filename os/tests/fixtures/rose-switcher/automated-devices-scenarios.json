@@ -1,5 +1,5 @@
 {
- "contract": "#156 AutomatedPackageListener.onAutomatedDevicesChanged(long generation, int[] deviceIds, String[] ownerPackages, int[] ownerUids), relayed to OS Core 19:51:27Z",
+ "contract": "#156/#225 common rendering contract (Home, App Core, OS Product), one class per scenario: cards (a complete same-user list, shown whole), empty (complete and empty: genuine 'No background work'), loading (not reported yet), cannot_confirm (any part of Rose's scope incomplete, in flight or more than one Rose session: no app cards), unreadable (malformed or failed read: no app cards), locked (no app cards). No class except cards shows an app card.",
  "controller": "dev.pixel.backgroundcontrol",
  "controllerUid": 10123,
  "user": 0,
@@ -32,7 +32,8 @@
     "state": "EMPTY",
     "cards": [],
     "unconfirmed": [],
-    "reason": "No background work"
+    "reason": "No background work",
+    "contract": "empty"
    }
   },
   {
@@ -66,7 +67,8 @@
     "unconfirmed": [
      2
     ],
-    "reason": "Rose's work can't be confirmed right now"
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   },
   {
@@ -96,7 +98,8 @@
     "state": "EMPTY",
     "cards": [],
     "unconfirmed": [],
-    "reason": "No background work"
+    "reason": "No background work",
+    "contract": "empty"
    }
   },
   {
@@ -144,7 +147,8 @@
      2
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -167,7 +171,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work has not been reported yet"
+    "reason": "Rose's work has not been reported yet",
+    "contract": "loading"
    }
   },
   {
@@ -215,7 +220,8 @@
      3
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -280,7 +286,8 @@
      2
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -323,14 +330,14 @@
     ]
    ],
    "expect": {
-    "state": "AVAILABLE",
-    "cards": [
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     9,
      2
     ],
-    "unconfirmed": [
-     9
-    ],
-    "reason": "Rose's work can't be confirmed right now"
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   },
   {
@@ -373,7 +380,8 @@
     "state": "EMPTY",
     "cards": [],
     "unconfirmed": [],
-    "reason": "No background work"
+    "reason": "No background work",
+    "contract": "empty"
    }
   },
   {
@@ -413,7 +421,8 @@
     "unconfirmed": [
      2
     ],
-    "reason": "Rose's work can't be confirmed right now"
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   },
   {
@@ -475,7 +484,8 @@
      2
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -516,7 +526,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work has not been reported yet"
+    "reason": "Rose's work has not been reported yet",
+    "contract": "loading"
    }
   },
   {
@@ -573,7 +584,8 @@
      2
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -611,7 +623,8 @@
     "state": "EMPTY",
     "cards": [],
     "unconfirmed": [],
-    "reason": "No background work"
+    "reason": "No background work",
+    "contract": "empty"
    }
   },
   {
@@ -662,7 +675,8 @@
      5
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -716,7 +730,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work could not be read (ownership)"
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
    }
   },
   {
@@ -752,7 +767,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work could not be read (ownership)"
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
    }
   },
   {
@@ -793,7 +809,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work could not be read (ownership)"
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
    }
   },
   {
@@ -853,7 +870,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work could not be read (ownership)"
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
    }
   },
   {
@@ -935,7 +953,8 @@
      2
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -986,7 +1005,8 @@
      -1
     ],
     "unconfirmed": [],
-    "reason": null
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -1034,14 +1054,14 @@
     ]
    ],
    "expect": {
-    "state": "AVAILABLE",
-    "cards": [
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     9,
      2
     ],
-    "unconfirmed": [
-     9
-    ],
-    "reason": "Rose's work can't be confirmed right now"
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   },
   {
@@ -1080,7 +1100,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work has not been reported yet"
+    "reason": "Rose's work has not been reported yet",
+    "contract": "loading"
    }
   },
   {
@@ -1133,7 +1154,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work can't be confirmed right now"
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   },
   {
@@ -1177,12 +1199,13 @@
     ]
    ],
    "expect": {
-    "state": "AVAILABLE",
-    "cards": [
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
      2
     ],
-    "unconfirmed": [],
-    "reason": "Some of Rose's work belongs to another user and isn't shown"
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   },
   {
@@ -1226,7 +1249,8 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work could not be read (ownership)"
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
    }
   },
   {
@@ -1274,7 +1298,61 @@
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
-    "reason": "Rose's work could not be read (ownership)"
+    "reason": "Rose's work could not be read (ownership)",
+    "contract": "unreadable"
+   }
+  },
+  {
+   "name": "contract: two Rose session devices, each complete",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7,
+       8
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123,
+       10123
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "8": 8
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     5,
+     8,
+     0,
+     "com.example.maps",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [
+     2,
+     5
+    ],
+    "reason": "Rose's work can't be confirmed right now",
+    "contract": "cannot_confirm"
    }
   }
  ]
