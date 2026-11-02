@@ -13,6 +13,7 @@ public final class AgentProvider extends ContentProvider {
    case "current_apps":result=Controller.route(getContext(),"current_apps",p);break; // Rose Agent's own overview only (#156/#225); not in capabilities // Rose Agent's own overview only (#225); not in capabilities
    case "command":result=Controller.route(getContext(),"command",p);break;
    case "stop":result=Controller.route(getContext(),"stop",p);break;
+   case "owner_stop":result=Controller.route(getContext(),"owner_stop",p);break; // Rose Agent's own native Stop only; not in capabilities
    default:throw new IllegalArgumentException("Unknown background operation");
   }}catch(Throwable e){try{String message=Controller.root(e).toString();result=new JSONObject().put("status",message.contains("snapshot")||message.contains("Snapshot")||message.contains("stale")||message.contains("changed; inspect")?"stale_screen":"error").put("error",message).put("foregroundFallback",false);}catch(Exception impossible){throw new IllegalStateException(impossible);}}
   Bundle out=new Bundle();out.putString("result",result.toString());return out;

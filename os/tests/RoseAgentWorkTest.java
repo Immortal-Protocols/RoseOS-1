@@ -108,8 +108,9 @@ public final class RoseAgentWorkTest {
         dispatch(two, 1, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, UID}, new boolean[] {true, true},
             new int[] {7, 8}, new String[] {"com.example.mail", "com.example.maps"});
         RoseAgentWork twoRow = RoseAgentWork.of(UID, 0, two.snapshot(), devices(70, 7, 80, 8), tasks);
-        expect(twoRow.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(twoRow.reason) && twoRow.linkLabel().isEmpty(),
-            "more than one controller device (old and new): cannot confirm, no app cards");
+        expect(twoRow.state == RoseAgentWork.State.AVAILABLE && twoRow.reason == null
+            && pkgs(twoRow.items).equals(Arrays.asList("com.example.mail", "com.example.maps")),
+            "two complete controller devices: the apps of both, bound to a session or not");
         RoseAgentWork.Ownership partial = new RoseAgentWork.Ownership();
         dispatch(partial, 1, new int[] {7}, new String[] {C}, new int[] {UID}, new boolean[] {false}, new int[] {7},
             new String[] {"com.example.mail"});
@@ -139,6 +140,74 @@ public final class RoseAgentWorkTest {
             && !RoseAgentWork.locked().hasLiveView(false), "locked: no app cards, nothing captured");
         expect(RoseAgentWork.unconfirmed().items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(RoseAgentWork.unconfirmed().reason),
             "a snapshot applied during a read: cannot confirm that read");
+
+        // Two apps on two of Rose's devices (snapshot-only: every complete owned device counts).
+        // Device 7 (display 70) runs mail, device 8 (displays 80, 81) runs maps; device 9 is another owner's.
+        RoseAgentWork.Ownership pair = new RoseAgentWork.Ownership();
+        dispatch(pair, 3, new int[] {8, 7, 9}, new String[] {C, C, OTHER}, new int[] {UID, UID, OTHER_UID},
+            new boolean[] {true, true, true}, new int[] {8, 7, 7, 8, 9},
+            new String[] {"com.example.maps", "com.example.mail", C, C, "com.example.maps"});
+        Map<Integer, Integer> pairDisplays = devices(70, 7, 80, 8, 81, 8, 90, 9);
+        List<RoseAgentWork.Task> pairTasks = Arrays.asList(
+            task(21, 80, 0, "com.example.maps", true),     // maps: device 8's current screen
+            task(22, 70, 0, "com.example.maps", false),    // a maps task on device 7: not device 8's member's task
+            task(23, 70, 0, "com.example.mail", true),     // mail: device 7's current screen
+            task(24, 90, 0, "com.example.maps", true),     // another owner's device: never attached
+            task(25, 81, 10, "com.example.maps", true));   // another user's task on device 8: never attached
+        RoseAgentWork pairRow = RoseAgentWork.of(UID, 0, pair.snapshot(), pairDisplays, pairTasks);
+        expect(pairRow.state == RoseAgentWork.State.AVAILABLE && pairRow.reason == null
+            && pkgs(pairRow.items).equals(Arrays.asList("com.example.mail", "com.example.maps"))
+            && ids(pairRow.items).equals(Arrays.asList(23, 21)),
+            "two devices: each member with its own device's front task, in device order; the controller on both is no "
+            + "duplicate, and another owner's device running the same app is not Rose's scope");
+        expect(pairRow.working() == 2 && "2 tasks in progress".equals(pairRow.linkLabel())
+            && pairRow.hasLiveView(false) && !pairRow.hasLiveView(true)
+            && RoseAgentWork.preview(pairRow.items.get(0), false) == RoseAgentWork.Preview.CAPTURE
+            && RoseAgentWork.preview(pairRow.items.get(1), false) == RoseAgentWork.Preview.CAPTURE,
+            "each device's front task is its own live view, captured only unlocked");
+        expect(RoseAgentWork.decide(pairRow.items.get(1), pairRow) == RoseAgentWork.Open.WATCH
+            && pairRow.items.get(1).displayId == 80,
+            "selection stays per device: the request names the member's own display (the controller binds or refuses)");
+        RoseAgentWork pairHidden = RoseAgentWork.of(UID, 0, pair.snapshot(), pairDisplays,
+            Arrays.asList(task(22, 70, 0, "com.example.maps", true), task(23, 70, 0, "com.example.mail", false)));
+        RoseAgentWork.Task mapsNoTask = pairHidden.items.get(1);
+        expect(pkgs(pairHidden.items).equals(Arrays.asList("com.example.mail", "com.example.maps"))
+            && mapsNoTask.taskId == RoseAgentWork.NO_TASK && mapsNoTask.displayId == 80
+            && RoseAgentWork.preview(mapsNoTask, false) == RoseAgentWork.Preview.NONE
+            && RoseAgentWork.preview(pairHidden.items.get(0), false) == RoseAgentWork.Preview.BEHIND,
+            "no task is reused across devices: maps has none on its own device, so 'Preview unavailable', never live");
+        RoseAgentWork.Ownership dup = new RoseAgentWork.Ownership();
+        dispatch(dup, 1, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, UID}, new boolean[] {true, true},
+            new int[] {7, 8, 8}, new String[] {"com.example.maps", "com.example.maps", "com.example.mail"});
+        RoseAgentWork dupRow = RoseAgentWork.of(UID, 0, dup.snapshot(), devices(70, 7, 80, 8), pairTasks);
+        expect(dupRow.state == RoseAgentWork.State.UNAVAILABLE && dupRow.items.isEmpty()
+            && RoseAgentWork.DUPLICATE.equals(dupRow.reason) && !dupRow.hasLiveView(false)
+            && RoseAgentWork.decide(pairRow.items.get(0), dupRow) == RoseAgentWork.Open.UNATTRIBUTED,
+            "one app on two devices: cannot confirm, no cards at all, nothing captured or opened");
+        RoseAgentWork.Ownership onePartial = new RoseAgentWork.Ownership();
+        dispatch(onePartial, 1, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, UID}, new boolean[] {true, false},
+            new int[] {7, 8}, new String[] {"com.example.mail", "com.example.maps"});
+        RoseAgentWork onePartialRow = RoseAgentWork.of(UID, 0, onePartial.snapshot(), devices(70, 7, 80, 8), pairTasks);
+        expect(onePartialRow.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(onePartialRow.reason),
+            "one of two devices incomplete: cannot confirm, never the complete device's apps alone");
+        RoseAgentWork.Ownership controllerOnly = new RoseAgentWork.Ownership();
+        dispatch(controllerOnly, 1, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, UID},
+            new boolean[] {true, true}, new int[] {7, 8}, new String[] {C, C});
+        expect(RoseAgentWork.of(UID, 0, controllerOnly.snapshot(), devices(70, 7, 80, 8), tasks).state
+            == RoseAgentWork.State.EMPTY, "two devices running only the controller: confirmed empty");
+        RoseAgentWork.Ownership mixed = new RoseAgentWork.Ownership();
+        dispatch(mixed, 1, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, UID}, new boolean[] {true, true},
+            new int[] {7, 8}, new String[] {C, "com.example.maps"});
+        expect(pkgs(RoseAgentWork.of(UID, 0, mixed.snapshot(), devices(70, 7, 80, 8), tasks).items)
+            .equals(Arrays.asList("com.example.maps")), "a controller-only device next to one running maps: maps only");
+        RoseAgentWork.Ownership mineAndOtherUser = new RoseAgentWork.Ownership();
+        dispatch(mineAndOtherUser, 1, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, 1010123},
+            new boolean[] {true, false}, new int[] {7, 8}, new String[] {"com.example.mail", "com.example.mail"});
+        expect(pkgs(RoseAgentWork.of(UID, 0, mineAndOtherUser.snapshot(), devices(70, 7, 80, 8), tasks).items)
+            .equals(Arrays.asList("com.example.mail")),
+            "another user's controller device is not this user's scope: neither a duplicate nor incomplete here");
+        expect(RoseAgentWork.decide(pairRow.items.get(0), RoseAgentWork.locked()) == RoseAgentWork.Open.UNATTRIBUTED,
+            "locked with two devices: no cards, nothing opened");
 
         // Tasks never add, remove or hold back a member.
         RoseAgentWork unlisted = row(rose("com.example.mail"), Arrays.asList(task(9, 70, 0, "com.example.chat", true),
@@ -252,9 +321,14 @@ public final class RoseAgentWorkTest {
             "a failed close changes nothing the platform reports: the same apps on both surfaces");
         dispatch(life, 4, new int[] {7, 8}, new String[] {C, C}, new int[] {UID, UID}, new boolean[] {true, true},
             new int[] {7, 8}, new String[] {"com.example.maps", "com.example.chat"});
-        expect(RoseAgentWork.UNCONFIRMED.equals(RoseAgentWork.of(UID, 0, life.snapshot(), devices(70, 7, 80, 8),
-            Collections.emptyList()).reason), "old and new devices together: cannot confirm");
-        dispatch(life, 5, new int[0], new String[0], new int[0], new boolean[0], new int[0], new String[0]);
+        expect(pkgs(RoseAgentWork.of(UID, 0, life.snapshot(), devices(70, 7, 80, 8), Collections.emptyList()).items)
+            .equals(Arrays.asList("com.example.maps", "com.example.chat")),
+            "old (lingering) and new devices together: the apps of both, in device order");
+        dispatch(life, 5, new int[] {8}, new String[] {C}, new int[] {UID}, new boolean[] {true}, new int[] {8},
+            new String[] {"com.example.chat"});
+        expect(pkgs(RoseAgentWork.of(UID, 0, life.snapshot(), devices(80, 8), Collections.emptyList()).items)
+            .equals(Arrays.asList("com.example.chat")), "the old device removed: its apps are gone at that generation");
+        dispatch(life, 6, new int[0], new String[0], new int[0], new boolean[0], new int[0], new String[0]);
         expect(row(life.snapshot(), tasks).state == RoseAgentWork.State.EMPTY, "all released: confirmed empty");
 
         // Labels, link and read-level failures.

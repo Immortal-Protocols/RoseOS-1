@@ -152,8 +152,28 @@ public final class CurrentAppsTest {
         expect(CurrentApps.LIVE.equals(o1.status) && o1.complete && CurrentApps.OWNED_DEVICES.equals(o1.source) && names(o1).equals(Arrays.asList(AMAZON + "*", MAPS + "!")), "one complete device: its apps, front first");
         CurrentApps.Result none0 = CurrentApps.of(false, null, CurrentApps.owned(21L, new int[0], new boolean[0], new int[0], new String[0]), null, CONTROLLER);
         expect(CurrentApps.NONE.equals(none0.status) && none0.complete && none0.apps.isEmpty(), "no device: genuine empty");
-        CurrentApps.Result two = CurrentApps.of(false, MAPS, CurrentApps.owned(22L, new int[] {7, 9}, new boolean[] {true, true}, new int[] {7, 9}, new String[] {MAPS, AMAZON}), null, CONTROLLER);
-        expect(!two.complete && CurrentApps.MULTIPLE_DEVICES.equals(two.incompleteReason) && two.apps.isEmpty(), "more than one device: cannot confirm, no members");
+        // Snapshot-only rule over several devices (agreed with Home and OS Product): the union without the controller.
+        CurrentApps.Owned twoDevices = CurrentApps.owned(22L, new int[] {7, 9}, new boolean[] {true, true}, new int[] {7, 9}, new String[] {MAPS, AMAZON});
+        CurrentApps.Result two = CurrentApps.ofDevices(false, Arrays.asList(MAPS, AMAZON), twoDevices, Arrays.asList(MAPS, AMAZON), CONTROLLER);
+        expect(two.complete && "".equals(two.incompleteReason) && names(two).equals(Arrays.asList(MAPS + "*!", AMAZON + "*!")),
+               "two complete devices: their union, each bound session's front first, targets flagged");
+        CurrentApps.Result twoUnbound = CurrentApps.ofDevices(false, Collections.<String>emptyList(), twoDevices, null, CONTROLLER);
+        expect(twoUnbound.complete && names(twoUnbound).equals(Arrays.asList(AMAZON, MAPS)), "no bindings: the same members, sorted, nothing flagged");
+        expect(CurrentApps.ofDevices(false, Arrays.asList(MAPS), twoDevices, Arrays.asList("com.example.not.listed"), CONTROLLER).apps.size() == 2,
+               "a front or target never adds a member");
+        CurrentApps.Result dup = CurrentApps.ofDevices(false, Arrays.asList(MAPS), CurrentApps.owned(25L, new int[] {7, 9}, new boolean[] {true, true},
+                new int[] {7, 7, 9}, new String[] {MAPS, AMAZON, MAPS}), Arrays.asList(MAPS), CONTROLLER);
+        expect(!dup.complete && CurrentApps.DUPLICATE_PACKAGE.equals(dup.incompleteReason) && dup.apps.isEmpty(), "a package on two devices: no members, no guessed owner");
+        CurrentApps.Result ctrlTwice = CurrentApps.ofDevices(false, Collections.<String>emptyList(), CurrentApps.owned(26L, new int[] {7, 9}, new boolean[] {true, true},
+                new int[] {7, 9, 9}, new String[] {CONTROLLER, CONTROLLER, MAPS}), null, CONTROLLER);
+        expect(ctrlTwice.complete && names(ctrlTwice).equals(Arrays.asList(MAPS)), "the controller is removed before the duplicate check");
+        CurrentApps.Result ctrlOnlyTwo = CurrentApps.ofDevices(false, Collections.<String>emptyList(), CurrentApps.owned(27L, new int[] {7, 9}, new boolean[] {true, true},
+                new int[] {7, 9}, new String[] {CONTROLLER, CONTROLLER}), null, CONTROLLER);
+        expect(CurrentApps.LIVE.equals(ctrlOnlyTwo.status) && ctrlOnlyTwo.complete && ctrlOnlyTwo.apps.isEmpty(), "controller-only devices: genuine empty");
+        CurrentApps.Result oneIncomplete = CurrentApps.ofDevices(false, Collections.<String>emptyList(), CurrentApps.owned(28L, new int[] {7, 9}, new boolean[] {true, false},
+                new int[] {7, 9}, new String[] {MAPS, AMAZON}), null, CONTROLLER);
+        expect(!oneIncomplete.complete && CurrentApps.OTHER_USER_OMITTED.equals(oneIncomplete.incompleteReason), "one incomplete device: cannot confirm");
+        expect(CurrentApps.LOCKED.equals(CurrentApps.ofDevices(true, Arrays.asList(MAPS), twoDevices, null, CONTROLLER).status), "locked: nothing, whatever the devices");
         CurrentApps.Result partialOwned = CurrentApps.of(false, MAPS, CurrentApps.owned(23L, new int[] {7}, new boolean[] {false}, new int[] {7}, new String[] {MAPS}), null, CONTROLLER);
         expect(!partialOwned.complete && CurrentApps.OTHER_USER_OMITTED.equals(partialOwned.incompleteReason), "incomplete device: other user omitted");
         CurrentApps.Result controllerOnly = CurrentApps.of(false, null, CurrentApps.owned(24L, new int[] {7}, new boolean[] {true}, new int[] {7}, new String[] {CONTROLLER}), null, CONTROLLER);

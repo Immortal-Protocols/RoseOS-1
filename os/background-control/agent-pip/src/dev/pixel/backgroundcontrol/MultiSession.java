@@ -3,8 +3,9 @@ package dev.pixel.backgroundcontrol;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** Two-app routing (OS Core MULTI-SESSION-DESIGN, agreed): which of the controller's two stable slots a request names,
@@ -20,15 +21,14 @@ import java.util.Set;
  *   and previews already require a sessionId; one naming no slot keeps its legacy refusal in slot 0.
  * - One app per session: Rose's prototype sessions may launch any app (patched launchApplication), so the platform does
  *   not keep an app in one session. The controller refuses a start or open_app for an app that is the other live slot's
- *   target or an attested member of it, and reports a package attested in both sessions as incomplete in both
- *   (app_in_two_sessions), never guessing an owner. */
+ *   target or an attested member of it. A package listed on two devices makes the snapshot membership duplicate_package
+ *   (CurrentApps.ofDevices), never a guessed owner; sessions are bindings only (bind). */
 final class MultiSession {
  static final int SLOTS=2;
  static final String ALONGSIDE="alongside";
  static final String MULTI_SESSION_UNAVAILABLE="multi_session_unavailable", SESSION_LIMIT="session_limit",
   APP_IN_OTHER_SESSION="app_in_other_session", SESSION_REQUIRED="session_required", STALE_SESSION="stale_session",
-  INVALID_MODE="invalid_mode", APP_IN_TWO_SESSIONS="app_in_two_sessions", SESSION_CLOSED="session_closed",
-  MEMBERSHIP_UNAVAILABLE="membership_unavailable", DEVICE_UNATTESTED="device_unattested";
+  INVALID_MODE="invalid_mode";
 
  /** The stable per-slot session name; slot 0 is exactly the single-session name. */
  static String name(int slot){return slot==0?"pixel-voice-background":"pixel-voice-background-"+slot;}
@@ -119,48 +119,50 @@ final class MultiSession {
   return null;
  }
 
- /** One slot's attested membership for current_apps: Android's per-session answer, joined to the owned-device snapshot
-  * by the attested deviceId. Closed ids are historical correlation only: a closed session lists nothing, and is
-  * lingering (unconfirmed) while the snapshot still lists its device. */
- static final class Membership {
-  final boolean open,closed,complete;final Integer deviceId;final List<String> packages;
-  /** open=false: no readable answer (no session, refused, malformed, or keys missing). */
-  Membership(boolean open,boolean closed,boolean complete,Integer deviceId,List<String> packages){
-   this.open=open;this.closed=closed;this.complete=complete;this.deviceId=deviceId;
-   this.packages=packages==null?Collections.<String>emptyList():packages;
-  }
-  static final Membership UNKNOWN=new Membership(false,false,false,null,null);
- }
- /** The deviceId of a per-session Bundle: an Integer, else null (missing keys mean no join). */
+ /** The deviceId of a per-session Bundle: an Integer, else null (missing keys mean no attested join). */
  static Integer deviceId(Object value){return value instanceof Integer?(Integer)value:null;}
 
- /** The reply for each slot: its packages (minus the controller and any package attested in another session), whether
-  * that list is complete, and why not. ownedDevices: the device ids of the owned-device snapshot, or null when there is
-  * no snapshot (older build or unreadable), in which case nothing is complete. */
- static final class Entry {
-  final int slot;final List<String> apps;final boolean complete;final String incompleteReason;
-  Entry(int slot,List<String> apps,boolean complete,String incompleteReason){this.slot=slot;this.apps=apps;this.complete=complete;this.incompleteReason=incompleteReason;}
- }
- static List<Entry> sessions(Slot[] slots,Membership[] members,Set<Integer> ownedDevices,String controller){
-  Set<String> seen=new HashSet<>(),duplicate=new HashSet<>();
-  for(int i=0;i<slots.length;i++)if(slots[i].occupied&&members[i].open&&!members[i].closed)
-   for(String p:new LinkedHashSet<>(members[i].packages))if(!seen.add(p))duplicate.add(p);
-  List<Entry> out=new ArrayList<>();
-  for(int i=0;i<slots.length;i++){
-   if(!slots[i].occupied)continue;
-   Membership m=members[i];
-   if(!m.open){out.add(new Entry(i,Collections.<String>emptyList(),false,MEMBERSHIP_UNAVAILABLE));continue;}
-   if(m.deviceId==null||ownedDevices==null){out.add(new Entry(i,Collections.<String>emptyList(),false,DEVICE_UNATTESTED));continue;}
-   if(m.closed){
-    // Historical id: never membership. Still listed by the snapshot means the device lingers.
-    out.add(new Entry(i,Collections.<String>emptyList(),!ownedDevices.contains(m.deviceId),ownedDevices.contains(m.deviceId)?SESSION_CLOSED:""));continue;
-   }
-   if(!ownedDevices.contains(m.deviceId)){out.add(new Entry(i,Collections.<String>emptyList(),false,DEVICE_UNATTESTED));continue;}
-   List<String> apps=new ArrayList<>();boolean dup=false;
-   for(String p:new LinkedHashSet<>(m.packages)){if(p.equals(controller))continue;if(duplicate.contains(p)){dup=true;continue;}apps.add(p);}
-   Collections.sort(apps);
-   out.add(new Entry(i,apps,m.complete&&!dup,dup?APP_IN_TWO_SESSIONS:m.complete?"":CurrentApps.OTHER_USER_OMITTED));
+ /** One occupied slot's facts for current_apps bindings, read under the controller lock. deviceId: the session's attested
+  * id (getAutomatedApps), null when unread or absent; closed: that answer says closed, so its ids are historical only;
+  * front: its topmost application window when frontKnown (ready, unblocked, unlocked, read). */
+ static final class Bind{
+  final int slot;final String sessionId,taskId,target,status,front;final Integer deviceId;final boolean closed,frontKnown;
+  Bind(int slot,String sessionId,String taskId,String target,String status,Integer deviceId,boolean closed,boolean frontKnown,String front){
+   this.slot=slot;this.sessionId=sessionId;this.taskId=taskId;this.target=target;this.status=status;this.deviceId=deviceId;
+   this.closed=closed;this.frontKnown=frontKnown;this.front=frontKnown?front:null;
   }
+ }
+ /** current_apps bindings (qa/parity bindingsContract). Bindings never decide membership or completeness: they only say
+  * which slot's session a listed device belongs to (for preview, Stop and Watch) and flag each bound session's target and
+  * one front app, both only when listed on that session's own device. */
+ static final class Bound{
+  final List<Bind> slots=new ArrayList<>();final List<Boolean> bound=new ArrayList<>();
+  final List<String> targets=new ArrayList<>(),fronts=new ArrayList<>();final Map<String,String> sessionOf=new HashMap<>();
+  String sessionOf(String pkg){return sessionOf.get(pkg);}
+ }
+ /** occupied: the slots that hold or create a session, in slot order. A slot is bound to the snapshot device whose id its
+  * open session attests. With no attested id (an older build without the keys), the one live slot of a single-slot
+  * controller is bound to the only device, as before. A closed answer's ids are historical: never bound. Two slots naming
+  * one device are both unbound. A package listed on two devices maps to no session. */
+ static Bound bind(List<Bind> occupied,CurrentApps.Owned owned){
+  Bound out=new Bound();int[] at=new int[occupied.size()];
+  for(int i=0;i<occupied.size();i++){
+   Bind b=occupied.get(i);at[i]=-1;
+   if(owned==null||b.closed)continue;
+   if(b.deviceId!=null){for(int d=0;d<owned.deviceIds.length;d++)if(owned.deviceIds[d]==b.deviceId.intValue())at[i]=d;}
+   else if(owned.deviceIds.length==1&&occupied.size()==1&&CurrentApps.live(b.status))at[i]=0;
+  }
+  for(int i=0;i<at.length;i++)for(int j=0;j<at.length;j++)if(i!=j&&at[i]>=0&&at[i]==at[j]){at[i]=-1;at[j]=-1;}
+  Set<String> conflict=new HashSet<>();
+  for(int i=0;i<occupied.size();i++){
+   Bind b=occupied.get(i);out.slots.add(b);out.bound.add(at[i]>=0);
+   if(at[i]<0)continue;
+   List<String> apps=owned.apps.get(at[i]);
+   if(CurrentApps.live(b.status)&&b.target!=null&&apps.contains(b.target))out.targets.add(b.target);
+   if(b.front!=null&&apps.contains(b.front))out.fronts.add(b.front);
+   for(String p:apps){if(out.sessionOf.containsKey(p)&&!b.sessionId.equals(out.sessionOf.get(p)))conflict.add(p);else out.sessionOf.put(p,b.sessionId);}
+  }
+  for(String p:conflict)out.sessionOf.remove(p);
   return out;
  }
 }

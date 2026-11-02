@@ -91,7 +91,7 @@ class PreviewWiringTest(unittest.TestCase):
         self.assertEqual(caps, '"list_apps","start","get_state","command","stop"', 'capabilities are unchanged: the Mac is never offered preview')
 
     def test_the_phone_command_path_never_reaches_the_preview(self):
-        guard = PHONE.index('if(pkg.equals("dev.pixel.backgroundcontrol")&&("preview".equals(command.optString("operation"))||"current_apps".equals(command.optString("operation"))))return new JSONObject().put("status","unavailable")')
+        guard = PHONE.index('if(pkg.equals("dev.pixel.backgroundcontrol")&&("preview".equals(command.optString("operation"))||"current_apps".equals(command.optString("operation"))||"owner_stop".equals(command.optString("operation"))))return new JSONObject().put("status","unavailable")')
         self.assertLess(PHONE.index('if(!AgentAppTrust.allows(pkg,sameSigner,certificates))'), guard)
         self.assertLess(guard, PHONE.index('context.getContentResolver().call(android.net.Uri.parse("content://"+authority),command.getString("operation")'))
 

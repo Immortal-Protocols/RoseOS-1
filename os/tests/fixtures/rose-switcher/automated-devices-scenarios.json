@@ -1,5 +1,5 @@
 {
- "contract": "#156/#225 common rendering contract (Home, App Core, OS Product), one class per scenario: cards (a complete same-user list, shown whole), empty (complete and empty: genuine 'No background work'), loading (not reported yet), cannot_confirm (any part of Rose's scope incomplete, in flight or more than one Rose session: no app cards), unreadable (malformed or failed read: no app cards), locked (no app cards). No class except cards shows an app card.",
+ "contract": "#156/#225 common rendering contract (Home, App Core, OS Product), one class per scenario: cards (a complete same-user list, shown whole), empty (complete and empty: genuine 'No background work'), loading (not reported yet), cannot_confirm (any of Rose's session devices incomplete, an app on two of them, or in flight: no app cards; every complete Rose device counts, bound to a session or not), unreadable (malformed or failed read: no app cards), locked (no app cards). No class except cards shows an app card.",
  "controller": "dev.pixel.backgroundcontrol",
  "controllerUid": 10123,
  "user": 0,
@@ -1339,11 +1339,210 @@
     ]
    ],
    "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2,
+     5
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
+   }
+  },
+  {
+   "name": "contract: one app on two Rose session devices (duplicate_package)",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7,
+       8
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123,
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       7,
+       "com.example.maps"
+      ],
+      [
+       8,
+       "com.example.maps"
+      ],
+      [
+       8,
+       "com.example.mail"
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "8": 8
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     5,
+     8,
+     0,
+     "com.example.maps",
+     true
+    ]
+   ],
+   "expect": {
+    "state": "UNAVAILABLE",
+    "cards": [],
+    "unconfirmed": [],
+    "reason": "Rose's apps can't be confirmed: one app is on two of Rose's screens",
+    "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "contract: one of two Rose session devices incomplete",
+   "events": [
+    {
+     "snapshot": [
+      1,
+      [
+       7,
+       8
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123,
+       10123
+      ]
+     ],
+     "complete": [
+      true,
+      false
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "8": 8
+   },
+   "released": [],
+   "tasks": [
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     true
+    ],
+    [
+     5,
+     8,
+     0,
+     "com.example.maps",
+     true
+    ]
+   ],
+   "expect": {
     "state": "UNAVAILABLE",
     "cards": [],
     "unconfirmed": [],
     "reason": "Rose's work can't be confirmed right now",
     "contract": "cannot_confirm"
+   }
+  },
+  {
+   "name": "contract: a lingering Rose device (failed close) next to the new session's device, controller on both",
+   "events": [
+    {
+     "snapshot": [
+      4,
+      [
+       8,
+       7
+      ],
+      [
+       "dev.pixel.backgroundcontrol",
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       10123,
+       10123
+      ]
+     ],
+     "apps": [
+      [
+       7,
+       "com.example.mail"
+      ],
+      [
+       7,
+       "dev.pixel.backgroundcontrol"
+      ],
+      [
+       8,
+       "com.example.maps"
+      ],
+      [
+       8,
+       "dev.pixel.backgroundcontrol"
+      ]
+     ]
+    }
+   ],
+   "sessionDevices": {
+    "7": 7,
+    "8": 8
+   },
+   "released": [],
+   "tasks": [
+    [
+     5,
+     8,
+     0,
+     "com.example.maps",
+     true
+    ],
+    [
+     6,
+     7,
+     0,
+     "dev.pixel.backgroundcontrol",
+     true
+    ],
+    [
+     2,
+     7,
+     0,
+     "com.example.mail",
+     false
+    ]
+   ],
+   "expect": {
+    "state": "AVAILABLE",
+    "cards": [
+     2,
+     5
+    ],
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
    }
   }
  ]

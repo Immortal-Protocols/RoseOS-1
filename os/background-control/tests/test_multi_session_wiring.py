@@ -101,18 +101,37 @@ class MultiSessionWiringTest(unittest.TestCase):
         self.assertLess(LAUNCH.index('otherHolds(slot,target)'), LAUNCH.index('"launchApplication"'), 'checked before every launch')
         self.assertIn('static JSONObject refused(MultiSession.Route r,Context c)throws Exception{return new JSONObject().put("status",r.refusal).put("actionExecuted",false)', CONTROLLER)
 
-    def test_membership_is_attested_owner_user_and_fail_closed(self):
-        member = span('static MultiSession.Membership member(Object s){', '\n static JSONObject capture()')
-        self.assertIn('CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000)', member,
+    def test_bindings_are_attested_owner_user_and_never_membership(self):
+        bindings = span('static MultiSession.Bound bindings(boolean locked,CurrentApps.Owned owned,List<String> front0){', '\n /** A session display')
+        self.assertIn('if(!locked&&s.session!=null)try{', bindings, 'nothing is read while locked')
+        self.assertIn('CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000)', bindings,
                       'the existing owner-user check')
-        self.assertIn('MultiSession.deviceId(b.get("deviceId"))', member)
-        self.assertNotIn('displayId', CONTROLLER, 'displayId is informational: never used for capture, input or content')
-        self.assertIn('catch(Throwable e){return MultiSession.Membership.UNKNOWN;}', member)
-        membership = span('static JSONArray membership(Context c)throws Exception{', '\n /** One session')
-        self.assertLess(membership.index('if(locked(c))'), membership.index('owned(c)'), 'not read while locked')
-        self.assertIn('new MultiSession.Entry(i,Collections.<String>emptyList(),false,CurrentApps.LOCKED)', membership)
-        # The legacy top-level answer is unchanged: two devices stay multiple_devices (cannot_confirm) for today's consumers.
-        self.assertIn('case "current_apps":return currentApps(c).put("sessions",membership(c));', ROUTE)
+        self.assertIn('if(pl!=null){closed=pl.closed;device=MultiSession.deviceId(b.get("deviceId"));}', bindings, 'closed ids are passed as historical')
+        self.assertIn('"ready".equals(s.status)&&!s.blocked?(s==active?front0:windows(s.session)):null', bindings, 'front only when ready and unblocked')
+        self.assertIn('w==null||w.isEmpty()?null:w.get(0)', bindings, 'one front: the topmost application window')
+        self.assertNotIn('displayId', CONTROLLER, 'displayId is informational: never used for capture, input, selection or content')
+        windows = span('static List<String> windows(Object s){', '\n static synchronized JSONObject route(')
+        for call in ('clearNodes(', 'snapshotId', 'nodes.', 'observed', 'getScreenshot'):
+            self.assertNotIn(call, windows, call)
+        self.assertIn('n.recycle();', windows); self.assertIn('w.recycle();', windows)
+        current = span('static synchronized JSONObject currentApps(Context c)', ' static final String EPOCH=')
+        self.assertIn('CurrentApps.ofDevices(locked,bound.targets,owned,bound.fronts,c.getPackageName())', current,
+                      'bindings only flag members; membership is the snapshot')
+        self.assertIn('.put("sessionId",owned!=null?nullable(bound.sessionOf(a.packageName)):held?id:JSONObject.NULL)', current)
+        self.assertNotIn('membership(', CONTROLLER)
+
+    def test_owner_stop_is_named_exact_confirmed_and_never_the_mac_path(self):
+        stop = ROUTE[ROUTE.index('case "owner_stop":'):]
+        self.assertIn('sid==null||sid.isEmpty()?MultiSession.Route.refuse(MultiSession.STALE_SESSION', stop, 'a missing sessionId stops nothing')
+        self.assertIn('if(!Objects.equals(task,slots[r.slot].taskId))return new JSONObject().put("status","stale_task")', stop, 'the exact task, null only for an untagged slot')
+        self.assertLess(stop.index('stale_task'), stop.index('stop(c,StopLedger.USER)'))
+        self.assertIn('put("confirmed","stopped".equals(status)&&StopLedger.USER.equals(stops.reason())\n     &&sid.equals(stops.sessionId())&&Objects.equals(task,stops.taskId()))', stop)
+        self.assertIn('return in(r.slot,()->{stop(c,StopLedger.USER);', stop, 'that slot only')
+        self.assertIn('case "owner_stop":result=Controller.route(getContext(),"owner_stop",p);break;', PROVIDER)
+        caps = re.search(r'case "capabilities":.*?new String\[\]\{([^}]*)\}', PROVIDER).group(1)
+        self.assertNotIn('owner_stop', caps, 'not advertised')
+        self.assertIn('||"owner_stop".equals(command.optString("operation"))))return new JSONObject().put("status","unavailable")', PHONE,
+                      'refused on the Mac app_command path')
 
     def test_one_request_at_a_time_across_slots(self):
         self.assertIn('if(!replacement.clear()||posting||othersUnanswered())return;', CONTROLLER)
