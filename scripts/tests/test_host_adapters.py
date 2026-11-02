@@ -378,6 +378,160 @@ class SignAdapterTest(Base):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('outside a temporary RAM directory', result.stderr)
 
+# The factory tail of the real generate-release.sh (GrapheneOS/script 09d65184), verbatim after img_from_target_files.
+FACTORY_TAIL = r"""
+BUILD_NUMBER=$BUILD
+source device/common/generate-factory-images-common.sh
+
+if [[ $DEVICE == @(yogi|kodiak|grizzly|cubs) ]]; then
+    MAX_DOWNLOAD_SIZE=0x20000000
+elif [[ $DEVICE == @(rango|mustang|blazer|frankel) ]]; then
+    MAX_DOWNLOAD_SIZE=0x10000000
+else
+    MAX_DOWNLOAD_SIZE=0xf900000
+fi
+
+# Second arg to optimize-factory-image is the name of outer zip directory.
+# Output zip name defaults to <outer zip dir name>.zip
+fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image $DEVICE-factory-$BUILD_NUMBER.zip $DEVICE-install-$BUILD_NUMBER
+
+if [[ -f "$KEY_DIR/id_ed25519" ]]; then
+    export PATH="$OLD_PATH"
+    ssh-keygen -Y sign -n "factory images" -f "$KEY_DIR/id_ed25519" $DEVICE-install-$BUILD_NUMBER.zip
+fi
+"""
+
+class SignFactoryTest(SignAdapterTest):
+    """Opt-in factory stage: synthetic stand-ins for img_from_target_files, the factory images generator and the otatools
+    fastboot (no real generator, signer or fastboot runs), plus an id_ed25519 in the key archive and an ssh-keygen on PATH
+    that must never run."""
+    def setUp(self):
+        super().setUp()
+        (self.src/'script/generate-release.sh').write_text(RELEASE_SCRIPT + FACTORY_TAIL)
+        self.calls = self.root/'calls.log'
+        self.fastboot = script(self.root/'fastboot-src', f"""
+            import sys, zipfile
+            open({str(self.calls)!r}, 'a').write('fastboot ' + ' '.join(sys.argv[1:]) + '\\n')
+            with zipfile.ZipFile(sys.argv[-1] + '.zip', 'w') as z: z.writestr(sys.argv[-1] + '/flash-all.sh', 'synthetic')""")
+        fastboot_bytes = Path(self.fastboot).read_bytes()
+        self.fastboot_sha = hashlib.sha256(fastboot_bytes).hexdigest()
+        # Like the otatools unzip: the generator source and bin/fastboot appear in the release directory.
+        script(self.tools/'img_from_target_files', f"""
+            import os, pathlib, shutil, sys
+            open({str(self.calls)!r}, 'a').write('img_from_target_files ' + ' '.join(sys.argv[1:]) + '\\n')
+            pathlib.Path(sys.argv[2]).write_bytes(b'img')
+            pathlib.Path('device/common').mkdir(parents=True)
+            pathlib.Path('device/common/generate-factory-images-common.sh').write_text(
+                'printf "factory\\\\n" > "$DEVICE-factory-$BUILD_NUMBER.zip"; echo "generator $DEVICE $BUILD_NUMBER" >> {self.calls}\\n')
+            shutil.copy({self.fastboot!r}, 'bin/fastboot'); os.chmod('bin/fastboot', 0o755)""")
+        script(self.tools/'ssh-keygen', f"open({str(self.calls)!r}, 'a').write('ssh-keygen RAN\\n')")
+        self.members.append(('release/keys/frankel/id_ed25519', b'synthetic unbound factory key'))
+        key_archive(self.secrets/'KEYS', self.members)
+        self.env['PATH'] = f'{self.tools}:' + self.env['PATH']
+        self.set_factory({'fastbootSha256': self.fastboot_sha})
+
+    def set_factory(self, factory):
+        config = json.loads(self.config.read_text())
+        config['host']['sign']['factory'] = factory
+        self.config.write_text(json.dumps(config))
+
+    def test_factory_stage_maps_the_install_archive_unsigned_beside_the_unchanged_public_outputs(self):
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(calls, ['img_from_target_files frankel-target_files.zip factory.zip', 'generator frankel 2026102802',
+            'fastboot -S 0x10000000 optimize-factory-image frankel-factory-2026102802.zip frankel-install-2026102802'])
+        install = self.release/'factory/frankel-install-2026102802.zip'
+        self.assertEqual(zipfile.ZipFile(install).namelist(), ['frankel-install-2026102802/flash-all.sh'])
+        self.assertEqual(sorted(os.listdir(self.release/'factory')), ['frankel-install-2026102802.zip'])  # no .sig
+        public = sorted(p.name for p in (self.release/'public').iterdir())
+        self.assertEqual(public, sorted(['frankel-ota_update-2026102802.zip', 'frankel-stable', 'releasekey.x509.pem',
+                                         'avb_pkmd.bin', 'UPDATE.md']))
+        receipt = json.loads((self.release/'sign-receipt.json').read_text())
+        marker = json.loads((self.src/'releases/2026102802/.rose-actions-signed.json').read_text())
+        self.assertEqual(sorted(receipt['outputs']), public)
+        self.assertEqual(sorted(marker['outputs']), public)  # recovery's exact five public outputs are unchanged
+        record = {'file': 'frankel-install-2026102802.zip', 'sha256': hashlib.sha256(install.read_bytes()).hexdigest(),
+                  'size': install.stat().st_size, 'fastbootSha256': self.fastboot_sha, 'signature': None,
+                  'signatureBasis': 'unsigned: os/flavors/frankel.json factorySigning principal and publicKey are not bound'}
+        self.assertEqual((receipt['factory'], marker['factory']), (record, record))
+        self.assertEqual((self.src/'releases/2026102802/factory/frankel-install-2026102802.zip').read_bytes(), install.read_bytes())
+        self.assertNotIn('ssh-keygen', self.calls.read_text())
+        self.assert_secrets_gone()
+
+    def test_ota_only_without_the_opt_in(self):
+        config = json.loads(self.config.read_text())
+        del config['host']['sign']['factory']
+        self.config.write_text(json.dumps(config))
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        self.assertNotIn('img_from_target_files', self.calls.read_text() if self.calls.exists() else '')
+        self.assertFalse((self.release/'factory').exists())
+        self.assertNotIn('factory', json.loads((self.release/'sign-receipt.json').read_text()))
+
+    def test_missing_or_invalid_factory_inputs_refuse_before_any_secret(self):
+        for factory, error, pattern in (({}, host_sign.AdapterSetupMissing, None),
+                                        ({'fastbootSha256': 'abc'}, host_sign.AdapterFailed, 'must be a sha256'),
+                                        ({'fastbootSha256': self.fastboot_sha, 'archiveSigning': {'principal': 'x'}},
+                                         host_sign.AdapterFailed, 'factorySigning principal and publicKey in os/flavors/frankel.json')):
+            with self.subTest(factory):
+                self.set_factory(factory)
+                with self.assertRaises(error) as ctx:
+                    host_sign.main(self.config, self.env, self.gcloud)
+                if pattern:
+                    self.assertIn(pattern, str(ctx.exception))
+                else:
+                    self.assertEqual(ctx.exception.missing, ['host.sign.factory.fastbootSha256'])
+                self.assertFalse(self.log.exists(), 'no secret is read')
+
+    def test_wrong_fastboot_stops_before_optimize_factory_image(self):
+        self.set_factory({'fastbootSha256': '0' * 64})
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaisesRegex(host_sign.AdapterFailed, 'derived release script exited'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertNotIn('fastboot -S', self.calls.read_text())
+        self.assertFalse((self.release/'factory').exists())
+        self.assert_secrets_gone()
+
+    def test_generator_output_must_exist_and_stay_unsigned(self):
+        script(self.root/'fastboot-src', f"open({str(self.calls)!r}, 'a').write('fastboot made nothing\\n')")
+        self.set_factory({'fastbootSha256': hashlib.sha256((self.root/'fastboot-src').read_bytes()).hexdigest()})
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'did not produce frankel-install-2026102802.zip'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse((self.src/'releases/2026102802/.rose-actions-signed.json').exists())
+
+    def test_a_signature_beside_the_install_archive_refuses(self):
+        script(self.root/'fastboot-src', """
+            import sys, zipfile
+            with zipfile.ZipFile(sys.argv[-1] + '.zip', 'w') as z: z.writestr('x', 'y')
+            open(sys.argv[-1] + '.zip.sig', 'w').write('unexpected signature')""")
+        self.set_factory({'fastbootSha256': hashlib.sha256((self.root/'fastboot-src').read_bytes()).hexdigest()})
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'frankel-install-2026102802.zip.sig exists'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse((self.release/'factory').exists())
+
+    def test_factory_anchor_drift_refuses(self):
+        args = ('/c/common.sh', '/k', '/p', '/R/rel/keys', '/R/wrap')
+        factory = {'fastbootSha256': '1' * 64, 'installTemplate': '{device}-install-{build}.zip'}
+        full = RELEASE_SCRIPT + FACTORY_TAIL
+        derived = host_sign.derive_release_script(full, *args, factory=factory)
+        self.assertIn("printf '%s  bin/fastboot\\n' " + '1' * 64 + ' | sha256sum --check --status', derived)
+        self.assertIn('\nbin/fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image', derived)
+        self.assertNotIn('ssh-keygen', derived)
+        self.assertNotIn('id_ed25519', derived)
+        self.assertNotIn('img_from_target_files', host_sign.derive_release_script(full, *args))  # OTA-only cut unchanged
+        fastboot_line = 'fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image $DEVICE-factory-$BUILD_NUMBER.zip $DEVICE-install-$BUILD_NUMBER\n'
+        for name, text in (('no fastboot', full.replace(fastboot_line, '')),
+                           ('two fastboot', full.replace(fastboot_line, fastboot_line * 2)),
+                           ('no generator', full.replace('source device/common/generate-factory-images-common.sh\n', '')),
+                           ('changed ssh block', full.replace('    export PATH="$OLD_PATH"\n', '')),
+                           ('extra signing', full + 'ssh-keygen -Y sign -f "$KEY_DIR/id_ed25519" x.zip\n')):
+            with self.subTest(name), self.assertRaises(host_sign.AdapterFailed):
+                host_sign.derive_release_script(text, *args, factory=factory)
+
+
+# The OTA-only tests run once, in SignAdapterTest; SignFactoryTest reuses only its fixture.
+for _name in [n for n in vars(SignAdapterTest) if n.startswith('test_')]:
+    setattr(SignFactoryTest, _name, None)
+
 class IntegrateAdapterTest(Base):
     def setUp(self):
         super().setUp()
