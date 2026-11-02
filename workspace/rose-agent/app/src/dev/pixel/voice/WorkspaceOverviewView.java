@@ -20,33 +20,35 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /** The selected HiFi's Rose's apps surface (prototypes/rose-hifi at ce126f56: views.js renderAgents/windowCard,
- * style.css .agents-surface/.agrid/.wcard/.wbody/.sdot/.stop-btn/.a-empty), drawn natively from a
- * WorkspaceOverview.Model. No visible heading (the HiFi h2 is screen-reader only); a two-column grid of 250dp cards
- * with 12dp gaps; each card is a 22dp-radius white(.86) card with a 24dp icon and label header, a #f3f6fa body and
- * a footer of status dot, short state and the round 44dp Stop.
+ * style.css .agents-surface/.agrid/.wcard/.wbody/.sdot/.stop-btn/.a-empty), drawn natively. No visible heading (the
+ * HiFi h2 is screen-reader only); a two-column grid of 250dp cards with 12dp gaps; each card is a 22dp-radius
+ * white(.86) card with a 24dp icon and label header, a #f3f6fa body and a footer of status dot, short state and the
+ * round 44dp Stop.
  *
- * Truth over decoration: the controller's ONE workspace is the only window card (its real app icon and name; its body
- * says what the task it is verifiably linked to is doing, or why it is not linked). Logical tasks are task cards
- * (Rose's mark, the real goal, progress or result), never shown as extra app windows. Finished cards are muted like
- * the HiFi's done/stopped windows. It only renders and reports taps; it starts, stops or opens nothing itself. */
+ * #225/#156 (Nathan's phone acceptance): exactly the apps CURRENTLY running under Rose's control (CurrentApps), one
+ * window card each, and nothing else: no task history or result cards. A card's body is that app's verified live
+ * frame, or the plain statement that live view isn't available: never an icon, canned or stale picture standing in for
+ * it. It only renders and reports taps; it starts, stops or opens nothing itself. */
 final class WorkspaceOverviewView extends LinearLayout {
  interface Listener {
-  void select(WorkspaceOverview.Identity task);
-  void watch(WorkspaceOverview.Identity task);
-  void stop(WorkspaceOverview.Identity task);
-  /** The workspace card was tapped. */
-  void workspace();
+  /** An app card was tapped (entryId of the app as reported). */
+  void app(String entryId);
   /** A Stop that is not available was tapped: say why instead of doing nothing. */
   void stopUnavailable(String reason);
  }
- /** The workspace app's real launcher icon, or null (the card then shows no icon rather than a made-up one). */
+ /** The app's real launcher icon, or null (the card then shows no icon rather than a made-up one). */
  interface Icons { Drawable icon(String pkg); }
+ /** The app's visible name, or "" (the card then says Rose's app rather than a guessed name). */
+ interface Labels { String label(String pkg); }
  static final int INK=0xff141922,INK2=0xff5b6680,INK3=0xff8a93a6,OK=0xff4fb36a,ATTN=0xffe6a23a,STOP=0xffd9534a,STOPPED=0xff8e98a6,DONE=0xff5b8def,IDLE=0xffaeb7c4,
   CARD=0xdbffffff,BODY=0xfff3f6fa,RING=0x2e788caa,ROSE=0xffc56f78;
  static final int CARD_DP=250,GAP_DP=12;
- private Listener listener;private Icons icons;private String lastKey="";
+ /** No live content for this app yet: said plainly, never an icon or picture standing in for it. */
+ static final String LIVE_UNAVAILABLE="Live view isn’t available for this app yet.";
+ static final String STOP_APP_UNAVAILABLE="Stopping an app from here isn’t available yet.";
+ private Listener listener;private Icons icons;private Labels labels;private String lastKey="";
  private final TextView notice;
- /** The workspace card's live image view while a verified frame is shown, and the frame it holds. */
+ /** The previewed card's live image view while a verified frame is shown, and the frame it holds. */
  private ImageView previewView;private android.graphics.Bitmap shown,preview;
 
  WorkspaceOverviewView(Context c){
@@ -55,28 +57,30 @@ final class WorkspaceOverviewView extends LinearLayout {
  }
  void setListener(Listener l){listener=l;}
  void setIcons(Icons i){icons=i;lastKey="";}
+ void setLabels(Labels l){labels=l;lastKey="";}
 
- /** Rebuilds only when the model's key changes, so repeated reads and re-entry redraw nothing. */
- void show(WorkspaceOverview.Model m){show(m,"",null);}
- void show(WorkspaceOverview.Model m,String note){show(m,note,null);}
- /** note: the HiFi observe line under the grid (why the last tap opened nothing); empty hides it. preview: the
-  * workspace card's accepted live frame (WorkspaceOverviewPreview, already checked against the card's verified
-  * binding), or null for the text body. A new frame for the same card only swaps the image. */
- void show(WorkspaceOverview.Model m,String note,WorkspaceOverviewPreview.Frame preview){
-  if(m==null)return;
-  android.graphics.Bitmap image=preview!=null&&preview.image instanceof android.graphics.Bitmap&&m.watchRow!=null?(android.graphics.Bitmap)preview.image:null;
-  String key=m.key()+"\n"+note+"\n"+(image!=null);
+ /** The apps currently running under Rose's control (CurrentApps), one HiFi window card each, and nothing else: no
+  * task history or results. state/reason/apps from CurrentApps.Tracker. note: the HiFi observe line (why the last tap
+  * opened nothing). previewEntry/frame: the one card whose verified live frame WorkspaceOverviewPreview accepted (null:
+  * every card says live view isn't available). Rebuilds only when what is shown changes; a new frame for the same card
+  * only swaps the image. */
+ void show(CurrentApps.State state,String reason,java.util.List<CurrentApps.App> apps,String note,String previewEntry,WorkspaceOverviewPreview.Frame frame){
+  android.graphics.Bitmap image=frame!=null&&frame.image instanceof android.graphics.Bitmap&&previewEntry!=null?(android.graphics.Bitmap)frame.image:null;
+  StringBuilder k=new StringBuilder().append(state).append('|').append(reason).append('|').append(note).append('|').append(image!=null?previewEntry:"-");
+  for(CurrentApps.App a:apps)k.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state);
+  String key=k.toString();
   if(key.equals(lastKey)){if(image!=null&&previewView!=null&&shown!=image){previewView.setImageBitmap(image);shown=image;fitTop(previewView);}return;}
   lastKey=key;previewView=null;shown=null;this.preview=image;
   removeAllViews();
-  if(!m.empty.isEmpty()){
-   TextView e=text(m.empty,15,INK2,false);e.setGravity(Gravity.CENTER);
+  if(state!=CurrentApps.State.AVAILABLE){
+   // HiFi .a-empty: nothing running under control, or why it can't be known; never stale cards.
+   TextView e=text(state==CurrentApps.State.EMPTY?WorkspaceOverview.EMPTY:CurrentApps.text(reason),15,INK2,false);e.setGravity(Gravity.CENTER);
+   e.setTag(state==CurrentApps.State.EMPTY?"empty":"unavailable");
    LayoutParams ep=new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT);ep.topMargin=dp(220);addView(e,ep);
    return;
   }
   java.util.List<View> cards=new java.util.ArrayList<>();
-  if(m.card.shown())cards.add(workspaceCard(m));
-  for(WorkspaceOverview.Row r:m.rows)cards.add(taskCard(r));
+  for(CurrentApps.App a:apps)cards.add(appCard(a,image!=null&&a.entryId.equals(previewEntry)));
   for(int i=0;i<cards.size();i+=2){
    LinearLayout row=new LinearLayout(getContext());row.setOrientation(HORIZONTAL);
    LayoutParams rp=new LayoutParams(LayoutParams.MATCH_PARENT,dp(CARD_DP));if(i>0)rp.topMargin=dp(GAP_DP);
@@ -90,17 +94,18 @@ final class WorkspaceOverviewView extends LinearLayout {
    LayoutParams np=new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT);np.topMargin=dp(14);addView(notice,np);}
  }
 
- /** The one real workspace: its app's icon and name, what its linked task is doing (or why none is linked), state. */
- View workspaceCard(WorkspaceOverview.Model m){
-  WorkspaceOverview.Card c=m.card;
-  Drawable icon=c.pkg.isEmpty()||icons==null?null:icons.icon(c.pkg);
-  WorkspaceOverview.Row linked=m.watchRow;
-  String headline=linked!=null?linked.title:c.label,body=linked!=null?(linked.detail.isEmpty()?linked.state:linked.detail):c.detail;
-  View card=card(icon==null?null:new ImageView(getContext()),icon,c.app,headline,body,c.dot,c.shortState,null,false,c.dot==WorkspaceOverview.Dot.STOPPED);
-  if(preview!=null&&linked!=null)showPreview((LinearLayout)card,c.app);
-  card.setContentDescription("Rose’s workspace: "+c.app+", "+c.shortState+". "+(linked!=null?WorkspaceOverview.WATCH_OK:m.cardReason()));
-  card.setOnClickListener(v->{if(listener!=null)listener.workspace();});
-  card.setTag("workspace");
+ /** One app running under Rose's control: its real icon and name, its live frame when verified (otherwise the plain
+  * statement that live view isn't available), its state, and a Stop that says why it isn't available. */
+ View appCard(final CurrentApps.App a,boolean live){
+  Drawable icon=icons==null?null:icons.icon(a.packageName);
+  String label=labels==null?"":labels.label(a.packageName);if(label==null||label.isEmpty())label=WorkspaceOverview.WORKSPACE;
+  WorkspaceOverview.Dot dot=CurrentApps.STATE_WAITING.equals(a.state)?WorkspaceOverview.Dot.ATTENTION:WorkspaceOverview.Dot.RUNNING;
+  String st=CurrentApps.STATE_WAITING.equals(a.state)?"Waiting":CurrentApps.STATE_STARTING.equals(a.state)?"Starting":"Running";
+  View card=card(icon==null?null:new ImageView(getContext()),icon,label,"",LIVE_UNAVAILABLE,dot,st,false,false);
+  if(live)showPreview((LinearLayout)card,label);
+  card.setContentDescription(label+", "+st+(live?". Live view":". "+LIVE_UNAVAILABLE));
+  card.setOnClickListener(v->{if(listener!=null)listener.app(a.entryId);});
+  card.setTag("app:"+a.entryId);
   return card;
  }
  /** Replaces the window card's text body with its live frame (HiFi .wbody content), top-aligned and cropped to the
@@ -120,19 +125,7 @@ final class WorkspaceOverviewView extends LinearLayout {
   float s=Math.max(img.getWidth()/(float)d.getIntrinsicWidth(),img.getHeight()/(float)d.getIntrinsicHeight());
   android.graphics.Matrix m=new android.graphics.Matrix();m.setScale(s,s);m.postTranslate((img.getWidth()-d.getIntrinsicWidth()*s)/2f,0);img.setImageMatrix(m);
  }
- /** A logical task: Rose's mark, its real goal, progress or result, state and its Stop (never an app window). */
- View taskCard(final WorkspaceOverview.Row r){
-  String body=!r.detail.isEmpty()?r.detail:!r.result.isEmpty()?r.result:r.state;
-  String state=r.stopNote.isEmpty()||r.stopNote.equals(WorkspaceOverview.STOP_NO_ROUTE)?r.state:r.stopNote;
-  boolean muted=r.dot==WorkspaceOverview.Dot.DONE||r.dot==WorkspaceOverview.Dot.STOPPED;
-  View card=card(new Glyph(getContext(),Glyph.ROSE,ROSE),null,r.title,"",body,r.dot,state,r,true,muted);
-  card.setContentDescription(r.description());
-  card.setOnClickListener(v->{if(listener!=null)listener.select(r.identity);});
-  card.setTag("task:"+r.identity.id);
-  return card;
- }
-
- View card(View iconView,Drawable icon,String label,String headline,String body,WorkspaceOverview.Dot dot,String state,final WorkspaceOverview.Row row,boolean task,boolean muted){
+ View card(View iconView,Drawable icon,String label,String headline,String body,WorkspaceOverview.Dot dot,String state,boolean task,boolean muted){
   LinearLayout card=new LinearLayout(getContext());card.setOrientation(VERTICAL);card.setClickable(true);card.setFocusable(true);
   GradientDrawable bg=new GradientDrawable();bg.setColor(CARD);bg.setCornerRadius(dp(22));bg.setStroke(Math.max(1,dp(1)),RING);card.setBackground(bg);
   card.setElevation(dp(6));card.setClipToOutline(true);
@@ -154,25 +147,22 @@ final class WorkspaceOverviewView extends LinearLayout {
   foot.addView(dot(dot),new LayoutParams(dp(9),dp(9)));
   TextView st=text(state,11.5f,INK2,false);st.setSingleLine(true);st.setEllipsize(TextUtils.TruncateAt.END);st.setPadding(dp(7),0,dp(4),0);
   foot.addView(st,new LayoutParams(0,LayoutParams.WRAP_CONTENT,1f));
-  foot.addView(stopButton(row),new LayoutParams(dp(44),dp(44)));
+  foot.addView(stopButton(label),new LayoutParams(dp(44),dp(44)));
   card.addView(foot);
   if(muted)card.setAlpha(.82f);
   return card;
  }
 
- /** .stop-btn: a 44dp round button with a red rounded square; greyed (.stop-btn:disabled) when Stop isn't available,
-  * yet a tap then says why. The workspace card's Stop is always unavailable: Stop belongs to a task. */
- View stopButton(final WorkspaceOverview.Row r){
-  boolean can=r!=null&&r.canStop;
-  Glyph g=new Glyph(getContext(),Glyph.STOP,can?STOP:0xffb8c0cb);
-  GradientDrawable bg=new GradientDrawable(GradientDrawable.Orientation.TL_BR,can?new int[]{0xffffffff,0xfffbe9e6}:new int[]{0xfff1f4f8,0xfff1f4f8});
-  bg.setShape(GradientDrawable.OVAL);bg.setStroke(Math.max(1,dp(1)),can?0x38d9534a:0x2e788caa);g.setBackground(bg);
+ /** .stop-btn: a 44dp round button with a red rounded square, greyed (.stop-btn:disabled): no route releases an app's
+  * control from here yet, so a tap says why instead of doing nothing (never a Stop that can't be confirmed). */
+ View stopButton(String label){
+  Glyph g=new Glyph(getContext(),Glyph.STOP,0xffb8c0cb);
+  GradientDrawable bg=new GradientDrawable();bg.setColor(0xfff1f4f8);
+  bg.setShape(GradientDrawable.OVAL);bg.setStroke(Math.max(1,dp(1)),0x2e788caa);g.setBackground(bg);
   g.setClickable(true);g.setFocusable(true);
-  String title=r==null?"this workspace":r.title;
-  String why=r==null?"Stop belongs to a task, not to the workspace.":r.stopNote.isEmpty()?(r.dot==WorkspaceOverview.Dot.RUNNING?WorkspaceOverview.STOP_NO_ROUTE:"This task isn’t running."):r.stopNote;
-  g.setContentDescription(can?"Stop "+title:"Stop "+title+", unavailable. "+why);
-  g.setOnClickListener(v->{if(listener==null)return;if(can)listener.stop(r.identity);else listener.stopUnavailable(why);});
-  g.setTag(can?"stop":"stop-unavailable");
+  g.setContentDescription("Stop "+label+", unavailable. "+STOP_APP_UNAVAILABLE);
+  g.setOnClickListener(v->{if(listener!=null)listener.stopUnavailable(STOP_APP_UNAVAILABLE);});
+  g.setTag("stop-unavailable");
   return g;
  }
 
