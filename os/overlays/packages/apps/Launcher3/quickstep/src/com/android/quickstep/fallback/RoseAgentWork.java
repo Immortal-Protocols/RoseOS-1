@@ -304,11 +304,15 @@ final class RoseAgentWork {
         }
         boolean consistent = owners.received && owners.appsReceived && owners.appsGeneration == owners.generation;
         if (session.isEmpty() && !roseApps) {
-            if (consistent && partial) return unavailable(UNCONFIRMED);
-            // No session task and no Rose app: truthfully empty, unless a Rose device is listed whose apps are not
-            // yet known for this generation (then not reported or unconfirmed, below).
-            if (!owners.received || rose.isEmpty() || consistent) {
+            // "No background work" only when none is confirmed: the platform lists no session display at all, or the
+            // complete task list and one consistent ownership snapshot agree there is none. A possibly truncated task
+            // list, or session displays before any ownership report, is not proof of none.
+            if (!complete) return unavailable(UNCONFIRMED);
+            if (sessionDevices.isEmpty() && releasedDisplays.isEmpty() && rose.isEmpty()) {
                 return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
+            }
+            if (consistent) {
+                return partial ? unavailable(UNCONFIRMED) : new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
             }
         }
         if (!owners.received || !owners.appsReceived) return unavailable(NOT_REPORTED);

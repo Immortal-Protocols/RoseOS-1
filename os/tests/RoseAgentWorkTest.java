@@ -452,6 +452,19 @@ public final class RoseAgentWorkTest {
         expect(RoseAgentWork.EMPTY.equals(work(roseOwns(), devices(), Collections.emptyList()).reason),
             "complete and empty: genuinely empty");
 
+        // "No background work" only when none is confirmed (old-fails on e9f10a3, which said empty in both).
+        RoseAgentWork truncatedNone = RoseAgentWork.of(CONTROLLER_UID, 0, rose, devices(7, 7), Collections.emptyList(),
+            Arrays.asList(task(1, 0, 0, "com.human.app", true)), false);
+        expect(truncatedNone.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(truncatedNone.reason),
+            "a possibly truncated task list is not proof of none");
+        RoseAgentWork beforeOwnership = RoseAgentWork.of(CONTROLLER_UID, 0, new RoseAgentWork.Ownership().snapshot(),
+            devices(7, 7), Collections.emptyList(), Arrays.asList(task(1, 0, 0, "com.human.app", true)), true);
+        expect(beforeOwnership.state == RoseAgentWork.State.UNAVAILABLE && RoseAgentWork.NOT_REPORTED.equals(beforeOwnership.reason),
+            "a session display exists but no ownership is reported yet: loading, not empty");
+        expect(RoseAgentWork.of(CONTROLLER_UID, 0, new RoseAgentWork.Ownership().snapshot(), devices(),
+            Collections.emptyList(), Arrays.asList(task(1, 0, 0, "com.human.app", true)), true).state == RoseAgentWork.State.EMPTY,
+            "no ComputerControl session device exists at all: genuinely none");
+
         par.reset();
         expect(!par.snapshot().received && !par.snapshot().appsReceived && par.snapshot().appsByDevice.isEmpty(),
             "reconnect clears devices and apps");
