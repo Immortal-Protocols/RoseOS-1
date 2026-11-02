@@ -47,6 +47,10 @@ public class WorkspaceOverviewRenderTest {
         public void watch(App app, WorkspaceOverview.Binding atTap) { calls.add("watch:" + app.entryId + ":" + atTap.sessionId); }
         public void endCall() { calls.add("end"); }
         public void requestPreview(WorkspaceOverviewPreview.Request r) { previews.add(r); }
+        boolean route = true; int checks;
+        public boolean stopRoute() { return route; }
+        public void ownerStop(String sessionId, String taskId) { calls.add("owner_stop:" + sessionId + ":" + taskId); }
+        public void checkStops() { checks++; }
         void report(String reg, long gen, App... apps) { snapshot = new Snapshot(reg, gen, true, "", Arrays.asList(apps)); }
     }
     static App app(String id, String pkg) { return new App(id, pkg, CurrentApps.STATE_RUNNING, null); }
@@ -197,4 +201,103 @@ public class WorkspaceOverviewRenderTest {
         h.live = false; p.refresh(); layout(p);
         assertNotNull("not connected: the middle well opens Rose", described(p, "Open Rose"));
     }
+
+    // ---------- Agreed two-app contract: snapshot membership, per-session bindings, Stop and live view ----------
+    static List<CurrentApps.Binding> pair(String status1) {
+        return Arrays.asList(new CurrentApps.Binding(0, "s-0", "rose-ws-0", CALC, "ready", true, true), new CurrentApps.Binding(1, "s-1", "rose-ws-1", MAPS, status1, true, true));
+    }
+    static Snapshot twoApps(long gen, String status1) {
+        return CurrentApps.fromBindings("r", "live", gen, Arrays.asList(new CurrentApps.ReplyApp(CALC, true, true, "s-0"), new CurrentApps.ReplyApp(MAPS, true, true, "s-1")), pair(status1), "e-1", true);
+    }
+
+    @Test public void twoSessionsTwoCardsEachItsOwnLiveView() throws Exception {
+        CurrentApps.SessionStop.class.getName(); WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host(); h.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel p = panel(h);
+        assertNotNull(tagged(p, "app:s-0/" + CALC)); assertNotNull(tagged(p, "app:s-1/" + MAPS));
+        assertEquals("one preview request per ready session", 2, h.previews.size());
+        WorkspaceOverviewPreview.Request r0 = null, r1 = null;
+        for (WorkspaceOverviewPreview.Request r : h.previews) { if (r.sessionId().equals("s-0")) r0 = r; else r1 = r; }
+        assertEquals("rose-ws-0", r0.taskId()); assertEquals("rose-ws-1", r1.taskId());
+        Bitmap a = synthetic(320, 693), b = synthetic(320, 600);
+        p.previewAnswer(r0, ok("s-0", "rose-ws-0", CALC, a)); p.previewAnswer(r1, ok("s-1", "rose-ws-1", MAPS, b)); layout(p);
+        assertTrue(((android.graphics.drawable.BitmapDrawable) preview(tagged(p, "app:s-0/" + CALC)).getDrawable()).getBitmap() == a);
+        assertTrue(((android.graphics.drawable.BitmapDrawable) preview(tagged(p, "app:s-1/" + MAPS)).getDrawable()).getBitmap() == b);
+        Host c = new Host(); c.snapshot = twoApps(1, "ready"); WorkspaceOverviewPanel pc = panel(c);
+        WorkspaceOverviewPreview.Request c0 = c.previews.get(0);
+        pc.previewAnswer(c0, ok(c0.sessionId().equals("s-0") ? "s-1" : "s-0", c0.taskId(), c0.sessionId().equals("s-0") ? CALC : MAPS, synthetic(320, 693))); layout(pc);
+        assertNull("one session's frame never lands on the other's card", preview(pc));
+        Host d = new Host(); d.snapshot = twoApps(1, "blocked"); WorkspaceOverviewPanel pd = panel(d);
+        assertEquals("blocked session: no request", 1, d.previews.size());
+        assertTrue(texts(tagged(pd, "app:s-1/" + MAPS)).contains("Waiting"));
+        RosePresenceRenderTest.save(draw(p), "two-sessions-live-synthetic");
+    }
+
+    @Test public void boundAppsHaveNoWatchUntilThePerSessionViewer() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host(); h.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel p = panel(h);
+        tagged(p, "app:s-1/" + MAPS).performClick(); layout(p);
+        assertTrue("no second-session view: said plainly", texts(p).contains(WorkspaceOverviewPanel.WATCH_APP_UNAVAILABLE));
+        for (String call : h.calls) assertFalse("never a watch for a bound app", call.startsWith("watch:"));
+    }
+
+    @Test public void lingeringAppsStayWithoutControls() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host();
+        h.snapshot = CurrentApps.fromBindings("r", "live", 3L, Arrays.asList(new CurrentApps.ReplyApp(CALC, false, false, null), new CurrentApps.ReplyApp(MAPS, true, true, "s-1")),
+            Arrays.asList(new CurrentApps.Binding(1, "s-1", "rose-ws-1", MAPS, "ready", true, true)), "e-1", true);
+        WorkspaceOverviewPanel p = panel(h);
+        View lingering = tagged(p, "app:owned/" + CALC);
+        assertNotNull("lingering app still listed", lingering);
+        assertNotNull("its Stop is unavailable", tagged(lingering, "stop-unavailable"));
+        assertNull(preview(lingering));
+        assertEquals("only the bound session is previewed", 1, h.previews.size());
+    }
+
+    @Test public void stopAsksThenStopsTheWholeSessionAndConfirmsOnlyItsPair() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host(); h.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel p = panel(h);
+        tagged(tagged(p, "app:s-1/" + MAPS), "stop").performClick(); layout(p);
+        View sheet = tagged(p, "stop-sheet");
+        assertNotNull("the HiFi sheet asks first", sheet);
+        assertTrue(texts(sheet).contains(WorkspaceOverviewPanel.STOP_SHEET_TITLE));
+        boolean names = false; for (String t : texts(sheet)) names |= t.contains("Maps");
+        assertTrue("it names the session's apps", names);
+        tagged(sheet, "sheet-keep").performClick(); layout(p);
+        assertNull("Keep working closes it", tagged(p, "stop-sheet"));
+        assertTrue("nothing sent", h.calls.isEmpty());
+        tagged(tagged(p, "app:s-1/" + MAPS), "stop").performClick(); layout(p);
+        tagged(tagged(p, "stop-sheet"), "sheet-stop").performClick(); layout(p);
+        assertEquals(Arrays.asList("owner_stop:s-1:rose-ws-1"), h.calls);
+        assertTrue("stopping, never stopped on the request", texts(tagged(p, "app:s-1/" + MAPS)).contains(WorkspaceOverview.STOP_STOPPING));
+        assertNull("no second Stop while waiting", tagged(tagged(p, "app:s-1/" + MAPS), "stop"));
+        assertNotNull("the other session's Stop is unaffected", tagged(tagged(p, "app:s-0/" + CALC), "stop"));
+        p.stopAnswer("s-1", "rose-ws-1", false); layout(p);
+        p.stopSummary("cleanup_failed", "user", "s-1", "rose-ws-1"); p.stopSummary("stopped", "user", "s-0", "rose-ws-0"); p.stopSummary("stopped", "user", "s-1", "rose-ws-9"); layout(p);
+        assertTrue("accepted, cleanup_failed or another pair never confirm", texts(tagged(p, "app:s-1/" + MAPS)).contains(WorkspaceOverview.STOP_STOPPING));
+        p.stopSummary("stopped", "user", "s-1", "rose-ws-1"); layout(p);
+        assertTrue("confirmed", texts(p).contains(WorkspaceOverviewPanel.STOP_DONE_NOTE));
+        assertNotNull("the app stays listed until the snapshot drops it", tagged(p, "app:s-1/" + MAPS));
+        RosePresenceRenderTest.save(draw(p), "two-sessions-stop-confirmed");
+    }
+
+    @Test public void stopTimesOutToUnknownAndSurvivesReentry() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host(); h.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel p = panel(h);
+        tagged(tagged(p, "app:s-0/" + CALC), "stop").performClick();
+        tagged(tagged(p, "stop-sheet"), "sheet-stop").performClick(); layout(p);
+        described(p, "Back").performClick(); p.open(); layout(p);
+        assertTrue("a pending Stop survives Back and re-entry", texts(tagged(p, "app:s-0/" + CALC)).contains(WorkspaceOverview.STOP_STOPPING));
+        synchronized (WorkspaceOverviewPanel.STOPS) { for (CurrentApps.SessionStop st : WorkspaceOverviewPanel.STOPS.values()) st.tick(System.currentTimeMillis() + CurrentApps.SessionStop.TIMEOUT_MS); }
+        p.refresh(); layout(p);
+        assertTrue("timeout: unknown, never stopped", texts(p).contains(WorkspaceOverviewPanel.STOP_UNKNOWN_NOTE) || hasUnknown());
+        assertNotNull("an unknown Stop may be tried again", tagged(tagged(p, "app:s-0/" + CALC), "stop"));
+        Host n = new Host(); n.route = false; n.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel pn = panel(n);
+        assertNull("no owner-Stop route: no Stop", tagged(pn, "stop"));
+    }
+    static boolean hasUnknown() { synchronized (WorkspaceOverviewPanel.STOPS) { for (CurrentApps.SessionStop st : WorkspaceOverviewPanel.STOPS.values()) if (st.phase == CurrentApps.SessionStop.Phase.UNKNOWN) return true; } return false; }
 }

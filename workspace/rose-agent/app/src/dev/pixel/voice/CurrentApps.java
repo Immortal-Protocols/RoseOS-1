@@ -43,7 +43,12 @@ final class CurrentApps {
  /** One app running under agent control. entryId: stable while that app instance runs (never reused for another). */
  static final class App {
   final String entryId,packageName,state;final Preview preview;
-  App(String entryId,String packageName,String state,Preview preview){this.entryId=nz(entryId);this.packageName=nz(packageName);this.state=nz(state);this.preview=preview;}
+  /** The controller session this app is bound to ("" when unbound or lingering), and the Stop handle for that session
+   * (both ids, from its binding; null when Home may not stop it). Neither ever decides membership. */
+  final String sessionId;final Preview stop;
+  App(String entryId,String packageName,String state,Preview preview){this(entryId,packageName,state,preview,"",null);}
+  App(String entryId,String packageName,String state,Preview preview,String sessionId,Preview stop){
+   this.entryId=nz(entryId);this.packageName=nz(packageName);this.state=nz(state);this.preview=preview;this.sessionId=nz(sessionId);this.stop=stop;}
  }
  /** One complete report. */
  static final class Snapshot {
@@ -87,7 +92,8 @@ final class CurrentApps {
   /** Empty unless UNAVAILABLE. */
   synchronized String reason(){return state()==State.UNAVAILABLE?(received?reason:reason.isEmpty()?NOT_REPORTED:reason):"";}
   synchronized String key(){StringBuilder b=new StringBuilder(registration).append('|').append(received).append('|').append(reason);
-   for(App a:apps)b.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state).append(':').append(a.preview==null?"-":a.preview.sessionId+"/"+a.preview.controllerTaskId);
+   for(App a:apps)b.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state).append(':').append(a.preview==null?"-":a.preview.sessionId+"/"+a.preview.controllerTaskId)
+    .append(':').append(a.sessionId).append(':').append(a.stop==null?"-":a.stop.sessionId+"/"+a.stop.controllerTaskId);
    return b.toString();}
  }
 
@@ -145,7 +151,16 @@ final class CurrentApps {
   * guessed). The preview handle goes only to the topmost front app: PR340 frames the session display, so the apps
   * behind it say live view isn't available. registrationFallback names this reader when instance is absent. */
  static final class ReplyApp { final String packageName;final boolean front,target;
-  ReplyApp(String packageName,boolean front,boolean target){this.packageName=packageName;this.front=front;this.target=target;} }
+  /** The controller session the snapshot joins this app to (string or null when unbound/lingering). */
+  final String sessionId;
+  ReplyApp(String packageName,boolean front,boolean target){this(packageName,front,target,null);}
+  ReplyApp(String packageName,boolean front,boolean target,String sessionId){this.packageName=packageName;this.front=front;this.target=target;this.sessionId=sessionId;} }
+ /** One controller slot's binding (agreed two-app contract, sessions[]): controls and live view only, never membership. */
+ static final class Binding {
+  final int slot;final String sessionId,taskId,targetPackage,sessionStatus;final boolean bound,frontKnown;
+  Binding(int slot,String sessionId,String taskId,String targetPackage,String sessionStatus,boolean bound,boolean frontKnown){
+   this.slot=slot;this.sessionId=nz(sessionId);this.taskId=nz(taskId);this.targetPackage=nz(targetPackage);this.sessionStatus=nz(sessionStatus);this.bound=bound;this.frontKnown=frontKnown;}
+ }
  static Snapshot fromReply(String registrationFallback,String status,String sessionId,String taskId,Long generation,List<ReplyApp> apps,
    String instance,String sessionStatus,Boolean complete){
   return fromReply(registrationFallback,status,sessionId,taskId,generation,apps,instance,sessionStatus,complete,null);
@@ -196,6 +211,79 @@ final class CurrentApps {
   }
   for(App a:out)if(a.packageName.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
   return new Snapshot(reg,gen,true,"",out);
+ }
+ /** The agreed two-app owned_devices reply (contract A): membership is the owner-attested snapshot only (apps[] with
+  * complete), bindings (sessions[]) give each app's controls and live view and never decide membership.
+  * <ul>
+  * <li>registration: "controller:"+controllerEpoch (a controller restart is a new registration); without it the reader's
+  * own. generation is the whole-response generation, ordered within an epoch.</li>
+  * <li>complete:false (locked, unreadable, incomplete device, duplicate_package...) is cannot-confirm; none+complete is
+  * genuinely empty; a complete live list is shown in full, lingering and unbound apps included.</li>
+  * <li>An app is bound when its sessionId names a bound binding. Its state is that binding's sessionStatus (ready
+  * running, blocked waiting, launching starting; anything else running); unbound or lingering apps are running with no
+  * live view, Stop or Watch.</li>
+  * <li>Live view: front:true as reported, on a bound session that is ready with frontKnown and both ids. Exactly one
+  * front per session is promised; if a session reports more than one, none of them gets live view (Home never picks).</li>
+  * <li>Stop: a bound session with both ids (an untagged slot is left to its own notification).</li>
+  * </ul> */
+ static Snapshot fromBindings(String registrationFallback,String status,Long generation,List<ReplyApp> apps,List<Binding> bindings,
+   String controllerEpoch,Boolean complete){
+  String reg=nz(controllerEpoch).isEmpty()?registrationFallback:"controller:"+controllerEpoch;long gen=generation==null?Long.MIN_VALUE:generation;
+  if(status==null||generation==null)return Snapshot.unavailable(reg,gen,UNREADABLE);
+  switch(status){
+   case "locked":return Snapshot.unavailable(reg,gen,LOCKED);
+   case "none":if(apps!=null&&!apps.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+    return Boolean.TRUE.equals(complete)?new Snapshot(reg,gen,true,"",Collections.<App>emptyList()):Snapshot.unavailable(reg,gen,INCOMPLETE);
+   case "live":break;
+   default:return Snapshot.unavailable(reg,gen,UNREADABLE);
+  }
+  if(apps==null)return Snapshot.unavailable(reg,gen,MALFORMED);
+  if(!Boolean.TRUE.equals(complete))return Snapshot.unavailable(reg,gen,INCOMPLETE);
+  java.util.Map<String,Binding> bySession=new java.util.HashMap<>();
+  if(bindings!=null)for(Binding b:bindings)if(b!=null&&b.bound&&!b.sessionId.isEmpty())bySession.put(b.sessionId,b);
+  java.util.Map<String,Integer> fronts=new java.util.HashMap<>();Set<String> seen=new HashSet<>();
+  for(ReplyApp a:apps){
+   if(a==null||nz(a.packageName).isEmpty()||!seen.add(a.packageName))return Snapshot.unavailable(reg,gen,MALFORMED);
+   if(a.front&&!nz(a.sessionId).isEmpty())fronts.put(a.sessionId,fronts.containsKey(a.sessionId)?fronts.get(a.sessionId)+1:1);
+  }
+  List<App> out=new ArrayList<>();
+  for(ReplyApp a:apps){
+   Binding b=nz(a.sessionId).isEmpty()?null:bySession.get(a.sessionId);
+   String state=STATE_RUNNING;Preview preview=null,stop=null;
+   if(b!=null){
+    switch(b.sessionStatus){case "blocked":state=STATE_WAITING;break;case "launching":state=STATE_STARTING;break;default:state=STATE_RUNNING;}
+    boolean ids=!b.sessionId.isEmpty()&&!b.taskId.isEmpty();
+    if(ids)stop=new Preview(b.sessionId,b.taskId);
+    if(ids&&a.front&&b.frontKnown&&"ready".equals(b.sessionStatus)&&fronts.get(b.sessionId)==1)preview=new Preview(b.sessionId,b.taskId);
+   }
+   out.add(new App((b==null?"owned":b.sessionId)+"/"+a.packageName,a.packageName,state,preview,b==null?"":b.sessionId,stop));
+  }
+  return new Snapshot(reg,gen,true,"",out);
+ }
+
+ /** One owner Stop of one controller session, captured at the tap (both ids). It is STOPPED only on an authoritative
+  * confirmation for exactly that pair: owner_stop's confirmed:true, or a routed summary entry whose slot status is
+  * stopped with stopReason user and stoppedSessionId/stoppedTaskId equal to the captured ids. An accepted request,
+  * cleanup_failed, stale_session or a reused slot never confirms; no confirmation by TIMEOUT_MS is UNKNOWN (it may still
+  * be running), and a later confirmation still settles it. A confirmed Stop does not remove the apps: they stay listed
+  * until the owner snapshot drops their device. */
+ static final class SessionStop {
+  enum Phase { SENDING, STOPPING, STOPPED, UNKNOWN }
+  static final long TIMEOUT_MS=15000;
+  final String sessionId,taskId;final long startedAt;Phase phase=Phase.SENDING;
+  SessionStop(String sessionId,String taskId,long now){this.sessionId=nz(sessionId);this.taskId=nz(taskId);this.startedAt=now;}
+  /** Waiting for its confirmation (an unknown Stop may be tried again). */
+  boolean pending(){return phase==Phase.SENDING||phase==Phase.STOPPING;}
+  /** owner_stop's own reply: confirmed (null when absent or the call failed). Anything but true waits for a summary. */
+  void answered(Boolean confirmed){if(phase==Phase.STOPPED)return;if(Boolean.TRUE.equals(confirmed))phase=Phase.STOPPED;else if(phase==Phase.SENDING)phase=Phase.STOPPING;}
+  /** One routed sessions-summary entry (slot status, stopReason, stoppedSessionId, stoppedTaskId) as read. */
+  void summary(String slotStatus,String stopReason,String stoppedSessionId,String stoppedTaskId){
+   if(phase==Phase.STOPPED)return;
+   if("stopped".equals(slotStatus)&&"user".equals(stopReason)&&sessionId.equals(nz(stoppedSessionId))&&taskId.equals(nz(stoppedTaskId))&&!sessionId.isEmpty())phase=Phase.STOPPED;
+  }
+  void tick(long now){if((phase==Phase.SENDING||phase==Phase.STOPPING)&&now-startedAt>=TIMEOUT_MS)phase=Phase.UNKNOWN;}
+  /** Still worth asking for a confirmation (a late one may still settle an unknown Stop, until twice the timeout). */
+  boolean checking(long now){return phase!=Phase.STOPPED&&now-startedAt<2*TIMEOUT_MS;}
  }
  static String nz(String s){return s==null?"":s;}
 }

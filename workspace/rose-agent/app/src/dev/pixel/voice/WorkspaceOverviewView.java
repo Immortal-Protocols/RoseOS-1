@@ -35,6 +35,8 @@ final class WorkspaceOverviewView extends LinearLayout {
   void app(String entryId);
   /** A Stop that is not available was tapped: say why instead of doing nothing. */
   void stopUnavailable(String reason);
+  /** An available Stop was tapped (the app's bound session, both ids): the panel asks before stopping. */
+  default void stop(CurrentApps.App app){}
  }
  /** The app's real launcher icon, or null (the card then shows no icon rather than a made-up one). */
  interface Icons { Drawable icon(String pkg); }
@@ -48,8 +50,11 @@ final class WorkspaceOverviewView extends LinearLayout {
  static final String STOP_APP_UNAVAILABLE="Stopping an app from here isn’t available yet.";
  private Listener listener;private Icons icons;private Labels labels;private String lastKey="";
  private final TextView notice;
- /** The previewed card's live image view while a verified frame is shown, and the frame it holds. */
- private ImageView previewView;private android.graphics.Bitmap shown,preview;
+ /** Each previewed card's live image view (by entry) while a verified frame is shown, and the frame it holds. */
+ private final java.util.Map<String,ImageView> previewViews=new java.util.HashMap<>();
+ private final java.util.Map<String,android.graphics.Bitmap> shownFrames=new java.util.HashMap<>();
+ /** Stop state per bound session (sessionId to SENDING/STOPPING/STOPPED/UNKNOWN), and whether Home has a Stop route. */
+ private java.util.Map<String,CurrentApps.SessionStop.Phase> stops=java.util.Collections.emptyMap();private boolean stopRoute;
 
  WorkspaceOverviewView(Context c){
   super(c);setOrientation(VERTICAL);
@@ -65,12 +70,24 @@ final class WorkspaceOverviewView extends LinearLayout {
   * every card says live view isn't available). Rebuilds only when what is shown changes; a new frame for the same card
   * only swaps the image. */
  void show(CurrentApps.State state,String reason,java.util.List<CurrentApps.App> apps,String note,String previewEntry,WorkspaceOverviewPreview.Frame frame){
-  android.graphics.Bitmap image=frame!=null&&frame.image instanceof android.graphics.Bitmap&&previewEntry!=null?(android.graphics.Bitmap)frame.image:null;
-  StringBuilder k=new StringBuilder().append(state).append('|').append(reason).append('|').append(note).append('|').append(image!=null?previewEntry:"-");
-  for(CurrentApps.App a:apps)k.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state);
+  java.util.Map<String,WorkspaceOverviewPreview.Frame> f=new java.util.HashMap<>();if(previewEntry!=null&&frame!=null)f.put(previewEntry,frame);
+  show(state,reason,apps,note,f,java.util.Collections.<String,CurrentApps.SessionStop.Phase>emptyMap(),false);
+ }
+ /** frames: the verified live frame per entry (one per previewed session at most); stops: each bound session's Stop
+  * state; stopRoute: the host can send an owner Stop. */
+ void show(CurrentApps.State state,String reason,java.util.List<CurrentApps.App> apps,String note,java.util.Map<String,WorkspaceOverviewPreview.Frame> frames,
+   java.util.Map<String,CurrentApps.SessionStop.Phase> stops,boolean stopRoute){
+  java.util.Map<String,android.graphics.Bitmap> images=new java.util.HashMap<>();
+  for(java.util.Map.Entry<String,WorkspaceOverviewPreview.Frame> e:frames.entrySet())if(e.getValue()!=null&&e.getValue().image instanceof android.graphics.Bitmap)images.put(e.getKey(),(android.graphics.Bitmap)e.getValue().image);
+  StringBuilder k=new StringBuilder().append(state).append('|').append(reason).append('|').append(note).append('|').append(new java.util.TreeSet<>(images.keySet())).append('|').append(new java.util.TreeMap<>(stops)).append('|').append(stopRoute);
+  for(CurrentApps.App a:apps)k.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state).append(':').append(a.sessionId).append(':').append(a.stop!=null);
   String key=k.toString();
-  if(key.equals(lastKey)){if(image!=null&&previewView!=null&&shown!=image){previewView.setImageBitmap(image);shown=image;fitTop(previewView);}return;}
-  lastKey=key;previewView=null;shown=null;this.preview=image;
+  if(key.equals(lastKey)){
+   for(java.util.Map.Entry<String,android.graphics.Bitmap> e:images.entrySet()){ImageView v=previewViews.get(e.getKey());
+    if(v!=null&&shownFrames.get(e.getKey())!=e.getValue()){v.setImageBitmap(e.getValue());shownFrames.put(e.getKey(),e.getValue());fitTop(v);}}
+   return;
+  }
+  lastKey=key;previewViews.clear();shownFrames.clear();this.stops=stops;this.stopRoute=stopRoute;
   removeAllViews();
   if(state!=CurrentApps.State.AVAILABLE){
    // HiFi .a-empty: nothing running under control, or why it can't be known; never stale cards.
@@ -80,7 +97,7 @@ final class WorkspaceOverviewView extends LinearLayout {
    return;
   }
   java.util.List<View> cards=new java.util.ArrayList<>();
-  for(CurrentApps.App a:apps)cards.add(appCard(a,image!=null&&a.entryId.equals(previewEntry)));
+  for(CurrentApps.App a:apps)cards.add(appCard(a,images.get(a.entryId)));
   for(int i=0;i<cards.size();i+=2){
    LinearLayout row=new LinearLayout(getContext());row.setOrientation(HORIZONTAL);
    LayoutParams rp=new LayoutParams(LayoutParams.MATCH_PARENT,dp(CARD_DP));if(i>0)rp.topMargin=dp(GAP_DP);
@@ -96,13 +113,16 @@ final class WorkspaceOverviewView extends LinearLayout {
 
  /** One app running under Rose's control: its real icon and name, its live frame when verified (otherwise the plain
   * statement that live view isn't available), its state, and a Stop that says why it isn't available. */
- View appCard(final CurrentApps.App a,boolean live){
+ View appCard(final CurrentApps.App a,android.graphics.Bitmap frame){
+  boolean live=frame!=null;
+  CurrentApps.SessionStop.Phase stopping=a.sessionId.isEmpty()?null:stops.get(a.sessionId);
+  boolean inFlight=stopping==CurrentApps.SessionStop.Phase.SENDING||stopping==CurrentApps.SessionStop.Phase.STOPPING;
   Drawable icon=icons==null?null:icons.icon(a.packageName);
   String label=labels==null?"":labels.label(a.packageName);if(label==null||label.isEmpty())label=WorkspaceOverview.WORKSPACE;
-  WorkspaceOverview.Dot dot=CurrentApps.STATE_WAITING.equals(a.state)?WorkspaceOverview.Dot.ATTENTION:WorkspaceOverview.Dot.RUNNING;
-  String st=CurrentApps.STATE_WAITING.equals(a.state)?"Waiting":CurrentApps.STATE_STARTING.equals(a.state)?"Starting":"Running";
-  View card=card(icon==null?null:new ImageView(getContext()),icon,label,"",LIVE_UNAVAILABLE,dot,st,false,false);
-  if(live)showPreview((LinearLayout)card,label);
+  WorkspaceOverview.Dot dot=inFlight?WorkspaceOverview.Dot.STOPPING:CurrentApps.STATE_WAITING.equals(a.state)?WorkspaceOverview.Dot.ATTENTION:WorkspaceOverview.Dot.RUNNING;
+  String st=inFlight?WorkspaceOverview.STOP_STOPPING:CurrentApps.STATE_WAITING.equals(a.state)?"Waiting":CurrentApps.STATE_STARTING.equals(a.state)?"Starting":"Running";
+  View card=card(icon==null?null:new ImageView(getContext()),icon,label,"",LIVE_UNAVAILABLE,dot,st,false,false,stopButton(a,label,inFlight));
+  if(live)showPreview((LinearLayout)card,label,a.entryId,frame);
   card.setContentDescription(label+", "+st+(live?". Live view":". "+LIVE_UNAVAILABLE));
   card.setOnClickListener(v->{if(listener!=null)listener.app(a.entryId);});
   card.setTag("app:"+a.entryId);
@@ -110,14 +130,14 @@ final class WorkspaceOverviewView extends LinearLayout {
  }
  /** Replaces the window card's text body with its live frame (HiFi .wbody content), top-aligned and cropped to the
   * body like the HiFi's window content; the text stays as the spoken description. */
- void showPreview(LinearLayout card,String app){
+ void showPreview(LinearLayout card,String app,String entryId,android.graphics.Bitmap preview){
   View body=card.getChildAt(1);LayoutParams lp=(LayoutParams)body.getLayoutParams();
   FrameLayout frame=new FrameLayout(getContext());GradientDrawable bb=new GradientDrawable();bb.setColor(BODY);bb.setCornerRadius(dp(14));frame.setBackground(bb);frame.setClipToOutline(true);
   ImageView img=new ImageView(getContext());img.setScaleType(ImageView.ScaleType.MATRIX);img.setImageBitmap(preview);
   img.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitTop(img));
   img.setContentDescription("Live view of Rose’s workspace in "+app);img.setTag("preview");
   frame.addView(img,new FrameLayout.LayoutParams(-1,-1));
-  card.removeViewAt(1);card.addView(frame,1,lp);previewView=img;shown=preview;
+  card.removeViewAt(1);card.addView(frame,1,lp);previewViews.put(entryId,img);shownFrames.put(entryId,preview);
  }
  /** Scales the frame to the body's width and pins its top (the app's top bar), cropping only the bottom. */
  static void fitTop(ImageView img){
@@ -126,6 +146,9 @@ final class WorkspaceOverviewView extends LinearLayout {
   android.graphics.Matrix m=new android.graphics.Matrix();m.setScale(s,s);m.postTranslate((img.getWidth()-d.getIntrinsicWidth()*s)/2f,0);img.setImageMatrix(m);
  }
  View card(View iconView,Drawable icon,String label,String headline,String body,WorkspaceOverview.Dot dot,String state,boolean task,boolean muted){
+  return card(iconView,icon,label,headline,body,dot,state,task,muted,stopButton(null,label,false));
+ }
+ View card(View iconView,Drawable icon,String label,String headline,String body,WorkspaceOverview.Dot dot,String state,boolean task,boolean muted,View stopView){
   LinearLayout card=new LinearLayout(getContext());card.setOrientation(VERTICAL);card.setClickable(true);card.setFocusable(true);
   GradientDrawable bg=new GradientDrawable();bg.setColor(CARD);bg.setCornerRadius(dp(22));bg.setStroke(Math.max(1,dp(1)),RING);card.setBackground(bg);
   card.setElevation(dp(6));card.setClipToOutline(true);
@@ -147,7 +170,7 @@ final class WorkspaceOverviewView extends LinearLayout {
   foot.addView(dot(dot),new LayoutParams(dp(9),dp(9)));
   TextView st=text(state,11.5f,INK2,false);st.setSingleLine(true);st.setEllipsize(TextUtils.TruncateAt.END);st.setPadding(dp(7),0,dp(4),0);
   foot.addView(st,new LayoutParams(0,LayoutParams.WRAP_CONTENT,1f));
-  foot.addView(stopButton(label),new LayoutParams(dp(44),dp(44)));
+  foot.addView(stopView,new LayoutParams(dp(44),dp(44)));
   card.addView(foot);
   if(muted)card.setAlpha(.82f);
   return card;
@@ -155,14 +178,19 @@ final class WorkspaceOverviewView extends LinearLayout {
 
  /** .stop-btn: a 44dp round button with a red rounded square, greyed (.stop-btn:disabled): no route releases an app's
   * control from here yet, so a tap says why instead of doing nothing (never a Stop that can't be confirmed). */
- View stopButton(String label){
-  Glyph g=new Glyph(getContext(),Glyph.STOP,0xffb8c0cb);
-  GradientDrawable bg=new GradientDrawable();bg.setColor(0xfff1f4f8);
-  bg.setShape(GradientDrawable.OVAL);bg.setStroke(Math.max(1,dp(1)),0x2e788caa);g.setBackground(bg);
+ View stopButton(final CurrentApps.App a,String label,boolean inFlight){
+  // Available only for a bound session with both ids, while the host has an owner-Stop route and no Stop of that
+  // session is waiting for its confirmation. It stops the whole session (every app listed under it).
+  final boolean can=a!=null&&a.stop!=null&&stopRoute&&!inFlight;
+  Glyph g=new Glyph(getContext(),Glyph.STOP,can?STOP:0xffb8c0cb);
+  GradientDrawable bg=can?new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xffffffff,0xfffbe9e6}):new GradientDrawable();
+  if(!can)bg.setColor(0xfff1f4f8);
+  bg.setShape(GradientDrawable.OVAL);bg.setStroke(Math.max(1,dp(1)),can?0x38d9534a:0x2e788caa);g.setBackground(bg);
   g.setClickable(true);g.setFocusable(true);
-  g.setContentDescription("Stop "+label+", unavailable. "+STOP_APP_UNAVAILABLE);
-  g.setOnClickListener(v->{if(listener!=null)listener.stopUnavailable(STOP_APP_UNAVAILABLE);});
-  g.setTag("stop-unavailable");
+  final String why=inFlight?WorkspaceOverview.STOP_STOPPING:STOP_APP_UNAVAILABLE;
+  g.setContentDescription(can?"Stop Rose’s session for "+label:"Stop "+label+", unavailable. "+why);
+  g.setOnClickListener(v->{if(listener==null)return;if(can)listener.stop(a);else listener.stopUnavailable(why);});
+  g.setTag(can?"stop":"stop-unavailable");
   return g;
  }
 

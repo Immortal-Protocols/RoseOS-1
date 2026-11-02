@@ -335,13 +335,60 @@ public final class RoseConversationActivity extends Activity {
     org.json.JSONObject o=new org.json.JSONObject(raw);
     java.util.List<CurrentApps.ReplyApp> apps=null;org.json.JSONArray a=o.optJSONArray("apps");
     if(a!=null){apps=new java.util.ArrayList<>();for(int i=0;i<a.length()&&i<64;i++){org.json.JSONObject x=a.optJSONObject(i);
-     apps.add(x==null?null:new CurrentApps.ReplyApp(x.optString("packageName",""),x.optBoolean("front"),x.optBoolean("target")));}}
+     apps.add(x==null?null:new CurrentApps.ReplyApp(x.optString("packageName",""),x.optBoolean("front"),x.optBoolean("target"),jsonString(x,"sessionId")));}}
+    // The agreed two-app contract: owned_devices with sessions[] bindings (slot/bound/frontKnown). Membership is the
+    // snapshot; bindings only give each app's state, live view and Stop.
+    java.util.List<CurrentApps.Binding> bindings=bindings(o.optJSONArray("sessions"));
+    if(CurrentApps.SOURCE_OWNED_DEVICES.equals(jsonString(o,"source"))&&bindings!=null)
+     return CurrentApps.fromBindings(reg,jsonString(o,"status"),o.has("generation")?o.optLong("generation"):null,apps,bindings,jsonString(o,"controllerEpoch"),
+      o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null);
     return CurrentApps.fromReply(reg,o.isNull("status")?null:o.optString("status",null),o.isNull("sessionId")?null:o.optString("sessionId",null),
      o.isNull("taskId")?null:o.optString("taskId",null),o.has("generation")?o.optLong("generation"):null,apps,
      o.isNull("instance")?null:o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
      o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null,o.isNull("source")?null:o.optString("source",null));
    }finally{client.close();}
   }catch(Exception e){return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);}
+ }
+ /** A JSON string field as read: null when absent, JSON null or not a string. */
+ static String jsonString(org.json.JSONObject o,String key){Object v=o.opt(key);return v instanceof String?(String)v:null;}
+ /** sessions[] as bindings ({slot, sessionId, taskId, targetPackage, sessionStatus, bound, frontKnown}); null when the
+  * reply has no binding-shaped sessions (an older controller). */
+ static java.util.List<CurrentApps.Binding> bindings(org.json.JSONArray a){
+  if(a==null)return null;java.util.List<CurrentApps.Binding> out=new java.util.ArrayList<>();
+  for(int i=0;i<a.length()&&i<8;i++){org.json.JSONObject x=a.optJSONObject(i);if(x==null||!x.has("bound")||!x.has("slot"))return null;
+   out.add(new CurrentApps.Binding(x.optInt("slot",-1),jsonString(x,"sessionId"),jsonString(x,"taskId"),jsonString(x,"targetPackage"),jsonString(x,"sessionStatus"),
+    x.optBoolean("bound"),x.optBoolean("frontKnown")));}
+  return out;
+ }
+ /** owner_stop {sessionId, taskId} for exactly the captured pair (phone-local; the Mac's app_command refuses it). Its
+  * confirmed flag is read as given; failures are no confirmation, never stopped. Nothing is logged. */
+ Boolean ownerStopCall(String sessionId,String taskId){
+  try{
+   android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
+   if(client==null)return null;
+   try{
+    Bundle extras=new Bundle();org.json.JSONObject p=new org.json.JSONObject().put("sessionId",sessionId).put("taskId",taskId==null||taskId.isEmpty()?org.json.JSONObject.NULL:taskId);
+    extras.putString("params",p.toString());
+    Bundle reply=client.call("owner_stop",null,extras);String raw=reply==null?null:reply.getString("result");if(raw==null||raw.length()>65536)return null;
+    org.json.JSONObject o=new org.json.JSONObject(raw);return o.has("confirmed")&&!o.isNull("confirmed")?o.optBoolean("confirmed"):null;
+   }finally{client.close();}
+  }catch(Exception e){return null;}
+ }
+ /** The routed sessions summary (a get_state with no session): each slot's status, stopReason and stopped pair. */
+ java.util.List<String[]> stopSummary(){
+  java.util.List<String[]> out=new java.util.ArrayList<>();
+  try{
+   android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
+   if(client==null)return out;
+   try{
+    Bundle extras=new Bundle();extras.putString("params","{}");
+    Bundle reply=client.call("get_state",null,extras);String raw=reply==null?null:reply.getString("result");if(raw==null||raw.length()>65536)return out;
+    org.json.JSONArray a=new org.json.JSONObject(raw).optJSONArray("sessions");
+    if(a!=null)for(int i=0;i<a.length()&&i<8;i++){org.json.JSONObject x=a.optJSONObject(i);if(x==null)continue;
+     out.add(new String[]{jsonString(x,"status"),jsonString(x,"stopReason"),jsonString(x,"stoppedSessionId"),jsonString(x,"stoppedTaskId")});}
+   }finally{client.close();}
+  }catch(Exception e){}
+  return out;
  }
  WorkspaceOverviewPanel.Source overviewSource(){
   return new WorkspaceOverviewPanel.Source(){
@@ -354,6 +401,15 @@ public final class RoseConversationActivity extends Activity {
  WorkspaceOverviewPanel.Actions overviewActions(){
   return new WorkspaceOverviewPanel.Actions(){
    public void endCall(){send("end");}
+   public boolean stopRoute(){return true;}
+   public void ownerStop(final String sessionId,final String taskId){
+    new Thread(()->{final Boolean confirmed=ownerStopCall(sessionId,taskId);
+     runOnUiThread(()->{if(!isFinishing()&&!isDestroyed()&&overview!=null)overview.stopAnswer(sessionId,taskId,confirmed);});},"rose-owner-stop").start();
+   }
+   public void checkStops(){
+    new Thread(()->{final java.util.List<String[]> entries=stopSummary();
+     runOnUiThread(()->{if(isFinishing()||isDestroyed()||overview==null)return;for(String[] e:entries)overview.stopSummary(e[0],e[1],e[2],e[3]);});},"rose-stop-check").start();
+   }
    public void requestPreview(final WorkspaceOverviewPreview.Request r){
     new Thread(()->{final WorkspaceOverviewPreview.Response a=readPreview(r);
      runOnUiThread(()->{if(!isFinishing()&&!isDestroyed()&&overview!=null)overview.previewAnswer(r,a);});},"rose-overview-preview").start();
