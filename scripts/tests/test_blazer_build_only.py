@@ -162,6 +162,7 @@ class RecipeTest(Fixture):
         self.assertEqual({s: (prep[s]['boundBytes'], prep[s]['timeoutSeconds']) for s in prep['stages']},
             {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
         self.assertEqual(prep['totalTimeoutSeconds'], 23400)
+        self.assertEqual(prep['source']['cleanupSeconds'], 240)
         self.assertEqual((prep['source']['includeRoots'], prep['source']['exclusionsFrom']),
             (['out_adevtool_deps'], 'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions'))
         policy = bb.pointer(ROOT, prep['source']['exclusionsFrom'])
@@ -227,6 +228,8 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation']['source'].update(boundBytes=None), 'preparation.source needs a positive boundBytes'),
             (lambda r: r['preparation']['source'].update(includeRoots=['out_adevtool_deps', 'out']), 'include exactly out_adevtool_deps'),
             (lambda r: r['preparation']['source'].update(stagingPrefix='.tmp-'), 'stage under .source-staging-'),
+            (lambda r: r['preparation']['source'].update(cleanupSeconds=300), 'cleanupSeconds must be positive and below'),
+            (lambda r: r['preparation']['source'].update(cleanupSeconds=0), 'cleanupSeconds must be positive and below'),
             (lambda r: r['preparation']['source'].update(exclusionsFrom='os/release-pipeline/frankel.json host'),
              'must exclude repo metadata, keys'),
             (lambda r: r['preparation']['source'].update(exclusionsFrom='os/release-pipeline/missing.json x'), 'alpha exclusion policy'),
@@ -661,6 +664,45 @@ class SourceRunTest(Fixture):
         # It is never replaced: a second run refuses before writing.
         self.assertIn('already exists', self.problems('source', source_root=str(t)))
 
+    def test_cleanup_is_bounded_and_a_remainder_is_named_and_blocks(self):
+        tree = self.tmp/'own'
+        (tree/'a/b').mkdir(parents=True)
+        for i in range(5):
+            (tree/'a/b'/f'f{i}').write_text('x')
+        outside = self.tmp/'outside'
+        outside.write_text('kept')
+        os.symlink(outside, tree/'a/link')
+        os.symlink(self.tmp, tree/'a/dirlink')
+        os.chmod(tree/'a/b', 0o555)
+        os.chmod(tree/'a', 0o555)
+        ticks = iter(range(10 ** 6))
+        modes, chmod = [], os.chmod
+        def spy(path, mode, *a, **k):  # root (this container) ignores directory modes; the builder's uid does not
+            modes.append((Path(path), mode))
+            return chmod(path, mode, *a, **k)
+        os.chmod = spy
+        try:
+            self.assertEqual(bb.remove_own(tree, 3, clock=lambda: next(ticks)), (False, 2))
+        finally:
+            os.chmod = chmod
+        self.assertEqual(modes, [(tree/'a/b', 0o555 | 0o700)], 'owner write is added before entries are removed')
+        self.assertTrue(tree.exists(), 'the remainder is left in place')
+        self.assertEqual(bb.remove_own(tree, 60), (True, 9 - 2 + 1), "the rest plus the root")
+        self.assertFalse(os.path.lexists(tree))
+        self.assertEqual((outside.read_text(), self.tmp.is_dir()), ('kept', True), 'links are never followed')
+        # A stop whose cleanup budget runs out writes its receipt, names the remainder, and the next run refuses.
+        stuck = json.loads(json.dumps(self.synthetic))
+        stuck['preparation']['source']['cleanupSeconds'] = 0
+        def full(source, destination, entry):
+            raise OSError(28, 'No space left on device')
+        ok, done = self.construct(stuck, copier=full)
+        self.assertEqual((ok, done['stagingRemoved'], done['removedEntries'], done['cleanupSeconds']), (False, False, 0, 0))
+        self.assertTrue(Path(done['stagingLeft']).is_dir())
+        self.assertEqual(Path(done['stagingLeft']).parent, self.target.parent)
+        self.assertIn(f'interrupted construction left {Path(done["stagingLeft"]).name}',
+                      self.problems('source', source_root=str(self.target)))
+        self.unverified(done)
+
     def test_projection_is_dense_and_block_rounded(self):
         entries = [{'type': 'file', 'size': 1}, {'type': 'file', 'size': 4096}, {'type': 'file', 'size': 0},
                    {'type': 'dir'}, {'type': 'link'}]
@@ -779,15 +821,15 @@ class SourceRunTest(Fixture):
         ok, done = self.construct(quick, copier=slow)
         self.assertEqual((ok, done['createdParentLeft'], os.path.lexists(parent)), (False, False, False))
         # A SIGTERM during cleanup (e.g. the outer timeout) does not interrupt removing this run's own staging.
-        original = bb.alpha_source.make_removable
-        def interrupted(path):
+        original = bb.remove_own
+        def interrupted(*args):
             os.kill(os.getpid(), signal.SIGTERM)
-            return original(path)
-        bb.alpha_source.make_removable = interrupted
+            return original(*args)
+        bb.remove_own = interrupted
         try:
             ok, done = self.construct(quick, copier=slow)
         finally:
-            bb.alpha_source.make_removable = original
+            bb.remove_own = original
         self.assertEqual((ok, done['stagingRemoved'], os.path.lexists(parent)), (False, True, False))
         def broken(source, destination, entry):
             raise KeyError('unexpected')

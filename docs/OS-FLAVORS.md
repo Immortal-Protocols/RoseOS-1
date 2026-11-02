@@ -216,9 +216,13 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     missing parent (mode 0700) under `/home/pixelbuild`.
   - The copy is staged as `.source-staging-<nonce>` beside `ISO` and renamed only when complete.
   - A wall-clock timer, SIGTERM or the sampled reserve stops planning or copying. Only this run's
-    staging (and a parent it created, if empty) is removed. `completed.json` gives `refused` (nothing
-    written) or `stopped` with `partial` entries/bytes of the selection, `stagingRemoved` and
-    `targetExists`. A complete copy records `selectionSha256` (each file's sha256 included).
+    staging (and a parent it created, if empty) is removed, within `cleanupSeconds` (240 s, inside
+    Release's 300 s outer margin; removal of ~1.7 million files is unmeasured). Whatever is not removed
+    in time stays, is named (`stagingLeft`) and blocks the next `source` run until it is removed
+    deliberately.
+  - `completed.json` gives `refused` (nothing written) or `stopped` with `partial` entries/bytes of
+    the selection, `stagingRemoved`, `removedEntries` and `targetExists`. A complete copy records
+    `selectionSha256` (each file's sha256 included).
   - No process starts. Per-file identity is checked against the plan, and the production lock is held
     for the whole stage (up to 2 h, so production builds wait).
   - Basis, historical, not current: the alpha's copy of the same root with these exclusions allocated

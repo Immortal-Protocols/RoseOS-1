@@ -16,7 +16,8 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
             policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly adevtool's
             host-tool deps; the full selection is measured before anything is written and refused above its bound, the
             copy is staged beside ISOLATED and renamed into place only when complete, and a stop (timeout, SIGTERM,
-            reserve) removes only this run's staging directory; no subprocess, reflink, hardlink or mount. The result is a
+            reserve) removes only this run's staging directory within cleanupSeconds (a remainder is left, named and
+            blocks the next run); no subprocess, reflink, hardlink or mount. The result is a
             byte snapshot of the production working tree, Frankel integration included: its project revisions are
             not verified (see SOURCE_PROVENANCE)
   download  --host --lock --download-dir
@@ -197,6 +198,8 @@ def preparation_problems(recipe, root, contract):
     if vendor.get('collisionPaths') != [f'vendor/google_devices/{DEVICE}', unpacked]:
         problems.append(f'preparation.vendor.collisionPaths must be the generated vendor tree and {unpacked}')
     source = prep.get('source') or {}
+    if not (positive(source.get('cleanupSeconds')) and source['cleanupSeconds'] < 300):
+        problems.append('preparation.source.cleanupSeconds must be positive and below the 300 s outer-timeout margin')
     if source.get('includeRoots') != [recipe['adevtool']['depsDir']] or source.get('stagingPrefix') != '.source-staging-':
         problems.append(f'preparation.source must include exactly {recipe["adevtool"]["depsDir"]} and stage under .source-staging-')
     try:
@@ -658,13 +661,33 @@ def projected_bytes(entries, block):
     apparent size), and the root, each directory and each link take one block."""
     return block + sum(-(-e['size'] // block) * block if e['type'] == 'file' else block for e in entries)
 
+def remove_own(path, seconds, clock=time.monotonic):
+    """Remove this run's own staging tree bottom-up within SECONDS: (removed, entries removed). Links are unlinked,
+    never followed; each directory gets owner write first (copied modes may be read-only). When the budget runs out
+    the rest is left in place, so a stop always finishes with a receipt instead of an unbounded removal."""
+    deadline, removed = clock() + seconds, 0
+    for base, dirs, files in os.walk(path, topdown=False):
+        os.chmod(base, stat.S_IMODE(os.lstat(base).st_mode) | stat.S_IRWXU)
+        for name in files + dirs:
+            if clock() >= deadline:
+                return False, removed
+            target = os.path.join(base, name)
+            if os.path.isdir(target) and not os.path.islink(target):
+                os.rmdir(target)
+            else:
+                os.unlink(target)
+            removed += 1
+    os.rmdir(path)
+    return True, removed + 1
+
 def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.monotonic, planner=alpha_source.plan_copy,
               copier=alpha_source.copy_file):
     """The source stage after admission, under the lock: (ok, outcome). The production root is only read. The whole
     selection is planned before anything is written; the copy is staged beside the source root and renamed into place
     only when complete. A wall-clock timer (timeoutSeconds) and SIGTERM stop planning or copying at any point, and
     available bytes are sampled against the reserve every sampleSeconds; a stop removes only this run's staging
-    directory (and the parent it created, when empty). No process is started."""
+    directory (and the parent it created, when empty) within cleanupSeconds, leaving and naming any remainder. No
+    process is started."""
     prep, src = recipe['preparation'], op['sourceRoot']
     spec, reserve = prep['source'], recipe['capacity']['reserveBytes']
     outcome = {'base': str(production), 'target': str(src), 'boundBytes': spec['boundBytes'], 'boundKind': prep['boundsKind'],
@@ -732,12 +755,13 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)  # cleanup of this run's own staging is not interrupted
         outcome['stagingRemoved'] = None
         if staging is not None and os.path.lexists(staging):
+            outcome['cleanupSeconds'] = spec['cleanupSeconds']
             try:
-                alpha_source.make_removable(staging)
-                shutil.rmtree(staging)
-                outcome['stagingRemoved'] = True
+                outcome['stagingRemoved'], outcome['removedEntries'] = remove_own(staging, spec['cleanupSeconds'], clock)
             except OSError as cleanup:
-                outcome.update(stagingRemoved=False, stagingLeft=str(staging), cleanupError=type(cleanup).__name__)
+                outcome.update(stagingRemoved=False, cleanupError=type(cleanup).__name__)
+            if not outcome['stagingRemoved']:
+                outcome['stagingLeft'] = str(staging)  # blocks the next source run until it is removed deliberately
         if created_parent:
             try:
                 src.parent.rmdir()
