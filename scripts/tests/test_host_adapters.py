@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -922,6 +923,164 @@ class FactoryPackageTest(unittest.TestCase):
         with mock.patch.dict(hfp.LIMITS, {'logBytes': 10}), mock.patch.object(hfp.os, 'killpg', lambda pid, sig: None):
             category, _ = hfp.run_script(self.root/'s.sh', self.root, log, popen=lambda argv, **k: Proc(b'x' * 100, False))
         self.assertEqual(category, 'log_overflow')
+
+
+# ---- FOLD-FIRMWARE-OBSERVE: FBPK firmware-carried partition observation (synthetic containers, no real firmware)
+_spec = importlib.util.spec_from_file_location('rango_firmware_observe', SCRIPTS/'rango-firmware-observe.py')
+rfo = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rfo)
+FBPK_FIXTURE = SCRIPTS/'tests/fixtures/fbpack-adevtool-17df3b79'
+
+
+def fbpk_v2(entries, platform=b'synthetic', pack=b'synthetic-1', header=112, entry_size=104, total=None, version=2):
+    """entries: (type, name, payload, product, slotted) or with an explicit (offset, size) as the 6th item."""
+    table_end = 112 + len(entries) * 104
+    body, rows, cursor = b'', [], table_end
+    for entry in entries:
+        kind, name, payload, product, slotted = entry[:5]
+        offset, size = entry[5] if len(entry) > 5 else (cursor, len(payload))
+        if len(entry) <= 5:
+            body += payload
+            cursor += len(payload)
+        rows.append(struct.pack('<I36s40sQQII', kind, name.encode(), product.encode(), offset, size, slotted, 0))
+    data_len = table_end + len(body)
+    head = b'FBPK' + struct.pack('<III16s64sIIII', version, header, entry_size, platform, pack, 0, 0, len(entries),
+                                 data_len if total is None else total)
+    return head + b''.join(rows) + body
+
+
+def fbpk_v1(entries, unknown=0, cut_chain=False):
+    blob, at = b'', 84
+    parts = []
+    for i, (kind, name, payload) in enumerate(entries):
+        start = at + 56
+        following = start + len(payload) if not (cut_chain and i == 0) else 10 ** 9
+        parts.append(struct.pack('<I32sIIIII', kind, name.encode(), unknown, len(payload), 0, following, 0) + payload)
+        at = start + len(payload)
+    body = b''.join(parts)
+    return b'FBPK' + struct.pack('<I64sIII', 1, b'synthetic', 0, len(entries), 84 + len(body)) + body
+
+
+class FirmwareObserveTest(unittest.TestCase):
+    AB = ['abl', 'bl31', 'boot', 'modem', 'system', 'tzsw']
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.parts = {p: os.urandom(64 + i) for i, p in enumerate(('abl', 'bl31', 'tzsw', 'modem'))}
+        self.bootloader = fbpk_v2([(0, 'partition-table', b'gpt', '', 0)] +
+                                  [(1, p, self.parts[p], 'rango', 1) for p in ('abl', 'bl31', 'tzsw')])
+        self.radio = fbpk_v1([(1, 'modem', self.parts['modem'])])
+
+    def tf(self, bootloader=None, radio=None, extra=(), drop=(), ab=None):
+        members = [('META/ab_partitions.txt', '\n'.join(ab or self.AB).encode() + b'\n'),
+                   ('IMAGES/boot.img', b'b'), ('IMAGES/system.img', b's'),
+                   ('RADIO/bootloader.img', self.bootloader if bootloader is None else bootloader),
+                   ('RADIO/radio.img', self.radio if radio is None else radio)]
+        members += [(f'RADIO/{p}.img', b) for p, b in self.parts.items()]
+        members = [m for m in members if m[0] not in drop] + list(extra)
+        path = self.root/'tf.zip'
+        with warnings_ignored():
+            path.write_bytes(target_files_zip(members))
+        return path
+
+    def observe(self, path=None, **kw):
+        path = path or self.tf(**kw)
+        return rfo.observe(path, sha(path.read_bytes()), 'rango', '2026103001', 'synthetic run 1 attempt 1')
+
+    def test_maps_each_container_and_satisfies_the_classifier_contract(self):
+        fw = self.observe()
+        self.assertEqual((fw['schema'], fw['device'], fw['build'], fw['synthetic']),
+                         ('roseos.factory-firmware-observation.v1', 'rango', '2026103001', False))
+        self.assertEqual(fw['bootloader']['partitions'], ['abl', 'bl31', 'tzsw'])
+        self.assertEqual(fw['radio']['partitions'], ['modem'])
+        self.assertEqual((fw['bootloader']['sha256'], fw['radio']['sha256']), (sha(self.bootloader), sha(self.radio)))
+        self.assertEqual((fw['withoutImage'], fw['uncarried']), (['abl', 'bl31', 'modem', 'tzsw'], []))
+        self.assertEqual((fw['bootloader']['otherEntries'], fw['bootloader']['fbpk']['version'], fw['radio']['fbpk']['version']),
+                         (1, 2, 1))
+        self.assertEqual(fw['bootloader']['entries'][0]['sha256'], sha(self.parts['abl']))
+        # The classifier's own coverage check accepts it when bound to the same container digests.
+        fp = hfp._module('factory_package_for_fw', SCRIPTS/'factory-package.py')
+        result = {'missing': [], 'problems': [], 'inventory': {}, 'evidence': {}}
+        fp.check_firmware_carried(fw, fw['withoutImage'], {'bootloader': sha(self.bootloader), 'radio': sha(self.radio)},
+                                  fp.load_flavor('rango'), '2026103001', result, False)
+        self.assertEqual((result['missing'], result['problems']), ([], []))
+        self.assertEqual(result['inventory']['firmwareCarried'], {'abl': 'bootloader', 'bl31': 'bootloader',
+                                                                  'modem': 'radio', 'tzsw': 'bootloader'})
+
+    def test_uncarried_partitions_are_reported_not_padded(self):
+        bootloader = fbpk_v2([(1, p, self.parts[p], 'rango', 1) for p in ('abl', 'bl31')])
+        fw = self.observe(bootloader=bootloader)
+        self.assertEqual(fw['uncarried'], ['tzsw'])
+        fp = hfp._module('factory_package_for_fw2', SCRIPTS/'factory-package.py')
+        result = {'missing': [], 'problems': [], 'inventory': {}, 'evidence': {}}
+        fp.check_firmware_carried(fw, fw['withoutImage'], {'bootloader': sha(bootloader), 'radio': sha(self.radio)},
+                                  fp.load_flavor('rango'), '2026103001', result, False)
+        self.assertEqual(result['missing'], ['firmware-carried evidence for tzsw'])
+
+    def test_malformed_unsupported_or_ambiguous_inputs_refuse(self):
+        p = self.parts
+        cases = {
+            'raw radio': ({'radio': p['modem']}, 'format_unsupported'),
+            'version 3': ({'radio': fbpk_v2([(1, 'modem', p['modem'], '', 0)], version=3)}, 'version 3 is not 1 or 2'),
+            'short v2': ({'bootloader': b'FBPK' + struct.pack('<I', 2) + bytes(20)}, 'shorter than the FBPK v2 header'),
+            'total size': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0)], total=5)}, 'totalSize'),
+            'header size': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0)], header=100)}, 'header/entry sizes'),
+            'entry size': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0)], entry_size=96)}, 'header/entry sizes'),
+            'out of range': ({'bootloader': fbpk_v2([(1, 'abl', b'', '', 0, (220, 10 ** 6))])}, 'outside the container'),
+            'into table': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0), (1, 'bl31', b'', '', 0, (0, 8))])}, 'outside the container'),
+            'overlap': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0), (1, 'bl31', b'', '', 0, (320, 32))])}, 'overlaps another'),
+            'product variants': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], 'rango', 1), (1, 'abl', p['abl'], 'other', 1)])},
+                                 'more than one abl entry'),
+            'not partition data': ({'bootloader': fbpk_v2([(2, 'abl', p['abl'], '', 0)])}, 'not PartitionData'),
+            'in both': ({'radio': fbpk_v1([(1, 'modem', p['modem']), (1, 'abl', p['abl'])])}, 'in both'),
+            'bytes differ': ({'bootloader': fbpk_v2([(1, 'abl', os.urandom(64), '', 0)])}, 'entry_mismatch'),
+            'no standalone': ({'drop': ('RADIO/tzsw.img',)}, 'has no RADIO/tzsw.img'),
+            'v1 reserved': ({'radio': fbpk_v1([(1, 'modem', p['modem'])], unknown=1)}, 'nonzero reserved'),
+            'v1 chain': ({'radio': fbpk_v1([(1, 'modem', p['modem']), (0, 'x', b'y')], cut_chain=True)}, 'ends the chain'),
+            'missing container': ({'drop': ('RADIO/radio.img',)}, 'member_missing'),
+            'duplicate container': ({'extra': [('RADIO/radio.img', b'FBPK')]}, 'member_missing'),
+            'unsafe name': ({'extra': [('../escape', b'x')]}, 'target_files_unsafe'),
+            'repeated ab': ({'ab': self.AB + ['abl']}, 'repeats a partition'),
+        }
+        for name, (kw, pattern) in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(rfo.Refused, pattern):
+                self.observe(**kw)
+        with mock.patch.dict(rfo.LIMITS, {'containerBytes': 100}), self.assertRaisesRegex(rfo.Refused, 'exceeds 100 bytes'):
+            self.observe()
+        path = self.tf()
+        with self.assertRaisesRegex(rfo.Refused, 'hash_mismatch'):
+            rfo.observe(path, '0' * 64, 'rango', '2026103001', 'x')
+
+    def test_cli_writes_once_or_refuses_with_one_line_and_no_file(self):
+        path, out = self.tf(), self.root/'fw.json'
+        argv = ['--target-files', str(path), '--target-files-sha256', sha(path.read_bytes()), '--device', 'rango',
+                '--build', '2026103001', '--source', 'synthetic', '--out', str(out)]
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(rfo.main(argv), 0)
+        self.assertEqual(json.loads(out.read_text())['radio']['partitions'], ['modem'])
+        for change in (['--out', str(out)], ['--target-files-sha256', '0' * 64, '--out', str(self.root/'fw2.json')]):
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(rfo.main(argv[:-2] + change if change[0] == '--out' else argv[:2] + change[:2] + argv[4:-2] + change[2:]), 3)
+            self.assertEqual(list(json.loads(stdout.getvalue())), ['refused'])
+        self.assertFalse((self.root/'fw2.json').exists())
+
+    def test_format_fixture_is_the_pinned_upstream_source(self):
+        provenance = json.loads((FBPK_FIXTURE/'PROVENANCE.json').read_text())
+        self.assertEqual(provenance['revision'], '17df3b79a73e67ad68387b35c7d41c85e1d8103c')
+        for entry in provenance['files']:
+            data = (FBPK_FIXTURE/entry['fixture']).read_bytes()
+            self.assertEqual(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), entry['gitBlob'])
+            self.assertEqual(sha(data), entry['sha256'])
+        source = (FBPK_FIXTURE/'fastboot-pack.ts').read_text()
+        for anchor in ("magic !== 'FBPK'", 'case 1:', 'case 2:', 'name: str(b, 36)', 'product: str(b, 40)',
+                       'offset: u64(b)', 'PartitionData = 1', 'name: str(b, 32)'):
+            self.assertIn(anchor, source)
+        self.assertIn('assert(entry.type === EntryType.PartitionData', (FBPK_FIXTURE/'firmware.ts').read_text())
+        self.assertEqual(rfo.FORMAT['gitBlob'], provenance['files'][0]['gitBlob'])
 
 
 class IntegrateAdapterTest(Base):
