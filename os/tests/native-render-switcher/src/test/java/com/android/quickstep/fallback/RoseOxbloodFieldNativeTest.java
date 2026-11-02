@@ -89,6 +89,31 @@ public class RoseOxbloodFieldNativeTest {
                 - (w - RoseOxbloodField.VIEW_W * s) / 2f) < 1e-3);
     }
 
+    @Test public void asTheScrimsFillItsCoverageIsExactlyTheScrimsOpacity() throws Exception {
+        // ScrimView paints its colour (the RoseOverviewOxblood base #170609 at the animated alpha) before onDraw calls
+        // the drawing controller; the field must then replace that fill as one image at the same alpha, never stack.
+        int w = 400, h = 866;
+        Bitmap opaque = render(w, h, 255);
+        int[][] probes = {{200, 100}, {300, 600}, {340, 640}, {50, 800}};
+        for (int a : new int[] {0, 64, 128, 200, 255}) {
+            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(b);
+            c.drawColor(Color.argb(a, 0x17, 0x06, 0x09));
+            new RoseOxbloodField().drawAsScrim(c, w, h, a);
+            if (a == 128) save(b, "switcher-oxblood-field-as-scrim-alpha128");
+            for (int[] p : probes) {
+                int px = b.getPixel(p[0], p[1]), ref = opaque.getPixel(p[0], p[1]);
+                assertTrue("alpha " + a + " at " + p[0] + "," + p[1] + ": coverage " + (px >>> 24),
+                        Math.abs((px >>> 24) - a) <= 1);
+                if (a >= 64) {
+                    assertTrue("alpha " + a + ": the field's own colour, not a blend with the scrim fill ("
+                            + Integer.toHexString(px) + " vs " + Integer.toHexString(ref) + ")",
+                            channelDistance(px, ref) <= 4);
+                }
+            }
+        }
+    }
+
     @Test public void alphaFollowsTheScrimAndZeroDrawsNothing() throws Exception {
         Bitmap none = render(200, 400, 0);
         assertEquals("transparent states draw nothing", 0, none.getPixel(100, 200));

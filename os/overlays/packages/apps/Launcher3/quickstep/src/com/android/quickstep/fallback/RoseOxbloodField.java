@@ -9,6 +9,8 @@ import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.graphics.RadialGradient;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -112,7 +114,6 @@ final class RoseOxbloodField extends Drawable {
         float s = scale(b.width(), b.height());
         canvas.translate(b.left + offsetX(b.width(), s), b.top);
         canvas.scale(s, s);
-        paint.setAlpha(255);
         paint.setShader(base);
         paint.setAlpha(alpha);
         canvas.drawRect(0, 0, VIEW_W, VIEW_H, paint);
@@ -130,6 +131,30 @@ final class RoseOxbloodField extends Drawable {
         paint.setAlpha(alpha);
         canvas.drawCircle(GLINT_X, GLINT_Y, GLINT_R, paint);
         paint.setShader(null);
+        canvas.restoreToCount(save);
+    }
+
+    private final Paint layer = new Paint();
+
+    /**
+     * Draws the field as the scrim's own fill at the scrim's current opacity (0-255), on a canvas where the scrim has
+     * just painted its colour. The artwork is composited once, as one image, and replaces that colour fill (SRC), so its
+     * coverage of what is behind the window is exactly the scrim's own, mid-transition included. Nothing at 0; at 255
+     * it is drawn directly; between, an offscreen layer exists only for that frame. The scrim is the first thing drawn
+     * in its window, so SRC replaces only its own fill.
+     */
+    void drawAsScrim(Canvas canvas, int width, int height, int scrimAlpha) {
+        if (scrimAlpha <= 0 || width <= 0 || height <= 0) return;
+        setBounds(0, 0, width, height);
+        setAlpha(255);
+        if (scrimAlpha >= 255) {
+            draw(canvas);
+            return;
+        }
+        layer.setAlpha(scrimAlpha);
+        layer.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
+        int save = canvas.saveLayer(0, 0, width, height, layer);
+        draw(canvas);
         canvas.restoreToCount(save);
     }
 

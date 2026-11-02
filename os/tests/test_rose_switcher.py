@@ -1233,8 +1233,12 @@ class OxbloodSwitcherFieldTest(unittest.TestCase):
         attach = self.STRIP[self.STRIP.index('protected void onAttachedToWindow() {'):self.STRIP.index('protected void onDetachedFromWindow()')]
         self.assertIn('View found = parent.findViewById(R.id.scrim_view);', attach)
         self.assertIn('scrim.setDrawingController(fieldOnScrim);', attach)
-        self.assertIn('field.setAlpha(Color.alpha(on.getBackgroundColor()));', self.STRIP,
-            'drawn at the scrim\'s current opacity: transparent states draw nothing')
+        self.assertIn('field.drawAsScrim(canvas, on.getWidth(), on.getHeight(), Color.alpha(on.getBackgroundColor()));',
+            self.STRIP, 'composited once as the scrim\'s own fill, at its current opacity')
+        self.assertIn('if (found instanceof ScrimView && reservedBelow(getContext()) > 0) {', attach,
+            'only in the RecentsActivity overview, where the Oxblood scrim style is applied')
+        self.assertIn('layer.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));', self.FIELD)
+        self.assertIn('if (scrimAlpha <= 0 || width <= 0 || height <= 0) return;', self.FIELD)
         detach = self.STRIP[self.STRIP.index('protected void onDetachedFromWindow() {'):self.STRIP.index('private void anchor()')]
         self.assertIn('scrim.setDrawingController(null);', detach)
         for state in ('RecentsState', 'setScrimColors', 'setBackgroundColor('):

@@ -281,16 +281,16 @@ public final class RoseAgentStrip extends LinearLayout {
      * own scrim through its public drawing-controller seam, after the scrim's background colour and at that colour's
      * current opacity. So the field follows every overview state the scrim already animates (opaque in the overview,
      * transparent while an app is in front or going Home) without any new state logic. Nothing else in the fallback
-     * overview uses this seam (only the in-launcher All Apps does, on its own scrim).
+     * overview uses this seam (only the in-launcher All Apps does, on its own scrim). Only in the RecentsActivity
+     * overview, where RoseOverviewOxblood sets the scrim's Oxblood base: Launcher3's in-window recents (other displays,
+     * or its in-window flag) inflate the same layout but keep the stock scrim, so the field is not registered there.
      */
     private final RoseOxbloodField field = new RoseOxbloodField();
     private ScrimView scrim;
     private final ScrimView.ScrimDrawingController fieldOnScrim = (canvas, scale, bottomOffset) -> {
         ScrimView on = scrim;
         if (on == null) return;
-        field.setBounds(0, 0, on.getWidth(), on.getHeight());
-        field.setAlpha(Color.alpha(on.getBackgroundColor()));
-        field.draw(canvas);
+        field.drawAsScrim(canvas, on.getWidth(), on.getHeight(), Color.alpha(on.getBackgroundColor()));
     };
 
     @Override
@@ -301,7 +301,7 @@ public final class RoseAgentStrip extends LinearLayout {
         View buttons = parent.findViewById(R.id.action_buttons);
         if (buttons != null) buttons.addOnLayoutChangeListener(relayout);
         View found = parent.findViewById(R.id.scrim_view);
-        if (found instanceof ScrimView) {
+        if (found instanceof ScrimView && reservedBelow(getContext()) > 0) {
             scrim = (ScrimView) found;
             scrim.setDrawingController(fieldOnScrim);
         }
