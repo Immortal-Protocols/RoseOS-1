@@ -114,8 +114,10 @@ final class CurrentApps {
    String targetPackage,WorkspaceOverview.Binding verified){
   if(failure!=null&&!failure.isEmpty())return Snapshot.unavailable(registration,generation,failure);
   switch(nz(status)){
-   case "idle":case "stopped":case "closed":case "user_stopped":case "cleanup_failed":case "failed":case "rejected":case "target_not_allowed":case "consent_required":
+   case "idle":case "stopped":case "closed":case "user_stopped":case "failed":case "rejected":case "target_not_allowed":case "consent_required":
     return new Snapshot(registration,generation,true,"",Collections.<App>emptyList());
+   // A session whose close failed is still held and its device may still run apps (App Core: session_unreleased).
+   case "cleanup_failed":
    case "ready":case "launching":case "starting":case "scheduled":case "blocked":
     return Snapshot.unavailable(registration,generation,INCOMPLETE);
    default:return Snapshot.unavailable(registration,generation,UNREADABLE);

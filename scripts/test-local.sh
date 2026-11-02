@@ -261,6 +261,10 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/CurrentApps.java \
  workspace/rose-agent/app/tests/CurrentAppsReplyTest.java
 java -cp "$JAVA_TESTS/CurrentAppsReply" dev.pixel.voice.CurrentAppsReplyTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CurrentAppsParity" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/CurrentApps.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/tests/CurrentAppsParityTest.java
+java -cp "$JAVA_TESTS/CurrentAppsParity" dev.pixel.voice.CurrentAppsParityTest qa/parity/current-apps-parity.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RendererRecovery" \
  workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java workspace/rose-agent/app/tests/RendererRecoveryTest.java
 java -cp "$JAVA_TESTS/RendererRecovery" dev.pixel.voice.RendererRecoveryTest
