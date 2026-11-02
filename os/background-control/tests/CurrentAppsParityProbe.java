@@ -8,8 +8,8 @@ import java.util.Arrays;
 import java.util.List;
 
 /** #156/#225 parity probe: runs the production controller CurrentApps on one controller input per stdin line and prints
- * the reply's status, complete, reason and members (test_current_apps_parity.py writes the lines from the shared
- * fixture). Line: locked TAB session TAB status TAB blocked TAB target TAB front TAB platform, where "-" is null, lists
+ * the reply's status, complete, incompleteReason, source, sessionStatus and apps (packageName:front:target), as
+ * Controller.currentApps would (test_current_apps_parity.py writes the lines from qa/parity/current-apps-parity.json). Line: locked TAB session TAB status TAB blocked TAB target TAB front TAB platform, where "-" is null, lists
  * are comma separated, and platform is five typed values separated by ";" (L:long, S:list, I:int, B:boolean, X:string). */
 public final class CurrentAppsParityProbe {
     static Object value(String typed) {
@@ -41,8 +41,13 @@ public final class CurrentAppsParityProbe {
             boolean live = session && CurrentApps.live(status);
             CurrentApps.Result r = platform != null && live && !locked ? CurrentApps.of(locked, session, status, target, platform, front, controller)
                 : CurrentApps.of(locked, session, status, blocked, target, front, controller);
-            StringBuilder b = new StringBuilder(r.status).append('\t').append(r.complete).append('\t').append(r.incompleteReason).append('\t');
-            for (int i = 0; i < r.apps.size(); i++) b.append(i == 0 ? "" : ",").append(r.apps.get(i).packageName);
+            // As Controller.currentApps' reply: status, complete, incompleteReason, source, sessionStatus (live only), apps.
+            StringBuilder b = new StringBuilder(r.status).append('\t').append(r.complete).append('\t').append(r.incompleteReason)
+                .append('\t').append(r.source).append('\t').append(CurrentApps.LIVE.equals(r.status) ? status : "").append('\t');
+            for (int i = 0; i < r.apps.size(); i++) {
+                CurrentApps.App a = r.apps.get(i);
+                b.append(i == 0 ? "" : ",").append(a.packageName).append(':').append(a.front).append(':').append(a.target);
+            }
             System.out.println(b);
         }
     }
