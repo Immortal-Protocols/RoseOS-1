@@ -41,7 +41,11 @@ final class SelfUpdate {
   if(UpdateCheck.version(manifestVersion)!=selectedVersion)return "The update’s version changed since it was offered.";
   long size=UpdateCheck.version(manifestSize);if(size<=0)return "The update’s size is missing.";
   if(!selectedId.equals(downloadedSha)||downloadedSize!=size)return "The download didn’t match the published update.";
-  if(!self.equals(archivePackage)||archiveVersion!=selectedVersion)return "The downloaded app isn’t the offered Rose Agent version.";
+  // #407: these bytes are the published ones (checked above), so say exactly what Android read from them: an archive it
+  // cannot parse, another package and another versionCode are different causes and are never one message.
+  if(archivePackage==null)return "Android couldn’t read the downloaded app, so version "+selectedVersion+" wasn’t checked or installed.";
+  if(!self.equals(archivePackage))return "The downloaded app is "+archivePackage+", not Rose Agent.";
+  if(archiveVersion!=selectedVersion)return "The downloaded app is version "+archiveVersion+", not the offered version "+selectedVersion+".";
   if(!signedLikeInstalled)return "The downloaded app isn’t signed like the installed Rose Agent.";
   if(selectedVersion<=installed)return "Rose Agent is already at this version or newer.";
   return null;
