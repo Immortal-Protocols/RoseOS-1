@@ -57,6 +57,54 @@ final class OxbloodField extends Drawable {
   else paintField(canvas);
  }
 
+ /** A blurred copy of the field for backdrop blur (#410: the tiles' backdrop-filter), at 1/BLUR_SCALE size: built
+  * once per size from the cached field, or null when there is no field yet or memory is short (callers then draw
+  * without blur). sigmaPx is the Gaussian's standard deviation in screen pixels (CSS blur(r) uses r as sigma). */
+ static final int BLUR_SCALE = 4;
+ android.graphics.Bitmap blurred;
+ float blurredSigma;
+ android.graphics.Bitmap blurred(float sigmaPx) {
+  android.graphics.Bitmap source = cache;
+  if (source == null) return null;
+  int w = Math.max(1, source.getWidth() / BLUR_SCALE), h = Math.max(1, source.getHeight() / BLUR_SCALE);
+  if (blurred != null && blurred.getWidth() == w && blurred.getHeight() == h && blurredSigma == sigmaPx) return blurred;
+  try {
+   android.graphics.Bitmap small = android.graphics.Bitmap.createScaledBitmap(source, w, h, true);
+   int[] px = new int[w * h];
+   small.getPixels(px, 0, w, 0, 0, w, h);
+   boxBlur(px, w, h, sigmaPx / BLUR_SCALE);
+   small.setPixels(px, 0, w, 0, 0, w, h);
+   if (blurred != null && blurred != small) blurred.recycle();
+   blurred = small; blurredSigma = sigmaPx;
+   return blurred;
+  } catch (RuntimeException | OutOfMemoryError unavailable) { return null; }
+ }
+
+ /** Three passes of a box blur each way approximate a Gaussian of sigma (pixels): a box of width 2r+1 has variance
+  * ((2r+1)^2 - 1) / 12, and three of them add up. Opaque pixels; edges clamp. Pure arithmetic on ARGB ints. */
+ static void boxBlur(int[] px, int w, int h, float sigma) {
+  int r = Math.max(0, Math.round((float) (Math.sqrt(4 * sigma * sigma + 1) - 1) / 2));
+  if (r == 0) return;
+  int[] tmp = new int[px.length];
+  for (int pass = 0; pass < 3; pass++) { boxLine(px, tmp, w, h, r, true); boxLine(tmp, px, w, h, r, false); }
+ }
+ private static void boxLine(int[] in, int[] out, int w, int h, int r, boolean horizontal) {
+  int lines = horizontal ? h : w, len = horizontal ? w : h, div = 2 * r + 1;
+  for (int line = 0; line < lines; line++) {
+   int sr = 0, sg = 0, sb = 0;
+   for (int i = -r; i <= r; i++) {
+    int c = in[index(line, Math.max(0, Math.min(len - 1, i)), w, horizontal)];
+    sr += (c >> 16) & 255; sg += (c >> 8) & 255; sb += c & 255;
+   }
+   for (int i = 0; i < len; i++) {
+    out[index(line, i, w, horizontal)] = 0xff000000 | ((sr / div) << 16) | ((sg / div) << 8) | (sb / div);
+    int add = in[index(line, Math.min(len - 1, i + r + 1), w, horizontal)], drop = in[index(line, Math.max(0, i - r), w, horizontal)];
+    sr += ((add >> 16) & 255) - ((drop >> 16) & 255); sg += ((add >> 8) & 255) - ((drop >> 8) & 255); sb += (add & 255) - (drop & 255);
+   }
+  }
+ }
+ private static int index(int line, int i, int w, boolean horizontal) { return horizontal ? line * w + i : i * w + line; }
+
  private void paintField(Canvas canvas) {
   int save = canvas.save();
   canvas.clipRect(getBounds());

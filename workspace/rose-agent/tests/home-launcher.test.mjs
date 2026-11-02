@@ -78,7 +78,7 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
  assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
- assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);homeBars\(\);/);
+ assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);homeBars\(\);/);
 });
 
 test('app pages sit on the shared wallpaper with one fixed row of dots and no drawer headings (OS-PAGING-158-M001)',()=>{
@@ -150,6 +150,20 @@ test('the Rose entry opens App\'s conversation activity and only navigates',()=>
    .replace(/setOnClickListener\(v->[^;]*;/g,'');
   assert.ok(!/send\(|startForegroundService|setAction\(/.test(body),hook);
  }
+});
+
+test('Home\'s Rose control opens Rose with the platform clip-reveal, one launch at a time (#410)',()=>{
+ const open=main.slice(main.indexOf(' void openRoseFromHome(){'),main.indexOf('\n }',main.indexOf(' void openRoseFromHome(){')));
+ assert.match(open,/if\(!roseLaunch\.tap\(SystemClock\.uptimeMillis\(\)\)\)return;/,'a repeated or interrupted tap opens nothing extra');
+ // The same plain explicit Intent as the hook (no flags or extras); only the window animation differs.
+ assert.match(open,/Intent i=new Intent\(this,RoseConversationActivity\.class\);/);
+ assert.ok(!/addFlags|setFlags|putExtra/.test(open),'no flags or extras');
+ assert.match(open,/startActivity\(i,ActivityOptions\.makeClipRevealAnimation\(from,0,0,from\.getWidth\(\),from\.getHeight\(\)\)\.toBundle\(\)\);/);
+ assert.match(open,/HomeRoseLaunch\.animate\(scale\)/,'animations off: a plain, instant launch');
+ assert.match(open,/else startActivity\(i\);/);
+ for(const forbidden of ['VoiceService','command(','startForegroundService','"talk"','"end"','"mute"'])assert.ok(!open.includes(forbidden),'navigation only: '+forbidden);
+ assert.match(main,/onPause\(\)\{refreshHomeRose\(false\);homeOverview\.homeLeft\(\);roseLaunch\.reset\(\);/);
+ assert.match(main,/screenHostActive=true;homeStopped=false;roseLaunch\.reset\(\);/);
 });
 
 test('Home shows the default apps through the app pages\' real tile and launch path',()=>{
@@ -235,7 +249,7 @@ test('the overview well asks for the real system overview through the one permit
  assert.match(homeTray,/overview\.setContentDescription\(HomeOverview\.describe\(available\)\);/);
  // MainActivity: one HomeOverview per activity (tray rebuilds keep it), cleared when Home leaves the foreground.
  assert.match(main,/final HomeOverview homeOverview=new HomeOverview\(\);/);
- assert.match(main,/homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);/);
+ assert.match(main,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable\);/);
  assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);homeOverview\.homeLeft\(\);/);
  // The route: only the owner-enabled phone-controls service's GLOBAL_ACTION_RECENTS; null (unavailable) when it is off.
  const open=main.slice(main.indexOf(' void openOverview(){'),main.indexOf('\n',main.indexOf(' void openOverview(){')));
@@ -268,7 +282,7 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
  assert.equal((main.match(/refreshHomeRose\(/g)||[]).length,3,'defined, called by refresh and by onPause only');
  // Pause renders hidden first; a rebuilt tray and a destroyed activity release the old one, which then ignores frames.
  assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);/);
- assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);/);
+ assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable\);/);
  assert.match(main,/protected void onDestroy\(\)\{closeSystemFolder\(\);if\(homeTray!=null\)homeTray\.release\(\);/);
  assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual\) \{\n  if \(released\) return;/);
  assert.match(homeTray,/void release\(\) \{\n  released = true;\n \}/);
