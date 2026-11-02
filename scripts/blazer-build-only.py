@@ -185,6 +185,11 @@ def preparation_problems(recipe, root, contract):
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
+    layout = prep.get('candidateLayout') or {}
+    if layout.get('children') != {'sourceRoot': 'source', 'downloadDir': 'downloads', 'receiptsDir': 'receipts'}:
+        problems.append('preparation.candidateLayout.children must be sourceRoot=source, downloadDir=downloads, receiptsDir=receipts')
+    if not isinstance(production, str) or layout.get('ancestorBoundary') != str(Path(production).parent):
+        problems.append('preparation.candidateLayout.ancestorBoundary must be the parent of the production source root')
     lunch = prep.get('lunch') or {}
     product, release, variant = recipe['lunch'].split('-')
     if lunch.get('expect') != {'TARGET_PRODUCT': product, 'TARGET_RELEASE': release, 'TARGET_BUILD_VARIANT': variant,
@@ -550,7 +555,6 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
 
 INSPECTION = 'roseos.blazer-preparation-inspection.v2'
 INSPECT_MAX_SECONDS = 1200
-CANDIDATE_LAYOUT = {'sourceRoot': 'source', 'downloadDir': 'downloads', 'receiptsDir': 'receipts'}
 
 def meta(path):
     """lstat metadata of one path; never follows a link and never reads content."""
@@ -611,11 +615,14 @@ def tree_facts(recipe, src, budget, clock):
     facts['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in paths}
     return facts
 
-def candidate_paths(candidate_root=None, **explicit):
-    """Proposed paths only: --candidate-root R proposes R/source, R/downloads and R/receipts; explicit candidate flags
-    override. None of them is a prep binding, and none is assumed to exist."""
+def candidate_paths(candidate_root=None, layout=None, **explicit):
+    """Proposed paths only: --candidate-root R proposes the recipe's candidateLayout children of R (source, downloads,
+    receipts); explicit candidate flags override. None of them is a prep binding, and none is assumed to exist."""
+    layout = layout or load()['preparation']['candidateLayout']
     paths = {}
-    for key, leaf in CANDIDATE_LAYOUT.items():
+    if candidate_root is not None and (not Path(candidate_root).is_absolute() or '..' in Path(candidate_root).parts):
+        raise InvalidInput('--candidate-root must be an absolute path without ..')
+    for key, leaf in layout['children'].items():
         value = explicit.get(key) or (str(Path(candidate_root)/leaf) if candidate_root else None)
         if value is not None:
             path = Path(value)
@@ -623,9 +630,22 @@ def candidate_paths(candidate_root=None, **explicit):
                 raise InvalidInput(f'candidate {key} must be an absolute path without ..')
             paths[key] = path
     node = explicit.get('node')
+    if node is not None and explicit.get('nodeFromPath'):
+        raise InvalidInput('--candidate-node and --candidate-node-from-path are mutually exclusive')
     if node is not None and (not Path(node).is_absolute() or '..' in Path(node).parts):
         raise InvalidInput('candidate node must be an absolute path without ..')
-    return paths, (Path(node) if node else None)
+    return paths, ('PATH' if explicit.get('nodeFromPath') else Path(node) if node else None), \
+        (Path(candidate_root) if candidate_root else None)
+
+def ancestors(path, boundary):
+    """lstat of PATH's existing ancestors from its parent up to and including BOUNDARY (never above it)."""
+    chain, boundary = [], Path(boundary)
+    for parent in Path(path).parents:
+        if parent != boundary and boundary not in parent.parents:
+            break
+        if os.path.lexists(parent):
+            chain.append(meta(parent))
+    return chain
 
 def node_facts(path, how):
     """Metadata of one node candidate: lstat of the path, its realpath and the realpath's stat. Never executed."""
@@ -650,13 +670,20 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
     budget = {'entries': max_entries, 'deadline': started + max_seconds}
     prep, factory = recipe['preparation'], recipe['factory']
     production = pointer(root, prep['productionSourceRootFrom'])
-    candidate, candidate_node = candidates or ({}, None)
+    candidate, candidate_node, candidate_root = candidates or ({}, None, None)
+    layout = prep['candidateLayout']
+    production_device = os.lstat(production).st_dev if os.path.isdir(production) and not os.path.islink(production) else None
     reference = Path(reference or production)
     report = {'schema': INSPECTION, 'device': DEVICE, 'host': op['host'], 'metadataOnly': True, 'processesStarted': 0,
               'network': False, 'writes': False, 'enablesPreparation': False, 'productionSourceRoot': production,
               'limits': {'maxEntries': max_entries, 'maxSeconds': max_seconds}, 'lock': meta(op['lock']),
               'bound': {name: (str(op[name]) if op[name] is not None else None) for name in ('sourceRoot', 'downloadDir', 'node')},
-              'candidates': {'proposed': True, 'note': 'proposed paths, not known to exist and not approved bindings'},
+              'candidates': {'proposed': True, 'verified': False, 'binding': False,
+                             'note': 'proposed paths, not known to exist and not approved bindings',
+                             'root': (dict(meta(candidate_root), path=str(candidate_root),
+                                           ancestors=ancestors(candidate_root, layout['ancestorBoundary']),
+                                           isolation=isolation_problem(candidate_root, production)) if candidate_root else None),
+                             'ancestorBoundary': layout['ancestorBoundary']},
               'unknowns': []}
     unknowns = report['unknowns']
     for name, value in report['bound'].items():
@@ -671,7 +698,8 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
         unknowns.append(f'reference source {reference} is not an existing, link-free directory')
     for key, path in candidate.items():
         entry = {'path': str(path), 'meta': meta(path), 'symlinkComponent': str(symlink_in(path) or '') or None,
-                 'isolation': isolation_problem(path, production), 'filesystem': filesystem(path, statvfs)}
+                 'isolation': isolation_problem(path, production), 'filesystem': filesystem(path, statvfs),
+                 'ancestors': ancestors(path, layout['ancestorBoundary'])}
         if key == 'sourceRoot' and path.is_dir() and not symlink_in(path):
             entry.update(tree_facts(recipe, path, budget, clock))
         if key == 'downloadDir':
@@ -683,11 +711,21 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
         ref_fs = report['reference']['filesystem']
         entry['sameFilesystemAsReference'] = (entry['filesystem'].get('device') == ref_fs.get('device')
                                              if entry['filesystem'].get('usable') and ref_fs.get('usable') else None)
+        entry['sameDeviceAsProduction'] = (entry['filesystem'].get('device') == production_device
+                                          if entry['filesystem'].get('usable') and production_device is not None else None)
         report['candidates'][key] = entry
     runner_path = environ.get('PATH', '')
     resolved = shutil.which('node', path=runner_path)
-    report['node'] = {'runnerPath': runner_path, 'runner': node_facts(Path(resolved) if resolved else None, 'runner PATH'),
-                      'candidate': node_facts(candidate_node, '--candidate-node') if candidate_node else None}
+    runner = node_facts(Path(resolved) if resolved else None, 'runner PATH')
+    if resolved:
+        runner['pathEntry'] = str(Path(resolved).parent)
+    if candidate_node == 'PATH':
+        candidate_facts = dict(runner, how='--candidate-node-from-path')
+    elif candidate_node:
+        candidate_facts = node_facts(candidate_node, '--candidate-node')
+    else:
+        candidate_facts = None
+    report['node'] = {'runnerPath': runner_path, 'runner': runner, 'candidate': candidate_facts}
     if not resolved:
         unknowns.append('no node on the runner PATH')
     unknowns += ['Node version (metadata only: never executed)', 'reflink support (never assumed)',
@@ -808,6 +846,7 @@ def main(argv=None):
     for flag in ('--candidate-root', '--candidate-source-root', '--candidate-download-dir', '--candidate-receipts-dir',
                  '--candidate-node', '--reference-source-root'):
         parser.add_argument(flag)
+    parser.add_argument('--candidate-node-from-path', action='store_true')
     parser.add_argument('--recipe', default=str(RECIPE))
     parser.add_argument('--host', required=True)
     parser.add_argument('--lock', required=True)
@@ -825,8 +864,9 @@ def main(argv=None):
             recipe['compile']['maxJobs'], a.inputs_receipt, a.node)
         inspect_only = {k: v for k, v in vars(a).items() if (k.startswith('candidate_') or k == 'reference_source_root') and v}
         if a.action == 'inspect':
-            candidates = candidate_paths(a.candidate_root, sourceRoot=a.candidate_source_root, downloadDir=a.candidate_download_dir,
-                                         receiptsDir=a.candidate_receipts_dir, node=a.candidate_node)
+            candidates = candidate_paths(a.candidate_root, recipe['preparation']['candidateLayout'], sourceRoot=a.candidate_source_root,
+                                         downloadDir=a.candidate_download_dir, receiptsDir=a.candidate_receipts_dir,
+                                         node=a.candidate_node, nodeFromPath=a.candidate_node_from_path)
             if a.reference_source_root and (not Path(a.reference_source_root).is_absolute() or '..' in Path(a.reference_source_root).parts):
                 raise InvalidInput('--reference-source-root must be an absolute path without ..')
             print(json.dumps(inspect(recipe, op, max_entries=a.max_entries, max_seconds=a.max_seconds, candidates=candidates,

@@ -120,6 +120,15 @@
       "basis": "Not a filesystem quota: every sampleSeconds the stage's watched paths are measured against its boundBytes and the filesystem's available bytes against capacity.reserveBytes, and an overrun or timeout stops the stage's process group (SIGTERM, then SIGKILL after killGraceSeconds). Writes between samples can overshoot. An enforced quota (project quota, loop device, cgroup io) and containment of descendants that start their own session need host-side authority and are not provided here."
     },
     "totalTimeoutSeconds": 16200,
-    "totalBasis": "4.5 hours: download 3600 + vendor 10800 + lunch 1800 seconds, excluding the isolated source construction, whose byte and time cost is unknown and separately scoped. The 144 GiB of bounds plus the 300 GiB reserve also exclude that source copy."
+    "totalBasis": "4.5 hours: download 3600 + vendor 10800 + lunch 1800 seconds, excluding the isolated source construction, whose byte and time cost is unknown and separately scoped. The 144 GiB of bounds plus the 300 GiB reserve also exclude that source copy.",
+    "candidateLayout": {
+      "children": {
+        "sourceRoot": "source",
+        "downloadDir": "downloads",
+        "receiptsDir": "receipts"
+      },
+      "ancestorBoundary": "/home/pixelbuild",
+      "basis": "inspect derives R/source, R/downloads and R/receipts from one proposed --candidate-root R and reports the lstat chain of R's ancestors up to ancestorBoundary (the parent of the production source root); statvfs is read only on the nearest existing ancestor of each path. Candidates are proposals, never bindings."
+    }
   }
 }
