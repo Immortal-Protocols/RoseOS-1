@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "rose-build-only-recipe",
-  "basis": "FAM-BLAZER-BUILD-004 / BLAZER-PREP: unsigned build-only recipe for blazer (Pixel 10 Pro) from checked-in pinned sources only. It binds no host: the operator supplies the host label, isolated work tree, lock, download and receipt paths, Node and make jobs at run time, and scripts/blazer-build-only.py admits them. Preparation (download, vendor, lunch) never compiles, signs, publishes or flashes and never runs in the production source tree. Nothing here was downloaded, generated, compiled, signed or run on any host or phone.",
+  "basis": "FAM-BLAZER-BUILD-004 / BLAZER-PREP: unsigned build-only recipe for blazer (Pixel 10 Pro) from checked-in pinned sources only. It binds no host: the operator supplies the host label, isolated work tree, lock, download and receipt paths, Node and make jobs at run time, and scripts/blazer-build-only.py admits them. Preparation (source, download, vendor, lunch) never compiles, signs, publishes or flashes and never runs in the production source tree. Nothing here was downloaded, generated, compiled, signed or run on any host or phone.",
   "device": "blazer",
   "lunch": "blazer-cur-user",
   "deviceContract": "os/devices/pixel10.json",
@@ -74,6 +74,7 @@
   },
   "preparation": {
     "stages": [
+      "source",
       "download",
       "vendor",
       "lunch"
@@ -82,6 +83,17 @@
     "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
     "boundsKind": "proposal",
     "boundsBasis": "Proposed upper bounds for review, not measurements: no Blazer preparation has run. A stage refuses before it starts when available minus its bound is below capacity.reserveBytes, stops at its byte or time bound, and records what it consumed.",
+    "source": {
+      "boundBytes": 161061273600,
+      "timeoutSeconds": 7200,
+      "exclusionsFrom": "os/release-pipeline/cuttlefish-alpha.json preparation.exclusions",
+      "includeRoots": [
+        "out_adevtool_deps"
+      ],
+      "stagingPrefix": ".source-staging-",
+      "boundBasis": "150 GiB and 7200 s are unverified proposals. Basis (historical, not a measurement of the current tree): the emulator alpha's copy of the same production root with the same exclusions allocated 120.16 GiB in 1,696,997 files on 2026-10-28 (cuttlefish-alpha.json preparation.basis), and its copy budget was 150 GiB. The stage measures its own full selection (no entry cap) before writing and refuses when the projected bytes exceed this bound; the Pro inspect's 1,131,550,560,256-byte reference walk was truncated, counts excluded outputs and repo metadata, and is never used as an estimate.",
+      "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includeRoots are adevtool's host-tool deps, which the vendor stage needs, copied as their own selection whose links may not leave them. The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
+    },
     "download": {
       "boundBytes": 8589934592,
       "timeoutSeconds": 3600,
@@ -119,8 +131,8 @@
       "killGraceSeconds": 30,
       "basis": "Not a filesystem quota: every sampleSeconds the stage's watched paths are measured against its boundBytes and the filesystem's available bytes against capacity.reserveBytes, and an overrun or timeout stops the stage's process group (SIGTERM, then SIGKILL after killGraceSeconds). Writes between samples can overshoot. An enforced quota (project quota, loop device, cgroup io) and containment of descendants that start their own session need host-side authority and are not provided here."
     },
-    "totalTimeoutSeconds": 16200,
-    "totalBasis": "4.5 hours: download 3600 + vendor 10800 + lunch 1800 seconds, excluding the isolated source construction, whose byte and time cost is unknown and separately scoped. The 144 GiB of bounds plus the 300 GiB reserve also exclude that source copy.",
+    "totalTimeoutSeconds": 23400,
+    "totalBasis": "6.5 hours: source 7200 + download 3600 + vendor 10800 + lunch 1800 seconds. The 294 GiB of proposal bounds (source 150, download 8, vendor 128, lunch 8) are checked one stage at a time against the 300 GiB reserve at each stage's start.",
     "candidateLayout": {
       "children": {
         "sourceRoot": "source",
