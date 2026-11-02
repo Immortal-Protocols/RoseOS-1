@@ -159,6 +159,17 @@ public final class RoseAgentWorkTest {
         expect(ids(nine.items).equals(Arrays.asList(5)) && nine.unattributed.isEmpty(),
             "9: the swap leaves Rose's card on Rose's device only");
 
+        // Fresh boot (#344 producer): the registration snapshot carries the repository's generation, 0 until the first
+        // device change. It is a valid, complete, empty snapshot, not malformed (old-fails on f0b21f6: "could not be
+        // read (ownership)" before any session ever ran).
+        RoseAgentWork.Ownership boot = new RoseAgentWork.Ownership();
+        expect(boot.accept(0, new int[0], new String[0], new int[0]) && boot.snapshot().received
+            && !boot.snapshot().malformed, "boot: generation 0 initial snapshot applied");
+        expect(work(boot.snapshot(), devices(), Arrays.asList(task(1, 0, 0, "com.human.app", true))).state
+            == RoseAgentWork.State.EMPTY, "boot: no session work is the truthful empty row");
+        expect(boot.accept(1, new int[] {7}, new String[] {RoseAgentWork.CONTROLLER}, new int[] {CONTROLLER_UID})
+            && !boot.accept(0, new int[0], new String[0], new int[0]), "boot: then only higher generations");
+
         // Malformed snapshots are never partly applied; ownership is dropped and the baseline kept.
         RoseAgentWork.Ownership strict = new RoseAgentWork.Ownership();
         strict.accept(3, new int[] {7}, new String[] {RoseAgentWork.CONTROLLER}, new int[] {CONTROLLER_UID});
@@ -172,7 +183,7 @@ public final class RoseAgentWorkTest {
             {3L + 1, new int[] {7}, new String[] {null}, new int[] {CONTROLLER_UID}},
             {3L + 1, new int[] {7}, new String[] {""}, new int[] {CONTROLLER_UID}},
             {3L + 1, new int[] {7}, new String[] {RoseAgentWork.CONTROLLER}, new int[] {-1}},
-            {0L, new int[0], new String[0], new int[0]},
+            {-1L, new int[0], new String[0], new int[0]},
             {-4L, new int[0], new String[0], new int[0]}};
         for (Object[] m : malformed) {
             RoseAgentWork.Ownership o = new RoseAgentWork.Ownership();

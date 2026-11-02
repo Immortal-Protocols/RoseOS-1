@@ -73,7 +73,7 @@ final class RoseAgentWork {
      * Applies the platform's snapshots in order. Not thread-safe: the strip's holder serializes it. Per registration
      * the first valid snapshot is applied whatever its generation; after that only a higher generation (a repeated or
      * lower one is a duplicate or out of order). A malformed snapshot (missing or unequal arrays, a duplicate device,
-     * a missing owner package, a negative uid, a generation below 1) is never partly applied: the known ownership is
+     * a missing owner package, a negative uid, a negative generation) is never partly applied: the known ownership is
      * dropped and the generation baseline stays where it was.
      */
     static final class Ownership {
@@ -105,7 +105,8 @@ final class RoseAgentWork {
         }
 
         private static Map<Integer, Owner> parse(long gen, int[] deviceIds, String[] packages, int[] uids) {
-            if (gen < 1 || deviceIds == null || packages == null || uids == null) return null;
+            // The registration snapshot carries the repository's generation, 0 until its first device change.
+            if (gen < 0 || deviceIds == null || packages == null || uids == null) return null;
             if (deviceIds.length != packages.length || deviceIds.length != uids.length) return null;
             Map<Integer, Owner> out = new HashMap<>();
             for (int i = 0; i < deviceIds.length; i++) {
