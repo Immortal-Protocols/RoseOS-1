@@ -15,6 +15,7 @@ const homeTray=read('../app/src/dev/pixel/voice/HomeTray.java');
 const homeFrame=read('../app/src/dev/pixel/voice/HomeFrame.java');
 const homeRose=read('../app/src/dev/pixel/voice/HomeRose.java');
 const homeOverview=read('../app/src/dev/pixel/voice/HomeOverview.java');
+const cell=read('../app/src/dev/pixel/voice/HomeAppTile.java');
 const manifest=read('../app/AndroidManifest.xml');
 
 test('the HOME activity identity is unchanged',()=>{
@@ -36,7 +37,7 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);showSettingsFor\(getIntent\(\)\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
  assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
- assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)closeVoiceControls\(\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
+ assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)\{closeVoiceControls\(\);closeSystemFolder\(\);\}if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
  // "Home shown" means only paused, never stopped: an app or the conversation over Home stops it.
  assert.match(main,/@Override protected void onStop\(\)\{super\.onStop\(\);homeStopped=true;\}/);
@@ -58,8 +59,11 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  // #223: the legacy Widgets and voice ("Tap to talk") pages are not pages any more, and no widget is built.
  for(const gone of ['titles.add("Widgets")','titles.add("Voice home")','new ClockWidgetView','new WeatherWidgetView','new GalleryWidgetView','launcherPager.addView(page)'])
   assert.ok(!pages.includes(gone),gone);
- // The app pages hold one continuous real inventory: our apps first, then preinstalled, Play Store and other installs.
- assert.match(pages,/for\(ArrayList<ResolveInfo> group:Arrays\.asList\(ourApps,systemApps,storeApps,otherApps\)\)launchable\.addAll\(group\);/);
+ // The app pages hold one continuous real inventory: our apps first, then Play Store and other installs, then the one
+ // "…" System folder cell (#403); the system and duplicate apps are in the folder, and still Home's default apps.
+ assert.match(pages,/for\(ArrayList<ResolveInfo> group:Arrays\.asList\(ourApps,storeApps,otherApps\)\)launchable\.addAll\(group\);/);
+ assert.match(pages,/ArrayList<ResolveInfo> entries=new ArrayList<>\(launchable\);if\(!systemApps\.isEmpty\(\)\)entries\.add\(null\);/);
+ assert.match(pages,/folderApps=systemApps;launchable\.addAll\(systemApps\);/);
  assert.deepEqual([...order].sort((a,b)=>a-b),order);
  assert.ok(order.every(i=>i>=0));
  assert.ok(pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView(')<pages.indexOf('for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage('));
@@ -83,7 +87,7 @@ test('app pages sit on the shared wallpaper with one fixed row of dots and no dr
  assert.ok(!/protected void onDraw|onSizeChanged/.test(home),'Home draws no wallpaper of its own, so it cannot slide');
  // App pages: the measured grid, no visible heading or subtitle, the page name as its accessible name.
  const appPage=main.slice(main.indexOf(' View appPage('),main.indexOf(' TextView appLabel('));
- assert.match(appPage,/HomeAppPage grid=new HomeAppPage\(this,appColumns,this::appPageMeasured\);for\(ResolveInfo app:apps\)grid\.addView\(appTile\(app\)\);/);
+ assert.match(appPage,/HomeAppPage grid=new HomeAppPage\(this,appColumns,this::appPageMeasured\);for\(ResolveInfo app:apps\)grid\.addView\(app==null\?folderTile\(\):appTile\(app\)\);/);
  assert.match(appPage,/result\.setContentDescription\(title\);/);
  assert.match(appPage,/No other apps are installed\./);
  for(const gone of ['setAccessibilityHeading','Your everyday apps','Included with this operating system','setBackground'])assert.ok(!appPage.includes(gone),gone);
@@ -91,17 +95,17 @@ test('app pages sit on the shared wallpaper with one fixed row of dots and no dr
  // Columns come from the width only (HomeAppLayout), never from the longest label.
  assert.ok(!/measureText/.test(main.slice(main.indexOf(' void planAppPages('),main.indexOf(' View appPage('))),'no label-driven columns');
  assert.match(main,/appColumns=HomeAppLayout\.columns\(width\/density\);appPerPage=HomeAppLayout\.perPage\(width,height,cell,density\);/);
- // Labels wrap to two lines in the measured cell; the cell height is what HomeAppLayout plans with.
- assert.match(main,/name\.setMaxLines\(HomeAppLayout\.LABEL_LINES\);/);
- assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
+ // Labels wrap to two lines in the measured cell (HomeAppTile); the cell height is what HomeAppLayout plans with.
+ assert.match(cell,/name\.setMaxLines\(HomeAppLayout\.LABEL_LINES\);/);
+ assert.match(cell,/new LinearLayout\.LayoutParams\(-1, HomeAppLayout\.LABEL_LINES \* name\.getLineHeight\(\)\)/);
  // One row of dots, fixed in the frame above the tray, and the pages' bottom inset clears both.
  assert.equal((main.match(/makePageDots\(titles\)/g)||[]).length,1);
  assert.match(homeFrame,/reserved = activity\.dp\(HomeTray\.HEIGHT_DP\) \+ 2 \* gap \+ dotsHeight;/);
  assert.match(homeFrame,/addView\(dots, dotsParams\);/);
  // A re-measure re-plans once, then only when the real capacity changes.
  assert.match(main,/if\(!HomeAppLayout\.replan\(appColumns,appPerPage,width,height,cell,getResources\(\)\.getDisplayMetrics\(\)\.density\)\)return;\n  if\(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight\)return;/);
- // Launch and return are unchanged: every tile opens its own app through WorkspaceLauncher.
- assert.match(main,/tile\.setOnClickListener\(v->WorkspaceLauncher\.open\(this,app,label\)\);/);
+ // Launch and return are unchanged: every tile opens its own app through WorkspaceLauncher (closing the folder first).
+ assert.match(main,/tile\.setOnClickListener\(v->\{closeSystemFolder\(\);WorkspaceLauncher\.open\(this,app,label\);\}\);/);
  // The pager's gesture decisions are HomePages' tested ones.
  const pager=read('../app/src/dev/pixel/voice/LauncherPager.java');
  assert.match(pager,/int owner=HomePages\.owner\(event\.getX\(\)-downX,event\.getY\(\)-downY,slop\);/);
@@ -151,9 +155,10 @@ test('Home shows the default apps through the app pages\' real tile and launch p
  // Home's cells are MainActivity.appTile: the installed icon/label, AppLabels and WorkspaceLauncher, as on the app pages.
  assert.match(home,/for \(ResolveInfo app : dock\) grid\.addView\(activity\.appTile\(app\)\);/);
  const tile=main.slice(main.indexOf(' View appTile(ResolveInfo app){'),main.indexOf('\n }',main.indexOf(' View appTile(ResolveInfo app){')));
- assert.match(tile,/tile\.setOnClickListener\(v->WorkspaceLauncher\.open\(this,app,label\)\);/);
+ assert.match(tile,/tile\.setOnClickListener\(v->\{closeSystemFolder\(\);WorkspaceLauncher\.open\(this,app,label\);\}\);/);
  assert.match(tile,/AppLabels\.label\(getPackageManager\(\),app\.activityInfo\.packageName/);
- assert.match(tile,/tile\.setContentDescription\(label\);/);
+ assert.match(tile,/View tile=HomeAppTile\.tile\(this,appMark\(app\),label\);/);
+ assert.match(cell,/tile\.setContentDescription\(label\);/);
  assert.match(home,/pm\.resolveActivity\(role, PackageManager\.MATCH_DEFAULT_ONLY\)/);
  // A chooser ("android") or Rose Agent itself is never a dock app; only launchable activities are used.
  assert.match(home,/"android"\.equals\(pkg\) \|\| pkg\.equals\(self\)/);
@@ -261,7 +266,7 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
  // Pause renders hidden first; a rebuilt tray and a destroyed activity release the old one, which then ignores frames.
  assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);/);
  assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable\);/);
- assert.match(main,/protected void onDestroy\(\)\{if\(homeTray!=null\)homeTray\.release\(\);/);
+ assert.match(main,/protected void onDestroy\(\)\{closeSystemFolder\(\);if\(homeTray!=null\)homeTray\.release\(\);/);
  assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual\) \{\n  if \(released\) return;/);
  assert.match(homeTray,/applyVisual\(RoseVisualState\.from\(shownConversation, Float\.NaN, Float\.NaN, true, false\)\)/);
  // One mount point for App's renderer; no second poller, timer or animation of Home's own.
@@ -274,10 +279,11 @@ test('the tray Rose reads real state once per tick and stops when Home is hidden
 
 test('Home labels are the app pages\' labels: whole names over two lines, never a one-line cut (M008)',()=>{
  // 302/304 forced one line with an end ellipsis (Messaging, Camera (system) cut at 720 px). Home now uses appLabel.
- const label=main.slice(main.indexOf(' TextView appLabel('),main.indexOf(' LinearLayout makePageDots('));
+ assert.match(main,/TextView appLabel\(String label\)\{return HomeAppTile\.label\(this,label\);\}/);
+ const label=cell.slice(cell.indexOf(' static TextView label('));
  assert.doesNotMatch(label,/setSingleLine\(true\)/);
  assert.match(label,/name\.setMaxLines\(HomeAppLayout\.LABEL_LINES\);/);
- assert.match(main,/new LinearLayout\.LayoutParams\(-1,HomeAppLayout\.LABEL_LINES\*name\.getLineHeight\(\)\)/);
+ assert.match(cell,/new LinearLayout\.LayoutParams\(-1, HomeAppLayout\.LABEL_LINES \* name\.getLineHeight\(\)\)/);
 });
 
 test('the wallpaper is the selected HiFi image, drawn like its .wall: cover at 62% 30% (APP-OS-VISUAL-1030-M002)',()=>{
@@ -360,9 +366,10 @@ test('the overview well draws the HiFi three-bar glyph with its gradients and ri
 test('app labels and page dots follow the HiFi type and dot treatment (APP-OS-VISUAL-1030)',()=>{
  // .app .label at ce126f56: 12.5px, weight 500, white, letter-spacing .005em, shadow 0 1px 3px rgba(8,22,45,.75) (the
  // override's middle layer; Android draws one). Inter falls back to the system UI sans; no font asset is added.
- const label=main.slice(main.indexOf(' TextView appLabel('),main.indexOf(' LinearLayout makePageDots('));
- assert.match(label,/name\.setTextSize\(12\.5f\);name\.setTextColor\(0xffffffff\);name\.setTypeface\(Typeface\.create\(Typeface\.SANS_SERIF,500,false\)\);name\.setLetterSpacing\(\.005f\);/);
- assert.match(label,/name\.setShadowLayer\(dp\(3\),0,dp\(1\),0xbf08162d\);/);
+ const label=cell.slice(cell.indexOf(' static TextView label('));
+ assert.match(label,/name\.setTextSize\(12\.5f\);\n  name\.setTextColor\(0xffffffff\);\n  name\.setTypeface\(Typeface\.create\(Typeface\.SANS_SERIF, 500, false\)\);\n  name\.setLetterSpacing\(\.005f\);/);
+ assert.match(label,/name\.setShadowLayer\(dp\(density, 3\), 0, dp\(density, 1\), 0xbf08162d\);/);
+ assert.match(cell,/static int dp\(float density, float value\) \{ return \(int\) \(value \* density\); \}/,'MainActivity.dp\'s truncation, so cells keep their sizes');
  assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');
  // .page-dots button i: drawn circles in 44dp targets; the current page is the view's selected state (aria-current).
  const dots=main.slice(main.indexOf(' LinearLayout makePageDots('),main.indexOf(' View appTile('));
@@ -380,23 +387,49 @@ test('app labels and page dots follow the HiFi type and dot treatment (APP-OS-VI
  assert.ok(!draw.includes('new '),'no allocation while drawing');
 });
 
-test('app tiles are the HiFi frosted glass, on Home and the app pages alike (APP-OS-VISUAL-1030)',()=>{
+test('app tiles are the Sunlit Instruments subdued tile with a simplified mark, on Home, the app pages and the folder (#403)',()=>{
+ // #403 supersedes the HiFi white frosted tile (APP-OS-VISUAL-1030) for the Home app icons: the Oxblood Home of
+ // "Rose — Sunlit Instruments | Visual Study" (Rose-07-Home-No-Status, Rose-06), a smoked oxblood tile and a cream line mark.
  const glass=read('../app/src/dev/pixel/voice/HomeGlassTile.java');
  const tile=main.slice(main.indexOf(' View appTile(ResolveInfo app){'),main.indexOf('\n }',main.indexOf(' View appTile(ResolveInfo app){')));
- assert.match(tile,/iconFrame\.setBackground\(new HomeGlassTile\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);iconFrame\.setElevation\(dp\(4\)\);/);
+ assert.match(cell,/iconFrame\.setBackground\(new HomeGlassTile\(density\)\);\n  iconFrame\.setElevation\(dp\(density, 4\)\);/);
  assert.ok(!/raised\(/.test(tile),'no cream raised tile');
- // style.css .tile at ce126f56: 18px radius; linear-gradient(160deg, rgba(255,255,255,.62), rgba(255,255,255,.18) 55%,
- // rgba(225,236,248,.32)); rings rgba(120,150,190,.32) and inset rgba(255,255,255,.5); top inset rgba(255,255,255,.95);
- // inset 0 -2px 6px rgba(60,90,130,.18); ::after sheen rgba(255,255,255,.55) over the top half.
- const argb=(a,rgb)=>'0x'+Math.round(a*255).toString(16).padStart(2,'0')+rgb;
- assert.match(glass,/RADIUS_DP = 18;/);
- assert.ok(glass.includes(`FILL = {${argb(.62,'ffffff')}, ${argb(.18,'ffffff')}, ${argb(.32,'e1ecf8')}}`),'fill');
+ assert.match(glass,/RADIUS_DP = 16;/);
+ assert.match(glass,/FILL = \{0xf05e1b26, 0xf0461019, 0xf233090f\};/);
  assert.match(glass,/FILL_STOPS = \{0f, \.55f, 1f\};/);assert.match(glass,/Math\.toRadians\(160\)/);
- for(const [name,a,rgb] of [['OUTER_RING',.32,'7896be'],['INNER_RING',.5,'ffffff'],['TOP_EDGE',.95,'ffffff'],['LOWER_SHADE',.18,'3c5a82'],['SHEEN',.55,'ffffff']])
-  assert.ok(glass.includes(`${name} = ${argb(a,rgb)}`),name);
- // Decorative: the tile is still the one spoken, clickable target; the drawable holds no listener or text.
- assert.ok(!/setOnClickListener|setContentDescription|drawText/.test(glass));
- assert.match(tile,/tile\.setContentDescription\(label\);tile\.setClickable\(true\);tile\.setFocusable\(true\);/);
+ for(const absent of ['0x9effffff','0xf2ffffff','7896be'])assert.ok(!glass.includes(absent),'no HiFi white glass: '+absent);
+ // Decorative: the cell is still the one spoken, clickable target; the drawables hold no listener or text.
+ for(const src of [glass,read('../app/src/dev/pixel/voice/HomeGlyph.java')])assert.ok(!/setOnClickListener|setContentDescription|drawText/.test(src));
+ assert.match(cell,/tile\.setContentDescription\(label\);\n  tile\.setClickable\(true\);\n  tile\.setFocusable\(true\);/);
+ assert.match(cell,/image\.setImportantForAccessibility\(View\.IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
+ assert.match(cell,/name\.setImportantForAccessibility\(View\.IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
+ // The mark: our suite's simplified glyph; another app's own monochrome layer, else its own icon, never redrawn.
+ const mark=main.slice(main.indexOf(' android.graphics.drawable.Drawable appMark('),main.indexOf(' ArrayList<ResolveInfo> folderApps'));
+ assert.match(mark,/HomeAppGroups\.glyph\(app\.activityInfo\.packageName,AppLabels\.preferredCamera\(getPackageManager\(\)\)\)/);
+ assert.match(mark,/HomeGlyph\.themed\(app\.activityInfo\.loadUnbadgedIcon\(getPackageManager\(\)\)\)/);
+ assert.match(mark,/return app\.loadIcon\(getPackageManager\(\)\);\n \}/);
+ assert.ok(!main.includes('AppLabels.icon('),'the illustrated suite PNGs are no longer Home icons');
+});
+
+test('system and duplicate apps leave the app pages for one "…" System folder (#403)',()=>{
+ const pages=main.slice(main.indexOf('void attachLauncherPages(boolean'),main.indexOf('/** A small square'));
+ // The grouping is HomeAppGroups over the launcher's own facts; no other app is hidden, nothing about access changes.
+ assert.match(pages,/int group=HomeAppGroups\.group\(packageName,AppLabels\.suiteIndex\(packageName,cameraPackage\)>=0,ourBuild\(packageName\),preinstalled\(app\),cameraPackage\);/);
+ assert.match(pages,/else \(group==HomeAppGroups\.SYSTEM\?systemApps:fromPlayStore\(packageName\)\?storeApps:otherApps\)\.add\(app\);/);
+ const groups=read('../app/src/dev/pixel/voice/HomeAppGroups.java');
+ assert.match(groups,/KEEP_OUT = \{"com\.anthropic\.claude", "com\.openai\.chatgpt", "com\.amazon\.mShop\.android\.shopping"\};/);
+ assert.match(groups,/if \(has\(KEEP_OUT, packageName\)\) return MAIN;\n  if \(suite\) return SUITE;/);
+ // Home's default apps come from every launchable app, the folder's included.
+ assert.match(pages,/RoseHomeView\.dockApps\(getPackageManager\(\),getPackageName\(\),launchable\)/);
+ assert.ok(pages.indexOf('launchable.addAll(systemApps)')<pages.indexOf('RoseHomeView.dockApps('));
+ // The folder: one named cell, a dialog with the real cells; launching, HOME, a rebuild or teardown closes it.
+ const folder=main.slice(main.indexOf(' View folderTile(){'),main.indexOf(' void closeSystemFolder(){'));
+ assert.match(folder,/tile\.setContentDescription\(HomeAppGroups\.folderDescription\(folderApps\.size\(\)\)\);/);
+ assert.match(folder,/for\(ResolveInfo app:folderApps\)tiles\.add\(appTile\(app\)\);/);
+ assert.match(folder,/new HomeFolder\(this,HomeAppGroups\.FOLDER_LABEL,tiles,appColumns,this::closeSystemFolder\)/);
+ assert.match(pages,/HashSet<String> seen=new HashSet<>\(\),suiteSeen=new HashSet<>\(\);\n  closeSystemFolder\(\);/);
+ // No stored preference, wallpaper or background-work call is touched by the folder.
+ for(const absent of ['getPreferences','putBoolean','VoiceService','WallpaperManager'])assert.ok(!folder.includes(absent),absent);
 });
 
 test('no conversation-page check uses a literal page index',()=>{
