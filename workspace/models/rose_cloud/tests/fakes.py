@@ -202,7 +202,9 @@ class FakeOpenAI:
     The default policy behaves as the contract expects (a reasoning parser returning thinking apart, local-agent-v1
     envelopes, the code word recalled from the start of a long history). ``mode`` breaks one thing at a time:
     inline_think, wrong_id, no_reasoning, prose, forget, short_prompt, truncate, extra_model, max_model_len, and
-    delay_s ({kind: seconds}, see ``kind``) holds a reply back."""
+    delay_s ({kind: seconds}, see ``kind``) holds a reply back. With thinking off (``nothink``, as a server with
+    --default-chat-template-kwargs '{"enable_thinking": false}' and the qwen3 parser) no reasoning is returned;
+    ``misroute`` puts the whole answer in the reasoning field (a parser that ignored the setting)."""
 
     THINKING = 'SECRET-FAKE-THINKING about the request'
 
@@ -280,7 +282,9 @@ class FakeOpenAI:
         message = {'role': 'assistant', 'content': content}
         if m.get('inline_think'):
             message['content'] = '<think>\n' + self.THINKING + '\n</think>\n\n' + content
-        elif not m.get('no_reasoning'):
+        elif m.get('misroute'):
+            message['content'], message['reasoning_content'] = None, content
+        elif not (m.get('no_reasoning') or m.get('nothink')):
             message['reasoning_content'] = self.THINKING
         finish = 'stop'
         if m.get('truncate'):

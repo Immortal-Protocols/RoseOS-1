@@ -63,16 +63,19 @@ public final class CurrentAppsTest {
         expect(home.read(read(false, true, "ready", MAPS, INSTALLER, MAPS), "s1") && home.shown.equals(Arrays.asList(INSTALLER, MAPS)), "an installer opens over it");
         expect(home.read(read(false, true, "ready", MAPS, MAPS), "s1") && home.shown.equals(Arrays.asList(MAPS)), "the installer closes: it leaves");
         long beforeClose = home.generation;
-        expect(home.read(read(false, true, "closed", MAPS), "s1") && home.shown.isEmpty() && home.generation == beforeClose + 1, "close removes it");
+        expect(home.read(read(false, false, "closed", MAPS), "s1") && home.shown.isEmpty() && home.generation == beforeClose + 1, "close removes it");
         expect(home.read(read(false, true, "ready", AMAZON, AMAZON), "s2") && home.shown.equals(Arrays.asList(AMAZON)), "a new session lists only its own app");
-        expect(home.read(read(false, true, "stopped", AMAZON), "s2") && home.shown.isEmpty(), "Stop (release of control) removes it; the target name left in state is not a member");
+        expect(home.read(read(false, false, "stopped", AMAZON), "s2") && home.shown.isEmpty(), "Stop (release of control) removes it; the target name left in state is not a member");
         expect(home.read(read(false, true, "ready", AMAZON, AMAZON), "s3") && home.shown.equals(Arrays.asList(AMAZON)), "reconnect: same app, new session");
         expect(home.read(read(false, true, "ready", AMAZON, AMAZON), "s4"), "a replaced session with the same app is a new generation, never merged");
         expect(home.read(read(true, true, "ready", AMAZON, AMAZON), "s4") && home.shown.isEmpty(), "locking hides it");
         expect(home.read(read(false, true, "ready", AMAZON, AMAZON), "s4") && home.shown.equals(Arrays.asList(AMAZON)), "unlocking shows the live set again, from the session");
-        expect(home.read(read(false, true, "failed", AMAZON), "s4") && home.shown.isEmpty(), "failure removes it");
+        expect(home.read(read(false, false, "failed", AMAZON), "s4") && home.shown.isEmpty(), "failure removes it");
         // Completeness: empty is complete only when no session is live; a live set always says why it is not complete.
-        expect(read(false, false, "idle", null).complete && read(false, true, "stopped", MAPS).complete && "".equals(read(false, true, "closed", MAPS).incompleteReason), "no live session: genuinely empty");
+        expect(read(false, false, "idle", null).complete && read(false, false, "stopped", MAPS).complete && "".equals(read(false, false, "closed", MAPS).incompleteReason), "no live session: genuinely empty");
+        // A session the controller still holds but could not release is never a genuine empty (parity contract).
+        CurrentApps.Result unreleased = read(false, true, "cleanup_failed", MAPS, MAPS);
+        expect(CurrentApps.NONE.equals(unreleased.status) && unreleased.apps.isEmpty() && !unreleased.complete && CurrentApps.SESSION_UNRELEASED.equals(unreleased.incompleteReason), "cleanup_failed: cannot confirm, not empty");
         expect(!read(true, true, "ready", MAPS, MAPS).complete && CurrentApps.LOCKED.equals(read(true, true, "ready", MAPS, MAPS).incompleteReason), "locked is unknown, never empty");
         expect(!read(false, true, "ready", MAPS, MAPS).complete && CurrentApps.BEHIND_FRONT_UNLISTED.equals(read(false, true, "ready", MAPS, MAPS).incompleteReason), "a live set never claims completeness");
         expect(CurrentApps.WINDOWS_UNREADABLE.equals(unread("ready", MAPS).incompleteReason) && !unread("ready", MAPS).complete, "an unread front says so");
@@ -108,7 +111,11 @@ public final class CurrentAppsTest {
         expect(CurrentApps.LIVE.equals(handover.status) && handover.apps.isEmpty() && handover.complete, "handover: open, genuinely empty, complete");
         CurrentApps.Result closed = CurrentApps.of(false, true, "ready", MAPS, CurrentApps.platform(Long.MAX_VALUE, new String[0], 0, true, true, me), null, CONTROLLER);
         expect(CurrentApps.NONE.equals(closed.status) && closed.apps.isEmpty() && closed.complete, "closed: nothing, for good, even if the controller still says ready");
-        expect(CurrentApps.NONE.equals(CurrentApps.of(false, true, "stopped", MAPS, ok, null, CONTROLLER).status), "a session the controller ended lists nothing");
+        expect(CurrentApps.NONE.equals(CurrentApps.of(false, false, "stopped", MAPS, ok, null, CONTROLLER).status) && CurrentApps.of(false, false, "stopped", MAPS, ok, null, CONTROLLER).complete, "a session the controller ended lists nothing");
+        expect(!CurrentApps.of(false, true, "cleanup_failed", MAPS, ok, null, CONTROLLER).complete, "held but unreleased: not complete, even with a platform answer");
+        CurrentApps.Result retainedClosed = CurrentApps.of(false, true, "cleanup_failed", MAPS, CurrentApps.platform(Long.MAX_VALUE, new String[0], 0, true, true, me), null, CONTROLLER);
+        expect(!retainedClosed.complete && CurrentApps.SESSION_UNRELEASED.equals(retainedClosed.incompleteReason),
+            "even a retained session answering closed stays unconfirmed: the platform marks closed when the close begins, before the device is gone");
         expect(CurrentApps.LOCKED.equals(CurrentApps.of(true, true, "ready", MAPS, ok, null, CONTROLLER).status), "locked lists nothing");
         expect(!CurrentApps.signature(p, "s1").equals(CurrentApps.signature(read(false, true, "ready", MAPS, AMAZON), "s1")), "a change of source is a new generation");
         // The fallback stays marked incomplete and says where it came from.

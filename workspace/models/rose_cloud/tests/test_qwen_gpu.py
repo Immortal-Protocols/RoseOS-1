@@ -557,6 +557,9 @@ with open(os.path.join(HERE, 'serve.pid'), 'w') as f:
 mode = json.load(open(os.path.join(HERE, 'serve.mode')))
 if mode.pop('die', False):
     sys.exit(2)  # as `vllm serve` exits on an argument it does not accept, before loading anything
+if '--default-chat-template-kwargs' in args:  # the server-wide template default, as vllm serve applies it
+    if json.loads(args[args.index('--default-chat-template-kwargs') + 1]).get('enable_thinking') is False:
+        mode.setdefault('nothink', True)
 FakeOpenAI(served=args[args.index('--served-model-name') + 1], mode=mode, port=int(args[args.index('--port') + 1]))
 time.sleep(300)
 '''
@@ -598,7 +601,7 @@ class Contract(Adapter):
         return json.loads(line[len(G.CONTRACT_MARKER):])
 
     def test_one_load_runs_the_contract_cases_with_the_proposed_profile(self):
-        t, box, state = self.start(deadline=30)
+        t, box, state = self.start(deadline=12)
         self.assertTrue(state.exists())
         argv = json.loads((self.extra / 'serve.argv').read_text())
         self.assertEqual(argv, ['serve', str(self.model), '--served-model-name', 'rose-qwen', '--host', '127.0.0.1',
@@ -638,7 +641,7 @@ class Contract(Adapter):
 
     def test_a_contract_break_is_a_receipt_not_a_pass(self):
         self.serve_mode({'inline_think': True})
-        t, box, state = self.start(deadline=15)
+        t, box, state = self.start(deadline=8)
         run = G.sanitize_contract(self.runner('chat'))
         self.assertEqual((run['step'], run['contract']['allExpected'], run['contract']['chat']['verdict'],
                           run['contract']['chat']['thinkInContent']), ('done', False, 'failed:malformed_action', True))
@@ -652,7 +655,7 @@ class Contract(Adapter):
         requests['client']['inference_timeout_ms'] = 1000
         self.bundle['qwen_contract_requests.json'] = json.dumps(requests)
         self.serve_mode({'delay_s': {'after': 1.5}})
-        t, box, state = self.start(deadline=15)
+        t, box, state = self.start(deadline=8)
         raw = self.runner('tool')
         self.assertEqual((raw['step'], raw['error']), ('done', None))
         run = G.sanitize_contract(raw)
@@ -726,6 +729,116 @@ class Contract(Adapter):
                 'engine': G.VISION_ENGINE, 'server': G.SERVER_ARGS, 'port': G.ADAPTER_PORT, 'warm': mode == 'warm',
                 'state': G.WARM_STATE, 'requestTimeoutS': G.ADAPTER_REQUEST_TIMEOUT_S, 'image': image,
                 'serverCommand': None})
+
+
+CLI_ARGS = '''
+import json, os
+from dataclasses import make_dataclass
+MODE = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'mode.json')))
+FrontendArgs = make_dataclass('FrontendArgs', [(f, object, None) for f in ('host', 'port', 'default_chat_template_kwargs')
+                                               if f not in MODE.get('drop', [])])
+'''
+
+
+class ContractNothink(Contract):
+    """Contract-nothink mode (MODELS-QWEN-CONTRACT-NOTHINK-001): the contract machinery with the no-thinking profile,
+    a stand-in `vllm serve` that honours the template default, a stand-in FrontendArgs, and the real runner."""
+
+    def setUp(self):
+        super().setUp()
+        cli = self.extra / 'vllm' / 'entrypoints' / 'openai'
+        cli.mkdir(parents=True)
+        (self.extra / 'vllm' / 'entrypoints' / '__init__.py').write_text('')
+        (cli / '__init__.py').write_text('')
+        (cli / 'cli_args.py').write_text(CLI_ARGS)
+
+    def start(self, deadline, **limits):
+        import threading
+        box = {}
+        t = threading.Thread(target=lambda: box.update(r=G.diagnose(
+            self.manifest, dict(self.limits, mode='contract-nothink', deadlineS=deadline,
+                                serverCommand=[sys.executable, str(self.extra / 'serve.py')], **limits),
+            bundle=self.bundle)))
+        t.start()
+        state = self.tmp / 'rose-qwen-gpu' / G.WARM_STATE
+        end = time.monotonic() + 20
+        while not state.exists() and t.is_alive() and time.monotonic() < end:
+            time.sleep(0.1)
+        return t, box, state
+
+    # the thinking profile's own tests run under Contract
+    test_one_load_runs_the_contract_cases_with_the_proposed_profile = None
+    test_a_contract_break_is_a_receipt_not_a_pass = test_client_timeout_through_the_real_runner = None
+    test_refusals_before_any_server = test_profile_is_the_proposed_serving_profile_and_proven_modes_are_unchanged = None
+
+    def test_one_load_runs_the_cases_with_thinking_off(self):
+        t, box, state = self.start(deadline=12)
+        self.assertEqual(json.loads(state.read_text())['thinking'], False)
+        argv = json.loads((self.extra / 'serve.argv').read_text())
+        self.assertEqual(argv, ['serve', str(self.model), '--served-model-name', 'rose-qwen', '--host', '127.0.0.1',
+                                '--port', str(self.port)] + G.CONTRACT_NOTHINK_SERVER_ARGS)
+        self.assertEqual(argv[-2:], ['--default-chat-template-kwargs', '{"enable_thinking": false}'])
+        self.assertEqual(argv[argv.index('--reasoning-parser') + 1], 'qwen3')
+        self.assertNotIn('--chat-template', argv)
+        run = G.sanitize_contract(self.runner('contract'))
+        c = run['contract']
+        self.assertEqual((run['step'], c['allExpected'], c['thinking'], c['noThinking'], c['reasoningSeparated']),
+                         ('done', True, False, True, False))
+        self.assertEqual([c[k]['verdict'] for k in G.CONTRACT_REPLIES],
+                         ['final', 'open_app:calculator', 'final', 'final'])
+        self.assertTrue(all(c[k]['reasoningChars'] == 0 for k in G.CONTRACT_REPLIES))
+        t.join(60)
+        self.assertEqual((box['r']['mode'], box['r']['stop']), ('contract-nothink', 'deadline'))
+        self.assertNotIn('SECRET', json.dumps(run))
+
+    def test_a_misrouting_parser_fails_through_the_real_runner(self):
+        self.serve_mode({'misroute': True})
+        t, box, state = self.start(deadline=8)
+        c = G.sanitize_contract(self.runner('chat'))['contract']
+        self.assertEqual((c['chat']['verdict'], c['noThinking'], c['allExpected']),
+                         ('failed:empty_completion', False, False))
+        t.join(60)
+
+    def test_unsupported_flag_refuses_before_any_server(self):
+        self.mode({'drop': ['default_chat_template_kwargs']})
+        r = G.diagnose(self.manifest, dict(self.limits, mode='contract-nothink',
+                                           serverCommand=[sys.executable, str(self.extra / 'serve.py')]),
+                       bundle=self.bundle)
+        self.assertEqual((r['stop'], r['engine']['unsupported']),
+                         ('engine_arg_unsupported', ['default_chat_template_kwargs']))
+        self.assertEqual(G.sanitize(r)['engine']['unsupported'], ['default_chat_template_kwargs'])
+        self.assertFalse((self.extra / 'serve.argv').exists())
+        shutil.rmtree(self.extra / 'vllm' / 'entrypoints')  # an image without the module at all: refused too
+        self.mode({})
+        r = G.diagnose(self.manifest, dict(self.limits, mode='contract-nothink',
+                                           serverCommand=[sys.executable, str(self.extra / 'serve.py')]),
+                       bundle=self.bundle)
+        self.assertEqual((r['stop'], r['engine']['unsupported']),
+                         ('engine_arg_unsupported', ['default_chat_template_kwargs']))
+        self.assertFalse((self.extra / 'serve.argv').exists())
+        self.serve_mode({'die': True})  # a flag the image's serve rejects: no fallback, the server fails
+        self.mode({})
+        r = G.diagnose(self.manifest, dict(self.limits, mode='contract-nothink',
+                                           serverCommand=[sys.executable, str(self.extra / 'serve.py')]),
+                       bundle=self.bundle)
+        self.assertEqual(r['stop'], 'engine_arg_unsupported')  # still no cli_args module: refused before serve
+
+    def test_profile_is_the_contract_profile_plus_thinking_off_and_others_unchanged(self):
+        self.assertEqual(G.CONTRACT_NOTHINK_SERVER_ARGS,
+                         G.CONTRACT_SERVER_ARGS + ['--default-chat-template-kwargs', '{"enable_thinking": false}'])
+        sys.path.insert(0, str(ROOT.parent / 'serving'))
+        import render_local
+        qwen = json.loads((ROOT.parent / 'serving' / 'qwen-fp8.json').read_text())
+        self.assertEqual(G.CONTRACT_SERVER_ARGS, render_local.qwen_args(qwen, 'proposed')[0])  # unchanged
+        cfg = G.child_config('contract-nothink')
+        base = G.child_config('contract')
+        self.assertEqual({k: v for k, v in cfg.items() if k not in ('server', 'frontend', 'thinking')},
+                         {k: v for k, v in base.items() if k != 'server'})
+        self.assertEqual((base['server'], cfg['server']), (G.CONTRACT_SERVER_ARGS, G.CONTRACT_NOTHINK_SERVER_ARGS))
+        self.assertEqual((cfg['frontend'], cfg['thinking']), (['default_chat_template_kwargs'], False))
+        self.assertNotIn('frontend', base)
+        self.assertNotIn('thinking', base)  # the thinking profile writes no thinking key: its runner default is True
+        self.assertIn("state.get('thinking', True)", G.CONTRACT_RUNNER)
 
 
 def alive(pid):

@@ -16,10 +16,11 @@ run in order and are rerun-safe: each first checks whether its result is already
   service    the rendered /etc/rose-models tree and systemd units; enables vLLM, health and verification timers
   diagnostic only with metadata rose-models-diagnostic=offline-validate|gpu-start-once|hf-probe-once|
              cloud-preflight-once|cloud-stage-once|cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once|
-             cloud-qwen-vision-once|cloud-qwen-adapter-once|cloud-qwen-warm-once|cloud-qwen-contract-once:
-             <payload sha256>:<id>, once per id (see gpu_start_once, hf_probe_once, cloud_preflight_once,
-             cloud_stage_once, cloud_redirect_probe_once, cloud_validate_once, cloud_qwen_gpu_once,
-             cloud_qwen_vision_once, cloud_qwen_adapter_once, cloud_qwen_warm_once, cloud_qwen_contract_once), and then
+             cloud-qwen-vision-once|cloud-qwen-adapter-once|cloud-qwen-warm-once|cloud-qwen-contract-once|
+             cloud-qwen-contract-nothink-once:<payload sha256>:<id>, once per id (see gpu_start_once, hf_probe_once,
+             cloud_preflight_once, cloud_stage_once, cloud_redirect_probe_once, cloud_validate_once,
+             cloud_qwen_gpu_once, cloud_qwen_vision_once, cloud_qwen_adapter_once, cloud_qwen_warm_once,
+             cloud_qwen_contract_once, cloud_qwen_contract_nothink_once), and then
              INSTEAD of every stage above and below: nothing is installed, pulled, reconfigured or rebooted. The model
              is held (MODEL_HOLD), stopped and its container positively absent; read-only prerequisites (docker, runc,
              the exact local image) or a refusal; one offline CLI check of the exact serve command (--pull=never,
@@ -88,7 +89,8 @@ RENEWAL_UNITS = ('certbot.timer', 'models-renewal-status.timer')  # renewal, and
 DIAG_KEY = 'attributes/rose-models-diagnostic'
 DIAG_VALUE = re.compile(r'(offline-validate|gpu-start-once|hf-probe-once|cloud-preflight-once|cloud-stage-once|'
                         r'cloud-redirect-probe-once|cloud-validate-once|cloud-qwen-gpu-once|cloud-qwen-vision-once|'
-                        r'cloud-qwen-adapter-once|cloud-qwen-warm-once|cloud-qwen-contract-once):([0-9a-f]{64}):'
+                        r'cloud-qwen-adapter-once|cloud-qwen-warm-once|cloud-qwen-contract-once|'
+                        r'cloud-qwen-contract-nothink-once):([0-9a-f]{64}):'
                         r'([a-z0-9][a-z0-9-]{0,31})')
 # gpu-start-once: one production GPU start, at most 900 s, stopped as soon as the server listens; inference stays held
 GPU_SECONDS, GPU_PROBE_S, MODEL_PORT, DATA = 900, 5, 8000, '/mnt/models-data'
@@ -150,6 +152,10 @@ QWEN_WARM_VALUE = re.compile(r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31}):(full|te
 # key accepts <this payload>:<fresh id>:<contract|chat|tool|long>. Only a case name comes from a request; the requests
 # themselves are the payload's pinned fixture (QWEN_CONTRACT_FILES).
 QWEN_CONTRACT_CONTAINER = 'rose-cloud-qwen-contract'
+# cloud-qwen-contract-nothink-once (MODELS-QWEN-CONTRACT-NOTHINK-001): the same, in its own container, with the helper's
+# contract-nothink profile (the contract profile plus a server default that turns thinking off) and its rule (no
+# reasoning anywhere instead of reasoning in its own field). Same cases, request key, bounds and cleanup.
+QWEN_CONTRACT_NOTHINK_CONTAINER = 'rose-cloud-qwen-contract-nothink'
 QWEN_CONTRACT_FILES = ('contract_session.py', 'qwen_contract_requests.json')
 QWEN_CONTRACT_VALUE = re.compile(r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31}):(contract|chat|tool|long)')
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
@@ -964,6 +970,8 @@ def stage_diagnostic(host, ctx):
         return cloud_qwen_warm_once(host, ctx, attempt, image)
     if request[2] == 'cloud-qwen-contract-once':
         return cloud_qwen_contract_once(host, ctx, attempt, image)
+    if request[2] == 'cloud-qwen-contract-nothink-once':
+        return cloud_qwen_contract_nothink_once(host, ctx, attempt, image)
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
               'attemptId': attempt, 'check': 'vllm-serve-cli-offline', 'modelHeld': True}
     refused = diagnostic_prerequisites(host, image)
@@ -1416,7 +1424,7 @@ def cloud_validate_once(host, ctx, attempt, image):
     return f"inference held; dependency validation stopped: {result['validate']['stop']}"
 
 
-def qwen_gpu_limits(vision=False, adapter=False, warm=False, contract=False) -> str:
+def qwen_gpu_limits(vision=False, adapter=False, warm=False, contract=False, nothink=False) -> str:
     """The only limits cloud-qwen-gpu-once (text), cloud-qwen-vision-once and cloud-qwen-adapter-once pass: no test
     hooks (mountsFile, netDir, devDir, tmpRoot, shmRoot, extraPath, serverCommand). Text mode is exactly the PR345
     limits."""
@@ -1428,7 +1436,8 @@ def qwen_gpu_limits(vision=False, adapter=False, warm=False, contract=False) -> 
     if warm:  # the helper's own deadline: load plus the fixed window, so the container ends even without bootstrap
         limits.update(mode='warm', deadlineS=QWEN_GPU_HELPER_S + QWEN_WARM_WINDOW_S)
     if contract:  # the same deadline as the warm container
-        limits.update(mode='contract', deadlineS=QWEN_GPU_HELPER_S + QWEN_WARM_WINDOW_S)
+        limits.update(mode='contract-nothink' if nothink else 'contract',
+                      deadlineS=QWEN_GPU_HELPER_S + QWEN_WARM_WINDOW_S)
     return json.dumps(limits, sort_keys=True)
 
 
@@ -1538,11 +1547,11 @@ def cloud_qwen_gpu_once(host, ctx, attempt, image, vision=False, adapter=False):
     return f"inference held; {what} stopped: {result['qwen']['stop']}"
 
 
-def qwen_warm_run(host, module, model_dir, case, contract=False):
+def qwen_warm_run(host, module, model_dir, case, contract=False, container=QWEN_CONTRACT_CONTAINER):
     """One payload-defined case inside the warm (or contract) container: (exit code or None on timeout, sanitized run
     or None)."""
     if contract:
-        argv = ['docker', 'exec', QWEN_CONTRACT_CONTAINER, 'python3', '-I', '-B', '-c', module.CONTRACT_RUNNER,
+        argv = ['docker', 'exec', container, 'python3', '-I', '-B', '-c', module.CONTRACT_RUNNER,
                 QWEN_WARM_WORK, case]
         marker, sanitize = module.CONTRACT_MARKER, module.sanitize_contract
     else:
@@ -1593,13 +1602,19 @@ def qwen_warm_ready(host, deadline, container=QWEN_WARM_CONTAINER):
         host.sleep(QWEN_WARM_READY_POLL_S)
 
 
+def cloud_qwen_contract_nothink_once(host, ctx, attempt, image):
+    """MODELS-QWEN-CONTRACT-NOTHINK-001: cloud_qwen_contract_once with the helper's no-thinking profile, in its own
+    container."""
+    return cloud_qwen_warm_once(host, ctx, attempt, image, contract=True, nothink=True)
+
+
 def cloud_qwen_contract_once(host, ctx, attempt, image):
     """MODELS-QWEN-CONTRACT-001: cloud_qwen_warm_once with the proposed serving profile and the contract cases, in
     its own container."""
     return cloud_qwen_warm_once(host, ctx, attempt, image, contract=True)
 
 
-def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False):
+def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False, nothink=False):
     """CLOUD-QWEN-WARM-001: the adapter container kept loaded for repeated, payload-defined sessions. The same
     prerequisites and container controls as cloud-qwen-adapter-once, started detached; once its server is healthy,
     the "full" case runs and the receipt is published; then each new rose-models-qwen-session request
@@ -1608,9 +1623,12 @@ def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False):
     QWEN_WARM_MAX_SESSIONS; then the container is removed and its absence verified. No retry; inference stays held.
     ``contract`` (cloud-qwen-contract-once): QWEN_CONTRACT_CONTAINER, the helper's contract mode and
     QWEN_CONTRACT_FILES; the first run is the "contract" case and requests name contract cases."""
-    container = QWEN_CONTRACT_CONTAINER if contract else QWEN_WARM_CONTAINER
+    container = (QWEN_CONTRACT_NOTHINK_CONTAINER if nothink else QWEN_CONTRACT_CONTAINER) if contract \
+        else QWEN_WARM_CONTAINER
+    check = ('cloud-qwen-contract-nothink-once' if nothink else 'cloud-qwen-contract-once') if contract \
+        else 'cloud-qwen-warm-once'
     result = {'schema': 'rose-models-diagnostic/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
-              'attemptId': attempt, 'check': 'cloud-qwen-contract-once' if contract else 'cloud-qwen-warm-once',
+              'attemptId': attempt, 'check': check,
               'modelHeld': True, 'started': False,
               'ready': None, 'readyAfterS': None, 'first': None, 'sessions': 0, 'ignored': 0,
               'endedBy': None, 'cleanup': None}
@@ -1629,7 +1647,8 @@ def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         argv = qwen_argv(container, image, model_dir, (lib / 'qwen_gpu.py').read_text(), manifest_text,
-                         qwen_gpu_limits(contract=True) if contract else qwen_gpu_limits(warm=True), bundle,
+                         qwen_gpu_limits(contract=True, nothink=nothink) if contract else qwen_gpu_limits(warm=True),
+                         bundle,
                          detach=True)
         t0 = host.clock()
         try:
@@ -1639,7 +1658,7 @@ def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False):
             if result['ready'] == 'ready':
                 result['readyAfterS'] = round(host.clock() - t0)
                 first = 'contract' if contract else 'full'
-                code, run = qwen_warm_run(host, module, model_dir, first, contract)
+                code, run = qwen_warm_run(host, module, model_dir, first, contract, container)
                 qwen_warm_record(host, ctx, attempt, 'first', first, 0, code, run)  # the first run's receipt
                 if contract:
                     result['first'] = {'exitCode': code, 'step': (run or {}).get('step'),
@@ -1650,7 +1669,8 @@ def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False):
                                        'sessionStep': session.get('step'),
                                        'semantics': (session.get('cancel') or {}).get('semantics')}
                 publish(False)
-                result['endedBy'] = qwen_warm_serve(host, ctx, attempt, module, model_dir, result, contract)
+                result['endedBy'] = qwen_warm_serve(host, ctx, attempt, module, model_dir, result, contract,
+                                                    container)
             else:
                 result['endedBy'] = result['ready'] or 'not_started'
         finally:
@@ -1663,11 +1683,13 @@ def cloud_qwen_warm_once(host, ctx, attempt, image, contract=False):
         raise Failed('diagnostic_prerequisite_missing', [{'prerequisite': refused}])
     if result['cleanup'] != 'removed':
         raise Failed('diagnostic_cleanup_failed', [{'cleanup': result['cleanup']}])
-    return (f"inference held; Qwen {'contract' if contract else 'warm'} container ended by {result['endedBy']} after "
+    kind = ('contract (no thinking)' if nothink else 'contract') if contract else 'warm'
+    return (f"inference held; Qwen {kind} container ended by {result['endedBy']} after "
             f"{result['sessions']} request(s)")
 
 
-def qwen_warm_serve(host, ctx, attempt, module, model_dir, result, contract=False):
+def qwen_warm_serve(host, ctx, attempt, module, model_dir, result, contract=False,
+                    container=QWEN_WARM_CONTAINER):
     """The request loop: the reason it ended (window, idle, max_sessions or container_gone)."""
     ready_at = last = host.clock()
     used, seen = {attempt, 'first'}, None  # 'first' names the first session's receipt
@@ -1689,11 +1711,10 @@ def qwen_warm_serve(host, ctx, attempt, module, model_dir, result, contract=Fals
                 result['ignored'] += 1
                 qwen_warm_record(host, ctx, attempt, None, None, None, None, None, ignored=reason)
             else:
-                container = QWEN_CONTRACT_CONTAINER if contract else QWEN_WARM_CONTAINER
                 if container_names(host, container) != [container]:
                     return 'container_gone'
                 used.add(m.group(2))
-                code, run = qwen_warm_run(host, module, model_dir, m.group(3), contract)
+                code, run = qwen_warm_run(host, module, model_dir, m.group(3), contract, container)
                 result['sessions'] += 1
                 last = host.clock()
                 qwen_warm_record(host, ctx, attempt, m.group(2), m.group(3), result['sessions'], code, run)

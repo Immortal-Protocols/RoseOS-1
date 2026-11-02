@@ -44,6 +44,7 @@ python3 os/background-control/tests/test_anyapp_wiring.py
 python3 os/background-control/tests/test_notification_wording.py
 python3 os/background-control/tests/test_preview_wiring.py
 python3 os/background-control/tests/test_current_apps_wiring.py
+python3 os/background-control/tests/test_current_apps_parity.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
@@ -97,6 +98,8 @@ python3 scripts/tests/test_factory_package.py
 # Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
 python3 scripts/tests/test_rango_factory_observe.py
 python3 scripts/tests/test_rango_factory_observe_workflow.py
+# Blazer (Pixel 10 Pro) preparation workflow wiring (stand-ins and the fake builder adapter; no host, download or vendor run).
+python3 scripts/tests/test_blazer_prep_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
