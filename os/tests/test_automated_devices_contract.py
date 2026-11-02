@@ -34,6 +34,8 @@ FILES = {
     f'{CORE}/computercontrol/IComputerControlSession.aidl': '83aea3fbe508f0b0a03f62f8907998bb0dba362bbbaf421b867e5f4207edeaa4',
     f'{CORE}/computercontrol/ComputerControlSession.java': '3ab33c355e774bcd00a7f3ee9692438ee5a48a53df464f3da577cce7b601fb59',
     f'{EXTENSIONS}/ComputerControlSession.java': '8c61474247ec68de7f1e50a4f15d248627a5e38013846743fcd9a74c8b67939b',
+    f'{CORE}/IVirtualDeviceManager.aidl': 'bfc6efe50adc8900def427769de91d9e6cc61116a65656d4b69e50bb570a9581',
+    f'{EXTENSIONS}/ComputerControlExtensions.java': 'fb5b292482f95b5922e0545d60852599499bb2a740fab0d3783e8b5a40f48780',
     f'{VIRTUAL}/computercontrol/ComputerControlSessionImpl.java': '66447d84e061d2a0304f51f9e06fa45032db3f2a1e5ac035689cb4522fd0f735',
     f'{VIRTUAL}/computercontrol/ComputerControlSessionProcessor.java': 'b0ace1a81f4c49dbcfb724d16951ac717684ab4a6ee97f6ea58ae7c850ebbf52',
 }
@@ -215,6 +217,43 @@ class AutomatedDevicesContractTest(unittest.TestCase):
         self.assertNotIn('public android.companion.virtual.computercontrol.AutomatedApps getAutomatedApps()', extension)
         # The extension's public API file is untouched: the method is @hide, as is the platform client's.
         self.assertNotIn('api_extension', (ROOT/'os/patches/background-control-modern-frameworks-base.patch').read_text())
+
+    def test_owned_devices_are_caller_scoped_atomic_and_cannot_resurrect(self):
+        # #156: getOwnedAutomatedDevices, agreed with App Core and OS Product. The binder method reads the calling uid
+        # itself, with no role, permission or identity-clearing in between, and returns the repository's snapshot.
+        service = flat(self.source['VirtualDeviceManagerService.java'])
+        self.assertIn('@Override // Binder call public android.os.Bundle getOwnedAutomatedDevices() { '
+            '// RoseOS (#156): only the caller\'s own devices, by its binder uid; no role, permission or other owner. '
+            'return mAutomatedPackagesRepository.ownedAutomatedDevices(Binder.getCallingUid()); }', service)
+        self.assertIn('android.os.Bundle getOwnedAutomatedDevices();', self.source['IVirtualDeviceManager.aidl'])
+        client = flat(self.source['VirtualDeviceManager.java'])
+        self.assertIn('@hide */ @NonNull public android.os.Bundle getOwnedAutomatedDevices() { if (mService == null) { '
+            'throw new IllegalStateException(', client)
+        self.assertIn('if (result == null) { throw new IllegalStateException(', client)
+        extensions = flat(self.source['ExtensionsComputerControlExtensions.java'])
+        self.assertIn('@hide */ @NonNull public android.os.Bundle getOwnedAutomatedDevices() { final VirtualDeviceManager vdm = '
+            'mContext == null ? null : mContext.getSystemService(VirtualDeviceManager.class); if (vdm == null) { '
+            'throw new IllegalStateException("Owned automated devices are unavailable"); } return vdm.getOwnedAutomatedDevices(); }',
+            extensions)
+        self.assertEqual(extensions.count('return new ComputerControlExtensions('), 2)
+        self.assertEqual(extensions.count(', context);'), 2, 'both getInstance paths keep the context')
+        repository = flat(self.source['AutomatedPackagesRepository.java'])
+        owned = repository[repository.index('public Bundle ownedAutomatedDevices(int callingUid) {'):]
+        owned = owned[:owned.index('return result; } }') + len('return result; } }')]
+        self.assertIn('synchronized (mLock) {', owned[:80], 'one snapshot under the repository lock')
+        self.assertIn('isListedLocked(deviceId) && mDeviceOwnerUids.get(deviceId) == callingUid', owned)
+        self.assertIn('result.putLong("generation", mDeviceGeneration);', owned)
+        for key in ('putIntArray("deviceIds"', 'putBooleanArray("deviceComplete"', 'putIntArray("appDeviceIds"',
+                'putStringArray("appPackageNames"'):
+            self.assertIn(key, owned)
+        self.assertEqual(owned.count('result.put'), 5, 'exactly the five agreed keys')
+        # A closed device stays closed: a late running-apps report is ignored (device ids are never reused).
+        self.assertIn('if (mClosedDevices.get(deviceId)) { return; } updateLocked(', repository)
+        self.assertIn('mClosedDevices.put(deviceId, true);', repository)
+        # No new permission or role check was added anywhere in the service.
+        original = (FIXTURES/'VirtualDeviceManagerService.java').read_text()
+        for marker in ('enforceCallingPermission', 'enforceCallingOrSelfPermission', 'ROLE_HOME', 'clearCallingIdentity'):
+            self.assertEqual(self.source['VirtualDeviceManagerService.java'].count(marker), original.count(marker), marker)
 
 if __name__ == '__main__':
     unittest.main()

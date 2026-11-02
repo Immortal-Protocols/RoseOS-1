@@ -86,11 +86,11 @@ public final class CurrentAppsTest {
         // Interim adapter: no session is authoritatively empty; a live session is not attested complete.
         WorkspaceOverview.Scope s = new WorkspaceOverview.Scope("srv", "c1");
         WorkspaceOverview.Binding verified = new WorkspaceOverview.Binding("rose-ws-1-calc", "s-1", "com.android.calculator2", s);
-        for (String st : new String[]{"ready", "launching", "starting", "scheduled", "blocked"}) {
+        for (String st : new String[]{"ready", "launching", "starting", "scheduled", "blocked", "cleanup_failed"}) {
             Snapshot live = CurrentApps.fromController("ctl", 1, null, st, "s-1", "rose-ws-1-calc", "com.android.calculator2", verified);
             expect(!live.available && live.reason.equals(CurrentApps.INCOMPLETE) && live.apps.isEmpty(), st + ": target-only membership is never shown as every app");
         }
-        for (String st : new String[]{"idle", "stopped", "closed", "user_stopped", "failed", "rejected", "cleanup_failed", "target_not_allowed", "consent_required"}) {
+        for (String st : new String[]{"idle", "stopped", "closed", "user_stopped", "failed", "rejected", "target_not_allowed", "consent_required"}) {
             Snapshot none = CurrentApps.fromController("ctl", 1, null, st, "", "", "", null);
             expect(none.available && none.apps.isEmpty(), st + ": no session display, nothing under control");
         }
