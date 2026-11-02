@@ -74,7 +74,7 @@ final class AuthTest {
                 && EndpointCredential.origin(ModelsService.TOKEN_URL).equals(EndpointCredential.origin(ModelsService.CHAT_URL))
                 && EndpointCredential.origin(ModelsService.CHALLENGE_URL).equals(EndpointCredential.origin(ModelsService.CHAT_URL)),
                 "auth and chat share the public origin");
-        check(ModelsService.DEFAULT == ModelsService.Model.MUSE && "muse-glimmer".equals(ModelsService.DEFAULT.id),
+        check(ModelsService.DEFAULT == ModelsService.Model.QWEN && "rose-qwen".equals(ModelsService.DEFAULT.id),
                 "default model");
     }
 

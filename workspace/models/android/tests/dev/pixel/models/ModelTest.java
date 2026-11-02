@@ -16,7 +16,7 @@ final class ModelTest {
     }
 
     static void all() {
-        defaultIsMuseWithItsPromptUnchanged();
+        defaultIsQwenAndMuseIsUnchanged();
         qwenIsExactWithoutTheMusePrompt();
         onlyExactKnownIdsSelectAModel();
         qwenReplyWithSeparateReasoningCompletesAndIsNeverReplayed();
@@ -25,10 +25,13 @@ final class ModelTest {
         inlineThinkingIsRefused();
     }
 
-    static void defaultIsMuseWithItsPromptUnchanged() {
-        check(AgentConfigJson.build(ModelsService.DEFAULT, HostTest.ALLOW).equals(
+    /** 0.4 demo default: Qwen with no setting. Choosing Muse still sends exactly the 0.2/0.3 Muse config. */
+    static void defaultIsQwenAndMuseIsUnchanged() {
+        check(ModelsService.DEFAULT == ModelsService.Model.QWEN && ModelsService.Model.fromId(null)
+                == ModelsService.Model.QWEN, "Qwen is the default, also with no stored choice");
+        check(AgentConfigJson.build(ModelsService.Model.MUSE, HostTest.ALLOW).equals(
                 AgentConfigJson.build("muse-glimmer", "Reasoning strength: low", HostTest.ALLOW)),
-                "default config is the 0.2 Muse config");
+                "explicit Muse config is the 0.2 Muse config");
         HostTest.Rig r = rig(ModelsService.Model.MUSE);
         r.host.send("hi");
         Map<String, Object> body = Json.object(Json.parse(r.client.bodies.get(0)));

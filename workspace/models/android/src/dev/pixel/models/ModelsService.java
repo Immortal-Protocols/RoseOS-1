@@ -38,7 +38,11 @@ public final class ModelsService {
         }
     }
 
-    public static final Model DEFAULT = Model.MUSE;
+    /**
+     * Qwen by default for the install-open-chat demo (0.4): the service slot serves rose-qwen, so the app needs no
+     * setting. This supersedes 0.3's Muse default; Muse stays one explicit Settings choice away.
+     */
+    public static final Model DEFAULT = Model.QWEN;
 
     private ModelsService() {
     }
