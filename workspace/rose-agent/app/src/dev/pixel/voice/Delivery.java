@@ -39,6 +39,9 @@ public class Delivery {
    long size;try(OutputStream out=new FileOutputStream(file)){size=PublicApkDownload.fetch(http,offer.apkUrl,out,offer.sha256,offer.size,DirectUpdate.MAX_APK);} // throws unless SHA-256 and size match
    long signatureSize;try(OutputStream out=new FileOutputStream(signature)){signatureSize=PublicApkDownload.fetchSignature(http,offer.idsigUrl,out,offer.idsigSha256,offer.idsigSize,DirectUpdate.MAX_IDSIG);}
    android.content.pm.PackageManager pm=a.getPackageManager();
+   // #407: Android parses <apk>.idsig beside an APK as its v4 signature and then needs fs-verity on the APK; a cache file has
+   // none, so parsing next to such a sibling fails. The signature is kept under another name; any old sibling is removed first.
+   File sibling=new File(file.getPath()+".idsig");if(sibling.exists()&&!sibling.delete())throw new IOException("An old update file couldn’t be removed, so nothing was installed.");
    android.content.pm.PackageInfo archive=pm.getPackageArchiveInfo(file.getPath(),android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
    android.content.pm.PackageInfo installed=pm.getPackageInfo(self,android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES);
    String reason=SelfUpdate.verify(offer.sha256,version,self,installed.getLongVersionCode(),offer.sha256,offer.sha256,self,Long.valueOf(version),Long.valueOf(offer.size),
@@ -51,7 +54,7 @@ public class Delivery {
    if(late!=null)throw new IOException(late);
    Intent callback=new Intent(a,InstallReceiver.class).putExtra(InstallReceiver.SELF_TARGET,version);PendingIntent result=PendingIntent.getBroadcast(a,sessionId,callback,PendingIntent.FLAG_UPDATE_CURRENT|(android.os.Build.VERSION.SDK_INT>=31?PendingIntent.FLAG_MUTABLE:0));
    UpdateAttempts.record(a,version,"committed");try(PackageInstaller.Session session=pi.openSession(sessionId)){session.commit(result.getIntentSender());}sessionId=-1;
-  }catch(Exception e){UpdateAttempts.record(a,version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();signature.delete();}
+  }catch(Exception e){UpdateAttempts.record(a,version,String.valueOf(e.getMessage()));if(sessionId>=0)a.getPackageManager().getPackageInstaller().abandonSession(sessionId);}finally{file.delete();signature.delete();new File(file.getPath()+".idsig").delete();}
  }
  /** This phone as DirectUpdate needs it, read locally. osBuild is Build.VERSION.INCREMENTAL only when it has the
   * ten-digit Rose build shape (proposed observation, APP-GITHUB-002-IFACE-001); otherwise unknown. */
