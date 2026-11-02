@@ -86,6 +86,13 @@ gcloud compute instances add-metadata models-glimmer-01 --project protocols-4657
 - **Not guaranteed** while an older payload's enable is still in place: that first reset can start the model before
   this bootstrap runs. The hold then reports it (`enabledBefore`), stops it, verifies it, and disables the units for
   later boots. Check `enabledBefore` on the first hold receipt.
+- **Why that caveat stays open:** the safe first transition would stop and disable the model and health units
+  (including their timers), verify them inactive and disabled with no pending jobs, and confirm the container gone,
+  all *before* the metadata change and reset. There is no authorized pre-reset guest execution channel today: the
+  operator route is Compute metadata, reset and sanitized guest attributes, and the temporary SSH access was removed.
+  This source cannot enforce that ordering retrospectively, and rollback is not guaranteed from that state.
+  Activation stays blocked on an authorized guest channel or an owner-run equivalent, and separately on the
+  enrolled-phone edge proof.
 
 ## 2a. Model selection: Muse (default) or the staged Qwen (MODELS-QWEN-SERVE-001; source only, never run as the service)
 
