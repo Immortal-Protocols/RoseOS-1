@@ -45,7 +45,7 @@ public final class Controller {
  static boolean locked(Context c){KeyguardManager k=c.getSystemService(KeyguardManager.class);return k!=null&&k.isDeviceLocked();}
  // Android refuses locked creation with ERROR_DEVICE_LOCKED (2) unless the OS build and owner
  // allow it; a locked session blocks on installer, permission, settings and secure screens.
- static String reason(Context c){if(error.contains("target_in_foreground"))return "target_in_foreground";if(error.contains("owner_unlock_required")||blocked&&locked(c))return "owner_unlock_required";if("rejected".equals(status)&&error.equals("Android session error 2"))return "device_locked";if("starting".equals(status)&&pending!=null&&pendingToken==generation)return Replacement.REPLACING;if("rejected".equals(status))return Replacement.reason(error);return "";}
+ static String reason(Context c){if(error.contains("target_in_foreground"))return "target_in_foreground";if(error.contains("owner_unlock_required")||blocked&&locked(c))return "owner_unlock_required";if("rejected".equals(status)&&error.equals("Android session error 2"))return "device_locked";if("starting".equals(status)){String w=pending!=null&&pendingToken==generation?replacement.blocker():replacement.unanswered(generation)?Replacement.REQUEST_UNANSWERED:"";if(!w.isEmpty())return w;}if("rejected".equals(status))return Replacement.reason(error);return "";}
  static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;}
  // Only the owner's notification/viewer Stop is "user"; it also refuses later starts of that task.
  static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
@@ -84,7 +84,8 @@ public final class Controller {
     Class<?> cb=Class.forName(EXT+"ComputerControlSession$Callback");Object callback=Proxy.newProxyInstance(cb.getClassLoader(),new Class<?>[]{cb},(proxy,method,args)->{
      if(method.getName().equals("hashCode"))return System.identityHashCode(proxy);if(method.getName().equals("equals"))return proxy==args[0];if(method.getName().equals("toString"))return "PixelVoiceBackgroundCallback";
      synchronized(Controller.class){
-      switch(method.getName()){case "onSessionCreated":case "onSessionCreationFailed":case "onSessionPending":replacement.answered(token);break;case "onSessionClosed":replacement.closed(token);break;}
+      // Every callback follows Android's same-name check, so the first one for this request is its admission.
+      switch(method.getName()){case "onSessionCreated":case "onSessionCreationFailed":case "onSessionPending":replacement.admitted(token);replacement.answered(token);break;case "onSessionClosed":replacement.closed(token);break;}
       if(token!=generation){if(method.getName().equals("onSessionCreated")){args[0].getClass().getMethod("close").invoke(args[0]);replacement.closing(token,args[0]);}dispatch();return null;}
       switch(method.getName()){
        case "onSessionPending":consent=(IntentSender)args[0];status="consent_required";Activity a=MainActivity.visible.get();if(a!=null)requestConsent(a);break;
@@ -96,8 +97,6 @@ public final class Controller {
     });
     synchronized(Controller.class){if(token!=generation)return;replacement.requested(token);}
     type.getMethod("requestSession",Class.forName(EXT+"ComputerControlSession$Params"),Executor.class,cb).invoke(ext,b.getMethod("build").invoke(builder),(Executor)(r->main.post(r)),callback);
-    // A normal return is Android's admission: its same-name check found none of this controller's closed sessions listed.
-    synchronized(Controller.class){replacement.admitted(token);}
    }catch(Throwable e){synchronized(Controller.class){replacement.answered(token);if(token==generation){error=root(e).toString();status=AnyAppControl.targetRefused(error)?"target_not_allowed":Replacement.listed(error)?"rejected":"failed";}dispatch();}}
   };
   pending=request;pendingToken=token;dispatch();
