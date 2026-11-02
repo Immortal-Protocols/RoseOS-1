@@ -1065,14 +1065,53 @@ Every run also checks `/v1/models`: exactly `["rose-qwen"]`, with `max_model_len
 A reply that thinks past `max_tokens` 512 is reported as `failed:truncated_reply`, which is exactly what the client
 would do.
 
+**PR353 runtime record** (original Mac, payload `34397ad1…`, boot `a667c989…`). This run did NOT pass the contract:
+- **Configured as intended:** the exact `rose-qwen` identity, the qwen3 parser and the 8192-token context; the
+  server was ready in 464 s.
+- **Initial full run: failed.** Chat and the calculator tool loop passed, with reasoning returned separately, valid
+  envelopes and no `<think>` in the content. The `long` request then hit the driver's 55 s bound (`TimeoutError`,
+  `allExpected: null`).
+- **Standalone `long` repeat, unchanged, on the same engine: passed once.** 3451 prompt tokens, 405 completion
+  tokens, 53.1 s, correct recall. One pass, not evidence of reliable latency.
+- **Full repeat, unchanged: failed.** Chat and the calculator proposal passed, then the request after the tool result
+  hit the 55 s bound (`TimeoutError`, `allExpected: null`).
+
+**Diagnosis (MODELS-QWEN-CONTRACT-002):**
+- The 55 s was this driver's own bound, chosen so five requests fit bootstrap's 300 s. It was not the product's.
+- The client waits 120 s per request:
+  - `inference_timeout_ms` 120000 in rose-chat-core `Limits::default()`;
+  - Android sends no limits, so those defaults apply, and passes the 120 s to its read timeout;
+  - the edge's upstream timeout is also 120 s.
+- The client allows 512 completion tokens, thinking included. At the roughly 7.6 tokens/s of the lone pass (an
+  inference), that is about 66 s.
+- So the driver gave up on requests the phone would still have waited for. Because the `TimeoutError` escaped, the
+  timed-out request left no time or token counts.
+
+**Correction (this driver only; product settings unchanged):**
+- **Client limits from the client.** rose-chat-core's test writes `Limits::default()` into the fixture's `client`,
+  and each request waits exactly that `inference_timeout_ms`.
+- **A timeout is a reply.** A request still unanswered then is recorded with the client's own verdict,
+  `failed:timeout_response`, plus `timedOut` and its elapsed seconds. Later requests still run.
+- **Nothing is hidden.** A case stays inside bootstrap's 300 s per run (`CASE_BUDGET_S` 285). A request that could not
+  get the full client wait in what is left is not sent and is listed in `notRun` as `budget`. A tool follow-up whose
+  proposal did not come is listed as `no_proposal`.
+- **`allExpected` is now always `true` or `false`,** never null. It is false whenever anything timed out or did not run.
+- **The `/v1/models` check** has its own 10 s bound and records `timedOut`.
+- **Old code fails the new tests:** run against the PR353 driver, they fail with `TimeoutError`.
+
+**Still open (deadline matching does not fix it):** a 30–70 s wait for a simple answer is a separate usability
+concern. It is mostly thinking length at the measured rate. Answering it needs per-reply token and time evidence from
+a run with this driver, not a longer deadline.
+
 **Proposed operator packet** (runtime only by the original Mac operator):
 1. Build at the merge commit with the deployed roots, and record P. Confirm the hashes Core reports for `qwen_gpu.py`,
    `contract_session.py` and `qwen_contract_requests.json`.
 2. Set `rose-models-diagnostic=cloud-qwen-contract-once:<P>:<fresh id>`, and do one reset.
 3. Read `rose-models/diagnostic` until it shows `phase: "serving"` (`first.allExpected`), then read
    `rose-models/qwen-session` for the whole contract receipt.
-4. Optionally, repeat a case on the same engine (the client sends no temperature, so the server's default sampling
-   applies, and repeats show stability):
+4. If the first run lists a request in `notRun` (`budget`), request that case on its own (`long`, or `tool`); each
+   single case fits a full client wait per request. Optionally repeat a case on the same engine (the client sends no
+   temperature, so the server's default sampling applies, and repeats show stability):
 
    ```bash
    gcloud compute instances add-metadata models-glimmer-01 --project protocols-465723 --zone us-central1-f --metadata=rose-models-qwen-session=<P>:<fresh id>:<contract|chat|tool|long>
