@@ -440,7 +440,7 @@
   // In an ordinary app or a Rose app window, dragging up from the bottom edge scrunches the app and
   // raises Home's own control edge (Rose · microphone · switcher). Tapping the app, swiping down or
   // Escape restores it; tapping the home bar still goes Home. Presentation only: no state change.
-  const peekable = () => device.dataset.theme === 'oxblood' && ['app', 'window'].includes(state.view) && !state.locked && !state.pendingStop;
+  const peekable = () => device.dataset.theme === 'oxblood' && ['app', 'window', 'rose'].includes(state.view) && !state.locked && !state.pendingStop;
   function setPeek(on) {
     on = !!on && peekable();
     if (on === peek) return;
@@ -468,7 +468,7 @@
   $('peek-rose').addEventListener('click', () => { setPeek(false); dispatch({ type: 'openRose' }); });
   $('peek-mic').addEventListener('click', () => { dispatch({ type: 'micMute' }); $('peek-mic').innerHTML = state.muted ? I.UI.micOff : I.UI.mic; $('peek-mic').setAttribute('aria-pressed', String(state.muted)); $('peek-mic').dataset.muted = String(state.muted); });
   $('peek-overview').addEventListener('click', () => { setPeek(false); dispatch({ type: 'switcher' }); });
-  for (const v of ['app', 'window']) viewEl(v).addEventListener('click', (e) => { if (peek) { e.stopPropagation(); e.preventDefault(); setPeek(false); } }, true);
+  for (const v of ['app', 'window', 'rose']) viewEl(v).addEventListener('click', (e) => { if (peek) { e.stopPropagation(); e.preventDefault(); setPeek(false); } }, true);
   $('home-bar').addEventListener('click', () => { if (suppressHomeTap) { suppressHomeTap = false; return; } setPeek(false); dispatch({ type: 'home' }); });
   $('unlock').addEventListener('click', () => dispatch({ type: 'unlock' }));
   document.addEventListener('keydown', (e) => {

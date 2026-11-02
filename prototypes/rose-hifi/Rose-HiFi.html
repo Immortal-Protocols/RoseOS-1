@@ -1053,9 +1053,9 @@ span.well{cursor:default}
 #device[data-theme=oxblood] #peek-overview svg{width:64px;height:28px}
 #device[data-theme=oxblood] .peek-pearl{width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%);box-shadow:0 2px 4px rgba(0,0,0,.5)}
 /* The app scrunches up and away from the edge, keeping its own content clear. */
-#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window){transform:translateY(-58px) scale(.88);border-radius:34px;overflow:hidden;
+#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window,#v-rose){transform:translateY(-58px) scale(.88);border-radius:34px;overflow:hidden;
   box-shadow:0 0 0 1px rgba(236,205,190,.25),0 24px 50px rgba(0,0,0,.6);transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease);cursor:pointer}
-#device[data-theme=oxblood] :is(#v-app,#v-window){transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease)}
+#device[data-theme=oxblood] :is(#v-app,#v-window,#v-rose){transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease)}
 #device[data-theme=oxblood] .screen.peek{background:#0f0406}
 #device[data-theme=oxblood] .screen.peek .home-bar{z-index:46}
 #device[data-theme=oxblood] .peek-tray .well::before,#device[data-theme=oxblood] .peek-tray .well::after{display:none}
@@ -2641,7 +2641,7 @@ void main(){
   // In an ordinary app or a Rose app window, dragging up from the bottom edge scrunches the app and
   // raises Home's own control edge (Rose · microphone · switcher). Tapping the app, swiping down or
   // Escape restores it; tapping the home bar still goes Home. Presentation only: no state change.
-  const peekable = () => device.dataset.theme === 'oxblood' && ['app', 'window'].includes(state.view) && !state.locked && !state.pendingStop;
+  const peekable = () => device.dataset.theme === 'oxblood' && ['app', 'window', 'rose'].includes(state.view) && !state.locked && !state.pendingStop;
   function setPeek(on) {
     on = !!on && peekable();
     if (on === peek) return;
@@ -2669,7 +2669,7 @@ void main(){
   $('peek-rose').addEventListener('click', () => { setPeek(false); dispatch({ type: 'openRose' }); });
   $('peek-mic').addEventListener('click', () => { dispatch({ type: 'micMute' }); $('peek-mic').innerHTML = state.muted ? I.UI.micOff : I.UI.mic; $('peek-mic').setAttribute('aria-pressed', String(state.muted)); $('peek-mic').dataset.muted = String(state.muted); });
   $('peek-overview').addEventListener('click', () => { setPeek(false); dispatch({ type: 'switcher' }); });
-  for (const v of ['app', 'window']) viewEl(v).addEventListener('click', (e) => { if (peek) { e.stopPropagation(); e.preventDefault(); setPeek(false); } }, true);
+  for (const v of ['app', 'window', 'rose']) viewEl(v).addEventListener('click', (e) => { if (peek) { e.stopPropagation(); e.preventDefault(); setPeek(false); } }, true);
   $('home-bar').addEventListener('click', () => { if (suppressHomeTap) { suppressHomeTap = false; return; } setPeek(false); dispatch({ type: 'home' }); });
   $('unlock').addEventListener('click', () => dispatch({ type: 'unlock' }));
   document.addEventListener('keydown', (e) => {
