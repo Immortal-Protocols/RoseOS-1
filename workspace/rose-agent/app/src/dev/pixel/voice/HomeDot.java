@@ -9,31 +9,27 @@ import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 
 /**
- * One Home page dot of the selected HiFi (prototypes/rose-hifi at ce126f56, style.css .page-dots button i): an 8dp
- * white circle at 45% with a fine rgba(30,60,100,.15) ring, and for the current page (aria-current, here the view's
- * selected state) a 9dp solid white circle in a soft white glow (0 0 6px rgba(255,255,255,.8)). Drawn centred in
- * its 44dp touch target; the view keeps the click and the spoken page name.
+ * One Home page dot of the committed Oxblood Rose HiFi (#410; main f6503a0, oxblood.css:364-367,514-515;
+ * qa/oxblood/oxblood-contract.json "homeGrid.dots"): a 7dp warm grey dot at 45%, and for the current page (the view's
+ * selected state) a 7.5dp ivory dot #f4ede0 in a soft warm glow (0 0 4px rgba(255,235,220,.45)). Indicator only, as in
+ * the reference: paging is by swipe, and the pager itself offers scroll actions and names the page for accessibility.
  */
 final class HomeDot extends Drawable {
- static final int DOT_DP = 8, CURRENT_DP = 9, GLOW_DP = 6;
- static final int IDLE = 0x73ffffff, RING = 0x261e3c64, CURRENT = 0xffffffff, GLOW = 0xccffffff;
+ static final float DOT_DP = 7, CURRENT_DP = 7.5f, GLOW_DP = 4;
+ static final int IDLE = 0x73c8beba, CURRENT = 0xfff4ede0, GLOW = 0x73ffebdc;
 
  final float density;
- final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), ring = new Paint(Paint.ANTI_ALIAS_FLAG),
-   glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+ final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), glow = new Paint(Paint.ANTI_ALIAS_FLAG);
  boolean current;
 
  HomeDot(float density) {
   this.density = density;
-  ring.setStyle(Paint.Style.STROKE);
-  ring.setStrokeWidth(Math.max(1f, density));
-  ring.setColor(RING);
  }
 
  @Override protected void onBoundsChange(android.graphics.Rect bounds) {
   float r = CURRENT_DP * density / 2, outer = r + GLOW_DP * density;
   glow.setShader(new RadialGradient(bounds.exactCenterX(), bounds.exactCenterY(), outer,
-    new int[]{GLOW, GLOW, 0x00ffffff}, new float[]{0f, r / outer, 1f}, Shader.TileMode.CLAMP));
+    new int[]{GLOW, GLOW, GLOW & 0x00ffffff}, new float[]{0f, r / outer, 1f}, Shader.TileMode.CLAMP));
  }
 
  @Override public void draw(Canvas canvas) {
@@ -44,10 +40,8 @@ final class HomeDot extends Drawable {
    fill.setColor(CURRENT);
    canvas.drawCircle(cx, cy, r, fill);
   } else {
-   float r = DOT_DP * density / 2;
    fill.setColor(IDLE);
-   canvas.drawCircle(cx, cy, r, fill);
-   canvas.drawCircle(cx, cy, r + ring.getStrokeWidth() / 2, ring);
+   canvas.drawCircle(cx, cy, DOT_DP * density / 2, fill);
   }
  }
 

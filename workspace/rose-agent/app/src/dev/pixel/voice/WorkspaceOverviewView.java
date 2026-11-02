@@ -19,11 +19,13 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** The selected HiFi's Rose's apps surface (prototypes/rose-hifi at ce126f56: views.js renderAgents/windowCard,
- * style.css .agents-surface/.agrid/.wcard/.wbody/.sdot/.stop-btn/.a-empty), drawn natively. No visible heading (the
- * HiFi h2 is screen-reader only); a two-column grid of 250dp cards with 12dp gaps; each card is a 22dp-radius
- * white(.86) card with a 24dp icon and label header, a #f3f6fa body and a footer of status dot, short state and the
- * round 44dp Stop.
+/** Rose's apps (Background Work) in the committed Oxblood HiFi (#410; main f6503a0, oxblood.css:279-319,421-439;
+ * qa/oxblood/oxblood-contract.json "manager"), drawn natively. No visible heading (screen-reader only); a two-column
+ * grid of 276dp cards, 18dp apart across and 20dp down. Each card is a dark 13dp-radius window: its body fills the card
+ * (the app's verified live frame, or its name and the plain statement that live view isn't available), a frosted
+ * identity chip with the app's real icon at the top left, a frosted state chip at the bottom left (hidden while it
+ * runs), and the compact frosted Stop at the bottom right. A card whose app is running under Rose gets the lit ruby
+ * edge (static under reduced motion); a Stop in flight dims it.
  *
  * #225/#156 (Nathan's phone acceptance): exactly the apps CURRENTLY running under Rose's control (CurrentApps), one
  * window card each, and nothing else: no task history or result cards. A card's body is that app's verified live
@@ -43,8 +45,10 @@ final class WorkspaceOverviewView extends LinearLayout {
  /** The app's visible name, or "" (the card then says Rose's app rather than a guessed name). */
  interface Labels { String label(String pkg); }
  static final int INK=0xff141922,INK2=0xff5b6680,INK3=0xff8a93a6,OK=0xff4fb36a,ATTN=0xffe6a23a,STOP=0xffd9534a,STOPPED=0xff8e98a6,DONE=0xff5b8def,IDLE=0xffaeb7c4,
-  CARD=0xdbffffff,BODY=0xfff3f6fa,RING=0x2e788caa,ROSE=0xffc56f78;
- static final int CARD_DP=250,GAP_DP=12;
+  CARD=0xff1a0a0d,BODY=0xff1a0a0d,RING=0x29ecd5c6,ROSE=0xffc56f78;
+ static final int CARD_DP=276,GAP_DP=18,ROW_GAP_DP=20,RADIUS_DP=13;
+ /** Oxblood ink on the dark field (contract "ink"). */
+ static final int OX_INK=0xfff2e6d9,OX_INK2=0xffd2b9ab;
  /** No live content for this app yet: said plainly, never an icon or picture standing in for it. */
  static final String LIVE_UNAVAILABLE="Live view isn’t available for this app yet.";
  static final String STOP_APP_UNAVAILABLE="Stopping an app from here isn’t available yet.";
@@ -58,7 +62,7 @@ final class WorkspaceOverviewView extends LinearLayout {
 
  WorkspaceOverviewView(Context c){
   super(c);setOrientation(VERTICAL);
-  notice=text("",13,INK3,false);notice.setGravity(Gravity.CENTER);notice.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
+  notice=text("",13,OX_INK2,false);notice.setGravity(Gravity.CENTER);notice.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
  }
  void setListener(Listener l){listener=l;}
  void setIcons(Icons i){icons=i;lastKey="";}
@@ -91,7 +95,7 @@ final class WorkspaceOverviewView extends LinearLayout {
   removeAllViews();
   if(state!=CurrentApps.State.AVAILABLE){
    // HiFi .a-empty: nothing running under control, or why it can't be known; never stale cards.
-   TextView e=text(state==CurrentApps.State.EMPTY?WorkspaceOverview.EMPTY:CurrentApps.text(reason),15,INK2,false);e.setGravity(Gravity.CENTER);
+   TextView e=text(state==CurrentApps.State.EMPTY?WorkspaceOverview.EMPTY:CurrentApps.text(reason),15,OX_INK2,false);e.setGravity(Gravity.CENTER);
    e.setTag(state==CurrentApps.State.EMPTY?"empty":"unavailable");
    LayoutParams ep=new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT);ep.topMargin=dp(220);addView(e,ep);
    return;
@@ -100,7 +104,7 @@ final class WorkspaceOverviewView extends LinearLayout {
   for(CurrentApps.App a:apps)cards.add(appCard(a,images.get(a.entryId)));
   for(int i=0;i<cards.size();i+=2){
    LinearLayout row=new LinearLayout(getContext());row.setOrientation(HORIZONTAL);
-   LayoutParams rp=new LayoutParams(LayoutParams.MATCH_PARENT,dp(CARD_DP));if(i>0)rp.topMargin=dp(GAP_DP);
+   LayoutParams rp=new LayoutParams(LayoutParams.MATCH_PARENT,dp(CARD_DP));if(i>0)rp.topMargin=dp(ROW_GAP_DP);
    LayoutParams a=new LayoutParams(0,LayoutParams.MATCH_PARENT,1f);row.addView(cards.get(i),a);
    LayoutParams b=new LayoutParams(0,LayoutParams.MATCH_PARENT,1f);b.leftMargin=dp(GAP_DP);
    if(i+1<cards.size())row.addView(cards.get(i+1),b);else row.addView(new View(getContext()),b);
@@ -111,87 +115,138 @@ final class WorkspaceOverviewView extends LinearLayout {
    LayoutParams np=new LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT);np.topMargin=dp(14);addView(notice,np);}
  }
 
- /** One app running under Rose's control: its real icon and name, its live frame when verified (otherwise the plain
-  * statement that live view isn't available), its state, and a Stop that says why it isn't available. */
+ /** One app running under Rose's control: its real icon and name, its live frame when verified (otherwise its name and
+  * the plain statement that live view isn't available), its state, and a Stop that says why it isn't available. */
  View appCard(final CurrentApps.App a,android.graphics.Bitmap frame){
   boolean live=frame!=null;
   CurrentApps.SessionStop.Phase stopping=a.sessionId.isEmpty()?null:stops.get(a.sessionId);
   boolean inFlight=stopping==CurrentApps.SessionStop.Phase.SENDING||stopping==CurrentApps.SessionStop.Phase.STOPPING;
   Drawable icon=icons==null?null:icons.icon(a.packageName);
   String label=labels==null?"":labels.label(a.packageName);if(label==null||label.isEmpty())label=WorkspaceOverview.WORKSPACE;
-  WorkspaceOverview.Dot dot=inFlight?WorkspaceOverview.Dot.STOPPING:CurrentApps.STATE_WAITING.equals(a.state)?WorkspaceOverview.Dot.ATTENTION:WorkspaceOverview.Dot.RUNNING;
-  String st=inFlight?WorkspaceOverview.STOP_STOPPING:CurrentApps.STATE_WAITING.equals(a.state)?"Waiting":CurrentApps.STATE_STARTING.equals(a.state)?"Starting":"Running";
-  View card=card(icon==null?null:new ImageView(getContext()),icon,label,"",LIVE_UNAVAILABLE,dot,st,false,false,stopButton(a,label,inFlight));
-  if(live)showPreview((LinearLayout)card,label,a.entryId,frame);
+  boolean waiting=CurrentApps.STATE_WAITING.equals(a.state),starting=CurrentApps.STATE_STARTING.equals(a.state);
+  String st=inFlight?WorkspaceOverview.STOP_STOPPING:waiting?"Waiting":starting?"Starting":"Running";
+  // The lit edge only while the app is actually running under Rose (not waiting, starting or stopping).
+  boolean running=!inFlight&&!waiting&&!starting;
+  FrameLayout card=card(icon,label,st,running,stopButton(a,label,inFlight));
+  if(inFlight)dim(card,.6f,.7f);
+  if(live)showPreview(card,label,a.entryId,frame);
   card.setContentDescription(label+", "+st+(live?". Live view":". "+LIVE_UNAVAILABLE));
   card.setOnClickListener(v->{if(listener!=null)listener.app(a.entryId);});
   card.setTag("app:"+a.entryId);
   return card;
  }
- /** Replaces the window card's text body with its live frame (HiFi .wbody content), top-aligned and cropped to the
-  * body like the HiFi's window content; the text stays as the spoken description. */
- void showPreview(LinearLayout card,String app,String entryId,android.graphics.Bitmap preview){
-  View body=card.getChildAt(1);LayoutParams lp=(LayoutParams)body.getLayoutParams();
-  FrameLayout frame=new FrameLayout(getContext());GradientDrawable bb=new GradientDrawable();bb.setColor(BODY);bb.setCornerRadius(dp(14));frame.setBackground(bb);frame.setClipToOutline(true);
+ /** Stopping (contract "manager.dimmed"): the card's saturation and brightness drop, as one layer. */
+ static void dim(View card,float saturation,float brightness){
+  android.graphics.ColorMatrix m=new android.graphics.ColorMatrix();m.setSaturation(saturation);
+  android.graphics.ColorMatrix b=new android.graphics.ColorMatrix();b.setScale(brightness,brightness,brightness,1);m.postConcat(b);
+  android.graphics.Paint p=new android.graphics.Paint();p.setColorFilter(new android.graphics.ColorMatrixColorFilter(m));card.setLayerType(LAYER_TYPE_HARDWARE,p);
+ }
+ /** Replaces the card's text body with its live frame, filling the whole card, top-aligned and cropped like the
+  * reference's full-card preview; the text stays as the spoken description. */
+ void showPreview(FrameLayout card,String app,String entryId,android.graphics.Bitmap preview){
   ImageView img=new ImageView(getContext());img.setScaleType(ImageView.ScaleType.MATRIX);img.setImageBitmap(preview);
   img.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitTop(img));
   img.setContentDescription("Live view of Rose’s workspace in "+app);img.setTag("preview");
-  frame.addView(img,new FrameLayout.LayoutParams(-1,-1));
-  card.removeViewAt(1);card.addView(frame,1,lp);previewViews.put(entryId,img);shownFrames.put(entryId,preview);
+  card.removeViewAt(0);card.addView(img,0,new FrameLayout.LayoutParams(-1,-1));previewViews.put(entryId,img);shownFrames.put(entryId,preview);
  }
- /** Scales the frame to the body's width and pins its top (the app's top bar), cropping only the bottom. */
+ /** Scales the frame to the card's width and pins its top (the app's top bar), cropping only the bottom. */
  static void fitTop(ImageView img){
   android.graphics.drawable.Drawable d=img.getDrawable();if(d==null||img.getWidth()==0||d.getIntrinsicWidth()<=0)return;
   float s=Math.max(img.getWidth()/(float)d.getIntrinsicWidth(),img.getHeight()/(float)d.getIntrinsicHeight());
   android.graphics.Matrix m=new android.graphics.Matrix();m.setScale(s,s);m.postTranslate((img.getWidth()-d.getIntrinsicWidth()*s)/2f,0);img.setImageMatrix(m);
  }
- View card(View iconView,Drawable icon,String label,String headline,String body,WorkspaceOverview.Dot dot,String state,boolean task,boolean muted){
-  return card(iconView,icon,label,headline,body,dot,state,task,muted,stopButton(null,label,false));
- }
- View card(View iconView,Drawable icon,String label,String headline,String body,WorkspaceOverview.Dot dot,String state,boolean task,boolean muted,View stopView){
-  LinearLayout card=new LinearLayout(getContext());card.setOrientation(VERTICAL);card.setClickable(true);card.setFocusable(true);
-  GradientDrawable bg=new GradientDrawable();bg.setColor(CARD);bg.setCornerRadius(dp(22));bg.setStroke(Math.max(1,dp(1)),RING);card.setBackground(bg);
-  card.setElevation(dp(6));card.setClipToOutline(true);
-  // header: 24dp icon + label (.wcard header: 12/14/8 padding, 13px 550)
-  LinearLayout head=new LinearLayout(getContext());head.setGravity(Gravity.CENTER_VERTICAL);head.setPadding(dp(14),dp(12),dp(14),dp(8));
-  if(iconView!=null){if(iconView instanceof ImageView)((ImageView)iconView).setImageDrawable(icon);head.addView(iconView,new LayoutParams(dp(24),dp(24)));}
-  TextView l=text(label,13,INK,true);l.setSingleLine(true);l.setEllipsize(TextUtils.TruncateAt.END);l.setPadding(iconView==null?0:dp(8),0,0,0);head.addView(l,new LayoutParams(0,LayoutParams.WRAP_CONTENT,1f));
-  card.addView(head);
-  // body (.wbody: 0 10dp margin, 14dp radius, #f3f6fa)
-  LinearLayout b=new LinearLayout(getContext());b.setOrientation(VERTICAL);b.setPadding(dp(12),dp(12),dp(12),dp(12));
-  GradientDrawable bb=new GradientDrawable();bb.setColor(BODY);bb.setCornerRadius(dp(14));b.setBackground(bb);
-  if(!headline.isEmpty()){TextView h=text(headline,14,INK,true);h.setMaxLines(3);h.setEllipsize(TextUtils.TruncateAt.END);b.addView(h);}
-  if(!body.isEmpty()){TextView t=text(body,12.5f,INK2,false);t.setMaxLines(task?7:5);t.setEllipsize(TextUtils.TruncateAt.END);if(!headline.isEmpty())t.setPadding(0,dp(6),0,0);b.addView(t);}
+ /** One window card: body (index 0), identity chip, state chip and Stop, and the running edge as its foreground. */
+ FrameLayout card(Drawable icon,String label,String state,boolean running,View stopView){
+  FrameLayout card=new FrameLayout(getContext());card.setClickable(true);card.setFocusable(true);
+  GradientDrawable bg=new GradientDrawable();bg.setColor(CARD);bg.setCornerRadius(dp(RADIUS_DP));bg.setStroke(Math.max(1,dp(1)),RING);card.setBackground(bg);
+  card.setClipToOutline(true);
+  // Body: no live frame yet, so the app's name and the plain statement (below the chip), never a stand-in picture.
+  LinearLayout b=new LinearLayout(getContext());b.setOrientation(VERTICAL);b.setPadding(dp(14),dp(58),dp(14),dp(56));
+  TextView name=text(label,15,OX_INK,true);name.setMaxLines(2);name.setEllipsize(TextUtils.TruncateAt.END);b.addView(name);
+  TextView t=text(LIVE_UNAVAILABLE,12.5f,OX_INK2,false);t.setMaxLines(5);t.setEllipsize(TextUtils.TruncateAt.END);t.setPadding(0,dp(8),0,0);b.addView(t);
   b.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-  LayoutParams bp=new LayoutParams(LayoutParams.MATCH_PARENT,0,1f);bp.leftMargin=bp.rightMargin=dp(10);card.addView(b,bp);
-  if(muted)b.setAlpha(.6f);
-  // footer: dot, short state, round Stop (.wcard footer 8/8/8/14)
-  LinearLayout foot=new LinearLayout(getContext());foot.setGravity(Gravity.CENTER_VERTICAL);foot.setPadding(dp(14),dp(8),dp(8),dp(8));
-  foot.addView(dot(dot),new LayoutParams(dp(9),dp(9)));
-  TextView st=text(state,11.5f,INK2,false);st.setSingleLine(true);st.setEllipsize(TextUtils.TruncateAt.END);st.setPadding(dp(7),0,dp(4),0);
-  foot.addView(st,new LayoutParams(0,LayoutParams.WRAP_CONTENT,1f));
-  foot.addView(stopView,new LayoutParams(dp(44),dp(44)));
-  card.addView(foot);
-  if(muted)card.setAlpha(.82f);
+  card.addView(b,new FrameLayout.LayoutParams(-1,-1));
+  // Identity chip (oxblood.css:424-425): 9dp in, 7dp padding, radius 10, frosted, the app's real 24dp icon.
+  if(icon!=null){
+   FrameLayout chip=new FrameLayout(getContext());chip.setPadding(dp(7),dp(7),dp(7),dp(7));
+   GradientDrawable cg=new GradientDrawable();cg.setColor(0x61281e1a);cg.setCornerRadius(dp(10));cg.setStroke(Math.max(1,dp(1)),0x8cecded6);chip.setBackground(cg);
+   ImageView iv=new ImageView(getContext());iv.setImageDrawable(icon);iv.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);chip.addView(iv,new FrameLayout.LayoutParams(dp(24),dp(24)));
+   FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);clp.leftMargin=clp.topMargin=dp(9);card.addView(chip,clp);
+  }
+  // State chip (oxblood.css:302-306): bottom left, frosted; hidden while the app is simply running.
+  TextView chip=text(state,11.5f,OX_INK,false);chip.setSingleLine(true);chip.setEllipsize(TextUtils.TruncateAt.END);chip.setPadding(dp(9),dp(4),dp(9),dp(4));
+  GradientDrawable sg=new GradientDrawable();sg.setColor(0x8c1e0e10);sg.setCornerRadius(dp(9));sg.setStroke(Math.max(1,dp(1)),0x38ffece0);chip.setBackground(sg);
+  if(running)chip.setVisibility(INVISIBLE);
+  FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.START);sp.leftMargin=dp(8);sp.bottomMargin=dp(8)+dp(11);sp.rightMargin=dp(8+44);card.addView(chip,sp);
+  // Stop (oxblood.css:429-433): a 44dp target whose 34dp frosted plate sits 8dp in from the bottom right.
+  FrameLayout.LayoutParams stp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.BOTTOM|Gravity.END);stp.rightMargin=stp.bottomMargin=dp(3);card.addView(stopView,stp);
+  if(running)card.setForeground(new RunningEdge(getResources().getDisplayMetrics().density));
   return card;
  }
 
- /** .stop-btn: a 44dp round button with a red rounded square, greyed (.stop-btn:disabled): no route releases an app's
-  * control from here yet, so a tap says why instead of doing nothing (never a Stop that can't be confirmed). */
+ /** The compact frosted Stop: available only for a bound session with both ids, while the host has an owner-Stop route
+  * and no Stop of that session is waiting for its confirmation (it stops the whole session, every app listed under
+  * it); otherwise greyed, and a tap says why instead of doing nothing (never a Stop that can't be confirmed). */
  View stopButton(final CurrentApps.App a,String label,boolean inFlight){
-  // Available only for a bound session with both ids, while the host has an owner-Stop route and no Stop of that
-  // session is waiting for its confirmation. It stops the whole session (every app listed under it).
   final boolean can=a!=null&&a.stop!=null&&stopRoute&&!inFlight;
-  Glyph g=new Glyph(getContext(),Glyph.STOP,can?STOP:0xffb8c0cb);
-  GradientDrawable bg=can?new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xffffffff,0xfffbe9e6}):new GradientDrawable();
-  if(!can)bg.setColor(0xfff1f4f8);
-  bg.setShape(GradientDrawable.OVAL);bg.setStroke(Math.max(1,dp(1)),can?0x38d9534a:0x2e788caa);g.setBackground(bg);
+  View g=new View(getContext());g.setBackground(new FrostedStop(getResources().getDisplayMetrics().density,can));
   g.setClickable(true);g.setFocusable(true);
   final String why=inFlight?WorkspaceOverview.STOP_STOPPING:STOP_APP_UNAVAILABLE;
   g.setContentDescription(can?"Stop Rose’s session for "+label:"Stop "+label+", unavailable. "+why);
   g.setOnClickListener(v->{if(listener==null)return;if(can)listener.stop(a);else listener.stopUnavailable(why);});
+  g.setStateListAnimator(HomeAppTile.pressAnimator(getContext(),View.SCALE_X,1f,.95f,0,View.SCALE_Y));
   g.setTag(can?"stop":"stop-unavailable");
   return g;
+ }
+ /** The frosted Stop plate: 34dp, radius 8, rgba(52,34,28,.62), ring 1.25dp rgba(236,222,214,.78); the red square
+  * (#f9304a, about 12.8dp, radius 1.2), grey (#8a7a76) when unavailable. */
+ static final class FrostedStop extends Drawable {
+  final float d;final boolean can;final android.graphics.Paint p=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+  FrostedStop(float density,boolean can){d=density;this.can=can;}
+  @Override public void draw(Canvas c){
+   android.graphics.Rect b=getBounds();float cx=b.exactCenterX(),cy=b.exactCenterY(),h=17*d,r=8*d,w=1.25f*d;
+   p.reset();p.setAntiAlias(true);p.setColor(0x9e34221c);c.drawRoundRect(cx-h,cy-h,cx+h,cy+h,r,r,p);
+   p.setStyle(android.graphics.Paint.Style.STROKE);p.setStrokeWidth(w);p.setColor(0xc7ecded6);c.drawRoundRect(cx-h+w/2,cy-h+w/2,cx+h-w/2,cy+h-w/2,r-w/2,r-w/2,p);
+   p.setStyle(android.graphics.Paint.Style.FILL);p.setColor(can?0xfff9304a:0xff8a7a76);float q=6.4f*d;c.drawRoundRect(cx-q,cy-q,cx+q,cy+q,1.2f*d,1.2f*d,p);
+  }
+  @Override public void setAlpha(int alpha){}
+  @Override public void setColorFilter(android.graphics.ColorFilter f){}
+  @Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
+ }
+ /** The lit ruby edge of a card whose app runs under Rose (oxblood.css:311-319,434-435): a 2dp ring with a constant
+  * platinum-to-ruby base (top #f1cfc8, #c44a5e, #9a3848, bottom #c4574e), a short platinum-to-rose segment travelling
+  * round it every 6s, and a soft ruby glow. With animations off (the system animator scale 0) the segment rests at 40
+  * degrees; it runs only while the card is visible. */
+ static final class RunningEdge extends Drawable {
+  final float d;final android.graphics.Paint p=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+  android.animation.ValueAnimator turn;float angle=40;
+  RunningEdge(float density){d=density;}
+  @Override public boolean setVisible(boolean visible,boolean restart){
+   boolean changed=super.setVisible(visible,restart);
+   if(visible&&android.animation.ValueAnimator.areAnimatorsEnabled()){
+    if(turn==null){turn=android.animation.ValueAnimator.ofFloat(0f,360f);turn.setDuration(6000);turn.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+     turn.setInterpolator(new android.view.animation.LinearInterpolator());turn.addUpdateListener(a->{angle=(float)a.getAnimatedValue();invalidateSelf();});turn.start();}
+   }else if(turn!=null){turn.cancel();turn=null;angle=40;invalidateSelf();}
+   return changed;
+  }
+  @Override public void draw(Canvas c){
+   android.graphics.Rect b=getBounds();if(b.isEmpty())return;
+   float w=2*d,r=RADIUS_DP*d;android.graphics.RectF ring=new android.graphics.RectF(b.left+w/2,b.top+w/2,b.right-w/2,b.bottom-w/2);
+   p.reset();p.setAntiAlias(true);p.setStyle(android.graphics.Paint.Style.STROKE);
+   // Glow: 0 0 18px rgba(200,40,70,.22), inside the card here (the card clips to its outline).
+   p.setStrokeWidth(6*d);p.setColor(0x38c82846);p.setMaskFilter(new android.graphics.BlurMaskFilter(Math.max(.1f,(9*d-.5f)/.57735f),android.graphics.BlurMaskFilter.Blur.NORMAL));
+   c.drawRoundRect(ring,r,r,p);p.setMaskFilter(null);
+   p.setStrokeWidth(w);
+   p.setShader(new android.graphics.LinearGradient(0,b.top,0,b.bottom,new int[]{0xfff1cfc8,0xffc44a5e,0xff9a3848,0xffc4574e},new float[]{0,.14f,.55f,1},android.graphics.Shader.TileMode.CLAMP));
+   c.drawRoundRect(ring,r,r,p);
+   // conic-gradient(from angle): transparent to 300deg, platinum at 330, rose at 348, transparent at 360.
+   android.graphics.SweepGradient sweep=new android.graphics.SweepGradient(b.exactCenterX(),b.exactCenterY(),new int[]{0x00ffffff,0x00ffffff,0xe6ffece4,0xffff6a80,0x00ff6a80},new float[]{0,300f/360,330f/360,348f/360,1});
+   android.graphics.Matrix m=new android.graphics.Matrix();m.setRotate(angle-90,b.exactCenterX(),b.exactCenterY());sweep.setLocalMatrix(m);
+   p.setShader(sweep);c.drawRoundRect(ring,r,r,p);p.setShader(null);
+  }
+  @Override public void setAlpha(int alpha){}
+  @Override public void setColorFilter(android.graphics.ColorFilter f){}
+  @Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
  }
 
  View dot(WorkspaceOverview.Dot d){

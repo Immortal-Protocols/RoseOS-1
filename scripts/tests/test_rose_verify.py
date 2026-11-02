@@ -213,8 +213,10 @@ class HomeCropTests(unittest.TestCase):
     def test_constants_match_production_home(self):
         layout = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java').read_text()
         self.assertIn('WALL_X = .62f, WALL_Y = .30f', layout)
-        home = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/RoseHomeView.java').read_text()
-        self.assertIn('HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y', home)
+        # #410: Home draws the Oxblood field (OxbloodField.HOME, MainActivity's pager background), no longer this image;
+        # the crop constants remain HomeAppLayout's, and rose-verify's Home screenshot reference needs its own update.
+        main = (rv.ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/MainActivity.java').read_text()
+        self.assertIn('launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));', main)
 
     @unittest.skipUnless(HAVE_PIL, 'needs Pillow')
     def test_coordinate_coded_image_crops_at_the_home_origin(self):
