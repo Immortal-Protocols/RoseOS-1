@@ -74,7 +74,8 @@ final class AuthTest {
                 && EndpointCredential.origin(ModelsService.TOKEN_URL).equals(EndpointCredential.origin(ModelsService.CHAT_URL))
                 && EndpointCredential.origin(ModelsService.CHALLENGE_URL).equals(EndpointCredential.origin(ModelsService.CHAT_URL)),
                 "auth and chat share the public origin");
-        check("muse-glimmer".equals(ModelsService.MODEL), "default model");
+        check(ModelsService.DEFAULT == ModelsService.Model.MUSE && "muse-glimmer".equals(ModelsService.DEFAULT.id),
+                "default model");
     }
 
     static void foreignOriginCredentialIsNeverSent() {

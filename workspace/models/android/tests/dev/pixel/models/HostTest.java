@@ -45,6 +45,7 @@ public final class HostTest {
         jsonRoundTrip();
         AuthTest.all();
         DeviceAuthTest.all();
+        ModelTest.all();
         System.out.println("HostTest: " + passed + " checks passed");
     }
 
@@ -183,7 +184,7 @@ public final class HostTest {
         final View view;
         final ManualClient client = new ManualClient();
         final Platform platform = platform();
-        final NativeAgent agent = new NativeAgent(AgentConfigJson.build(MODEL, null, ALLOW));
+        final NativeAgent agent;
         final ManualDelay delay = new ManualDelay();
         final LocalAgentHost host;
 
@@ -192,7 +193,12 @@ public final class HostTest {
         }
 
         Rig(View view) {
+            this(view, AgentConfigJson.build(MODEL, null, ALLOW));
+        }
+
+        Rig(View view, String configJson) {
             this.view = view;
+            agent = new NativeAgent(configJson);
             host = new LocalAgentHost(agent, client, new AllowlistLauncher(ALLOW, platform), view, DIRECT, delay);
         }
 
