@@ -44,8 +44,8 @@ class Verdicts(unittest.TestCase):
         r = C.REQUESTS
         self.assertEqual((r['schema'], r['model'], r['allowlist']), ('rose-qwen-contract-requests/1', 'rose-qwen',
                                                                      ['calculator']))
-        self.assertEqual(sorted(r['cases']), ['chat', 'long', 'tool'])
-        for name, steps in r['cases'].items():
+        self.assertEqual(sorted(r['cases']), ['chat', 'conformance', 'long', 'tool'])
+        for name, steps in ((n, v) for n, v in r['cases'].items() if n != 'conformance'):
             for step in steps:
                 body = json.loads(step['body'])
                 self.assertEqual((body['model'], body['max_tokens'], body['stream']), ('rose-qwen', 512, False))
@@ -91,7 +91,7 @@ class Run(unittest.TestCase):
         r = C.run(fake.url, 'rm -rf /')
         self.assertEqual((r['case'], r['step']), (None, 'bad_case'))
         self.assertNotIn('allExpected', r)
-        self.assertEqual(sorted(C.CASES), ['chat', 'contract', 'long', 'tool'])
+        self.assertEqual(sorted(C.CASES), ['chat', 'conformance', 'contract', 'long', 'tool'])
 
     def test_each_contract_break_is_reported_not_accepted(self):
         checks = {
@@ -304,6 +304,125 @@ class NoThinking(unittest.TestCase):
         r = C.run(self.serve(nothink=True, delay_s={'after': 1.5}).url, 'tool', thinking=False)
         self.assertEqual((r['toolAfter']['verdict'], r['toolAfter']['timedOut'], r['allExpected']),
                          ('failed:timeout_response', True, False))
+
+
+PROMPTS = json.loads((HERE.parents[1] / 'serving' / 'conformance' / 'prompts.json').read_text())
+
+
+def text_of(step):
+    return json.loads(json.loads(step['body'])['messages'][-1]['content'])['text']
+
+
+class Conformance(unittest.TestCase):
+    """MODELS-QWEN-SERVE-NOTHINK-001: the existing 20-prompt conformance set as one fixed case, against a scripted
+    stand-in. The bar is the harness's own plus action correctness; nothing skipped or failed is hidden."""
+
+    def serve(self, answers=None, **mode):
+        right = {text_of(p): ('final' if p['expect'] in ('final', 'no_open_app') else p['expect'])
+                 for p in C.CONFORMANCE}
+        fake = FakeOpenAI(mode={'answers': {**right, **(answers or {})}, 'nothink': True, **mode})
+        self.addCleanup(fake.close)
+        return fake
+
+    def text(self, pid):
+        return text_of(next(p for p in C.CONFORMANCE if p['id'] == pid))
+
+    def test_the_fixture_is_the_existing_set_built_by_the_client(self):
+        self.assertEqual([(p['id'], p['category'], p['expect']) for p in C.CONFORMANCE],
+                         [(p['id'], p['category'], p['expect']) for p in PROMPTS['prompts']])
+        self.assertEqual([text_of(p) for p in C.CONFORMANCE], [p['text'] for p in PROMPTS['prompts']])
+        self.assertEqual(([p['category'] for p in C.CONFORMANCE].count('chat'),
+                          [p['category'] for p in C.CONFORMANCE].count('launch'),
+                          [p['category'] for p in C.CONFORMANCE].count('not_allowed')), (10, 8, 2))
+        self.assertEqual(C.CONFORMANCE_MIN_PARSED, PROMPTS['bar']['min_parsed'])  # 19: unchanged
+        for p in C.CONFORMANCE:
+            body = json.loads(p['body'])
+            self.assertEqual((body['model'], body['max_tokens'], len(body['messages'])), ('rose-qwen', 512, 2))
+            self.assertNotIn('Reasoning strength', body['messages'][0]['content'])  # Qwen: no system prompt line
+
+    def test_all_right_passes_with_per_prompt_timings(self):
+        fake = self.serve()
+        r = C.run(fake.url, 'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['total'], s['sent'], s['notRun'], s['parsed'], s['conforming'], s['wrongLaunchTarget'],
+                          s['openAppOutsideLaunch'], s['timedOut'], s['failures'], s['existingBarPass'], s['pass']),
+                         (20, 20, 0, 20, 20, 0, 0, 0, {}, True, True))
+        self.assertEqual((r['allExpected'], r['noThinking'], r['notRun']), (True, True, {}))
+        res = r['conformance']['results']
+        self.assertEqual(len(res), 20)
+        self.assertTrue(all(x['ok'] and x['id'] and x['s'] is not None and not x['to'] for x in res))
+        self.assertEqual([x['v'] for x in res], ['final'] * 10 + ['open_app:calculator'] * 8 + ['final'] * 2)
+        self.assertEqual(fake.bodies, [p['body'].encode() for p in C.CONFORMANCE])  # each once, in order, exact
+        line = json.dumps(r)
+        for leak in ('Scripted', 'calculator.', 'Settings', 'email', 'joke', 'SECRET'):
+            self.assertNotIn(leak, line)
+
+    def test_parsed_alone_never_passes_and_wrong_actions_fail(self):
+        # a launch answered with a final: parsed, existing bar met at 20/20 parsed, but the action is wrong
+        r = C.run(self.serve({self.text('launch-01'): 'final', self.text('launch-02'): 'final'}).url,
+                  'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['parsed'], s['conforming'], s['existingBarPass'], s['pass'], r['allExpected']),
+                         (20, 18, True, False, False))
+        # open_app on a chat prompt, and on a not-allowed prompt: the existing bar fails
+        for pid in ('chat-09', 'not-allowed-01'):
+            with self.subTest(pid):
+                r = C.run(self.serve({self.text(pid): 'open_app:calculator'}).url, 'conformance', thinking=False)
+                s = r['conformance']['summary']
+                self.assertEqual((s['openAppOutsideLaunch'], s['existingBarPass'], s['pass'], r['allExpected']),
+                                 (1, False, False, False))
+        # a not-allowlisted app is the agent's action_not_allowed (never an open_app), and not parsed: one such
+        # failure is inside the existing 19/20 bar and is reported, two are not
+        r = C.run(self.serve({self.text('not-allowed-01'): 'open_app:settings'}).url, 'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['parsed'], s['conforming'], s['failures'], s['existingBarPass'], s['pass']),
+                         (19, 19, {'action_not_allowed': 1}, True, True))
+        self.assertEqual(r['conformance']['results'][18]['v'], 'failed:action_not_allowed')
+        r = C.run(self.serve({self.text('not-allowed-01'): 'open_app:settings',
+                              self.text('not-allowed-02'): 'open_app:email'}).url, 'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['parsed'], s['failures'], s['existingBarPass'], s['pass'], r['allExpected']),
+                         (18, {'action_not_allowed': 2}, False, False, False))
+
+    def test_malformed_and_prose_count_against_both(self):
+        r = C.run(self.serve({self.text('chat-01'): 'malformed', self.text('launch-03'): 'prose'}).url,
+                  'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['parsed'], s['conforming'], s['failures'], s['existingBarPass'], s['pass']),
+                         (18, 18, {'malformed_action': 2}, False, False))
+        self.assertEqual([x['v'] for x in r['conformance']['results']][0], 'failed:malformed_action')
+        r = C.run(self.serve({self.text('chat-01'): 'malformed'}).url, 'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['parsed'], s['existingBarPass'], s['pass'], r['allExpected']), (19, True, True, True))
+
+    def test_timeouts_and_budget_exhaustion_are_reported_not_hidden(self):
+        for name, value in (('REQUEST_TIMEOUT_S', 1.0), ('CASE_BUDGET_S', 3.5)):
+            old = getattr(C, name)
+            setattr(C, name, value)
+            self.addCleanup(setattr, C, name, old)
+        # chat-01 hits the client timeout (1 s scaled); then the budget leaves no full wait after a few prompts
+        slow = {text_of(p): 0.4 for p in C.CONFORMANCE}
+        slow[self.text('chat-01')] = 1.5
+        r = C.run(self.serve(text_delay_s=slow).url, 'conformance', thinking=False)
+        s, res = r['conformance']['summary'], r['conformance']['results']
+        self.assertEqual((res[0]['v'], res[0]['to'], res[0]['ok']), ('failed:timeout_response', True, False))
+        self.assertGreaterEqual(res[0]['s'], 1.0)
+        sent = s['sent']
+        self.assertTrue(2 <= sent < 20, sent)
+        self.assertEqual(res[sent:], [{'notRun': 'budget'}] * (20 - sent))
+        self.assertEqual((s['notRun'], s['timedOut'], s['failures']), (20 - sent, 1, {'timeout_response': 1}))
+        self.assertEqual((s['existingBarPass'], s['pass'], r['allExpected'], r['notRun']),
+                         (False, False, False, {'conformance': 'budget'}))
+        self.assertLessEqual(s['parsed'], sent - 1)
+
+    def test_thinking_rule_and_identity_still_apply(self):
+        r = C.run(self.serve(nothink=False).url, 'conformance', thinking=False)  # reasoning present
+        self.assertEqual((r['conformance']['summary']['pass'], r['noThinking'], r['allExpected']), (True, False, False))
+        r = C.run(self.serve(nothink=False).url, 'conformance')  # the thinking profile's rule: passes
+        self.assertEqual(r['allExpected'], True)
+        r = C.run(self.serve(wrong_id=True).url, 'conformance', thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['parsed'], s['failures'], r['allExpected']), (0, {'model_identity_mismatch': 20}, False))
 
 if __name__ == '__main__':
     unittest.main()

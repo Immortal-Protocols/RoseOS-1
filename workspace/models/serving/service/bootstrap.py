@@ -149,7 +149,8 @@ QWEN_WARM_VALUE = re.compile(r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31}):(full|te
 # (served id rose-qwen, the model's own chat template, the qwen3 reasoning parser, an 8192-token context; the helper's
 # CONTRACT_SERVER_ARGS) instead of the adapter's. The first run is the whole fixed contract (/v1/models, exact identity,
 # separated reasoning, the client's exact local-agent-v1 requests and a long-context request); then the same metadata
-# key accepts <this payload>:<fresh id>:<contract|chat|tool|long>. Only a case name comes from a request; the requests
+# key accepts <this payload>:<fresh id>:<contract|chat|tool|long|conformance> (conformance: the existing 20-prompt
+# envelope set, MODELS-QWEN-SERVE-NOTHINK-001). Only a case name comes from a request; the requests
 # themselves are the payload's pinned fixture (QWEN_CONTRACT_FILES).
 QWEN_CONTRACT_CONTAINER = 'rose-cloud-qwen-contract'
 # cloud-qwen-contract-nothink-once (MODELS-QWEN-CONTRACT-NOTHINK-001): the same, in its own container, with the helper's
@@ -157,7 +158,8 @@ QWEN_CONTRACT_CONTAINER = 'rose-cloud-qwen-contract'
 # reasoning anywhere instead of reasoning in its own field). Same cases, request key, bounds and cleanup.
 QWEN_CONTRACT_NOTHINK_CONTAINER = 'rose-cloud-qwen-contract-nothink'
 QWEN_CONTRACT_FILES = ('contract_session.py', 'qwen_contract_requests.json')
-QWEN_CONTRACT_VALUE = re.compile(r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31}):(contract|chat|tool|long)')
+QWEN_CONTRACT_VALUE = re.compile(
+    r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31}):(contract|chat|tool|long|conformance)')
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',

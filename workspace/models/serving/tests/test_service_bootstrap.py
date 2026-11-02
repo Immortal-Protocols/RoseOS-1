@@ -2943,6 +2943,25 @@ class CloudQwenContractNothinkOnce(CloudQwenContractOnce):
     # the contract tests that pin the thinking container's exact argv and name are re-stated below
     test_one_load_then_contract_cases_until_idle = None
 
+    def test_conformance_request_runs_the_fixed_case(self):
+        line = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': 'conformance', 'step': 'done', 'contract': {
+            'step': 'done', 'notRun': {'conformance': 'budget'}, 'allExpected': False, 'conformance': {
+                'summary': {'total': 20, 'sent': 17, 'notRun': 3, 'parsed': 17, 'conforming': 17, 'minParsed': 19,
+                            'wrongLaunchTarget': 0, 'openAppOutsideLaunch': 0, 'timedOut': 0, 'failures': {},
+                            'existingBarPass': False, 'pass': False, 'secondsMax': 9.5, 'secondsTotal': 120.0},
+                'results': [{'v': 'final', 'ok': True, 's': 7.0, 'ct': 40, 'id': True, 'to': False, 'rs': False,
+                             'tc': False}] * 17 + [{'notRun': 'budget'}] * 3}}})
+        self.warm('n-conf', requests=((2, f'{SHA}:c-9:conformance'),), contract_runs={'conformance': (0, line + '\n')})
+        recs = self.sessions()
+        self.assertEqual([(x.get('requestId'), x.get('case')) for x in recs],
+                         [('first', 'contract'), ('c-9', 'conformance')])
+        c = recs[1]['run']['contract']
+        self.assertEqual((c['notRun'], c['allExpected'], c['conformance']['summary']['notRun'],
+                          c['conformance']['results'][-1]), ({'conformance': 'budget'}, False, 3, {'notRun': 'budget'}))
+        self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
+        self.assertNotIn('receiptTooLarge', recs[1])
+        self.host.contract_runs = {}
+
     def test_own_container_and_profile_same_controls(self):
         status, code = self.warm(requests=((2, f'{SHA}:n-1:tool'),))
         self.assertEqual(code, 0)
@@ -2975,6 +2994,8 @@ class CloudQwenContractNothinkOnce(CloudQwenContractOnce):
         self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-contract-nothink'])
         self.assertEqual((active, container, held, timeout), (False, False, True, 120))
         self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothink-once:{SHA}:n1'))
+        self.assertIsNotNone(B.QWEN_CONTRACT_VALUE.fullmatch(f'{SHA}:n2:conformance'))  # the 20-prompt case
+        self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(f'{SHA}:n2:conformance'))  # never the adapter container's
         self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothinking-once:{SHA}:n1'))
         self.assertNoProvisioning()
 
