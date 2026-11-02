@@ -117,8 +117,8 @@ public final class RoseConversationActivity extends Activity {
   more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});
    m.getMenu().add("Settings").setOnMenuItemClickListener(i->{startActivity(new Intent(MainActivity.ACTION_SETTINGS).setClass(this,MainActivity.class));return true;});m.show();});
   FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
-  overview=new WorkspaceOverviewPanel(this,WorkspaceOverviewPanel.State.INSTANCE,ivory?new ConversationDrawing.IvoryBackground(this):null,statusInset());
-  overview.bind(overviewSource(),overviewActions());overview.setIcons(this::appIcon);
+  overview=new WorkspaceOverviewPanel(this,ivory?new ConversationDrawing.IvoryBackground(this):null,statusInset());
+  overview.bind(overviewSource(),overviewActions());overview.setIcons(this::appIcon);overview.setLabels(this::appLabel);
   root.addView(overview,new FrameLayout.LayoutParams(-1,-1));
   setContentView(root);
  }
@@ -305,35 +305,51 @@ public final class RoseConversationActivity extends Activity {
    }finally{client.close();}
   }catch(Exception e){return WorkspaceOverviewPreview.Response.failed();}
  }
+ /** #225/#156 interim current-apps source, until App Core's shared membership contract: the controller's own
+  * get_state session (it starts, owns and closes that session) as one complete snapshot per read. Never task history:
+  * the local task feed is consulted only to find an explicitly verified binding for exactly the live session, which
+  * alone enables that app's live preview and Watch. A new screen is a new registration, so nothing shown before it
+  * comes back. */
+ final String appsRegistration="controller-"+java.util.UUID.randomUUID();long appsGeneration;String appsKey="";
+ CurrentApps.Snapshot currentApps(){
+  TaskControl.ControllerRead r=ctl;String[] p=ctlPackage;String pkg=r.key().equals(p[0])?p[1]:"";
+  String key=r.key()+"|"+pkg;if(!key.equals(appsKey)){appsKey=key;appsGeneration++;}
+  String failure;
+  switch(r.failure){
+   case NONE:failure=null;break;
+   case PENDING:failure=CurrentApps.NOT_REPORTED;break;
+   case NO_PROVIDER:failure=CurrentApps.NOT_INSTALLED;break;
+   default:failure=CurrentApps.UNREADABLE;
+  }
+  WorkspaceOverview.Scope scope=WorkspaceOverviewFeed.scope();
+  WorkspaceOverview.Model m=WorkspaceOverview.of(localLive(),scope,overviewWorkspace(r,scope),WorkspaceOverviewFeed.tasks(),null,null,false);
+  return CurrentApps.fromController(appsRegistration,appsGeneration,failure,r.status,r.sessionId,r.taskId,pkg,m.watchRow==null?null:m.watchRow.binding);
+ }
  WorkspaceOverviewPanel.Source overviewSource(){
   return new WorkspaceOverviewPanel.Source(){
    public boolean connected(){return localLive();}
-   public WorkspaceOverview.Scope scope(){return WorkspaceOverviewFeed.scope();}
-   public java.util.List<WorkspaceOverview.Task> tasks(){return WorkspaceOverviewFeed.tasks();}
-   public WorkspaceOverview.Workspace workspace(){return overviewWorkspace(ctl,WorkspaceOverviewFeed.scope());}
+   public CurrentApps.Snapshot currentApps(){return RoseConversationActivity.this.currentApps();}
   };
  }
- /** No Stop transport reaches the Mac yet (LocalRoseLink sends no Stop and forwards no task_stop answer), so Stop
-  * stays unavailable. Watch re-reads the controller after the tap and opens the existing viewer, bound by its extras,
-  * only for the binding the row showed, still equal to the live session in all three fields. */
+ /** Watch re-reads the controller after the tap and opens the existing viewer, bound by its extras, only while the
+  * live session is still exactly the app's handle (session, controller task and package). Nothing is stopped. */
  WorkspaceOverviewPanel.Actions overviewActions(){
   return new WorkspaceOverviewPanel.Actions(){
-   public boolean stopRoute(){return false;}
    public void endCall(){send("end");}
    public void requestPreview(final WorkspaceOverviewPreview.Request r){
     new Thread(()->{final WorkspaceOverviewPreview.Response a=readPreview(r);
      runOnUiThread(()->{if(!isFinishing()&&!isDestroyed()&&overview!=null)overview.previewAnswer(r,a);});},"rose-overview-preview").start();
    }
-   public void stop(WorkspaceOverview.Identity task){}
-   public void watch(final WorkspaceOverview.Identity task,final WorkspaceOverview.Binding atTap){
+   public void watch(final CurrentApps.App app,final WorkspaceOverview.Binding atTap){
     if(watchOpening)return;watchOpening=true;
     new Thread(()->{final TaskControl.ControllerRead c=controllerState();runOnUiThread(()->{
      watchOpening=false;ctl=c;
      if(isFinishing()||isDestroyed())return;
-     WorkspaceOverview.Scope scope=WorkspaceOverviewFeed.scope();
-     WorkspaceOverview.Binding b=WorkspaceOverview.watchBinding(task,atTap,localLive(),scope,overviewWorkspace(c,scope),WorkspaceOverviewFeed.tasks());
-     if(b==null){Toast.makeText(RoseConversationActivity.this,WorkspaceOverview.WATCH_MOVED_ON,Toast.LENGTH_LONG).show();overview.refresh();return;}
-     if(!launchBoundViewer(b.controllerTaskId,b.sessionId))Toast.makeText(RoseConversationActivity.this,"The workspace viewer couldn’t open.",Toast.LENGTH_LONG).show();
+     String[] p=ctlPackage;String pkg=c.key().equals(p[0])?p[1]:"";
+     boolean still=c.failure==TaskControl.ReadFailure.NONE&&("ready".equals(c.status)||"blocked".equals(c.status))
+      &&atTap.sessionId.equals(c.sessionId)&&atTap.controllerTaskId.equals(c.taskId)&&atTap.targetPackage.equals(pkg);
+     if(!still){Toast.makeText(RoseConversationActivity.this,WorkspaceOverview.WATCH_MOVED_ON,Toast.LENGTH_LONG).show();overview.refresh();return;}
+     if(!launchBoundViewer(atTap.controllerTaskId,atTap.sessionId))Toast.makeText(RoseConversationActivity.this,"The workspace viewer couldn’t open.",Toast.LENGTH_LONG).show();
     });},"rose-overview-watch").start();
    }
   };

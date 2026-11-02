@@ -6,7 +6,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.ColorDrawable;
@@ -15,9 +14,10 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
-import dev.pixel.voice.WorkspaceOverview.*;
+import dev.pixel.voice.CurrentApps.*;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -27,46 +27,34 @@ import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
 
 /**
- * HOME-WORKSPACE-FIDELITY-225: the production WorkspaceOverviewPanel and its view, measured and drawn by Robolectric's
- * native graphics at SDK 35 in the selected HiFi's screen size (384x832 dp, ce126f56 .screen), against the HiFi
- * Rose's apps structure: no visible heading, a two-column grid of 250dp cards (12dp gaps, 24dp margins, 64dp top),
- * window/task cards with header/body/footer and a round 44dp Stop, and the three-well tray (Back, End/Rose, selected
- * grid). Synthetic inputs shaped like PR321's list; host-rendered output, not a device or phone acceptance.
+ * #225/#156: the production WorkspaceOverviewPanel and view show exactly the apps currently running under Rose's
+ * control, in the selected HiFi (ce126f56) cards and tray, measured and drawn by Robolectric's native graphics at SDK 35
+ * in the HiFi's 384x832dp screen. Synthetic CurrentApps snapshots and labelled synthetic frames only; host-rendered
+ * output, not a device or phone acceptance.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, qualifiers = "w384dp-h832dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class WorkspaceOverviewRenderTest {
-    static final Scope S = new Scope("server-a", "pair-1");
-    static final Binding B = new Binding("rose-ws-n1-1-com.android.calculator2", "sess-1", "com.android.calculator2", S);
-    static Workspace ready(String label) { return Workspace.read("ready", "sess-1", B.controllerTaskId, B.targetPackage, label, S); }
-    static final Scope NONE = Scope.UNKNOWN;
-    /** PR318 today: no server, no binding (as the PM photo: an open workspace not linked to any task, one finished task). */
-    static List<Task> current() {
-        return Arrays.asList(new Task("@1761960000.5#1", NONE, Status.DONE, "What's 12 times 7?", "", "12 × 7 = 84", 10, 15, null));
-    }
-    static List<Task> linked() {
-        return Arrays.asList(new Task("2", S, Status.RUNNING, "Multiply 12 by 7", "Typing 12 × 7", "", 20, 0, B),
-            new Task("1", S, Status.DONE, "Add 3 and 4", "", "3 + 4 = 7", 10, 15, null));
-    }
+    static final String CALC = "com.android.calculator2", MAPS = "com.google.android.apps.maps";
 
     static final class Host implements WorkspaceOverviewPanel.Source, WorkspaceOverviewPanel.Actions {
-        boolean live = true; Workspace ws = ready("Claude"); List<Task> tasks = current(); Scope scope = NONE;
+        boolean live = true; Snapshot snapshot = new Snapshot("r1", 1, true, "", Collections.<App>emptyList());
         final List<String> calls = new ArrayList<>();
-        public boolean connected() { return live; }
-        public Scope scope() { return scope; }
-        public List<Task> tasks() { return tasks; }
-        public Workspace workspace() { return ws; }
-        public boolean stopRoute() { return false; }
-        public void stop(Identity t) { calls.add("stop:" + t.id); }
-        public void watch(Identity t, Binding atTap) { calls.add("watch:" + t.id + ":" + (atTap == null ? "none" : atTap.sessionId)); }
-        public void endCall() { calls.add("end"); }
         final List<WorkspaceOverviewPreview.Request> previews = new ArrayList<>();
+        public boolean connected() { return live; }
+        public Snapshot currentApps() { return snapshot; }
+        public void watch(App app, WorkspaceOverview.Binding atTap) { calls.add("watch:" + app.entryId + ":" + atTap.sessionId); }
+        public void endCall() { calls.add("end"); }
         public void requestPreview(WorkspaceOverviewPreview.Request r) { previews.add(r); }
+        void report(String reg, long gen, App... apps) { snapshot = new Snapshot(reg, gen, true, "", Arrays.asList(apps)); }
     }
+    static App app(String id, String pkg) { return new App(id, pkg, CurrentApps.STATE_RUNNING, null); }
+    static App viewable(String id, String pkg, String session, String task) { return new App(id, pkg, CurrentApps.STATE_RUNNING, new Preview(session, task)); }
     static WorkspaceOverviewPanel panel(Host h) {
-        WorkspaceOverviewPanel p = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication(), new WorkspaceOverviewPanel.State());
-        p.bind(h, h); p.setIcons(pkg -> new ColorDrawable(0xffd97757)); p.open(); layout(p); return p;
+        WorkspaceOverviewPanel p = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication());
+        p.bind(h, h); p.setIcons(pkg -> new ColorDrawable(0xffd97757)); p.setLabels(pkg -> CALC.equals(pkg) ? "Calculator" : MAPS.equals(pkg) ? "Maps" : "");
+        p.open(); layout(p); return p;
     }
     static int dp(float v) { return Math.round(v * RuntimeEnvironment.getApplication().getResources().getDisplayMetrics().density); }
     static void layout(View v) {
@@ -81,163 +69,132 @@ public class WorkspaceOverviewRenderTest {
     static View tagged(View root, String tag) { for (View v : all(root)) if (tag.equals(v.getTag())) return v; return null; }
     static List<View> taggedPrefix(View root, String prefix) { List<View> o = new ArrayList<>(); for (View v : all(root)) if (v.getTag() instanceof String && ((String) v.getTag()).startsWith(prefix)) o.add(v); return o; }
     static View described(View root, String d) { for (View v : all(root)) if (v.getContentDescription() != null && d.equals(v.getContentDescription().toString())) return v; return null; }
-    static int[] at(View v) { int[] l = new int[2]; v.getLocationInWindow(l); int x = 0, y = 0; for (View p = v; p != null; p = p.getParent() instanceof View ? (View) p.getParent() : null) { x += p.getLeft() - p.getScrollX(); y += p.getTop() - p.getScrollY(); } return new int[]{x, y}; }
-
-    /** The PM's photo complaints, as structure: plain heading, rectangular Back, list instead of cards. */
-    @Test public void hifiStructureNotAPlainList() throws Exception {
-        WorkspaceOverviewPanel p = panel(new Host());
-        assertFalse("no visible heading (HiFi h2 is screen-reader only)", texts(p).contains(WorkspaceOverview.TITLE));
-        for (View v : all(p)) assertFalse("no Android push buttons (rectangular Back)", v instanceof Button);
-        View back = described(p, "Back"), mid = described(p, "End call"), self = described(p, "Rose’s apps, current screen");
-        assertNotNull("tray Back well", back); assertNotNull("tray End call well while connected", mid); assertNotNull("selected grid well", self);
-        int[] b = at(back), m = at(mid), s = at(self);
-        assertTrue("three wells side by side in one tray", b[1] == m[1] && m[1] == s[1] && b[0] < m[0] && m[0] < s[0]);
-        assertEquals("tray bottom 34dp above the screen edge", dp(832 - 34), b[1] + back.getHeight() + (dp(92) - back.getHeight()) / 2, dp(2));
-        View ws = tagged(p, "workspace"), task = tagged(p, "task:@1761960000.5#1");
-        assertNotNull(ws); assertNotNull(task);
-        assertEquals("cards are 250dp", dp(250), ws.getHeight()); assertEquals(ws.getHeight(), task.getHeight());
-        int[] a = at(ws), c = at(task);
-        assertEquals("two columns, same row", a[1], c[1]);
-        assertEquals("equal columns", ws.getWidth(), task.getWidth(), 1);
-        assertEquals("12dp gap", dp(12), c[0] - (a[0] + ws.getWidth()), 1);
-        assertEquals("24dp margin", dp(24), a[0], 1);
-        assertEquals("64dp top", dp(64), a[1], 1);
-        List<String> t = texts(p);
-        assertTrue("window card: the real app's name and state", t.contains("Claude") && t.contains("Open"));
-        boolean icon = false; for (View v : all(ws)) icon |= v instanceof ImageView && ((ImageView) v).getDrawable() != null;
-        assertTrue("window card: the app's real icon", icon);
-        assertTrue("task card: real goal and result", t.contains("What's 12 times 7?") && t.contains("12 × 7 = 84") && t.contains("Done"));
-        assertEquals("one window card only (one controller workspace)", 1, taggedPrefix(p, "workspace").size());
-        for (View st : taggedPrefix(p, "stop")) { assertEquals(dp(44), st.getWidth()); assertEquals(dp(44), st.getHeight()); }
-        assertTrue("finished cards are muted", task.getAlpha() < 1f);
-        RosePresenceRenderTest.save(draw(p), "overview-hifi-current-unlinked");
-    }
-
-    @Test public void tapsExplainInsteadOfFailingSilently() throws Exception {
-        Host h = new Host();
-        WorkspaceOverviewPanel p = panel(h);
-        tagged(p, "workspace").performClick(); layout(p);
-        assertTrue("unlinked workspace: says why", texts(p).contains(WorkspaceOverview.WATCH_CARD_UNLINKED));
-        assertTrue("nothing opened", h.calls.isEmpty());
-        h.tasks = Arrays.asList(new Task("@5#3", NONE, Status.RUNNING, "Open Maps", "Opening", "", 30, 0, null)); p.refresh(); layout(p);
-        tagged(tagged(p, "task:@5#3"), "stop-unavailable").performClick(); layout(p);
-        assertTrue("an unavailable Stop says why", texts(p).contains(WorkspaceOverview.STOP_NO_ROUTE));
-        tagged(tagged(p, "workspace"), "stop-unavailable").performClick(); layout(p);
-        assertTrue("the workspace's Stop says Stop belongs to a task", texts(p).contains("Stop belongs to a task, not to the workspace."));
-        assertTrue("nothing stopped", h.calls.isEmpty());
-        described(p, "End call").performClick();
-        assertEquals(Arrays.asList("end"), h.calls);
-        described(p, "Back").performClick();
-        assertFalse(p.isOpen());
-    }
-
-    @Test public void linkedWorkspaceWatchesItsOwnTask() throws Exception {
-        Host h = new Host(); h.tasks = linked(); h.scope = S; h.ws = ready("Calculator");
-        WorkspaceOverviewPanel p = panel(h);
-        List<String> t = texts(p);
-        assertTrue("the window card says what its linked task is doing", t.contains("Calculator") && t.contains("Multiply 12 by 7") && t.contains("Typing 12 × 7"));
-        tagged(p, "workspace").performClick();
-        assertEquals(Arrays.asList("watch:2:sess-1"), h.calls);
-        RosePresenceRenderTest.save(draw(p), "overview-hifi-linked");
-    }
-
-    @Test public void emptyDisconnectedAndIdleStates() throws Exception {
-        Host h = new Host(); h.ws = Workspace.read("idle", "", "", "", "", NONE); h.tasks = new ArrayList<>();
-        WorkspaceOverviewPanel p = panel(h);
-        assertTrue("HiFi a-empty", texts(p).contains(WorkspaceOverview.EMPTY));
-        assertNull("idle: no window card", tagged(p, "workspace"));
-        RosePresenceRenderTest.save(draw(p), "overview-hifi-empty");
-        h.live = false; h.ws = ready("Claude"); h.tasks = current(); p.refresh(); layout(p);
-        assertNotNull("disconnected: Open Rose in the middle well", described(p, "Open Rose"));
-        assertTrue(texts(p).contains("Not connected"));
-        RosePresenceRenderTest.save(draw(p), "overview-hifi-disconnected");
-    }
-
-    // ---------- #225 live preview consumer (synthetic frames only; no controller or phone) ----------
-    /** A synthetic stand-in for the controller's JPEG: a labelled gradient, never presented as real app content. */
+    static int[] at(View v) { int x = 0, y = 0; for (View p = v; p != null; p = p.getParent() instanceof View ? (View) p.getParent() : null) { x += p.getLeft() - p.getScrollX(); y += p.getTop() - p.getScrollY(); } return new int[]{x, y}; }
     static Bitmap synthetic(int w, int h) {
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); Canvas c = new Canvas(b);
         android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
         p.setShader(new android.graphics.LinearGradient(0, 0, 0, h, 0xff2f6be6, 0xffe8eef7, android.graphics.Shader.TileMode.CLAMP)); c.drawRect(0, 0, w, h, p);
         p.setShader(null); p.setColor(0xffffffff); p.setTextSize(28); c.drawText("SYNTHETIC", 20, 60, p); return b;
     }
-    static WorkspaceOverviewPreview.Response ok(WorkspaceOverviewPreview.Request r, String session, String task, String pkg, Bitmap img) {
+    static WorkspaceOverviewPreview.Response ok(String session, String task, String pkg, Bitmap img) {
         return new WorkspaceOverviewPreview.Response("ok", session, task, pkg, System.currentTimeMillis(), img.getWidth(), img.getHeight(), "image/jpeg", 30000, img);
     }
-    static Host linkedHost() { Host h = new Host(); h.tasks = linked(); h.scope = S; h.ws = ready("Calculator"); return h; }
     static ImageView preview(View root) { View v = tagged(root, "preview"); return v instanceof ImageView ? (ImageView) v : null; }
 
-    @Test public void verifiedBindingShowsItsOwnFreshFrame() throws Exception {
-        Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
-        assertEquals("one request for the verified binding", 1, h.previews.size());
+    /** Selected HiFi structure, current apps only: no heading, no push buttons, the three-well tray, 250dp cards in two columns. */
+    @Test public void currentAppsInTheSelectedHiFi() throws Exception {
+        Host h = new Host(); h.report("r1", 2, app("s1/calc", CALC), app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        assertFalse(texts(p).contains(WorkspaceOverview.TITLE));
+        for (View v : all(p)) assertFalse("no Android push buttons", v instanceof Button);
+        View back = described(p, "Back"), mid = described(p, "End call"), self = described(p, "Rose’s apps, current screen");
+        assertNotNull(back); assertNotNull(mid); assertNotNull(self);
+        int[] b = at(back), m = at(mid), s = at(self);
+        assertTrue("three wells in one tray", b[1] == m[1] && m[1] == s[1] && b[0] < m[0] && m[0] < s[0]);
+        View calc = tagged(p, "app:s1/calc"), maps = tagged(p, "app:s2/maps");
+        assertNotNull(calc); assertNotNull(maps);
+        assertEquals(dp(250), calc.getHeight()); assertEquals(calc.getWidth(), maps.getWidth(), 1);
+        int[] a = at(calc), c = at(maps);
+        assertEquals("same row", a[1], c[1]); assertEquals("12dp gap", dp(12), c[0] - (a[0] + calc.getWidth()), 1);
+        assertEquals("24dp margin", dp(24), a[0], 1); assertEquals("64dp top", dp(64), a[1], 1);
+        List<String> t = texts(p);
+        assertTrue("real app names", t.contains("Calculator") && t.contains("Maps"));
+        assertEquals("no live view: said plainly on each card", 2, Collections.frequency(t, WorkspaceOverviewView.LIVE_UNAVAILABLE));
+        assertTrue("no task history or result cards", taggedPrefix(p, "task:").isEmpty() && taggedPrefix(p, "workspace").isEmpty());
+        boolean icon = false; for (View v : all(calc)) icon |= v instanceof ImageView && ((ImageView) v).getDrawable() != null;
+        assertTrue("real app icon", icon);
+        for (View st : taggedPrefix(p, "stop")) { assertEquals(dp(44), st.getWidth()); assertEquals(dp(44), st.getHeight()); }
+        RosePresenceRenderTest.save(draw(p), "current-apps-two");
+    }
+
+    /** Launch adds, content change updates, close/release removes; reconnect and recreation never resurrect. */
+    @Test public void launchChangeCloseReleaseReconnect() throws Exception {
+        Host h = new Host();
+        WorkspaceOverviewPanel p = panel(h);
+        assertTrue("none running", texts(p).contains(WorkspaceOverview.EMPTY));
+        h.report("r1", 2, app("s1/calc", CALC)); p.refresh(); layout(p);
+        assertNotNull("launch adds", tagged(p, "app:s1/calc"));
+        h.snapshot = new Snapshot("r1", 3, true, "", Arrays.asList(new App("s1/calc", CALC, CurrentApps.STATE_WAITING, null))); p.refresh(); layout(p);
+        assertTrue("content change shown", texts(p).contains("Waiting"));
+        h.report("r1", 4, app("s1/calc", CALC), app("s2/maps", MAPS)); p.refresh(); layout(p);
+        h.report("r1", 5, app("s2/maps", MAPS)); p.refresh(); layout(p);
+        assertNull("close removes that app", tagged(p, "app:s1/calc")); assertNotNull(tagged(p, "app:s2/maps"));
+        h.report("r1", 6); p.refresh(); layout(p);
+        assertTrue("control released: none", taggedPrefix(p, "app:").isEmpty() && texts(p).contains(WorkspaceOverview.EMPTY));
+        h.report("r1", 5, app("s2/maps", MAPS)); p.refresh(); layout(p);
+        assertTrue("an older report never resurrects", taggedPrefix(p, "app:").isEmpty());
+        h.snapshot = Snapshot.unavailable("r2", 1, CurrentApps.NOT_REPORTED); p.refresh(); layout(p);
+        assertTrue("reconnect: unavailable until the new source reports", texts(p).contains(CurrentApps.text(CurrentApps.NOT_REPORTED)));
+        h.report("r1", 7, app("s2/maps", MAPS)); p.refresh(); layout(p);
+        assertTrue("a late report from the replaced source is ignored", taggedPrefix(p, "app:").isEmpty());
+        described(p, "Back").performClick(); p.open(); layout(p);
+        assertTrue("re-entry shows the current report only", taggedPrefix(p, "app:").isEmpty());
+        Host fresh = new Host(); fresh.report("r9", 1);
+        WorkspaceOverviewPanel recreated = panel(fresh);
+        assertTrue("recreation starts from its own source", taggedPrefix(recreated, "app:").isEmpty());
+        h.snapshot = Snapshot.unavailable("r2", 2, CurrentApps.LOCKED); p.refresh(); layout(p);
+        assertTrue("locked: the reason, no cards", texts(p).contains(CurrentApps.text(CurrentApps.LOCKED)) && taggedPrefix(p, "app:").isEmpty());
+        RosePresenceRenderTest.save(draw(p), "current-apps-locked");
+    }
+
+    /** Live content only from the app's own verified handle; wrong/stale answers, Back, pause and teardown never show one. */
+    @Test public void livePreviewForTheAppsOwnHandleOnly() throws Exception {
+        Host h = new Host(); h.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"), app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        assertEquals("one request, for the app with a handle", 1, h.previews.size());
         WorkspaceOverviewPreview.Request r = h.previews.get(0);
-        assertEquals(B.sessionId, r.sessionId()); assertEquals(B.controllerTaskId, r.taskId());
-        p.refresh(); p.refresh();
-        assertEquals("one in flight, at most once a second", 1, h.previews.size());
+        assertEquals("s-1", r.sessionId()); assertEquals("rose-ws-1", r.taskId());
         Bitmap img = synthetic(320, 693);
-        p.previewAnswer(r, ok(r, B.sessionId, B.controllerTaskId, B.targetPackage, img)); layout(p);
-        ImageView iv = preview(p);
-        assertNotNull("the window card shows the frame", iv);
+        p.previewAnswer(r, ok("s-1", "rose-ws-1", CALC, img)); layout(p);
+        ImageView iv = preview(tagged(p, "app:s1/calc"));
+        assertNotNull("its own card shows the frame", iv);
         assertTrue(((android.graphics.drawable.BitmapDrawable) iv.getDrawable()).getBitmap() == img);
-        assertTrue(iv.getContentDescription().toString().contains("Calculator"));
-        assertTrue("its task card keeps the real text", texts(p).contains("Typing 12 × 7"));
-        RosePresenceRenderTest.save(draw(p), "overview-preview-synthetic-frame");
-    }
-
-    @Test public void wrongIdentityStaleAndLateAnswersKeepTheTextBody() throws Exception {
-        String[][] wrong = {{"s-2", B.controllerTaskId, B.targetPackage}, {B.sessionId, "rose-ws-other", B.targetPackage}, {B.sessionId, B.controllerTaskId, "com.android.chrome"}};
-        for (String[] f : wrong) {
-            Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
-            WorkspaceOverviewPreview.Request r = h.previews.get(0);
-            p.previewAnswer(r, ok(r, f[0], f[1], f[2], synthetic(320, 693))); layout(p);
-            assertNull("wrong " + java.util.Arrays.toString(f) + ": no image", preview(p));
-            assertTrue("text body retained", texts(p).contains("Multiply 12 by 7"));
+        assertNull("the other app has no live view", preview(tagged(p, "app:s2/maps")));
+        assertTrue(texts(tagged(p, "app:s2/maps")).contains(WorkspaceOverviewView.LIVE_UNAVAILABLE));
+        RosePresenceRenderTest.save(draw(p), "current-apps-preview-synthetic");
+        h.report("r1", 3, app("s2/maps", MAPS)); p.refresh(); layout(p);
+        assertNull("the app closed: its frame is gone with it", preview(p));
+        for (String[] wrong : new String[][]{{"s-2", "rose-ws-1", CALC}, {"s-1", "rose-ws-9", CALC}, {"s-1", "rose-ws-1", MAPS}}) {
+            Host q = new Host(); q.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
+            WorkspaceOverviewPanel pq = panel(q);
+            pq.previewAnswer(q.previews.get(0), ok(wrong[0], wrong[1], wrong[2], synthetic(320, 693))); layout(pq);
+            assertNull("wrong identity " + Arrays.toString(wrong), preview(pq));
         }
-        Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
-        WorkspaceOverviewPreview.Request r = h.previews.get(0);
-        p.previewAnswer(r, new WorkspaceOverviewPreview.Response("ok", B.sessionId, B.controllerTaskId, B.targetPackage, System.currentTimeMillis() - 60000, 320, 693, "image/jpeg", 30000, synthetic(320, 693))); layout(p);
-        assertNull("stale capture: no image", preview(p));
-        for (String word : new String[]{"locked", "blocked", "stale_session", "stale_task", "not_ready", "unbound", "too_soon", "no_frame"}) {
-            Host q = linkedHost(); WorkspaceOverviewPanel pq = panel(q);
-            pq.previewAnswer(q.previews.get(0), new WorkspaceOverviewPreview.Response(word, null, null, null, 0, 0, 0, null, 0, null)); layout(pq);
-            assertNull(word + ": no image", preview(pq));
-            assertTrue(word + ": text body", texts(pq).contains("Multiply 12 by 7"));
-        }
+        Host s = new Host(); s.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
+        WorkspaceOverviewPanel ps = panel(s);
+        ps.previewAnswer(s.previews.get(0), new WorkspaceOverviewPreview.Response("ok", "s-1", "rose-ws-1", CALC, System.currentTimeMillis() - 60000, 320, 693, "image/jpeg", 30000, synthetic(320, 693))); layout(ps);
+        assertNull("stale frame", preview(ps));
+        Host b = new Host(); b.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
+        WorkspaceOverviewPanel pb = panel(b);
+        described(pb, "Back").performClick();
+        pb.previewAnswer(b.previews.get(0), ok("s-1", "rose-ws-1", CALC, synthetic(320, 693)));
+        for (int i = 0; i < 4; i++) pb.refresh();
+        assertEquals("closed: no further requests", 1, b.previews.size());
+        pb.open(); layout(pb); assertNull("a late answer after Back never lands", preview(pb));
+        Host d = new Host(); d.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
+        WorkspaceOverviewPanel pd = panel(d);
+        pd.pause(); pd.refresh();
+        pd.previewAnswer(d.previews.get(0), ok("s-1", "rose-ws-1", CALC, synthetic(320, 693))); layout(pd);
+        assertNull("paused: nothing lands", preview(pd)); assertEquals(1, d.previews.size());
+        pd.teardown(); pd.resume(); layout(pd);
+        assertTrue("after teardown the old source's report never comes back", taggedPrefix(pd, "app:").isEmpty());
+        Host n = new Host(); n.report("r1", 2, app("s1/calc", CALC));
+        WorkspaceOverviewPanel pn = panel(n); for (int i = 0; i < 4; i++) pn.refresh();
+        assertTrue("no handle: never a request", n.previews.isEmpty());
     }
 
-    @Test public void backPauseAndTeardownCancelAndHiddenNeverRequests() throws Exception {
-        Host h = linkedHost(); WorkspaceOverviewPanel p = panel(h);
-        WorkspaceOverviewPreview.Request r = h.previews.get(0);
-        described(p, "Back").performClick();
-        p.previewAnswer(r, ok(r, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693)));
-        for (int i = 0; i < 5; i++) p.refresh();
-        assertEquals("closed: no further requests", 1, h.previews.size());
-        p.open(); layout(p);
-        assertNull("a late answer after Back is never shown", preview(p));
-        Host h2 = linkedHost(); WorkspaceOverviewPanel p2 = panel(h2);
-        WorkspaceOverviewPreview.Request r2 = h2.previews.get(0);
-        p2.previewAnswer(r2, ok(r2, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693))); layout(p2);
-        assertNotNull(preview(p2));
-        p2.pause(); p2.refresh(); layout(p2);
-        assertNull("pause drops the frame", preview(p2));
-        assertEquals("paused: no requests", 1, h2.previews.size());
-        Host h3 = linkedHost(); WorkspaceOverviewPanel p3 = panel(h3);
-        WorkspaceOverviewPreview.Request r3 = h3.previews.get(0);
-        p3.teardown();
-        p3.previewAnswer(r3, ok(r3, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693))); layout(p3);
-        assertNull("after teardown nothing lands", preview(p3));
-    }
-
-    @Test public void unboundOrReplacedBindingNeverRequestsOrShows() throws Exception {
-        Host h = new Host(); WorkspaceOverviewPanel p = panel(h);  // PR318 today: open workspace, no producer binding
-        for (int i = 0; i < 5; i++) p.refresh();
-        assertTrue("no binding: never a request, whichever workspace is open", h.previews.isEmpty());
-        assertNull(preview(p));
-        Host l = linkedHost(); WorkspaceOverviewPanel pl = panel(l);
-        WorkspaceOverviewPreview.Request r = l.previews.get(0);
-        l.ws = Workspace.read("ready", "s-2", "rose-ws-n1-2-com.android.chrome", "com.android.chrome", "Chrome", S); pl.refresh();
-        pl.previewAnswer(r, ok(r, B.sessionId, B.controllerTaskId, B.targetPackage, synthetic(320, 693))); layout(pl);
-        assertNull("the workspace was replaced: the old binding's answer is not shown", preview(pl));
-        assertEquals("no request for the replacement (it is not this task's binding)", 1, l.previews.size());
+    @Test public void tapsWatchOnlyWithTheAppsHandleAndOtherwiseSayWhy() throws Exception {
+        Host h = new Host(); h.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"), app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        tagged(p, "app:s2/maps").performClick(); layout(p);
+        assertTrue(texts(p).contains(WorkspaceOverviewPanel.WATCH_APP_UNAVAILABLE)); assertTrue(h.calls.isEmpty());
+        tagged(p, "app:s1/calc").performClick();
+        assertEquals(Arrays.asList("watch:s1/calc:s-1"), h.calls);
+        tagged(tagged(p, "app:s2/maps"), "stop-unavailable").performClick(); layout(p);
+        assertTrue(texts(p).contains(WorkspaceOverviewView.STOP_APP_UNAVAILABLE));
+        described(p, "End call").performClick();
+        assertEquals("end", h.calls.get(h.calls.size() - 1));
+        h.live = false; p.refresh(); layout(p);
+        assertNotNull("not connected: the middle well opens Rose", described(p, "Open Rose"));
     }
 }
