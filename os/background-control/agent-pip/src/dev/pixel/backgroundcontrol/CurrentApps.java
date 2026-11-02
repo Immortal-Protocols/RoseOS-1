@@ -13,7 +13,14 @@ import java.util.List;
  * changed. Completeness is explicit: an empty set is complete only when no session is live. A live set is never
  * claimed complete, because the controller cannot see an app hidden behind the front on its own session display
  * (incompleteReason behind_front_unlisted), and it says so too when the windows could not be read (windows_unreadable)
- * or the session is blocked (blocked); while locked nothing is known (locked). Pure logic, no Android types. */
+ * or the session is blocked (blocked); while locked nothing is known (locked).
+ *
+ * When the platform answers (ComputerControlSession.getAutomatedApps, #156 parity: the same automated-package
+ * repository Launcher3's listener reads), its packages are the members instead: every app with a non-finishing activity
+ * of the owner's user on the session's own device, front or hidden. Its completeness is the platform's (false only when
+ * another user's activity was omitted: other_user_omitted); a closed session lists nothing. Front windows still mark
+ * which members are visible now. A missing, failed or malformed platform answer falls back to the session windows
+ * above, marked incomplete. Pure logic, no Android types. */
 final class CurrentApps {
  private CurrentApps() {}
 
@@ -30,14 +37,59 @@ final class CurrentApps {
  }
 
  static final class Result {
-  final String status,incompleteReason;final List<App> apps;final boolean complete;
-  Result(String status, List<App> apps, boolean complete, String incompleteReason) {
-   this.status = status;this.apps = Collections.unmodifiableList(apps);this.complete = complete;this.incompleteReason = incompleteReason;
+  final String status,incompleteReason,source;final List<App> apps;final boolean complete;
+  Result(String status, List<App> apps, boolean complete, String incompleteReason) {this(status, apps, complete, incompleteReason, SESSION_WINDOWS);}
+  Result(String status, List<App> apps, boolean complete, String incompleteReason, String source) {
+   this.status = status;this.apps = Collections.unmodifiableList(apps);this.complete = complete;this.incompleteReason = incompleteReason;this.source = source;
   }
  }
 
  static final String BEHIND_FRONT_UNLISTED = "behind_front_unlisted", WINDOWS_UNREADABLE = "windows_unreadable",
-  BLOCKED = "blocked";
+  BLOCKED = "blocked", OTHER_USER_OMITTED = "other_user_omitted";
+ /** Where the members came from. */
+ static final String PLATFORM = "platform", SESSION_WINDOWS = "session_windows";
+
+ /** The platform's answer for the session's own device (the agreed Bundle keys), validated. */
+ static final class Platform {
+  final long generation;final List<String> packages;final boolean complete,closed;
+  Platform(long generation, List<String> packages, boolean complete, boolean closed) {
+   this.generation = generation;this.packages = Collections.unmodifiableList(packages);this.complete = complete;this.closed = closed;
+  }
+ }
+
+ /** The Bundle's values as read ("generation" long, "packageNames" String[], "userId" int, "complete" boolean,
+  * "closed" boolean), or null when any is missing or of another type, a package name is empty, the user is not the
+  * caller's own, or a closed answer still lists apps. */
+ static Platform platform(Object generation, Object packageNames, Object userId, Object complete, Object closed, int ownUser) {
+  if (!(generation instanceof Long) || !(packageNames instanceof String[]) || !(userId instanceof Integer)
+    || !(complete instanceof Boolean) || !(closed instanceof Boolean)) return null;
+  if ((Integer) userId != ownUser) return null;
+  List<String> packages = new ArrayList<>();
+  for (String p : (String[]) packageNames) {
+   if (p == null || p.isEmpty()) return null;
+   if (!packages.contains(p)) packages.add(p);
+  }
+  if ((Boolean) closed && !packages.isEmpty()) return null;
+  return new Platform((Long) generation, packages, (Boolean) complete, (Boolean) closed);
+ }
+
+ /** Membership from the platform's answer: its packages, front ones first in front order, then the rest in its
+  * (sorted) order; the controller never; completeness the platform's; closed lists nothing. */
+ static Result of(boolean locked, boolean hasSession, String status, String target, Platform platform, List<String> front, String controller) {
+  if (locked) return new Result(LOCKED, new ArrayList<App>(), false, LOCKED, PLATFORM);
+  if (!hasSession || !live(status) || platform.closed) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
+  List<App> apps = new ArrayList<>();
+  if (front != null) for (String p : front)
+   if (p != null && platform.packages.contains(p) && !p.equals(controller) && !contains(apps, p)) apps.add(new App(p, true, p.equals(target)));
+  for (String p : platform.packages)
+   if (!p.equals(controller) && !contains(apps, p)) apps.add(new App(p, false, p.equals(target)));
+  return new Result(LIVE, apps, platform.complete, platform.complete ? "" : OTHER_USER_OMITTED, PLATFORM);
+ }
+
+ private static boolean contains(List<App> apps, String p) {
+  for (App a : apps) if (a.packageName.equals(p)) return true;
+  return false;
+ }
 
  /** front: the packages of the session display's application windows now, top first; null when they were not read. */
  static Result of(boolean locked, boolean hasSession, String status, boolean blocked, String target, List<String> front, String controller) {
@@ -53,10 +105,17 @@ final class CurrentApps {
   return new Result(LIVE, apps, false, reason);
  }
 
- /** What a consumer sees, for the generation: status, session and members in order. */
+ /** What a consumer sees, for the generation: status, session, its controller status, completeness, source and members
+  * in order. The platform's own per-device generation is not part of it: it restarts with each session device (and is
+  * Long.MAX_VALUE once closed), so the consumer's generation is the controller's counter, which rises across sessions. */
  static String signature(Result r, String sessionId) {
-  StringBuilder b = new StringBuilder(r.status).append('|').append(LIVE.equals(r.status) && sessionId != null ? sessionId : "")
-   .append('|').append(r.complete).append('|').append(r.incompleteReason);
+  return signature(r, sessionId, null);
+ }
+ static String signature(Result r, String sessionId, String sessionStatus) {
+  boolean live = LIVE.equals(r.status);
+  StringBuilder b = new StringBuilder(r.status).append('|').append(live && sessionId != null ? sessionId : "")
+   .append('|').append(live && sessionStatus != null ? sessionStatus : "")
+   .append('|').append(r.complete).append('|').append(r.incompleteReason).append('|').append(r.source);
   for (App a : r.apps) b.append('|').append(a.packageName).append(a.front ? ":f" : ":-").append(a.target ? "t" : "-");
   return b.toString();
  }
