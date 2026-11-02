@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.oxblood-material-motion-contract",
+  "reference": {
+    "commit": "f6503a0d00db674d9f5c38dc79758ff61cc26c82",
+    "artifact": "prototypes/rose-hifi/Rose-HiFi.html",
+    "artifactBlob": "5b9c6c89aa72319cb3afe4744e401c8fe11762ef",
+    "sources": "prototypes/rose-hifi/src (oxblood.css final passes 337-534, style.css, app.js, views.js, icons.js, assets/oxblood-home.svg, assets/oxblood-rose.svg)",
+    "issue": "https://github.com/Immortal-Protocols/RoseOS-1/issues/410"
+  },
+  "ownership": {
+    "writer": "Agent Product/Home (workspace/rose-agent). Single writer of this file; OS Product reads it key-for-key and requests changes on #410.",
+    "agentProduct": "Home, icons/folder, Rose conversation, Background Work manager, Rose Agent's pearl renderer.",
+    "osProduct": "System switcher and its two carousels, bottom-edge gesture, raised edge (peek), live vertical resize, insets, OS-wide microphone integration. Launcher3/SystemUI implement these values in their own renderer."
+  },
+  "units": "Lengths in dp (the prototype's CSS px on its 384x832 screen map 1:1 to dp). Colours are ARGB hex (0xAARRGGBB as #AARRGGBB). Durations in ms. Easing as cubic-bezier control points.",
+  "fields": {
+    "home": { "source": "assets/oxblood-home.svg", "viewBox": [390, 844], "placement": "scale = max(W/390, H/844); centred horizontally; top-aligned", "base": "#FF170104", "nativeRenderer": "workspace/rose-agent/app/src/dev/pixel/voice/OxbloodField.java (HOME)" },
+    "rose": { "source": "assets/oxblood-rose.svg", "viewBox": [390, 844], "placement": "scale = max(W/390, H/844); centred horizontally; top-aligned", "use": "Rose conversation, Background Work, app window views, and the switcher", "nativeRenderer": "OxbloodField.java (ROSE)" },
+    "screenBase": "#FF170609",
+    "notes": "Procedural vector artwork; no raster, grain or blue. SVG gradients are in each shape's objectBoundingBox. Blurs: beam soft stdDeviation 2.5, join bloom 9, rose lit-join soft 3."
+  },
+  "ink": { "primary": "#FFF2E6D9", "secondary": "#FFD2B9AB", "roseView": { "primary": "#FFFFFFFF", "secondary": "#C7FFFFFF" }, "focusRing": { "color": "#FFF2C9B6", "width": 3, "offset": 3 } },
+  "pearl": {
+    "shape": "circle",
+    "sizes": { "homeEdge": 16, "raisedEdge": 16, "roseHeader": 16, "managerHeader": 18, "switcher": 18 },
+    "ruby": { "gradient": "radial, circle centred at (34%, 28%), radius = distance to the farthest corner", "stops": [[0, "#FFFFE6E8"], [0.07, "#FFFFE6E8"], [0.20, "#FFE8606F"], [0.46, "#FFC43048"], [0.76, "#FF8A1428"], [1.0, "#FF4A0612"]] },
+    "silver": { "when": "microphone muted (only where a real mute state exists)", "stops": [[0, "#FFFFFFFF"], [0.08, "#FFFFFFFF"], [0.24, "#FFD9D4D2"], [0.55, "#FF9B9391"], [0.85, "#FF5C5452"], [1.0, "#FF3A3433"]] },
+    "shadow": [{ "dx": 0, "dy": 2, "blur": 3, "color": "#99000000" }, { "inset": true, "dx": 0, "dy": -1, "blur": 2, "color": "#59000000" }],
+    "listeningRing": { "surface": "Rose header only", "gap": { "spread": 3, "color": "#E614080A" }, "ring": { "spread": 4, "color": "#8CE65064" } },
+    "speakingBreath": { "surface": "Rose header only", "durationMs": 1600, "easing": "ease-in-out", "repeat": "infinite",
+      "from": { "gapSpread": 3, "ringSpread": 4, "ringColor": "#80E65064", "glow": { "blur": 8, "spread": 3, "color": "#40E65064" } },
+      "mid": { "gapSpread": 4, "ringSpread": 5.5, "ringColor": "#BFFF788C", "glow": { "blur": 14, "spread": 6, "color": "#59E65064" } },
+      "reducedMotion": "static at the 'from' values (agreed deviation: the reference drops the ring entirely, which hides speaking)" },
+    "connectingCue": "none on the pearl; the caption carries it"
+  },
+  "homeEdge": {
+    "height": 92,
+    "flatTop": 34,
+    "concaveFilletRadius": 34,
+    "outline": "M0,0 arc r34 (centre 34,0) to 34,34; L W-34,34; arc r34 (centre W-34,0) to W,0; L W,H; L 0,H; Z",
+    "extendsBelowFor": "the tappable navigation inset (three-button navigation); gesture navigation adds nothing",
+    "plate": { "gradientVertical": [[0, "#FF4A141A"], [34, "#FF4A141A"], [46, "#FF3C0E13"], [92, "#FF330C10"]], "gradientStopUnits": "dp from the edge top", "sheen": { "from": "#12FF96A5", "to": "#00FF96A5", "heightFraction": 0.40 } },
+    "hairline": { "along": "the concave contour (y = 34 and both fillets)", "width": 1, "color": "#A6D65468", "shadowBelow": { "dy": 4, "blur": 10, "color": "#73000000" } },
+    "controls": { "layout": "centred row, gap 14, vertically centred in the flat area (centre 29dp above the edge bottom)", "rose": { "hit": [103, 44] }, "switcher": { "hit": [106, 44] }, "microphone": { "hit": [44, 44], "status": "NOT SHIPPED by Agent Product: no OS-wide microphone API exists yet (#410 capability gap). OS Product owns any future control." } },
+    "well": { "plateHeight": 36, "radius": 8, "fill": { "from": "#47140407", "to": "#1F46121C" }, "innerRing": { "width": 1, "color": "#66ECCDBE" }, "innerTopShadow": { "dy": 1, "blur": 2, "color": "#66000000" }, "pressed": { "translateY": 1, "durationMs": 160 } },
+    "switcherGlyph": { "box": [64, 28], "viewBox": [2, 3, 60, 20], "stroke": 2, "join": "round", "ink": "#FFEADBCD", "frontCardFill": "#FF331019",
+      "cards": { "leftBack": "M10 11h18l-6 10H4z", "leftFront": "M10 5h18l-6 10H4z", "rightBack": "M42 11h18l-6 10H36z", "rightFront": "M42 5h18l-6 10H36z" },
+      "rubyEdge": { "appliesTo": "rightBack stroke", "gradient": "linear, user space x 34 to 62", "stops": [[0.5, "#FFEADBCD"], [0.8, "#FFFF4A5E"]] },
+      "dropShadow": { "dy": 1, "blur": 1, "color": "#80000000" } }
+  },
+  "homeGrid": {
+    "homePage": { "columns": 4, "cell": [60, 59], "columnGap": 17.5, "rowGap": 14, "labels": "hidden (accessible name only)" },
+    "appPages": { "columns": 4, "cell": [72, 78], "columnGap": 6, "rowGap": 14, "tile": 59, "icon": 40, "labelGap": 5 },
+    "verticalBand": "grid top = band bottom - max(170, grid height); band bottom is 95dp above the edge top (reference grid top 475 of 832)",
+    "tile": { "size": 59, "radius": 14, "fill": "#0EFFE8DE", "innerRing": { "width": 1, "color": "#12FFE8DE" }, "innerTopEdge": { "width": 1, "color": "#1AFFE8DE" }, "backdropBlur": "reference 6-10; not implemented natively", "pressed": { "scale": 0.94, "durationMs": 160 } },
+    "systemGlyph": { "grid": 48, "box": 46, "stroke": 2.6, "caps": "round", "joins": "round", "color": "#FFECDCCB" },
+    "storeIcon": { "box": 40, "artwork": "the app's own icon, unrestyled", "dropShadow": { "dy": 2, "blur": 3, "color": "#73000000" } },
+    "label": { "size": 11.5, "weight": 500, "color": "#FFD2B9AB", "shadow": { "dy": 1, "blur": 4, "color": "#B3000000" } },
+    "date": { "size": 22, "weight": 400, "color": "#FFEADBD0", "position": "page 1, left 33, top 65" },
+    "dots": { "size": 7, "currentSize": 7.5, "spacing": 19, "idle": "#73C8BEBA", "current": "#FFF4EDE0", "currentGlow": { "blur": 4, "color": "#73FFEBDC" }, "centreAboveEdgeTop": 30, "interactive": false }
+  },
+  "rose": {
+    "header": { "top": 49, "left": 30, "title": { "size": 23, "weight": 400, "color": "#FFFFFFFF", "pearlGap": 13 } },
+    "workButton": { "hit": [44, 44], "square": 38, "radius": 10, "idleRing": { "width": 1.5, "color": "#9EC8B6AE" }, "glyph": "2x2 panes of 8dp, gap 4, radius 2, 1.5dp white outline",
+      "working": { "when": "at least one authoritatively running Rose session", "ring": { "width": 1.5, "color": "#B3FF96A5" }, "glow": { "blur": 12, "color": "#59E6465F" }, "badge": { "size": 9, "color": "#FFFF5A68", "ring": { "width": 2, "color": "#FF2A0A10" }, "glow": { "blur": 8, "color": "#CCFF5A68" } } } },
+    "caption": { "top": 137, "left": 30, "size": 15, "color": "#FFFFFFFF", "text": { "connecting": "Connecting…", "speaking": "Rose speaking", "muted": "Microphone muted", "listening": "Listening", "disconnected": "Disconnected" } },
+    "connectButton": { "hit": [154, 44], "bottom": 42, "plate": { "height": 36, "radius": 10, "fill": "#D1220C0E", "ring": { "width": 1, "color": "#C7F1E9E1" } }, "label": { "size": 15, "color": "#FFFFFFFF" },
+      "live": { "label": "Disconnect", "glyph": "x 15dp, stroke 1.6/24, #FFD93A55" }, "idle": { "label": "Connect", "glyph": "12dp ruby dot (not muted-silver)" }, "pressed": { "translateY": 1, "durationMs": 320 } }
+  },
+  "manager": {
+    "card": { "radius": 13, "fill": "#FF1A0A0D", "neutralRing": { "width": 1, "color": "#29ECD5C6" }, "shadow": { "dy": 12, "blur": 26, "color": "#80000000" } },
+    "identityChip": { "inset": 9, "padding": 7, "radius": 10, "icon": 24, "fill": "#61281E1A", "ring": { "width": 1, "color": "#8CECDED6" } },
+    "stateChip": { "inset": 8, "padding": [9, 4], "radius": 9, "fill": "#8C1E0E10", "ring": { "width": 1, "color": "#38FFECE0" }, "text": { "size": 11.5, "color": "#FFF2E6D9" }, "hiddenWhileRunning": true },
+    "stop": { "hit": 44, "plate": 34, "radius": 8, "inset": 8, "fill": "#9E34221C", "ring": { "width": 1.25, "color": "#C7ECDED6" }, "glyph": { "size": 12.8, "radius": 1.2, "color": "#FFF9304A", "disabled": "#FF8A7A76" }, "pressedScale": 0.95 },
+    "runningEdge": { "when": "authoritatively running only", "width": 2, "base": [[0, "#FFF1CFC8"], [0.14, "#FFC44A5E"], [0.55, "#FF9A3848"], [1.0, "#FFC4574E"]],
+      "travellingHighlight": { "sweepDeg": 60, "stops": [[300, "#00FFFFFF"], [330, "#E6FFECE4"], [348, "#FFFF6A80"], [360, "#00FFFFFF"]], "periodMs": 6000, "easing": "linear", "reducedMotion": "static at 40deg" },
+      "glow": [{ "spread": 0.5, "color": "#59FF96A0" }, { "dy": -3, "blur": 12, "spread": -2, "color": "#59FF788C" }, { "blur": 18, "color": "#38C82846" }] },
+    "dimmed": { "stopping": { "saturation": 0.6, "brightness": 0.7 }, "stoppedOrDone": { "saturation": 0.35, "brightness": 0.55 } }
+  },
+  "motion": {
+    "ease": [0.2, 0.8, 0.2, 1],
+    "easeIn": [0.5, 0, 0.75, 0],
+    "viewEase": [0.45, 0, 0.2, 1],
+    "fastMs": 160, "mediumMs": 320, "slowMs": 560,
+    "homeToRose": { "durationMs": 620, "from": "the Rose well's hit rect", "to": "full screen", "content": { "fadeUp": 12, "durationMs": 420, "delayMs": 300 } },
+    "roseToHome": { "durationMs": 560, "to": "the Rose well's hit rect" },
+    "otherViewEntry": { "durationMs": 360, "fromOpacity": 0, "fromScale": 0.98 },
+    "pageSettleMs": 560,
+    "reducedMotion": "system animator scale 0 (or prefers-reduced-motion): every transition is instant, loops stop at their static frame (running edge at 40deg, pearl breath at its 'from' ring); state stays visible."
+  },
+  "notShipped": [
+    "Global/OS-wide microphone control and its silver-pearl meaning beyond Rose's own call mute (no platform API)",
+    "Glass sheen overlay and backdrop blurs",
+    "Prototype fixtures: eight windows, three tasks, sample apps, messages, simulated microphone"
+  ]
+}

@@ -17,7 +17,11 @@ final class UpdateRecovery {
   * session of ours, was interrupted (the process died or Android dropped it). */
  static final long STALE_MS = 15 * 60 * 1000;
  /** The download file Delivery.installSelf writes in the cache; anything left after a kill is stale. */
- static final String DOWNLOAD = "self-update.apk", DOWNLOAD_SIGNATURE = "self-update.apk.idsig"; // the owned temp files
+ // The owned temp files. #407: the signature is never DOWNLOAD's ".idsig" sibling: the platform's v4 verifier
+ // (ApkSignatureSchemeV4Verifier.extractSignature, pinned frameworks/base) reads <apk>.idsig beside an APK it parses and then
+ // requires fs-verity on that APK, which a cache file never has, so getPackageArchiveInfo would fail for a valid update.
+ // LEGACY_SIGNATURE is that old sibling name, kept only so it is removed (an interrupted earlier attempt can leave it).
+ static final String DOWNLOAD = "self-update.apk", DOWNLOAD_SIGNATURE = "self-update.v4sig", LEGACY_SIGNATURE = "self-update.apk.idsig";
 
  /** The persisted channel: a fresh install (nothing stored) is Beta, the only published channel; a stored
   * alpha, beta or prod is kept exactly, even while unavailable; anything else was corrupted and reads as Beta. */
