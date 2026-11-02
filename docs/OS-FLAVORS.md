@@ -216,18 +216,32 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     missing parent (mode 0700) under `/home/pixelbuild`.
   - The copy is staged as `.source-staging-<nonce>` beside `ISO` and renamed only when complete.
   - A wall-clock timer, SIGTERM or the sampled reserve stops planning or copying. Only this run's
-    staging (and a parent it created, if empty) is removed. `completed.json` gives `refused` (nothing
-    written) or `stopped` with `partial` entries/bytes of the selection, `stagingRemoved` and
-    `targetExists`. A complete copy records `selectionSha256` (each file's sha256 included).
+    staging (and a parent it created, if empty) is removed, within `cleanupSeconds` (240 s, inside
+    Release's 300 s outer margin; removal of ~1.7 million files is unmeasured). Whatever is not removed
+    in time stays, is named (`stagingLeft`) and blocks the next `source` run until it is removed
+    deliberately.
+  - `completed.json` gives `refused` (nothing written) or `stopped` with `partial` entries/bytes of
+    the selection, `stagingRemoved`, `removedEntries` and `targetExists`. A complete copy records
+    `selectionSha256` (each file's sha256 included).
   - No process starts. Per-file identity is checked against the plan, and the production lock is held
     for the whole stage (up to 2 h, so production builds wait).
   - Basis, historical, not current: the alpha's copy of the same root with these exclusions allocated
     120.16 GiB (1,696,997 files) on 2026-10-28, and reflink is unsupported on that ext4. The Pro
     inspect's truncated 1.13 TB reference walk counts outputs and repo metadata. It is never an
     estimate: it already shows a full copy cannot fit (above 1,254,214,725,632 − reserve).
-  - Provenance limit: the copy is the production working tree as it is (its Frankel integration
-    included) without `.git` or `.repo`, so project revisions are not re-verified, and the admission
-    report's `.repo/manifest.xml` rule needs its resolved-manifest route.
+  - **Provenance** (`completed.json` `provenance`, verbatim `SOURCE_PROVENANCE`): a
+    `production-working-tree-byte-snapshot` with `projectRevisionsVerified: false`,
+    `pinnedManifestVerified: false` and `resolvedManifest: null`.
+    - The copy holds the production working tree as found, its Frankel integration included, without
+      `.git` or `.repo`. Revisions cannot be re-derived from it.
+    - No manifest or resolved manifest read anywhere else is evidence for these bytes. The admission
+      report's manifest rule (`blazer-preparation-preflight.py`) therefore stays BLOCKED for the copy
+      by design.
+    - `selectionSha256` identifies only the copied bytes at copy time. Vendor and lunch then change the
+      tree, and nothing re-hashes it. `complete: true` means only that the copy finished.
+    - Verifying project bytes against the pinned revisions would need a separately approved
+      comparison against the production `.repo` objects that accounts for the integration. This helper
+      does not do it.
 - **Byte limits are a sampled stop, not a filesystem quota.**
   - Every `limits.sampleSeconds` (5 s), the watched outputs are checked against the bound and the
     filesystem's available bytes against the reserve.

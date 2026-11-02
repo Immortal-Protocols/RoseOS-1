@@ -86,6 +86,8 @@
     "source": {
       "boundBytes": 161061273600,
       "timeoutSeconds": 7200,
+      "cleanupSeconds": 240,
+      "cleanupBasis": "After a stop, removal of this run's own staging is bounded to 240 s, inside the 300 s between timeoutSeconds and Release's outer timeout, so completed.json is written before that timeout. Removal of ~1.7 million files is unmeasured: whatever is not removed in time stays, is named in completed.json (stagingLeft) and blocks the next source run until it is removed deliberately.",
       "exclusionsFrom": "os/release-pipeline/cuttlefish-alpha.json preparation.exclusions",
       "includeRoots": [
         "out_adevtool_deps"

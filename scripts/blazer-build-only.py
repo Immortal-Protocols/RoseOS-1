@@ -16,15 +16,19 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
             policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly adevtool's
             host-tool deps; the full selection is measured before anything is written and refused above its bound, the
             copy is staged beside ISOLATED and renamed into place only when complete, and a stop (timeout, SIGTERM,
-            reserve) removes only this run's staging directory; no subprocess, reflink, hardlink or mount
+            reserve) removes only this run's staging directory within cleanupSeconds (a remainder is left, named and
+            blocks the next run); no subprocess, reflink, hardlink or mount. The result is a
+            byte snapshot of the production working tree, Frankel integration included: its project revisions are
+            not verified (see SOURCE_PROVENANCE)
   download  --host --lock --download-dir
             stream the pinned official URL to DIR/<file>.part (byte and time bound), rename to DIR/<file> only when its
             sha256 equals the pin; an existing archive is never replaced; a failed attempt removes only its own .part
   vendor    --host --lock --download-dir --source-root ISOLATED --node PATH
             `node --version` must meet the floor, then `vendor/adevtool/bin/run generate-all -d blazer` with
             ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
-            (os/release-pipeline/frankel.json host.sourceRoot); the verified archive, pins, host tools and kernel must be
-            present and every collision path absent; consumed bytes are measured afterwards against the bound
+            (os/release-pipeline/frankel.json host.sourceRoot); the archive's sha256, the adevtool deps revision marker, the
+            host tools and the kernel directory must be present (project revisions are not checked) and every collision
+            path absent; consumed bytes are measured afterwards against the bound
   lunch     --host --lock --source-root ISOLATED
             `lunch blazer-cur-user` and the TARGET_PRODUCT/RELEASE/BUILD_VARIANT/DEVICE checks with OUT_DIR=out-blazer-lunch;
             no make goal
@@ -194,6 +198,8 @@ def preparation_problems(recipe, root, contract):
     if vendor.get('collisionPaths') != [f'vendor/google_devices/{DEVICE}', unpacked]:
         problems.append(f'preparation.vendor.collisionPaths must be the generated vendor tree and {unpacked}')
     source = prep.get('source') or {}
+    if not (positive(source.get('cleanupSeconds')) and source['cleanupSeconds'] < 300):
+        problems.append('preparation.source.cleanupSeconds must be positive and below the 300 s outer-timeout margin')
     if source.get('includeRoots') != [recipe['adevtool']['depsDir']] or source.get('stagingPrefix') != '.source-staging-':
         problems.append(f'preparation.source must include exactly {recipe["adevtool"]["depsDir"]} and stage under .source-staging-')
     try:
@@ -603,6 +609,20 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
         out.close()
     return result
 
+# What a source copy is and is not: completed.json carries this verbatim so no consumer can read the copy as verified.
+SOURCE_PROVENANCE = {
+    'kind': 'production-working-tree-byte-snapshot',
+    'projectRevisionsVerified': False,
+    'pinnedManifestVerified': False,
+    'resolvedManifest': None,
+    'integration': 'included as found in the production working tree (its Frankel/Rose integration is not removed, '
+                   're-applied or verified)',
+    'versionControlMetadata': 'excluded (.git and .repo): project revisions cannot be re-derived from the copy, and a '
+                              'manifest or resolved manifest read elsewhere is not evidence for these bytes',
+    'selectionSha256': 'identifies the copied paths, modes, sizes, link texts and file sha256s at copy time only; later '
+                       'stages change the tree by design (vendor output, OUT_DIR) and do not re-hash it',
+}
+
 class StageStopped(Exception):
     """The source stage stopped after it started writing (timeout, SIGTERM, reserve or a base change)."""
 
@@ -641,17 +661,38 @@ def projected_bytes(entries, block):
     apparent size), and the root, each directory and each link take one block."""
     return block + sum(-(-e['size'] // block) * block if e['type'] == 'file' else block for e in entries)
 
+def remove_own(path, seconds, clock=time.monotonic):
+    """Remove this run's own staging tree bottom-up within SECONDS: (removed, entries removed). Links are unlinked,
+    never followed; each directory gets owner write first (copied modes may be read-only). When the budget runs out
+    the rest is left in place, so a stop always finishes with a receipt instead of an unbounded removal."""
+    deadline, removed = clock() + seconds, 0
+    for base, dirs, files in os.walk(path, topdown=False):
+        os.chmod(base, stat.S_IMODE(os.lstat(base).st_mode) | stat.S_IRWXU)
+        for name in files + dirs:
+            if clock() >= deadline:
+                return False, removed
+            target = os.path.join(base, name)
+            if os.path.isdir(target) and not os.path.islink(target):
+                os.rmdir(target)
+            else:
+                os.unlink(target)
+            removed += 1
+    os.rmdir(path)
+    return True, removed + 1
+
 def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.monotonic, planner=alpha_source.plan_copy,
               copier=alpha_source.copy_file):
     """The source stage after admission, under the lock: (ok, outcome). The production root is only read. The whole
     selection is planned before anything is written; the copy is staged beside the source root and renamed into place
     only when complete. A wall-clock timer (timeoutSeconds) and SIGTERM stop planning or copying at any point, and
     available bytes are sampled against the reserve every sampleSeconds; a stop removes only this run's staging
-    directory (and the parent it created, when empty). No process is started."""
+    directory (and the parent it created, when empty) within cleanupSeconds, leaving and naming any remainder. No
+    process is started."""
     prep, src = recipe['preparation'], op['sourceRoot']
     spec, reserve = prep['source'], recipe['capacity']['reserveBytes']
     outcome = {'base': str(production), 'target': str(src), 'boundBytes': spec['boundBytes'], 'boundKind': prep['boundsKind'],
-               'timeoutSeconds': spec['timeoutSeconds'], 'processesStarted': 0, 'written': False, 'usable': False}
+               'timeoutSeconds': spec['timeoutSeconds'], 'processesStarted': 0, 'written': False, 'complete': False,
+               'selectionSha256': None, 'provenance': dict(SOURCE_PROVENANCE)}
     staging, created_parent, done = None, False, {'entries': 0, 'fileBytes': 0}
     def stop(signum, frame):
         raise StageStopped('SIGTERM' if signum == signal.SIGTERM else f'exceeded {spec["timeoutSeconds"]} s')
@@ -706,7 +747,7 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
         signal.setitimer(signal.ITIMER_REAL, 0)
         os.rename(staging, src)
         staging = None
-        outcome.update(usable=True, sourceRoot=str(src), selectionSha256=digest.hexdigest(), copied=done,
+        outcome.update(complete=True, sourceRoot=str(src), selectionSha256=digest.hexdigest(), copied=done,
                        createdParent=created_parent)
         return True, outcome
     except BaseException as error:
@@ -714,12 +755,13 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)  # cleanup of this run's own staging is not interrupted
         outcome['stagingRemoved'] = None
         if staging is not None and os.path.lexists(staging):
+            outcome['cleanupSeconds'] = spec['cleanupSeconds']
             try:
-                alpha_source.make_removable(staging)
-                shutil.rmtree(staging)
-                outcome['stagingRemoved'] = True
+                outcome['stagingRemoved'], outcome['removedEntries'] = remove_own(staging, spec['cleanupSeconds'], clock)
             except OSError as cleanup:
-                outcome.update(stagingRemoved=False, stagingLeft=str(staging), cleanupError=type(cleanup).__name__)
+                outcome.update(stagingRemoved=False, cleanupError=type(cleanup).__name__)
+            if not outcome['stagingRemoved']:
+                outcome['stagingLeft'] = str(staging)  # blocks the next source run until it is removed deliberately
         if created_parent:
             try:
                 src.parent.rmdir()
