@@ -7,10 +7,15 @@ scripts/factory-package.py to literal historical expected pins, one manual run p
   check                         hosted and on the builder: the literal pins agree with their committed sources
                                 (os/retained-rango/release.json, os/flavors/rango.json, os/release-pipeline/frankel.json)
                                 and every bound; prints the step and job bounds. Reads no host path.
-  package  --run-id --attempt   creates this run's new task root R (its parent must already exist) and execs exactly
+  package  --run-id --attempt --attempt-record NEW.json
+                                creates this run's new task root R (its parent must already exist) and runs exactly
                                 host-factory-package.py with the pins, --lock and --out R/package. The helper holds
                                 the shared builder lock for its whole run (never taken again here) and keeps R/package
-                                (the ZIP, its receipt and its capped raw log); it removes only its own work/.
+                                (the ZIP, its receipt and its capped raw log); it removes only its own work/. Its
+                                receipt exists only once R/package is created, so every earlier refusal (lock, a pinned
+                                input, the output or capacity checks, the script derivation) and a refused task root
+                                are recorded in the write-once attempt record outside R: the exit code and the helper's
+                                own one-line JSON result (its refusal category and detail), never its stderr or log.
   observe  --run-id --attempt   factory-package.py observe of the pinned signed target-files into
                                 R/inspection/target-files-observation.json.
   classify --run-id --attempt   factory-package.py classify of R/package/rango-install-2026103001.zip, its stdout kept
@@ -22,7 +27,7 @@ scripts/factory-package.py to literal historical expected pins, one manual run p
                                 sha256 equal the helper receipt's output and whose size is within the proposed 8 GiB
                                 cap; writes R/SHA256SUMS (write-once) and prints root=R for the private installer
                                 artifact, which holds exactly SHA256SUMS and package/rango-install-2026103001.zip.
-  report   --run-id --attempt --upload-dir NEW [--installer-upload OUTCOME]
+  report   --run-id --attempt --upload-dir NEW [--installer-upload OUTCOME] [--attempt-record FILE]
                                 writes R/cleanup.json with the actually observed scratch state and copies only
                                 factory-package-receipt.json, target-files-observation.json, classify.json and
                                 cleanup.json (regular files) into NEW, recording the installer staging and the upload
@@ -40,6 +45,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -71,6 +77,10 @@ BOUNDS = {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200
 INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45}
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
+ATTEMPT_SCHEMA = 'roseos.rango-factory-package-attempt.v1'
+ATTEMPT_NAME = 'rango-factory-package-attempt-{run_id}-{attempt}.json'
+RESULT_BYTES = 1 << 16  # the helper prints one short JSON line; anything longer is not trusted as a result
+CATEGORY = re.compile(r'[a-z][a-z_]{0,39}')
 UPLOAD = {'package/factory-package-receipt.json': 'factory-package-receipt.json',
           'inspection/target-files-observation.json': 'target-files-observation.json',
           'inspection/classify.json': 'classify.json', 'cleanup.json': 'cleanup.json'}
@@ -214,12 +224,73 @@ def stage_installer(root_dir, cap=None, hasher=sha256_file):
             'retentionDays': INSTALLER['retentionDays']}
 
 
-def report(root_dir, upload_dir, installer_upload=None):
+def attempt_record_path(value, run_id, attempt):
+    """The attempt record lives outside R (which may never be created): a new file with the fixed per-run name in an
+    existing plain directory (the runner's temp directory in the workflow)."""
+    path = Path(value or '')
+    if (not value or not path.is_absolute() or os.path.normpath(value) != value
+            or path.name != ATTEMPT_NAME.format(run_id=run_id, attempt=attempt)):
+        raise Invalid(f'--attempt-record must be an absolute path named {ATTEMPT_NAME}')
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise Invalid('the attempt record directory must be an existing plain directory')
+    return path
+
+
+def sanitized_result(stdout):
+    """The helper's one-line JSON result reduced to fixed fields; anything else is not interpreted."""
+    lines = [line for line in (stdout or '').splitlines() if line.strip()]
+    if not lines or len(stdout) > RESULT_BYTES:
+        return {'category': 'no_result'}
+    try:
+        result = json.loads(lines[-1])
+    except ValueError:
+        return {'category': 'no_result'}
+    if isinstance(result, dict) and isinstance(result.get('refused'), str):
+        head = result['refused'].split(':', 1)[0]
+        return {'category': head if CATEGORY.fullmatch(head) else 'refused', 'detail': result['refused'][:500]}
+    if isinstance(result, dict) and isinstance(result.get('packaged'), dict):
+        output = result['packaged']
+        return {'category': 'packaged', 'output': {k: output.get(k) for k in ('file', 'sha256', 'size')}}
+    return {'category': 'no_result'}
+
+
+def package(root_dir, record_path, runner=subprocess.run):
+    """Create R, run the helper and keep its outcome in the write-once attempt record. Returns the exit status."""
+    record = {'schema': ATTEMPT_SCHEMA, 'step': 'package', 'taskRoot': str(root_dir)}
+    fd = os.open(record_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)  # before anything else
+    with os.fdopen(fd, 'w') as f:
+        try:
+            new_dir(root_dir)
+        except (Invalid, OSError) as error:
+            record.update(exit=2, category='task_root_refused', detail=str(error)[:500])
+        else:
+            try:
+                result = runner(package_argv(root_dir), stdout=subprocess.PIPE, text=True)
+            except OSError as error:
+                record.update(exit=1, category='spawn_failed', detail=type(error).__name__)
+            else:
+                record.update(exit=result.returncode, **sanitized_result(result.stdout))
+                print((result.stdout or '').strip()[:RESULT_BYTES], flush=True)
+        finally:
+            record.setdefault('exit', 1)
+            record.setdefault('category', 'wiring_interrupted')
+            f.write(json.dumps(record, indent=2, sort_keys=True) + '\n')
+    return record['exit']
+
+
+def report(root_dir, upload_dir, installer_upload=None, record_path=None):
     """The observed scratch state, then the allowlisted copies. Works when the task root was never created."""
     upload_dir = Path(upload_dir)
     upload_dir.mkdir(mode=0o700)
     state = {'schema': 'roseos.rango-factory-package-cleanup.v1', 'taskRoot': str(root_dir),
              'taskRootExists': root_dir.is_dir() and not root_dir.is_symlink()}
+    record = Path(record_path) if record_path else None
+    if record is not None and record.is_file() and not record.is_symlink():
+        (upload_dir/'package-attempt.json').write_bytes(record.read_bytes())
+        state['packageAttempt'] = 'recorded'
+    else:
+        state['packageAttempt'] = 'absent (the package step did not run or was stopped before recording)'
+
     if state['taskRootExists']:
         work, scratch = root_dir/'package/work', root_dir/'classify-work'
         state['packageWorkRemoved'] = not os.path.lexists(work)
@@ -255,6 +326,7 @@ def main(argv=None):
     p.add_argument('--attempt')
     p.add_argument('--upload-dir')
     p.add_argument('--installer-upload', choices=('success', 'failure', 'cancelled', 'skipped'))
+    p.add_argument('--attempt-record')
     a = p.parse_args(argv)
     try:
         bounds, minutes = check()
@@ -268,9 +340,11 @@ def main(argv=None):
         root_dir = task_root(a.run_id, a.attempt)
         if (a.command == 'report') != bool(a.upload_dir) or (a.installer_upload and a.command != 'report'):
             raise Invalid('--upload-dir and --installer-upload are for report only, and report needs --upload-dir')
+        if a.attempt_record and a.command not in ('package', 'report') or (a.command == 'package' and not a.attempt_record):
+            raise Invalid('--attempt-record is for package (required) and report only')
+        record = attempt_record_path(a.attempt_record, a.run_id, a.attempt) if a.attempt_record else None
         if a.command == 'package':
-            new_dir(root_dir)
-            os.execv(sys.executable, package_argv(root_dir))
+            return package(root_dir, record)
         if a.command == 'observe':
             packaged(root_dir)
             new_dir(root_dir/'inspection')
@@ -282,7 +356,7 @@ def main(argv=None):
             print(json.dumps(record, sort_keys=True), file=sys.stderr)
             print(f'root={root_dir}')
             return 0
-        print(json.dumps(report(root_dir, a.upload_dir, a.installer_upload), sort_keys=True))
+        print(json.dumps(report(root_dir, a.upload_dir, a.installer_upload, record), sort_keys=True))
         return 0
     except (Invalid, FileExistsError, KeyError, ValueError) as error:
         print(json.dumps({'verdict': 'INVALID', 'error': str(error)}), file=sys.stderr)

@@ -270,11 +270,13 @@ class Job(unittest.TestCase):
             self.assertNotIn(absent, body)
         self.assertEqual(sorted(set(re.findall(r'python3 (\S+)', body))), ['scripts/rango-factory-package-wiring.py'])
         self.assertIn('          persist-credentials: false\n', self.job)
-        for name, var, command in (('Package the install archive (bounded, under the helper\'s shared lock)', 'PACKAGE', 'package'),
-                                   ('Observe the signed target-files (bounded)', 'OBSERVE', 'observe'),
-                                   ('Classify the install archive (bounded)', 'CLASSIFY', 'classify')):
+        record = ' --attempt-record "$RUNNER_TEMP/rango-factory-package-attempt-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"'
+        for name, var, command, extra in (('Package the install archive (bounded, under the helper\'s shared lock)', 'PACKAGE',
+                                           'package', record),
+                                          ('Observe the signed target-files (bounded)', 'OBSERVE', 'observe', ''),
+                                          ('Classify the install archive (bounded)', 'CLASSIFY', 'classify', '')):
             self.assertEqual(script(step(self.job, name)), f'timeout --kill-after=30s "${{{var}_SECONDS}}s" python3 '
-                f'scripts/rango-factory-package-wiring.py {command} --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"\n')
+                f'scripts/rango-factory-package-wiring.py {command} --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"{extra}\n')
             self.assertNotIn('if:', step(self.job, name))  # each runs only after the previous step succeeded
         self.assertEqual([n for n, b in jobs().items() if 'rango-factory-package-wiring.py package' in b], [MODE])
         self.assertNotIn('rango-factory-package', jobs()['rango-factory-observe'])
@@ -300,7 +302,7 @@ class Job(unittest.TestCase):
         self.assertIn('        if: always()\n', report)
         self.assertEqual(script(report), 'python3 scripts/rango-factory-package-wiring.py report --run-id "$GITHUB_RUN_ID" '
             '--attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/rango-factory-package-upload-$GITHUB_RUN_ID-'
-            '$GITHUB_RUN_ATTEMPT" --installer-upload "$INSTALLER_UPLOAD"\n')
+            '$GITHUB_RUN_ATTEMPT" --installer-upload "$INSTALLER_UPLOAD" --attempt-record "$RUNNER_TEMP/rango-factory-package-attempt-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"\n')
         self.assertIn("          INSTALLER_UPLOAD: ${{ steps.installer-artifact.outcome || 'skipped' }}\n", report)
         artifact = step(self.job, 'Receipts artifact')
         self.assertIn('        if: always()\n', artifact)
@@ -415,6 +417,102 @@ class InstallerExport(unittest.TestCase):
         state = wiring.report(unstaged, self.parent/'upload-unstaged')
         self.assertEqual((state['installer']['staged'], state['installer']['uploadOutcome']), (False, 'not-run'))
         self.assertEqual(wire('stage-installer', '--run-id', '1', '--attempt', '1', '--installer-upload', 'success').returncode, 2)
+
+
+
+class AttemptRecord(unittest.TestCase):
+    """A failure before the helper creates its receipt (run 41498418434 left only cleanup.json) is still reported:
+    the write-once attempt record outside R keeps the exit code and the helper's own one-line JSON result."""
+    RUN, ATTEMPT = '41498418434', '1'
+
+    def setUp(self):
+        self.parent = Path(tempfile.mkdtemp())
+        self.temp = Path(tempfile.mkdtemp())
+        self.root = wiring.task_root(self.RUN, self.ATTEMPT, parent=self.parent)
+        self.record = wiring.attempt_record_path(str(self.temp/f'rango-factory-package-attempt-{self.RUN}-{self.ATTEMPT}.json'),
+                                                 self.RUN, self.ATTEMPT)
+
+    def helper(self, code, output):
+        """A stand-in for subprocess.run of the helper: its stdout is captured, its stderr is left alone."""
+        self.calls = []
+
+        def run(argv, stdout=None, **kwargs):
+            self.calls.append(argv)
+            self.assertEqual((stdout, kwargs), (subprocess.PIPE, {'text': True}))
+            return subprocess.CompletedProcess(argv, code, stdout=output)
+        return run
+
+    def read(self):
+        return json.loads(self.record.read_text())
+
+    def test_helper_refusal_before_its_receipt_is_recorded_with_category_and_detail(self):
+        refusal = json.dumps({'refused': 'input_changed: target-files sha256 differs from its pin'})
+        self.assertEqual(wiring.package(self.root, self.record, self.helper(3, refusal + '\n')), 3)
+        self.assertEqual(self.calls, [wiring.package_argv(self.root)])
+        self.assertEqual(self.read(), {'schema': 'roseos.rango-factory-package-attempt.v1', 'step': 'package',
+            'taskRoot': str(self.root), 'exit': 3, 'category': 'input_changed',
+            'detail': 'input_changed: target-files sha256 differs from its pin'})
+        self.assertFalse((self.root/'package').exists())  # nothing invented: the helper wrote no receipt
+
+    def test_packaged_no_result_and_unparsed_results_are_recorded_truthfully(self):
+        cases = ((0, json.dumps({'packaged': {'file': 'rango-install-2026103001.zip', 'sha256': 'a' * 64, 'size': 9,
+                                              'extra': 'dropped'}}), {'category': 'packaged',
+                  'output': {'file': 'rango-install-2026103001.zip', 'sha256': 'a' * 64, 'size': 9}}),
+                 (1, '', {'category': 'no_result'}), (1, 'Traceback (most recent call last):', {'category': 'no_result'}),
+                 (3, json.dumps({'refused': 'Weird Text without category'}), {'category': 'refused',
+                  'detail': 'Weird Text without category'}),
+                 (3, json.dumps({'refused': 'x' * 2000}), {'category': 'refused', 'detail': 'x' * 500}),
+                 (0, 'y' * (wiring.RESULT_BYTES + 1), {'category': 'no_result'}))
+        for i, (code, stdout, expected) in enumerate(cases):
+            run_id = str(100 + i)
+            root = wiring.task_root(run_id, '1', parent=self.parent)
+            record = self.temp/f'rango-factory-package-attempt-{run_id}-1.json'
+            with self.subTest(code=code, stdout=stdout[:40]):
+                self.assertEqual(wiring.package(root, record, self.helper(code, stdout)), code)
+                self.assertEqual({k: v for k, v in json.loads(record.read_text()).items()
+                                  if k not in ('schema', 'step', 'taskRoot')}, dict(expected, exit=code))
+
+    def test_a_helper_that_cannot_start_is_recorded_not_left_empty(self):
+        def fails(argv, **kwargs):
+            raise FileNotFoundError('python3')
+        self.assertEqual(wiring.package(self.root, self.record, fails), 1)
+        self.assertEqual({k: self.read()[k] for k in ('exit', 'category', 'detail')},
+                         {'exit': 1, 'category': 'spawn_failed', 'detail': 'FileNotFoundError'})
+
+    def test_refused_task_root_is_recorded_and_the_helper_never_runs(self):
+        missing = wiring.task_root(self.RUN, self.ATTEMPT, parent=self.parent/'absent')
+        self.assertEqual(wiring.package(missing, self.record, self.helper(0, '')), 2)
+        self.assertEqual(self.calls, [])
+        record = self.read()
+        self.assertEqual((record['exit'], record['category']), (2, 'task_root_refused'))
+        self.assertIn('must be an existing plain directory', record['detail'])
+        with self.assertRaises(FileExistsError):  # write-once
+            wiring.package(missing, self.record, self.helper(0, ''))
+
+    def test_report_uploads_the_record_whether_or_not_the_task_root_exists(self):
+        wiring.package(wiring.task_root(self.RUN, self.ATTEMPT, parent=self.parent/'absent'), self.record, self.helper(0, ''))
+        upload = self.parent/'upload-absent'
+        state = wiring.report(wiring.task_root(self.RUN, self.ATTEMPT, parent=self.parent/'absent'), upload, None, self.record)
+        self.assertFalse(state['taskRootExists'])
+        self.assertEqual(state['packageAttempt'], 'recorded')
+        self.assertEqual(sorted(p.name for p in upload.iterdir()), ['cleanup.json', 'package-attempt.json'])
+        self.assertEqual(json.loads((upload/'package-attempt.json').read_text())['category'], 'task_root_refused')
+        other = self.temp/'rango-factory-package-attempt-7-1.json'
+        state = wiring.report(wiring.task_root('7', '1', parent=self.parent), self.parent/'upload-none', None, other)
+        self.assertTrue(state['packageAttempt'].startswith('absent'))
+        self.assertEqual([p.name for p in (self.parent/'upload-none').iterdir()], ['cleanup.json'])
+
+    def test_record_path_is_fixed_per_run_and_required_only_for_package(self):
+        for value in ('', 'relative.json', str(self.temp/'other.json'), str(self.temp/'x'/'..'/self.record.name),
+                      str(self.temp/'absent'/self.record.name)):
+            with self.subTest(value=value), self.assertRaises(wiring.Invalid):
+                wiring.attempt_record_path(value, self.RUN, self.ATTEMPT)
+        record = str(self.record)
+        for argv in (('package', '--run-id', self.RUN, '--attempt', self.ATTEMPT),
+                     ('observe', '--run-id', self.RUN, '--attempt', self.ATTEMPT, '--attempt-record', record),
+                     ('classify', '--run-id', self.RUN, '--attempt', self.ATTEMPT, '--attempt-record', record)):
+            self.assertEqual(wire(*argv).returncode, 2, argv)
+        self.assertFalse(self.record.exists())
 
 
 if __name__ == '__main__':
