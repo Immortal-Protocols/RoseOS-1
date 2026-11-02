@@ -18,12 +18,50 @@ index 65f606a..e068d38 100644
 +
      </com.android.quickstep.fallback.RecentsDragLayer>
  </com.android.launcher3.LauncherRootView>
+diff --git a/quickstep/res/layout/icon_app_chip_view.xml b/quickstep/res/layout/icon_app_chip_view.xml
+index 76f4cc9..9907cb2 100644
+--- a/quickstep/res/layout/icon_app_chip_view.xml
++++ b/quickstep/res/layout/icon_app_chip_view.xml
+@@ -29,8 +29,8 @@
+     android:autoMirrored="true"
+     android:elevation="@dimen/task_thumbnail_icon_menu_elevation"
+     android:foreground="@drawable/app_chip_fg"
+-    android:background="@color/materialColorSurfaceBright"
+-    launcher:focusBorderColor="@color/materialColorSecondary">
++    android:background="@color/rose_oxblood_chip"
++    launcher:focusBorderColor="@color/rose_oxblood_focus_ring">
+ 
+     <!-- ignoring warning because the user of the anchor is a Rect where RTL is not needed -->
+     <!-- This anchor's bounds is in the expected location after rotations and translations are
+@@ -66,6 +66,7 @@
+         android:fadingEdgeLength="@dimen/task_thumbnail_icon_menu_text_fading_size"
+         android:marqueeRepeatLimit="1"
+         android:scrollHorizontally="true"
++        android:textColor="@color/rose_oxblood_ink"
+         style="@style/IconAppChipMenuTextStyle" />
+ 
+     <ImageView
+diff --git a/quickstep/res/layout/task.xml b/quickstep/res/layout/task.xml
+index fa1d9f0..1a4be9d 100644
+--- a/quickstep/res/layout/task.xml
++++ b/quickstep/res/layout/task.xml
+@@ -25,8 +25,8 @@
+     android:clipChildren="false"
+     android:defaultFocusHighlightEnabled="false"
+     android:focusable="true"
+-    launcher:focusBorderColor="@color/materialColorOutline"
+-    launcher:hoverBorderColor="@color/materialColorPrimary">
++    launcher:focusBorderColor="@color/rose_oxblood_focus_ring"
++    launcher:hoverBorderColor="@color/rose_oxblood_hover_ring">
+ 
+     <ViewStub
+         android:id="@+id/task_content_view"
 diff --git a/quickstep/res/values/rose_agent_strip.xml b/quickstep/res/values/rose_agent_strip.xml
 new file mode 100644
-index 0000000..7d45106
+index 0000000..5e4ba10
 --- /dev/null
 +++ b/quickstep/res/values/rose_agent_strip.xml
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,19 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- RoseOS (#156): the agent row's fixed height in the fallback overview. FallbackActivityInterface claims it below
 +     the task cards and OverviewActionsView keeps it free above the action buttons; the layout uses the same value. -->
@@ -31,6 +69,14 @@ index 0000000..7d45106
 +    <dimen name="rose_agent_strip_height">200dp</dimen>
 +    <!-- RoseOS (#410): the fallback overview's scrim, the Oxblood switcher base (qa/oxblood/oxblood-contract.json
 +         fields.screenBase), applied by RecentsActivity after OverviewBlurFallbackStyle. -->
++    <!-- RoseOS (#410): the human task cards' Oxblood identity chip and borders, from Home's contract
++         (qa/oxblood/oxblood-contract.json): the chip is manager.card.fill at 95% (kept nearly opaque so its ivory
++         ink.primary name stays readable over light app screens), keyboard focus is ink.focusRing.color, and hover is
++         ink.secondary. Used only by the overview's task card layouts (task.xml, icon_app_chip_view.xml). -->
++    <color name="rose_oxblood_chip">#F21A0A0D</color>
++    <color name="rose_oxblood_ink">#FFF2E6D9</color>
++    <color name="rose_oxblood_focus_ring">#FFF2C9B6</color>
++    <color name="rose_oxblood_hover_ring">#FFD2B9AB</color>
 +    <style name="RoseOverviewOxblood">
 +        <item name="overviewScrimColor">#FF170609</item>
 +    </style>

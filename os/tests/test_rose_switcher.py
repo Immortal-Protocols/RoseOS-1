@@ -22,14 +22,22 @@ PINNED = {'fallback_recents_activity.xml': '8df1879fb83e2a9f5b11b657a498e6153504
     'BaseContainerInterface.java': 'a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829',
     'FallbackActivityInterface.java': 'dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa',
     'OverviewActionsView.java': '7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f',
-    'RecentsActivity.java': 'b9bd0251eef6b4cd3159dea08657881cfad74fbe42034f03b773c2fda8d8b804'}
+    'RecentsActivity.java': 'b9bd0251eef6b4cd3159dea08657881cfad74fbe42034f03b773c2fda8d8b804',
+    'task.xml': '6fab27a7a95e9bda31d7fd4fb4a041ff49bf25c88e1744e30fff78dc50780b19',
+    'icon_app_chip_view.xml': '39f08f41ca50a248942ec9c756d474659ee31fe91c486788ae1cfd5bd6306071'}
 TARGETS = {'fallback_recents_activity.xml': LAYOUT, 'BaseContainerInterface.java': f'{QUICKSTEP}/BaseContainerInterface.java',
     'FallbackActivityInterface.java': f'{QUICKSTEP}/FallbackActivityInterface.java',
     'OverviewActionsView.java': f'{QUICKSTEP}/views/OverviewActionsView.java',
-    'RecentsActivity.java': f'{QUICKSTEP}/RecentsActivity.java'}
-# The stock lines the patch replaces, and nothing else: the fallback's claimed space below the cards, and the phone
-# actions bar's task-aligned bottom margin (now less the same space).
-REPLACED = ['-                    overviewActionsClaimedSpace,',
+    'RecentsActivity.java': f'{QUICKSTEP}/RecentsActivity.java',
+    'task.xml': 'quickstep/res/layout/task.xml', 'icon_app_chip_view.xml': 'quickstep/res/layout/icon_app_chip_view.xml'}
+# The stock lines the patch replaces, and nothing else: #410's colour values of the human task cards' identity chip and
+# focus/hover borders (attribute values only), the fallback's claimed space below the cards, and the phone actions
+# bar's task-aligned bottom margin (now less the same space).
+REPLACED = ['-    android:background="@color/materialColorSurfaceBright"',
+    '-    launcher:focusBorderColor="@color/materialColorSecondary">',
+    '-    launcher:focusBorderColor="@color/materialColorOutline"',
+    '-    launcher:hoverBorderColor="@color/materialColorPrimary">',
+    '-                    overviewActionsClaimedSpace,',
     '-        // Align to bottom of task Rect.',
     '-                - mDp.getOverviewProfile().getActionsHeight();']
 
@@ -1148,6 +1156,58 @@ class OxbloodSwitcherBackdropTest(unittest.TestCase):
             'RecentsActivity only gains the style; nothing of it is removed')
         stock_scrim = (FIXTURES/'RecentsActivity.java').read_text()
         self.assertIn(stock, stock_scrim)
+
+class OxbloodHumanCardTest(unittest.TestCase):
+    """#410: the smallest safe alignment of the human (top) carousel's own cards. Only colour values in the overview's
+    task card layouts change: each card's app-identity chip (IconAppChipView, which clips itself to its rounded outline
+    in code and never reads its background) becomes an Oxblood plate with ivory text, and the card's keyboard-focus and
+    hover borders take the contract's focus-ring and secondary ink. No TaskView, live tile, touch, dismiss, launch or
+    navigation code, and no layout structure, changes."""
+
+    def test_the_human_cards_chip_and_borders_take_the_contracts_colours_and_nothing_else(self):
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+        tree = patched_tree(self)
+        values = (tree/DIMENS).read_text()
+        colors = dict(re.findall(r'<color name="(rose_oxblood_\w+)">(#[0-9A-F]{8})</color>', values))
+        fill = contract['manager']['card']['fill']
+        self.assertEqual(colors['rose_oxblood_chip'], '#F2' + fill[3:], 'the card fill, kept nearly opaque (95%)')
+        self.assertEqual(colors['rose_oxblood_ink'], contract['ink']['primary'])
+        self.assertEqual(colors['rose_oxblood_focus_ring'], contract['ink']['focusRing']['color'])
+        self.assertEqual(colors['rose_oxblood_hover_ring'], contract['ink']['secondary'])
+        chip = (tree/'quickstep/res/layout/icon_app_chip_view.xml').read_text()
+        self.assertIn('android:background="@color/rose_oxblood_chip"', chip)
+        self.assertIn('launcher:focusBorderColor="@color/rose_oxblood_focus_ring"', chip)
+        self.assertIn('android:textColor="@color/rose_oxblood_ink"\n        style="@style/IconAppChipMenuTextStyle" />', chip,
+            'the name\'s colour only; its size, font and fading stay the stock style\'s')
+        task = (tree/'quickstep/res/layout/task.xml').read_text()
+        self.assertIn('launcher:focusBorderColor="@color/rose_oxblood_focus_ring"', task)
+        self.assertIn('launcher:hoverBorderColor="@color/rose_oxblood_hover_ring"', task)
+        # Only attribute values change in these layouts: the same elements, ids and attribute names, in order.
+        for name in ('task.xml', 'icon_app_chip_view.xml'):
+            stock = (FIXTURES/name).read_text()
+            patched = (tree/f'quickstep/res/layout/{name}').read_text()
+            def shape(text):
+                return re.findall(r'<\s*([\w.]+)|\b([\w:]+)="', text)
+            added = [a for a in shape(patched) if a not in shape(stock)]
+            self.assertEqual(sorted(set(added)), [] if name == 'task.xml' else [('', 'android:textColor')], name)
+            self.assertEqual(re.findall(r'android:id="([^"]+)"', stock), re.findall(r'android:id="([^"]+)"', patched))
+
+    def test_the_chip_code_never_depends_on_its_background(self):
+        """The pinned IconAppChipView clips to its own outline (app_chip_round_corner_radius) and animates that
+        outline; it never reads or casts its background, so a different colour value is all that changes."""
+        code = FIXTURES/'IconAppChipView.kt'
+        self.assertEqual(hashlib.sha256(code.read_bytes()).hexdigest(),
+            '31a644a01e48b9cdeb66332a7a1fff9c865012b8466696195adc918e31731fcd', 'Launcher3 47accce, byte for byte')
+        source = code.read_text()
+        for touch in (r'getBackground\(', r'\.background\b', r'\bbackground\s*=', 'setBackground', 'backgroundTint'):
+            self.assertIsNone(re.search(touch, source), f'{touch}: the chip code never reads or sets its background')
+        self.assertIn('R.dimen.app_chip_round_corner_radius', source, 'it clips to its own outline')
+        tree = patched_tree(self)
+        chip = (tree/'quickstep/res/layout/icon_app_chip_view.xml').read_text()
+        self.assertIn('android:clipToOutline="true"', chip)
+        self.assertIn('<com.android.quickstep.views.IconAppChipView', chip)
+        self.assertNotIn('setTextColor', source, 'nor its name\'s colour, so the layout attribute holds')
 
 if __name__ == '__main__':
     unittest.main()
