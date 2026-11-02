@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/GrapheneOS/adevtool",
+  "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+  "revisionBasis": "os/pinned-manifest.xml project adevtool path vendor/adevtool (upstream refs/tags/2026100600): the adevtool the retained rango 2026103001 build pins",
+  "alsoIdenticalAt": "df29e3a20920914f8ec4cd29e41c4db85fd78c41 (same git blobs for both source files)",
+  "route": "FOLD-FIRMWARE-OBSERVE: anonymous git read of the public repository through the session git proxy (add_repo read_available); git fetch --depth 1 of each revision; files copied with git show, never executed",
+  "license": "MIT (LICENSE copied unchanged)",
+  "files": [
+    {"fixture": "fastboot-pack.ts", "path": "src/images/fastboot-pack.ts",
+     "gitBlob": "3e1a92e6df3a2f7deb25a955d289c8f7d21f522a", "sha256": "c59ad773994e9e2c5bfac34efb62922a5f5b39ff16026992ae18ed5897c23ad4"},
+    {"fixture": "firmware.ts", "path": "src/images/firmware.ts",
+     "gitBlob": "77c1554cea80884b04adfa6e9fb3801207220331", "sha256": "ea67c4555ecb63ead9b7ad5d232873965ccaebe8f722e96e0fcfbe4f371fba5a"},
+    {"fixture": "LICENSE", "path": "LICENSE",
+     "gitBlob": "adb54865e788ac06f688ec40d6b830e1ec7c2341", "sha256": "0e57c9e350ae16854cf7692672d0fb898c21b3e54e74156dc282c1a1e9e3ba33"}
+  ],
+  "establishes": "the FBPK (fastboot pack) v1/v2 layout, and that adevtool parses BOTH bootloader.img and radio.img as FBPK and takes each A/B-partition-named PartitionData (type 1) entry as that partition's image",
+  "doesNotEstablish": "the actual headers or entries of the retained build's containers (validated byte-for-byte at run time); any meaning of maybeCrc32, which the source itself calls unreliable; any raw (non-FBPK) radio fallback"
+}
