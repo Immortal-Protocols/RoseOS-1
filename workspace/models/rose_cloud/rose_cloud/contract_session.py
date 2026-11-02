@@ -267,10 +267,11 @@ def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | No
     replies = [r[k] for k in REPLIES if k in r]
     r['reasoningSeparated'] = any(x['reasoningChars'] for x in replies) and not any(
         x['thinkInContent'] for x in replies)
+    # a request in notRun has no reply, so it fails the first all(); a timed-out reply never meets its expectation
     r['allExpected'] = bool(
-        r['models']['idsExact'] and r['models']['maxModelLen'] == MAX_MODEL_LEN and not r['notRun']
+        r['models']['idsExact'] and r['models']['maxModelLen'] == MAX_MODEL_LEN
         and r['reasoningSeparated'] and all(k in r for k in expected)
-        and all(x['expectMet'] and x['identityExact'] and not x['timedOut'] for x in replies)
+        and all(x['expectMet'] and x['identityExact'] for x in replies)
         and (case not in ('long', 'contract') or (r['long']['recalled'] and r['long']['beyondProven'])))
     r['step'] = 'done'
     return r
