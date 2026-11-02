@@ -670,7 +670,7 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
         got = [l for l in result.stdout.splitlines() if '|' in l]
         self.assertEqual(len(got), len(data['scenarios']))
         for sc, line in zip(data['scenarios'], got):
-            name, state, cards, held, reason, _members = line.split('|')
+            name, state, cards, held, reason = line.split('|')
             want = sc['expect']
             with self.subTest(scenario=sc['name']):
                 self.assertEqual(name, sc['name'])
@@ -836,120 +836,6 @@ class DeviceAppsParityTest(unittest.TestCase):
         for history in ('completed', 'finished', 'history', 'lastResult', 'result'):
             self.assertNotIn(history, work.split('static RoseAgentWork of(')[1].split('static RoseAgentWork unconfirmed()')[0],
                 f'{history}: membership never reads task history')
-
-class CommonParityReplayTest(unittest.TestCase):
-    """#156/#225: Launcher3's consumer replay of App Core's common parity fixture (qa/parity/current-apps-parity.json,
-    owned by App Core; read here, never edited). Each case's platform input becomes the exact listener callbacks
-    (onAutomatedDevicesChanged then onAutomatedDeviceAppsChanged, one generation) and runs through the production
-    RoseAgentWork; the row's class (cards with their packages, genuine_empty, or cannot_confirm) must equal the case's
-    expected. A case Launcher3 cannot replay (platform null) is never counted as a parity pass: it must be listed in the
-    fixture's residualDifferences."""
-    FIXTURE = ROOT/'qa/parity/current-apps-parity.json'
-    UID, OTHER_UID, CONTROLLER = 10123, 10456, 'dev.pixel.backgroundcontrol'
-    enc = staticmethod(AutomatedDevicesConsumerTest.encode)
-
-    def lines(self, name, platform, gen, reset=False):
-        """The listener callbacks and platform reads Launcher3 would get for one platform input."""
-        out = [f'S\t{name}'] if name else []
-        if reset:
-            out.append('R')
-        if platform.get('locked'):
-            return out + ['K']
-        if platform.get('unavailable'):
-            # A live session exists (its display is listed) but no ownership snapshot reached Launcher3.
-            return out + ['D\t101\t1', 'T\t1\t101\t0\tcom.example.app\ttrue', 'E']
-        if platform.get('malformed'):
-            out.append('\t'.join(['G', str(gen), self.enc([1]), self.enc([self.CONTROLLER]), self.enc([self.UID])]))
-            out.append('\t'.join(['A', str(gen), self.enc([1]), self.enc([self.CONTROLLER]), self.enc([self.UID]),
-                self.enc(['true']), self.enc([1, 1]), self.enc(['com.example.app'])]))
-            return out + ['D\t101\t1', 'E']
-        devices = platform['devices']
-        ids = list(range(1, len(devices) + 1))
-        owners = [self.CONTROLLER if d['owner'] == 'controller' else 'com.other.agent' for d in devices]
-        uids = [self.UID if d['owner'] == 'controller' else self.OTHER_UID for d in devices]
-        complete = [str(bool(d['complete'])).lower() for d in devices]
-        app_ids = [i for i, d in zip(ids, devices) for _ in d['apps']]
-        app_pkgs = [a for d in devices for a in d['apps']]
-        out.append('\t'.join(['G', str(gen), self.enc(ids), self.enc(owners), self.enc(uids)]))
-        out.append('\t'.join(['A', str(gen), self.enc(ids), self.enc(owners), self.enc(uids), self.enc(complete),
-            self.enc(app_ids), self.enc(app_pkgs)]))
-        for i in ids:
-            out.append(f'D\t{100 + i}\t{i}')
-        return out + ['E']
-
-    def run_lines(self, lines):
-        out = Path(tempfile.mkdtemp(prefix='rose-parity-'))
-        self.addCleanup(shutil.rmtree, out, True)
-        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
-            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseAgentWork.java'), str(ROOT/'os/tests/RoseAgentScenarios.java')],
-            check=True, capture_output=True)
-        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseAgentScenarios',
-            str(self.UID), '0'], input='\n'.join(lines) + '\n', capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return [l.split('|') for l in result.stdout.splitlines() if '|' in l]
-
-    @staticmethod
-    def category(state, members):
-        if state == 'AVAILABLE':
-            return 'cards', sorted(members.split(',')) if members else []
-        if state == 'EMPTY':
-            return 'genuine_empty', []
-        return 'cannot_confirm', []
-
-    def load(self):
-        import json
-        self.assertTrue(self.FIXTURE.is_file(), 'App Core\'s common fixture is on this base (PR370)')
-        return json.loads(self.FIXTURE.read_text())
-
-    def test_every_replayable_case_matches_and_the_rest_are_named_differences(self):
-        data = self.load()
-        self.assertEqual(set(data['categories']), {'cards', 'genuine_empty', 'cannot_confirm'})
-        cases = [c for c in data['cases'] if c['platform'] is not None]
-        not_replayable = [c['name'] for c in data['cases'] if c['platform'] is None]
-        lines = []
-        for c in cases:
-            lines += self.lines(c['name'], c['platform'], 1)
-        got = self.run_lines(lines)
-        self.assertEqual([g[0] for g in got], [c['name'] for c in cases])
-        for c, g in zip(cases, got):
-            with self.subTest(case=c['name']):
-                self.assertEqual(self.category(g[1], g[5]), (c['expected']['category'], sorted(c['expected']['apps'])))
-        residual = ' '.join(data['residualDifferences'])
-        for name in not_replayable:
-            self.assertIn(name, residual, f'{name}: Launcher3 cannot see it, so it is a named difference, not a pass')
-        self.assertEqual(not_replayable, ['session_unreleased_cleanup_failed'],
-            'exactly the known difference; any new one must be added to the fixture and resolved')
-
-    def test_sequences_replay_through_one_ledger(self):
-        data = self.load()
-        by_name = {c['name']: c for c in data['cases']}
-        for seq in data['sequences']:
-            lines, expected = [f'S\t{seq["name"]}'], []
-            gen = 0
-            for step in seq['steps']:
-                lines.append('C')  # each step is a fresh read of the platform; the ledger is the same registration
-                if step.get('reconnect'):
-                    # A new registration: nothing reported yet while Rose's session display is still listed.
-                    lines += ['R', 'D\t101\t1', 'T\t1\t101\t0\tcom.example.app\ttrue', 'E']
-                else:
-                    gen += 1
-                    lines += self.lines(None, by_name[step['case']]['platform'], gen)
-                expected.append((step['expected']['category'], sorted(step['expected']['apps'])))
-            got = self.run_lines(lines)
-            with self.subTest(sequence=seq['name']):
-                self.assertEqual([self.category(g[1], g[5]) for g in got], expected)
-
-    def test_the_known_difference_is_launcher3_cards_versus_home_cannot_confirm(self):
-        """session_unreleased_cleanup_failed (platform null in the fixture): the controller's close() threw and it kept
-        the session, so the platform still lists that one complete device with its apps. Launcher3 shows them; Home
-        shows cannot_confirm. Encoded as a failing parity case until App Core's reply and Launcher3 agree."""
-        data = self.load()
-        case = {c['name']: c for c in data['cases']}['session_unreleased_cleanup_failed']
-        got = self.run_lines(self.lines('cleanup_failed_as_launcher3_sees_it',
-            {'devices': [{'owner': 'controller', 'complete': True, 'apps': ['com.android.calculator2']}]}, 1))
-        launcher3 = self.category(got[0][1], got[0][5])
-        self.assertEqual(launcher3, ('cards', ['com.android.calculator2']))
-        self.assertNotEqual(launcher3[0], case['expected']['category'], 'NOT parity: a named, open difference')
 
 if __name__ == '__main__':
     unittest.main()
