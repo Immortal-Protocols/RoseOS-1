@@ -20,7 +20,7 @@ index 65f606a..e068d38 100644
  </com.android.launcher3.LauncherRootView>
 diff --git a/quickstep/res/values/rose_agent_strip.xml b/quickstep/res/values/rose_agent_strip.xml
 new file mode 100644
-index 0000000..bbd6949
+index 0000000..8523d81
 --- /dev/null
 +++ b/quickstep/res/values/rose_agent_strip.xml
 @@ -0,0 +1,6 @@
@@ -28,7 +28,7 @@ index 0000000..bbd6949
 +<!-- RoseOS (#156): the agent row's fixed height in the fallback overview. FallbackActivityInterface claims it below
 +     the task cards and OverviewActionsView keeps it free above the action buttons; the layout uses the same value. -->
 +<resources>
-+    <dimen name="rose_agent_strip_height">160dp</dimen>
++    <dimen name="rose_agent_strip_height">200dp</dimen>
 +</resources>
 diff --git a/quickstep/src/com/android/quickstep/BaseContainerInterface.java b/quickstep/src/com/android/quickstep/BaseContainerInterface.java
 index 37eac47..fbcab76 100644

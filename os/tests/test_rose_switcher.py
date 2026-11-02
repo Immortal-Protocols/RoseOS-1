@@ -108,7 +108,7 @@ class RoseSwitcherTest(unittest.TestCase):
             self.assertEqual(row.count(moved), 1 if moved == 'setTranslationY' else 0, 'only the row itself moves')
         self.assertIn('parent.addOnLayoutChangeListener(relayout);', row)
         self.assertIn('parent.removeOnLayoutChangeListener(relayout);', row)
-        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 18 + 96 + 18)
+        self.assertGreaterEqual(int(dimens['rose_agent_strip_height']), 12 + 22 + 146 + 18)
         layout_actions = layout.index('android:id="@+id/overview_actions_view"')
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'))
         self.assertLess(layout_actions, layout.index('RoseAgentStrip'), 'declared after the actions so it draws above them')
@@ -206,7 +206,8 @@ class RoseSwitcherTest(unittest.TestCase):
             (tmp/'src'/relative).write_text(code)
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
             '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
-            str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java')], capture_output=True, text=True)
+            str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java'), str(OVERLAY/'RoseAgentFan.java'),
+            str(OVERLAY/'RoseFan.java')], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_view_uses_only_existing_authority_and_opens_only_the_current_work(self):
@@ -258,10 +259,14 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         return self.STRIP[self.STRIP.index(signature):self.STRIP.index(end)]
 
     def test_the_agent_carousel_scrolls_on_its_own(self):
-        self.assertEqual(self.STRIP.count('new HorizontalScrollView(context)'), 1)
+        # #410: the row's own scroller is the Oxblood fan, still a HorizontalScrollView of its own.
+        self.assertEqual(self.STRIP.count('new RoseAgentFan(context)'), 1)
         self.assertIn('scroller.addView(cards);', self.STRIP)
-        for coupled in ('RecentsView', 'PagedView', 'overview_panel', 'setOnScrollChangeListener', 'scrollBy('):
-            self.assertNotIn(coupled, self.STRIP, f'{coupled}: the agent row never drives the human carousel')
+        fan = (OVERLAY/'RoseAgentFan.java').read_text()
+        self.assertIn('final class RoseAgentFan extends HorizontalScrollView {', fan)
+        for code in (self.STRIP, fan):
+            for coupled in ('RecentsView', 'PagedView', 'overview_panel', 'setOnScrollChangeListener', 'scrollBy('):
+                self.assertNotIn(coupled, code, f'{coupled}: the agent row never drives the human carousel')
         tree = patched_tree(self)
         layout = (tree/LAYOUT).read_text()
         self.assertLess(layout.index('android:id="@id/overview_panel"'), layout.index('RoseAgentStrip'),
@@ -269,7 +274,8 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
 
     def test_every_entry_starts_fresh_and_leaving_stops_the_connector(self):
         visibility = self.body('protected void onWindowVisibilityChanged(int visibility)', 'private void setWorking(')
-        self.assertLess(visibility.index('scroller.scrollTo(0, 0);'), visibility.index('refresh();'))
+        self.assertLess(visibility.index('scroller.unplace();'), visibility.index('refresh();'),
+            'every entry places the carousel afresh (RoseFan.initial), before the read that fills it')
         self.assertIn('setWorking(false);', visibility.split('} else {')[1])
         refresh = self.body('void refresh() {', 'private static RoseAgentWork read(')
         self.assertIn('int token = ++generation;', refresh)
@@ -281,10 +287,12 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertIn('link.setText(next.linkLabel());', show)
         self.assertIn('setWorking(next.working() > 0 && getWindowVisibility() == VISIBLE);', show)
         working = self.body('private void setWorking(boolean working) {', 'void refresh() {')
-        self.assertIn('pulse.setRepeatCount(ValueAnimator.INFINITE);', working)
-        self.assertIn('if (pulse != null) pulse.cancel();', working.split('} else {')[1])
-        self.assertIn('connector.setAlpha(IDLE);', working)
-        self.assertIn('task.topOfDisplay ? 0x55FFFFFF : 0x33FFFFFF', show, 'the current card is marked')
+        # #410: the Oxblood switcher's pearl is static (lit or dim); nothing animates, so reduced motion has nothing to stop.
+        self.assertIn('connector.setAlpha(working ? 1f : IDLE);', working)
+        for animated in ('ObjectAnimator', 'setRepeatCount', 'ValueAnimator.INFINITE', 'pulse'):
+            self.assertNotIn(animated, self.STRIP, animated)
+        self.assertIn('if (task.topOfDisplay) edge.setStroke(dp(2), RUBY_EDGE);', show, 'the current card has the ruby rim')
+        self.assertIn('else edge.setStroke(Math.max(1, dp(1)), CARD_RING);', show)
         self.assertIn('Rose is working in it now', show)
 
     def test_empty_and_error_states_invent_nothing(self):
@@ -307,11 +315,13 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertEqual(removed, REPLACED)
 
     def test_the_row_still_fits_its_claimed_height(self):
-        # padding 12 + link row ~18 + card 96 (live view 64 + label) + status ~18 dp, inside the claimed height.
+        # padding 12 + pearl row 22 + Oxblood Rose card 146 (RoseFan.CARD_HEIGHT_DP) + status ~18 dp, inside the claim.
         import re
         tree = patched_tree(self)
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
-        self.assertGreaterEqual(height, 12 + 18 + 96 + 18)
+        self.assertGreaterEqual(height, 12 + 22 + 146 + 18)
+        self.assertIn('LINK_ROW_DP = 22', self.STRIP)
+        self.assertIn('static final int CARD_WIDTH_DP = 124, CARD_HEIGHT_DP = 146', (OVERLAY/'RoseFan.java').read_text())
         self.assertNotIn('title = text(', self.STRIP, 'the HiFi link row replaces the old static title')
 
 class ControllerReadPermissionTest(unittest.TestCase):
@@ -803,7 +813,11 @@ class LivePreviewTest(unittest.TestCase):
         self.assertLess(show.index('clearCards();'), show.index('shownFrames = frames;'), 'the previous frames are released')
         self.assertIn('Bitmap frame = frames.get(task.taskId);', show)
         self.assertIn('String why = RoseAgentWork.previewText(RoseAgentWork.preview(task, locked), frame != null);', show)
-        self.assertIn('if (why == null) {\n                ImageView live = new ImageView(getContext());', show)
+        self.assertIn('if (why == null) {\n            ImageView live = new ImageView(getContext());', show)
+        # #410 in-place rebind: the same cards keep their views, and the previous frames are released only after every
+        # card has this read's frame or reason (never a frame from an earlier read, never a recycled one on screen).
+        self.assertLess(show.index('bind(card, task, frames, locked);'), show.index('if (same) release(previous);'))
+        self.assertIn('if (!same) clearCards();', show)
         visibility = code[code.index('protected void onWindowVisibilityChanged(int visibility) {'):code.index('private void setWorking(')]
         hidden = visibility.split('} else {')[1]
         for step in ('removeCallbacks(previewTick);', 'generation++;', 'clearCards();'):
@@ -823,7 +837,7 @@ class LivePreviewTest(unittest.TestCase):
         self.assertNotIn('PictureInPicture', code)
         tree = patched_tree(self)
         height = int(re.search(r'name="rose_agent_strip_height">(\d+)dp', (tree/DIMENS).read_text())[1])
-        self.assertEqual(height, 160, 'the claimed space grows only by the preview body')
+        self.assertEqual(height, 200, '#410: the claimed space grows only to hold the Oxblood Rose card (146 dp)')
 
 class DeviceAppsParityTest(unittest.TestCase):
     """#156 parity (PR361 on main): membership is the platform's per-device app list, front or hidden, the same source
@@ -971,6 +985,78 @@ class CommonParityReplayTest(unittest.TestCase):
                 if g['launcherCategory'] == g['homeCategory']:
                     self.assertIn('launcherApps', g, 'a same-category gap names both sets')
                     self.assertIn('homeApps', g, 'a same-category gap names both sets')
+
+class OxbloodRoseCarouselTest(unittest.TestCase):
+    """#410: the switcher's Rose carousel as the frozen Oxblood HiFi (prototypes/rose-hifi at f6503a0d) draws it: a
+    centred fan with depth (RoseFan, checked against the transforms Chromium computed for the pinned page) that snaps
+    exactly on a card. Source and JVM checks only: touch feel, rendering and timing need a device recording."""
+    FAN = (OVERLAY/'RoseAgentFan.java').read_text()
+    STRIP = (OVERLAY/'RoseAgentStrip.java').read_text()
+
+    def test_the_fan_geometry_and_placement_match_the_frozen_reference(self):
+        out = Path(tempfile.mkdtemp(prefix='rose-fan-'))
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseFan.java'), str(ROOT/'os/tests/RoseFanTest.java')],
+            check=True)
+        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseFanTest'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_every_release_cancel_and_fling_settles_exactly_on_a_card(self):
+        touch = self.FAN[self.FAN.index('public boolean onTouchEvent('):self.FAN.index('public boolean executeKeyEvent(')]
+        self.assertIn('if (action == MotionEvent.ACTION_DOWN) flung = false;', touch, 'each gesture starts unflung')
+        self.assertIn('if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) && !flung) '
+            'settle(centred());', touch, 'a drag released or cancelled (e.g. by the system gesture) settles on a card')
+        fling = self.FAN[self.FAN.index('public void fling(int velocityX)'):self.FAN.index('public boolean onTouchEvent(')]
+        self.assertIn('settle(centred() + (velocityX > 0 ? 1 : velocityX < 0 ? -1 : 0));', fling,
+            'a fling moves one card, never skipping work')
+        self.assertNotIn('super.fling', fling, 'no free momentum that could stop between cards')
+
+    def test_reduced_motion_moves_at_once_and_keeps_the_static_fan(self):
+        settle = self.FAN[self.FAN.index('private void settle(int index)'):self.FAN.index('protected void onLayout(')]
+        self.assertIn('if (ValueAnimator.areAnimatorsEnabled()) smoothScrollTo(x, 0);\n        else scrollTo(x, 0);', settle)
+        for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler(',
+                'ObjectAnimator', 'INFINITE'):
+            self.assertNotIn(timed, self.FAN, f'{timed}: no timer or endless animation in the carousel')
+
+    def test_keys_step_one_card_clamped_and_accessibility_focus_centres(self):
+        keys = self.FAN[self.FAN.index('public boolean executeKeyEvent('):self.FAN.index('void focused(View card)')]
+        self.assertIn('int target = RoseFan.step(centred(), delta, count());', keys)
+        self.assertIn('if (getLayoutDirection() == LAYOUT_DIRECTION_RTL) delta = -delta;', keys)
+        self.assertIn('if (eventType == AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) focused(host);', self.FAN)
+        self.assertIn('card.setAccessibilityDelegate(scroller.centreOnFocus());', self.STRIP)
+        self.assertIn('card.setContentDescription(', self.STRIP, 'every card keeps its spoken name and state')
+
+    def test_the_fan_only_places_cards_it_is_given(self):
+        for banned in ('getTasks', 'takeTaskSnapshot', 'startActivity', 'VirtualDeviceManager', 'RoseAgentWork.of',
+                'getSystemService', 'removeView', 'addView('):
+            self.assertNotIn(banned, self.FAN, f'{banned}: the fan never reads, captures, opens, adds or removes')
+        self.assertIn('card.setTranslationZ(RoseFan.depth(k) * density / 2f);', self.FAN, 'the centre card draws and '
+            'takes touches on top (ViewGroup orders both by Z)')
+
+    def test_entry_places_afresh_and_a_refresh_never_removes_the_card_under_a_finger(self):
+        show = self.STRIP[self.STRIP.index('private void show(RoseAgentWork next'):self.STRIP.index('private LinearLayout card()')]
+        self.assertIn('boolean same = keys.equals(before) && cards.getChildCount() == keys.size();', show)
+        self.assertIn('LinearLayout card = same ? (LinearLayout) cards.getChildAt(index) : card();', show)
+        self.assertIn('if (!scroller.placed()) scroller.place(RoseFan.initial(keys.size()));', show)
+        self.assertIn('else if (!same) scroller.place(RoseFan.keep(before, centred, keys));', show)
+        self.assertIn('return task.displayId + "/" + task.userId + "/" + task.packageName;', self.STRIP,
+            'a card is the same card by display, user and package, as RoseAgentWork.decide matches it')
+
+    def test_the_live_view_is_the_real_frame_at_the_cards_width_never_stretched(self):
+        self.assertEqual(self.STRIP.count('int framePx = dp(RoseFan.CARD_WIDTH_DP);'), 2, 'the row and the tap read alike')
+        self.assertIn('Bitmap scaled = Bitmap.createScaledBitmap(copy, framePx, height, true);', self.STRIP)
+        self.assertIn('int height = Math.max(1, Math.round(copy.getHeight() * (framePx / (float) copy.getWidth())));',
+            self.STRIP, 'the task keeps its own aspect')
+        self.assertIn('live.setScaleType(ImageView.ScaleType.MATRIX);', self.STRIP, 'its top at 1:1, no crop-zoom')
+
+    def test_oxblood_materials_and_the_pearl_show_no_mic_or_call_state(self):
+        self.assertIn('static final int CARD_FILL = 0xFF1A0A0D, CARD_RING = 0x29ECD5C6, RUBY_EDGE = 0xFFC44A5E', self.STRIP)
+        self.assertIn('static final int[] PEARL_COLORS = {0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612};',
+            self.STRIP)
+        for real in ('SensorPrivacy', 'setMicrophoneMute', 'isMicrophoneMute', 'RECORD_AUDIO', 'AudioManager'):
+            self.assertNotIn(real, self.STRIP + self.FAN, f'{real}: the switcher pearl is not a mic control or indicator')
 
 if __name__ == '__main__':
     unittest.main()

@@ -3,8 +3,6 @@ package com.android.quickstep.fallback;
 
 import static com.android.launcher3.util.Executors.UI_HELPER_EXECUTOR;
 
-import android.animation.ObjectAnimator;
-import android.animation.ValueAnimator;
 import android.app.ActivityManager;
 import android.app.ActivityTaskManager;
 import android.app.KeyguardManager;
@@ -21,11 +19,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
-import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -41,9 +39,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * RoseOS (#156): the agent row of the fallback overview, above Launcher3's own human-task carousel and scrolling
+ * RoseOS (#156): the agent row of the fallback overview, below Launcher3's own human-task carousel and scrolling
  * independently of it. Cards are Rose Agent's real running work (RoseAgentWork). Selecting one opens Rose's viewer of
- * that work only while it is the agent screen's current task. Uses only what this recents component already holds:
+ * that work only while it is the agent screen's current task. #410: the row is the Oxblood HiFi's Rose carousel, a
+ * centred fan with depth (RoseAgentFan, RoseFan) beside a static ruby pearl, with Oxblood card materials; the fan
+ * only places the cards this row reads, and nothing about membership, capture or selection changes. Uses only what this recents component already holds:
  * the platform lets the configured recents component read all tasks (ActivityTaskManagerService.isGetTasksAllowed)
  * and receive its complete snapshots of which owner each ComputerControl session device belongs to
  * (VirtualDeviceManagerService.checkCallerIsRecentsOrHomeRoleHolder). Rose's session display stays private: it is
@@ -56,12 +56,13 @@ public final class RoseAgentStrip extends LinearLayout {
 
     private final TextView link, status;
     private final View connector;
-    private final HorizontalScrollView scroller;
+    private final RoseAgentFan scroller;
     private final LinearLayout cards;
-    private ObjectAnimator pulse;
     private int generation, selection;
     /** The frames on screen now, all from the read that built the cards; released when replaced or hidden. */
     private Map<Integer, Bitmap> shownFrames = new HashMap<>();
+    /** The identities (display, user, package) of the cards on screen now, in order. */
+    private List<String> shownKeys = new ArrayList<>();
     /** Re-reads the platform while a live view is on screen; never decides membership or attribution. */
     private final Runnable previewTick = this::refresh;
 
@@ -70,30 +71,35 @@ public final class RoseAgentStrip extends LinearLayout {
         setOrientation(VERTICAL);
         int pad = dp(12);
         setPadding(pad, pad, pad, 0);
-        // The HiFi link between the carousels: a connector that is live only while Rose is actually working, and
-        // the count of that work. Nothing in it is invented: both come from the platform read (RoseAgentWork).
+        // The HiFi link between the carousels: Rose's ruby pearl (Oxblood, oxblood.css:342, static: it shows no mic or
+        // call state, which Launcher3 does not have), lit only while Rose is actually working, and the count of that
+        // work. Nothing in it is invented: both come from the platform read (RoseAgentWork).
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         connector = new View(context);
-        GradientDrawable wire = new GradientDrawable();
-        wire.setCornerRadius(dp(2));
-        wire.setColor(0xFFFFFFFF);
-        connector.setBackground(wire);
+        GradientDrawable pearl = new GradientDrawable();
+        pearl.setShape(GradientDrawable.OVAL);
+        pearl.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        pearl.setGradientCenter(0.34f, 0.28f);
+        pearl.setGradientRadius(dp(PEARL_DP));
+        pearl.setColors(PEARL_COLORS, PEARL_STOPS);
+        connector.setBackground(pearl);
         connector.setAlpha(IDLE);
-        LayoutParams wireLp = new LayoutParams(dp(28), dp(3));
-        wireLp.setMarginEnd(dp(8));
-        row.addView(connector, wireLp);
+        connector.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LayoutParams pearlLp = new LayoutParams(dp(PEARL_DP), dp(PEARL_DP));
+        pearlLp.setMarginEnd(dp(8));
+        row.addView(connector, pearlLp);
         link = text("", 13);
         link.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         row.addView(link);
-        addView(row);
-        scroller = new HorizontalScrollView(context);
-        scroller.setHorizontalScrollBarEnabled(false);
+        addView(row, new LayoutParams(LayoutParams.MATCH_PARENT, dp(LINK_ROW_DP)));
+        scroller = new RoseAgentFan(context);
         cards = new LinearLayout(context);
         cards.setOrientation(HORIZONTAL);
+        cards.setGravity(Gravity.CENTER_VERTICAL);
         scroller.addView(cards);
-        addView(scroller);
+        addView(scroller, new LayoutParams(LayoutParams.MATCH_PARENT, dp(RoseFan.CARD_HEIGHT_DP)));
         status = text("", 13);
         status.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         addView(status);
@@ -206,7 +212,19 @@ public final class RoseAgentStrip extends LinearLayout {
     private static final int TASK_LIMIT = 64;
     /** How often a visible live view is captured again: at most once a second, like the controller's own preview. */
     private static final long PREVIEW_INTERVAL_MS = 1000;
-    private static final int PREVIEW_HEIGHT_DP = 64;
+    /** The live view's area of a Rose card, above its name (RoseFan.CARD_HEIGHT_DP, less the name line). */
+    private static final int PREVIEW_HEIGHT_DP = 112;
+    private static final int LINK_ROW_DP = 22, PEARL_DP = 18;
+    /**
+     * Oxblood materials, Launcher3's own copy of the shared contract (qa/oxblood/oxblood-contract.json, Home's) as the
+     * frozen HiFi draws them (f6503a0d oxblood.css:292, 313-319, 342, 451): the card fill, its fine inset ring, the
+     * ruby rim marking the card that is the current screen of Rose's display (static: the HiFi's reduced-motion edge),
+     * the ruby pearl, and ivory text.
+     */
+    static final int CARD_FILL = 0xFF1A0A0D, CARD_RING = 0x29ECD5C6, RUBY_EDGE = 0xFFC44A5E, TEXT = 0xFFF2E6DC,
+            TEXT_MUTED = 0xB3F2E6DC;
+    static final int[] PEARL_COLORS = {0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612};
+    static final float[] PEARL_STOPS = {0.07f, 0.20f, 0.46f, 0.76f, 1f};
 
     /**
      * The row's height when this context belongs to the fallback overview (RecentsActivity, whose layout holds the
@@ -268,14 +286,14 @@ public final class RoseAgentStrip extends LinearLayout {
     }
 
     /**
-     * Each entry starts from the first agent card (the HiFi agent carousel is placed again on every entry) and reads
-     * the platform afresh; leaving stops the connector. Nothing here stops, finishes or moves any task.
+     * Each entry places the carousel afresh (RoseFan.initial: the second card when there are three or more, before its
+     * first frame) and reads the platform afresh; leaving dims the pearl. Nothing here stops, finishes or moves a task.
      */
     @Override
     protected void onWindowVisibilityChanged(int visibility) {
         super.onWindowVisibilityChanged(visibility);
         if (visibility == VISIBLE) {
-            scroller.scrollTo(0, 0);
+            scroller.unplace();
             refresh();
         } else {
             // Leaving: no capture continues, no pending read lands, and no frame stays to be shown again on return.
@@ -286,21 +304,12 @@ public final class RoseAgentStrip extends LinearLayout {
         }
     }
 
-    /** The connector pulses only while work is in progress; idle and hidden it is still. */
+    /**
+     * The pearl is lit only while work is in progress; idle and hidden it is dim. It never animates (the Oxblood
+     * switcher's pearl is static, oxblood.css:321), so there is nothing to stop under reduced motion.
+     */
     private void setWorking(boolean working) {
-        if (working) {
-            if (pulse == null) {
-                pulse = ObjectAnimator.ofFloat(connector, "alpha", IDLE, 1f);
-                pulse.setDuration(900);
-                pulse.setRepeatMode(ValueAnimator.REVERSE);
-                pulse.setRepeatCount(ValueAnimator.INFINITE);
-                pulse.start();
-            }
-        } else {
-            if (pulse != null) pulse.cancel();
-            pulse = null;
-            connector.setAlpha(IDLE);
-        }
+        connector.setAlpha(working ? 1f : IDLE);
     }
 
     /** Reads the platform state off the UI thread; the newest read wins. */
@@ -308,7 +317,7 @@ public final class RoseAgentStrip extends LinearLayout {
         int token = ++generation;
         removeCallbacks(previewTick);
         Context context = getContext();
-        int framePx = dp(PREVIEW_HEIGHT_DP);
+        int framePx = dp(RoseFan.CARD_WIDTH_DP);
         UI_HELPER_EXECUTOR.execute(() -> {
             boolean locked = locked(context);
             // Locked: nothing of Rose's screens is listed (the common #156/#225 contract), so nothing is read either.
@@ -349,6 +358,7 @@ public final class RoseAgentStrip extends LinearLayout {
         return frames;
     }
 
+    /** framePx: the card's width; the frame keeps the task's own aspect. */
     private static Bitmap frame(int taskId, int framePx) {
         TaskSnapshot snapshot = null;
         try {
@@ -356,12 +366,13 @@ public final class RoseAgentStrip extends LinearLayout {
                     true /* lowResolution */);
             if (snapshot == null || !snapshot.isBufferValid()) return null;
             Bitmap wrapped = snapshot.wrapToBitmap(snapshot.getColorSpace());
-            if (wrapped == null || wrapped.getHeight() <= 0) return null;
+            if (wrapped == null || wrapped.getWidth() <= 0) return null;
             Bitmap copy = wrapped.copy(Bitmap.Config.ARGB_8888, false);
             wrapped.recycle();
             if (copy == null) return null;
-            int width = Math.max(1, Math.round(copy.getWidth() * (framePx / (float) copy.getHeight())));
-            Bitmap scaled = Bitmap.createScaledBitmap(copy, width, framePx, true);
+            // #410: the whole width of the task's real screen at the card's width; the card shows its top at 1:1.
+            int height = Math.max(1, Math.round(copy.getHeight() * (framePx / (float) copy.getWidth())));
+            Bitmap scaled = Bitmap.createScaledBitmap(copy, framePx, height, true);
             if (scaled != copy) copy.recycle();
             return scaled;
         } catch (RemoteException | RuntimeException e) {
@@ -380,6 +391,7 @@ public final class RoseAgentStrip extends LinearLayout {
     private void clearCards() {
         cards.removeAllViews();
         release(shownFrames);
+        shownKeys = new ArrayList<>();
     }
 
     /**
@@ -444,52 +456,97 @@ public final class RoseAgentStrip extends LinearLayout {
         }
     }
 
-    /** Cards only from this read, each with the frame captured for it in this read or the reason it has none. */
+    /** A card's identity across reads: the same display, user and package is the same card (RoseAgentWork.decide). */
+    private static String key(RoseAgentWork.Task task) {
+        return task.displayId + "/" + task.userId + "/" + task.packageName;
+    }
+
+    /**
+     * Cards only from this read, each with the frame captured for it in this read or the reason it has none. When the
+     * read has the same cards as the screen (same identities, same order), each card is rebound in place: a re-read
+     * every second while a live view shows never removes the card under a finger, so a tap or accessibility focus that
+     * straddles it is kept. Otherwise the cards are rebuilt and the carousel keeps the card it centred (RoseFan.keep).
+     */
     private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {
-        clearCards();
+        List<String> keys = new ArrayList<>();
+        for (RoseAgentWork.Task task : next.items) keys.add(key(task));
+        List<String> before = shownKeys;
+        int centred = scroller.centred();
+        boolean same = keys.equals(before) && cards.getChildCount() == keys.size();
+        Map<Integer, Bitmap> previous = shownFrames;
+        if (!same) clearCards();
         shownFrames = frames;
         status.setText(next.reason == null ? "" : next.reason);
         link.setText(next.linkLabel());
         setWorking(next.working() > 0 && getWindowVisibility() == VISIBLE);
+        int index = 0;
         for (RoseAgentWork.Task task : next.items) {
-            LinearLayout card = new LinearLayout(getContext());
-            card.setOrientation(VERTICAL);
-            card.setGravity(Gravity.CENTER_HORIZONTAL);
-            card.setMinimumWidth(dp(120));
-            card.setMinimumHeight(dp(96));
-            card.setPadding(dp(12), dp(8), dp(12), dp(8));
-            Bitmap frame = frames.get(task.taskId);
-            String why = RoseAgentWork.previewText(RoseAgentWork.preview(task, locked), frame != null);
-            View body;
-            if (why == null) {
-                ImageView live = new ImageView(getContext());
-                live.setImageBitmap(frame);
-                live.setAdjustViewBounds(true);
-                body = live;
-            } else {
-                TextView none = text(why, 12);
-                none.setGravity(Gravity.CENTER);
-                body = none;
-            }
-            card.addView(body, new LayoutParams(LayoutParams.WRAP_CONTENT, dp(PREVIEW_HEIGHT_DP)));
-            TextView name = text(task.label, 15);
-            name.setGravity(Gravity.CENTER);
-            card.addView(name);
-            GradientDrawable shape = new GradientDrawable();
-            shape.setCornerRadius(dp(18));
-            // The card Rose is working in now is marked; background apps stay plain.
-            shape.setColor(task.topOfDisplay ? 0x55FFFFFF : 0x33FFFFFF);
-            if (task.topOfDisplay) shape.setStroke(dp(2), 0xFFFFFFFF);
-            card.setBackground(shape);
-            LayoutParams lp = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
-            lp.setMarginEnd(dp(10));
-            card.setContentDescription(task.label + (task.topOfDisplay ? ", Rose is working in it now" : ", in Rose's background")
-                    + (why == null ? ", live view" : ", " + why));
-            card.setOnClickListener(v -> select(task));
-            cards.addView(card, lp);
+            LinearLayout card = same ? (LinearLayout) cards.getChildAt(index) : card();
+            bind(card, task, frames, locked);
+            if (!same) cards.addView(card, new LayoutParams(dp(RoseFan.CARD_WIDTH_DP), dp(RoseFan.CARD_HEIGHT_DP)));
+            index++;
         }
+        // Rebound in place: the previous frames are no longer on any card, so they are released now.
+        if (same) release(previous);
+        shownKeys = keys;
+        if (!scroller.placed()) scroller.place(RoseFan.initial(keys.size()));
+        else if (!same) scroller.place(RoseFan.keep(before, centred, keys));
         // Capture again only while a live view is on screen; the row keeps re-reading membership at the same time.
         if (getWindowVisibility() == VISIBLE && next.hasLiveView(locked)) postDelayed(previewTick, PREVIEW_INTERVAL_MS);
+    }
+
+    /** An empty Rose card: Oxblood plate, clipped to its rounded outline, centred by the fan on accessibility focus. */
+    private LinearLayout card() {
+        LinearLayout card = new LinearLayout(getContext());
+        card.setOrientation(VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        GradientDrawable plate = new GradientDrawable();
+        plate.setCornerRadius(dp(RoseFan.CARD_RADIUS_DP));
+        plate.setColor(CARD_FILL);
+        card.setBackground(plate);
+        card.setClipToOutline(true);
+        card.setElevation(dp(6));
+        card.setAccessibilityDelegate(scroller.centreOnFocus());
+        return card;
+    }
+
+    /** One card's content from this read: its live view or the reason it has none, its name, and its marking. */
+    private void bind(LinearLayout card, RoseAgentWork.Task task, Map<Integer, Bitmap> frames, boolean locked) {
+        card.removeAllViews();
+        Bitmap frame = frames.get(task.taskId);
+        String why = RoseAgentWork.previewText(RoseAgentWork.preview(task, locked), frame != null);
+        View body;
+        if (why == null) {
+            ImageView live = new ImageView(getContext());
+            live.setImageBitmap(frame);
+            // The frame is the card's width (frame()): its top at 1:1, never stretched; the rest of the screen is
+            // below the card's live area and is not drawn.
+            live.setScaleType(ImageView.ScaleType.MATRIX);
+            body = live;
+        } else {
+            TextView none = text(why, 12);
+            none.setGravity(Gravity.CENTER);
+            none.setTextColor(TEXT_MUTED);
+            none.setPadding(dp(8), 0, dp(8), 0);
+            body = none;
+        }
+        card.addView(body, new LayoutParams(LayoutParams.MATCH_PARENT, dp(PREVIEW_HEIGHT_DP)));
+        TextView name = text(task.label, 13);
+        name.setGravity(Gravity.CENTER);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setPadding(dp(8), dp(6), dp(8), dp(6));
+        card.addView(name, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+        // The card Rose is working in now has the ruby rim; background apps keep the fine ring.
+        GradientDrawable edge = new GradientDrawable();
+        edge.setCornerRadius(dp(RoseFan.CARD_RADIUS_DP));
+        edge.setColor(0);
+        if (task.topOfDisplay) edge.setStroke(dp(2), RUBY_EDGE);
+        else edge.setStroke(Math.max(1, dp(1)), CARD_RING);
+        card.setForeground(edge);
+        card.setContentDescription(task.label + (task.topOfDisplay ? ", Rose is working in it now" : ", in Rose's background")
+                + (why == null ? ", live view" : ", " + why));
+        card.setOnClickListener(v -> select(task));
     }
 
     /**
@@ -500,7 +557,7 @@ public final class RoseAgentStrip extends LinearLayout {
     private void select(RoseAgentWork.Task card) {
         int token = ++selection;
         Context context = getContext();
-        int framePx = dp(PREVIEW_HEIGHT_DP);
+        int framePx = dp(RoseFan.CARD_WIDTH_DP);
         UI_HELPER_EXECUTOR.execute(() -> {
             RoseAgentWork platform = read(context);
             boolean locked = locked(context);
@@ -536,7 +593,7 @@ public final class RoseAgentStrip extends LinearLayout {
         TextView view = new TextView(getContext());
         view.setText(value);
         view.setTextSize(sp);
-        view.setTextColor(0xFFFFFFFF);
+        view.setTextColor(TEXT);
         return view;
     }
 
