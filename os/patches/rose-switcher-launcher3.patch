@@ -27,6 +27,42 @@ index 0000000..3710dbc
 +    <item android:color="@android:color/transparent" android:state_enabled="true" android:state_focused="true" />
 +    <item android:color="@android:color/transparent" />
 +</selector>
+diff --git a/quickstep/res/drawable/rose_oxblood_arrow_background.xml b/quickstep/res/drawable/rose_oxblood_arrow_background.xml
+new file mode 100644
+index 0000000..a7fef80
+--- /dev/null
++++ b/quickstep/res/drawable/rose_oxblood_arrow_background.xml
+@@ -0,0 +1,30 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++     Copyright (C) 2023 The Android Open Source Project
++
++     Licensed under the Apache License, Version 2.0 (the "License");
++     you may not use this file except in compliance with the License.
++     You may obtain a copy of the License at
++
++          http://www.apache.org/licenses/LICENSE-2.0
++
++     Unless required by applicable law or agreed to in writing, software
++     distributed under the License is distributed on an "AS IS" BASIS,
++     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++     See the License for the specific language governing permissions and
++     limitations under the License.
++-->
++<!-- RoseOS (#410): icon_menu_arrow_background fading into the Oxblood chip (rose_oxblood_chip) instead of
++     SurfaceBright, so it still masks the chip's title under the arrow while the chip expands or collapses, without a
++     light patch. Same shape, angle, centre and corners. -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:autoMirrored="true">
++    <gradient
++        android:type="linear"
++        android:angle="0"
++        android:startColor="#00000000"
++        android:centerX="0.25"
++        android:centerColor="@color/rose_oxblood_chip"
++        android:endColor="@color/rose_oxblood_chip" />
++    <corners android:radius="@dimen/dialogCornerRadius" />
++</shape>
 diff --git a/quickstep/res/drawable/rose_oxblood_chip_fg.xml b/quickstep/res/drawable/rose_oxblood_chip_fg.xml
 new file mode 100644
 index 0000000..0779a24
@@ -73,7 +109,7 @@ index 65f606a..e068d38 100644
      </com.android.quickstep.fallback.RecentsDragLayer>
  </com.android.launcher3.LauncherRootView>
 diff --git a/quickstep/res/layout/icon_app_chip_view.xml b/quickstep/res/layout/icon_app_chip_view.xml
-index 76f4cc9..b2cbbad 100644
+index 76f4cc9..317a281 100644
 --- a/quickstep/res/layout/icon_app_chip_view.xml
 +++ b/quickstep/res/layout/icon_app_chip_view.xml
 @@ -28,9 +28,9 @@
@@ -101,7 +137,7 @@ index 76f4cc9..b2cbbad 100644
          android:layout_width="@dimen/task_thumbnail_icon_menu_arrow_size"
          android:layout_height="@dimen/task_thumbnail_icon_menu_arrow_size"
 -        android:background="@drawable/icon_menu_arrow_background"
-+        android:background="@null"
++        android:background="@drawable/rose_oxblood_arrow_background"
 +        android:tint="@color/rose_oxblood_ink"
          android:src="@drawable/ic_chevron_down"
          android:importantForAccessibility="no" />

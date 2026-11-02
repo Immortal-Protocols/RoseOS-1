@@ -1187,8 +1187,13 @@ class OxbloodHumanCardTest(unittest.TestCase):
         self.assertIn('launcher:hoverBorderColor="@color/materialColorPrimary">', task, 'stock hover: focus stays distinct')
         # The chip's arrow takes no stock light backing and an ivory chevron; its press/hover overlay is the ivory ink
         # (the stock OnSurface overlay would vanish on the dark plate), same states and alphas as stock.
-        self.assertIn('android:background="@null"\n        android:tint="@color/rose_oxblood_ink"\n        '
-            'android:src="@drawable/ic_chevron_down"', chip)
+        self.assertIn('android:background="@drawable/rose_oxblood_arrow_background"\n        '
+            'android:tint="@color/rose_oxblood_ink"\n        android:src="@drawable/ic_chevron_down"', chip)
+        arrow = (tree/'quickstep/res/drawable/rose_oxblood_arrow_background.xml').read_text()
+        for line in ('android:startColor="#00000000"', 'android:centerX="0.25"',
+                'android:centerColor="@color/rose_oxblood_chip"', 'android:endColor="@color/rose_oxblood_chip"',
+                '<corners android:radius="@dimen/dialogCornerRadius" />', 'Copyright (C) 2023 The Android Open Source Project'):
+            self.assertIn(line, arrow, 'the stock gradient that masks the title under the arrow, fading into the plate')
         self.assertIn('android:foreground="@drawable/rose_oxblood_chip_fg"', chip)
         overlay = (tree/'quickstep/res/color/rose_oxblood_chip_state_fg.xml').read_text()
         for state in ('android:alpha="0.15" android:color="@color/rose_oxblood_ink" android:state_enabled="true" '
