@@ -74,7 +74,7 @@ class Pins(unittest.TestCase):
         self.assertEqual(pins['fastbootSha256'], 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9')
         result = wire('check')
         self.assertEqual((result.returncode, result.stdout),
-            (0, 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\njob_minutes=237\n'))
+            (0, 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=312\n'))
 
     def test_drift_from_any_committed_source_refuses(self):
         for name, change in (('otatools', {'sha256': 'a' * 64}), ('releaseScript', {'sha256': 'b' * 64}),
@@ -90,10 +90,12 @@ class Pins(unittest.TestCase):
 
     def test_bounds_cover_every_step_and_are_not_a_measurement(self):
         bounds, minutes = wiring.check()
-        self.assertEqual(bounds, {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200})
+        self.assertEqual(bounds, {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900})
+        self.assertEqual(wiring.INSTALLER, {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 60})
+        self.assertEqual(minutes, 312)  # 237 before the installer export: +900 s staging, +30 s kill, +60 min upload
         self.assertGreater(bounds['packageSeconds'], 3600 + 10)  # beyond the helper's 60-min generation and kill grace
         self.assertGreaterEqual(bounds['classifySeconds'], 2 * 3600)  # two tool calls, each 3600 s in the helper
-        self.assertGreaterEqual(minutes * 60, sum(bounds.values()) + 3 * 30)
+        self.assertGreaterEqual(minutes * 60, sum(bounds.values()) + 4 * 30 + wiring.INSTALLER['uploadMinutes'] * 60)
         self.assertIn('not measurements', wiring.__doc__)
         self.assertIn('not a usage cap', wiring.__doc__)
 
@@ -258,8 +260,9 @@ class Job(unittest.TestCase):
             '    permissions:\n      contents: read\n    env:\n'
             '      PACKAGE_SECONDS: ${{ needs.guard.outputs.factory_package_seconds }}\n'
             '      OBSERVE_SECONDS: ${{ needs.guard.outputs.factory_observe_seconds }}\n'
-            '      CLASSIFY_SECONDS: ${{ needs.guard.outputs.factory_classify_seconds }}')
-        body = code(self.job)
+            '      CLASSIFY_SECONDS: ${{ needs.guard.outputs.factory_classify_seconds }}\n'
+            '      STAGE_SECONDS: ${{ needs.guard.outputs.factory_stage_seconds }}')
+        body = code(self.job.replace(step(self.job, 'Private installer artifact (exactly SHA256SUMS and the ZIP)'), ''))
         for absent in ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_', 'PIXEL_', 'publish', 'host-sign', 'signing-bootstrap',
                        'ssh-keygen', 'download-artifact', 'release-pipeline.py', 'factory-package.log', '.zip', 'target_files',
                        'rm -rf'):
@@ -281,13 +284,13 @@ class Job(unittest.TestCase):
         (bin_dir/'python3').write_text('#!/bin/sh\nprintf "%s\\n" "$CHECK_OUTPUT"\n')
         (bin_dir/'python3').chmod(0o755)
         text = script(step(self.job, 'Recheck the pins and bounds on the builder'))
-        good = 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\njob_minutes=237'
+        good = 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\nstage_seconds=900\njob_minutes=312'
         def run(**env):
             base = {'PATH': f'{bin_dir}:/usr/bin:/bin', 'RUNNER_TEMP': str(self.tmp), 'CHECK_OUTPUT': good,
-                    'PACKAGE_SECONDS': '5400', 'OBSERVE_SECONDS': '900', 'CLASSIFY_SECONDS': '7200'}
+                    'PACKAGE_SECONDS': '5400', 'OBSERVE_SECONDS': '900', 'CLASSIFY_SECONDS': '7200', 'STAGE_SECONDS': '900'}
             return subprocess.run(['bash', '-c', text], env={**base, **env}, capture_output=True).returncode
         self.assertEqual(run(), 0)
-        for change in ({'PACKAGE_SECONDS': '3600'}, {'CLASSIFY_SECONDS': ''}, {'OBSERVE_SECONDS': '900s'},
+        for change in ({'PACKAGE_SECONDS': '3600'}, {'CLASSIFY_SECONDS': ''}, {'STAGE_SECONDS': '60'}, {'OBSERVE_SECONDS': '900s'},
                        {'CHECK_OUTPUT': good.replace('7200', '3600')}):
             self.assertNotEqual(run(**change), 0, change)
 
@@ -296,7 +299,8 @@ class Job(unittest.TestCase):
         self.assertIn('        if: always()\n', report)
         self.assertEqual(script(report), 'python3 scripts/rango-factory-package-wiring.py report --run-id "$GITHUB_RUN_ID" '
             '--attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/rango-factory-package-upload-$GITHUB_RUN_ID-'
-            '$GITHUB_RUN_ATTEMPT"\n')
+            '$GITHUB_RUN_ATTEMPT" --installer-upload "$INSTALLER_UPLOAD"\n')
+        self.assertIn("          INSTALLER_UPLOAD: ${{ steps.installer-artifact.outcome || 'skipped' }}\n", report)
         artifact = step(self.job, 'Receipts artifact')
         self.assertIn('        if: always()\n', artifact)
         self.assertIn('          path: ${{ runner.temp }}/rango-factory-package-upload-${{ github.run_id }}-'
@@ -312,6 +316,104 @@ class Ownership(unittest.TestCase):
         self.assertIn(f'      - if: {own}\n        env:\n          STARTED: ${{{{ needs.controller.outputs.started }}}}\n'
                       '        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"\n', cleanup)
         self.assertIn('blazer-prep, rango-factory-package, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+
+
+
+class InstallerExport(unittest.TestCase):
+    """The private installer artifact: exactly SHA256SUMS and the ZIP, only after inspection and verification."""
+    def setUp(self):
+        self.parent = Path(tempfile.mkdtemp())
+        self.root = wiring.task_root('41500000000', '1', parent=self.parent)
+        self.job = jobs()[MODE]
+
+    def tree(self, data=b'PK-install', recorded=None, report=True):
+        (self.root/'package').mkdir(parents=True)
+        (self.root/'inspection').mkdir()
+        archive = self.root/'package/rango-install-2026103001.zip'
+        archive.write_bytes(data)
+        output = {'file': 'rango-install-2026103001.zip', 'size': len(data), 'sha256': wiring.sha256_file(archive)}
+        output.update(recorded or {})
+        (self.root/'package/factory-package-receipt.json').write_text(json.dumps({'status': 'packaged', 'output': output}))
+        (self.root/'package/factory-package.log').write_text('raw local log')
+        if report:
+            (self.root/'inspection/target-files-observation.json').write_text('{}')
+            (self.root/'inspection/classify.json').write_text(json.dumps({'factoryReady': False}))
+        return output
+
+    def test_verified_archive_is_staged_with_one_hash_line(self):
+        output = self.tree()
+        record = wiring.stage_installer(self.root)
+        self.assertEqual(record, {'file': 'package/rango-install-2026103001.zip', 'bytes': output['size'],
+                                  'sha256': output['sha256'], 'capBytes': 8 << 30, 'retentionDays': 3})
+        self.assertEqual((self.root/'SHA256SUMS').read_text(), f'{output["sha256"]}  package/rango-install-2026103001.zip\n')
+        with self.assertRaises(FileExistsError):
+            wiring.stage_installer(self.root)  # write-once
+
+    def test_cap_hash_size_and_missing_inspection_refuse_and_stage_nothing(self):
+        cases = (({}, {'cap': 4}, 'above the proposed 4-byte cap'), ({'sha256': 'a' * 64}, {}, 'sha256 differs'),
+                 ({'size': 3}, {}, 'not the recorded 3'), ({'file': 'other.zip'}, {}, 'does not record'),
+                 ({'sha256': 'short'}, {}, 'does not record'))
+        for i, (recorded, kwargs, message) in enumerate(cases):
+            self.root = wiring.task_root(str(i + 1), '1', parent=self.parent)
+            self.tree(recorded=recorded)
+            with self.subTest(recorded=recorded), self.assertRaisesRegex(wiring.Invalid, message):
+                wiring.stage_installer(self.root, **kwargs)
+            self.assertFalse((self.root/'SHA256SUMS').exists())
+        self.root = wiring.task_root('9', '1', parent=self.parent)
+        self.tree(report=False)
+        with self.assertRaisesRegex(wiring.Invalid, 'not exported uninspected'):
+            wiring.stage_installer(self.root)
+        self.assertFalse((self.root/'SHA256SUMS').exists())
+
+    def test_artifact_step_exports_exactly_two_files_privately_for_three_days(self):
+        stage = step(self.job, 'Stage the installer for the private artifact (bounded)')
+        self.assertEqual(script(stage), 'timeout --kill-after=30s "${STAGE_SECONDS}s" python3 scripts/rango-factory-package-'
+            'wiring.py stage-installer --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"\n')
+        self.assertNotIn('if:', stage)  # only after inspection succeeded (classify 0 or 3)
+        artifact = step(self.job, 'Private installer artifact (exactly SHA256SUMS and the ZIP)')
+        self.assertEqual(artifact, '        id: installer-artifact\n        timeout-minutes: 60\n'
+            '        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2\n        with:\n'
+            '          name: rango-install-2026103001-${{ github.run_id }}-${{ github.run_attempt }}\n'
+            '          path: |\n            ${{ steps.installer.outputs.root }}/SHA256SUMS\n'
+            '            ${{ steps.installer.outputs.root }}/package/rango-install-2026103001.zip\n'
+            '          retention-days: 3\n          if-no-files-found: error\n          compression-level: 0\n')
+        self.assertEqual(wiring.INSTALLER['uploadMinutes'], 60)
+        self.assertEqual(self.job.count('actions/upload-artifact@'), 2)  # the installer and the unchanged reports
+
+    def test_stage_prints_only_the_root_for_the_artifact_paths(self):
+        self.tree()
+        bound = self.root
+        original = wiring.task_root
+        wiring.task_root = lambda run_id, attempt: bound
+        try:
+            import contextlib
+            import io
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                self.assertEqual(wiring.main(['stage-installer', '--run-id', '41500000000', '--attempt', '1']), 0)
+        finally:
+            wiring.task_root = original
+        self.assertEqual(out.getvalue(), f'root={bound}\n')
+
+    def test_reports_stay_intact_and_record_the_installer_outcome_truthfully(self):
+        self.tree()
+        wiring.stage_installer(self.root)
+        for outcome in ('failure', 'success'):
+            root = self.root
+            (root/'cleanup.json').unlink(missing_ok=True)
+            upload = self.parent/f'upload-{outcome}'
+            state = wiring.report(root, upload, outcome)
+            self.assertEqual(sorted(p.name for p in upload.iterdir()),
+                ['classify.json', 'cleanup.json', 'factory-package-receipt.json', 'target-files-observation.json'])
+            self.assertEqual(state['installer']['uploadOutcome'], outcome)
+            self.assertTrue(state['installer']['staged'])
+            self.assertEqual((state['installer']['retentionDays'], state['installer']['capBytes']), (3, 8 << 30))
+        unstaged = wiring.task_root('8', '1', parent=self.parent)
+        self.root = unstaged
+        self.tree(report=False)
+        state = wiring.report(unstaged, self.parent/'upload-unstaged')
+        self.assertEqual((state['installer']['staged'], state['installer']['uploadOutcome']), (False, 'not-run'))
+        self.assertEqual(wire('stage-installer', '--run-id', '1', '--attempt', '1', '--installer-upload', 'success').returncode, 2)
 
 
 if __name__ == '__main__':

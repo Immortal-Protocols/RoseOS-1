@@ -17,10 +17,17 @@ scripts/factory-package.py to literal historical expected pins, one manual run p
                                 write-once as R/inspection/classify.json, with --work-dir R/classify-work. Exit 0
                                 (factoryReady) and 3 (incomplete, still JSON; expected: no archive signature and no
                                 firmware observation) are reported results; anything else fails.
-  report   --run-id --attempt --upload-dir NEW
+  stage-installer --run-id --attempt
+                                after inspection reported: the packaged ZIP must be a regular file whose size and
+                                sha256 equal the helper receipt's output and whose size is within the proposed 8 GiB
+                                cap; writes R/SHA256SUMS (write-once) and prints root=R for the private installer
+                                artifact, which holds exactly SHA256SUMS and package/rango-install-2026103001.zip.
+  report   --run-id --attempt --upload-dir NEW [--installer-upload OUTCOME]
                                 writes R/cleanup.json with the actually observed scratch state and copies only
                                 factory-package-receipt.json, target-files-observation.json, classify.json and
-                                cleanup.json (regular files) into NEW. Never the raw log, the ZIP or the target-files.
+                                cleanup.json (regular files) into NEW, recording the installer staging and the upload
+                                step's outcome as reported. Never the raw log or the target-files; the ZIP leaves only
+                                through the separate private installer artifact.
 
 The pins are historical expected values, checked by the helpers before use; they are not current byte proof. The
 task root is a proposed path under /home/pixelbuild/rose-actions, not known to exist: a missing parent refuses before
@@ -28,6 +35,7 @@ anything is written. 128 GiB is the helper's free-space precondition, not a usag
 not measurements: no total runtime has been measured. Exit status: 0 ok, 2 invalid, 3 refused, others from the helpers.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -57,7 +65,9 @@ INSTALL = f'{DEVICE}-install-{BUILD}.zip'
 # Wrapper ceilings (seconds), not measurements. package: the helper's 60-min generation plus its unbounded hashing,
 # otatools unzip and target-files copy; observe: names-only target-files walk; classify: each tool call is bounded at
 # 3600 s by the helper, two expected (simg2img, lpunpack).
-BOUNDS = {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200}
+BOUNDS = {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900}
+# The private installer artifact (actions/upload-artifact): proposed source bounds, not a measured size or duration.
+INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 60}
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
 UPLOAD = {'package/factory-package-receipt.json': 'factory-package-receipt.json',
@@ -103,7 +113,7 @@ def check(root=ROOT, pins=PINS):
     if Path(TASK_PARENT) in Path(PRODUCTION).parents or Path(PRODUCTION) in Path(TASK_PARENT).parents \
             or Path(TASK_PARENT) == Path(PRODUCTION):
         raise Invalid('the task parent must not overlap the production tree')
-    total = sum(BOUNDS.values()) + KILL_AFTER_SECONDS * len(BOUNDS)
+    total = sum(BOUNDS.values()) + KILL_AFTER_SECONDS * len(BOUNDS) + INSTALLER['uploadMinutes'] * 60
     return dict(BOUNDS), math.ceil(total / 60) + JOB_MARGIN_MINUTES
 
 
@@ -167,7 +177,43 @@ def classify(root_dir, runner=subprocess.run):
     return 0 if code in (0, 3) else (code or 1)
 
 
-def report(root_dir, upload_dir):
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(8 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def stage_installer(root_dir, cap=None, hasher=sha256_file):
+    """The ZIP the helper recorded, verified again before it may leave: regular file, recorded size and sha256, within
+    the cap, and only after inspection wrote its report. Writes R/SHA256SUMS; returns the export record."""
+    cap = INSTALLER['capBytes'] if cap is None else cap
+    packaged(root_dir)
+    report_file = root_dir/'inspection/classify.json'
+    if report_file.is_symlink() or not report_file.is_file():
+        raise Invalid('the inspection report is missing: the installer is not exported uninspected')
+    output = json.loads((root_dir/'package/factory-package-receipt.json').read_text()).get('output') or {}
+    if output.get('file') != INSTALL or not isinstance(output.get('size'), int) or not (
+            isinstance(output.get('sha256'), str) and len(output['sha256']) == 64):
+        raise Invalid('the package receipt does not record the install archive name, size and sha256')
+    archive = root_dir/'package'/INSTALL
+    size = os.lstat(archive).st_size
+    if size != output['size']:
+        raise Invalid(f'the archive is {size} bytes, not the recorded {output["size"]}: not exported')
+    if size > cap:
+        raise Invalid(f'the archive is {size} bytes, above the proposed {cap}-byte cap: not exported')
+    digest = hasher(archive)
+    if digest != output['sha256']:
+        raise Invalid('the archive sha256 differs from the package receipt: not exported')
+    fd = os.open(root_dir/'SHA256SUMS', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, 'w') as f:
+        f.write(f'{digest}  package/{INSTALL}\n')
+    return {'file': f'package/{INSTALL}', 'bytes': size, 'sha256': digest, 'capBytes': cap,
+            'retentionDays': INSTALLER['retentionDays']}
+
+
+def report(root_dir, upload_dir, installer_upload=None):
     """The observed scratch state, then the allowlisted copies. Works when the task root was never created."""
     upload_dir = Path(upload_dir)
     upload_dir.mkdir(mode=0o700)
@@ -184,6 +230,11 @@ def report(root_dir, upload_dir):
         state['retained'] = {name: (root_dir/'package'/name).is_file()
                              for name in (INSTALL, 'factory-package-receipt.json', 'factory-package.log')}
         state['uploaded'] = sorted(UPLOAD.values())
+        sums = root_dir/'SHA256SUMS'
+        state['installer'] = {'staged': sums.is_file() and not sums.is_symlink(),
+                              'sha256sums': sums.read_text().strip() if sums.is_file() and not sums.is_symlink() else None,
+                              'uploadOutcome': installer_upload or 'not-run', 'retentionDays': INSTALLER['retentionDays'],
+                              'capBytes': INSTALLER['capBytes']}
         fd = os.open(root_dir/'cleanup.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, 'w') as f:
             f.write(json.dumps(state, indent=2, sort_keys=True) + '\n')
@@ -198,10 +249,11 @@ def report(root_dir, upload_dir):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('check', 'package', 'observe', 'classify', 'report'))
+    p.add_argument('command', choices=('check', 'package', 'observe', 'classify', 'stage-installer', 'report'))
     p.add_argument('--run-id')
     p.add_argument('--attempt')
     p.add_argument('--upload-dir')
+    p.add_argument('--installer-upload', choices=('success', 'failure', 'cancelled', 'skipped'))
     a = p.parse_args(argv)
     try:
         bounds, minutes = check()
@@ -210,11 +262,11 @@ def main(argv=None):
                 raise Invalid('check takes no other option')
             print('\n'.join(f'{k}={v}' for k, v in (('package_seconds', bounds['packageSeconds']),
                 ('observe_seconds', bounds['observeSeconds']), ('classify_seconds', bounds['classifySeconds']),
-                ('job_minutes', minutes))))
+                ('stage_seconds', bounds['stageSeconds']), ('job_minutes', minutes))))
             return 0
         root_dir = task_root(a.run_id, a.attempt)
-        if (a.command == 'report') != bool(a.upload_dir):
-            raise Invalid('--upload-dir is for report only, and report needs it')
+        if (a.command == 'report') != bool(a.upload_dir) or (a.installer_upload and a.command != 'report'):
+            raise Invalid('--upload-dir and --installer-upload are for report only, and report needs --upload-dir')
         if a.command == 'package':
             new_dir(root_dir)
             os.execv(sys.executable, package_argv(root_dir))
@@ -224,7 +276,12 @@ def main(argv=None):
             return subprocess.run(observe_argv(root_dir, a.run_id, a.attempt)).returncode
         if a.command == 'classify':
             return classify(root_dir)
-        print(json.dumps(report(root_dir, a.upload_dir), sort_keys=True))
+        if a.command == 'stage-installer':
+            record = stage_installer(root_dir)
+            print(json.dumps(record, sort_keys=True), file=sys.stderr)
+            print(f'root={root_dir}')
+            return 0
+        print(json.dumps(report(root_dir, a.upload_dir, a.installer_upload), sort_keys=True))
         return 0
     except (Invalid, FileExistsError, KeyError, ValueError) as error:
         print(json.dumps({'verdict': 'INVALID', 'error': str(error)}), file=sys.stderr)
