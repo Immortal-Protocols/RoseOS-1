@@ -104,6 +104,7 @@ python3 scripts/tests/test_rango_factory_observe_workflow.py
 python3 scripts/tests/test_blazer_prep_workflow.py
 # Fold factory package workflow wiring (stand-ins and mocks; no host, lock, generation or inspection run).
 python3 scripts/tests/test_rango_factory_package_workflow.py
+python3 scripts/tests/test_rango_factory_inspect_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py

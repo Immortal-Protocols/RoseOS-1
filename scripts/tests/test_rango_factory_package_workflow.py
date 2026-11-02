@@ -285,7 +285,7 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.run_guard(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn('signing-bootstrap, rango-factory-package, models-sign,', WORKFLOW)
+        self.assertIn('signing-bootstrap, rango-factory-package, rango-factory-inspect, models-sign,', WORKFLOW)
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]),
                          ['workflow_dispatch'])
         guard = jobs()['guard']
@@ -367,12 +367,12 @@ class Job(unittest.TestCase):
 class Ownership(unittest.TestCase):
     def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package'"
+        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect'"
         self.assertIn(f'      - if: {own}\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
         self.assertIn(f'        if: always() && ({own})\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
         self.assertIn(f'      - if: {own}\n        env:\n          STARTED: ${{{{ needs.controller.outputs.started }}}}\n'
                       '        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"\n', cleanup)
-        self.assertIn('blazer-prep, rango-factory-package, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn('blazer-prep, rango-factory-package, rango-factory-inspect, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
 
 
 
