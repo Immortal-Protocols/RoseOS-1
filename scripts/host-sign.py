@@ -64,10 +64,10 @@ def factory_contract(device):
 def factory_inputs(sign, device):
     """The opt-in factory stage (absent: OTA only, unchanged). host.sign.factory is {"fastbootSha256": H} plus, only
     once os/flavors/<device>.json factorySigning is bound, "signing": {project, keySecret, keyVersion, passphraseSecret,
-    passphraseVersion, sshKeygen, sshKeygenSha256}. The otatools bin/fastboot must hash to H. The generator's own ssh-keygen step is always removed;
-    the archive is signed afterwards by factory_signing (pinned askpass, verified against the pin) only when the pin is
-    bound and signing is configured. An unbound pin keeps the archive unsigned, and signing configured without a bound
-    pin refuses. Checked before any secret is read."""
+    passphraseVersion, sshKeygen, sshKeygenSha256}. The otatools bin/fastboot must hash to H. The generator's own
+    ssh-keygen step is always removed; the archive is signed afterwards by factory_signing (pinned askpass, verified
+    against the pin) only when the pin is bound and signing is configured. An unbound pin keeps the archive unsigned,
+    and signing configured without a bound pin refuses. Checked before any secret is read."""
     factory = sign.get('factory')
     if factory is None:
         return None
