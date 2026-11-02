@@ -30,6 +30,7 @@ import sys
 import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_secrets  # noqa: E402
+import factory_signing  # noqa: E402
 import sign_trace  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 
@@ -45,30 +46,58 @@ def missing_inputs(config):
     sign = config['host'].get('sign') or {}
     return [f'host.sign.{k}' for k in REQUIRED if not sign.get(k)]
 
-def factory_inputs(sign, device):
-    """The opt-in factory stage (absent: OTA only, unchanged). host.sign.factory is exactly {"fastbootSha256": H}: the
-    otatools bin/fastboot the generator runs must hash to H. Archive SSH signing is not supported: no factory-signing
-    identity is bound (os/flavors/<device>.json factorySigning principal/publicKey are null), so the generator's
-    ssh-keygen step is removed and the install archive stays unsigned. Checked before any secret is read."""
-    factory = sign.get('factory')
-    if factory is None:
-        return None
-    if not isinstance(factory, dict) or not factory.get('fastbootSha256'):
-        raise AdapterSetupMissing(['host.sign.factory.fastbootSha256'])
-    if set(factory) != {'fastbootSha256'}:
-        raise AdapterFailed('host.sign.factory takes only fastbootSha256; factory archive SSH signing needs a bound '
-                            f'factorySigning principal and publicKey in os/flavors/{device}.json, which are null')
-    if not re.fullmatch(r'[0-9a-f]{64}', str(factory['fastbootSha256'])):
-        raise AdapterFailed('host.sign.factory.fastbootSha256 must be a sha256')
+SIGNING_KEYS = ('project', 'keySecret', 'keyVersion', 'passphraseSecret', 'passphraseVersion', 'sshKeygen', 'sshKeygenSha256')
+FACTORY_RUNNER = [factory_signing.run_bounded]  # the ssh-keygen process boundary (tests substitute a mock)
+
+def factory_contract(device):
+    """The flavor's install-archive name template and factorySigning pin (scripts/factory-package.py load_flavor)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location('factory_package', ROOT/'scripts/factory-package.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     try:
-        artifact = module.load_flavor(device)['artifacts']['factory']['file']
+        flavor = module.load_flavor(device)
+        return flavor['artifacts']['factory']['file'], flavor.get('factorySigning')
     except (module.ContractError, KeyError, TypeError) as error:
         raise AdapterFailed(f'no factory artifact contract for {device}: {error}') from None
-    return {'fastbootSha256': factory['fastbootSha256'], 'installTemplate': artifact}
+
+def factory_inputs(sign, device):
+    """The opt-in factory stage (absent: OTA only, unchanged). host.sign.factory is {"fastbootSha256": H} plus, only
+    once os/flavors/<device>.json factorySigning is bound, "signing": {project, keySecret, keyVersion, passphraseSecret,
+    passphraseVersion, sshKeygen, sshKeygenSha256}. The otatools bin/fastboot must hash to H. The generator's own ssh-keygen step is always removed;
+    the archive is signed afterwards by factory_signing (pinned askpass, verified against the pin) only when the pin is
+    bound and signing is configured. An unbound pin keeps the archive unsigned, and signing configured without a bound
+    pin refuses. Checked before any secret is read."""
+    factory = sign.get('factory')
+    if factory is None:
+        return None
+    if not isinstance(factory, dict) or not factory.get('fastbootSha256'):
+        raise AdapterSetupMissing(['host.sign.factory.fastbootSha256'])
+    if set(factory) - {'fastbootSha256', 'signing'}:
+        raise AdapterFailed('host.sign.factory takes only fastbootSha256 and signing')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(factory['fastbootSha256'])):
+        raise AdapterFailed('host.sign.factory.fastbootSha256 must be a sha256')
+    artifact, signing = factory_contract(device)
+    try:
+        pin = factory_signing.bound_pin(signing)
+    except factory_signing.Refused as error:
+        raise AdapterFailed(f'os/flavors/{device}.json {error}') from None
+    config = factory.get('signing')
+    if pin is None and config is not None:
+        raise AdapterFailed(f'host.sign.factory.signing is set but os/flavors/{device}.json factorySigning principal and '
+                            'publicKey are not bound')
+    if pin is not None:
+        if not isinstance(config, dict) or not all(config.get(k) for k in SIGNING_KEYS):
+            raise AdapterSetupMissing([f'host.sign.factory.signing.{k}' for k in SIGNING_KEYS
+                                       if not isinstance(config, dict) or not config.get(k)])
+        if set(config) != set(SIGNING_KEYS) or not all(re.fullmatch(r'[1-9][0-9]*', str(config[k]))
+                                                         for k in ('keyVersion', 'passphraseVersion')):
+            raise AdapterFailed('host.sign.factory.signing needs exactly project, secret names and pinned numeric versions')
+        tool = Path(str(config['sshKeygen']))
+        if not tool.is_absolute() or tool.is_symlink() or not tool.is_file() \
+                or sha256(tool.read_bytes()) != config['sshKeygenSha256']:
+            raise AdapterFailed('host.sign.factory.signing.sshKeygen is not the pinned regular file')
+    return {'fastbootSha256': factory['fastbootSha256'], 'installTemplate': artifact, 'pin': pin, 'signing': config}
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -354,15 +383,31 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
             raise AdapterFailed(f'release script did not produce {install.name}')
         if Path(f'{install}.sig').exists():
             raise AdapterFailed(f'{install.name}.sig exists although archive signing was removed')
+        signature = None
+        if factory['pin'] is not None:
+            signing = factory['signing']
+            with host_secrets.private_directory('rose-factory-signing-') as private:
+                key = host_secrets.fetch_secret(signing['project'], signing['keySecret'], signing['keyVersion'],
+                    private/factory_signing.KEY_FILE, gcloud)
+                passfile = host_secrets.fetch_secret(signing['project'], signing['passphraseSecret'],
+                    signing['passphraseVersion'], private/'passphrase', gcloud)
+                try:
+                    signature = factory_signing.sign_and_verify(install, key, passfile, factory['pin'], private,
+                                                                signing['sshKeygen'], FACTORY_RUNNER[0])
+                except factory_signing.Refused as error:
+                    raise AdapterFailed(f'factory archive signing refused: {error}') from None
         (release_dir/'factory').mkdir()
         shutil.copyfile(install, release_dir/'factory'/install.name)
+        if signature:
+            shutil.copyfile(Path(f'{install}.sig'), release_dir/'factory'/signature['file'])
         digest = hashlib.sha256()
         with open(install, 'rb') as f:
             for block in iter(lambda: f.read(8 << 20), b''):
                 digest.update(block)
         factory_record = {'file': install.name, 'sha256': digest.hexdigest(), 'size': install.stat().st_size,
-            'fastbootSha256': factory['fastbootSha256'], 'signature': None,
-            'signatureBasis': f'unsigned: os/flavors/{device}.json factorySigning principal and publicKey are not bound'}
+            'fastbootSha256': factory['fastbootSha256'], 'signature': signature,
+            'signatureBasis': f'signed and verified against os/flavors/{device}.json factorySigning' if signature else
+                f'unsigned: os/flavors/{device}.json factorySigning principal and publicKey are not bound'}
     feed = config['publication']['channels']['beta']['feedChannel']
     (public/f'{device}-stable').write_text(f'{build} {stamp} {device} {feed}\n')
     (public/'UPDATE.md').write_bytes(notes)

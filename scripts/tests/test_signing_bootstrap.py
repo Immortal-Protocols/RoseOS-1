@@ -885,5 +885,296 @@ class Sources(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(ws)), ['keys.tar.gz', 'passphrase'])
 
 
+
+# ---------------------------------------------------------------- FOLD-FACTORY-IDENTITY (factory_signing, mocks only)
+# No ssh-keygen runs and no key is generated: the runner and Popen are mocks, and the "key" files are byte fixtures in
+# the openssh-key-v1 layout with random bytes standing in for the public key and the encrypted body (not a key pair).
+import struct
+import sys
+from unittest import mock
+sys.path.insert(0, str(SCRIPTS))
+import factory_signing as fs  # noqa: E402
+
+TOOL = '/opt/synthetic/ssh-keygen'
+
+
+def ssh_string(b):
+    return struct.pack('>I', len(b)) + b
+
+
+def fake_key(cipher=b'aes256-ctr', kdf=b'bcrypt', rounds=100, keys=1, key_type=b'ssh-ed25519', raw=None):
+    """A synthetic openssh-key-v1 file: header fields as ssh-keygen writes them, random bytes elsewhere."""
+    raw = os.urandom(32) if raw is None else raw
+    public = ssh_string(key_type) + ssh_string(raw)
+    options = ssh_string(os.urandom(16)) + struct.pack('>I', rounds) if kdf == b'bcrypt' else b''
+    blob = b'openssh-key-v1\0' + ssh_string(cipher) + ssh_string(kdf) + ssh_string(options) + struct.pack('>I', keys) \
+        + ssh_string(public) + ssh_string(os.urandom(144))
+    body = base64.b64encode(blob).decode()
+    text = '-----BEGIN OPENSSH PRIVATE KEY-----\n' + '\n'.join(body[i:i + 70] for i in range(0, len(body), 70)) \
+        + '\n-----END OPENSSH PRIVATE KEY-----\n'
+    return text.encode(), 'ssh-ed25519 ' + base64.b64encode(public).decode()
+
+
+class KeygenMock:
+    """Stands in for ssh-keygen: records argv/env/cwd/seconds, checks the pinned helper is in place, writes fixtures."""
+
+    def __init__(self, key=None, pub=None, category='ok', extra=None):
+        self.calls, self.key, self.pub, self.category, self.extra = [], key, pub, category, extra
+
+    def __call__(self, argv, env, cwd, seconds, stdin_path=None):
+        helper = Path(env['SSH_ASKPASS'])
+        self.calls.append({'argv': argv, 'env': dict(env), 'cwd': Path(cwd), 'seconds': seconds,
+                           'helper': helper.read_bytes(), 'helperMode': oct(helper.stat().st_mode & 0o777)})
+        if self.category == 'ok':
+            key, pub = (self.key, self.pub) if self.key else fake_key()
+            out = Path(argv[argv.index('-f') + 1])
+            fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'wb') as f:
+                f.write(key)
+            Path(f'{out}.pub').write_text(pub + ' \n')
+            if self.extra:
+                (Path(cwd)/self.extra).write_bytes(b'x')
+        return {'exit': 0 if self.category == 'ok' else None, 'category': self.category, 'outputBytes': 0, 'outputSha256': None}
+
+
+def owner_dir(test):
+    path = Path(tempfile.mkdtemp(prefix='fs-'))
+    os.chmod(path, 0o700)
+    test.addCleanup(shutil.rmtree, path, True)
+    return path
+
+
+class FactoryKeyGeneration(unittest.TestCase):
+    def test_passphrase_only_through_the_pinned_helper_never_argv_or_environment(self):
+        ws = owner_dir(self)
+        runner = KeygenMock()
+        with mock.patch.dict(os.environ, {'GITHUB_TOKEN': 'ghs_synthetic', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'x'}):
+            identity = fs.generate_key(ws, TOOL, runner, token='SYNTHETIC-passphrase-token')
+        call = runner.calls[0]
+        self.assertEqual(call['argv'], [TOOL, '-q', '-t', 'ed25519', '-a', '100', '-C', '', '-f', str(ws/'id_ed25519')])
+        self.assertFalse({'-N', '-P', '-p'} & set(call['argv']))
+        self.assertEqual(call['env'], {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'SSH_ASKPASS_REQUIRE': 'force',
+                                       'SSH_ASKPASS': str(ws/'askpass')})
+        self.assertEqual(call['helper'], f'#!/bin/sh\nexec cat {ws}/passphrase\n'.encode())
+        self.assertEqual(call['helperMode'], '0o700')
+        self.assertEqual(call['seconds'], 60)
+        self.assertNotIn('SYNTHETIC-passphrase-token', json.dumps(call, default=str) + json.dumps(identity))
+        self.assertEqual(sorted(os.listdir(ws)), ['id_ed25519', 'passphrase'])  # helper and .pub removed
+        self.assertEqual(oct((ws/'passphrase').stat().st_mode & 0o777), '0o600')
+        self.assertEqual((ws/'passphrase').read_text(), 'SYNTHETIC-passphrase-token\n')
+        self.assertRegex(identity['publicKey'], r'^ssh-ed25519 [A-Za-z0-9+/]{68}$')
+        blob = base64.b64decode(identity['publicKey'].split()[1])
+        self.assertEqual(identity['fingerprint'], 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('='))
+        self.assertEqual(fs.ASKPASS_TEMPLATE_SHA256, hashlib.sha256(b'#!/bin/sh\nexec cat {passfile}\n').hexdigest())
+
+    def test_unencrypted_weak_wrong_or_failed_generation_refuses(self):
+        cases = {
+            'unencrypted': (fake_key(cipher=b'none', kdf=b'none'), 'key_unencrypted'),
+            'weak kdf': (fake_key(rounds=16), 'bcrypt rounds below 100'),
+            'two keys': (fake_key(keys=2), 'exactly one key'),
+            'rsa': (fake_key(key_type=b'ssh-rsa'), 'not an ssh-ed25519 key'),
+            'short public': (fake_key(raw=b'x' * 31), 'not a 32-byte'),
+        }
+        for name, ((key, pub), pattern) in cases.items():
+            with self.subTest(name):
+                with self.assertRaisesRegex(fs.Refused, pattern):
+                    fs.generate_key(owner_dir(self), TOOL, KeygenMock(key, pub))
+        key, _ = fake_key()
+        with self.assertRaisesRegex(fs.Refused, 'does not equal the private key header'):
+            fs.generate_key(owner_dir(self), TOOL, KeygenMock(key, fake_key()[1]))
+        for category in ('timeout', 'nonzero_exit', 'output_overflow', 'spawn_failed'):
+            with self.subTest(category):
+                ws = owner_dir(self)
+                with self.assertRaisesRegex(fs.Refused, f'generator_failed: ssh-keygen {category}'):
+                    fs.generate_key(ws, TOOL, KeygenMock(category=category))
+                self.assertFalse((ws/'askpass').exists(), 'the helper is removed on failure too')
+        with self.assertRaisesRegex(fs.Refused, 'unexpected_output'):
+            fs.generate_key(owner_dir(self), TOOL, KeygenMock(extra='stray'))
+        with self.assertRaisesRegex(fs.Refused, 'path_refused'):
+            fs.generate_key(owner_dir(self), 'ssh-keygen', KeygenMock())  # never a PATH lookup
+
+
+class FakeProc:
+    """A Popen stand-in over a real pipe (no process): writes the given bytes, optionally never exits."""
+
+    def __init__(self, data=b'', exits=True, returncode=0):
+        read, write = os.pipe()
+        self.stdout = os.fdopen(read, 'rb')
+        os.write(write, data[:60000])
+        if exits:
+            os.close(write)
+        else:
+            self._write = write
+        self.pid, self.returncode, self.exits, self.waits = 424242, None, exits, []
+        self._rc = returncode
+
+    def poll(self):
+        return self._rc if self.exits else None
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if hasattr(self, '_write'):
+            os.close(self._write)
+            del self._write
+        self.returncode = self._rc if self.exits else -9
+        return self.returncode
+
+
+class BoundedRunner(unittest.TestCase):
+    def run_with(self, proc, clock=None):
+        kills, spawned = [], []
+
+        def popen(argv, **kw):
+            spawned.append((argv, kw))
+            return proc
+        with mock.patch.object(fs.os, 'killpg', lambda pid, sig: kills.append((pid, sig))):
+            result = fs.run_bounded(['/opt/synthetic/tool'], {'PATH': '/usr/bin:/bin'}, '/tmp', 5, popen=popen,
+                                    **({'clock': clock} if clock else {}))
+        return result, kills, spawned
+
+    def test_spawn_shape_and_whole_group_ended_and_reaped_on_success(self):
+        proc = FakeProc(b'Signing file x\n')
+        result, kills, spawned = self.run_with(proc)
+        argv, kw = spawned[0]
+        self.assertEqual((argv, kw['env'], kw['start_new_session'], kw['close_fds']), (['/opt/synthetic/tool'],
+                                                                                     {'PATH': '/usr/bin:/bin'}, True, True))
+        self.assertIs(kw['preexec_fn'], fs._no_core)
+        self.assertEqual(kw['stdin'].name, os.devnull)
+        self.assertEqual(kills, [(424242, fs.signal.SIGTERM), (424242, fs.signal.SIGKILL)])
+        self.assertEqual(result, {'exit': 0, 'category': 'ok', 'outputBytes': 15,
+                                  'outputSha256': hashlib.sha256(b'Signing file x\n').hexdigest()})
+        self.assertNotIn('output', result)  # bytes are never returned
+
+    def test_overflow_and_timeout_end_the_group(self):
+        result, kills, _ = self.run_with(FakeProc(b'x' * 40000, exits=False))
+        self.assertEqual((result['category'], result['exit'], result['outputBytes']), ('output_overflow', None, 16385))
+        self.assertEqual([k[1] for k in kills], [fs.signal.SIGTERM, fs.signal.SIGKILL])
+        ticks = iter([0, 0] + [100] * 10)
+        result, kills, _ = self.run_with(FakeProc(exits=False), clock=lambda: next(ticks))
+        self.assertEqual((result['category'], result['exit']), ('timeout', None))
+        self.assertEqual([k[1] for k in kills], [fs.signal.SIGTERM, fs.signal.SIGKILL])
+        result, _, _ = self.run_with(FakeProc(returncode=3))
+        self.assertEqual((result['category'], result['exit']), ('nonzero_exit', 3))
+
+    def test_spawn_failure(self):
+        def popen(argv, **kw):
+            raise FileNotFoundError(argv[0])
+        self.assertEqual(fs.run_bounded(['/nonexistent/tool'], {}, '/tmp', 5, popen=popen)['category'], 'spawn_failed')
+
+
+class FactoryPin(unittest.TestCase):
+    def test_bound_pin_only_when_genuinely_bound(self):
+        self.assertIsNone(fs.bound_pin({'namespace': 'factory images', 'principal': None, 'publicKey': None, 'status': 'missing'}))
+        for flavor in ('rango', 'frankel'):  # the checked-in pins are unbound: signing stays off
+            pin = json.loads((ROOT/f'os/flavors/{flavor}.json').read_text())['factorySigning']
+            self.assertIsNone(fs.bound_pin(pin))
+        good = {'namespace': 'factory images', 'principal': 'roseos-factory-images-rango-v1', 'publicKey': fake_key()[1],
+                'status': 'bound'}
+        self.assertEqual(fs.bound_pin(good)['principal'], 'roseos-factory-images-rango-v1')
+        for name, change in (('half bound', {'publicKey': None}), ('other namespace', {'namespace': 'file'}),
+                             ('not bound', {'status': 'missing'}), ('rsa', {'publicKey': 'ssh-rsa ' + 'A' * 68}),
+                             ('bad principal', {'principal': 'Root User'})):
+            with self.subTest(name), self.assertRaises(fs.Refused):
+                fs.bound_pin(dict(good, **change))
+
+
+def sign_runner(calls, sign='ok', verify='ok', write=True):
+    def runner(argv, env, cwd, seconds, stdin_path=None):
+        calls.append({'argv': argv, 'env': dict(env), 'stdin': stdin_path,
+                      'helper': Path(env['SSH_ASKPASS']).read_bytes() if 'SSH_ASKPASS' in env else None,
+                      'signers': (Path(cwd)/'allowed_signers').read_text() if (Path(cwd)/'allowed_signers').exists() else None})
+        if argv[1:3] == ['-Y', 'sign']:
+            if write and sign == 'ok':
+                Path(argv[-1] + '.sig').write_text('-----BEGIN SSH SIGNATURE-----\nc3lu\n-----END SSH SIGNATURE-----\n')
+            return {'exit': 0 if sign == 'ok' else 1, 'category': sign, 'outputBytes': 0, 'outputSha256': None}
+        return {'exit': 0 if verify == 'ok' else 255, 'category': verify, 'outputBytes': 0, 'outputSha256': None}
+    return runner
+
+
+class FactorySignVerify(unittest.TestCase):
+    def setUp(self):
+        self.dir = owner_dir(self)
+        self.archive = self.dir/'rango-install-2026103001.zip'
+        self.archive.write_bytes(b'synthetic archive bytes')
+        self.key, self.passfile = self.dir/'id_ed25519', self.dir/'passphrase'
+        self.key.write_bytes(fake_key()[0]), self.passfile.write_text('SYNTHETIC\n')
+        self.work = owner_dir(self)
+        self.pin = {'principal': 'roseos-factory-images-rango-v1', 'publicKey': fake_key()[1]}
+
+    def test_sign_then_verify_against_the_pin_only(self):
+        calls = []
+        sig = fs.sign_and_verify(self.archive, self.key, self.passfile, self.pin, self.work, TOOL, sign_runner(calls))
+        sign, verify = calls
+        self.assertEqual(sign['argv'], [TOOL, '-Y', 'sign', '-n', 'factory images', '-f', str(self.key), str(self.archive)])
+        self.assertEqual(sign['helper'], f'#!/bin/sh\nexec cat {self.passfile}\n'.encode())
+        self.assertEqual(verify['argv'], [TOOL, '-Y', 'verify', '-f', str(self.work/'allowed_signers'), '-I',
+                                          'roseos-factory-images-rango-v1', '-n', 'factory images', '-s', f'{self.archive}.sig'])
+        self.assertEqual(verify['signers'], f'roseos-factory-images-rango-v1 namespaces="factory images" {self.pin["publicKey"]}\n')
+        self.assertEqual((verify['stdin'], 'SSH_ASKPASS' in verify['env']), (str(self.archive), False))
+        self.assertEqual(sorted(os.listdir(self.work)), [])  # helper and allowed_signers removed
+        self.assertEqual(sig['sha256'], hashlib.sha256(Path(f'{self.archive}.sig').read_bytes()).hexdigest())
+        self.assertNotIn('SYNTHETIC', json.dumps(calls[0]['argv']) + json.dumps(sig))
+
+    def test_failed_sign_or_verify_leaves_no_signature(self):
+        for kw, pattern in (({'sign': 'timeout'}, 'sign_failed'), ({'write': False}, 'no single small SSH signature'),
+                            ({'verify': 'nonzero_exit'}, 'verify_failed')):
+            with self.subTest(kw):
+                with self.assertRaisesRegex(fs.Refused, pattern):
+                    fs.sign_and_verify(self.archive, self.key, self.passfile, self.pin, self.work, TOOL, sign_runner([], **kw))
+                self.assertFalse(os.path.lexists(f'{self.archive}.sig'))
+                self.assertEqual(sorted(os.listdir(self.work)), [])
+        Path(f'{self.archive}.sig').write_text('pre-existing')
+        with self.assertRaisesRegex(fs.Refused, 'signature_exists'):
+            fs.sign_and_verify(self.archive, self.key, self.passfile, self.pin, self.work, TOOL, sign_runner([]))
+
+
+def factory_ready_profiles():
+    profiles = copy.deepcopy(PROFILES)
+    profile = profiles['profiles']['fold-rango-factory-v1']
+    profile.update(status='resource-bound')
+    profile['tools']['ssh-keygen']['installed'] = {'path': TOOL, 'sha256': hashlib.sha256(b'ssh-keygen').hexdigest()}
+    profile['access'].update(addVersionExpires='2027-01-01T00:00:00Z', accessorExpires='2027-01-01T00:00:00Z')
+    return profiles
+
+
+class FactoryBootstrapProfile(unittest.TestCase):
+    def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
+        reasons = sb.readiness('fold-rango-factory-v1', PROFILES, NOW)
+        self.assertEqual(reasons[0][0], 'profile-unbound')
+        profile = PROFILES['profiles']['fold-rango-factory-v1']
+        self.assertEqual((profile['principal'], profile['archive']['format']), ('roseos-factory-images-rango-v1', 'openssh-ed25519'))
+        self.assertEqual(profile['secrets'], {'keys': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1',
+                                              'passphrase': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1'})
+        self.assertIsNone(profile['tools']['ssh-keygen']['installed']['path'])
+        with self.assertRaises(sb.Blocked) as ctx:
+            sb.generate_keys(owner_dir(self), profile, runner=None)
+        self.assertEqual(ctx.exception.code, 'tool-unapproved')
+
+    def test_ready_copy_generates_projects_and_imports_only_the_key_and_passphrase(self):
+        profiles = factory_ready_profiles()
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
+        runner = KeygenMock()
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+        executor, fixture = Executor(), Fixture(self)
+        receipt = sb.run('fold-rango-factory-v1', profiles, executor, fixture.state, fixture.lock, SHA, NOW,
+                         workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+        self.assertEqual(receipt['status'], 'complete', receipt['reasons'])
+        self.assertEqual([c for c in executor.calls if c[0] == 'add'],
+                         [('add', 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1'), ('add', 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1')])
+        identity = receipt['publicIdentity']
+        self.assertEqual((identity['principal'], identity['namespace']), ('roseos-factory-images-rango-v1', 'factory images'))
+        self.assertRegex(identity['fingerprint'], r'^SHA256:[A-Za-z0-9+/]{43}$')
+        self.assertNotIn('SYNTHETIC-token', json.dumps(receipt))
+        self.assertEqual(runner.calls[0]['argv'][0], TOOL)  # the measured path, not a PATH lookup
+
+
 if __name__ == '__main__':
     unittest.main()
