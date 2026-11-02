@@ -141,6 +141,40 @@ public final class MultiSessionTest {
         expect(!b.bound.get(0) && b.fronts.isEmpty() && b.targets.isEmpty(), "no snapshot: no bindings");
         expect(MultiSession.deviceId(11) == 11 && MultiSession.deviceId(11L) == null && MultiSession.deviceId(null) == null, "deviceId type");
 
+        // #410 viewer Stop (Nathan-approved): only the viewer's own bound pair, rechecked when the owner confirms.
+        {
+            MultiSession.Slot[] two = slots(slot("s-calc", CALC, "ready"), slot("s-clock", CLOCK, "blocked"));
+            MultiSession.Route own = MultiSession.viewerStop(two, true, "s-calc", "t-1", "t-1", true, false);
+            expect(!own.refused() && own.slot == 0, "the bound, unlocked, current pair stops its own slot only");
+            expect(MultiSession.viewerStop(two, true, "s-clock", "t-2", "t-2", true, false).slot == 1,
+                "an already-bound blocked session can be stopped, as owner_stop allows (nothing is shown)");
+            MultiSession.Slot holding = new MultiSession.Slot("s-calc", CALC, "cleanup_failed", MultiSession.occupied(true, "cleanup_failed"), null);
+            expect(MultiSession.viewerStop(slots(holding, IDLE), true, "s-calc", "t-1", "t-1", true, false).slot == 0,
+                "cleanup_failed still holds the session: Stop retries it, like the owner's other Stops");
+            String[][] refused = {
+                {MultiSession.VIEWER_UNBOUND, "unbound"}, {MultiSession.VIEWER_LOCKED, "locked"},
+                {MultiSession.VIEWER_REPLACED, "replaced id"}, {MultiSession.VIEWER_ENDED, "ended"},
+                {MultiSession.VIEWER_RETAGGED, "retagged"}, {MultiSession.VIEWER_REPLACED, "other object"}};
+            MultiSession.Slot[] ended = slots(slot("s-calc", CALC, "stopped"), slot("s-clock", CLOCK, "ready"));
+            MultiSession.Route[] routes = {
+                MultiSession.viewerStop(two, false, "s-calc", "t-1", "t-1", true, false),
+                MultiSession.viewerStop(two, true, "s-calc", "t-1", "t-1", true, true),
+                MultiSession.viewerStop(two, true, "s-old", "t-1", null, false, false),
+                MultiSession.viewerStop(ended, true, "s-calc", "t-1", "t-1", true, false),
+                MultiSession.viewerStop(two, true, "s-calc", "t-1", "t-9", true, false),
+                MultiSession.viewerStop(two, true, "s-calc", "t-1", "t-1", false, false)};
+            for (int i = 0; i < routes.length; i++)
+                expect(routes[i].refused() && refused[i][0].equals(routes[i].refusal) && routes[i].slot == -1,
+                    "fails closed and stops nothing: " + refused[i][1]);
+            for (String status : new String[] {"idle", "stopped", "closed", "failed", "rejected", "target_not_allowed"})
+                expect(MultiSession.VIEWER_ENDED.equals(MultiSession.viewerStop(slots(slot("s-calc", CALC, status), IDLE),
+                    true, "s-calc", "t-1", "t-1", true, false).refusal), "an ended slot that keeps its id stops nothing: " + status);
+            expect(MultiSession.VIEWER_UNBOUND.equals(MultiSession.viewerStop(two, true, null, "t-1", "t-1", true, false).refusal)
+                && MultiSession.VIEWER_UNBOUND.equals(MultiSession.viewerStop(two, true, "s-calc", null, null, true, false).refusal),
+                "a pair without a session or task id is unbound");
+            expect(MultiSession.VIEWER_LOCKED.equals(MultiSession.viewerStop(ended, true, "s-calc", "t-1", "t-1", true, true).refusal),
+                "while locked nothing about the session is decided or stopped");
+        }
         System.out.println("MultiSessionTest: " + checks + " checks passed");
     }
 }

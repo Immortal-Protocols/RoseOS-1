@@ -74,7 +74,8 @@ public final class Controller {
  // allow it; a locked session blocks on installer, permission, settings and secure screens.
  static String reason(Context c){if(error.contains("target_in_foreground"))return "target_in_foreground";if(error.contains("owner_unlock_required")||blocked&&locked(c))return "owner_unlock_required";if("rejected".equals(status)&&error.equals("Android session error 2"))return "device_locked";if("starting".equals(status)){String w=pending!=null&&pendingToken==generation?replacement.blocker():replacement.unanswered(generation)?Replacement.REQUEST_UNANSWERED:"";if(!w.isEmpty())return w;}if("rejected".equals(status))return Replacement.reason(error);return "";}
  static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;}
- // Only the owner's notification/viewer Stop is "user"; it also refuses later starts of that task.
+ // Only the owner's Stops (notification, Rose's owner_stop, the viewer's confirmed Stop) are "user"; that also refuses
+ // later starts of that task.
  static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
  // Tells Rose Agent at once, so it can end the task even if the agent makes no further phone call.
  // Shared sender identity lets the receiver check this package and its signing certificate.
@@ -414,6 +415,20 @@ public final class Controller {
  }
  /** The owner's Stop from one session's notification: that session only (MultiSession.ownerStop). */
  static synchronized void ownerStop(Context c,String sessionId){int i=MultiSession.ownerStop(view(false),sessionId);if(i<0)return;Slot was=enter(slots[i]);try{stop(c,StopLedger.USER);}finally{leave(was);}}
+ /** The owner's confirmed Stop from the agent viewer (#410, Nathan-approved): only the viewer's own bound pair, rechecked
+  * here under the lock (MultiSession.viewerStop: bound, unlocked, a slot holding that id and still occupied, the same task
+  * and the session object the viewer attached). Then the same owner Stop as the notification's and owner_stop, confirmed
+  * by owner_stop's rule. A refusal stops nothing. Called only from the viewer's confirmation (AgentPipActivity). */
+ static synchronized JSONObject viewerStop(Context c,WatchBinding b,Object attachedSession)throws Exception{
+  MultiSession.Slot[] v=view(false);int i=b.mode==WatchBinding.Mode.BOUND?MultiSession.bySession(v,b.session):-1;Slot s=i<0?null:slots[i];
+  MultiSession.Route r=MultiSession.viewerStop(v,b.mode==WatchBinding.Mode.BOUND,b.session,b.task,s==null?null:s.taskId,
+   s!=null&&attachedSession!=null&&s.session==attachedSession,locked(c));
+  if(r.refused())return new JSONObject().put("status",r.refusal).put("actionExecuted",false).put("confirmed",false);
+  Slot was=enter(slots[r.slot]);
+  try{stop(c,StopLedger.USER);return new JSONObject().put("status",status).put("actionExecuted",true).put("confirmed","stopped".equals(status)
+   &&StopLedger.USER.equals(stops.reason())&&b.session.equals(stops.sessionId())&&Objects.equals(b.task,stops.taskId()));}
+  finally{leave(was);}
+ }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");
   Bitmap all=null,crop=null,encoded=null;
