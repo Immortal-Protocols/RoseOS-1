@@ -14,6 +14,7 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Process;
@@ -21,7 +22,9 @@ import android.os.RemoteException;
 import android.os.UserHandle;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.ImageView;
@@ -91,7 +94,9 @@ public final class RoseAgentStrip extends LinearLayout {
         LayoutParams pearlLp = new LayoutParams(dp(PEARL_DP), dp(PEARL_DP));
         pearlLp.setMarginEnd(dp(8));
         row.addView(connector, pearlLp);
-        link = text("", 13);
+        link = text("", LINK_SP);
+        link.setSingleLine(true);
+        link.setEllipsize(TextUtils.TruncateAt.END);
         link.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         row.addView(link);
         row.setMinimumHeight(dp(LINK_ROW_DP));
@@ -102,7 +107,10 @@ public final class RoseAgentStrip extends LinearLayout {
         cards.setGravity(Gravity.CENTER_VERTICAL);
         scroller.addView(cards);
         addView(scroller, new LayoutParams(LayoutParams.MATCH_PARENT, dp(RoseFan.CARD_HEIGHT_DP)));
-        status = text("", 13);
+        status = text("", STATUS_SP);
+        // Room for STATUS_LINES lines is part of the row's measured height (rowHeight), at every font scale.
+        status.setMaxLines(RoseFan.STATUS_LINES);
+        status.setEllipsize(TextUtils.TruncateAt.END);
         status.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         addView(status);
         setContentDescription("Rose's background apps");
@@ -214,7 +222,7 @@ public final class RoseAgentStrip extends LinearLayout {
     private static final int TASK_LIMIT = 64;
     /** How often a visible live view is captured again: at most once a second, like the controller's own preview. */
     private static final long PREVIEW_INTERVAL_MS = 1000;
-    private static final int LINK_ROW_DP = 22, PEARL_DP = 18;
+    private static final int LINK_ROW_DP = 22, PEARL_DP = 18, LINK_SP = 13, STATUS_SP = 13;
     /**
      * Oxblood materials: Launcher3's own copy of the shared contract (qa/oxblood/oxblood-contract.json, written by Home;
      * test_rose_switcher compares these key for key): manager.card.fill and .neutralRing, ink.primary and
@@ -230,6 +238,20 @@ public final class RoseAgentStrip extends LinearLayout {
     private static final float PEARL_RADIUS_DP = (float) Math.hypot(0.66 * PEARL_DP, 0.72 * PEARL_DP);
 
     /**
+     * The row's height: the claimed default (R.dimen.rose_agent_strip_height), or more when the person's font scale
+     * needs it for the count and two lines of status (RoseFan.rowHeightPx). TypedValue applies the platform's own sp
+     * conversion, nonlinear at large scales. FallbackActivityInterface claims this height below the task cards, and
+     * the row measures itself to it, so the status is never clipped and the human cards make room.
+     */
+    public static int rowHeight(Resources resources) {
+        DisplayMetrics metrics = resources.getDisplayMetrics();
+        return RoseFan.rowHeightPx(metrics.density,
+                TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, LINK_SP, metrics),
+                TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, STATUS_SP, metrics),
+                resources.getDimensionPixelSize(R.dimen.rose_agent_strip_height));
+    }
+
+    /**
      * The row's height when this context belongs to the fallback overview (RecentsActivity, whose layout holds the
      * row), else 0: OverviewActionsView subtracts it so the action buttons sit below the row. The in-launcher overview
      * is unchanged.
@@ -237,11 +259,17 @@ public final class RoseAgentStrip extends LinearLayout {
     public static int reservedBelow(Context context) {
         for (Context c = context; c != null; c = c instanceof ContextWrapper ? ((ContextWrapper) c).getBaseContext() : null) {
             if (c instanceof RecentsActivity) {
-                return c.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
+                return rowHeight(c.getResources());
             }
             if (!(c instanceof ContextWrapper)) break;
         }
         return 0;
+    }
+
+    /** The layout's fixed height is the default; the row takes rowHeight, the same height the overview claimed. */
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(rowHeight(getResources()), MeasureSpec.EXACTLY));
     }
 
     private final View.OnLayoutChangeListener relayout = (v, l, t, r, b, ol, ot, orr, ob) -> anchor();

@@ -87,8 +87,8 @@ class RoseSwitcherTest(unittest.TestCase):
         self.assertLess(size.index('isLargeScreen()'), size.index('getOverviewClaimedSpaceBelow'), 'phone path only')
         fallback = (tree/f'{QUICKSTEP}/FallbackActivityInterface.java').read_text()
         override = fallback[fallback.index('protected int getOverviewClaimedSpaceBelow(Context context) {'):]
-        self.assertIn('R.dimen.rose_agent_strip_height', override[:override.index('}')])
-        self.assertIn('import com.android.launcher3.R;', fallback)
+        self.assertIn('return com.android.quickstep.fallback.RoseAgentStrip.rowHeight(context.getResources());',
+            override[:override.index('}')], '#410: the claim is the row\'s measured height (font scale)')
         actions = (tree/f'{QUICKSTEP}/views/OverviewActionsView.java').read_text()
         margin = actions[actions.index('private int getBottomMargin() {'):actions.index('public void updateDimension(')]
         phone = margin[margin.index('// Align to bottom of task Rect.'):]
@@ -99,7 +99,11 @@ class RoseSwitcherTest(unittest.TestCase):
         row = (OVERLAY/'RoseAgentStrip.java').read_text()
         reserved = row[row.index('public static int reservedBelow(Context context) {'):row.index('private final View.OnLayoutChangeListener')]
         self.assertIn('if (c instanceof RecentsActivity) {', reserved, 'only the fallback overview reserves it')
-        self.assertIn('R.dimen.rose_agent_strip_height', reserved)
+        self.assertIn('return rowHeight(c.getResources());', reserved)
+        height = row[row.index('public static int rowHeight(Resources resources) {'):row.index('public static int reservedBelow(')]
+        self.assertIn('resources.getDimensionPixelSize(R.dimen.rose_agent_strip_height));', height, 'the default is the minimum')
+        self.assertEqual(height.count('TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,'), 2,
+            'the platform\'s own sp conversion (nonlinear at large scales) for the count and the status')
         self.assertIn('return 0;', reserved)
         anchor = row[row.index('private void anchor() {'):row.index('void refresh() {')]
         self.assertIn('parent.findViewById(R.id.action_buttons)', anchor)
@@ -1061,6 +1065,21 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
         self.assertIn('else if (!same) scroller.place(RoseFan.keep(before, centred, keys));', show)
         self.assertIn('return task.displayId + "/" + task.userId + "/" + task.packageName;', self.STRIP,
             'a card is the same card by display, user and package, as RoseAgentWork.decide matches it')
+
+    def test_status_and_count_stay_readable_at_every_supported_font_scale(self):
+        """#410: the row is measured for the person's font size (RoseFan.rowHeightPx, checked over scales 0.85-2.0 in
+        RoseFanTest): the overview claims that height, the row takes it, and the status keeps two full lines."""
+        measure = self.STRIP[self.STRIP.index('protected void onMeasure('):self.STRIP.index('private final View.OnLayoutChangeListener')]
+        self.assertIn('MeasureSpec.makeMeasureSpec(rowHeight(getResources()), MeasureSpec.EXACTLY)', measure)
+        self.assertIn('status.setMaxLines(RoseFan.STATUS_LINES);', self.STRIP)
+        self.assertIn('status = text("", STATUS_SP);', self.STRIP)
+        self.assertIn('link = text("", LINK_SP);', self.STRIP)
+        self.assertIn('LINK_SP = 13, STATUS_SP = 13;', self.STRIP)
+        tree = patched_tree(self)
+        fallback = (tree/f'{QUICKSTEP}/FallbackActivityInterface.java').read_text()
+        self.assertIn('RoseAgentStrip.rowHeight(context.getResources())', fallback, 'the human cards make the same room')
+        actions = (tree/f'{QUICKSTEP}/views/OverviewActionsView.java').read_text()
+        self.assertIn('RoseAgentStrip.reservedBelow(getContext())', actions, 'the actions sit below the same height')
 
     def test_the_live_view_is_the_real_frame_at_the_cards_width_never_stretched(self):
         self.assertEqual(self.STRIP.count('int framePx = dp(RoseFan.CARD_WIDTH_DP);'), 2, 'the row and the tap read alike')

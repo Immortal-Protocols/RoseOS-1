@@ -86,6 +86,25 @@ final class RoseFan {
      */
     static int orderStep(int visualStep, boolean rtl) { return rtl ? -visualStep : visualStep; }
 
+    /** The row above and around the cards (dp): top padding, the pearl row's minimum, the gap under the status. */
+    static final int ROW_TOP_DP = 12, LINK_MIN_DP = 22, ROW_BOTTOM_DP = 4;
+    /** Lines the status may take (it wraps, then ellipsizes), and a text line's height per px of text size. */
+    static final int STATUS_LINES = 2;
+    static final float LINE_SPACING = 1.25f;
+
+    /**
+     * The row's height (px) for the text sizes the person's font scale gives (px, after the platform's own sp
+     * conversion, which is nonlinear at large scales): top padding, the pearl row (at least its minimum, or one line of
+     * the count), the Rose cards, and STATUS_LINES lines of status, never less than minimumPx (the claimed default).
+     * One value serves both the row's own measure and the space the overview claims for it, so a larger font grows the
+     * claim instead of clipping the status.
+     */
+    static int rowHeightPx(float density, float linkTextPx, float statusTextPx, int minimumPx) {
+        float needed = ROW_TOP_DP * density + Math.max(LINK_MIN_DP * density, linkTextPx * LINE_SPACING)
+                + CARD_HEIGHT_DP * density + STATUS_LINES * statusTextPx * LINE_SPACING + ROW_BOTTOM_DP * density;
+        return Math.max(minimumPx, (int) Math.ceil(needed));
+    }
+
     /** Side padding that lets the first and last cards reach the centre. */
     static int sidePadding(int viewportWidth, int cardWidth) { return Math.max(0, (viewportWidth - cardWidth) / 2); }
 

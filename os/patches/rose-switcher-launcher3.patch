@@ -64,25 +64,18 @@ index 37eac47..fbcab76 100644
          Resources res = context.getResources();
          float maxScale = res.getFloat(R.dimen.overview_max_scale);
 diff --git a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-index d9f14ac..2b8ce81 100644
+index d9f14ac..3a8cda8 100644
 --- a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
 +++ b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-@@ -33,6 +33,7 @@ import androidx.annotation.Nullable;
- 
- import com.android.app.displaylib.PerDisplayRepository;
- import com.android.launcher3.DeviceProfile;
-+import com.android.launcher3.R;
- import com.android.launcher3.dagger.LauncherAppSingleton;
- import com.android.launcher3.display.DisplayController;
- import com.android.launcher3.statemanager.StateManager;
-@@ -72,6 +73,12 @@ public final class FallbackActivityInterface extends
+@@ -72,6 +72,13 @@ public final class FallbackActivityInterface extends
          super(false, DEFAULT, BACKGROUND_APP, taskAnimationManagerRepo.get(DEFAULT_DISPLAY));
      }
  
 +    /** RoseOS (#156): the fallback overview's agent row (RoseAgentStrip) sits below the task cards. */
 +    @Override
 +    protected int getOverviewClaimedSpaceBelow(Context context) {
-+        return context.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
++        // The agent row's measured height: its default, or more at a large font scale (RoseAgentStrip.rowHeight).
++        return com.android.quickstep.fallback.RoseAgentStrip.rowHeight(context.getResources());
 +    }
 +
      /** 2 */

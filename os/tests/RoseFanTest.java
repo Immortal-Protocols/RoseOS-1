@@ -83,6 +83,28 @@ public final class RoseFanTest {
         expect(RoseFan.keep(before, 0, Collections.emptyList()) == 0 && RoseFan.keep(null, 3, before) == 2,
                 "no cards, or nothing known before: clamped");
         expect(RoseFan.keep(before, -1, before) == 0, "nothing centred: the first");
+        // Font scale: the row is measured for the person's text size, never clipping the count or two status lines.
+        // Supported scales up to Settings' largest (2.0); text px is what TypedValue gives for 13 sp (linear here, the
+        // upper bound; Android 14's nonlinear scaling gives less at large scales, which only shrinks the need).
+        float density = 2.625f;
+        int minimum = Math.round(200 * density);
+        int previous = 0;
+        for (float scale : new float[] {0.85f, 1f, 1.15f, 1.3f, 1.5f, 1.8f, 2f}) {
+            float text = 13 * density * scale;
+            int row = RoseFan.rowHeightPx(density, text, text, minimum);
+            float link = Math.max(RoseFan.LINK_MIN_DP * density, text * RoseFan.LINE_SPACING);
+            float status = row - (RoseFan.ROW_TOP_DP * density + link + RoseFan.CARD_HEIGHT_DP * density
+                    + RoseFan.ROW_BOTTOM_DP * density);
+            expect(row >= minimum, "never below the claimed default at " + scale);
+            expect(status >= RoseFan.STATUS_LINES * text * RoseFan.LINE_SPACING - 1,
+                    "two full status lines fit at font scale " + scale);
+            expect(row >= previous, "a larger font never shrinks the row");
+            previous = row;
+        }
+        expect(RoseFan.rowHeightPx(1, 0, 0, 400) == 400, "nothing to show: the claimed default");
+        // Android 14 nonlinear scaling: 13 sp at scale 2.0 converts to less than 26 dp, so the row needs no more.
+        expect(RoseFan.rowHeightPx(density, 22 * density, 22 * density, minimum)
+                <= RoseFan.rowHeightPx(density, 26 * density, 26 * density, minimum), "nonlinear needs no more room");
         System.out.println("RoseFanTest: " + checks + " checks passed");
     }
 }
