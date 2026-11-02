@@ -92,6 +92,9 @@ scripts and config, and every diagnostic mode, is unchanged and tested):
   both (`rose-chat-core/tests/qwen_contract.rs`):
   - with the proven flags, a thinking Qwen reply carries `<think>` inside `content`, and `local-agent-v1` refuses it;
   - with the reasoning parser, the thinking goes to a separate field that the client never shows or replays.
+  - The bootstrap diagnostic `cloud-qwen-contract-once` (MODELS-QWEN-CONTRACT-001, `rose_cloud/README.md`) is the
+    isolated proof for exactly these proposed flags. Until the original Mac runs it at a merged payload, they stay
+    unproven.
 
 **Separate owner dependency (Product, `dev.pixel.models`):**
 - the app compiles `ModelsService.MODEL = "muse-glimmer"` (there are no settings since 0.2) and fails any reply from

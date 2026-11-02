@@ -679,6 +679,20 @@ class Contract(Adapter):
         self.assertEqual(sorted(contract_session.CASES), sorted(G.CONTRACT_CASES))
         self.assertEqual(set(contract_session.VERDICTS), set(G.CONTRACT_VERDICTS))
         self.assertEqual(G.CONTRACT_ENGINE, {**G.VISION_ENGINE, 'max_model_len': 8192, 'reasoning_parser': 'qwen3'})
+        self.assertLess(5 * contract_session.REQUEST_TIMEOUT_S, 300)  # models + 4 replies inside bootstrap's 300 s
+        worst_reply = {'status': 599, 'verdict': 'failed:model_identity_mismatch', 'expectMet': False,
+                       'identityExact': False, 'thinkInContent': False, 'recalled': False, 'beyondProven': False,
+                       'finish': 'length', 'reasoningField': 'reasoning_content', 'reasoningChars': (1 << 50) - 1,
+                       'contentChars': (1 << 50) - 1, 'promptTokens': (1 << 50) - 1,
+                       'completionTokens': (1 << 50) - 1, 'seconds': 999999.9}
+        worst = G.sanitize_contract({'case': 'contract', 'step': 'done', 'error': 'E' * 64, 'module': 'm' * 64,
+                                     'contract': {'step': 'toolAfter', 'models': {'status': 599, 'ids': (1 << 50) - 1,
+                                                                                  'idsExact': False,
+                                                                                  'maxModelLen': (1 << 50) - 1},
+                                                  **{k: dict(worst_reply) for k in G.CONTRACT_REPLIES},
+                                                  'reasoningSeparated': False, 'allExpected': False}})
+        self.assertEqual(worst['contract']['long'], worst_reply)  # every field kept when valid
+        self.assertLess(len(json.dumps(worst, separators=(',', ':'))), 3000)  # room in the 4 KiB session receipt
         image = {k: G.VISION[k] for k in ('width', 'height', 'rgb')}
         for mode in ('adapter', 'warm'):  # the proven modes: the PR349/PR350 configuration, unchanged
             self.assertEqual(G.child_config(mode), {

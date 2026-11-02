@@ -31,7 +31,7 @@ MAX_MODEL_LEN = 8192
 PROVEN_MAX_MODEL_LEN = 2048
 CONTRACT = 'local-agent-v1'
 MAX_REPLY_CHARS = 8000  # rose_chat_core Limits::default().max_reply_chars
-REQUEST_TIMEOUT_S = 60  # each request; the client allows 120, the case as a whole stays inside bootstrap's 300 s
+REQUEST_TIMEOUT_S = 55  # each of at most 5 requests (the client allows 120): a case stays inside bootstrap's 300 s
 READ_MAX = 1 << 20  # the client's response cap
 FAILED = ('model_identity_mismatch', 'truncated_reply', 'empty_completion', 'reply_too_long', 'malformed_action',
           'unknown_action', 'action_not_allowed', 'malformed_response', 'http_status')

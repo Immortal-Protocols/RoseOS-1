@@ -29,6 +29,11 @@ when the prompt expanded the one image placeholder to between 1 and MAX_IMAGE_TO
 (``vision_not_applied`` otherwise). ``expectedWordSeen`` says whether the decoded answer contains the colour word; the
 answer itself never leaves the child. Text mode (no ``mode``) is exactly the PR345 configuration.
 
+Adapter, warm and contract modes start `vllm serve` on the container's own loopback (see their comments below). Contract
+mode (bootstrap's cloud-qwen-contract-once, MODELS-QWEN-CONTRACT-001) serves the PROPOSED profile of
+serving/qwen-fp8.json (rose-qwen, the model's own chat template, the qwen3 reasoning parser, 8192 tokens) and runs
+rose_cloud/contract_session.py's fixed client-contract cases through CONTRACT_RUNNER.
+
 The receipt holds fixed tokens, counts, timings, the vLLM version, the quantization name, exception class names and
 the sha256 of the generated token ids. Never the generated text, a prompt, a log line, a path or an environment value.
 
