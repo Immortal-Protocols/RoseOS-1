@@ -29,6 +29,11 @@ when the prompt expanded the one image placeholder to between 1 and MAX_IMAGE_TO
 (``vision_not_applied`` otherwise). ``expectedWordSeen`` says whether the decoded answer contains the colour word; the
 answer itself never leaves the child. Text mode (no ``mode``) is exactly the PR345 configuration.
 
+Adapter, warm and contract modes start `vllm serve` on the container's own loopback (see their comments below). Contract
+mode (bootstrap's cloud-qwen-contract-once, MODELS-QWEN-CONTRACT-001) serves the PROPOSED profile of
+serving/qwen-fp8.json (rose-qwen, the model's own chat template, the qwen3 reasoning parser, 8192 tokens) and runs
+rose_cloud/contract_session.py's fixed client-contract cases through CONTRACT_RUNNER.
+
 The receipt holds fixed tokens, counts, timings, the vLLM version, the quantization name, exception class names and
 the sha256 of the generated token ids. Never the generated text, a prompt, a log line, a path or an environment value.
 
@@ -69,7 +74,7 @@ MAX_IMAGE_TOKENS = 256  # (256 / 32) ** 2 = 64 expected; more means the size cap
 STOPS = ('done', 'bad_manifest', 'not_isolated', 'bad_inputs', 'engine_arg_unsupported', 'engine_failed',
          'generate_failed', 'crashed', 'deadline', 'vision_not_applied', 'bad_mode', 'bad_bundle', 'server_failed',
          'session_failed')
-MODES = ('text', 'vision', 'adapter', 'warm')
+MODES = ('text', 'vision', 'adapter', 'warm', 'contract')
 # Adapter mode (limits {"mode": "adapter"}, CLOUD-QWEN-ADAPTER-001): the real adapter (rose_cloud.vllm_brain) is an
 # HTTP client of vLLM's OpenAI server, so this mode starts `vllm serve` on the container's own loopback (the container
 # has --network none: nothing is published or reachable from outside) with the vision mode's engine bounds, the
@@ -93,6 +98,26 @@ TURN_KEYS = ('turn1', 'turn2', 'turn3', 'rewound', 'staleText')
 # payload's adapter_session.CASES). A request carries only a case name: no code ever comes from outside the payload.
 WARM_CASES = ('full', 'text', 'image', 'cancel')
 WARM_STATE = 'state.json'  # under the helper's work dir on the tmpfs: written once the server is healthy
+# Contract mode (limits {"mode": "contract"}, MODELS-QWEN-CONTRACT-001): the warm machinery with the PROPOSED serving
+# profile of serving/qwen-fp8.json instead of the adapter's: served id rose-qwen, the model's own chat template (no
+# --chat-template), the qwen3 reasoning parser and an 8192-token context; every other flag is the proven SERVER_ARGS.
+# RUNNER is CONTRACT_RUNNER and the cases are contract_session.CASES; the bundle is exactly CONTRACT_FILES. The
+# adapter's proven modes are unchanged. The proposed flags are NOT runtime-proven until this mode has run.
+CONTRACT_FILES = ('contract_session.py', 'qwen_contract_requests.json')
+CONTRACT_SERVED, CONTRACT_MAX_MODEL_LEN, CONTRACT_REASONING_PARSER = 'rose-qwen', 8192, 'qwen3'
+CONTRACT_SERVER_ARGS = (SERVER_ARGS[:SERVER_ARGS.index('--max-model-len') + 1] + [str(CONTRACT_MAX_MODEL_LEN)]
+                        + SERVER_ARGS[SERVER_ARGS.index('--max-model-len') + 2:]
+                        + ['--reasoning-parser', CONTRACT_REASONING_PARSER])
+# EngineArgs fields the image must have before anything loads (the parser name itself is checked by `vllm serve`)
+CONTRACT_ENGINE = {**VISION_ENGINE, 'max_model_len': CONTRACT_MAX_MODEL_LEN,
+                   'reasoning_parser': CONTRACT_REASONING_PARSER}
+CONTRACT_CASES = ('contract', 'chat', 'tool', 'long')
+CONTRACT_MARKER = 'ROSE-CLOUD-QWEN-CONTRACT '
+CONTRACT_VERDICTS = ('final', 'open_app:calculator', 'failed:model_identity_mismatch', 'failed:truncated_reply',
+                     'failed:empty_completion', 'failed:reply_too_long', 'failed:malformed_action',
+                     'failed:unknown_action', 'failed:action_not_allowed', 'failed:malformed_response',
+                     'failed:http_status')
+CONTRACT_REPLIES = ('chat', 'tool', 'toolAfter', 'long')
 STEPS = ('import', 'engine_args', 'load', 'generate', 'done')
 FINISH = ('length', 'stop', 'abort')
 TOKEN = re.compile(r'^[A-Za-z][A-Za-z0-9_]{0,63}$')
@@ -191,16 +216,20 @@ try:
     if out['unsupported']:
         emit(3)
     out['step'] = 'server'
-    from rose_cloud.vllm_brain import RAW_TEMPLATE, VllmBrain, load_tokenizer
-    from rose_cloud import adapter_session
-    template_path = os.path.join(os.environ['TMPDIR'], 'raw_template.jinja')
-    with open(template_path, 'w') as f:
-        f.write(RAW_TEMPLATE)
+    if cfg.get('nativeTemplate'):  # contract mode: the model's own chat template, nothing from the adapter
+        template = []
+    else:
+        from rose_cloud.vllm_brain import RAW_TEMPLATE, VllmBrain, load_tokenizer
+        from rose_cloud import adapter_session
+        template_path = os.path.join(os.environ['TMPDIR'], 'raw_template.jinja')
+        with open(template_path, 'w') as f:
+            f.write(RAW_TEMPLATE)
+        template = ['--chat-template', template_path]
     base = 'http://127.0.0.1:%d' % cfg['port']
     command = cfg.get('serverCommand') or [shutil.which('vllm') or 'vllm']
     t = time.monotonic()
-    server = subprocess.Popen(command + ['serve', model, '--served-model-name', 'rose-brain', '--host', '127.0.0.1',
-                                         '--port', str(cfg['port']), '--chat-template', template_path] + cfg['server'],
+    server = subprocess.Popen(command + ['serve', model, '--served-model-name', cfg.get('servedName', 'rose-brain'),
+                                         '--host', '127.0.0.1', '--port', str(cfg['port'])] + template + cfg['server'],
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     while True:
         if server.poll() is not None:
@@ -275,6 +304,34 @@ sys.stdout.flush()
 ''' % {'state': WARM_STATE, 'w': VISION['width'], 'h': VISION['height'], 'rgb': tuple(VISION['rgb']),
        'timeout': ADAPTER_REQUEST_TIMEOUT_S, 'marker': 'ROSE-CLOUD-QWEN-SESSION '}
 RUNNER_MARKER = 'ROSE-CLOUD-QWEN-SESSION '
+
+# What bootstrap runs with `docker exec` in the contract container: one of contract_session.CASES against the loaded
+# server. Only the case name comes from the request; the requests themselves are the payload's pinned fixture.
+CONTRACT_RUNNER = r'''
+import json, os, sys
+work, case = sys.argv[1], sys.argv[2]
+for key in [k for k in os.environ if 'PROXY' in k.upper()]:
+    del os.environ[key]
+sys.path[:0] = [os.path.join(work, 'pkg')]
+out = {'case': case, 'step': 'state', 'contract': None, 'error': None, 'module': None}
+try:
+    with open(os.path.join(work, %(state)r)) as f:
+        state = json.load(f)
+    if not state.get('ready'):
+        raise RuntimeError('not ready')
+    out['step'] = 'contract'
+    from rose_cloud import contract_session
+    if case not in contract_session.CASES:
+        raise KeyError('case')
+    out['contract'] = {}
+    contract_session.run(state['base'], case, into=out['contract'])
+    out['step'] = 'done'
+except BaseException as e:
+    out['error'] = type(e).__name__
+    out['module'] = getattr(e, 'name', None) if isinstance(e, ImportError) else None
+sys.stdout.write(%(marker)r + json.dumps(out, sort_keys=True, separators=(',', ':')) + '\n')
+sys.stdout.flush()
+''' % {'state': WARM_STATE, 'marker': CONTRACT_MARKER}
 
 
 class Env:
@@ -393,6 +450,10 @@ def child_env(work):
 
 def child_config(mode, limits=None):
     """What the child runs. Text mode is exactly the PR345 configuration."""
+    if mode == 'contract':
+        return {'engine': CONTRACT_ENGINE, 'server': CONTRACT_SERVER_ARGS, 'port': ADAPTER_PORT, 'warm': True,
+                'state': WARM_STATE, 'servedName': CONTRACT_SERVED, 'nativeTemplate': True,
+                'serverCommand': (limits or {}).get('serverCommand')}  # a test hook; bootstrap never sets it
     if mode in ('adapter', 'warm'):
         return {'engine': VISION_ENGINE, 'server': SERVER_ARGS, 'port': ADAPTER_PORT, 'warm': mode == 'warm',
                 'state': WARM_STATE,
@@ -440,9 +501,9 @@ def run_child(model_dir, env, extra, timeout, config, pkg=None):
     return status, lines[-1] if lines else None
 
 
-def write_bundle(bundle, work):
-    """The adapter sources into work/pkg/rose_cloud (the tmpfs); None unless the bundle is exactly ADAPTER_FILES."""
-    if not isinstance(bundle, dict) or sorted(bundle) != sorted(ADAPTER_FILES) or not all(
+def write_bundle(bundle, work, files=ADAPTER_FILES):
+    """The payload sources into work/pkg/rose_cloud (the tmpfs); None unless the bundle is exactly ``files``."""
+    if not isinstance(bundle, dict) or sorted(bundle) != sorted(files) or not all(
             isinstance(v, str) and len(v) < 1 << 20 for v in bundle.values()):
         return None
     pkg = os.path.join(work, 'pkg')
@@ -481,13 +542,13 @@ def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
     work = os.path.join(env.tmp, 'rose-qwen-gpu')
     os.makedirs(work, exist_ok=True)
     pkg = None
-    if mode in ('adapter', 'warm'):
-        pkg = write_bundle(bundle, work)
+    if mode in ('adapter', 'warm', 'contract'):
+        pkg = write_bundle(bundle, work, CONTRACT_FILES if mode == 'contract' else ADAPTER_FILES)
         if pkg is None:
             result['stop'] = 'bad_bundle'
             return result
     config = child_config(mode, limits)
-    if mode == 'warm':
+    if mode in ('warm', 'contract'):
         config['work'] = work
     status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), config, pkg)
     engine = {'run': status}
@@ -506,7 +567,7 @@ def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
         result['stop'] = 'vision_not_applied'  # no image placeholder expanded, or the size cap did not hold
     elif step == 'done' and status == 'ok':
         result['stop'] = 'done'
-    elif mode in ('adapter', 'warm') and step == 'server':
+    elif mode in ('adapter', 'warm', 'contract') and step == 'server':
         result['stop'] = 'server_failed'
     elif mode in ('adapter', 'warm') and step in ('tokenizer', 'session'):
         result['stop'] = 'session_failed'
@@ -562,7 +623,8 @@ def sanitize(raw):
             'run': e.get('run') if e.get('run') in ('ok', 'failed', 'crashed', 'timeout') else None,
             'step': e.get('step') if e.get('step') in STEPS or e.get('step') in ADAPTER_STEPS else None,
             'vllm': version if version is None or (isinstance(version, str) and VERSION.match(version)) else 'other',
-            'unsupported': (sorted({u for u in unsupported if u in ENGINE or u in VISION_ENGINE})
+            'unsupported': (sorted({u for u in unsupported if u in ENGINE or u in VISION_ENGINE
+                                    or u in CONTRACT_ENGINE})
                             if isinstance(unsupported, list) else None),
             'imageTokens': _count(e.get('imageTokens')), 'expectedWordSeen': _flag(e.get('expectedWordSeen')),
             'loadS': _secs(e.get('loadS')), 'generateS': _secs(e.get('generateS')),
@@ -575,6 +637,8 @@ def sanitize(raw):
     if out['mode'] in ('adapter', 'warm') and isinstance(out['engine'], dict):  # text and vision receipts are unchanged
         out['engine'].update(serverReadyS=_secs(e.get('serverReadyS')), serverExit=_exit(e.get('serverExit')),
                              session=_session(e.get('session')))
+    if out['mode'] == 'contract' and isinstance(out['engine'], dict):
+        out['engine'].update(serverReadyS=_secs(e.get('serverReadyS')), serverExit=_exit(e.get('serverExit')))
     return out
 
 
@@ -586,6 +650,39 @@ def sanitize_run(raw):
             'step': raw.get('step') if raw.get('step') in ('state', 'tokenizer', 'session', 'done') else None,
             'error': _match(raw.get('error'), TOKEN), 'module': _match(raw.get('module'), MODULE),
             'session': _session(raw.get('session'))}
+
+
+def sanitize_contract(raw):
+    """One CONTRACT_RUNNER line: the case and contract_session.run's allowlisted fields, or None."""
+    if not isinstance(raw, dict):
+        return None
+    c = raw.get('contract')
+    reply = lambda x: None if not isinstance(x, dict) else {  # noqa: E731
+        'status': _status(x.get('status')),
+        'verdict': x.get('verdict') if x.get('verdict') in CONTRACT_VERDICTS else None,
+        **{k: _flag(x.get(k)) for k in ('expectMet', 'identityExact', 'thinkInContent', 'recalled', 'beyondProven')
+           if k in x},
+        'finish': x.get('finish') if x.get('finish') in ('stop', 'length', 'other') else None,
+        'reasoningField': x.get('reasoningField') if x.get('reasoningField') in ('reasoning', 'reasoning_content',
+                                                                                  'both') else None,
+        **{k: _count(x.get(k)) for k in ('reasoningChars', 'contentChars', 'promptTokens', 'completionTokens')},
+        'seconds': _secs(x.get('seconds'))}
+    m = c.get('models') if isinstance(c, dict) else None
+    return {'case': raw.get('case') if raw.get('case') in CONTRACT_CASES else None,
+            'step': raw.get('step') if raw.get('step') in ('state', 'contract', 'done') else None,
+            'error': _match(raw.get('error'), TOKEN), 'module': _match(raw.get('module'), MODULE),
+            'contract': None if not isinstance(c, dict) else {
+                'step': c.get('step') if c.get('step') in ('models', 'bad_case', 'done') + CONTRACT_REPLIES else None,
+                'models': None if not isinstance(m, dict) else {
+                    'status': _status(m.get('status')),
+                    'ids': _count(m.get('ids')), 'idsExact': _flag(m.get('idsExact')),
+                    'maxModelLen': _count(m.get('maxModelLen'))},
+                **{k: reply(c.get(k)) for k in CONTRACT_REPLIES if k in c},
+                **{k: _flag(c.get(k)) for k in ('reasoningSeparated', 'allExpected')}}}
+
+
+def _status(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and 100 <= v <= 599 else None
 
 
 def _exit(v):

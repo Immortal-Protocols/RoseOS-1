@@ -1001,6 +1001,86 @@ mode keeps that engine loaded so later sessions cost seconds, without a reset.
 - that the startup script may stay in bootstrap for up to about 2.5 h on a diagnostic boot. Bootstrap returns only
   when the window ends; the model stays held meanwhile.
 
+## cloud-qwen-contract-once (MODELS-QWEN-CONTRACT-001; source only, has not run): the proposed serving contract
+
+**Why:** the original Mac's local preparation found that every existing diagnostic serves `rose-brain` with a 2048-token
+context, the adapter's raw template and no reasoning parser. None of them can show whether the PROPOSED serving
+profile of `serving/qwen-fp8.json` (`--qwen-settings proposed`) meets the Rose Models client's contract. This mode
+closes that gap. It is one fixed profile, not a new kind of test.
+
+**Profile** (`qwen_gpu.CONTRACT_SERVER_ARGS`, asserted equal to `render_local.qwen_args(qwen, 'proposed')`):
+- `vllm serve <staged dir> --served-model-name rose-qwen --host 127.0.0.1 --port 18000`;
+- the model's own chat template: no `--chat-template`, nothing from the adapter;
+- `--reasoning-parser qwen3` and `--max-model-len 8192`;
+- every other flag is the proven `SERVER_ARGS`.
+
+Before anything loads, the helper refuses (`engine_arg_unsupported`) if the image's EngineArgs lacks
+`reasoning_parser`. `vllm serve` itself rejects an unknown parser name before loading, and that shows as
+`server_failed` with its exit code.
+
+**How it runs:** exactly `cloud-qwen-warm-once` (previous section), with these differences:
+- the container is `rose-cloud-qwen-contract`, with `"mode": "contract"`;
+- the bundle is `QWEN_CONTRACT_FILES` (`contract_session.py`, `qwen_contract_requests.json`) instead of the adapter
+  sources;
+- the runner is `qwen_gpu.CONTRACT_RUNNER`.
+
+Everything else is shared code: the prerequisites, the container controls (`--network none`, no published port, the
+staged directory read-only, 16 CPUs, 64 GiB with no swap, the 8 GiB exec tmpfs, the 4 GiB shm), the 900 s startup
+bound, the 300 s per run, the 7200 s window, 1800 s idle, 24 runs, and the removal with verified absence.
+
+**Cases** (`contract_session.CASES`; a request names one, as `rose-models-qwen-session=<P>:<fresh id>:<case>`):
+- `contract` (the first run): all of the following on the one loaded server;
+- `chat`: one plain turn, expected `final`;
+- `tool`: an `open_app` proposal, expected `open_app:calculator`, then the request after its `launch_requested` tool
+  result, expected `final`. The follow-up is sent only when the first reply was that proposal;
+- `long`: a request whose history (a code word, then 26 journal turns, 14,091 characters, inside the client's 20,000)
+  is far past the proven 2048 tokens. It asks for the code word: expected `final`, `recalled`, and `beyondProven`
+  (reported `prompt_tokens` > 2048).
+
+Every run also checks `/v1/models`: exactly `["rose-qwen"]`, with `max_model_len` 8192.
+
+**What a reply is judged on:**
+- **The requests** are the client's own bodies, byte for byte: `rose-chat-core/tests/qwen_contract.rs` builds them
+  with the real `rose_chat_core::agent::Agent` (model `rose-qwen`, allowlist `calculator`, no system-prompt prefix,
+  default limits: `max_tokens` 512, no temperature) and fails if `qwen_contract_requests.json` differs.
+- **The verdict** is the one that agent reaches, in its order: identity, truncation, empty content, length, then the
+  closed envelope. `contract_session.verdict` is checked against the agent itself on 34 shared fixtures
+  (`tests/fixtures/qwen_contract_verdicts.json`), in both languages.
+- **Per reply:** `identityExact` (the response `model` is exactly `rose-qwen`), `reasoningField` and `reasoningChars`,
+  `thinkInContent`, `finish`, `contentChars`, token usage and seconds.
+- **`allExpected`** holds only when all of these hold:
+  - the models check;
+  - every expected verdict, with the exact identity;
+  - reasoning separated: some reply had a reasoning field, and no reply had `<think>` in its content;
+  - the long case recalled the code word beyond 2048 tokens.
+- **Never exported:** prompt, reply, reasoning text and the code word.
+
+**Not shown even when it passes:**
+- the app's real system prompt for Qwen (a Product decision: `ModelsService` still compiles `muse-glimmer` and Muse's
+  `Reasoning strength: low`);
+- latency through the edge;
+- behaviour under the persistent service (`render_service --model qwen`);
+- any PR288 voice or conductor path.
+
+A reply that thinks past `max_tokens` 512 is reported as `failed:truncated_reply`, which is exactly what the client
+would do.
+
+**Proposed operator packet** (runtime only by the original Mac operator):
+1. Build at the merge commit with the deployed roots, and record P. Confirm the hashes Core reports for `qwen_gpu.py`,
+   `contract_session.py` and `qwen_contract_requests.json`.
+2. Set `rose-models-diagnostic=cloud-qwen-contract-once:<P>:<fresh id>`, and do one reset.
+3. Read `rose-models/diagnostic` until it shows `phase: "serving"` (`first.allExpected`), then read
+   `rose-models/qwen-session` for the whole contract receipt.
+4. Optionally, repeat a case on the same engine (the client sends no temperature, so the server's default sampling
+   applies, and repeats show stability):
+
+   ```bash
+   gcloud compute instances add-metadata models-glimmer-01 --project protocols-465723 --zone us-central1-f --metadata=rose-models-qwen-session=<P>:<fresh id>:<contract|chat|tool|long>
+   ```
+
+5. The window ends by itself, and the final receipt shows `endedBy` and `cleanup`. The next reset without a new
+   diagnostic id starts Muse.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through

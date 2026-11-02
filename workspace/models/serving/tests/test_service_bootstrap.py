@@ -63,6 +63,7 @@ class FakeHost(B.Host):
         self.adapter_container = self.adapter_timeout = False
         self.adapter_rc, self.adapter_out = 0, ''
         self.warm_container, self.warm_run_rc, self.warm_states, self.warm_runs = False, 0, [], {}
+        self.contract_container, self.contract_runs = False, {}
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -188,7 +189,8 @@ class FakeHost(B.Host):
                                             ('rose-cloud-qwen-gpu', self.qwen_container),
                                             ('rose-cloud-qwen-vision', self.vision_container),
                                             ('rose-cloud-qwen-adapter', self.adapter_container),
-                                            ('rose-cloud-qwen-warm', self.warm_container)) if alive]
+                                            ('rose-cloud-qwen-warm', self.warm_container),
+                                            ('rose-cloud-qwen-contract', self.contract_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -215,6 +217,8 @@ class FakeHost(B.Host):
                     self.adapter_container = False
                 if argv[3] == 'rose-cloud-qwen-warm' and not self.rm_fails:
                     self.warm_container = False
+                if argv[3] == 'rose-cloud-qwen-contract' and not self.rm_fails:
+                    self.contract_container = False
                 return (1, '') if self.rm_fails else (0, '')
             if argv[1] == 'run' and 'rose-cloud-qwen-warm' in argv:
                 self.events.append(('qwenwarm', list(argv), self.model_active, self.model_container,
@@ -231,6 +235,24 @@ class FakeHost(B.Host):
                 default = 'ROSE-CLOUD-QWEN-SESSION ' + json.dumps({'case': case, 'step': 'done', 'session': {
                     'step': 'done', 'cancel': {'semantics': 'inflight_abort'}}})
                 return self.warm_runs.get(case, (0, default + '\n'))
+            if argv[1] == 'run' and 'rose-cloud-qwen-contract' in argv:
+                self.events.append(('qwencontract', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.contract_container = self.warm_run_rc == 0
+                return self.warm_run_rc, 'f00dfeed\n'
+            if argv[1] == 'exec' and argv[2] == 'rose-cloud-qwen-contract':
+                if not self.contract_container:
+                    return 1, ''
+                if argv[3] == 'cat':
+                    return self.warm_states.pop(0) if self.warm_states else (0, '{"ready": true}')
+                case = argv[-1]
+                self.events.append(('contractexec', case, list(argv), timeout))
+                default = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': case, 'step': 'done', 'contract': {
+                    'step': 'done', 'models': {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192},
+                    'chat': {'status': 200, 'verdict': 'final', 'expectMet': True, 'identityExact': True,
+                             'reasoningField': 'reasoning', 'reasoningChars': 200, 'thinkInContent': False},
+                    'reasoningSeparated': True, 'allExpected': True}})
+                return self.contract_runs.get(case, (0, default + '\n'))
             if argv[1] == 'run' and 'rose-cloud-qwen-adapter' in argv:
                 self.events.append(('qwenadapter', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), timeout))
@@ -2746,6 +2768,131 @@ class CloudQwenWarmOnce(DiagnosticFixture):
         self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')  # still missing: refused
         for bad in (f'{SHA}:Q1:text', f'{SHA}:q1:text;rm', f'{SHA}:q1:', f'{SHA[:-1]}:q1:text', f'{SHA}:q1:full\n'):
             self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(bad))
+
+
+class CloudQwenContractOnce(CloudQwenWarmOnce):
+    """cloud-qwen-contract-once (MODELS-QWEN-CONTRACT-001): the warm machinery with the proposed serving profile in
+    its own container; the first run is the whole contract, later requests name contract cases only."""
+
+    def warm(self, attempt='contract1', requests=(), **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        plan, polls = dict(requests), {'n': 0}
+
+        def operator(host):
+            polls['n'] += 1
+            if polls['n'] in plan:
+                host.md[B.QWEN_WARM_KEY] = plan[polls['n']]
+        self.host.on_sleep = operator
+        return self.boot(f'cloud-qwen-contract-once:{SHA}:{attempt}')
+
+    # the warm tests whose expectations are the adapter cases are re-stated below for the contract cases
+    test_one_load_then_requests_until_idle = test_not_ready_gone_and_timeouts = None
+    test_reserved_and_own_ids_are_replays = test_hostile_runner_output_and_refusals = None
+    test_window_and_session_cap_end_it = None
+
+    def test_one_load_then_contract_cases_until_idle(self):
+        status, code = self.warm(requests=((2, f'{SHA}:c-1:long'), (4, f'{SHA}:c-2:full'), (6, f'{SHA}:c-1:chat'),
+                                           (8, f'{"1" * 64}:c-3:tool'), (10, f'{SHA}:c-4:tool')))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(status)['diagnostic'],
+                         ('ok', 'inference held; Qwen contract container ended by idle after 2 request(s)'))
+        r = self.published()
+        self.assertEqual((r['check'], r['phase'], r['started'], r['ready'], r['sessions'], r['ignored'], r['endedBy'],
+                          r['cleanup'], r['modelHeld']),
+                         ('cloud-qwen-contract-once', 'final', True, 'ready', 2, 3, 'idle', 'removed', True))
+        self.assertEqual(r['first'], {'exitCode': 0, 'step': 'done', 'allExpected': True})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'contractexec'], ['contract', 'long', 'tool'])
+        recs = self.sessions()
+        self.assertEqual([(x.get('requestId'), x.get('case'), x.get('ignored')) for x in recs],
+                         [('first', 'contract', None), ('c-1', 'long', None), (None, None, 'malformed'),
+                          (None, None, 'id_already_used'), (None, None, 'other_payload'), ('c-4', 'tool', None)])
+        self.assertEqual(recs[0]['run']['contract']['models'], {'status': 200, 'ids': 1, 'idsExact': True,
+                                                                'maxModelLen': 8192})
+        self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
+        # one detached container: exactly the warm container's controls and bounds, its own name, the contract
+        # helper mode and the contract bundle; no adapter sources, no published port, no network
+        (start,) = [e for e in self.host.events if e[0] == 'qwencontract']
+        _, argv, active, container, held, timeout = start
+        bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_CONTRACT_FILES}, sort_keys=True)
+        source, manifest = (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text()
+        self.assertEqual(argv, B.qwen_argv('rose-cloud-qwen-contract', RUNTIME['image_id'], self.QWEN_DIR, source,
+                                           manifest, B.qwen_gpu_limits(contract=True), bundle, detach=True))
+        warm_bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_ADAPTER_FILES}, sort_keys=True)
+        warm = B.qwen_argv('rose-cloud-qwen-warm', RUNTIME['image_id'], self.QWEN_DIR, source, manifest,
+                           B.qwen_gpu_limits(warm=True), warm_bundle, detach=True)
+        self.assertEqual(argv[:-3], [a if a != 'rose-cloud-qwen-warm' else 'rose-cloud-qwen-contract'
+                                     for a in warm[:-3]])
+        for flag in ('--network', '--cpus', '--memory', '--memory-swap', '--shm-size', '--tmpfs'):
+            self.assertEqual(argv[argv.index(flag) + 1], warm[warm.index(flag) + 1])
+        self.assertEqual((argv[argv.index('--network') + 1], argv[argv.index('--cpus') + 1],
+                          argv[argv.index('--memory') + 1], argv[argv.index('--memory-swap') + 1]),
+                         ('none', '16', str(64 << 30), str(64 << 30)))
+        self.assertIn(f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro', argv)
+        self.assertFalse({'-p', '--publish', '-P', '--network=host', '-e', '--env'} & set(argv))
+        self.assertNotIn('vllm_brain.py', argv[-1])
+        self.assertEqual(json.loads(B.qwen_gpu_limits(contract=True)),
+                         {'deadlineS': 870 + 7200, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30, 'mode': 'contract'})
+        self.assertEqual((active, container, held, timeout), (False, False, True, 120))
+        spec = __import__('importlib.util').util.spec_from_file_location('qg', self.lib / 'qwen_gpu.py')
+        qg = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(qg)
+        execs = [e for e in self.host.events if e[0] == 'contractexec']
+        self.assertEqual(execs[1][2], ['docker', 'exec', 'rose-cloud-qwen-contract', 'python3', '-I', '-B', '-c',
+                                       qg.CONTRACT_RUNNER, '/tmp/rose-qwen-gpu', 'long'])
+        self.assertEqual({e[3] for e in execs}, {B.QWEN_WARM_SESSION_S})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-contract'])
+        self.assertFalse(self.host.contract_container)
+        self.assertNotIn('qwenwarm', [e[0] for e in self.host.events])
+        self.assertNoProvisioning()
+
+    def test_window_idle_cap_gone_timeouts_and_cleanup(self):
+        self.patch('QWEN_WARM_IDLE_S', 10 ** 6)
+        self.warm('c-window')
+        self.assertEqual(self.published()['endedBy'], 'window')
+        self.host.model_active = self.host.model_container = True
+        self.patch('QWEN_WARM_MAX_SESSIONS', 2)
+        self.warm('c-cap', requests=[(n, f'{SHA}:r{n}:chat') for n in range(1, 10)])
+        self.assertEqual((self.published()['endedBy'], self.published()['sessions']), ('max_sessions', 2))
+        self.host.model_active = self.host.model_container = True
+        self.host.warm_states = [(1, '')] * 1000
+        self.warm('c-slow')
+        self.assertEqual((self.published()['ready'], self.published()['cleanup']), ('not_ready', 'removed'))
+        self.host.warm_states = []
+        self.host.model_active = self.host.model_container = True
+        self.warm('c-timeout', contract_runs={'contract': (124, '')})
+        self.assertEqual((self.sessions()[0]['timedOut'], self.sessions()[0]['run'], self.published()['first']),
+                         (True, None, {'exitCode': None, 'step': None, 'allExpected': None}))
+        self.host.contract_runs = {}
+        self.host.model_active = self.host.model_container = True
+        status, code = self.warm('c-rmfail', rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+
+    def test_hostile_output_bad_requests_and_missing_sources(self):
+        hostile = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({
+            'case': 'contract; x', 'step': 'done', 'reply': 'SECRET', 'contract': {
+                'step': 'done', 'chat': {'verdict': 'SECRET', 'text': 'SECRET', 'status': 'SECRET',
+                                         'reasoning': 'SECRET', 'reasoningField': 'SECRET'},
+                'models': {'ids': ['SECRET'], 'maxModelLen': 'SECRET'}, 'reasoning': 'SECRET', 'allExpected': 'yes'}})
+        self.warm('c-hostile', contract_runs={'contract': (0, hostile + '\n'), 'chat': (0, 'x' * 10000 + '\n')},
+                  requests=((1, f'{SHA}:h1:chat'),))
+        recs = self.sessions()
+        self.assertNotIn('SECRET', json.dumps(recs))
+        c = recs[0]['run']['contract']
+        self.assertEqual((recs[0]['run']['case'], c['chat']['verdict'], c['allExpected'], c['models']['ids']),
+                         (None, None, None, None))
+        self.assertIsNone(recs[1]['run'])
+        self.host.contract_runs = {}
+        for bad in (f'{SHA}:q1:full', f'{SHA}:q1:text', f'{SHA}:q1:contract;rm', f'{SHA}:Q1:chat', f'{SHA}:q1:'):
+            self.assertIsNone(B.QWEN_CONTRACT_VALUE.fullmatch(bad))
+        self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(f'{SHA}:q1:contract'))  # the warm container never runs them
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-once:{SHA}:c1'))
+        self.host.model_active = self.host.model_container = True
+        (self.lib / 'qwen_contract_requests.json').unlink()
+        self.warm('c-nosrc')
+        self.assertEqual(self.published()['prerequisite'], 'contract_sources_missing')
+        self.assertNotIn('qwencontract', [e[0] for e in self.host.events])
 
 
 class HostValidate(unittest.TestCase):

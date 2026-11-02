@@ -103,7 +103,7 @@ from dataclasses import make_dataclass
 MODE = json.load(open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'mode.json')))
 FIELDS = ['model', 'tokenizer', 'tensor_parallel_size', 'max_model_len', 'max_num_seqs', 'gpu_memory_utilization',
           'enforce_eager', 'language_model_only', 'trust_remote_code', 'seed', 'distributed_executor_backend',
-          'disable_log_stats', 'limit_mm_per_prompt', 'mm_processor_kwargs']
+          'disable_log_stats', 'limit_mm_per_prompt', 'mm_processor_kwargs', 'reasoning_parser']
 EngineArgs = make_dataclass('EngineArgs', [(f, object, None) for f in FIELDS if f not in MODE.get('drop', [])])
 '''
 
@@ -542,6 +542,163 @@ class Warm(Adapter):
         self.assertEqual((r['step'], r['error']), ('state', 'FileNotFoundError'))  # no server yet: nothing runs
         from rose_cloud import adapter_session
         self.assertEqual(sorted(adapter_session.CASES), sorted(G.WARM_CASES))
+
+
+FAKE_CONTRACT_SERVE = '''
+import json, os, sys, time
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from fakes import FakeOpenAI
+args = sys.argv[1:]
+with open(os.path.join(HERE, 'serve.argv'), 'w') as f:
+    json.dump(args, f)
+with open(os.path.join(HERE, 'serve.pid'), 'w') as f:
+    f.write(str(os.getpid()))
+mode = json.load(open(os.path.join(HERE, 'serve.mode')))
+if mode.pop('die', False):
+    sys.exit(2)  # as `vllm serve` exits on an argument it does not accept, before loading anything
+FakeOpenAI(served=args[args.index('--served-model-name') + 1], mode=mode, port=int(args[args.index('--port') + 1]))
+time.sleep(300)
+'''
+
+
+class Contract(Adapter):
+    """Contract mode (MODELS-QWEN-CONTRACT-001): the warm machinery with the proposed profile, a stand-in `vllm serve`
+    (tests/fakes.FakeOpenAI) and CONTRACT_RUNNER, what bootstrap runs with `docker exec`."""
+
+    def setUp(self):
+        super().setUp()
+        (self.extra / 'serve.py').write_text(FAKE_CONTRACT_SERVE)
+        self.bundle = {n: (ROOT / 'rose_cloud' / n).read_text() for n in G.CONTRACT_FILES}
+
+    # the adapter's own session tests do not apply to this server (they run under Adapter and Warm)
+    test_one_session_through_the_real_adapter = test_server_failures_and_deadline = None
+
+    def start(self, deadline, **limits):
+        import threading
+        box = {}
+        t = threading.Thread(target=lambda: box.update(r=G.diagnose(
+            self.manifest, dict(self.limits, mode='contract', deadlineS=deadline,
+                                serverCommand=[sys.executable, str(self.extra / 'serve.py')], **limits),
+            bundle=self.bundle)))
+        t.start()
+        state = self.tmp / 'rose-qwen-gpu' / G.WARM_STATE
+        end = time.monotonic() + 20
+        while not state.exists() and t.is_alive() and time.monotonic() < end:
+            time.sleep(0.1)
+        return t, box, state
+
+    def runner(self, case):
+        import subprocess
+        out = subprocess.run([sys.executable, '-I', '-B', '-c', G.CONTRACT_RUNNER, str(self.tmp / 'rose-qwen-gpu'),
+                              case], capture_output=True, text=True, timeout=120).stdout
+        line = out.strip().splitlines()[-1]
+        self.assertTrue(line.startswith(G.CONTRACT_MARKER))
+        self.assertLess(len(line), 3000)  # inside bootstrap's 4 KiB receipt with its envelope
+        return json.loads(line[len(G.CONTRACT_MARKER):])
+
+    def test_one_load_runs_the_contract_cases_with_the_proposed_profile(self):
+        t, box, state = self.start(deadline=30)
+        self.assertTrue(state.exists())
+        argv = json.loads((self.extra / 'serve.argv').read_text())
+        self.assertEqual(argv, ['serve', str(self.model), '--served-model-name', 'rose-qwen', '--host', '127.0.0.1',
+                                '--port', str(self.port)] + G.CONTRACT_SERVER_ARGS)
+        self.assertNotIn('--chat-template', argv)  # the model's own template
+        self.assertEqual(argv[argv.index('--max-model-len') + 1], '8192')
+        self.assertEqual(argv[argv.index('--reasoning-parser') + 1], 'qwen3')
+        self.assertNotIn('0.0.0.0', argv)
+        pid = int((self.extra / 'serve.pid').read_text())
+        full = G.sanitize_contract(self.runner('contract'))
+        self.assertEqual((full['case'], full['step'], full['error']), ('contract', 'done', None))
+        c = full['contract']
+        self.assertEqual((c['step'], c['allExpected'], c['reasoningSeparated']), ('done', True, True))
+        self.assertEqual(c['models'], {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192})
+        self.assertEqual([c[k]['verdict'] for k in G.CONTRACT_REPLIES],
+                         ['final', 'open_app:calculator', 'final', 'final'])
+        self.assertEqual((c['long']['recalled'], c['long']['beyondProven']), (True, True))
+        long = G.sanitize_contract(self.runner('long'))
+        self.assertEqual((long['case'], long['contract']['allExpected']), ('long', True))
+        self.assertEqual(int((self.extra / 'serve.pid').read_text()), pid)  # the same loaded server: no reload
+        bad = self.runner('rm -rf /')
+        self.assertEqual((bad['step'], bad['error']), ('contract', 'KeyError'))  # only the payload's cases run
+        self.assertIsNone(G.sanitize_contract(bad)['case'])
+        t.join(60)
+        r = box['r']
+        self.assertEqual((r['mode'], r['stop']), ('contract', 'deadline'))  # the fixed window ended the container
+        s = G.sanitize(r)
+        self.assertEqual((s['mode'], s['stop'], s['engine']['run']), ('contract', 'deadline', 'timeout'))
+        self.assertNotIn('session', s['engine'])
+        time.sleep(0.2)
+        self.assertFalse(alive(pid))
+        line = json.dumps([full, long, s])
+        for leak in ('SECRET', 'AMBERFALCON', 'amberfalcon', 'Hello, I am Rose', 'Journal', str(self.dir)):
+            self.assertNotIn(leak, line)
+
+    def test_a_contract_break_is_a_receipt_not_a_pass(self):
+        self.serve_mode({'inline_think': True})
+        t, box, state = self.start(deadline=15)
+        run = G.sanitize_contract(self.runner('chat'))
+        self.assertEqual((run['step'], run['contract']['allExpected'], run['contract']['chat']['verdict'],
+                          run['contract']['chat']['thinkInContent']), ('done', False, 'failed:malformed_action', True))
+        t.join(60)
+
+    def test_refusals_before_any_server(self):
+        self.mode({'drop': ['reasoning_parser']})
+        r = G.diagnose(self.manifest, dict(self.limits, mode='contract',
+                                           serverCommand=[sys.executable, str(self.extra / 'serve.py')]),
+                       bundle=self.bundle)
+        self.assertEqual((r['stop'], r['engine']['unsupported']), ('engine_arg_unsupported', ['reasoning_parser']))
+        self.assertEqual(G.sanitize(r)['engine']['unsupported'], ['reasoning_parser'])
+        self.assertFalse((self.extra / 'serve.argv').exists())
+        self.mode({})
+        adapter = {n: (ROOT / 'rose_cloud' / n).read_text() for n in G.ADAPTER_FILES}
+        for bundle in (None, {}, adapter, dict(self.bundle, extra='x'), {'contract_session.py': 'x'}):
+            r = G.diagnose(self.manifest, dict(self.limits, mode='contract'), bundle=bundle)
+            self.assertEqual((r['stop'], r['engine']), ('bad_bundle', None))
+        r = G.diagnose(self.manifest, dict(self.limits, mode='adapter'), bundle=self.bundle)
+        self.assertEqual(r['stop'], 'bad_bundle')  # and the adapter modes never take the contract files
+        self.assertFalse((self.extra / 'serve.argv').exists())
+        self.serve_mode({'die': True})
+        t, box, _ = self.start(deadline=15)
+        t.join(30)
+        self.assertEqual((box['r']['stop'], box['r']['engine']['serverExit']), ('server_failed', 2))
+        self.assertFalse((self.tmp / 'rose-qwen-gpu' / G.WARM_STATE).exists())
+
+    def test_profile_is_the_proposed_serving_profile_and_proven_modes_are_unchanged(self):
+        sys.path.insert(0, str(ROOT.parent / 'serving'))
+        import render_local
+        qwen = json.loads((ROOT.parent / 'serving' / 'qwen-fp8.json').read_text())
+        args, proposed = render_local.qwen_args(qwen, 'proposed')
+        self.assertEqual(G.CONTRACT_SERVER_ARGS, args)  # exactly what --qwen-settings proposed would serve
+        self.assertEqual(sorted(proposed), ['--max-model-len', '--reasoning-parser'])
+        self.assertEqual(render_local.qwen_args(qwen, 'proven')[0], G.SERVER_ARGS)
+        self.assertEqual(G.CONTRACT_SERVED, qwen['served_model_name'])
+        from rose_cloud import contract_session
+        self.assertEqual((contract_session.SERVED, contract_session.MAX_MODEL_LEN), (G.CONTRACT_SERVED,
+                                                                                     G.CONTRACT_MAX_MODEL_LEN))
+        self.assertEqual(sorted(contract_session.CASES), sorted(G.CONTRACT_CASES))
+        self.assertEqual(set(contract_session.VERDICTS), set(G.CONTRACT_VERDICTS))
+        self.assertEqual(G.CONTRACT_ENGINE, {**G.VISION_ENGINE, 'max_model_len': 8192, 'reasoning_parser': 'qwen3'})
+        self.assertLess(5 * contract_session.REQUEST_TIMEOUT_S, 300)  # models + 4 replies inside bootstrap's 300 s
+        worst_reply = {'status': 599, 'verdict': 'failed:model_identity_mismatch', 'expectMet': False,
+                       'identityExact': False, 'thinkInContent': False, 'recalled': False, 'beyondProven': False,
+                       'finish': 'length', 'reasoningField': 'reasoning_content', 'reasoningChars': (1 << 50) - 1,
+                       'contentChars': (1 << 50) - 1, 'promptTokens': (1 << 50) - 1,
+                       'completionTokens': (1 << 50) - 1, 'seconds': 999999.9}
+        worst = G.sanitize_contract({'case': 'contract', 'step': 'done', 'error': 'E' * 64, 'module': 'm' * 64,
+                                     'contract': {'step': 'toolAfter', 'models': {'status': 599, 'ids': (1 << 50) - 1,
+                                                                                  'idsExact': False,
+                                                                                  'maxModelLen': (1 << 50) - 1},
+                                                  **{k: dict(worst_reply) for k in G.CONTRACT_REPLIES},
+                                                  'reasoningSeparated': False, 'allExpected': False}})
+        self.assertEqual(worst['contract']['long'], worst_reply)  # every field kept when valid
+        self.assertLess(len(json.dumps(worst, separators=(',', ':'))), 3000)  # room in the 4 KiB session receipt
+        image = {k: G.VISION[k] for k in ('width', 'height', 'rgb')}
+        for mode in ('adapter', 'warm'):  # the proven modes: the PR349/PR350 configuration, unchanged
+            self.assertEqual(G.child_config(mode), {
+                'engine': G.VISION_ENGINE, 'server': G.SERVER_ARGS, 'port': G.ADAPTER_PORT, 'warm': mode == 'warm',
+                'state': G.WARM_STATE, 'requestTimeoutS': G.ADAPTER_REQUEST_TIMEOUT_S, 'image': image,
+                'serverCommand': None})
 
 
 def alive(pid):
