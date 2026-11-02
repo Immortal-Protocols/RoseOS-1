@@ -21,10 +21,12 @@ PINNED = {'fallback_recents_activity.xml': '8df1879fb83e2a9f5b11b657a498e6153504
     'OverviewComponentObserver.java': 'a94703d973e14ba8e1f43ab07d7eacaa0e32f8b5668d16bff1c6843dd4877893',
     'BaseContainerInterface.java': 'a416df4aaa95b3cc954cef5ada99bc3f1078ddbdb56ccb4365be861eda6cf829',
     'FallbackActivityInterface.java': 'dfc02ef28da28e5fc82744588f6be235ad41eb9bdd79b8a471cb40c324cd4faa',
-    'OverviewActionsView.java': '7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f'}
+    'OverviewActionsView.java': '7f7d82fd09d7ad48d0ca0b2ef481b42e9445fe1d37de80a3b2cb45f8b908980f',
+    'RecentsActivity.java': 'b9bd0251eef6b4cd3159dea08657881cfad74fbe42034f03b773c2fda8d8b804'}
 TARGETS = {'fallback_recents_activity.xml': LAYOUT, 'BaseContainerInterface.java': f'{QUICKSTEP}/BaseContainerInterface.java',
     'FallbackActivityInterface.java': f'{QUICKSTEP}/FallbackActivityInterface.java',
-    'OverviewActionsView.java': f'{QUICKSTEP}/views/OverviewActionsView.java'}
+    'OverviewActionsView.java': f'{QUICKSTEP}/views/OverviewActionsView.java',
+    'RecentsActivity.java': f'{QUICKSTEP}/RecentsActivity.java'}
 # The stock lines the patch replaces, and nothing else: the fallback's claimed space below the cards, and the phone
 # actions bar's task-aligned bottom margin (now less the same space).
 REPLACED = ['-                    overviewActionsClaimedSpace,',
@@ -1084,6 +1086,34 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
             self.STRIP)
         for real in ('SensorPrivacy', 'setMicrophoneMute', 'isMicrophoneMute', 'RECORD_AUDIO', 'AudioManager'):
             self.assertNotIn(real, self.STRIP + self.FAN, f'{real}: the switcher pearl is not a mic control or indicator')
+
+class OxbloodSwitcherBackdropTest(unittest.TestCase):
+    """#410: the smallest safe alignment of the whole switcher surface. The fallback overview's own scrim (the colour
+    layer RecentsState already draws behind both carousels, FLAG_SCRIM) becomes the Oxblood switcher base from Home's
+    contract. It is a theme value applied by RecentsActivity after the stock fallback style: no task, thumbnail, live
+    tile, gesture or launch code changes, and Launcher3's own in-launcher overview keeps its style."""
+
+    def test_the_scrim_is_the_contracts_switcher_base_in_the_fallback_overview_only(self):
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+        tree = patched_tree(self)
+        values = (tree/DIMENS).read_text()
+        style = re.search(r'<style name="RoseOverviewOxblood">\s*<item name="overviewScrimColor">(#[0-9A-F]{8})</item>\s*</style>',
+            values)
+        self.assertIsNotNone(style, values)
+        self.assertEqual(style[1], contract['fields']['screenBase'])
+        activity = (tree/f'{QUICKSTEP}/RecentsActivity.java').read_text()
+        stock = '        getTheme().applyStyle(R.style.OverviewBlurFallbackStyle, true);\n'
+        rose = '        getTheme().applyStyle(R.style.RoseOverviewOxblood, true);\n'
+        self.assertEqual(activity.count(rose), 1)
+        self.assertLess(activity.index(stock), activity.index(rose), 'applied after the stock style, so it wins')
+        self.assertLess(activity.index(rose), activity.index('inflateRootView(R.layout.fallback_recents_activity);'),
+            'before the views read the theme')
+        hunk = PATCH.read_text().split('RecentsActivity.java b/')[1].split('\ndiff --git')[0]
+        self.assertFalse([l for l in hunk.splitlines() if l.startswith('-') and not l.startswith('---')],
+            'RecentsActivity only gains the style; nothing of it is removed')
+        stock_scrim = (FIXTURES/'RecentsActivity.java').read_text()
+        self.assertIn(stock, stock_scrim)
 
 if __name__ == '__main__':
     unittest.main()
