@@ -21,7 +21,7 @@ public final class Controller {
  static Object session; static long generation,started; static String id,target,taskId,status="idle",error="",snapshotId;
  static final StopLedger stops=new StopLedger(); static int width,height,operations; static boolean blocked; static IntentSender consent;
  // The replacement race (Replacement): sessionToken is the start token of the held session; pending is a start's request
- // waiting until nothing this controller closed or requested earlier can still be listed by Android.
+ // waiting for the earliest point Android can admit it. Closed sessions stay unconfirmed until Android admits a later request.
  static final Replacement replacement=new Replacement(); static long sessionToken,pendingToken; static Runnable pending;
  static final Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();
  static final Map<Integer,Integer> parents=new HashMap<>(); static final Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>(); static boolean truncated;
@@ -48,7 +48,7 @@ public final class Controller {
  static String reason(Context c){if(error.contains("target_in_foreground"))return "target_in_foreground";if(error.contains("owner_unlock_required")||blocked&&locked(c))return "owner_unlock_required";if("rejected".equals(status)&&error.equals("Android session error 2"))return "device_locked";if("starting".equals(status)&&pending!=null&&pendingToken==generation)return Replacement.REPLACING;if("rejected".equals(status))return Replacement.reason(error);return "";}
  static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;}
  // Only the owner's notification/viewer Stop is "user"; it also refuses later starts of that task.
- static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
+ static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
  // Tells Rose Agent at once, so it can end the task even if the agent makes no further phone call.
  // Shared sender identity lets the receiver check this package and its signing certificate.
  static void announceOwnerStop(Context c,String session,String task){try{Intent i=new Intent("dev.pixel.backgroundcontrol.action.OWNER_STOP").setPackage("dev.pixel.voice").putExtra("sessionId",session).putExtra("taskId",task).putExtra("stoppedAt",System.currentTimeMillis());BroadcastOptions o=BroadcastOptions.makeBasic();o.setShareIdentityEnabled(true);c.sendBroadcast(i,null,o.toBundle());}catch(RuntimeException e){Log.w("BackgroundControl","Owner stop notice not delivered",e);}}
@@ -85,7 +85,7 @@ public final class Controller {
      if(method.getName().equals("hashCode"))return System.identityHashCode(proxy);if(method.getName().equals("equals"))return proxy==args[0];if(method.getName().equals("toString"))return "PixelVoiceBackgroundCallback";
      synchronized(Controller.class){
       switch(method.getName()){case "onSessionCreated":case "onSessionCreationFailed":case "onSessionPending":replacement.answered(token);break;case "onSessionClosed":replacement.closed(token);break;}
-      if(token!=generation){if(method.getName().equals("onSessionCreated")){args[0].getClass().getMethod("close").invoke(args[0]);replacement.closing(token);}dispatch();return null;}
+      if(token!=generation){if(method.getName().equals("onSessionCreated")){args[0].getClass().getMethod("close").invoke(args[0]);replacement.closing(token,args[0]);}dispatch();return null;}
       switch(method.getName()){
        case "onSessionPending":consent=(IntentSender)args[0];status="consent_required";Activity a=MainActivity.visible.get();if(a!=null)requestConsent(a);break;
        case "onSessionCreated":session=args[0];sessionToken=token;consent=null;status="launching";attachLifecycle(token);worker.execute(()->launch(c,token));break;
@@ -96,6 +96,8 @@ public final class Controller {
     });
     synchronized(Controller.class){if(token!=generation)return;replacement.requested(token);}
     type.getMethod("requestSession",Class.forName(EXT+"ComputerControlSession$Params"),Executor.class,cb).invoke(ext,b.getMethod("build").invoke(builder),(Executor)(r->main.post(r)),callback);
+    // A normal return is Android's admission: its same-name check found none of this controller's closed sessions listed.
+    synchronized(Controller.class){replacement.admitted(token);}
    }catch(Throwable e){synchronized(Controller.class){replacement.answered(token);if(token==generation){error=root(e).toString();status=AnyAppControl.targetRefused(error)?"target_not_allowed":Replacement.listed(error)?"rejected":"failed";}dispatch();}}
   };
   pending=request;pendingToken=token;dispatch();
@@ -118,10 +120,11 @@ public final class Controller {
   long until=SystemClock.elapsedRealtime()+15000;
   while(SystemClock.elapsedRealtime()<until){synchronized(Controller.class){if(token!=generation||session==null)return;Image frame=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(frame!=null){width=frame.getWidth();height=frame.getHeight();frame.close();status="ready";return;}}Thread.sleep(150);}
   throw new IllegalStateException("Target did not produce an allowed background frame");
- }catch(Throwable e){synchronized(Controller.class){if(token==generation){++generation;error=root(e).toString();Object old=session;session=null;clearNodes();status="failed";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(token);}catch(Throwable ignored){}}}}}
- /** Sends the pending start's request once nothing this controller closed or requested earlier can still be listed by
-  * Android (Replacement); an older start's request is dropped. No timer: it runs, under the lock, when a start is made,
-  * a request is answered or a closed session is reported; the start's own deadline still applies while it waits. */
+ }catch(Throwable e){synchronized(Controller.class){if(token==generation){++generation;error=root(e).toString();Object old=session;session=null;clearNodes();status="failed";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(token,old);}catch(Throwable ignored){}}}}}
+ /** Sends the pending start's one request at the earliest point Android can admit it (Replacement.clear: every session
+  * this controller closed has reported onClosed and no earlier request is unanswered); Android decides admission itself.
+  * An older start's request is dropped. No timer and no retry: it runs, under the lock, when a start is made, a request is
+  * answered or a closed session is reported; the start's own deadline still applies while it waits. */
  static void dispatch(){if(pending==null)return;if(pendingToken!=generation){pending=null;return;}if(!replacement.clear())return;Runnable r=pending;pending=null;main.post(r);}
  static void require(JSONObject p)throws Exception{if(session==null||!"ready".equals(status)||blocked)throw new IllegalStateException("Background session is not ready: "+status);if(!id.equals(p.getString("sessionId")))throw new IllegalArgumentException("Stale session ID");if(SystemClock.elapsedRealtime()-started>DEADLINE)throw new IllegalStateException("Session expired");}
  static void fresh(JSONObject p)throws Exception{if(snapshotId==null||SystemClock.elapsedRealtime()-snapshotTime>30000||!snapshotId.equals(p.optString("snapshotId",p.optString("screenshotId"))))throw new IllegalArgumentException("Fresh background snapshot required");}
