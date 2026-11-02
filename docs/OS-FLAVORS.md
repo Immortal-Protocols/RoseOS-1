@@ -225,12 +225,36 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
   `vendor/google_devices/blazer`, `vendor/adevtool/dl/unpacked/blazer-CP3A.261005.005` and
   `out-blazer-lunch`. A failed download removes only the `.part` it created.
 - **Exit status**: 0 ready/success, 1 not ready or failed, 2 invalid input.
-- **`inspect`** (proposed for a later observation of at most 20 minutes; not authorized or run):
-  - It reports `lstat` identities, isolation, `statvfs` available and total bytes, pinned project
-    presence, the 128-byte `adevtool_revision`, bounded collision and download sizes (no hashing),
-    and the `--node` realpath, identity and stage-`PATH` resolution (not executed).
-  - It starts no process, opens no network connection and writes nothing.
-  - It is bounded by `--max-entries` (default 200000) and `--max-seconds` (default 900, at most 1200).
+- **`inspect`** (schema v2; proposed for a later observation of at most 20 minutes; not authorized or run). Usage:
+  `inspect --host H --lock L --candidate-root R --candidate-node-from-path [--max-entries 200000] [--max-seconds 900]`
+  is Release's call shape. Optional: `--candidate-source-root S`, `--candidate-download-dir D`,
+  `--candidate-receipts-dir X`, `--candidate-node N` (exclusive with `--candidate-node-from-path`) and
+  `--reference-source-root P`.
+  - `--candidate-root R` proposes the children in `preparation.candidateLayout` (`R/source`,
+    `R/downloads`, `R/receipts`); the explicit flags override those. Every candidate is labelled
+    `verified: false, binding: false`.
+  - Ancestor `lstat` chains stop at `candidateLayout.ancestorBoundary` (`/home/pixelbuild`, the parent
+    of the production root). `statvfs` is read only on each path's nearest existing ancestor, never by
+    walking up to `/`.
+  - `sameDeviceAsProduction` is reported as a fact only; reflink and hardlinks are never inferred.
+  - `--candidate-node-from-path` reports `node` as the job's `PATH` resolves it, with the matching
+    `pathEntry`, realpath, mode, owner and inode. It is never executed.
+  - Candidates are proposals, never bindings. `plan`, `preflight` and `run` refuse every candidate or
+    reference flag (exit 2), and null `--source-root`/`--download-dir`/`--node` still refuse preparation.
+  - The output has `bound` (the prep inputs as given, normally null) and `candidates` (`proposed: true`).
+    Each candidate gets `lstat` metadata, symlink component, isolation, nearest-existing-ancestor
+    `statvfs`, `sameFilesystemAsReference`, and, where it exists, project presence, the 128-byte
+    `adevtool_revision` and bounded collision sizes. For the download candidate it also reports the
+    archive and `.part` metadata (not hashed).
+  - `reference` (default: the production source root, read-only) gives the same tree facts plus a
+    bounded total size.
+  - `node.runner` is `node` as the runner's own `PATH` resolves it, and `node.candidate` is
+    `--candidate-node`: path and realpath `lstat` identity, name and executable bit. Neither is ever
+    executed.
+  - `unknowns` lists what metadata cannot establish: null bindings, missing candidates, Node version,
+    reflink support (never assumed), the isolated-copy cost, the Pro archive size, and truncated walks.
+  - It starts no process, opens no connection, reads no secret and writes nothing. The kernel may
+    still update directory access times (relatime); contents, mtime and ctime are unchanged.
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
   proposal, not verified paths. Building the isolated copy (no writable hardlinks, no assumed

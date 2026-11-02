@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,8 @@ class Fixture(unittest.TestCase):
         self.synthetic['capacity']['compileAllowanceBytes'] = 10
         # Test-speed sampling (the checked-in recipe samples every 5 s with a 30 s grace).
         self.synthetic['preparation']['limits'].update(sampleSeconds=0.05, killGraceSeconds=1)
+        # The ancestor boundary is the parent of the (temporary) production root, as the recipe derives it.
+        self.synthetic['preparation']['candidateLayout']['ancestorBoundary'] = str(self.tmp)
         # A checked-in-source copy whose production source root is a temporary tree, so isolation is exercised for real.
         self.root = self.tmp/'repo'
         (self.root/'os/release-pipeline').mkdir(parents=True)
@@ -186,6 +189,8 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation']['limits'].update(enforcement='quota'), 'sampled-stop enforcement'),
             (lambda r: r['preparation']['limits'].update(sampleSeconds=0), 'sampled-stop enforcement'),
             (lambda r: r['preparation'].update(productionSourceRootFrom='os/release-pipeline/frankel.json host.missing'), 'must resolve'),
+            (lambda r: r['preparation']['candidateLayout']['children'].update(sourceRoot='src'), 'candidateLayout.children'),
+            (lambda r: r['preparation']['candidateLayout'].update(ancestorBoundary='/'), 'ancestorBoundary must be the parent'),
             (lambda r: r['generate'].update(note='os/fold-port'), 'os/fold-port')):
             recipe = json.loads(json.dumps(self.recipe))
             change(recipe)
@@ -507,44 +512,150 @@ get_build_var() {{ echo blazer; }}
         self.assertIn('lunch targets', done['error'])
 
 class InspectTest(Fixture):
-    def snapshot(self):
-        return sorted((str(p), p.stat().st_mtime_ns if not p.is_symlink() else 0) for p in self.tmp.rglob('*'))
+    """inspect is metadata-only: candidates are proposals that never enable preparation, and nothing it scans changes."""
+    def snapshot(self, *roots):
+        state = []
+        for root in roots:
+            for path in sorted([root, *root.rglob('*')]) if root.exists() else []:
+                st = os.lstat(path)
+                content = path.read_bytes() if path.is_file() and not path.is_symlink() else None
+                state.append((str(path), st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns, content))
+        return state
 
-    def test_metadata_only_bounded_and_writes_nothing(self):
-        self.archive()
-        self.generated()
-        before = self.snapshot()
-        original = subprocess.Popen
-        subprocess.Popen = lambda *a, **k: (_ for _ in ()).throw(AssertionError('inspect started a process'))
-        self.addCleanup(setattr, subprocess, 'Popen', original)
-        report = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15))
-        self.assertEqual(self.snapshot(), before, 'inspect writes nothing')
-        self.assertEqual((report['metadataOnly'], report['processesStarted'], report['network'], report['writes']),
-                         (True, 0, False, False))
-        self.assertEqual(report['isolation'], {'sourceRoot': None, 'downloadDir': None})
-        self.assertEqual(report['download']['archive']['size'], len(PAYLOAD))
-        self.assertFalse(report['download']['hashed'])
-        self.assertEqual(report['adevtoolRevision'], ADEVTOOL)
-        self.assertTrue(report['collisions']['vendor/google_devices/blazer']['exists'])
-        self.assertEqual((report['node']['sameFile'], report['node']['nameIsNode']), (True, True))
-        self.assertEqual(report['node']['version'], 'not executed (metadata only)')
-        self.assertEqual(report['filesystems']['sourceRoot']['availableBytes'], 10 ** 15)
-        bounded = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15), max_entries=1)
+    def guard(self):
+        """Any process start or network connection fails the test."""
+        boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError('inspect started a process or opened a connection'))
+        for owner, name in ((subprocess, 'Popen'), (os, 'fork'), (os, 'posix_spawn'), (os, 'system'),
+                            (bb.urllib.request, 'urlopen'), (socket, 'create_connection')):
+            original = getattr(owner, name)
+            setattr(owner, name, boom)
+            self.addCleanup(setattr, owner, name, original)
+
+    def reference(self):
+        """A synthetic stand-in for the historical production tree (never the real one)."""
+        ref = self.production
+        for rel in bb.TREE_NEEDS + ('vendor/state/README', self.recipe['kernelDir'] + '/.keep', '.repo/manifest.xml'):
+            (ref/rel).parent.mkdir(parents=True, exist_ok=True)
+            (ref/rel).write_text('synthetic\n')
+        (ref/'out_adevtool_deps').mkdir(exist_ok=True)
+        (ref/'out_adevtool_deps/adevtool_revision').write_text(ADEVTOOL + '\n')
+        return ref
+
+    def test_candidates_are_reported_but_never_bound(self):
+        ref = self.reference()
+        cand = self.tmp/'rose-actions/blazer-prep-41000000001-1'
+        (cand/'downloads').mkdir(parents=True)
+        (cand/'downloads'/FACTORY).write_bytes(PAYLOAD)
+        nodebin = self.tmp/'runner-bin'
+        nodebin.mkdir()
+        os.symlink(self.node, nodebin/'node')
+        before = self.snapshot(ref, cand, self.tmp/'nodebin', self.lock.parent/'dl') + [os.lstat(self.lock).st_mtime_ns if self.lock.exists() else None]
+        self.guard()
+        unbound = self.op(source_root=None, download_dir=None, node=None)
+        report = bb.inspect(self.synthetic, unbound, root=self.root, statvfs=fs(10 ** 15),
+                            candidates=bb.candidate_paths(str(cand)), environ={'PATH': f'{nodebin}:/usr/bin:/bin'})
+        self.assertEqual(self.snapshot(ref, cand, self.tmp/'nodebin', self.lock.parent/'dl')
+                         + [os.lstat(self.lock).st_mtime_ns if self.lock.exists() else None], before, 'inspect changes nothing')
+        self.assertFalse((cand/'source').exists() or (cand/'receipts').exists(), 'inspect creates no candidate path')
+        self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'],
+                          report['writes'], report['enablesPreparation']),
+                         ('roseos.blazer-preparation-inspection.v2', True, 0, False, False, False))
+        self.assertEqual(report['bound'], {'sourceRoot': None, 'downloadDir': None, 'node': None})
+        self.assertIn('bound sourceRoot is null: preparation stays refused until the binding is supplied', report['unknowns'])
+        c = report['candidates']
+        self.assertEqual((c['proposed'], c['verified'], c['binding']), (True, False, False))
+        self.assertEqual(c['root']['path'], str(cand))
+        self.assertEqual([a['path'] for a in c['root']['ancestors']], [str(cand.parent), str(self.tmp)],
+                         'ancestors stop at the boundary, never above it')
+        self.assertEqual([a['path'] for a in c['sourceRoot']['ancestors']], [str(cand), str(cand.parent), str(self.tmp)])
+        self.assertTrue(c['sourceRoot']['sameDeviceAsProduction'])
+        self.assertEqual(c['sourceRoot']['path'], str(cand/'source'))
+        self.assertFalse(c['sourceRoot']['meta']['exists'])
+        self.assertEqual(c['sourceRoot']['filesystem']['queried'], str(cand))
+        self.assertIsNone(c['sourceRoot']['isolation'])
+        self.assertEqual(c['downloadDir']['archive']['size'], len(PAYLOAD))
+        self.assertFalse(c['downloadDir']['hashed'])
+        self.assertTrue(c['downloadDir']['sameFilesystemAsReference'])
+        self.assertIn(f'candidate sourceRoot {cand/"source"} does not exist (proposal only)', report['unknowns'])
+        r = report['reference']
+        self.assertEqual((r['path'], r['isProduction']), (str(ref), True))
+        self.assertEqual(r['adevtoolRevision'], ADEVTOOL)
+        self.assertTrue(r['projects']['build/envsetup.sh']['exists'])
+        self.assertEqual((r['projects']['vendor/adevtool']['exists'], r['projects']['vendor/adevtool']['type']), (True, 'dir'))
+        self.assertGreater(r['bytes']['bytes'], 0)
+        n = report['node']['runner']
+        self.assertEqual((n['path'], n['realpath'], n['nameIsNode'], n['executable']), (str(nodebin/'node'), str(self.node), True, True))
+        self.assertEqual(n['pathMeta']['type'], 'link')
+        self.assertEqual(n['realpathMeta']['inode'], os.stat(self.node).st_ino)
+        self.assertEqual(n['version'], 'not executed (metadata only)')
+        for unknown in ('reflink support (never assumed)', 'isolated source copy byte and time cost (separately scoped)',
+                        'Pro factory archive size (8 GiB cap unverified)'):
+            self.assertIn(unknown, report['unknowns'])
+
+    def test_node_from_path_reports_the_runner_resolution_as_the_candidate(self):
+        nodebin = self.tmp/'runner-bin'
+        nodebin.mkdir()
+        os.symlink(self.node, nodebin/'node')
+        self.guard()
+        report = bb.inspect(self.synthetic, self.op(node=None), root=self.root, statvfs=fs(10 ** 15),
+                            candidates=bb.candidate_paths(str(self.tmp/'c'), nodeFromPath=True),
+                            environ={'PATH': f'/nonexistent:{nodebin}:/usr/bin'})
+        node = report['node']['candidate']
+        self.assertEqual((node['how'], node['path'], node['pathEntry'], node['realpath']),
+                         ('--candidate-node-from-path', str(nodebin/'node'), str(nodebin), str(self.node)))
+        self.assertEqual((node['realpathMeta']['uid'], node['realpathMeta']['inode']), (os.getuid(), os.stat(self.node).st_ino))
+        self.assertEqual(node['version'], 'not executed (metadata only)')
+        self.assertEqual(bb.ancestors('/srv/elsewhere/blazer-prep-1-1', str(self.tmp)), [],
+                         'a path outside the boundary reports no ancestors and never walks up to /')
+        self.assertEqual([a['path'] for a in bb.ancestors(self.tmp/'x/y', str(self.tmp))], [str(self.tmp)])
+        with self.assertRaisesRegex(bb.InvalidInput, 'mutually exclusive'):
+            bb.candidate_paths(None, node=str(self.node), nodeFromPath=True)
+        with self.assertRaisesRegex(bb.InvalidInput, '--candidate-root must be an absolute path'):
+            bb.candidate_paths('/a/../b')
+
+    def test_production_candidates_are_flagged_and_walks_are_bounded(self):
+        self.reference()
+        report = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15),
+                            candidates=bb.candidate_paths(None, sourceRoot=str(self.production/'nested')), environ={'PATH': ''})
+        self.assertIn('production source root', report['candidates']['sourceRoot']['isolation'])
+        self.assertFalse(report['node']['runner']['found'])
+        self.assertIn('no node on the runner PATH', report['unknowns'])
+        bounded = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15), max_entries=1, environ={'PATH': ''})
         self.assertTrue(bounded['truncated'])
-        walked = sum(c['entries'] for c in bounded['collisions'].values())
-        self.assertLessEqual(walked, 1, 'the entry budget stops the walk')
-        self.assertTrue(any(c['truncated'] for c in bounded['collisions'].values()))
+        self.assertLessEqual(bounded['reference']['bytes']['entries'] + sum(
+            c['entries'] for c in bounded['reference']['collisions'].values()), 1)
+        self.assertIn('a bounded walk stopped at --max-entries or --max-seconds: sizes are lower bounds', bounded['unknowns'])
         with self.assertRaisesRegex(bb.InvalidInput, 'max-seconds'):
             bb.inspect(self.synthetic, self.op(), root=self.root, max_seconds=1201)
-        production = bb.inspect(self.synthetic, self.op(source_root=str(self.production)), root=self.root, statvfs=fs(10 ** 15))
-        self.assertIn('production source root', production['isolation']['sourceRoot'])
+        with self.assertRaisesRegex(bb.InvalidInput, 'absolute'):
+            bb.candidate_paths('relative/root')
 
-    def test_cli_inspect_needs_no_stage(self):
+    def test_candidates_never_enable_preparation(self):
+        cand = str(self.tmp/'cand')
+        for action in ('plan', 'preflight', 'run'):
+            cli = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-build-only.py'), action, '--stage', 'vendor', '--host', 'h',
+                '--lock', str(self.lock), '--candidate-root', cand, '--candidate-node-from-path', '--receipt-dir', str(self.tmp/f'r-{action}')],
+                capture_output=True, text=True)
+            self.assertEqual(cli.returncode, 2, action)
+            self.assertIn('inspect-only', cli.stderr)
+            self.assertFalse((self.tmp/f'r-{action}').exists())
+        unbound = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'preflight', '--stage', 'vendor', '--host',
+            'h', '--lock', str(self.lock)], capture_output=True, text=True)
+        self.assertEqual(unbound.returncode, 1)
+        self.assertIn('vendor needs --download-dir, --source-root, --node', unbound.stdout)
+
+    def test_cli_inspect_needs_no_stage_and_accepts_candidates(self):
         cli = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'inspect', '--host', 'operator-builder-1',
-            '--lock', str(self.lock), '--download-dir', str(self.download), '--source-root', str(self.src), '--node', str(self.node)],
+            '--lock', str(self.lock), '--candidate-root', str(self.tmp/'rose-actions/blazer-prep-1-1'),
+            '--candidate-node-from-path', '--reference-source-root', str(self.src), '--max-entries', '1000'],
             capture_output=True, text=True)
         self.assertEqual(cli.returncode, 0, cli.stderr)
-        self.assertEqual(json.loads(cli.stdout)['schema'], 'roseos.blazer-preparation-inspection.v1')
+        report = json.loads(cli.stdout)
+        self.assertEqual(report['schema'], 'roseos.blazer-preparation-inspection.v2')
+        self.assertEqual(report['candidates']['receiptsDir']['path'], str(self.tmp/'rose-actions/blazer-prep-1-1/receipts'))
+        self.assertEqual(report['node']['candidate']['how'], '--candidate-node-from-path')
+        self.assertEqual(report['candidates']['ancestorBoundary'], '/home/pixelbuild')
+        self.assertFalse(report['reference']['isProduction'])
         bad = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'preflight', '--host', 'h', '--lock',
             str(self.lock)], capture_output=True, text=True)
         self.assertEqual(bad.returncode, 2)
