@@ -424,21 +424,39 @@ index baed11a1..4346d7e5 100644
 +    AutomatedApps getAutomatedApps();
  }
 diff --git a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
-index 9cbc59bc..d45dd85e 100644
+index 9cbc59bc..6a2ff073 100644
 --- a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
 +++ b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
-@@ -283,6 +283,16 @@ public final class ComputerControlSession implements AutoCloseable {
+@@ -283,6 +283,34 @@ public final class ComputerControlSession implements AutoCloseable {
          mSession.handOverApplications();
      }
  
 +    /**
-+     * RoseOS (#156): the apps currently on this session's own device, for the session owner only.
++     * RoseOS (#156): the apps currently on this session's own device, for the session owner only, as a public
++     * {@link android.os.Bundle} (the agent cannot load the platform's hidden AutomatedApps class):
++     * <ul>
++     *   <li>{@code "generation"} (long): rises with every change to this device's apps or completeness; never
++     *       decreases for one session; {@link Long#MAX_VALUE} once closed.</li>
++     *   <li>{@code "packageNames"} (String[]): the distinct packages, sorted, with a non-finishing activity of the
++     *       owner's user on the session's device, front or hidden; empty when closed.</li>
++     *   <li>{@code "userId"} (int): the owner's user.</li>
++     *   <li>{@code "complete"} (boolean): false when the device also runs another user's activity, never named.</li>
++     *   <li>{@code "closed"} (boolean): the session is closed, for good.</li>
++     * </ul>
++     * Throws SecurityException unless the caller is the session owner, and IllegalStateException when unavailable.
 +     *
 +     * @hide
 +     */
 +    @NonNull
-+    public android.companion.virtual.computercontrol.AutomatedApps getAutomatedApps() {
-+        return mSession.getAutomatedApps();
++    public android.os.Bundle getAutomatedApps() {
++        final android.companion.virtual.computercontrol.AutomatedApps apps = mSession.getAutomatedApps();
++        final android.os.Bundle result = new android.os.Bundle();
++        result.putLong("generation", apps.getGeneration());
++        result.putStringArray("packageNames", apps.getPackageNames());
++        result.putInt("userId", apps.getUserId());
++        result.putBoolean("complete", apps.isComplete());
++        result.putBoolean("closed", apps.isClosed());
++        return result;
 +    }
 +
      /**

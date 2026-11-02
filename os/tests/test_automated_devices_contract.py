@@ -195,11 +195,24 @@ class AutomatedDevicesContractTest(unittest.TestCase):
         self.assertLess(service.index('mAutomatedPackagesRepository = new AutomatedPackagesRepository(mHandler);'),
             service.index('mComputerControlSessionProcessor.setAutomatedPackagesRepository(mAutomatedPackagesRepository);'))
         self.assertIn('AutomatedApps getAutomatedApps();', self.source['IComputerControlSession.aidl'])
-        for client in ('ComputerControlSession.java', 'ExtensionsComputerControlSession.java'):
-            method = flat(self.source[client])
-            self.assertIn('getAutomatedApps()', method, client)
-            self.assertRegex(method, r'@hide \*/ @NonNull public android\.companion\.virtual\.computercontrol\.AutomatedApps '
-                r'getAutomatedApps\(\)|@hide \*/ @NonNull public AutomatedApps getAutomatedApps\(\)', client)
+        self.assertIn('@hide */ @NonNull public AutomatedApps getAutomatedApps() { try { return mSession.getAutomatedApps();',
+            flat(self.source['ComputerControlSession.java']))
+        # The agent reaches the session through the extensions library, which cannot hand it the hidden AutomatedApps
+        # class: the wrapper returns a public Bundle with exactly these keys and types (agreed with App Core).
+        extension = flat(self.source['ExtensionsComputerControlSession.java'])
+        self.assertIn('@hide */ @NonNull public android.os.Bundle getAutomatedApps() {', extension)
+        method = extension[extension.index('public android.os.Bundle getAutomatedApps() {'):]
+        method = method[:method.index('return result; }') + len('return result; }')]
+        self.assertEqual(method, 'public android.os.Bundle getAutomatedApps() { '
+            'final android.companion.virtual.computercontrol.AutomatedApps apps = mSession.getAutomatedApps(); '
+            'final android.os.Bundle result = new android.os.Bundle(); '
+            'result.putLong("generation", apps.getGeneration()); '
+            'result.putStringArray("packageNames", apps.getPackageNames()); '
+            'result.putInt("userId", apps.getUserId()); '
+            'result.putBoolean("complete", apps.isComplete()); '
+            'result.putBoolean("closed", apps.isClosed()); '
+            'return result; }')
+        self.assertNotIn('public android.companion.virtual.computercontrol.AutomatedApps getAutomatedApps()', extension)
         # The extension's public API file is untouched: the method is @hide, as is the platform client's.
         self.assertNotIn('api_extension', (ROOT/'os/patches/background-control-modern-frameworks-base.patch').read_text())
 
