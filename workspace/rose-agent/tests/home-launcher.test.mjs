@@ -319,8 +319,9 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
  // Both trays and every well use the one material; no hand-rolled gradients are left behind.
  // #410: Home's edge is the Oxblood edge (OxbloodEdge); TrayMaterial remains the conversation's until its Oxblood slice.
  assert.match(homeTray,/control\.setBackground\(new OxbloodEdge\.Well\(activity\.getResources\(\)\.getDisplayMetrics\(\)\.density\)\);/);
- assert.match(conversation,/icon\.setBackground\(new TrayMaterial\.Well\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);icon\.setDuplicateParentStateEnabled\(true\);/);
- assert.match(conversation,/row\.setBackground\(new TrayMaterial\.Tray\(getResources\(\)\.getDisplayMetrics\(\)\.density\)\);row\.setElevation\(dp\(12\)\);/);
+ // #410: the conversation's controls are Oxblood too (OxbloodRose): the single Connect/Disconnect plate and the work entry.
+ assert.match(conversation,/connect\.setBackground\(new OxbloodRose\.Pill\(density\)\);/);
+ assert.match(conversation,/work=new FrameLayout\(this\);workGlyph=new OxbloodRose\.WorkButton\(density\);work\.setBackground\(workGlyph\);/);
  assert.ok(!/GradientDrawable/.test(homeTray),'HomeTray draws no private gradient');
  assert.ok(!/0xfaffffff,0x8cffffff|0xfff6f7f9,0xffe3e7eb/.test(conversation),'the conversation has no copy of the material');
  // #157: values measured from the selected image's pixels (alpha x 255, rounded). The bar is mid silver (top #c1c3c9,
@@ -346,8 +347,7 @@ test('one tray material for Home and the conversation, and the HiFi-sized tray R
  // Home's Rose is the 16dp pearl (#410); the conversation keeps the shared sphere renderer until its slice.
  assert.match(homeTray,/pearl = new RosePearl\(density, PEARL_DP\);/);
  assert.match(read('../app/src/dev/pixel/voice/RosePresenceView.java'),/float r=Math\.min\(getWidth\(\),getHeight\(\)\)\/\(2f\*RosePresenceModel\.VIEW_RADII\);/);
- // The conversation's wells keep the reference 92x66 where they fit and narrow on a small screen (ConversationPresentation).
- assert.match(conversation,/int lens=ConversationPresentation\.wellWidth\(getResources\(\)\.getConfiguration\(\)\.screenWidthDp,TrayMaterial\.POCKET_DP\);/);
+ assert.ok(!/TrayMaterial/.test(conversation),'no HiFi tray left on the conversation');
 });
 
 test('the overview well draws the HiFi three-bar glyph with its gradients and rings (APP-OS-VISUAL-1030)',()=>{

@@ -34,6 +34,20 @@ final class RosePearl extends Drawable {
 
  RosePearl(float density, float sizeDp) { d = density; this.sizeDp = sizeDp; }
 
+ android.animation.ValueAnimator breathing;
+ /** The speaking breath (oxblood.css:396-398): 1600ms ease-in-out, repeating, while on; off stops it at its static
+  * ring. The caller turns it on only while the screen is visible with animations enabled. */
+ void breathe(boolean on) {
+  if (on == (breathing != null)) return;
+  if (!on) { breathing.cancel(); breathing = null; return; }
+  breathing = android.animation.ValueAnimator.ofFloat(0f, 1f);
+  breathing.setDuration(1600);
+  breathing.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+  breathing.setInterpolator(new android.view.animation.LinearInterpolator());
+  breathing.addUpdateListener(a -> set(silver, false, (float) a.getAnimatedValue()));
+  breathing.start();
+ }
+
  /** Returns true when the look changed. */
  boolean set(boolean silver, boolean listening, float breath) {
   if (this.silver == silver && this.listening == listening && this.breath == breath) return false;

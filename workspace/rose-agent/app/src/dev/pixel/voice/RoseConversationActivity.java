@@ -16,68 +16,72 @@ import android.widget.*;
  * Layout follows Rose-Fold-v3.html (SHA-256 67bf7a50…05ee): labelled call controls (Speak/Cancel,
  * Mute/Unmute, End call) and a light notice card entering from the top. */
 public final class RoseConversationActivity extends Activity {
- // Prototype palette: paper #fafbf7, ink #283e39, control #e7eddf, end #aa4b3a; dark variants keep bar icons legible.
- static int c(int light,int dark){return PixelAppearance.dark()?dark:light;}
- // HiFi tokens (prototypes/rose-hifi/src/style.css at ce126f56): ivory surface, ink and secondary ink.
- static int paper(){return c(0xfff5f7fa,0xff142019);} static int ink(){return c(0xff141922,0xffe6eee8);} static int ink2(){return c(0xff5b6680,0xffb7c2d6);}
- static int control(){return c(0xffe7eddf,0xff2f4a3c);} static int line(){return c(0xffe0e6d8,0xff3c5a4b);}
- static int noticeBg(){return c(0xfffffff6,0xff1f3329);} static int endInk(){return c(0xffaa4b3a,0xffefa786);}
+ // #410 Oxblood (qa/oxblood/oxblood-contract.json "ink", "rose"): white and 78% white ink on the dark Rose field,
+ // hairlines rgba(241,233,225,.22), the ruby x of Disconnect; the surface is dark in either system theme.
+ static int c(int light,int dark){return dark;}
+ static int paper(){return 0xff120a0d;} static int ink(){return OxbloodRose.INK;} static int ink2(){return OxbloodRose.INK_2;}
+ static int control(){return 0x24f1e9e1;} static int line(){return OxbloodRose.LINE;}
+ static int noticeBg(){return 0xf03a141b;} static int endInk(){return OxbloodRose.PillGlyph.X;}
  final Handler handler=new Handler(Looper.getMainLooper());
  final ConversationState.Notices notices=new ConversationState.Notices();
  ConversationState state;
- RosePresenceView presence;LinearLayout stage;TextView caption;Control agents;LinearLayout notice;TextView noticeIcon,noticeText,failure;
+ RosePearl pearl;View pearlView;TextView caption,prompt;FrameLayout work,connect,mic;OxbloodRose.WorkButton workGlyph;OxbloodRose.PillGlyph connectGlyph;TextView connectLabel;LinearLayout notice;TextView noticeIcon,noticeText,failure;
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";boolean shownTaskActive;
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
  volatile TaskControl.ControllerRead ctl=TaskControl.ControllerRead.PENDING_READ;volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
  String stopPendingFor,stopMessage="";boolean stopInFlight;
- Control primary,end;
+ int headTop;
  int noticeSerial;
  final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,150);}};
 
  int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
  boolean reducedMotion(){return Settings.Global.getFloat(getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,1f)==0f;}
 
- /** One call control: round icon above a short label, as in the prototype's .call-control. */
- final class Control extends LinearLayout {
-  final ConversationDrawing.TrayIcon icon;final TextView label;final int color;
-  Control(int labelColor){super(RoseConversationActivity.this);setOrientation(VERTICAL);setGravity(Gravity.CENTER_HORIZONTAL);setClickable(true);setFocusable(true);
-   color=labelColor;icon=new ConversationDrawing.TrayIcon(getContext());
-   // HiFi .well (TrayMaterial, shared with the Home tray): a glass lens (92x66 where it fits) in its pocket; it shows the press.
-   icon.setBackground(new TrayMaterial.Well(getResources().getDisplayMetrics().density));icon.setDuplicateParentStateEnabled(true);
-   icon.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);int lens=ConversationPresentation.wellWidth(getResources().getConfiguration().screenWidthDp,TrayMaterial.POCKET_DP);
-   addView(icon,new LayoutParams(dp(lens+2*TrayMaterial.POCKET_DP),dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP)));
-   // Icon-only like the HiFi wells; the words stay as the spoken name (content description).
-   label=new TextView(getContext());label.setVisibility(GONE);
-   setPadding(0,0,0,0);setMinimumHeight(dp(ConversationPresentation.WELL_HEIGHT+2*TrayMaterial.POCKET_DP));}
-  void show(ConversationPresentation.Glyph glyph,String text,String description){icon.set(glyph,color);label.setText(text);setContentDescription(description);}
-  void available(boolean on){setEnabled(on);setAlpha(on?1f:.45f);}
-  /** Dimmed but still tappable, so a tap can say why (Rose's apps: TaskControl.watchState). */
-  void dimmed(boolean dim,String description){setEnabled(true);setAlpha(dim?.45f:1f);setContentDescription(description);}
- }
-
  @Override protected void onCreate(Bundle b){
-  PixelAppearance.attach(this);super.onCreate(b);PixelAppearance.bars(this);
+  PixelAppearance.attach(this);super.onCreate(b);
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
-  boolean ivory=!PixelAppearance.dark();
-  getWindow().setStatusBarColor(ivory?0xfff7f9fc:paper());getWindow().setNavigationBarColor(ivory?0xffeef3f9:paper());
+  // #410: the Oxblood Rose field (OxbloodField.ROSE) in either system theme, with light bar icons over it.
+  getWindow().setStatusBarColor(0xff120a0d);getWindow().setNavigationBarColor(0xff12060a);
+  View decor=getWindow().getDecorView();decor.setSystemUiVisibility(decor.getSystemUiVisibility()&~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
+  float density=getResources().getDisplayMetrics().density;
   FrameLayout root=new FrameLayout(this);
-  // HiFi .ivory-bg reading surface in light mode; dark mode keeps its existing paper color.
-  if(ivory)root.setBackground(new ConversationDrawing.IvoryBackground(this));else root.setBackgroundColor(paper());
-  // Presence plus the presented output of the current task (Rose-Fold-v3 .presented): eyebrow, title, body.
-  content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setGravity(Gravity.CENTER);
-  // HiFi Rose stage: Rose large and centred with its caption below; compact beside the caption once a result exists.
-  stage=new LinearLayout(this);stage.setOrientation(LinearLayout.VERTICAL);stage.setGravity(Gravity.CENTER);
-  presence=new RosePresenceView(this);stage.addView(presence,new LinearLayout.LayoutParams(dp(220),dp(220)));
-  caption=presentedText(ConversationPresentation.CAPTION_SP,ink2(),"sans-serif");caption.setGravity(Gravity.CENTER);caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-  stage.addView(caption,new LinearLayout.LayoutParams(-2,dp(24)));content.addView(stage,new LinearLayout.LayoutParams(-1,-2));
-  presentedScroll=new ScrollView(this);presentedScroll.setVisibility(View.GONE);
-  LinearLayout presented=new LinearLayout(this);presented.setOrientation(LinearLayout.VERTICAL);presented.setPadding(dp(24),dp(8),dp(24),dp(16));
+  root.setBackground(new OxbloodField(OxbloodField.ROSE));
+  headTop=Math.max(dp(49),statusInset()+dp(8));
+  // Header (oxblood.css:391-398,504): the 16dp pearl and "Rose" at 23sp, 30dp in; the pearl draws the listening ring
+  // and speaking breath from the real visual state; the title is the screen's heading.
+  LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);
+  pearl=new RosePearl(density,16);pearlView=new View(this);pearlView.setBackground(pearl);pearlView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  head.addView(pearlView,new LinearLayout.LayoutParams(dp(28),dp(28)));
+  TextView title=presentedText(23,ink(),"sans-serif");title.setText("Rose");title.setAccessibilityHeading(true);title.setIncludeFontPadding(false);
+  LinearLayout.LayoutParams tlp=new LinearLayout.LayoutParams(-2,-2);tlp.leftMargin=dp(7);head.addView(title,tlp);
+  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,dp(44),Gravity.TOP|Gravity.START);hp.topMargin=headTop;hp.leftMargin=dp(24);root.addView(head,hp);
+  // Upper right (oxblood.css:406-410,500-503): the Background Work entry, lit only while Rose's controller reports a
+  // running workspace (ready or launching), never from a timer or a guess.
+  work=new FrameLayout(this);workGlyph=new OxbloodRose.WorkButton(density);work.setBackground(workGlyph);
+  work.setClickable(true);work.setFocusable(true);work.setContentDescription("Open Rose’s background work");work.setOnClickListener(v->openOverview());
+  work.setStateListAnimator(HomeAppTile.pressAnimator(this,View.TRANSLATION_Y,0,dp(1),0));work.setForeground(HomeAppTile.focusRing(density,12));
+  FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.TOP|Gravity.END);wp.topMargin=headTop;wp.rightMargin=dp(18);root.addView(work,wp);
+  // App Core's More menu (Update Rose Agent, Settings) keeps its own place, just left of the work entry.
+  TextView more=new TextView(this);more.setText("⋯");more.setTextSize(24);more.setTextColor(ink());more.setGravity(Gravity.CENTER);more.setContentDescription("More options");
+  more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});
+   m.getMenu().add("Settings").setOnMenuItemClickListener(i->{startActivity(new Intent(MainActivity.ACTION_SETTINGS).setClass(this,MainActivity.class));return true;});m.show();});
+  FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.TOP|Gravity.END);mp.topMargin=headTop;mp.rightMargin=dp(18+44+4);root.addView(more,mp);
+  // Caption (app.js:350): 15sp white, 88dp under the header's top; it is the visible state, the controls speak it.
+  caption=presentedText(15,ink(),"sans-serif");caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  FrameLayout.LayoutParams capp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);capp.topMargin=headTop+dp(88);capp.leftMargin=dp(30);root.addView(caption,capp);
+  // Output (oxblood.css:400-405): from 121dp under the header to 110dp above the bottom, 30dp in; the empty prompt or
+  // the current task's presentation (eyebrow, title, body, note, its Watch/Stop actions).
+  content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);
+  prompt=presentedText(26,ink(),"sans-serif");prompt.setText("What would you like to do?");prompt.setLetterSpacing(-.005f);prompt.setLineSpacing(0,1.2f);
+  LinearLayout.LayoutParams prp=new LinearLayout.LayoutParams(-1,-2);prp.topMargin=dp(8);content.addView(prompt,prp);
+  presentedScroll=new ScrollView(this);presentedScroll.setVisibility(View.GONE);presentedScroll.setVerticalScrollBarEnabled(false);
+  LinearLayout presented=new LinearLayout(this);presented.setOrientation(LinearLayout.VERTICAL);presented.setPadding(0,0,0,dp(16));
   taskEyebrow=presentedText(13,eyebrow(),"sans-serif-medium");presented.addView(taskEyebrow);
-  taskTitle=presentedText(ConversationPresentation.TITLE_SP,ink(),"sans-serif");taskTitle.setLetterSpacing(-.03f);taskTitle.setLineSpacing(0,1.06f);taskTitle.setAccessibilityHeading(true);taskTitle.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-  LinearLayout.LayoutParams ttp=new LinearLayout.LayoutParams(-1,-2);ttp.topMargin=dp(10);presented.addView(taskTitle,ttp);
-  taskBody=presentedText(ConversationPresentation.BODY_SP,ink2(),"sans-serif");taskBody.setLineSpacing(0,1.38f);
-  LinearLayout.LayoutParams tbp=new LinearLayout.LayoutParams(-1,-2);tbp.topMargin=dp(14);presented.addView(taskBody,tbp);
+  taskTitle=presentedText(ConversationPresentation.TITLE_SP,ink(),"sans-serif");taskTitle.setLetterSpacing(-.02f);taskTitle.setLineSpacing(0,1.08f);taskTitle.setAccessibilityHeading(true);taskTitle.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+  LinearLayout.LayoutParams ttp=new LinearLayout.LayoutParams(-1,-2);ttp.topMargin=dp(6);presented.addView(taskTitle,ttp);
+  taskBody=presentedText(ConversationPresentation.BODY_SP,ink2(),"sans-serif");taskBody.setLineSpacing(0,1.4f);taskBody.setLetterSpacing(-.01f);
+  LinearLayout.LayoutParams tbp=new LinearLayout.LayoutParams(-1,-2);tbp.topMargin=dp(24);presented.addView(taskBody,tbp);
   taskNote=presentedText(13,eyebrow(),"sans-serif");LinearLayout.LayoutParams tnp=new LinearLayout.LayoutParams(-1,-2);tnp.topMargin=dp(12);presented.addView(taskNote,tnp);
   stopNote=presentedText(14,ink(),"sans-serif");stopNote.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
   LinearLayout.LayoutParams snp=new LinearLayout.LayoutParams(-1,-2);snp.topMargin=dp(12);presented.addView(stopNote,snp);
@@ -87,51 +91,55 @@ public final class RoseConversationActivity extends Activity {
   LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.leftMargin=dp(12);taskActions.addView(stopTask,sp);
   LinearLayout.LayoutParams tap=new LinearLayout.LayoutParams(-1,-2);tap.topMargin=dp(16);presented.addView(taskActions,tap);
   presentedScroll.addView(presented);content.addView(presentedScroll,new LinearLayout.LayoutParams(-1,0,1f));
-  FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=statusInset()+dp(ConversationPresentation.reservedTop());cp.bottomMargin=dp(ConversationPresentation.reservedBottom());root.addView(content,cp);
+  FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=headTop+dp(121);cp.bottomMargin=dp(110);cp.leftMargin=dp(30);cp.rightMargin=dp(30);root.addView(content,cp);
 
-  TextView head=presentedText(ConversationPresentation.HEAD_SP,ink(),"sans-serif");head.setLetterSpacing(-.03f);head.setText("Rose");head.setAccessibilityHeading(true);
-  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,dp(ConversationPresentation.HEAD_HEIGHT),Gravity.TOP|Gravity.START);hp.topMargin=statusInset()+dp(4);hp.leftMargin=dp(24);head.setGravity(Gravity.CENTER_VERTICAL);root.addView(head,hp);
-  notice=new LinearLayout(this);notice.setGravity(Gravity.CENTER_VERTICAL);notice.setPadding(dp(18),dp(12),dp(18),dp(12));notice.setMinimumHeight(dp(56));
-  GradientDrawable nb=new GradientDrawable();nb.setColor(noticeBg());nb.setCornerRadius(dp(24));nb.setStroke(dp(1),line());notice.setBackground(nb);notice.setElevation(dp(6));
+  notice=new LinearLayout(this);notice.setGravity(Gravity.CENTER_VERTICAL);notice.setPadding(dp(18),dp(12),dp(18),dp(12));notice.setMinimumHeight(dp(48));
+  GradientDrawable nb=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xf03a141b,0xf0220b0f});nb.setCornerRadius(dp(26));nb.setStroke(Math.max(1,dp(1)),0x38ecd5c6);notice.setBackground(nb);notice.setElevation(dp(6));
   noticeIcon=new TextView(this);noticeIcon.setTextSize(18);noticeIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);notice.addView(noticeIcon);
-  noticeText=new TextView(this);noticeText.setTextSize(15);noticeText.setTextColor(ink());noticeText.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+  noticeText=new TextView(this);noticeText.setTextSize(15);noticeText.setTextColor(0xfff2e6d9);noticeText.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
   LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-2,-2);tp.leftMargin=dp(12);notice.addView(noticeText,tp);
   notice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);notice.setVisibility(View.GONE);
-  FrameLayout.LayoutParams np=new FrameLayout.LayoutParams(-1,-2,Gravity.TOP);np.leftMargin=np.rightMargin=dp(18);np.topMargin=dp(12)+statusInset();root.addView(notice,np);
+  FrameLayout.LayoutParams np=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);np.rightMargin=dp(24);np.topMargin=headTop+dp(69);root.addView(notice,np);
 
-  LinearLayout bottom=new LinearLayout(this);bottom.setOrientation(LinearLayout.VERTICAL);bottom.setGravity(Gravity.CENTER_HORIZONTAL);
-  failure=new TextView(this);failure.setTextSize(14);failure.setTextColor(ink());failure.setGravity(Gravity.CENTER);
-  failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);bottom.addView(failure,new LinearLayout.LayoutParams(-2,dp(28)));
-  // HiFi .tray: brushed metal, three wells (microphone, end call, Rose's apps).
-  LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER);row.setPadding(dp(ConversationPresentation.TRAY_PAD-TrayMaterial.POCKET_DP),0,dp(ConversationPresentation.TRAY_PAD-TrayMaterial.POCKET_DP),0);
-  row.setBackground(new TrayMaterial.Tray(getResources().getDisplayMetrics().density));row.setElevation(dp(12));
-  primary=new Control(ink());primary.setOnClickListener(v->primary());row.addView(primary,new LinearLayout.LayoutParams(0,-2,1f));
-  end=new Control(endInk());end.show(ConversationPresentation.Glyph.END,"End call","End voice conversation");end.setOnClickListener(v->send("end"));row.addView(end,new LinearLayout.LayoutParams(0,-2,1f));
-  // MANAGED-WORKSPACE-OVERVIEW-001: Rose's apps opens the managed workspace overview (one real controller workspace
-  // plus the local task list); the shown task's own View workspace button keeps the bound Watch route.
-  agents=new Control(ink());agents.show(ConversationPresentation.Glyph.APPS,"Rose's apps","Open Rose's apps");agents.setOnClickListener(v->openOverview());
-  row.addView(agents,new LinearLayout.LayoutParams(0,-2,1f));
-  LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT));rp.topMargin=dp(8);bottom.addView(row,rp);
-  FrameLayout.LayoutParams bp=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);bp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);bp.leftMargin=bp.rightMargin=dp(ConversationPresentation.MARGIN);root.addView(bottom,bp);
-  TextView more=new TextView(this);more.setText("⋯");more.setTextSize(24);more.setTextColor(ink());more.setGravity(Gravity.CENTER);more.setContentDescription("More options");
-  more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});
-   m.getMenu().add("Settings").setOnMenuItemClickListener(i->{startActivity(new Intent(MainActivity.ACTION_SETTINGS).setClass(this,MainActivity.class));return true;});m.show();});
-  FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=statusInset()+dp(4);mp.rightMargin=dp(8);root.addView(more,mp);
-  overview=new WorkspaceOverviewPanel(this,ivory?new ConversationDrawing.IvoryBackground(this):null,statusInset());
+  // Bottom (oxblood.css:260-267,411-414,505-508): the one Connect/Disconnect control centred 42dp above the bottom
+  // (plus the navigation inset), its failure line above it. Connect starts Rose's call (talk, after the microphone
+  // permission); Disconnect ends it or cancels connecting (end). Neither touches background work.
+  failure=new TextView(this);failure.setTextSize(14);failure.setTextColor(ink2());failure.setGravity(Gravity.CENTER);
+  failure.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+  FrameLayout.LayoutParams fp=new FrameLayout.LayoutParams(-1,dp(28),Gravity.BOTTOM);fp.bottomMargin=dp(42+44+6);fp.leftMargin=fp.rightMargin=dp(30);root.addView(failure,fp);
+  connect=new FrameLayout(this);connect.setBackground(new OxbloodRose.Pill(density));connect.setClickable(true);connect.setFocusable(true);
+  connect.setMinimumWidth(dp(154));connect.setPadding(dp(26),0,dp(26),0);
+  LinearLayout connectRow=new LinearLayout(this);connectRow.setGravity(Gravity.CENTER);connectRow.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+  connectGlyph=new OxbloodRose.PillGlyph(density);View glyph=new View(this);glyph.setBackground(connectGlyph);connectRow.addView(glyph,new LinearLayout.LayoutParams(dp(15),dp(15)));
+  connectLabel=presentedText(15,ink(),"sans-serif");LinearLayout.LayoutParams clp=new LinearLayout.LayoutParams(-2,-2);clp.leftMargin=dp(11);connectRow.addView(connectLabel,clp);
+  connect.addView(connectRow,new FrameLayout.LayoutParams(-2,-1,Gravity.CENTER));
+  connect.setOnClickListener(v->connectTapped());
+  connect.setStateListAnimator(HomeAppTile.pressAnimator(this,View.TRANSLATION_Y,0,dp(1),320));connect.setForeground(HomeAppTile.focusRing(density,10));
+  FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,dp(44),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);pp.bottomMargin=dp(42);root.addView(connect,pp);
+  // Rose's own call microphone (not an OS-wide control, #410): shown only while the call is live, named as Rose's.
+  mic=new FrameLayout(this);mic.setBackground(new OxbloodEdge.Well(density));mic.setClickable(true);mic.setFocusable(true);
+  TextView micGlyph=presentedText(18,ink(),"sans-serif");micGlyph.setGravity(Gravity.CENTER);micGlyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);micGlyph.setTag("mic-glyph");
+  mic.addView(micGlyph,new FrameLayout.LayoutParams(-1,-1));mic.setOnClickListener(v->{if(state!=null&&state.active())send(state.muted?"tray_unmute":"tray_mute");});
+  FrameLayout.LayoutParams mcp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.BOTTOM|Gravity.START);mcp.bottomMargin=dp(42);mcp.leftMargin=dp(30);root.addView(mic,mcp);
+  root.setOnApplyWindowInsetsListener((v,i)->{int nav=i.getSystemWindowInsetBottom();
+   for(View c:new View[]{connect,mic,failure}){FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)c.getLayoutParams();int base=c==failure?dp(42+44+6):dp(42);if(l.bottomMargin!=base+nav){l.bottomMargin=base+nav;c.setLayoutParams(l);}}
+   FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)content.getLayoutParams();if(l.bottomMargin!=dp(110)+nav){l.bottomMargin=dp(110)+nav;content.setLayoutParams(l);}
+   return i;});
+  overview=new WorkspaceOverviewPanel(this,new OxbloodField(OxbloodField.ROSE),statusInset());
   overview.bind(overviewSource(),overviewActions());overview.setIcons(this::appIcon);overview.setLabels(this::appLabel);
   root.addView(overview,new FrameLayout.LayoutParams(-1,-1));
   setContentView(root);
  }
  TextView taskAction(String text,int color){TextView t=presentedText(15,color,"sans-serif-medium");t.setText(text);t.setGravity(Gravity.CENTER);t.setMinHeight(dp(44));
-  t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(22));g.setStroke(dp(1),line());t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
- static int eyebrow(){return c(0xff677c6f,0xffb6ccbc);}
+  t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setColor(0x8c0e080b);g.setCornerRadius(dp(10));g.setStroke(Math.max(1,dp(1)),0x38f1e9e1);t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
+ static int eyebrow(){return OxbloodRose.INK_2;}
  TextView presentedText(int size,int color,String family){TextView t=new TextView(this);t.setTextSize(size);t.setTextColor(color);t.setTypeface(Typeface.create(family,Typeface.NORMAL));return t;}
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
 
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
  @Override protected void onResume(){super.onResume();resumed=true;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
- @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);if(presence!=null&&state!=null)presence.show(RoseVisualState.from(state,Float.NaN,Float.NaN,true,false));if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
+ @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
   VoiceService s=VoiceService.instance;
@@ -139,19 +147,23 @@ public final class RoseConversationActivity extends Activity {
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);
   String n=notices.observe(state);
   if(ConversationState.CLEAR.equals(n))clearNotice();else if(n!=null)showNotice(n);
-  boolean active=state.active();
-  ConversationPresentation.Glyph glyph=ConversationPresentation.primary(state);
-  if(active)primary.show(glyph,state.muted?"Unmute":"Mute",state.muted?"Microphone muted. Unmute":"Microphone on. Mute");
-  else if(state.phase==ConversationState.Phase.CONNECTING)primary.show(glyph,"Cancel","Cancel voice connection");
-  else primary.show(glyph,"Speak","Start voice conversation");
-  end.available(state.canEnd());
+  boolean live=state.active()||state.phase==ConversationState.Phase.CONNECTING;
+  connectGlyph.set(live);
+  String label=live?"Disconnect":"Connect";if(!label.contentEquals(connectLabel.getText()))connectLabel.setText(label);
+  connect.setContentDescription(live?(state.phase==ConversationState.Phase.CONNECTING?"Cancel connecting to Rose":"Disconnect from Rose"):"Connect to Rose");
+  mic.setVisibility(state.active()?View.VISIBLE:View.GONE);
+  ((TextView)mic.findViewWithTag("mic-glyph")).setText(state.muted?"🔇":"🎙");
+  mic.setContentDescription(state.muted?"Rose’s microphone is muted. Unmute":"Mute Rose’s microphone");
   failure.setText(state.failureText());
   // Core's RoseVisualState maps the session and VoiceService's own measured levels (stale or absent levels are
   // NaN, never invented) into the presence's three independent axes; this screen only draws them.
   long now=SystemClock.elapsedRealtime(),seen=s==null?0L:s.trayAudioObservedAt;
   RoseVisualState visual=RoseVisualState.from(state,s==null?Float.NaN:RoseVisualState.fresh(s.trayInputLevel,seen,now),
    s==null?Float.NaN:RoseVisualState.fresh(s.trayOutputLevel,seen,now),reducedMotion(),resumed);
-  presence.show(visual);caption.setText(RosePresenceModel.caption(visual));
+  showPearl(visual);
+  String cap=OxbloodRose.caption(state,visual);if(!cap.contentEquals(caption.getText()))caption.setText(cap);
+  pearlView.setContentDescription(RosePresenceModel.describe(visual));
+  workGlyph.set(ctl.failure==TaskControl.ReadFailure.NONE&&("ready".equals(ctl.status)||"launching".equals(ctl.status)),reducedMotion());
   renderTask(s);
   if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
  }
@@ -172,12 +184,7 @@ public final class RoseConversationActivity extends Activity {
   android.content.res.Configuration cfg=getResources().getConfiguration();
   ConversationPresentation lay=ConversationPresentation.of(cfg.screenHeightDp-Math.round(statusInset()/getResources().getDisplayMetrics().density),t.visible,cfg.fontScale);
   taskTitle.setTextSize(lay.titleSp);taskBody.setTextSize(lay.bodySp);
-  LinearLayout.LayoutParams pp=(LinearLayout.LayoutParams)presence.getLayoutParams();int size=dp(lay.stage);
-  if(pp.width!=size){pp.width=pp.height=size;presence.setLayoutParams(pp);
-   stage.setOrientation(t.visible?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);stage.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);
-   // HiFi data-result: the 88dp Rose box starts at the margin and the caption follows it directly (.rose-caption left:
-   // margin+84), so no extra inset.
-   stage.setPadding(0,0,0,0);caption.setGravity(t.visible?Gravity.START|Gravity.CENTER_VERTICAL:Gravity.CENTER);}
+  prompt.setVisibility(t.visible?View.GONE:View.VISIBLE);
   presentedScroll.setVisibility(t.visible?View.VISIBLE:View.GONE);
   if(!t.visible){shownTaskId="";shownTaskActive=false;return;}
   if(!t.id.equals(shownTaskId)){shownTaskId=t.id;presentedScroll.scrollTo(0,0);}
@@ -466,6 +473,26 @@ public final class RoseConversationActivity extends Activity {
  }
  /** Withdraws any notice and its pending dismissal; a newer notice is never hidden by an older timer. */
  void clearNotice(){noticeSerial++;handler.removeCallbacksAndMessages(notice);notice.animate().cancel();notice.setVisibility(View.GONE);}
+ /** The single Connect/Disconnect control: Connect starts Rose's call (talk, after the microphone permission);
+  * Disconnect ends a live call or cancels connecting (end). It never mutes, and ending never stops background work. */
+ void connectTapped(){
+  if(state==null)return;
+  boolean live=state.active()||state.phase==ConversationState.Phase.CONNECTING;
+  if(live){send("end");return;}
+  if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){
+   requestPermissions(new String[]{"android.permission.RECORD_AUDIO","android.permission.POST_NOTIFICATIONS"},1);return;}
+  send("talk");
+ }
+ /** The header pearl from the real visual state: silver while Rose's call is live and muted; the listening ring; the
+  * speaking breath (1600ms ease-in-out, only while visible with animations on; otherwise its static ring). */
+ void showPearl(RoseVisualState v){
+  boolean silver=state!=null&&state.active()&&state.muted;
+  boolean speaking=v.surround==RoseVisualState.Surround.SPEAKING,listening=v.surround==RoseVisualState.Surround.LISTENING;
+  boolean breathing=speaking&&v.animate;
+  pearl.breathe(breathing);
+  if(!breathing)pearl.set(silver,listening,speaking?0f:-1f);else if(pearl.silver!=silver)pearl.set(silver,false,pearl.breath<0?0f:pearl.breath);
+ }
+ void stopBreath(){if(pearl!=null)pearl.breathe(false);}
  void primary(){
   String cmd=state==null?null:state.primaryCommand();if(cmd==null)return;
   if("talk".equals(cmd)&&checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){
