@@ -1,5 +1,6 @@
 package com.android.server.companion.virtual.computercontrol;
 
+import android.companion.virtual.computercontrol.AutomatedApps;
 import android.companion.virtual.computercontrol.IAutomatedPackageListener;
 import android.os.Handler;
 import android.os.UserHandle;
@@ -42,6 +43,11 @@ public final class AutomatedDevicesContractTest {
         Map<Integer, Owner> lastContent;
         Map<Integer, Owner> owners = null;  // reference consumer: null until the first valid snapshot
         int snapshots;
+        /** device id -> its current apps, from onAutomatedDeviceAppsChanged; complete per device. */
+        Map<Integer, List<String>> apps = new HashMap<>();
+        Map<Integer, Boolean> complete = new HashMap<>();
+        final Map<Long, String> appsByGeneration = new HashMap<>();
+        long devicesGeneration = -1;
         @Override public void onAutomatedPackagesChanged(String owner, List<String> packages, UserHandle user) {
             calls.add("packages:" + owner);
         }
@@ -61,6 +67,29 @@ public final class AutomatedDevicesContractTest {
             if (lastContent != null && !lastContent.equals(content)) expect(generation > last, "a content change has a higher generation");
             last = generation; lastContent = content;
             owners = content;
+            devicesGeneration = generation;
+        }
+        @Override public void onAutomatedDeviceAppsChanged(long generation, int[] ids, String[] pkgs, int[] uids,
+                boolean[] deviceComplete, int[] appDevices, String[] appPackages) {
+            calls.add("apps:" + generation);
+            expect(generation == devicesGeneration, "apps follow the same generation's devices at once");
+            expect(ids.length == pkgs.length && ids.length == uids.length && ids.length == deviceComplete.length
+                    && appDevices.length == appPackages.length, "well-formed app snapshot");
+            Map<Integer, Owner> devices = new HashMap<>();
+            for (int i = 0; i < ids.length; i++) devices.put(ids[i], new Owner(pkgs[i], uids[i]));
+            expect(devices.equals(owners), "the app snapshot names exactly the same devices");
+            Map<Integer, List<String>> next = new HashMap<>();
+            Map<Integer, Boolean> nextComplete = new HashMap<>();
+            for (int i = 0; i < ids.length; i++) { next.put(ids[i], new ArrayList<>()); nextComplete.put(ids[i], deviceComplete[i]); }
+            for (int i = 0; i < appDevices.length; i++) {
+                expect(next.containsKey(appDevices[i]), "every app's device is listed");
+                expect(!next.get(appDevices[i]).contains(appPackages[i]), "no duplicate app on a device");
+                next.get(appDevices[i]).add(appPackages[i]);
+            }
+            String content = next + "/" + nextComplete;
+            String seen = appsByGeneration.putIfAbsent(generation, content);
+            expect(seen == null || seen.equals(content), "a repeated generation has identical apps");
+            apps = next; complete = nextComplete;
         }
         /** Reference join: display -> device (getVirtualDevices) -> listed owner with Rose's package AND this user's uid. */
         boolean roses(int display, Map<Integer, Integer> displayToDevice, int roseUid) {
@@ -68,6 +97,88 @@ public final class AutomatedDevicesContractTest {
             Owner owner = owners == null || device == null ? null : owners.get(device);
             return owner != null && ROSE.equals(owner.pkg) && owner.uid == roseUid;
         }
+    }
+
+    /** #156 parity: the listener's per-device apps and a session's own getAutomatedApps come from one repository. */
+    static void parity() {
+        Handler handler = new Handler();
+        AutomatedPackagesRepository repository = new AutomatedPackagesRepository(handler);
+        Recorder home = new Recorder();
+        repository.registerAutomatedPackageListener(home, 0);
+        handler.drain();
+        expect(home.calls.equals(List.of("devices:0", "apps:0")), "initial: devices then apps, one generation, even empty");
+
+        // Rose works in mail (front) with maps behind it: both are current apps; hidden apps never disappear.
+        repository.update(3, ROSE, ROSE_UID, running(10500, "com.example.mail", "com.example.maps"));
+        repository.update(4, OTHER, OTHER_UID, running(10500, "com.example.mail"));
+        handler.drain();
+        expect(home.apps.get(3).equals(List.of("com.example.mail", "com.example.maps")), "front and hidden apps are both listed");
+        expect(home.apps.get(4).equals(List.of("com.example.mail")), "the same package on another owner's device is that device's");
+        AutomatedApps rose = repository.automatedAppsForDevice(3, ROSE_UID);
+        expect(Arrays.asList(rose.getPackageNames()).equals(home.apps.get(3)) && rose.isComplete() && !rose.isClosed()
+                && rose.getUserId() == 0, "the session read equals the listener's apps for that device");
+
+        // A finished logical task changes nothing in the platform: no report, no change, same generations.
+        long homeBefore = home.last, roseBefore = rose.getGeneration();
+        handler.drain();
+        expect(home.last == homeBefore && repository.automatedAppsForDevice(3, ROSE_UID).getGeneration() == roseBefore,
+                "a completed logical task is not an app closing");
+
+        // Maps finishes: it leaves both surfaces at a higher generation.
+        repository.update(3, ROSE, ROSE_UID, running(10500, "com.example.mail"));
+        handler.drain();
+        AutomatedApps after = repository.automatedAppsForDevice(3, ROSE_UID);
+        expect(home.apps.get(3).equals(List.of("com.example.mail")) && home.last > homeBefore, "a closed app leaves the listener");
+        expect(Arrays.asList(after.getPackageNames()).equals(List.of("com.example.mail")) && after.getGeneration() > roseBefore,
+                "and the session read, at a higher generation");
+
+        // Per-device generation: another owner's change never moves Rose's session generation (no cross-owner signal).
+        repository.update(4, OTHER, OTHER_UID, running(10500, "com.example.mail", "com.example.notes"));
+        handler.drain();
+        expect(repository.automatedAppsForDevice(3, ROSE_UID).getGeneration() == after.getGeneration(),
+                "another owner's apps never change Rose's session generation");
+
+        // Cross-owner and cross-user refusal: only the device's recorded owner uid reads it.
+        expect(repository.automatedAppsForDevice(3, OTHER_UID) == null, "another owner cannot read Rose's device");
+        expect(repository.automatedAppsForDevice(3, ROSE_UID_USER10) == null, "another user's Rose cannot read it");
+
+        // Another user's activity on Rose's device: never named, and the device is reported incomplete.
+        ArraySet<Pair<Integer, String>> mixed = running(10500, "com.example.mail");
+        mixed.add(new Pair<>(1010500, "com.example.private"));
+        repository.update(3, ROSE, ROSE_UID, mixed);
+        handler.drain();
+        AutomatedApps partial = repository.automatedAppsForDevice(3, ROSE_UID);
+        expect(!home.complete.get(3) && home.apps.get(3).equals(List.of("com.example.mail")), "listener: incomplete, own user's apps only");
+        expect(!partial.isComplete() && Arrays.asList(partial.getPackageNames()).equals(List.of("com.example.mail")),
+                "session: incomplete, own user's apps only");
+
+        // Handover moves every app off the session display: genuinely empty and complete, not closed.
+        repository.update(3, ROSE, ROSE_UID, running(10500));
+        handler.drain();
+        AutomatedApps handedOver = repository.automatedAppsForDevice(3, ROSE_UID);
+        expect(handedOver.getPackageNames().length == 0 && handedOver.isComplete() && !handedOver.isClosed()
+                && handedOver.getGeneration() > partial.getGeneration(), "handover: empty, complete, newer");
+        expect(!home.owners.containsKey(3) && !home.apps.containsKey(3), "an empty device leaves the listener");
+
+        // Close: the device is dropped; the closed terminal state is AutomatedApps.closed (sticky in the session).
+        repository.update(3, ROSE, ROSE_UID, running(10500, "com.example.mail"));
+        repository.onDeviceClosed(3);
+        handler.drain();
+        expect(!home.apps.containsKey(3), "a closed device is gone from the listener");
+        AutomatedApps closed = AutomatedApps.closed(0);
+        expect(closed.isClosed() && closed.getPackageNames().length == 0 && closed.getGeneration() == Long.MAX_VALUE,
+                "closed is empty and terminal");
+        android.os.Parcel parcel = android.os.Parcel.obtain();
+        partial.writeToParcel(parcel, 0);
+        AutomatedApps copy = AutomatedApps.CREATOR.createFromParcel(parcel);
+        expect(copy.getGeneration() == partial.getGeneration() && Arrays.equals(copy.getPackageNames(), partial.getPackageNames())
+                && copy.isComplete() == partial.isComplete() && copy.getUserId() == 0 && !copy.isClosed(), "parcel round trip");
+
+        // Replacement: Rose's new session has its own device; its reads start from its own state.
+        repository.update(5, ROSE, ROSE_UID, running(10500, "com.example.notes"));
+        handler.drain();
+        expect(Arrays.asList(repository.automatedAppsForDevice(5, ROSE_UID).getPackageNames()).equals(List.of("com.example.notes"))
+                && home.apps.get(5).equals(List.of("com.example.notes")), "the replacement session's app on both surfaces");
     }
 
     static ArraySet<Pair<Integer, String>> running(int uid, String... packages) {
@@ -104,12 +215,15 @@ public final class AutomatedDevicesContractTest {
         repository.update(3, ROSE, ROSE_UID, running(10600, "com.example.maps"));
         repository.update(4, OTHER, OTHER_UID, running(10500, "com.example.mail"));
         repository.update(4, OTHER, OTHER_UID, running(10500, "com.example.mail", "com.example.notes"));
-        int before = user0.snapshots;
+        Map<Integer, Owner> ownersBefore = user0.owners;
         while (!handler.queue.isEmpty()) {
             handler.queue.poll().run();
             expect(user0.roses(7, displays, ROSE_UID) && !user0.roses(11, displays, ROSE_UID), "swap: no false card at any message");
         }
-        expect(user0.snapshots == before, "an app moving between agents changes no owner, so no new snapshot");
+        // Apps moved, so the app snapshot changed at a higher generation; no device changed owner.
+        expect(user0.owners.equals(ownersBefore), "an app moving between agents changes no device owner");
+        expect(user0.apps.get(3).equals(List.of("com.example.maps")) && user0.apps.get(4).equals(
+                List.of("com.example.mail", "com.example.notes")), "each device lists its own current apps after the swap");
 
         // 8. Foreign user: user 10's controller (same package, another uid) is never in user 0's snapshot.
         Recorder user10 = new Recorder();
@@ -136,7 +250,8 @@ public final class AutomatedDevicesContractTest {
         long beforeUnknown = user0.last;
         repository.update(7, ROSE, running(10500, "com.example.mail"));  // the pre-#156 path: owner uid unknown
         handler.drain();
-        expect(!user0.owners.containsKey(7) && user0.last == beforeUnknown, "an owner without a uid is never listed");
+        // Its own view changed (running, not reportable), so a higher generation may repeat user 0's content.
+        expect(!user0.owners.containsKey(7) && user0.last >= beforeUnknown, "an owner without a uid is never listed");
         expect(!user0.roses(13, displays, ROSE_UID), "nor attributed");
 
         // 6. Ordering: a registration made while changes are still queued may first see an earlier queued generation,
@@ -164,6 +279,7 @@ public final class AutomatedDevicesContractTest {
             for (Map<Integer, Owner> content : r.byGeneration.values())
                 for (Owner o : content.values())
                     expect(o.pkg.equals(ROSE) || o.pkg.equals(OTHER), "only owner packages are named");
+        parity();
         System.out.println("AutomatedDevicesContractTest: " + checks + " checks passed");
     }
 }
