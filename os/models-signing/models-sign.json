@@ -7,8 +7,8 @@
     "ingress": "guard",
     "workflowPath": ".github/workflows/models-android.yml",
     "artifactName": "rose-models-unsigned-{source12}-run{run}-{attempt}",
-    "archiveBytes": 752772,
-    "archiveSha256": "595238a550fce263fce87fcf1b435c7d106566f3148419887d094cd10e99ac5b",
+    "archiveBytes": 753580,
+    "archiveSha256": "a7aaced1cb6a7c2a1b20d2300c38d8591451e7e80ab45c57f6e37207aae20672",
     "handoffArtifact": "models-input-{run}",
     "limits": {"memberBytes": 67108864, "totalBytes": 134217728},
     "basis": "S013 selected ingress: only the original unsigned input the PR #149 profile pins (source, push/main, run, attempt), read by the hosted guard with its existing actions: read job token, validated by scripts/models-input-ingress.py before the controller starts, handed to the signing job as a same-run artifact and rechecked there before any secret access. No other run, artifact, URL, credential or permission is accepted."
