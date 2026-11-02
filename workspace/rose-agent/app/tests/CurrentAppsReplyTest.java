@@ -73,6 +73,29 @@ public final class CurrentAppsReplyTest {
         Snapshot hidden = CurrentApps.fromReply("reader", "live", "s-1", "rose-ws-1", 11L, apps(new ReplyApp(PERM, true, false), new ReplyApp(CALC, false, true)), null, "ready", true);
         expect(hidden.available && hidden.apps.size() == 2 && hidden.apps.get(0).preview != null && hidden.apps.get(1).preview == null, "complete list with a hidden app: listed, live view unavailable");
         expect(CurrentApps.fromReply("reader", "live", "s-1", "rose-ws-1", 11L, apps(new ReplyApp(CALC, true, true)), null, null, true).reason.equals(CurrentApps.MALFORMED), "complete members without sessionStatus: no guessed state");
+        // PR379 owned_devices: an attested complete live list is shown whatever the informational sessionStatus, even
+        // without a session; every other source keeps the ready/blocked/launching gate. Live view only with a ready,
+        // explicitly associated session's front app.
+        for (String st : new String[]{"cleanup_failed", null, "ready", "blocked", "launching"}) {
+            Snapshot o = CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 20L, apps(new ReplyApp(CALC, false, false)), null, st, true, "owned_devices");
+            expect(o.available && o.apps.size() == 1 && o.apps.get(0).packageName.equals(CALC), "owned_devices, sessionStatus " + st + ": the attested app is shown");
+        }
+        expect(CurrentApps.fromReply("r", "live", "s-1", "t", 20L, apps(new ReplyApp(CALC, false, false)), null, "cleanup_failed", true, "owned_devices").apps.get(0).state.equals(CurrentApps.STATE_RUNNING), "informational status: the app is running");
+        expect(CurrentApps.fromReply("r", "live", "s-1", "t", 20L, apps(new ReplyApp(CALC, false, false)), null, "blocked", true, "owned_devices").apps.get(0).state.equals(CurrentApps.STATE_WAITING), "a known status still names the card's state");
+        Snapshot noSession = CurrentApps.fromReply("r", "live", null, null, 21L, apps(new ReplyApp(CALC, true, false)), null, null, true, "owned_devices");
+        expect(noSession.available && noSession.apps.size() == 1 && noSession.apps.get(0).preview == null, "owned_devices without a session: shown, no live view");
+        for (String src : new String[]{"session_windows", "platform", null}) {
+            expect(CurrentApps.fromReply("r", "live", "s-1", "t", 22L, apps(new ReplyApp(CALC, true, true)), null, "cleanup_failed", true, src).reason.equals(CurrentApps.MALFORMED), "source " + src + ": no guessed state");
+            expect(CurrentApps.fromReply("r", "live", null, "t", 22L, apps(new ReplyApp(CALC, true, true)), null, "ready", true, src).reason.equals(CurrentApps.MALFORMED), "source " + src + ": a live list needs its session");
+        }
+        expect(CurrentApps.fromReply("r", "live", "s-1", "t", 23L, apps(new ReplyApp(CALC, true, true)), null, "cleanup_failed", false, "owned_devices").reason.equals(CurrentApps.INCOMPLETE), "owned_devices complete:false: cannot confirm");
+        expect(CurrentApps.fromReply("r", "none", null, null, 23L, Collections.<ReplyApp>emptyList(), null, null, true, "owned_devices").available, "owned_devices none, complete: genuinely empty");
+        for (String st : new String[]{"blocked", "launching", "cleanup_failed", null}) {
+            Snapshot np = CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 24L, apps(new ReplyApp(CALC, true, true)), null, st, true, "owned_devices");
+            expect(np.apps.get(0).preview == null, "sessionStatus " + st + ": no live view");
+        }
+        expect(CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 24L, apps(new ReplyApp(CALC, true, true)), null, "ready", true, "owned_devices").apps.get(0).preview != null, "ready, associated, front: live view");
+        expect(CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 24L, apps(new ReplyApp(CALC, true, true)), null, "blocked", true, "platform").apps.get(0).preview == null, "platform blocked: no live view either");
         // Controller restart: a new instance is a new registration even though its generation starts again.
         Tracker r = new Tracker();
         r.apply(live(40, "ready", true, new ReplyApp(CALC, true, true)));

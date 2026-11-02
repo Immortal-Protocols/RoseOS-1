@@ -339,7 +339,7 @@ public final class RoseConversationActivity extends Activity {
     return CurrentApps.fromReply(reg,o.isNull("status")?null:o.optString("status",null),o.isNull("sessionId")?null:o.optString("sessionId",null),
      o.isNull("taskId")?null:o.optString("taskId",null),o.has("generation")?o.optLong("generation"):null,apps,
      o.isNull("instance")?null:o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
-     o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null);
+     o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null,o.isNull("source")?null:o.optString("source",null));
    }finally{client.close();}
   }catch(Exception e){return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);}
  }

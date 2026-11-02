@@ -30,7 +30,7 @@ public final class CurrentAppsParityTest {
             apps.add(new ReplyApp(str(m, "packageName"), Boolean.TRUE.equals(m.get("front")), Boolean.TRUE.equals(m.get("target")))); } }
         Object g = r.get("generation"), c = r.get("complete");
         return CurrentApps.fromReply(registration, str(r, "status"), str(r, "sessionId"), str(r, "taskId"), g instanceof Number ? ((Number) g).longValue() : null,
-            apps, str(r, "instance"), str(r, "sessionStatus"), c instanceof Boolean ? (Boolean) c : null);
+            apps, str(r, "instance"), str(r, "sessionStatus"), c instanceof Boolean ? (Boolean) c : null, str(r, "source"));
     }
     @SuppressWarnings("unchecked")
     static void check(Tracker t, Map<?, ?> expected, String what) {
@@ -53,7 +53,7 @@ public final class CurrentAppsParityTest {
             Tracker t = new Tracker(); t.apply(reply("case-" + name, (Map<?, ?>) r));
             check(t, (Map<?, ?>) c.get("expected"), name); home++;
         }
-        expect(home >= 15, "Home covers every case that has a controller reply (" + home + ")");
+        expect(home >= 24, "Home covers every case that has a controller reply (" + home + ")");
         for (Object o : (List<Object>) fx.get("sequences")) {
             Map<?, ?> s = (Map<?, ?>) o; Tracker t = new Tracker(); int i = 0;
             for (Object st : (List<Object>) s.get("steps")) {

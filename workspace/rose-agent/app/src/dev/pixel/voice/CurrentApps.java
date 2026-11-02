@@ -148,7 +148,17 @@ final class CurrentApps {
   ReplyApp(String packageName,boolean front,boolean target){this.packageName=packageName;this.front=front;this.target=target;} }
  static Snapshot fromReply(String registrationFallback,String status,String sessionId,String taskId,Long generation,List<ReplyApp> apps,
    String instance,String sessionStatus,Boolean complete){
+  return fromReply(registrationFallback,status,sessionId,taskId,generation,apps,instance,sessionStatus,complete,null);
+ }
+ /** The source App Core reports the members from (PR379): the platform's owned-device snapshot, independent of any
+  * session. Only for it is an attested complete live list shown whatever the informational sessionStatus (a failed
+  * close or a missing session must not hide apps still under control). */
+ static final String SOURCE_OWNED_DEVICES="owned_devices";
+ /** source: the reply's member source (owned_devices, platform or session_windows; null when absent). */
+ static Snapshot fromReply(String registrationFallback,String status,String sessionId,String taskId,Long generation,List<ReplyApp> apps,
+   String instance,String sessionStatus,Boolean complete,String source){
   String reg=nz(instance).isEmpty()?registrationFallback:"controller:"+instance;long gen=generation==null?Long.MIN_VALUE:generation;
+  boolean owned=SOURCE_OWNED_DEVICES.equals(source);
   if(status==null||generation==null)return Snapshot.unavailable(reg,gen,UNREADABLE);
   switch(status){
    case "locked":return Snapshot.unavailable(reg,gen,LOCKED);
@@ -159,23 +169,30 @@ final class CurrentApps {
    case "live":break;
    default:return Snapshot.unavailable(reg,gen,UNREADABLE);
   }
-  if(apps==null||nz(sessionId).isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+  // The owner snapshot is session-independent: its live members need no session id; every other source does.
+  if(apps==null||!owned&&nz(sessionId).isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
   // PR355 (41140ec): a live session is never attested complete (behind_front_unlisted, windows_unreadable or
-  // blocked), so it is the explicit unavailable state before anything else is read from it.
+  // blocked), so it is the explicit unavailable state before anything else is read from it. complete:false always
+  // means cannot confirm, whatever the source.
   if(!Boolean.TRUE.equals(complete))return Snapshot.unavailable(reg,gen,INCOMPLETE);
   // An open session whose apps all left (PR361: handover is not close) is attested empty: no state to show.
   if(apps.isEmpty())return new Snapshot(reg,gen,true,"",Collections.<App>emptyList());
   String state;
   switch(nz(sessionStatus)){
    case "ready":state=STATE_RUNNING;break;case "blocked":state=STATE_WAITING;break;case "launching":state=STATE_STARTING;break;
-   default:return Snapshot.unavailable(reg,gen,MALFORMED);
+   // owned_devices: the apps are attested running under control; the session's own state is only informational.
+   default:if(!owned)return Snapshot.unavailable(reg,gen,MALFORMED);state=STATE_RUNNING;
   }
+  // Live view only for the topmost front app of an explicitly associated, live and ready session (PR340 frames that
+  // session's display); every other member, and every member otherwise, says live view isn't available.
+  boolean previewable="ready".equals(sessionStatus)&&!nz(sessionId).isEmpty()&&!nz(taskId).isEmpty();
+  String owner=nz(sessionId).isEmpty()?"owned":sessionId;
   List<App> out=new ArrayList<>();boolean previewed=false;
   for(ReplyApp a:apps){
    if(a==null)return Snapshot.unavailable(reg,gen,MALFORMED);
    Preview p=null;
-   if(a.front&&!previewed&&!nz(taskId).isEmpty()){p=new Preview(sessionId,taskId);previewed=true;}
-   out.add(new App(sessionId+"/"+nz(a.packageName),a.packageName,state,p));
+   if(a.front&&!previewed&&previewable){p=new Preview(sessionId,taskId);previewed=true;}
+   out.add(new App(owner+"/"+nz(a.packageName),a.packageName,state,p));
   }
   for(App a:out)if(a.packageName.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
   return new Snapshot(reg,gen,true,"",out);
