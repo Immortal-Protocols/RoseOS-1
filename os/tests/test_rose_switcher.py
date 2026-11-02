@@ -947,8 +947,9 @@ class CommonParityReplayTest(unittest.TestCase):
 
     def test_each_known_gap_replays_to_launcher3s_stated_side_and_stays_not_claimed(self):
         """Each of the fixture's knownGaps with a platform input, whichever App Core lists: Launcher3's own side is
-        replayed from the gap's platform input and must equal its launcherCategory; the gap is parity not_claimed, with
-        the two surfaces in different categories. A gap is an open difference, never a parity pass."""
+        replayed from the gap's platform input and must equal its launcherCategory (and launcherApps, when stated); the
+        gap is parity not_claimed, with the two surfaces in different categories or, within the same category, naming
+        different sets (launcherApps, homeApps). A gap is an open difference, never a parity pass."""
         data = self.load()
         gaps = [g for g in data.get('knownGaps', []) if g.get('platform') is not None]
         lines = []
@@ -959,9 +960,17 @@ class CommonParityReplayTest(unittest.TestCase):
         for g, row in zip(gaps, got):
             with self.subTest(gap=g['name']):
                 self.assertEqual(row[0], g['name'])
-                self.assertEqual(self.category(row[1], row[5])[0], g['launcherCategory'])
+                launcher = self.category(row[1], row[5])
+                self.assertEqual(launcher[0], g['launcherCategory'])
+                if 'launcherApps' in g:
+                    self.assertEqual(launcher[1], sorted(g['launcherApps']), 'Launcher3\'s stated set')
                 self.assertEqual(g['parity'], 'not_claimed')
-                self.assertNotEqual(g['launcherCategory'], g['homeCategory'], 'NOT parity: a named, open difference')
+                # NOT parity: the surfaces differ in category, or in the set shown within the same category.
+                self.assertNotEqual((g['launcherCategory'], sorted(g.get('launcherApps', []))),
+                    (g['homeCategory'], sorted(g.get('homeApps', []))), 'NOT parity: a named, open difference')
+                if g['launcherCategory'] == g['homeCategory']:
+                    self.assertIn('launcherApps', g, 'a same-category gap names both sets')
+                    self.assertIn('homeApps', g, 'a same-category gap names both sets')
 
 if __name__ == '__main__':
     unittest.main()
