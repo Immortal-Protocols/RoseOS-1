@@ -150,6 +150,7 @@ jobs:
       factory_package_seconds: ${{ steps.factory-package.outputs.package_seconds }}
       factory_observe_seconds: ${{ steps.factory-package.outputs.observe_seconds }}
       factory_classify_seconds: ${{ steps.factory-package.outputs.classify_seconds }}
+      factory_stage_seconds: ${{ steps.factory-package.outputs.stage_seconds }}
       factory_job_minutes: ${{ steps.factory-package.outputs.job_minutes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -1102,11 +1103,14 @@ jobs:
     # firmware-carried partitions missing is the expected truthful result). The pins in
     # scripts/rango-factory-package-wiring.py are historical expected values checked before use, not current byte
     # proof. Everything stays in a new task directory under /home/pixelbuild/rose-actions (a proposed parent, refused
-    # when absent); only the package receipt, the observation, the classify report and the cleanup report are uploaded,
-    # never the capped raw log, the ZIP or the target-files. contents: read only: no OIDC token, signer login, secret,
+    # when absent). Two private run artifacts leave: the reports (package receipt, observation, classify report, cleanup
+    # report; 7 days) and, only after inspection reported and the ZIP's regular-file, size (proposed 8 GiB cap) and
+    # sha256 checks against the helper receipt pass, the installer (exactly SHA256SUMS and the ZIP; 3 days). Never the
+    # capped raw log or the target-files; nothing is published. contents: read only: no OIDC token, signer login, secret,
     # signing, download, install, phone action or publication. Time: per-step wrapper ceilings from the hosted guard
-    # (package 5400 s, observe 900 s, classify 7200 s, each +30 s kill; job 237 min), not measurements. 128 GiB free is
-    # the helper's precondition, not a usage cap. Cleanup stops the builder only if this run's controller started it.
+    # (package 5400 s, observe 900 s, classify 7200 s, stage 900 s, each +30 s kill; upload 45 min; job 297 min), not
+    # measurements or a guaranteed stop. 128 GiB free is the helper's precondition, not a usage cap. Cleanup stops the
+    # builder only if this run's controller started it.
     # Runtime is not approved.
     needs: [guard, controller]
     if: inputs.mode == 'rango-factory-package'
@@ -1118,6 +1122,7 @@ jobs:
       PACKAGE_SECONDS: ${{ needs.guard.outputs.factory_package_seconds }}
       OBSERVE_SECONDS: ${{ needs.guard.outputs.factory_observe_seconds }}
       CLASSIFY_SECONDS: ${{ needs.guard.outputs.factory_classify_seconds }}
+      STAGE_SECONDS: ${{ needs.guard.outputs.factory_stage_seconds }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -1125,20 +1130,38 @@ jobs:
       - name: Recheck the pins and bounds on the builder
         run: |
           set -euo pipefail
-          for bound in "$PACKAGE_SECONDS" "$OBSERVE_SECONDS" "$CLASSIFY_SECONDS"; do [[ "$bound" =~ ^[1-9][0-9]{0,5}$ ]]; done
+          for bound in "$PACKAGE_SECONDS" "$OBSERVE_SECONDS" "$CLASSIFY_SECONDS" "$STAGE_SECONDS"; do [[ "$bound" =~ ^[1-9][0-9]{0,5}$ ]]; done
           python3 scripts/rango-factory-package-wiring.py check > "$RUNNER_TEMP/factory-package-bounds"
           grep -qx "package_seconds=$PACKAGE_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
           grep -qx "observe_seconds=$OBSERVE_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
           grep -qx "classify_seconds=$CLASSIFY_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
+          grep -qx "stage_seconds=$STAGE_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
       - name: Package the install archive (bounded, under the helper's shared lock)
         run: timeout --kill-after=30s "${PACKAGE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py package --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - name: Observe the signed target-files (bounded)
         run: timeout --kill-after=30s "${OBSERVE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py observe --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - name: Classify the install archive (bounded)
         run: timeout --kill-after=30s "${CLASSIFY_SECONDS}s" python3 scripts/rango-factory-package-wiring.py classify --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Stage the installer for the private artifact (bounded)
+        id: installer
+        run: timeout --kill-after=30s "${STAGE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py stage-installer --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Private installer artifact (exactly SHA256SUMS and the ZIP)
+        id: installer-artifact
+        timeout-minutes: 45
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rango-install-2026103001-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.installer.outputs.root }}/SHA256SUMS
+            ${{ steps.installer.outputs.root }}/package/rango-install-2026103001.zip
+          retention-days: 3
+          if-no-files-found: error
+          compression-level: 0
       - name: Cleanup report and allowlisted receipts
         if: always()
-        run: python3 scripts/rango-factory-package-wiring.py report --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/rango-factory-package-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+        env:
+          INSTALLER_UPLOAD: ${{ steps.installer-artifact.outcome || 'skipped' }}
+        run: python3 scripts/rango-factory-package-wiring.py report --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/rango-factory-package-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --installer-upload "$INSTALLER_UPLOAD"
       - name: Receipts artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
