@@ -153,7 +153,7 @@ public final class RoseConversationActivity extends Activity {
    s==null?Float.NaN:RoseVisualState.fresh(s.trayOutputLevel,seen,now),reducedMotion(),resumed);
   presence.show(visual);caption.setText(RosePresenceModel.caption(visual));
   renderTask(s);
-  if(overview!=null)overview.refresh();
+  if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
  }
  /** The current task from VoiceService's copy of the server's task projection, which outlives this
   * screen, voice sessions and navigation; returning here shows the same task. Read-only: no Stop. */
@@ -251,7 +251,8 @@ public final class RoseConversationActivity extends Activity {
  /** {read key, targetPackage} of the latest controller read, published together: the package is used only for the
   * read whose key it was taken with. */
  volatile String[] ctlPackage={"",""};
- void openOverview(){if(overview!=null)overview.open();}
+ /** Re-entry starts from a fresh read: the last visit's reply is dropped first, so nothing it listed comes back. */
+ void openOverview(){appsEpoch++;appsSnapshot=null;appsPolledAt=0;if(overview!=null)overview.open();}
  /** Back closes the overview first; the work, its selection and the human's foreground app are unchanged. */
  @Override public void onBackPressed(){if(overview!=null&&overview.isOpen()){overview.close();return;}super.onBackPressed();}
  /** Live: the local Rose connection is up; its tasks come only from App Core's onLocalTasks list (PR321). */
@@ -305,25 +306,42 @@ public final class RoseConversationActivity extends Activity {
    }finally{client.close();}
   }catch(Exception e){return WorkspaceOverviewPreview.Response.failed();}
  }
- /** #225/#156 interim current-apps source, until App Core's shared membership contract: the controller's own
-  * get_state session (it starts, owns and closes that session) as one complete snapshot per read. Never task history:
-  * the local task feed is consulted only to find an explicitly verified binding for exactly the live session, which
-  * alone enables that app's live preview and Watch. A new screen is a new registration, so nothing shown before it
-  * comes back. */
- final String appsRegistration="controller-"+java.util.UUID.randomUUID();long appsGeneration;String appsKey="";
+ /** #225/#156: the apps currently under Rose's control, from the controller's phone-local call("current_apps")
+  * (App Core PR355), read with the controller state about once a second while the overview is open. Each read is one
+  * complete report and its own registration (reads are serial), so a controller restart or a late reply never brings
+  * old apps back. Only an attested complete reply is shown as membership (CurrentApps.fromReply); anything else is the
+  * explicit unavailable state. Task history is never consulted. */
+ volatile CurrentApps.Snapshot appsSnapshot;long appsReads;volatile boolean appsPolling;long appsPolledAt;volatile int appsEpoch;
+ /** One read in flight, about once a second, only while the overview is open (never otherwise). */
+ void pollApps(){
+  if(appsPolling||SystemClock.uptimeMillis()-appsPolledAt<1000)return;appsPolling=true;appsPolledAt=SystemClock.uptimeMillis();
+  final int epoch=appsEpoch;
+  new Thread(()->{CurrentApps.Snapshot s=readCurrentApps();if(epoch==appsEpoch)appsSnapshot=s;appsPolling=false;},"rose-current-apps").start();
+ }
  CurrentApps.Snapshot currentApps(){
-  TaskControl.ControllerRead r=ctl;String[] p=ctlPackage;String pkg=r.key().equals(p[0])?p[1]:"";
-  String key=r.key()+"|"+pkg;if(!key.equals(appsKey)){appsKey=key;appsGeneration++;}
-  String failure;
-  switch(r.failure){
-   case NONE:failure=null;break;
-   case PENDING:failure=CurrentApps.NOT_REPORTED;break;
-   case NO_PROVIDER:failure=CurrentApps.NOT_INSTALLED;break;
-   default:failure=CurrentApps.UNREADABLE;
-  }
-  WorkspaceOverview.Scope scope=WorkspaceOverviewFeed.scope();
-  WorkspaceOverview.Model m=WorkspaceOverview.of(localLive(),scope,overviewWorkspace(r,scope),WorkspaceOverviewFeed.tasks(),null,null,false);
-  return CurrentApps.fromController(appsRegistration,appsGeneration,failure,r.status,r.sessionId,r.taskId,pkg,m.watchRow==null?null:m.watchRow.binding);
+  CurrentApps.Snapshot s=appsSnapshot;
+  return s!=null?s:CurrentApps.Snapshot.unavailable("pending",0,CurrentApps.NOT_REPORTED);
+ }
+ /** One current_apps read (off the UI thread). Failures are fixed words; nothing is logged. */
+ CurrentApps.Snapshot readCurrentApps(){
+  String reg="current_apps-"+(++appsReads);
+  try{
+   android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
+   if(client==null)return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.NOT_INSTALLED);
+   try{
+    Bundle extras=new Bundle();extras.putString("params","{}");
+    Bundle reply=client.call("current_apps",null,extras);String raw=reply==null?null:reply.getString("result");
+    if(raw==null||raw.length()>65536)return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);
+    org.json.JSONObject o=new org.json.JSONObject(raw);
+    java.util.List<CurrentApps.ReplyApp> apps=null;org.json.JSONArray a=o.optJSONArray("apps");
+    if(a!=null){apps=new java.util.ArrayList<>();for(int i=0;i<a.length()&&i<64;i++){org.json.JSONObject x=a.optJSONObject(i);
+     apps.add(x==null?null:new CurrentApps.ReplyApp(x.optString("packageName",""),x.optBoolean("front"),x.optBoolean("target")));}}
+    return CurrentApps.fromReply(reg,o.isNull("status")?null:o.optString("status",null),o.isNull("sessionId")?null:o.optString("sessionId",null),
+     o.isNull("taskId")?null:o.optString("taskId",null),o.has("generation")?o.optLong("generation"):null,apps,
+     o.isNull("instance")?null:o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
+     o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null);
+   }finally{client.close();}
+  }catch(Exception e){return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);}
  }
  WorkspaceOverviewPanel.Source overviewSource(){
   return new WorkspaceOverviewPanel.Source(){
