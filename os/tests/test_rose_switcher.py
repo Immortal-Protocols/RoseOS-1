@@ -33,10 +33,11 @@ TARGETS = {'fallback_recents_activity.xml': LAYOUT, 'BaseContainerInterface.java
 # The stock lines the patch replaces, and nothing else: #410's colour values of the human task cards' identity chip and
 # focus/hover borders (attribute values only), the fallback's claimed space below the cards, and the phone actions
 # bar's task-aligned bottom margin (now less the same space).
-REPLACED = ['-    android:background="@color/materialColorSurfaceBright"',
+REPLACED = ['-    android:foreground="@drawable/app_chip_fg"',
+    '-    android:background="@color/materialColorSurfaceBright"',
     '-    launcher:focusBorderColor="@color/materialColorSecondary">',
+    '-        android:background="@drawable/icon_menu_arrow_background"',
     '-    launcher:focusBorderColor="@color/materialColorOutline"',
-    '-    launcher:hoverBorderColor="@color/materialColorPrimary">',
     '-                    overviewActionsClaimedSpace,',
     '-        // Align to bottom of task Rect.',
     '-                - mDp.getOverviewProfile().getActionsHeight();']
@@ -1160,9 +1161,10 @@ class OxbloodSwitcherBackdropTest(unittest.TestCase):
 class OxbloodHumanCardTest(unittest.TestCase):
     """#410: the smallest safe alignment of the human (top) carousel's own cards. Only colour values in the overview's
     task card layouts change: each card's app-identity chip (IconAppChipView, which clips itself to its rounded outline
-    in code and never reads its background) becomes an Oxblood plate with ivory text, and the card's keyboard-focus and
-    hover borders take the contract's focus-ring and secondary ink. No TaskView, live tile, touch, dismiss, launch or
-    navigation code, and no layout structure, changes."""
+    in code and never reads its background) becomes an Oxblood plate with an ivory name and chevron and an ivory
+    press/hover overlay, and the card's keyboard-focus border takes the contract's focus ring (hover stays stock, so
+    the two stay distinct). The chip's expanded menu (TaskMenuView) keeps its stock colours. No TaskView, live tile,
+    touch, dismiss, launch or navigation code, and no layout structure, changes."""
 
     def test_the_human_cards_chip_and_borders_take_the_contracts_colours_and_nothing_else(self):
         import json
@@ -1174,7 +1176,7 @@ class OxbloodHumanCardTest(unittest.TestCase):
         self.assertEqual(colors['rose_oxblood_chip'], '#F2' + fill[3:], 'the card fill, kept nearly opaque (95%)')
         self.assertEqual(colors['rose_oxblood_ink'], contract['ink']['primary'])
         self.assertEqual(colors['rose_oxblood_focus_ring'], contract['ink']['focusRing']['color'])
-        self.assertEqual(colors['rose_oxblood_hover_ring'], contract['ink']['secondary'])
+        self.assertNotIn('rose_oxblood_hover_ring', colors, 'hover keeps the stock colour, distinct from focus')
         chip = (tree/'quickstep/res/layout/icon_app_chip_view.xml').read_text()
         self.assertIn('android:background="@color/rose_oxblood_chip"', chip)
         self.assertIn('launcher:focusBorderColor="@color/rose_oxblood_focus_ring"', chip)
@@ -1182,7 +1184,20 @@ class OxbloodHumanCardTest(unittest.TestCase):
             'the name\'s colour only; its size, font and fading stay the stock style\'s')
         task = (tree/'quickstep/res/layout/task.xml').read_text()
         self.assertIn('launcher:focusBorderColor="@color/rose_oxblood_focus_ring"', task)
-        self.assertIn('launcher:hoverBorderColor="@color/rose_oxblood_hover_ring"', task)
+        self.assertIn('launcher:hoverBorderColor="@color/materialColorPrimary">', task, 'stock hover: focus stays distinct')
+        # The chip's arrow takes no stock light backing and an ivory chevron; its press/hover overlay is the ivory ink
+        # (the stock OnSurface overlay would vanish on the dark plate), same states and alphas as stock.
+        self.assertIn('android:background="@null"\n        android:tint="@color/rose_oxblood_ink"\n        '
+            'android:src="@drawable/ic_chevron_down"', chip)
+        self.assertIn('android:foreground="@drawable/rose_oxblood_chip_fg"', chip)
+        overlay = (tree/'quickstep/res/color/rose_oxblood_chip_state_fg.xml').read_text()
+        for state in ('android:alpha="0.15" android:color="@color/rose_oxblood_ink" android:state_enabled="true" '
+                'android:state_pressed="true"', 'android:alpha="0.11" android:color="@color/rose_oxblood_ink" '
+                'android:state_enabled="true" android:state_hovered="true"'):
+            self.assertIn(state, overlay)
+        self.assertIn('Copyright (C) 2025 The Android Open Source Project', overlay, 'the upstream notice is kept')
+        self.assertIn('<solid android:color="@color/rose_oxblood_chip_state_fg" />',
+            (tree/'quickstep/res/drawable/rose_oxblood_chip_fg.xml').read_text())
         # Only attribute values change in these layouts: the same elements, ids and attribute names, in order.
         for name in ('task.xml', 'icon_app_chip_view.xml'):
             stock = (FIXTURES/name).read_text()
@@ -1190,7 +1205,8 @@ class OxbloodHumanCardTest(unittest.TestCase):
             def shape(text):
                 return re.findall(r'<\s*([\w.]+)|\b([\w:]+)="', text)
             added = [a for a in shape(patched) if a not in shape(stock)]
-            self.assertEqual(sorted(set(added)), [] if name == 'task.xml' else [('', 'android:textColor')], name)
+            self.assertEqual(sorted(set(added)), [] if name == 'task.xml' else [('', 'android:textColor'), ('', 'android:tint')],
+                name)
             self.assertEqual(re.findall(r'android:id="([^"]+)"', stock), re.findall(r'android:id="([^"]+)"', patched))
 
     def test_the_chip_code_never_depends_on_its_background(self):

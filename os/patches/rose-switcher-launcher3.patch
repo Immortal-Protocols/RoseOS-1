@@ -1,3 +1,57 @@
+diff --git a/quickstep/res/color/rose_oxblood_chip_state_fg.xml b/quickstep/res/color/rose_oxblood_chip_state_fg.xml
+new file mode 100644
+index 0000000..3710dbc
+--- /dev/null
++++ b/quickstep/res/color/rose_oxblood_chip_state_fg.xml
+@@ -0,0 +1,23 @@
++<?xml version="1.0" encoding="utf-8"?><!--
++  ~ Copyright (C) 2025 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++<!-- RoseOS (#410): app_chip_state_color_fg with the pressed and hovered overlay in Rose's ivory ink, visible on the
++     Oxblood chip (the stock OnSurface overlay vanishes on a dark plate). Same states and alphas. -->
++<selector xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:alpha="0.15" android:color="@color/rose_oxblood_ink" android:state_enabled="true" android:state_pressed="true" />
++    <item android:alpha="0.11" android:color="@color/rose_oxblood_ink" android:state_enabled="true" android:state_hovered="true" />
++    <item android:color="@android:color/transparent" android:state_enabled="true" android:state_focused="true" />
++    <item android:color="@android:color/transparent" />
++</selector>
+diff --git a/quickstep/res/drawable/rose_oxblood_chip_fg.xml b/quickstep/res/drawable/rose_oxblood_chip_fg.xml
+new file mode 100644
+index 0000000..0779a24
+--- /dev/null
++++ b/quickstep/res/drawable/rose_oxblood_chip_fg.xml
+@@ -0,0 +1,19 @@
++<?xml version="1.0" encoding="utf-8"?><!--
++  ~ Copyright (C) 2025 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++<!-- RoseOS (#410): app_chip_fg with the Rose overlay colours (rose_oxblood_chip_state_fg). -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android">
++    <solid android:color="@color/rose_oxblood_chip_state_fg" />
++</shape>
 diff --git a/quickstep/res/layout/fallback_recents_activity.xml b/quickstep/res/layout/fallback_recents_activity.xml
 index 65f606a..e068d38 100644
 --- a/quickstep/res/layout/fallback_recents_activity.xml
@@ -19,21 +73,23 @@ index 65f606a..e068d38 100644
      </com.android.quickstep.fallback.RecentsDragLayer>
  </com.android.launcher3.LauncherRootView>
 diff --git a/quickstep/res/layout/icon_app_chip_view.xml b/quickstep/res/layout/icon_app_chip_view.xml
-index 76f4cc9..9907cb2 100644
+index 76f4cc9..b2cbbad 100644
 --- a/quickstep/res/layout/icon_app_chip_view.xml
 +++ b/quickstep/res/layout/icon_app_chip_view.xml
-@@ -29,8 +29,8 @@
+@@ -28,9 +28,9 @@
+     android:importantForAccessibility="no"
      android:autoMirrored="true"
      android:elevation="@dimen/task_thumbnail_icon_menu_elevation"
-     android:foreground="@drawable/app_chip_fg"
+-    android:foreground="@drawable/app_chip_fg"
 -    android:background="@color/materialColorSurfaceBright"
 -    launcher:focusBorderColor="@color/materialColorSecondary">
++    android:foreground="@drawable/rose_oxblood_chip_fg"
 +    android:background="@color/rose_oxblood_chip"
 +    launcher:focusBorderColor="@color/rose_oxblood_focus_ring">
  
      <!-- ignoring warning because the user of the anchor is a Rect where RTL is not needed -->
      <!-- This anchor's bounds is in the expected location after rotations and translations are
-@@ -66,6 +66,7 @@
+@@ -66,13 +66,15 @@
          android:fadingEdgeLength="@dimen/task_thumbnail_icon_menu_text_fading_size"
          android:marqueeRepeatLimit="1"
          android:scrollHorizontally="true"
@@ -41,24 +97,31 @@ index 76f4cc9..9907cb2 100644
          style="@style/IconAppChipMenuTextStyle" />
  
      <ImageView
+         android:id="@+id/icon_arrow"
+         android:layout_width="@dimen/task_thumbnail_icon_menu_arrow_size"
+         android:layout_height="@dimen/task_thumbnail_icon_menu_arrow_size"
+-        android:background="@drawable/icon_menu_arrow_background"
++        android:background="@null"
++        android:tint="@color/rose_oxblood_ink"
+         android:src="@drawable/ic_chevron_down"
+         android:importantForAccessibility="no" />
+ 
 diff --git a/quickstep/res/layout/task.xml b/quickstep/res/layout/task.xml
-index fa1d9f0..1a4be9d 100644
+index fa1d9f0..d09e585 100644
 --- a/quickstep/res/layout/task.xml
 +++ b/quickstep/res/layout/task.xml
-@@ -25,8 +25,8 @@
+@@ -25,7 +25,7 @@
      android:clipChildren="false"
      android:defaultFocusHighlightEnabled="false"
      android:focusable="true"
 -    launcher:focusBorderColor="@color/materialColorOutline"
--    launcher:hoverBorderColor="@color/materialColorPrimary">
 +    launcher:focusBorderColor="@color/rose_oxblood_focus_ring"
-+    launcher:hoverBorderColor="@color/rose_oxblood_hover_ring">
+     launcher:hoverBorderColor="@color/materialColorPrimary">
  
      <ViewStub
-         android:id="@+id/task_content_view"
 diff --git a/quickstep/res/values/rose_agent_strip.xml b/quickstep/res/values/rose_agent_strip.xml
 new file mode 100644
-index 0000000..5e4ba10
+index 0000000..ace444b
 --- /dev/null
 +++ b/quickstep/res/values/rose_agent_strip.xml
 @@ -0,0 +1,19 @@
@@ -71,12 +134,12 @@ index 0000000..5e4ba10
 +         fields.screenBase), applied by RecentsActivity after OverviewBlurFallbackStyle. -->
 +    <!-- RoseOS (#410): the human task cards' Oxblood identity chip and borders, from Home's contract
 +         (qa/oxblood/oxblood-contract.json): the chip is manager.card.fill at 95% (kept nearly opaque so its ivory
-+         ink.primary name stays readable over light app screens), keyboard focus is ink.focusRing.color, and hover is
-+         ink.secondary. Used only by the overview's task card layouts (task.xml, icon_app_chip_view.xml). -->
++         ink.primary name and chevron stay readable over light app screens; its pressed/hovered overlay is that ink,
++         rose_oxblood_chip_state_fg), and keyboard focus is ink.focusRing.color; hover keeps the stock colour, so focus
++         and hover stay distinct. Used only by the overview's task card layouts (task.xml, icon_app_chip_view.xml). -->
 +    <color name="rose_oxblood_chip">#F21A0A0D</color>
 +    <color name="rose_oxblood_ink">#FFF2E6D9</color>
 +    <color name="rose_oxblood_focus_ring">#FFF2C9B6</color>
-+    <color name="rose_oxblood_hover_ring">#FFD2B9AB</color>
 +    <style name="RoseOverviewOxblood">
 +        <item name="overviewScrimColor">#FF170609</item>
 +    </style>
