@@ -56,6 +56,16 @@ public final class CurrentAppsReplyTest {
         expect(CurrentApps.fromReply("r", "error", null, null, 1L, null, "i", null, null).reason.equals(CurrentApps.UNREADABLE), "unknown status");
         expect(CurrentApps.fromReply("r", null, null, null, null, null, null, null, null).reason.equals(CurrentApps.UNREADABLE), "no reply");
 
+        // PR355 head 41140ec, exact shapes: live is always complete:false (no sessionStatus field); none with no live
+        // session is complete:true; locked lists nothing.
+        for (String reason : new String[]{"behind_front_unlisted", "windows_unreadable", "blocked"}) {
+            Snapshot pr = CurrentApps.fromReply("reader", "live", "s-1", "rose-ws-1", 9L, apps(new ReplyApp(CALC, true, true)), null, null, false);
+            expect(!pr.available && pr.reason.equals(CurrentApps.INCOMPLETE) && pr.apps.isEmpty(), "PR355 live (" + reason + "): can't confirm, never a list or 'couldn't be read'");
+        }
+        Snapshot prNone = CurrentApps.fromReply("reader", "none", null, null, 9L, Collections.<ReplyApp>emptyList(), null, null, true);
+        expect(prNone.available && prNone.apps.isEmpty(), "PR355 none, complete: genuinely nothing under control");
+        Snapshot prLocked = CurrentApps.fromReply("reader", "locked", null, null, 9L, Collections.<ReplyApp>emptyList(), null, null, false);
+        expect(!prLocked.available && prLocked.reason.equals(CurrentApps.LOCKED), "PR355 locked");
         // Controller restart: a new instance is a new registration even though its generation starts again.
         Tracker r = new Tracker();
         r.apply(live(40, "ready", true, new ReplyApp(CALC, true, true)));

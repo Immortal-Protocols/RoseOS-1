@@ -158,12 +158,14 @@ final class CurrentApps {
    default:return Snapshot.unavailable(reg,gen,UNREADABLE);
   }
   if(apps==null||nz(sessionId).isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+  // PR355 (41140ec): a live session is never attested complete (behind_front_unlisted, windows_unreadable or
+  // blocked), so it is the explicit unavailable state before anything else is read from it.
+  if(!Boolean.TRUE.equals(complete))return Snapshot.unavailable(reg,gen,INCOMPLETE);
   String state;
   switch(nz(sessionStatus)){
    case "ready":state=STATE_RUNNING;break;case "blocked":state=STATE_WAITING;break;case "launching":state=STATE_STARTING;break;
    default:return Snapshot.unavailable(reg,gen,MALFORMED);
   }
-  if(!Boolean.TRUE.equals(complete))return Snapshot.unavailable(reg,gen,INCOMPLETE);
   List<App> out=new ArrayList<>();boolean previewed=false;
   for(ReplyApp a:apps){
    if(a==null)return Snapshot.unavailable(reg,gen,MALFORMED);
