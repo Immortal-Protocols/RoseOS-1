@@ -548,8 +548,9 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
         out.close()
     return result
 
-INSPECTION = 'roseos.blazer-preparation-inspection.v1'
+INSPECTION = 'roseos.blazer-preparation-inspection.v2'
 INSPECT_MAX_SECONDS = 1200
+CANDIDATE_LAYOUT = {'sourceRoot': 'source', 'downloadDir': 'downloads', 'receiptsDir': 'receipts'}
 
 def meta(path):
     """lstat metadata of one path; never follows a link and never reads content."""
@@ -580,54 +581,121 @@ def bounded_bytes(path, budget, clock):
                 pass
     return {'exists': True, 'bytes': total, 'entries': entries, 'truncated': False}
 
-def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_seconds=900, clock=time.monotonic):
-    """Metadata-only observation for a later, separately approved run: path identities, isolation, filesystem space,
-    pinned project presence, bounded sizes of collision and download paths, and the --node file identity and its PATH
-    resolution. Reads lstat/statvfs and at most 128 bytes of out_adevtool_deps/adevtool_revision; starts no process,
-    opens no network connection and writes nothing."""
+def nearest_existing(path):
+    """The closest existing ancestor of PATH (PATH itself when it exists), never following a link."""
+    probe = Path(path)
+    while not os.path.lexists(probe) and probe != probe.parent:
+        probe = probe.parent
+    return probe
+
+def filesystem(path, statvfs):
+    probe = nearest_existing(path)
+    if os.path.islink(probe) or not probe.is_dir():
+        return {'queried': str(probe), 'usable': False}
+    fs = statvfs(probe)
+    return {'queried': str(probe), 'usable': True, 'availableBytes': fs.f_bavail * fs.f_frsize,
+            'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.lstat(probe).st_dev}
+
+def tree_facts(recipe, src, budget, clock):
+    """Project presence, the adevtool revision marker (128 bytes) and bounded collision sizes of one tree."""
+    prep = recipe['preparation']
+    facts = {'projects': {rel: meta(src/rel) for rel in [*recipe['pins'], recipe['kernelDir'], *TREE_NEEDS,
+                                                          '.repo', '.repo/manifest.xml']}}
+    revision = src/recipe['adevtool']['depsDir']/'adevtool_revision'
+    facts['adevtoolRevision'] = None
+    if revision.is_file() and not revision.is_symlink():
+        with open(revision, 'rb') as f:
+            facts['adevtoolRevision'] = f.read(128).decode(errors='replace').strip()
+    facts['adevtoolRevisionPinned'] = recipe['pins']['vendor/adevtool']
+    paths = [*prep['vendor']['collisionPaths'], prep['lunch']['outDir']]
+    facts['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in paths}
+    return facts
+
+def candidate_paths(candidate_root=None, **explicit):
+    """Proposed paths only: --candidate-root R proposes R/source, R/downloads and R/receipts; explicit candidate flags
+    override. None of them is a prep binding, and none is assumed to exist."""
+    paths = {}
+    for key, leaf in CANDIDATE_LAYOUT.items():
+        value = explicit.get(key) or (str(Path(candidate_root)/leaf) if candidate_root else None)
+        if value is not None:
+            path = Path(value)
+            if not path.is_absolute() or '..' in path.parts:
+                raise InvalidInput(f'candidate {key} must be an absolute path without ..')
+            paths[key] = path
+    node = explicit.get('node')
+    if node is not None and (not Path(node).is_absolute() or '..' in Path(node).parts):
+        raise InvalidInput('candidate node must be an absolute path without ..')
+    return paths, (Path(node) if node else None)
+
+def node_facts(path, how):
+    """Metadata of one node candidate: lstat of the path, its realpath and the realpath's stat. Never executed."""
+    if path is None:
+        return {'how': how, 'found': False}
+    real = os.path.realpath(path)
+    facts = {'how': how, 'found': True, 'path': str(path), 'pathMeta': meta(path), 'realpath': real,
+             'realpathMeta': meta(real), 'nameIsNode': Path(path).name == 'node', 'executable': os.access(real, os.X_OK),
+             'version': 'not executed (metadata only)'}
+    return facts
+
+def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_seconds=900, clock=time.monotonic,
+            candidates=None, reference=None, environ=os.environ):
+    """Metadata-only observation for a later, separately approved run. It reports the bound inputs (normally null), the
+    proposed candidate paths (never bindings), the reference source tree (default: the production source root, read-only
+    metadata), and node as the runner's own PATH resolves it plus any candidate. Reads lstat/statvfs/realpath and at most
+    128 bytes of each adevtool_revision; starts no process, opens no network connection, reads no secret and writes
+    nothing. It cannot bind or enable a preparation stage: plan, preflight and run still need bound inputs."""
     if not 0 < max_seconds <= INSPECT_MAX_SECONDS or max_entries < 1:
         raise InvalidInput(f'--max-seconds must be 1..{INSPECT_MAX_SECONDS} and --max-entries positive')
     started = clock()
     budget = {'entries': max_entries, 'deadline': started + max_seconds}
     prep, factory = recipe['preparation'], recipe['factory']
     production = pointer(root, prep['productionSourceRootFrom'])
+    candidate, candidate_node = candidates or ({}, None)
+    reference = Path(reference or production)
     report = {'schema': INSPECTION, 'device': DEVICE, 'host': op['host'], 'metadataOnly': True, 'processesStarted': 0,
-              'network': False, 'writes': False, 'productionSourceRoot': production, 'paths': {}, 'isolation': {},
-              'filesystems': {}, 'limits': {'maxEntries': max_entries, 'maxSeconds': max_seconds}}
-    for name in ('sourceRoot', 'downloadDir', 'lock', 'node'):
-        if op[name] is None:
-            continue
-        report['paths'][name] = dict(meta(op[name]), symlinkComponent=str(symlink_in(op[name]) or '') or None)
-        if name in ('sourceRoot', 'downloadDir'):
-            report['isolation'][name] = isolation_problem(op[name], production)
-            probe = op[name] if op[name].exists() else op[name].parent
-            if probe.is_dir():
-                fs = statvfs(probe)
-                report['filesystems'][name] = {'queried': str(probe), 'availableBytes': fs.f_bavail * fs.f_frsize,
-                    'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.stat(probe).st_dev}
-    src = op['sourceRoot']
-    if src is not None and src.is_dir() and not symlink_in(src):
-        report['projects'] = {rel: meta(src/rel) for rel in [*recipe['pins'], recipe['kernelDir'], *TREE_NEEDS, '.repo/manifest.xml']}
-        revision = src/recipe['adevtool']['depsDir']/'adevtool_revision'
-        if revision.is_file() and not revision.is_symlink():
-            with open(revision, 'rb') as f:
-                report['adevtoolRevision'] = f.read(128).decode(errors='replace').strip()
-        report['adevtoolRevisionPinned'] = recipe['pins']['vendor/adevtool']
-        report['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in prep['vendor']['collisionPaths']}
-        report['collisions'][prep['lunch']['outDir']] = bounded_bytes(src/prep['lunch']['outDir'], budget, clock)
-    if op['downloadDir'] is not None:
-        report['download'] = {'archive': meta(op['downloadDir']/factory['file']),
-            'part': meta(op['downloadDir']/(factory['file'] + prep['download']['partSuffix'])),
-            'expectedSha256': factory['sha256'], 'hashed': False}
-    if op['node'] is not None:
-        node_path = f'{op["node"].parent}:{SAFE_PATH}'
-        resolved = shutil.which('node', path=node_path)
-        report['node'] = {'given': str(op['node']), 'realpath': os.path.realpath(op['node']),
-            'resolvedThroughStagePath': resolved, 'nameIsNode': op['node'].name == 'node',
-            'sameFile': bool(resolved) and os.path.exists(op['node']) and os.path.samefile(resolved, op['node']),
-            'version': 'not executed (metadata only)'}
+              'network': False, 'writes': False, 'enablesPreparation': False, 'productionSourceRoot': production,
+              'limits': {'maxEntries': max_entries, 'maxSeconds': max_seconds}, 'lock': meta(op['lock']),
+              'bound': {name: (str(op[name]) if op[name] is not None else None) for name in ('sourceRoot', 'downloadDir', 'node')},
+              'candidates': {'proposed': True, 'note': 'proposed paths, not known to exist and not approved bindings'},
+              'unknowns': []}
+    unknowns = report['unknowns']
+    for name, value in report['bound'].items():
+        if value is None:
+            unknowns.append(f'bound {name} is null: preparation stays refused until the binding is supplied')
+    report['reference'] = {'path': str(reference), 'meta': meta(reference), 'symlinkComponent': str(symlink_in(reference) or '') or None,
+                           'isProduction': reference == Path(production), 'filesystem': filesystem(reference, statvfs)}
+    if reference.is_dir() and not symlink_in(reference):
+        report['reference'].update(tree_facts(recipe, reference, budget, clock))
+        report['reference']['bytes'] = bounded_bytes(reference, budget, clock)
+    else:
+        unknowns.append(f'reference source {reference} is not an existing, link-free directory')
+    for key, path in candidate.items():
+        entry = {'path': str(path), 'meta': meta(path), 'symlinkComponent': str(symlink_in(path) or '') or None,
+                 'isolation': isolation_problem(path, production), 'filesystem': filesystem(path, statvfs)}
+        if key == 'sourceRoot' and path.is_dir() and not symlink_in(path):
+            entry.update(tree_facts(recipe, path, budget, clock))
+        if key == 'downloadDir':
+            entry['archive'] = meta(path/factory['file'])
+            entry['part'] = meta(path/(factory['file'] + prep['download']['partSuffix']))
+            entry['expectedSha256'], entry['hashed'] = factory['sha256'], False
+        if not entry['meta'].get('exists'):
+            unknowns.append(f'candidate {key} {path} does not exist (proposal only)')
+        ref_fs = report['reference']['filesystem']
+        entry['sameFilesystemAsReference'] = (entry['filesystem'].get('device') == ref_fs.get('device')
+                                             if entry['filesystem'].get('usable') and ref_fs.get('usable') else None)
+        report['candidates'][key] = entry
+    runner_path = environ.get('PATH', '')
+    resolved = shutil.which('node', path=runner_path)
+    report['node'] = {'runnerPath': runner_path, 'runner': node_facts(Path(resolved) if resolved else None, 'runner PATH'),
+                      'candidate': node_facts(candidate_node, '--candidate-node') if candidate_node else None}
+    if not resolved:
+        unknowns.append('no node on the runner PATH')
+    unknowns += ['Node version (metadata only: never executed)', 'reflink support (never assumed)',
+                 'isolated source copy byte and time cost (separately scoped)', 'Pro factory archive size (8 GiB cap unverified)']
     report['elapsedSeconds'] = round(clock() - started, 3)
     report['truncated'] = budget['entries'] <= 0 or clock() > budget['deadline']
+    if report['truncated']:
+        unknowns.append('a bounded walk stopped at --max-entries or --max-seconds: sizes are lower bounds')
     return report
 
 def fetch(url, timeout):
@@ -737,6 +805,9 @@ def main(argv=None):
     parser.add_argument('--stage', choices=STAGES)
     parser.add_argument('--max-entries', type=int, default=200000)
     parser.add_argument('--max-seconds', type=int, default=900)
+    for flag in ('--candidate-root', '--candidate-source-root', '--candidate-download-dir', '--candidate-receipts-dir',
+                 '--candidate-node', '--reference-source-root'):
+        parser.add_argument(flag)
     parser.add_argument('--recipe', default=str(RECIPE))
     parser.add_argument('--host', required=True)
     parser.add_argument('--lock', required=True)
@@ -752,9 +823,18 @@ def main(argv=None):
         recipe = load(a.recipe)
         op = operator(a.host, a.source_root, a.jobs, a.lock, a.download_dir, a.integration_dir,
             recipe['compile']['maxJobs'], a.inputs_receipt, a.node)
+        inspect_only = {k: v for k, v in vars(a).items() if (k.startswith('candidate_') or k == 'reference_source_root') and v}
         if a.action == 'inspect':
-            print(json.dumps(inspect(recipe, op, max_entries=a.max_entries, max_seconds=a.max_seconds), indent=2, default=str))
+            candidates = candidate_paths(a.candidate_root, sourceRoot=a.candidate_source_root, downloadDir=a.candidate_download_dir,
+                                         receiptsDir=a.candidate_receipts_dir, node=a.candidate_node)
+            if a.reference_source_root and (not Path(a.reference_source_root).is_absolute() or '..' in Path(a.reference_source_root).parts):
+                raise InvalidInput('--reference-source-root must be an absolute path without ..')
+            print(json.dumps(inspect(recipe, op, max_entries=a.max_entries, max_seconds=a.max_seconds, candidates=candidates,
+                                     reference=a.reference_source_root), indent=2, default=str))
             return 0
+        if inspect_only:
+            raise InvalidInput(f'{", ".join("--" + k.replace("_", "-") for k in sorted(inspect_only))} are inspect-only: '
+                               'candidates are never preparation bindings; supply --source-root/--download-dir/--node')
         if a.stage is None:
             raise InvalidInput(f'{a.action} needs --stage')
         if a.action == 'run':
