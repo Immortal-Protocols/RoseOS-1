@@ -939,9 +939,9 @@ class Historical(Fixture):
         self.assertIn(f"{recipe['factory']['file']} (expected sha256 {recipe['factory']['sha256']})", entry['absent'])
         for key in ('recipe', 'tool', 'integration', 'integrationTool', 'updaterRoute'):
             self.assertTrue((ROOT/blazer['buildRoute'][key]).is_file(), key)
-        self.assertEqual((recipe['capacity']['generateAllowanceBytes'], recipe['capacity']['compileAllowanceBytes']), (None, None))
+        self.assertEqual((recipe['preparation']['boundsKind'], recipe['capacity']['compileAllowanceBytes']), ('proposal', None))
         inputs = [m['input'] for m in blazer['missingForFactory']]
-        self.assertTrue(any(i.startswith('operator capacity inputs') for i in inputs))
+        self.assertTrue(any(i.startswith("operator review of the recipe's proposal preparation bounds") for i in inputs))
         self.assertFalse(any(i.startswith('build-only recipe for blazer-cur-user') for i in inputs), 'the recipe already exists')
         text = json.dumps(blazer)
         for absent in ('S007', 'S008', 'peak'):

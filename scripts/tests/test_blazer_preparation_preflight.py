@@ -35,7 +35,9 @@ INPUTS = pre.load_inputs()
 CONTRACT = INPUTS['contract']
 PINS = CONTRACT['source']['projects']
 PINNED_SHA = hashlib.sha256((ROOT/'os/pinned-manifest.xml').read_bytes()).hexdigest()
-SOURCE_ROOT = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['host']['sourceRoot']
+PRODUCTION = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['host']['sourceRoot']
+SOURCE_ROOT = '/home/pixelbuild/blazer-prep-work'  # an isolated work tree, never the production source root
+PEAK = sum(json.loads((ROOT/'os/build-only/blazer.json').read_text())['preparation'][s]['boundBytes'] for s in ('download', 'vendor', 'lunch'))
 FACTORY = CONTRACT['devices']['blazer']['vendorInputs']['factoryImage']
 RECIPE = 'a' * 40
 NOW = '2026-10-29T19:30:00Z'
@@ -61,7 +63,7 @@ def synthetic():
         'manifest': {'observationId': OID, 'sha256': PINNED_SHA, 'pinnedSha256': PINNED_SHA, 'comparison': 'match'},
         'resolvedManifest': None,
         'space': {'observationId': OID,
-            'filesystem': {'queriedPath': SOURCE_ROOT, 'availableBytes': 400 * GiB, 'freeBytes': 500 * GiB},
+            'filesystem': {'queriedPath': SOURCE_ROOT, 'availableBytes': 500 * GiB, 'freeBytes': 600 * GiB},
             'estimate': {'kind': 'blazer', 'complete': True, 'bounded': True, 'transientBytes': 40 * GiB,
                 'collisionBytes': 0}}}
 
@@ -207,6 +209,10 @@ class Negative(unittest.TestCase):
         self.blocked(obs, 'binding-recipe')
         obs = synthetic(); obs['source']['sourceRoot'] = '/home/pixelbuild/other'
         self.blocked(obs, 'binding-source-root')
+        for root in (PRODUCTION, PRODUCTION + '/nested', '/home/pixelbuild', '/'):
+            obs = synthetic(); obs['source']['sourceRoot'] = obs['operation']['sourceRoot'] = root
+            obs['space']['filesystem']['queriedPath'] = root
+            self.blocked(obs, 'source-root-production')
         obs = synthetic(); obs['source']['hashes']['contractSha256'] = 'f' * 64
         self.blocked(obs, 'binding-contract')
         obs = synthetic(); del obs['source']['observedAt']
@@ -252,8 +258,10 @@ class Negative(unittest.TestCase):
         self.blocked(obs, 'space-available-unknown')
 
     def test_reserve_and_api_disk_size(self):
-        obs = synthetic(); obs['space']['filesystem']['availableBytes'] = pre.RESERVE_FLOOR_BYTES + 40 * GiB - 1
+        self.assertEqual(PEAK, 144 * GiB)
+        obs = synthetic(); obs['space']['filesystem']['availableBytes'] = pre.RESERVE_FLOOR_BYTES + PEAK - 1
         report = self.blocked(obs, 'space-reserve')
+        self.assertEqual((report['space']['peakBytes'], report['space']['peakKind']), (PEAK, 'proposal'))
         self.assertEqual(report['space']['marginBytes'], pre.RESERVE_FLOOR_BYTES - 1)
         obs['space']['filesystem']['availableBytes'] += 1
         self.assertEqual(assess(obs)['verdict'], 'ADMISSIBLE_SYNTHETIC')
@@ -263,18 +271,20 @@ class Negative(unittest.TestCase):
         self.assertIn('provider disk size ignored: it is not filesystem or free-space evidence', report['notes'])
         self.assertEqual(pre.RESERVE_FLOOR_BYTES, 322122547200)
 
-    def test_incomplete_or_proxy_estimates(self):
-        obs = synthetic(); obs['space']['estimate'] = {'kind': 'frankel-proxy', 'complete': True, 'bounded': True,
-            'transientBytes': 9753948160, 'collisionBytes': 0}
-        self.blocked(obs, 'space-estimate-proxy')
-        obs = synthetic(); obs['space']['estimate']['complete'] = False
-        self.blocked(obs, 'space-estimate-incomplete')
-        obs = synthetic(); del obs['space']['estimate']['bounded']
-        self.blocked(obs, 'space-estimate-incomplete')
-        obs = synthetic(); del obs['space']['estimate']['collisionBytes']
-        self.blocked(obs, 'space-estimate-incomplete')
-        obs = synthetic(); del obs['space']['estimate']
-        self.blocked(obs, 'space-estimate-unknown')
+    def test_no_prior_blazer_measurement_is_required(self):
+        for estimate in ({'kind': 'frankel-proxy', 'complete': True, 'bounded': True, 'transientBytes': 9753948160},
+                         {'kind': 'blazer', 'complete': False}, None):
+            obs = synthetic()
+            if estimate is None:
+                del obs['space']['estimate']
+            else:
+                obs['space']['estimate'] = estimate
+            report = assess(obs)
+            self.assertEqual(report['verdict'], 'ADMISSIBLE_SYNTHETIC', estimate)
+            self.assertEqual(report['space']['peakBytes'], PEAK)
+            self.assertNotIn('space-estimate', ' '.join(codes(report)))
+            if estimate:
+                self.assertIn('not a prior measurement', ' '.join(report['notes']))
 
     def test_invalid_input(self):
         with self.assertRaises(pre.InvalidInput):
@@ -300,7 +310,7 @@ class Retained(unittest.TestCase):
         # declared packages/apps/Launcher3 (#156), so the old binding is truthfully stale. Its hash is not rebound.
         for code in ('operation-all-devices', 'operation-device-arg', 'binding-recipe', 'binding-source-root',
                 'factory-absent', 'collision-unknown', 'tool-usability-unknown', 'node-unknown', 'manifest-mismatch',
-                'space-estimate-proxy', 'binding-contract'):
+                'source-root-production', 'space-reserve', 'binding-contract'):
             self.assertIn(code, got)
         for code in ('pin-mismatch', 'pin-unknown', 'deps-revision-mismatch', 'collision-occupied',
                 'binding-inconsistent', 'space-free-not-available', 'tool-not-executable', 'manifest-pin-stale'):
@@ -311,7 +321,8 @@ class Retained(unittest.TestCase):
         self.assertEqual(report['manifest']['observedSha256'], RETAINED['manifest']['sha256'])
         self.assertEqual(report['space']['availableBytes'], 340356505600)
         self.assertEqual(report['space']['fullBuildAllocation'], 'unknown')
-        self.assertIsNone(report['space']['peakBytes'])
+        self.assertEqual(report['space']['peakBytes'], PEAK)
+        self.assertNotIn('space-estimate-proxy', got)
 
     def test_retained_receipt_with_operation_is_still_blocked_and_stale_later(self):
         op = {'deviceArgs': ['blazer'], 'allDevices': False, 'recipeSha': RETAINED['recipeSha'], 'sourceRoot': SOURCE_ROOT}
@@ -321,9 +332,11 @@ class Retained(unittest.TestCase):
         self.assertIn('binding-stale', codes(report))
         self.assertNotIn('operation-device-arg', codes(report))
         self.assertNotIn('binding-recipe', codes(report))
-        # Headroom above the reserve is still not admission: no Blazer estimate exists.
+        # The retained receipt observed the production tree: preparation never runs there, and its headroom does not
+        # cover the proposal peak plus the reserve.
         self.assertGreater(RETAINED['filesystem']['availableBytes'], pre.RESERVE_FLOOR_BYTES)
-        self.assertIn('space-estimate-proxy', codes(report))
+        self.assertIn('source-root-production', codes(report))
+        self.assertIn('space-reserve', codes(report))
 
 
 class Cli(unittest.TestCase):
@@ -366,7 +379,8 @@ def _manifest(o): o['manifest'].update(sha256='3' * 64, comparison='mismatch')
 def _include(o): resolved(o)['resolvedManifest']['includes'][0]['sha256'] = '9' * 64
 def _free(o): del o['space']['filesystem']['availableBytes']
 def _reserve(o): o['space']['filesystem']['availableBytes'] = 300 * GiB
-def _proxy(o): o['space']['estimate']['kind'] = 'frankel-proxy'
+def _production(o):
+    o['source']['sourceRoot'] = o['operation']['sourceRoot'] = o['space']['filesystem']['queriedPath'] = PRODUCTION
 
 
 MUTATIONS = [
@@ -384,7 +398,7 @@ MUTATIONS = [
     ("if inc.get('sha256') != pinned_sha:", "if False:", _include),
     ("available = fs.get('availableBytes')", "available = fs.get('availableBytes', fs.get('freeBytes'))", _free),
     ("if margin < RESERVE_FLOOR_BYTES:", "if False:", _reserve),
-    ("if estimate.get('kind') != 'blazer':", "if False:", _proxy),
+    ("if not isolated(work_root, inputs['productionSourceRoot']):", "if False:", _production),
 ]
 
 
