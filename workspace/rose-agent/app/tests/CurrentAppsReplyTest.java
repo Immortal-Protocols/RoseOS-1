@@ -1,6 +1,7 @@
 package dev.pixel.voice;
 
 import dev.pixel.voice.CurrentApps.*;
+import dev.pixel.voice.CurrentApps.SessionStop;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -96,6 +97,75 @@ public final class CurrentAppsReplyTest {
         }
         expect(CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 24L, apps(new ReplyApp(CALC, true, true)), null, "ready", true, "owned_devices").apps.get(0).preview != null, "ready, associated, front: live view");
         expect(CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 24L, apps(new ReplyApp(CALC, true, true)), null, "blocked", true, "platform").apps.get(0).preview == null, "platform blocked: no live view either");
+        // Agreed two-app contract (owned_devices + bindings): membership is the snapshot; bindings give controls only.
+        String MAPS = "com.google.android.apps.maps";
+        List<Binding> pair = Arrays.asList(new Binding(0, "s-0", "rose-ws-0", CALC, "ready", true, true), new Binding(1, "s-1", "rose-ws-1", MAPS, "blocked", true, true));
+        Snapshot both = CurrentApps.fromBindings("r", "live", 30L, apps(new ReplyApp(CALC, true, true, "s-0"), new ReplyApp(MAPS, true, true, "s-1")), pair, "e-1", true);
+        expect(both.available && both.apps.size() == 2 && both.registration.equals("controller:e-1") && both.generation == 30, "two sessions: two cards, epoch registration");
+        App calc = both.apps.get(0), maps = both.apps.get(1);
+        expect(calc.state.equals(CurrentApps.STATE_RUNNING) && maps.state.equals(CurrentApps.STATE_WAITING), "each card's state from its own binding");
+        expect(calc.preview != null && calc.preview.sessionId.equals("s-0") && calc.preview.controllerTaskId.equals("rose-ws-0"), "ready session's front app: its own preview handle");
+        expect(maps.preview == null, "blocked session: no live view");
+        expect(calc.stop != null && calc.stop.sessionId.equals("s-0") && maps.stop != null && maps.stop.controllerTaskId.equals("rose-ws-1"), "each bound session has its own Stop handle");
+        expect(!calc.entryId.equals(maps.entryId), "distinct entries");
+        Snapshot lingering = CurrentApps.fromBindings("r", "live", 31L, apps(new ReplyApp(CALC, false, false, null), new ReplyApp(MAPS, true, true, "s-1")),
+            Arrays.asList(new Binding(1, "s-1", "rose-ws-1", MAPS, "ready", true, true)), "e-1", true);
+        expect(lingering.apps.size() == 2 && lingering.apps.get(0).sessionId.isEmpty() && lingering.apps.get(0).stop == null && lingering.apps.get(0).preview == null, "lingering/unbound app: shown, no Stop or live view");
+        expect(lingering.apps.get(0).state.equals(CurrentApps.STATE_RUNNING), "unbound app is running (attested)");
+        Snapshot unboundRef = CurrentApps.fromBindings("r", "live", 32L, apps(new ReplyApp(CALC, true, true, "s-gone")), Arrays.asList(new Binding(0, "s-gone", "t", CALC, "ready", false, true)), "e-1", true);
+        expect(unboundRef.available && unboundRef.apps.get(0).stop == null && unboundRef.apps.get(0).preview == null, "binding not bound: membership kept, no controls");
+        Snapshot untagged = CurrentApps.fromBindings("r", "live", 33L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", null, CALC, "ready", true, true)), "e-1", true);
+        expect(untagged.apps.get(0).stop == null && untagged.apps.get(0).preview == null, "untagged slot: no Home Stop or live view (needs both ids)");
+        Snapshot unknownFront = CurrentApps.fromBindings("r", "live", 34L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, "ready", true, false)), "e-1", true);
+        expect(unknownFront.apps.get(0).preview == null && unknownFront.apps.get(0).stop != null, "frontKnown:false: no live view, Stop still available");
+        Snapshot twoFronts = CurrentApps.fromBindings("r", "live", 35L, apps(new ReplyApp(CALC, true, true, "s-0"), new ReplyApp(MAPS, true, false, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, "ready", true, true)), "e-1", true);
+        expect(twoFronts.apps.get(0).preview == null && twoFronts.apps.get(1).preview == null, "two fronts for one session: Home never picks, no live view");
+        Snapshot notFront = CurrentApps.fromBindings("r", "live", 36L, apps(new ReplyApp(CALC, false, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, "ready", true, true)), "e-1", true);
+        expect(notFront.apps.get(0).preview == null, "a hidden app: no live view");
+        for (String st : new String[]{"launching", "cleanup_failed", ""})
+            expect(CurrentApps.fromBindings("r", "live", 37L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, st, true, true)), "e-1", true).apps.get(0).preview == null, st + ": no live view");
+        expect(CurrentApps.fromBindings("r", "live", 38L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, "ready", true, true)), "e-1", false).reason.equals(CurrentApps.INCOMPLETE), "complete:false: cannot confirm, whatever the bindings");
+        expect(CurrentApps.fromBindings("r", "none", 39L, Collections.<ReplyApp>emptyList(), Collections.<Binding>emptyList(), "e-1", true).available, "none+complete: genuinely empty");
+        expect(!CurrentApps.fromBindings("r", "none", 39L, Collections.<ReplyApp>emptyList(), null, "e-1", false).available, "none without attestation: cannot confirm");
+        expect(CurrentApps.fromBindings("r", "locked", 40L, Collections.<ReplyApp>emptyList(), null, "e-1", false).reason.equals(CurrentApps.LOCKED), "locked");
+        expect(CurrentApps.fromBindings("r", "live", 41L, apps(new ReplyApp(CALC, true, true, "s-0"), new ReplyApp(CALC, false, false, "s-1")), pair, "e-1", true).reason.equals(CurrentApps.MALFORMED), "a package listed twice: malformed, never an owner guess");
+        expect(CurrentApps.fromBindings("r", "live", 42L, apps(new ReplyApp("", true, true, "s-0")), pair, "e-1", true).reason.equals(CurrentApps.MALFORMED), "empty package");
+        expect(CurrentApps.fromBindings("r", "live", 43L, apps(new ReplyApp(CALC, false, true, null)), null, "e-1", true).apps.size() == 1, "no bindings at all: membership still shown");
+        expect(CurrentApps.fromBindings("reader-9", "live", 44L, apps(new ReplyApp(CALC, false, true, null)), null, null, true).registration.equals("reader-9"), "no epoch: the reader's registration");
+        Tracker ep = new Tracker();
+        ep.apply(CurrentApps.fromBindings("r", "live", 50L, apps(new ReplyApp(CALC, true, true, "s-0")), pair, "e-1", true));
+        expect(ep.apply(CurrentApps.fromBindings("r", "none", 1L, Collections.<ReplyApp>emptyList(), null, "e-2", true)) && ep.state() == State.EMPTY, "controller restart (new epoch): its lower generation applies");
+        expect(!ep.apply(CurrentApps.fromBindings("r", "live", 51L, apps(new ReplyApp(CALC, true, true, "s-0")), pair, "e-1", true)) && ep.apps().isEmpty(), "the old epoch's late reply never resurrects");
+
+        // Session Stop: confirmed only for exactly the captured pair; timeout is unknown, never stopped.
+        SessionStop st = new SessionStop("s-1", "rose-ws-1", 1000);
+        expect(st.pending() && st.phase == SessionStop.Phase.SENDING, "sent");
+        st.answered(false);
+        expect(st.phase == SessionStop.Phase.STOPPING, "accepted alone is stopping, never stopped");
+        st.answered(null);
+        expect(st.phase == SessionStop.Phase.STOPPING, "no reply: still stopping");
+        String[][] wrong = {{"cleanup_failed", "user", "s-1", "rose-ws-1"}, {"stopped", "agent", "s-1", "rose-ws-1"}, {"stopped", "user", "s-2", "rose-ws-1"},
+            {"stopped", "user", "s-1", "rose-ws-9"}, {"ready", "user", "s-1", "rose-ws-1"}, {"stopped", "user", null, null}};
+        for (String[] w : wrong) { st.summary(w[0], w[1], w[2], w[3]); expect(st.phase == SessionStop.Phase.STOPPING, "no confirmation from " + Arrays.toString(w)); }
+        st.tick(1000 + SessionStop.TIMEOUT_MS - 1);
+        expect(st.phase == SessionStop.Phase.STOPPING, "before the timeout");
+        st.tick(1000 + SessionStop.TIMEOUT_MS);
+        expect(st.phase == SessionStop.Phase.UNKNOWN && !st.pending(), "timeout: unknown (may be retried), never stopped");
+        expect(st.checking(1000 + SessionStop.TIMEOUT_MS + 1) && !st.checking(1000 + 2 * SessionStop.TIMEOUT_MS), "a late confirmation is still looked for, for a while");
+        st.summary("stopped", "user", "s-1", "rose-ws-1");
+        expect(st.phase == SessionStop.Phase.STOPPED, "a late matching summary settles it");
+        st.summary("ready", "user", "s-2", "x"); st.answered(false); st.tick(1000 + 10 * SessionStop.TIMEOUT_MS);
+        expect(st.phase == SessionStop.Phase.STOPPED, "stopped is final");
+        SessionStop direct = new SessionStop("s-0", "rose-ws-0", 0);
+        direct.answered(true);
+        expect(direct.phase == SessionStop.Phase.STOPPED && !direct.pending(), "owner_stop confirmed:true");
+        SessionStop untaggedStop = new SessionStop("s-0", "", 0);
+        untaggedStop.summary("stopped", "user", "s-0", null);
+        expect(untaggedStop.phase == SessionStop.Phase.STOPPED, "an exactly matching null task (untagged) confirms");
+        SessionStop noSid = new SessionStop("", "", 0);
+        noSid.summary("stopped", "user", null, null);
+        expect(noSid.phase != SessionStop.Phase.STOPPED, "no captured session: never confirmed");
+
         // Controller restart: a new instance is a new registration even though its generation starts again.
         Tracker r = new Tracker();
         r.apply(live(40, "ready", true, new ReplyApp(CALC, true, true)));

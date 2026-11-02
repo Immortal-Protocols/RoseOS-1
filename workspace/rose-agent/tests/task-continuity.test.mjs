@@ -167,7 +167,12 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  assert.ok(!/WorkspaceOverviewFeed\.tasks\(\)/.test(block.slice(0,block.indexOf('WorkspaceOverviewPanel.Actions overviewActions()'))),'membership never reads task history');
  assert.match(block,/public CurrentApps\.Snapshot currentApps\(\)\{return RoseConversationActivity\.this\.currentApps\(\);\}/);
  assert.ok(!/taskStateJson/.test(block),'the overview never reads the backend task projection');
- assert.ok(!/task\/stop|sendStop|localRoseStop|stopRoute/.test(block),'the overview sends no Stop');
+ // Stop: only the controller's owner_stop for exactly the captured session/task pair; never the task Stop or voice.
+ assert.ok(!/task\/stop|sendStop|localRoseStop/.test(block),'never the backend task Stop or the voice link');
+ assert.match(block,/client\.call\("owner_stop",null,extras\)/,'the owner Stop of one controller session');
+ assert.match(block,/new org\.json\.JSONObject\(\)\.put\("sessionId",sessionId\)\.put\("taskId",/,'exactly the captured pair');
+ assert.match(block,/o\.has\("confirmed"\)&&!o\.isNull\("confirmed"\)\?o\.optBoolean\("confirmed"\):null/,'confirmed read as given; failures never confirm');
+ assert.match(block,/client\.call\("get_state",null,extras\)/,'confirmation from the routed sessions summary');
  const panel=source('WorkspaceOverviewPanel.java'),view=source('WorkspaceOverviewView.java');
  assert.ok(!/taskCard|WorkspaceOverview\.Row|\.rows\b/.test(view+panel),'no task or result cards on the current-app surface');
  assert.match(panel,/apps\.apply\(source==null\?null:source\.currentApps\(\)\);/,'shown only through CurrentApps\' rules');
@@ -196,8 +201,9 @@ test('#225 live preview: the overview reads only the controller\'s local read-on
  assert.match(activity,/if\(overview!=null\)overview\.resume\(\);/);
  assert.match(activity,/runOnUiThread\(\(\)->\{if\(!isFinishing\(\)&&!isDestroyed\(\)&&overview!=null\)overview\.previewAnswer\(r,a\);\}\)/,'answers land only on a live screen, through the gate');
  const panel=source('WorkspaceOverviewPanel.java');
- assert.match(panel,/for\(CurrentApps\.App a:apps\.apps\(\)\)if\(handle\(a\)!=null\)\{target=a;break;\}/,'only an app\'s own verified handle is previewed');
- assert.match(panel,/if\(a==null\|\|a\.preview==null\|\|!a\.preview\.complete\(\)\)return null;/,'no handle, no preview');
- assert.match(panel,/void close\(\)\{setVisibility\(GONE\);preview\.cancel\(\);\}/,'Back cancels');
+ assert.match(panel,/for\(CurrentApps\.App a:apps\.apps\(\)\)if\(a\.preview!=null&&a\.preview\.complete\(\)&&!targets\.containsKey\(a\.preview\.sessionId\)\)targets\.put\(a\.preview\.sessionId,a\);/,'only an app\'s own handle, one per session');
+ assert.match(panel,/if\(!targets\.containsKey\(e\.getKey\(\)\)\)\{e\.getValue\(\)\.cancel\(\);it\.remove\(\);\}/,'a session gone or no longer previewable is cancelled');
+ assert.match(panel,/if\(a==null\|\|a\.preview==null\|\|!a\.preview\.complete\(\)\|\|!a\.sessionId\.isEmpty\(\)\)return null;/,'no handle, no Watch; bound apps wait for the per-session viewer');
+ assert.match(panel,/void close\(\)\{setVisibility\(GONE\);closeSheet\(\);cancelPreviews\(\);\}/,'Back cancels');
  assert.ok(!/preview/.test(source('PhoneControl.java').replace(/"preview"\.equals[^;]*;/,'').replace(/\/\/[^\n]*preview[^\n]*/g,'')),'no second preview route through PhoneControl');
 });
