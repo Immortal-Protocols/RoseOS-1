@@ -4,7 +4,7 @@
   python3 scripts/host-factory-package.py --device rango --build 2026103001 \
       --target-files TF --target-files-sha256 H --otatools OTA --otatools-sha256 H \
       --release-script script/generate-release.sh --release-script-sha256 H \
-      --avb-pkmd AVB_PKMD_BIN --fastboot-sha256 H --out NEW_ROOT
+      --avb-pkmd AVB_PKMD_BIN --fastboot-sha256 H --lock SHARED_BUILDER_LOCK --out NEW_ROOT
 
 No key, secret, decrypt, signing, OTA or archive signature is involved. host-sign.py correctly refuses a build whose
 release already holds a successful signature; this entrypoint never touches that release. It only reads the inputs,
@@ -19,6 +19,9 @@ Everything is written below NEW_ROOT (absent beforehand; never inside an input's
 unzip, a COPY of the target-files, the generator's files), removed on success and failure; factory-package.log
 (capped); factory-package-receipt.json; and on success {device}-install-{build}.zip.
 
+The whole run holds the shared builder lock (--lock, non-blocking: lock_held refuses before anything is written).
+The receipt records each phase's wall time (verify, stage, generate, recheck) as measured, not as a requirement.
+
 Bounds: the derived script runs in its own process group, killed (TERM, then KILL) after LIMITS['seconds'] (60 min)
 or when its combined log exceeds LIMITS['logBytes']. Free space under NEW_ROOT's filesystem must be at least
 LIMITS['freeBytes'] (128 GiB) before starting; actual use is measured and recorded, not capped (no quota exists), so
@@ -27,6 +30,8 @@ the free-space floor is a precondition, not a guarantee. Nothing here is a runti
 Exit status: 0 packaged, 3 refused or failed (one JSON line on stdout), 2 usage.
 """
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -130,6 +135,26 @@ def unzip_otatools(archive, work):
                 os.chmod(Path(work)/info.filename, mode & 0o755)
 
 
+@contextlib.contextmanager
+def shared_lock(path):
+    """The existing shared builder lock: non-blocking, never waited on."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise Refused('usage_refused: --lock must be an absolute path')
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        raise Refused('lock_unavailable: the shared builder lock cannot be opened') from None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused('lock_held: the shared builder lock is held by another job') from None
+        yield
+    finally:
+        os.close(fd)
+
+
 def run_script(script, cwd, log, popen=subprocess.Popen, clock=time.monotonic):
     """bash SCRIPT in its own session with a minimal environment; combined output to the capped log. Returns a
     category: ok, nonzero_exit, timeout, log_overflow or spawn_failed."""
@@ -178,8 +203,14 @@ def run_script(script, cwd, log, popen=subprocess.Popen, clock=time.monotonic):
     return category, proc.returncode
 
 
-def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time):
+def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time, lock=shared_lock):
+    with lock(args.lock):
+        return _package(args, root, runner, free, clock)
+
+
+def _package(args, root, runner, free, clock):
     hs = _module('host_sign', root/'scripts/host-sign.py')
+    begun = time.monotonic()
     pins = flavor_pins(args.device, root)
     target_files = pinned_input(args.target_files, args.target_files_sha256, 'target-files')
     otatools = pinned_input(args.otatools, args.otatools_sha256, 'otatools')
@@ -196,6 +227,7 @@ def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time
     except hs.AdapterFailed as error:
         raise Refused(f'script_refused: {error}') from None
     install_name = pins['install'].format(device=args.device, build=args.build)
+    timings = {'verifySeconds': round(time.monotonic() - begun, 3)}
     out.mkdir(mode=0o700)
     work = out/'work'
     receipt = {'schema': SCHEMA, 'device': args.device, 'build': args.build, 'status': 'failed', 'started': int(clock()),
@@ -204,7 +236,7 @@ def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time
                           'releaseScript': {'path': str(release_script), 'sha256': args.release_script_sha256},
                           'avbPkmd': {'path': str(avb_pkmd), 'sha256': pins['avb']},
                           'fastbootSha256': args.fastboot_sha256},
-               'derivedScriptSha256': hashlib.sha256(derived.encode()).hexdigest(), 'limits': LIMITS,
+               'derivedScriptSha256': hashlib.sha256(derived.encode()).hexdigest(), 'limits': LIMITS, 'timings': timings,
                'signature': None, 'signatureBasis': 'packaging only: no archive signature (identity not a generation gate)',
                'claims': 'generated install archive bytes only; not installed, booted or validated on a phone'}
     try:
@@ -218,7 +250,10 @@ def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time
         shutil.copyfile(target_files, work/f'{args.device}-target_files.zip')  # a copy; the retained file is only read
         script = work/'factory-only.sh'
         script.write_text(derived)
+        timings['stageSeconds'] = round(time.monotonic() - begun - timings['verifySeconds'], 3)
+        mark = time.monotonic()
         category, code = runner(script, work, out/'factory-package.log')
+        timings['generateSeconds'] = round(time.monotonic() - mark, 3)
         receipt['script'] = {'category': category, 'exit': code}
         if category != 'ok':
             raise Refused(f'generation_failed: the factory-only script ended {category} (exit {code})')
@@ -232,8 +267,10 @@ def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time
         receipt.update(status='packaged', output={'file': install_name, 'sha256': sha256_file(out/install_name),
                                                   'size': (out/install_name).stat().st_size},
                        measuredWorkBytes=used)
+        mark = time.monotonic()
         if sha256_file(target_files) != args.target_files_sha256:
             raise Refused('input_changed: the retained target-files changed during packaging')
+        timings['recheckSeconds'] = round(time.monotonic() - mark, 3)
         return receipt
     except Refused as error:
         receipt['refused'] = str(error)
@@ -252,7 +289,7 @@ def package(args, root=ROOT, runner=run_script, free=free_bytes, clock=time.time
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     for flag in ('--device', '--build', '--target-files', '--target-files-sha256', '--otatools', '--otatools-sha256',
-                 '--release-script', '--release-script-sha256', '--avb-pkmd', '--fastboot-sha256', '--out'):
+                 '--release-script', '--release-script-sha256', '--avb-pkmd', '--fastboot-sha256', '--lock', '--out'):
         p.add_argument(flag, required=True)
     args = p.parse_args(argv)
     try:
