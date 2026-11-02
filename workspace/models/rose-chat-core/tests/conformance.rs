@@ -294,3 +294,25 @@ fn cli_refuses_bad_live_inputs_before_any_request() {
         assert!(conformance::cli(&bad).is_err(), "{bad:?}");
     }
 }
+
+/// MODELS-AGENT-OPENAPP-POLICY-001 regression: PR377's no-thinking Qwen answered chat-02 ("What is 17 times 23?")
+/// with an unrequested Calculator proposal. Every other reply right: still parsed 20/20, but the bar fails.
+#[test]
+fn an_unrequested_calculator_on_chat_02_fails_the_bar() {
+    let set = set();
+    let mut replies = replies("replies-pass.json");
+    let open = r#"{"rose_action":"local-agent-v1","type":"open_app","app_id":"calculator"}"#;
+    replies["chat-02"]["body"] = json!(
+        json!({"model": set.model, "choices": [{"finish_reason": "stop",
+               "message": {"role": "assistant", "content": open}}]})
+        .to_string()
+    );
+    let summary = conformance::run_fixture(&set, &replies).unwrap();
+    assert_eq!(summary["parsed"], 20);
+    assert_eq!(summary["conforming"], 19);
+    assert_eq!(summary["wrong_launch_target"], 0);
+    assert_eq!(summary["open_app_outside_launch_prompts"], 1);
+    assert_eq!(summary["pass"], false);
+    assert_eq!(set.prompts[1].id, "chat-02");
+    assert_eq!(set.prompts[1].expect, "final"); // the expected category is unchanged
+}
