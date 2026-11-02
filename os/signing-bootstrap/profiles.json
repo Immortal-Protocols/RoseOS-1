@@ -726,6 +726,58 @@
         },
         "note": "keytool takes the store and key passwords from the passphrase file (-storepass:file / -keypass:file, the documented JDK keytool password-file form); nothing secret is in argv or the environment. The store is reloaded twice (exportcert, list -v) and its public listing and certificate are checked before import; the public files are then removed and only keystore.p12 and passphrase remain. keytool runs by its explicit pinned-tree path with a fresh minimal environment (PATH, LC_ALL, HOME only: no JAVA_TOOL_OPTIONS, _JAVA_OPTIONS, JDK_JAVA_OPTIONS, CLASSPATH or LD_*). The Models key bootstrap needs keytool only; APK signing tools (SDK apksigner.jar, aapt) stay separately unbound."
       }
+    },
+    "fold-rango-factory-v1": {
+      "status": "unbound",
+      "purpose": "Rango factory-archive SSH signing identity: one new passphrase-encrypted Ed25519 key for ssh-keygen -Y sign -n \"factory images\" of rango-install-{build}.zip; never derived from or stored with the OS (OTA/AVB/APK) keys",
+      "device": "rango",
+      "principal": "roseos-factory-images-rango-v1",
+      "project": "protocols-465723",
+      "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "secrets": {
+        "keys": "PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1",
+        "passphrase": "PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1"
+      },
+      "recheckEmptyBeforeImport": true,
+      "archive": {
+        "format": "openssh-ed25519",
+        "consumer": "scripts/factory_signing.py inspect_private, generate_key and sign_and_verify",
+        "publicIdentityFiles": []
+      },
+      "keyInventory": {
+        "complete": true,
+        "requiredByConsumer": [
+          "id_ed25519"
+        ],
+        "optionalByConsumer": []
+      },
+      "tools": {
+        "ssh-keygen": {
+          "kind": "installed",
+          "installed": {
+            "path": null,
+            "sha256": null
+          },
+          "requiredObservation": "installed path, sha256 and version (OpenSSH >= 8.4 for SSH_ASKPASS_REQUIRE=force) of ssh-keygen on the builder, then the synthetic self-check, in an approved run"
+        }
+      },
+      "generation": {
+        "kind": "openssh-ed25519-askpass",
+        "missing": [],
+        "note": "scripts/factory_signing.py generate_key: ssh-keygen -q -t ed25519 -a 100 -C '' -f <workspace>/id_ed25519 with stdin closed, a new session, core dumps off, a 60 s timeout and environment exactly PATH, LANG, SSH_ASKPASS_REQUIRE=force and SSH_ASKPASS=<pinned helper>; the passphrase is a random file read only by that helper. No passphrase in argv, environment, output or receipt."
+      },
+      "access": {
+        "addVersionExpires": null,
+        "accessorExpires": null,
+        "minimumRemainingSeconds": 1800
+      },
+      "missing": [
+        "owner/security approval of the new identity (FOLD-FACTORY-IDENTITY proposal)",
+        "the two empty secret containers, created by the admin",
+        "time-boxed bootstrap access (secrets.get, versions.list, versions.add, 4 h) and secretAccessor (30 d) for the signer on those two containers only",
+        "measured ssh-keygen installed identity and version on the builder",
+        "one approved bootstrap run"
+      ]
     }
   }
 }

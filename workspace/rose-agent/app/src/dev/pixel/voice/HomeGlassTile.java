@@ -12,19 +12,20 @@ import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 
 /**
- * The app tile of the selected HiFi (prototypes/rose-hifi at ce126f56, style.css .tile and .tile::after): a 64dp
- * rounded square of frosted glass over the wallpaper. A 160-degree white fill (62% to 18% at 55% to a cool 32%),
- * a fine cool outer ring and a white inner ring, a bright top edge, a soft lower inner shade and a sheen over the
- * top half. The drop shadow is the view's elevation, cast from this outline. The web tile also blurs the wallpaper
- * behind it (backdrop-filter); this drawable does not, so it reads slightly clearer than the reference.
- * Decorative only: the tile view keeps the app's name and its click.
+ * The subdued app tile of the Sunlit Instruments study's Oxblood Home (#403; Rose-07-Home-No-Status, Rose-06), which
+ * replaces the HiFi white frosted tile for the Home app icons: a rounded square of smoked oxblood glass a little
+ * lighter at the top than the bottom (sampled from the study, where the tile reads about #5A1822 over a #35070E field),
+ * a faint warm rim, a brighter top edge and a soft sheen over the top half. It is nearly opaque so the cream glyph
+ * (HomeGlyph) keeps the study's contrast over the current light wallpaper, which this change leaves as it is. The
+ * drop shadow is the view's elevation, cast from this outline. Decorative only: the tile view keeps the app's name and
+ * its click.
  */
 final class HomeGlassTile extends Drawable {
- static final int RADIUS_DP = 18;
- static final int[] FILL = {0x9effffff, 0x2effffff, 0x52e1ecf8};
+ static final int RADIUS_DP = 16;
+ static final int[] FILL = {0xf05e1b26, 0xf0461019, 0xf233090f};
  static final float[] FILL_STOPS = {0f, .55f, 1f};
- static final int OUTER_RING = 0x527896be, INNER_RING = 0x80ffffff, TOP_EDGE = 0xf2ffffff, LOWER_SHADE = 0x2e3c5a82,
-   SHEEN = 0x8cffffff;
+ static final int OUTER_RING = 0x4d1a0306, INNER_RING = 0x29ffd9cc, TOP_EDGE = 0x2effe6da, LOWER_SHADE = 0x33140205,
+   SHEEN = 0x17ffffff;
 
  final float density, radius;
  final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), line = new Paint(Paint.ANTI_ALIAS_FLAG),
@@ -41,12 +42,12 @@ final class HomeGlassTile extends Drawable {
  @Override protected void onBoundsChange(Rect bounds) {
   box.set(bounds);
   float w = box.width(), h = box.height();
-  // CSS 160deg runs from the top towards the bottom, leaning a little left: start top-left of centre, end below.
+  // Light from above, leaning a little left (a 160-degree gradient): start top-left of centre, end below.
   double angle = Math.toRadians(160);
   float dx = (float) Math.sin(angle) * w / 2, dy = (float) -Math.cos(angle) * h / 2;
   fill.setShader(new LinearGradient(box.centerX() - dx, box.centerY() - dy, box.centerX() + dx, box.centerY() + dy,
     FILL, FILL_STOPS, Shader.TileMode.CLAMP));
-  shade.setShader(new LinearGradient(0, box.bottom - 8 * density, 0, box.bottom, 0x003c5a82, LOWER_SHADE, Shader.TileMode.CLAMP));
+  shade.setShader(new LinearGradient(0, box.bottom - 8 * density, 0, box.bottom, 0x00140205, LOWER_SHADE, Shader.TileMode.CLAMP));
   inner.set(box);
   inner.inset(2 * density, 2 * density);
   top.set(inner.left, inner.top, inner.right, box.centerY());
@@ -58,7 +59,7 @@ final class HomeGlassTile extends Drawable {
   canvas.drawRoundRect(box, radius, radius, fill);
   canvas.drawRoundRect(box, radius, radius, shade);
   canvas.drawRoundRect(top, radius - 2 * density, radius - 2 * density, sheen);
-  // Outer ring on the edge, inner ring one stroke inside it (box-shadow 0 0 0 1px and inset 0 0 0 1px).
+  // A dark outer ring on the edge, a faint warm inner ring one stroke inside it.
   float stroke = line.getStrokeWidth(), half = stroke / 2, in = stroke * 1.5f;
   line.setColor(INNER_RING);
   canvas.drawRoundRect(box.left + in, box.top + in, box.right - in, box.bottom - in, radius - in, radius - in, line);

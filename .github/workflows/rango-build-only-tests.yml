@@ -26,6 +26,19 @@ on:
       - 'os/build-only/**'
       - 'os/devices/pixel10.json'
       - 'os/release-pipeline/frankel.json'
+      - 'scripts/blazer-build-only.py'
+      - 'scripts/tests/test_blazer_build_only.py'
+      - 'scripts/blazer_integration.py'
+      - 'scripts/tests/test_blazer_integration.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe.py'
+      - 'os/retained-rango/release.json'
+      - 'os/tests/test_blazer_flavor.py'
+      - 'os/flavors/**'
+      - 'os/fold-port/**'
+      - 'scripts/factory-package.py'
+      - 'os/tests/fixtures/adevtool-17df3b79/**'
+      - 'scripts/tests/fixtures/permission-apex/**'
       - '.github/workflows/rango-build-only-tests.yml'
   push:
     branches: [main]
@@ -49,6 +62,19 @@ on:
       - 'os/build-only/**'
       - 'os/devices/pixel10.json'
       - 'os/release-pipeline/frankel.json'
+      - 'scripts/blazer-build-only.py'
+      - 'scripts/tests/test_blazer_build_only.py'
+      - 'scripts/blazer_integration.py'
+      - 'scripts/tests/test_blazer_integration.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe.py'
+      - 'os/retained-rango/release.json'
+      - 'os/tests/test_blazer_flavor.py'
+      - 'os/flavors/**'
+      - 'os/fold-port/**'
+      - 'scripts/factory-package.py'
+      - 'os/tests/fixtures/adevtool-17df3b79/**'
+      - 'scripts/tests/fixtures/permission-apex/**'
       - '.github/workflows/rango-build-only-tests.yml'
 
 permissions:
@@ -68,6 +94,13 @@ jobs:
           persist-credentials: false
       - name: Python version
         run: python3 --version
+      - name: Blazer flavor, build-only and integration tests (pinned fixtures, synthetic tree, fake runner)
+        run: |
+          python3 os/tests/test_blazer_flavor.py -v
+          python3 scripts/tests/test_blazer_build_only.py -v
+          python3 scripts/tests/test_blazer_integration.py -v
+      - name: Rango factory observer tests (synthetic packages, fake fastboot)
+        run: python3 scripts/tests/test_rango_factory_observe.py -v
       - name: Rango build-only tests (synthetic tree, fake runner)
         run: python3 scripts/tests/test_rango_build_only.py -v
       - name: Rango output collector tests (synthetic output tree, no build or tools run)

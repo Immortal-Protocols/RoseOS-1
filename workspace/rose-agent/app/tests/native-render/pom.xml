@@ -73,6 +73,16 @@
             <testInclude>dev/pixel/voice/ConversationState.java</testInclude>
             <testInclude>dev/pixel/voice/TrayMaterial.java</testInclude>
             <testInclude>dev/pixel/voice/HomeGlassTile.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeGlyph.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeAppTile.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeAppPage.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeAppLayout.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeFolder.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverview.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverviewView.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverviewPanel.java</testInclude>
+            <testInclude>dev/pixel/voice/WorkspaceOverviewPreview.java</testInclude>
+            <testInclude>dev/pixel/voice/CurrentApps.java</testInclude>
             <testInclude>dev/pixel/voice/*RenderTest.java</testInclude>
           </testIncludes>
         </configuration>

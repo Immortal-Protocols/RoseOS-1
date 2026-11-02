@@ -17,7 +17,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest import mock
 import urllib.parse
 import zipfile
 
@@ -43,13 +45,23 @@ def signing_block(certificate, scheme=0x7109871A):
     size = len(pairs) + 8 + 16
     return struct.pack('<Q', size) + pairs + struct.pack('<Q', size) + b'APK Sig Block 42'
 
+APK_ZIP_TIME = (2026, 1, 1, 0, 0, 0)  # fixed, valid DOS time: writestr(name) would stamp the clock (2 s resolution)
+
+
+def apk_member(name):
+    """A ZIP member with a fixed timestamp and writestr(name)'s defaults, so identical inputs give identical bytes."""
+    info = zipfile.ZipInfo(name, date_time=APK_ZIP_TIME)
+    info.external_attr = 0o600 << 16
+    return info
+
+
 def apk_bytes(certificate, content=b'rose agent 309', scheme=0x7109871A, block=True, libs=()):
     """A ZIP with an APK signing block between the entries and the central directory, as apksigner writes it."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
-        archive.writestr('AndroidManifest.xml', content)
+        archive.writestr(apk_member('AndroidManifest.xml'), content)
         for lib in libs:
-            archive.writestr(lib, b'\x7fELF synthetic')
+            archive.writestr(apk_member(lib), b'\x7fELF synthetic')
     data = buffer.getvalue()
     eocd = data.rfind(b'PK\x05\x06')
     directory = struct.unpack_from('<I', data, eocd + 16)[0]
@@ -145,6 +157,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.reply(404, {'message': 'not found'})
 
     do_GET = do_POST = do_PATCH = do_DELETE = handle_any
+
+class ApkFixtureTest(unittest.TestCase):
+    """apk_bytes is a pure function of its inputs: the clock (writestr's default stamp) never reaches the bytes."""
+
+    @staticmethod
+    def at(seconds):
+        start = time.mktime((2026, 10, 31, 12, 0, 0, 0, 0, -1))   # an even second: +2 s crosses ZIP's clock step
+        clock = mock.Mock(wraps=time, time=mock.Mock(return_value=start + seconds), localtime=time.localtime)
+        return mock.patch.object(zipfile, 'time', clock)
+
+    def test_identical_inputs_give_identical_bytes_across_the_two_second_zip_clock(self):
+        for kw in (dict(certificate=b'cert'), dict(certificate=b'cert', libs=('lib/arm64-v8a/librose.so',)),
+                   dict(certificate=b'', block=False)):
+            with self.subTest(kw):
+                with self.at(0):
+                    first = apk_bytes(**kw)
+                with self.at(2):
+                    second = apk_bytes(**kw)
+                with self.at(86400 * 400 + 7):
+                    later = apk_bytes(**kw)
+                self.assertEqual(first, second)
+                self.assertEqual(first, later)
+                with zipfile.ZipFile(io.BytesIO(first)) as archive:
+                    self.assertEqual({i.date_time for i in archive.infolist()}, {APK_ZIP_TIME})
+                    self.assertIsNone(archive.testzip())
+
+    def test_payload_certificate_scheme_and_libs_still_change_the_bytes(self):
+        base = apk_bytes(b'cert')
+        variants = {'payload': apk_bytes(b'cert', b'rose agent 310'), 'certificate': apk_bytes(b'another certificate'),
+                    'scheme': apk_bytes(b'cert', scheme=0xF05368C0), 'libs': apk_bytes(b'cert', libs=('lib/x86_64/librose.so',)),
+                    'no block': apk_bytes(b'cert', block=False)}
+        for name, data in variants.items():
+            with self.subTest(name):
+                self.assertNotEqual(data, base)
+        self.assertEqual(len(set(variants.values())), len(variants))
+
+    def test_refusal_fixtures_differ_from_a_valid_apk_only_where_intended(self):
+        """The signer and scheme refusals keep the valid APK's ZIP entries; only the signing block differs."""
+        def split(data):
+            """(entries, signing block, central directory + EOCD); the block ends where the EOCD says the directory starts."""
+            eocd = data.rfind(b'PK\x05\x06')
+            directory = struct.unpack_from('<I', data, eocd + 16)[0]
+            self.assertEqual(data[directory - 16:directory], b'APK Sig Block 42')
+            start = directory - 8 - struct.unpack_from('<Q', data, directory - 24)[0]
+            self.assertEqual(data[start:start + 8], data[directory - 24:directory - 16], 'block size fields agree')
+            return data[:start], data[start:directory], data[directory:]
+        good = split(apk_bytes(b'cert'))
+        for name, data in {'signer': apk_bytes(b'another certificate'), 'scheme': apk_bytes(b'cert', scheme=0x42726577)}.items():
+            with self.subTest(name):
+                entries, block, _ = split(data)
+                self.assertEqual(entries, good[0])
+                self.assertNotEqual(block, good[1])
+        unsigned = apk_bytes(b'cert', block=False)
+        self.assertTrue(unsigned.startswith(good[0]))
+        self.assertNotIn(b'APK Sig Block 42', unsigned)
+
 
 class PublisherTest(unittest.TestCase):
     def setUp(self):
@@ -366,22 +434,34 @@ class PublisherTest(unittest.TestCase):
         self.assertEqual(self.server.log, [])
 
     def test_latest_must_stay_the_ota_release(self):
-        # Beta 2901 is Latest (AGENT311-APP-ONLY: owner-confirmed 2026-10-30). The previous 2806 and 2805, any older Beta,
-        # a newer build, an app prerelease or no Latest is refused: the guard is one exact tag, never newest-wins.
-        self.assertEqual(FRANKEL['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
-        for latest in ('frankel-2026102806', 'frankel-2026102805', 'frankel-2026102804', 'frankel-2026102902', 'rose-agent-307', None):
+        # AGENT-BETA-AUTO: whatever OS release is Latest is preserved (the fixed 2901 tag went stale once the Beta
+        # advanced). Before publication Latest must be an OS release; an app prerelease, another tag or no Latest refuses.
+        self.assertEqual(FRANKEL['appRelease']['publication']['latestTagPattern'], 'frankel-{build}')
+        self.assertNotIn('preserveLatest', FRANKEL['appRelease']['publication'])
+        for latest in ('rose-agent-307', 'rose-models-2', 'frankel-20261031', 'frankel-2026103101-x', None):
             self.server.latest = latest
             result = self.run_publisher(public=f'refused-{latest}')
             self.assertEqual(result.returncode, 1)
-            self.assertIn('Latest is not frankel-2026102901; nothing is published', result.stderr)
+            self.assertIn('Latest is not an OS release (frankel-{build}); nothing is published', result.stderr)
             self.assertEqual(self.api_writes(), [])
-        # After publishing: Latest moved to the new prerelease, back to 2805, or to another build is refused too.
-        for index, moved_to in enumerate((True, 'frankel-2026102805', 'frankel-2026102807')):
-            self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102901', moved_to
+        # After publishing: Latest moved to the new prerelease or back to an older build is refused.
+        for index, moved_to in enumerate((True, 'frankel-2026102805', 'frankel-2026103013')):
+            self.server.latest, self.server.move_latest_on_publish = 'frankel-2026103014', moved_to
             self.server.releases.clear()
             moved = self.run_publisher(public=f'moved{index}')
             self.assertEqual(moved.returncode, 1, moved_to)
-            self.assertIn('Latest moved away from frankel-2026102901', moved.stderr)
+            self.assertIn('Latest moved away from frankel-2026103014', moved.stderr)
+
+    def test_the_current_os_latest_is_preserved_and_may_legitimately_advance(self):
+        for index, (before, after) in enumerate((('frankel-2026103014', False), ('frankel-2026102806', False),
+                                                 ('frankel-2026103014', 'frankel-2026103101'))):
+            self.server.latest, self.server.move_latest_on_publish = before, after
+            self.server.releases.clear()
+            result = self.run_publisher(public=f'kept{index}')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.server.latest, after or before, 'an app release never becomes Latest')
+            release, = self.server.releases
+            self.assertEqual((release['prerelease'], release['make_latest']), (True, 'false'))
 
     def test_publishing_309_preserves_2806_and_promotes_nothing(self):
         result = self.run_publisher()
@@ -544,10 +624,10 @@ class PublisherReuseTest(PublisherTest):
         self.assertIn('published release rose-agent-308 differs from this app release; it is not modified', result.stderr)
         self.assertEqual(json.dumps(self.server.releases), before)
         self.server.releases.clear()
-        for latest in ('frankel-2026102805', 'frankel-2026102807', None):
+        for latest in ('rose-agent-307', None):
             self.server.latest = latest
             result = self.reuse_publisher(public=f'latest-{latest}')
-            self.assertIn('Latest is not frankel-2026102901; nothing is published', result.stderr)
+            self.assertIn('Latest is not an OS release (frankel-{build}); nothing is published', result.stderr)
             self.assertEqual(self.api_writes(), [])
         self.server.latest, self.server.move_latest_on_publish = 'frankel-2026102901', 'frankel-2026102805'
         result = self.reuse_publisher(public='moved')
@@ -737,7 +817,7 @@ class WorkflowAppPublisherTest(unittest.TestCase):
     def test_only_app_only_with_app_publish_runs_the_hosted_app_publisher(self):
         job = self.jobs['app-publisher']
         self.assertIn("    needs: [app-builder, app-reuse]\n    if: >-\n      !cancelled() && inputs.app_publish &&\n"
-            "      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||\n"
+            "      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success' && needs.app-builder.outputs.app_skip != 'true') ||\n"
             "      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))\n    runs-on: ubuntu-24.04\n", job)
         self.assertNotIn('self-hosted', job)
         self.assertIn('          name: app-release-dev.pixel.voice-${{ github.run_id }}\n', job)

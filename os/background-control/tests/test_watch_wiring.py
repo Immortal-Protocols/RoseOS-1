@@ -4,6 +4,8 @@ import re
 import unittest
 
 SOURCE = (Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol/AgentPipActivity.java').read_text()
+PRESENTATION = (Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol/ViewerPresentation.java').read_text()
+AUTO = (Path(__file__).resolve().parents[3]/'workspace/rose-agent/app/src/dev/pixel/voice/AutoAgentPip.java').read_text()
 
 def method(signature):
     start = SOURCE.index(signature)
@@ -19,19 +21,25 @@ class WatchWiringTest(unittest.TestCase):
         self.assertLess(create.index('restore(saved) : fromIntent(getIntent())'), create.index('new FrameLayout(this)'))
         self.assertIn('if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }', create)
         # Replacement before attach: the selected pair must be the controller's current one.
-        self.assertRegex(create, r'synchronized \(Controller\.class\) \{[^}]*\}\s*if \(!binding\.allows\(Controller\.id, Controller\.taskId\)\) \{ unavailable\(\); return; \}')
+        # ... of the viewer's own slot (Controller.viewed): never another session, never a guess between two.
+        self.assertIn('Controller.Slot viewed = Controller.viewed(binding);\n            if (viewed == null) { unavailable(); return; }', create)
+        lock = create.index('synchronized (Controller.class) {')
+        self.assertLess(lock, create.index('if (viewed.session == null) {'))
+        self.assertLess(create.index('if (viewed.session == null) {'), create.index('if (!binding.allows(viewed.id, viewed.taskId)) { unavailable(); return; }'))
+        self.assertLess(create.index('if (!binding.allows(viewed.id, viewed.taskId)) { unavailable(); return; }'), create.index('new FrameLayout(this)'))
 
     def test_every_attach_is_gated_and_rechecked(self):
         refresh = method('private final Runnable refresh')
         self.assertEqual(refresh.count('setSession.invoke(mirror, current)'), 1)
         attach = refresh.index('setSession.invoke(mirror, current)')
         # Read under the controller lock together with the session object.
-        self.assertRegex(refresh, r'synchronized \(Controller\.class\) \{\s*current = Controller\.session;\s*allowed = binding\.allows\(Controller\.id, Controller\.taskId\);')
+        self.assertRegex(refresh, r'synchronized \(Controller\.class\) \{\s*Controller\.Slot viewed = Controller\.viewed\(binding\);\s*ambiguous = viewed == null;\s*current = viewed == null \? null : viewed\.session;\s*allowed = viewed != null && binding\.allows\(viewed\.id, viewed\.taskId\);')
+        self.assertLess(refresh.index('if (ambiguous) { unavailable(); return; }'), attach)
         self.assertLess(refresh.index('if (!allowed) { unavailable(); return; }'), attach)
         # A changed binding re-attaches even when the session object is the same.
         self.assertIn('if (current != attached || !binding.equals(attachedBinding))', refresh)
         # Re-checked after attaching, so a retag during the attach call is not shown.
-        self.assertGreater(refresh.index('allowed = Controller.session == current && binding.allows(Controller.id, Controller.taskId);'), attach)
+        self.assertGreater(refresh.index('allowed = viewed != null && viewed.session == current && binding.allows(viewed.id, viewed.taskId);'), attach)
 
     def test_new_intents_and_recreation(self):
         intent = method('protected void onNewIntent(Intent intent)')
@@ -45,8 +53,8 @@ class WatchWiringTest(unittest.TestCase):
         self.assertIn('intent.hasExtra(WatchBinding.EXTRA_TASK), intent.getStringExtra(WatchBinding.EXTRA_TASK)', extras)
         self.assertIn('intent.hasExtra(WatchBinding.EXTRA_SESSION), intent.getStringExtra(WatchBinding.EXTRA_SESSION)', extras)
 
-    def test_explicit_watch_is_full_screen_and_the_fallback_stays(self):
-        # APP-WATCH-1031-C: a bound entry (Rose's apps, an overview selection) is expanded; only PiP asks for PiP.
+    def test_explicit_watch_is_full_screen_and_automatic_pip_is_off(self):
+        # APP-WATCH-1031-C: a bound entry is expanded; AUTO-PIP-OFF-330: so is every other entry, and only PiP asks for PiP.
         create = method('public void onCreate(Bundle saved)')
         self.assertIn('ViewerPresentation.forEntry(binding.mode == WatchBinding.Mode.BOUND, null)', create)
         self.assertIn('if (ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());', create)
@@ -56,13 +64,29 @@ class WatchWiringTest(unittest.TestCase):
         self.assertIn('presentation = ViewerPresentation.forEntry(incoming.mode == WatchBinding.Mode.BOUND, presentation);', intent)
         self.assertIn('if (frame != null && ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());', intent)
         self.assertNotIn('if (frame != null) frame.post(() -> enterFloatingView());', intent, 'no unconditional return to PiP')
-        # The presentation survives recreation with the binding.
+        # The presentation survives recreation with the binding; an earlier build's saved PiP is restored full screen.
         self.assertIn('out.putString(KEY_PRESENTATION, presentation.name());', method('protected void onSaveInstanceState(Bundle out)'))
+        self.assertIn('ViewerPresentation.restore(saved.getString(KEY_PRESENTATION))', create)
+        # Leaving a full-screen viewer never auto-enters the floating window, and only a floating presentation needs the
+        # picture-in-picture feature.
+        params = method('private PictureInPictureParams parameters()')
+        self.assertIn('.setAutoEnterEnabled(ViewerPresentation.AUTOMATIC_PIP)', params)
+        self.assertNotIn('.setAutoEnterEnabled(true)', SOURCE)
+        self.assertIn('if (ViewerPresentation.entersPip(presentation)\n                && !getPackageManager().hasSystemFeature('
+            'PackageManager.FEATURE_PICTURE_IN_PICTURE)) {', create)
+        self.assertIn('static final boolean AUTOMATIC_PIP = false;', PRESENTATION)
         # Privacy and lock guards are unchanged: the view is secure and never shown over the keyguard.
         self.assertIn('getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);', create)
         self.assertNotRegex(SOURCE, r'setShowWhenLocked|FLAG_SHOW_WHEN_LOCKED|setTurnScreenOn|requestDismissKeyguard')
-        # The automatic show itself is unchanged: picture-in-picture is still the default for an unbound entry.
-        self.assertIn('.setAutoEnterEnabled(true)', method('private PictureInPictureParams parameters()'))
+
+    def test_rose_agent_never_launches_the_viewer_into_pip_on_its_own(self):
+        # AUTO-PIP-OFF-330: AutoAgentPip launched the viewer into picture-in-picture whenever a session became ready. It
+        # is off and in memory only (fresh install and upgrade alike); the session and its controls are untouched.
+        observe = AUTO[AUTO.index('static synchronized void observe('):]
+        self.assertIn('static final boolean ENABLED = false;', AUTO)
+        self.assertLess(observe.index('if (!ENABLED) return;'), observe.index('makeLaunchIntoPip'))
+        self.assertIn('.put("autoShow", ENABLED)', AUTO)
+        self.assertNotRegex(AUTO, r'SharedPreferences|getSharedPreferences|Controller|agentStop|"stop"')
 
     def test_closing_the_viewer_never_stops_work(self):
         close = method('private void unavailable()')
@@ -82,8 +106,10 @@ class SelectionWiringTest(unittest.TestCase):
 
     def test_the_controller_resolves_from_its_own_session_under_its_lock(self):
         controller = (Path(__file__).resolve().parents[1]/'agent-pip/src/dev/pixel/backgroundcontrol/Controller.java').read_text()
-        line = [l for l in controller.splitlines() if 'WatchBinding resolveSelection(' in l][0]
-        self.assertIn('static synchronized WatchBinding resolveSelection(int display,String pkg)', line)
+        # Every slot is tried, each through its own live session only (resolveSelectionOne).
+        self.assertIn('static synchronized WatchBinding resolveSelection(int display,String pkg){', controller)
+        line = [l for l in controller.splitlines() if 'WatchBinding resolveSelectionOne(' in l][0]
+        self.assertIn('static synchronized WatchBinding resolveSelectionOne(int display,String pkg)', line)
         self.assertIn('getMethod("getAccessibilityWindows").invoke(session)', line)
         self.assertIn('w.getDisplayId()', line)
         self.assertIn('return WatchBinding.fromSelection(display,pkg,session!=null,status,own<0?-1:own,target,id,taskId);', line)

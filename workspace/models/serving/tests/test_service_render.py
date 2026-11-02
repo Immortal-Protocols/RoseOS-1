@@ -44,6 +44,18 @@ class Rendered(unittest.TestCase):
         self.assertIn('/etc/rose-models/tls/current/fullchain.pem', conf)
         self.assertNotIn('token.map', conf)
 
+    def test_cloud_preflight_helper_is_packaged_but_inert(self):
+        m = R.render(self.tmp / 'out')
+        src = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        for name in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py', 'qwen_gpu.py', 'vllm_brain.py',
+                     'coop.py', 'pump.py', 'adapter_session.py'):
+            rel = f'lib/rose_cloud/{name}'
+            self.assertIn(rel, m['files'])  # in the tree manifest, so in the roots-inclusive payload digest
+            self.assertEqual((self.tmp / 'out' / rel).read_bytes(), (src / name).read_bytes())
+            self.assertFalse((self.tmp / 'out' / rel).stat().st_mode & 0o111)
+        units = ''.join(p.read_text() for p in (self.tmp / 'out/systemd').iterdir())
+        self.assertNotIn('rose_cloud', units)  # nothing runs it except bootstrap's explicit diagnostic mode
+
     def test_launch_scripts_are_the_pinned_tp2_loopback_profile(self):
         R.render(self.tmp / 'out')
         for mode in ('online', 'offline'):
@@ -80,6 +92,173 @@ class Rendered(unittest.TestCase):
         (snap / 'tokenizer.json').unlink()
         code, _ = start()
         self.assertEqual(code, 4)  # refused, and RestartPreventExitStatus=4 stops the restart loop
+
+
+class QwenSelection(unittest.TestCase):
+    """MODELS-QWEN-SERVE-001: Muse stays the default; Qwen only on an explicit selection, as an overlay of the same tree."""
+
+    QWEN = json.loads((HERE.parent / 'qwen-fp8.json').read_text())
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix='svc-qwen-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def tree(self, name, **kw):
+        R.render(self.tmp / name, **kw)
+        return {p.relative_to(self.tmp / name).as_posix(): p.read_bytes()
+                for p in sorted((self.tmp / name).rglob('*')) if p.is_file()}
+
+    def test_default_is_muse_byte_for_byte(self):
+        default, muse = self.tree('a'), self.tree('b', model='muse')
+        self.assertEqual(default, muse)
+        for absent in ('bin/launch-qwen', 'lib/qwen-fp8.json', 'lib/service/verify_staged.py'):
+            self.assertNotIn(absent, default)  # (lib/rose_cloud/qwen_gpu.py is the existing diagnostic helper)
+        self.assertEqual(json.loads(default['manifest.json'])['model'],
+                         'meta-models/Muse-Glimmer-30B@cec94fcfd6512f2cfe708138c32533b346ea4f69')
+        with self.assertRaises(R.render_local.render_upload.Rejected):
+            R.render(self.tmp / 'c', model='llama')
+
+    def test_qwen_overlay_changes_only_the_model_slot(self):
+        muse, qwen = self.tree('m'), self.tree('q', model='qwen')
+        changed = sorted(k for k in set(muse) | set(qwen) if muse.get(k) != qwen.get(k))
+        self.assertEqual(changed, ['bin/launch-qwen', 'bin/start-model', 'lib/qwen-fp8.json',
+                                   'lib/service/verify_staged.py', 'manifest.json', 'systemd/models-health.service',
+                                   'systemd/models-verify-full.service', 'systemd/muse-glimmer.service'])
+        for kept in ('bin/launch-offline', 'bin/launch-online', 'lib/muse-glimmer-30b.json', 'edge/nginx.conf',
+                     'systemd/models-edge.service', 'systemd/models-auth.service'):
+            self.assertEqual(muse[kept], qwen[kept], kept)  # diagnostics, edge, auth and TLS unchanged
+        unit = qwen['systemd/muse-glimmer.service'].decode()
+        self.assertIn('Description=Qwen Qwen/Qwen3.6-35B-A3B-FP8 as rose-qwen', unit)
+        self.assertEqual(unit.replace(unit.split('\n')[2], ''), muse['systemd/muse-glimmer.service'].decode().replace(
+            muse['systemd/muse-glimmer.service'].decode().split('\n')[2], ''))  # only the description differs
+        self.assertIn('health.py run --model rose-qwen\n', qwen['systemd/models-health.service'].decode())
+        self.assertNotIn('--record', qwen['systemd/models-health.service'].decode())
+        start = qwen['bin/start-model'].decode()
+        self.assertIn('verify_staged.py --manifest /etc/rose-models/lib/rose_cloud/manifest.json --manifest-sha256 '
+                      + self.QWEN['model']['manifest_sha256'] + ' --group qwen --staging-root /mnt/models-data/rose-cloud',
+                      start)
+        self.assertNotIn('launch-online', start)  # no download branch
+        self.assertIn('--full', qwen['systemd/models-verify-full.service'].decode())
+        m = json.loads(qwen['manifest.json'])
+        self.assertEqual((m['profile'], m['servedModel'], m['qwenSettings'], m['notRuntimeProven'], m['model']),
+                         (self.QWEN['id'], 'rose-qwen', 'proven', [],
+                          'Qwen/Qwen3.6-35B-A3B-FP8@95a723d08a9490559dae23d0cff1d9466213d989'))
+
+    def test_nothink_tier_is_the_diagnostic_profile_and_only_on_request(self):
+        """MODELS-QWEN-SERVE-NOTHINK-001: --qwen-settings nothink serves exactly the flags that passed the isolated
+        no-thinking contract diagnostic; it changes only the launcher and the manifest of the qwen tree, and nothing
+        else (Muse, the edge, auth and TLS) moves."""
+        rose = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        sys.path.insert(0, str(rose.parent))
+        from rose_cloud import qwen_gpu
+        args, flags = R.render_local.qwen_args(self.QWEN, 'nothink')
+        self.assertEqual(args, qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS)
+        self.assertEqual(flags, ['--max-model-len', '--reasoning-parser', '--default-chat-template-kwargs'])
+        self.assertEqual(R.render_local.qwen_args(self.QWEN, 'proposed')[0], qwen_gpu.CONTRACT_SERVER_ARGS)
+        self.assertEqual(R.render_local.qwen_args(self.QWEN, 'proven')[0], qwen_gpu.SERVER_ARGS)
+        for bad in ('fast', 'NOTHINK', '', None):
+            with self.assertRaises(R.render_local.render_upload.Rejected):
+                R.render_local.qwen_args(self.QWEN, bad)
+            with self.assertRaises(R.render_local.render_upload.Rejected):
+                R.render(self.tmp / f'bad-{bad}', model='qwen', qwen_settings=bad)
+        broken = json.loads(json.dumps(self.QWEN))
+        broken['settings']['nothink']['extends'] = 'proven'
+        with self.assertRaises(R.render_local.render_upload.Rejected):
+            R.render_local.qwen_args(broken, 'nothink')
+        muse, proposed, nothink = self.tree('m'), self.tree('p', model='qwen', qwen_settings='proposed'), \
+            self.tree('n', model='qwen', qwen_settings='nothink')
+        changed = sorted(k for k in set(proposed) | set(nothink) if proposed.get(k) != nothink.get(k))
+        self.assertEqual(changed, ['bin/launch-qwen', 'manifest.json', 'systemd/muse-glimmer.service'])
+        unit_p, unit_n = (t['systemd/muse-glimmer.service'].decode().split('\n') for t in (proposed, nothink))
+        self.assertEqual([(a, b) for a, b in zip(unit_p, unit_n) if a != b],
+                         [(unit_p[2], unit_p[2].replace(', proposed)', ', nothink)'))])  # only the Description's tier
+        for kept in ('edge/nginx.conf', 'edge/acme-only.conf', 'systemd/models-edge.service',
+                     'systemd/models-auth.service', 'bin/launch-offline', 'bin/launch-online',
+                     'lib/muse-glimmer-30b.json'):
+            self.assertEqual(muse[kept], nothink[kept], kept)
+        script = nothink['bin/launch-qwen'].decode()
+        self.assertIn("settings: nothink", script)
+        self.assertIn('NOT runtime-proven here: --max-model-len --reasoning-parser --default-chat-template-kwargs',
+                      script)
+        self.assertIn("--default-chat-template-kwargs '{\"enable_thinking\": false}'", script)
+        m = json.loads(nothink['manifest.json'])
+        self.assertEqual((m['qwenSettings'], m['servedModel'], m['notRuntimeProven']),
+                         ('nothink', 'rose-qwen', flags))
+        self.assertIn('not proven as the persistent service', m['evidence'])
+        for other in (proposed, self.tree('v', model='qwen'), muse):
+            self.assertNotIn('evidence', json.loads(other['manifest.json']))  # other manifests unchanged
+        sys.path.insert(0, str(HERE.parent / 'service'))
+        import build_bootstrap
+        self.assertEqual(build_bootstrap.render_service.render_local.QWEN_SETTINGS, ('proven', 'proposed', 'nothink'))
+
+    def test_pins_match_the_staged_manifest_and_the_runtime_proven_flags(self):
+        import hashlib
+        rose = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        manifest_bytes = (rose / 'manifest.json').read_bytes()
+        manifest = json.loads(manifest_bytes)
+        model = self.QWEN['model']
+        self.assertEqual(hashlib.sha256(manifest_bytes).hexdigest(), model['manifest_sha256'])
+        sys.path.insert(0, str(HERE.parent / 'service'))
+        import bootstrap
+        self.assertEqual(model['manifest_sha256'], bootstrap.STAGE_MANIFEST_SHA256)
+        q = manifest['groups'][model['manifest_group']]
+        self.assertEqual((q['repo'], q['revision']), (model['repo'], model['revision']))
+        self.assertEqual(model['staged_dir'], f"{manifest['stagingRoot']}/{q['dir']}")
+        sys.path.insert(0, str(rose.parent))
+        from rose_cloud import qwen_gpu
+        self.assertEqual(self.QWEN['settings']['proven']['args'], qwen_gpu.SERVER_ARGS)  # PR349's exact serve flags
+        runtime = R.render_local.render_upload.profile(CONFIG, R.PROFILE)['runtime']
+        script, limits = R.render_local.render_qwen(self.QWEN, runtime, 'proven')
+        self.assertIn(runtime['image_id'], script)  # the same cached image: nothing new is pulled
+        self.assertNotIn('docker pull', script)
+        with self.assertRaises(R.render_local.render_upload.Rejected):
+            R.render_local.qwen_args(self.QWEN, 'unproven')
+        bad = json.loads(json.dumps(self.QWEN))
+        bad['launch']['host'] = '0.0.0.0'
+        with self.assertRaises(R.render_local.render_upload.Rejected):
+            R.render_local.render_qwen(bad, runtime, 'proven')
+
+
+class VerifyStaged(unittest.TestCase):
+    """verify_staged.py: the staged files against a pinned manifest; quick (sizes, small-file hashes) and --full."""
+
+    def setUp(self):
+        import hashlib
+        sys.path.insert(0, str(HERE.parent / 'service'))
+        import verify_staged
+        self.V = verify_staged
+        self.tmp = Path(tempfile.mkdtemp(prefix='staged-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        d = self.tmp / 'root' / 'qwen'
+        d.mkdir(parents=True)
+        files = {'config.json': b'{}', 'layers-0.safetensors': b'w' * 1000}
+        entries = []
+        for name, data in files.items():
+            (d / name).write_bytes(data)
+            entries.append([name, len(data), 'sha256', hashlib.sha256(data).hexdigest()])
+        self.manifest = self.tmp / 'manifest.json'
+        self.manifest.write_text(json.dumps({'stagingRoot': '/x', 'groups': {'qwen': {'dir': 'qwen', 'revision': 'r',
+                                                                                    'files': entries}}}))
+        self.pin = hashlib.sha256(self.manifest.read_bytes()).hexdigest()
+        self.dir = d
+
+    def run_cli(self, *extra):
+        result = self.tmp / 'result.json'
+        code = self.V.main(['--manifest', str(self.manifest), '--manifest-sha256', self.pin, '--group', 'qwen',
+                            '--staging-root', str(self.tmp / 'root'), '--result', str(result), *extra])
+        return code, json.loads(result.read_text())['result']
+
+    def test_quick_full_and_refusals(self):
+        self.assertEqual(self.run_cli(), (0, 'verified'))
+        (self.dir / 'layers-0.safetensors').write_bytes(b'x' * 1000)  # same size, different content
+        self.assertEqual(self.run_cli(), (0, 'verified'))  # quick: weights by size only
+        self.assertEqual(self.run_cli('--full'), (4, 'mismatch'))  # the daily rehash catches it
+        (self.dir / 'layers-0.safetensors').write_bytes(b'w' * 1000)
+        (self.dir / 'config.json').write_bytes(b'[]')
+        self.assertEqual(self.run_cli(), (4, 'mismatch'))  # small files are always hashed
+        (self.dir / 'config.json').write_bytes(b'{}')
+        self.pin = '0' * 64
+        self.assertEqual(self.run_cli(), (4, 'mismatch'))  # not the pinned manifest
 
 
 if __name__ == '__main__':

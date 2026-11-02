@@ -1,0 +1,48 @@
+{
+  "status": "SELECTABLE SERVING PROFILE (MODELS-QWEN-SERVE-001). Rendered only with render_service.py/build_bootstrap.py --model qwen; Muse Glimmer stays the default. Source only: nothing here has run as the persistent service.",
+  "id": "qwen3.6-35b-a3b-fp8-a100x2",
+  "model": {
+    "repo": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "revision": "95a723d08a9490559dae23d0cff1d9466213d989",
+    "staged_dir": "/mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0",
+    "manifest_group": "qwen",
+    "manifest_sha256": "ebcfb082a94bcae9c950eefab4b34a8fc736bfeb934c84a96360398afd09f3c3",
+    "license": "apache-2.0"
+  },
+  "served_model_name": "rose-qwen",
+  "served_model_name_basis": "the Rose Models app (dev.pixel.models) names it explicitly: ModelsService.Model.QWEN is rose-qwen with no system prompt, Muse stays the app's default, and a reply naming any other model fails local-agent-v1 with model_identity_mismatch (Product #352). The server never pretends to be Muse.",
+  "runtime_from": "muse-glimmer-30b.json profile a100x2-bf16-vllm-persistent (the same cached image ID and digest: no pull, no new image)",
+  "launch": {
+    "container_name": "muse-glimmer",
+    "container_name_basis": "the persistent model slot: bootstrap's MODEL_UNITS stop logic, health.py and the unit's docker rm all use this name; the unit description and the rendered script say which model runs",
+    "network": "host",
+    "host": "127.0.0.1",
+    "port": 8000,
+    "shm_size_mb": 4096,
+    "driver_major_min": 580,
+    "gpu_count": 2,
+    "gpu_memory_utilization": 0.9,
+    "gpu_total_min_bytes": 40000000000
+  },
+  "settings": {
+    "proven": {
+      "basis": "the exact vllm serve flags of the original Mac's PR349 adapter run (CLOUD-QWEN-ADAPTER-001, 22:20 UTC 2026-11-01: server ready in 423.2 s, text/image/history/cancel passed) and PR350's warm runs, minus only the per-run --chat-template (the adapter's RAW_TEMPLATE), which the OpenAI chat route of a product client does not use",
+      "args": ["--tensor-parallel-size", "2", "--max-model-len", "2048", "--max-num-seqs", "1",
+               "--gpu-memory-utilization", "0.9", "--enforce-eager", "--seed", "0",
+               "--distributed-executor-backend", "mp",
+               "--limit-mm-per-prompt", "{\"image\": {\"count\": 1, \"height\": 256, \"width\": 256}, \"video\": 0}",
+               "--mm-processor-kwargs", "{\"max_pixels\": 65536}",
+               "--chat-template-content-format", "openai"]
+    },
+    "proposed": {
+      "basis": "NOT runtime-proven. local-agent-v1 needs a longer context (max_reply_chars 8000 plus history) than the proven 2048, and its closed JSON envelope must be the whole message content, so Qwen's thinking must go to the separate reasoning field (the client ignores it). FP8 weights are about 18.75 GB per A100 at TP2; the extra KV cache for 8192 tokens and one sequence is derived to fit, not measured. The qwen3 reasoning parser name is from the model card, unverified on the cached image",
+      "overrides": {"--max-model-len": "8192"},
+      "add": ["--reasoning-parser", "qwen3"]
+    },
+    "nothink": {
+      "basis": "the proposed settings plus a server-wide chat-template default that turns the model's thinking off (the client sends no chat_template_kwargs, so it applies to every request). Exactly rose_cloud.qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS, which passed the isolated cloud-qwen-contract-nothink-once diagnostic once (original Mac, PR368 payload, 03:38:46 UTC 2026-11-02: allExpected, noThinking, the image's FrontendArgs check, replies 2.7-8.5 s on the four fixed cases). NOT proven as the persistent service: its network, container limits and lifecycle differ from the diagnostic's",
+      "extends": "proposed",
+      "add": ["--default-chat-template-kwargs", "{\"enable_thinking\": false}"]
+    }
+  }
+}

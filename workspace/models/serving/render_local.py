@@ -78,6 +78,81 @@ exec {' '.join(q(x) for x in run)} "$GUARD" {' '.join(q(x) for x in tail)}
 """, limits
 
 
+QWEN_SETTINGS = ('proven', 'proposed', 'nothink')
+
+
+def qwen_args(qwen, settings):
+    """The vllm serve flags for the selectable Qwen profile: the runtime-proven set, plus the proposed overrides and
+    additions when ``settings`` is 'proposed', plus the nothink additions on top of those when it is 'nothink'.
+    Returns (args, the flags beyond the proven set: not runtime-proven as this service)."""
+    if settings not in QWEN_SETTINGS:
+        raise render_upload.Rejected('qwen settings must be proven, proposed or nothink')
+    args = list(qwen['settings']['proven']['args'])
+    proposed = []
+    if settings in ('proposed', 'nothink'):
+        p = qwen['settings']['proposed']
+        for flag, value in p['overrides'].items():
+            args[args.index(flag) + 1] = value
+            proposed.append(flag)
+        args += p['add']
+        proposed += [a for a in p['add'] if a.startswith('--')]
+    if settings == 'nothink':
+        n = qwen['settings']['nothink']
+        if n.get('extends') != 'proposed':
+            raise render_upload.Rejected('the nothink settings must extend the proposed settings')
+        args += n['add']
+        proposed += [a for a in n['add'] if a.startswith('--')]
+    return args, proposed
+
+
+def render_qwen(qwen, runtime, settings='proven', status=None):
+    """The persistent service's launch script for the staged Qwen model (MODELS-QWEN-SERVE-001): the same image, guard
+    and loopback-only host networking as the Muse launch, the staged directory mounted read-only, offline. Nothing is
+    downloaded; no cache is written. Returns (script, guard limits)."""
+    launch, model = qwen['launch'], qwen['model']
+    if launch['network'] != 'host' or launch['host'] != '127.0.0.1':
+        raise render_upload.Rejected('the qwen profile must bind 127.0.0.1 on the host network only')
+    args, proposed = qwen_args(qwen, settings)
+    staged = model['staged_dir']
+    limits = {'driver_major_min': launch['driver_major_min'], 'gpu_count': launch['gpu_count'],
+              'gpu_total_min_bytes': launch['gpu_total_min_bytes'],
+              'gpu_memory_utilization': launch['gpu_memory_utilization'],
+              'cache_dir': staged, 'cache_free_min_bytes': 0,  # read-only staged weights: nothing is written
+              'shm_min_bytes': int(launch['shm_size_mb'] * 2**20 * 0.9)}
+    mounts = []
+    if status:
+        limits['status_path'] = f'{status[1]}/status.json'
+        mounts = ['-v', f'{status[0]}:{status[1]}']
+    guard = (HERE/'startup_guard.py').read_text()
+    if 'GUARD_SOURCE_END' in guard:
+        raise render_upload.Rejected('guard source collides with the heredoc marker')
+    run = ['docker', 'run', '--rm', '--name', launch['container_name'], '--gpus', 'all', '--network', 'host',
+           '--shm-size', f"{launch['shm_size_mb']}m", '-v', f'{staged}:{staged}:ro', *mounts,
+           '-e', 'HF_HUB_OFFLINE=1', '-e', 'TRANSFORMERS_OFFLINE=1', '-e', 'VLLM_NO_USAGE_STATS=1',
+           '-e', 'DO_NOT_TRACK=1', '--entrypoint', 'python3', runtime['image_id'], '-c']
+    tail = [json.dumps(limits, sort_keys=True), '--', 'vllm', 'serve', staged,
+            '--served-model-name', qwen['served_model_name'], '--host', launch['host'], '--port', str(launch['port']),
+            *args]
+    q = shlex.quote
+    return f"""#!/usr/bin/env bash
+# Qwen {model['repo']}@{model['revision']} as {qwen['served_model_name']} ({qwen['id']}, settings: {settings}).
+# Runtime-proven flags are the PR349/PR350 vllm serve set; NOT runtime-proven here: {' '.join(proposed) or 'none'}.
+# Rendered by workspace/models/serving/render_local.py (render_qwen). Loopback only: http://{launch['host']}:{launch['port']}/v1
+set -euo pipefail
+IMAGE_ID={q(runtime['image_id'])}
+SCRATCH={q(staged.rsplit('/', 2)[0])}
+MODEL_DIR={q(staged)}
+if ! mountpoint -q "$SCRATCH"; then echo "refused: $SCRATCH is not a mounted scratch filesystem" >&2; exit {EXIT_PRECONDITION}; fi
+actual="$(docker image inspect --format '{{{{.Id}}}}' "$IMAGE_ID" 2>/dev/null || true)"
+if [ "$actual" != "$IMAGE_ID" ]; then echo "refused: image $IMAGE_ID is not present locally (this script never pulls)" >&2; exit {EXIT_PRECONDITION}; fi
+if [ ! -d "$MODEL_DIR" ]; then echo "refused: $MODEL_DIR is not staged (this script never downloads)" >&2; exit {EXIT_PRECONDITION}; fi
+GUARD="$(cat <<'GUARD_SOURCE_END'
+{guard}GUARD_SOURCE_END
+)"
+exec {' '.join(q(x) for x in run)} "$GUARD" {' '.join(q(x) for x in tail)}
+""", limits
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', type=Path, required=True)

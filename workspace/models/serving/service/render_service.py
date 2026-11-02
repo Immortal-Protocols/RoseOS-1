@@ -12,6 +12,14 @@ Output, all self-contained (no repository needed on the VM afterwards):
   systemd/        muse-glimmer, models-health(.timer), models-verify-full(.timer), models-auth, models-edge,
                   models-renewal-status(.timer)
   manifest.json   sha256 of every rendered file
+
+Model selection (MODELS-QWEN-SERVE-001): Muse Glimmer is the default, and the default render is unchanged. Only an
+explicit --model qwen renders the staged Qwen FP8 profile (../qwen-fp8.json) into the same model slot: bin/launch-qwen,
+a start-model that verifies the staged files against the pinned rose_cloud manifest (verify_staged.py; there is
+no download branch), models-health with the Qwen served name, a staged full rehash, and lib/qwen-fp8.json. The Muse
+launch scripts and config stay in the tree, so every bootstrap diagnostic mode keeps working; the edge, auth and TLS
+are identical. --qwen-settings proven (default) renders exactly the runtime-proven flags; proposed adds the
+not-yet-proven 8192 context and qwen3 reasoning parser, and says so in the script and the manifest.
 """
 import argparse
 import hashlib
@@ -47,9 +55,14 @@ LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              **{f'lib/service/{n}': SERVING / 'service' / n
                 for n in ('verify_model.py', 'health.py', 'auth_service.py', 'tls_deploy.py', 'renewal_status.py',
                           'unit_facts.py', 'hf_probe.py')},
-             'lib/startup_guard.py': SERVING / 'startup_guard.py'}
+             'lib/startup_guard.py': SERVING / 'startup_guard.py',
+             **{f'lib/rose_cloud/{n}': SERVING.parent / 'rose_cloud' / 'rose_cloud' / n
+                for n in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py', 'qwen_gpu.py', 'vllm_brain.py', 'coop.py',
+                          'pump.py', 'adapter_session.py', 'contract_session.py', 'qwen_contract_requests.json')}}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
+QWEN_CONFIG = SERVING / 'qwen-fp8.json'
+MODELS = ('muse', 'qwen')
 
 
 def unit(description, service, unit_extra='', install='WantedBy=multi-user.target'):
@@ -60,6 +73,62 @@ Description={description}
 [Service]
 {service}
 ''' + (f'\n[Install]\n{install}\n' if install else '')
+
+
+def qwen_files(out, config, qwen, settings, root=ROOT):
+    """Overlay the selectable Qwen profile onto the default tree (the same model slot, unit and container names)."""
+    runtime = render_local.render_upload.profile(config, PROFILE)['runtime']
+    script, _ = render_local.render_qwen(qwen, runtime, settings, status=(CONTAINER_STATUS, '/run/rose-status'))
+    out['bin/launch-qwen'] = script
+    out['lib/qwen-fp8.json'] = QWEN_CONFIG.read_text()
+    out['lib/service/verify_staged.py'] = (SERVING / 'service' / 'verify_staged.py').read_text()
+    model = qwen['model']
+    staged = (f"{PY} {root}/lib/service/verify_staged.py --manifest {root}/lib/rose_cloud/manifest.json "
+              f"--manifest-sha256 {model['manifest_sha256']} --group {model['manifest_group']} "
+              f"--staging-root {model['staged_dir'].rsplit('/', 1)[0]}")
+    out['bin/start-model'] = f'''#!/usr/bin/env bash
+# Verify the staged Qwen files against the pinned manifest, then start vLLM offline (no download branch).
+# Each phase is recorded in {START_PHASE} for health.py to publish; recording never changes the branch or exit code.
+set -uo pipefail
+verify=null mounted=null image=null
+phase() {{
+  mkdir -p {START_PHASE.rsplit('/', 1)[0]} 2>/dev/null
+  printf '{{"phase": "%s", "verifyExit": %s, "dataMounted": %s, "imagePresent": %s, "at": %s}}\\n' \\
+    "$1" "$verify" "$mounted" "$image" "$(date +%s)" > {START_PHASE}.tmp 2>/dev/null \\
+    && mv -f {START_PHASE}.tmp {START_PHASE} 2>/dev/null
+  return 0
+}}
+fresh() {{
+  mkdir -p {CONTAINER_STATUS} 2>/dev/null && rm -f {CONTAINER_STATUS}/status.json 2>/dev/null
+  return 0
+}}
+prechecks() {{
+  if mountpoint -q {DATA}; then mounted=true; else mounted=false; fi
+  if [ "$(timeout 30 docker image inspect --format '{{{{.Id}}}}' {runtime['image_id']} 2>/dev/null)" = {runtime['image_id']} ]; then image=true
+  else image=false; fi
+}}
+fresh
+phase verifying
+{staged} --result {VERIFY_START}
+verify=$?
+case $verify in
+  0) prechecks; phase launching_offline; exec {root}/bin/launch-qwen ;;
+  *) phase refused_storage; echo "refused: staged Qwen files do not match the pinned manifest; see verify_staged.py" >&2; exit 4 ;;
+esac
+'''
+    name = qwen['served_model_name']
+    out['systemd/muse-glimmer.service'] = out['systemd/muse-glimmer.service'].replace(
+        f'Description=Muse Glimmer vLLM ({PROFILE}) on 127.0.0.1:8000',
+        f"Description=Qwen {model['repo']} as {name} ({qwen['id']}, {settings}) vLLM on 127.0.0.1:8000 (model slot)")
+    out['systemd/models-health.service'] = unit(  # the Qwen served name; no HF-cache receipt to record
+        f'{name} loaded-model readiness and bounded recovery',
+        f'Type=oneshot\nExecStart={PY} {root}/lib/service/health.py run --model {name}\nTimeoutStartSec=3700',
+        install=None)
+    out['systemd/models-verify-full.service'] = unit(
+        'Rehash the staged Qwen model against its pinned manifest',
+        f'Type=oneshot\nExecStart={staged} --full --result {VERIFY_FULL}\nNice=10\nIOSchedulingClass=idle',
+        install=None)
+    return out
 
 
 def files(config, root=ROOT, data=DATA):
@@ -185,14 +254,20 @@ RestartSec=5''',
     return out
 
 
-def render(out_dir, config_path=capacity.CONFIG, root=ROOT):
+def render(out_dir, config_path=capacity.CONFIG, root=ROOT, model='muse', qwen_settings='proven'):
+    if model not in MODELS:
+        raise render_local.render_upload.Rejected(f'model must be one of {", ".join(MODELS)}')
     config = capacity.load(config_path)
+    qwen = json.loads(QWEN_CONFIG.read_text()) if model == 'qwen' else None
     out_dir = Path(out_dir)
     edge = render_proxy.render(out_dir / 'edge', 'models.a-list.com', RUN_EDGE, 8080, 8000, 120, front='tls',
                                fullchain=f'{root}/tls/current/fullchain.pem', key=f'{root}/tls/current/privkey.pem',
                                auth='service', auth_port=8090, acme_webroot=ACME_WEBROOT)
     rendered = {}
-    for rel, text in files(config, root).items():
+    tree = files(config, root)
+    if qwen is not None:
+        tree = qwen_files(tree, config, qwen, qwen_settings, root)
+    for rel, text in tree.items():
         path = out_dir / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         data = text.encode()
@@ -207,6 +282,14 @@ def render(out_dir, config_path=capacity.CONFIG, root=ROOT):
                 'model': f"{config['model']['repo']}@{config['model']['revision']}",
                 'image': render_local.render_upload.profile(config, PROFILE)['runtime']['image_digest'],
                 'files': dict(sorted(rendered.items()))}
+    if qwen is not None:  # the default manifest is unchanged
+        _, proposed = render_local.qwen_args(qwen, qwen_settings)
+        manifest.update(profile=qwen['id'], servedModel=qwen['served_model_name'], qwenSettings=qwen_settings,
+                        notRuntimeProven=proposed,
+                        model=f"{qwen['model']['repo']}@{qwen['model']['revision']}")
+        if qwen_settings == 'nothink':  # what proved these flags, and what it did not (other manifests unchanged)
+            manifest['evidence'] = ('isolated contract diagnostic cloud-qwen-contract-nothink-once (PR368, original '
+                                    'Mac, 03:38:46 UTC 2026-11-02); not proven as the persistent service')
     (out_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest
 
@@ -215,9 +298,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--config', type=Path, default=capacity.CONFIG)
+    p.add_argument('--model', choices=MODELS, default='muse', help='the model the persistent slot serves (default muse)')
+    p.add_argument('--qwen-settings', choices=render_local.QWEN_SETTINGS, default='proven')
     a = p.parse_args(argv)
     try:
-        manifest = render(a.out, a.config)
+        manifest = render(a.out, a.config, model=a.model, qwen_settings=a.qwen_settings)
     except (render_local.render_upload.Rejected, render_proxy.Invalid) as e:
         print(f'rejected: {e}', file=sys.stderr)
         return 2

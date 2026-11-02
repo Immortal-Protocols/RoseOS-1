@@ -54,6 +54,130 @@ python3 workspace/models/serving/service/build_bootstrap.py --out /tmp/rose-mode
   `payloadTarSha256` with the value Core reports for that commit; the build is deterministic.
 - **Roots:** omit `--attestation-roots` to defer them. The VM then reports `auth: waiting attestation_roots_missing`.
 
+## 2b. Hold-only rollback (MODELS-HOLD-ONLY-001; source only, never run)
+
+**Model units are never enabled for boot.** `stage_service` disables `muse-glimmer.service`, `models-health.timer`,
+`models-verify-full.timer` and `models-attestation-status.timer` (undoing any older payload's enable), then starts
+them itself on every normal boot. systemd therefore starts no model or health unit at boot. The model runs only after
+this bootstrap has read the hold and diagnostic keys. The edge, auth and renewal units keep their existing boot
+behaviour.
+
+**Hold:** set the metadata key `rose-models-hold`, then reset.
+
+```bash
+gcloud compute instances add-metadata models-glimmer-01 --project protocols-465723 --zone us-central1-f --metadata=rose-models-hold=<payload sha256>
+```
+
+- **Every boot holds while the key exists.** It writes the `/run` hold, then stops and disables the model and health
+  units. It then positively verifies they are inactive and disabled and that no `muse-glimmer` slot container exists.
+  Docker not answering is a failure, never assumed absence.
+- **It never runs or consumes a diagnostic.** A diagnostic id set at the same time is reported as
+  `diagnosticSuppressed` and is still fresh once the key is removed.
+- **Untouched:** provisioning, the GPUs, the data disk, certificates, auth state, the edge and the installed payload.
+- **Any value holds** (fail closed). The receipt's `key` says `this_payload`, `other_payload` or `malformed`.
+- **Receipt:** guest attribute `rose-models/hold`, with `verified`, `enabledBefore`/`enabledAfter`, the unit states,
+  `containerAbsent`, and the edge and auth units' states, reported and not changed. An unverified hold fails the boot
+  (exit 1) and starts nothing.
+- **Resume:** remove the key and reset. The model is started by this bootstrap again.
+
+**What is guaranteed:**
+- **Guaranteed** once the VM has had one normal or hold boot under a payload with this change: its units are then
+  disabled, so no reset starts the model before the hold is read.
+- **Not guaranteed** while an older payload's enable is still in place: that first reset can start the model before
+  this bootstrap runs. The hold then reports it (`enabledBefore`), stops it, verifies it, and disables the units for
+  later boots. Check `enabledBefore` on the first hold receipt.
+- **Why that caveat stays open:** the safe first transition would stop and disable the model and health units
+  (including their timers), verify them inactive and disabled with no pending jobs, and confirm the container gone,
+  all *before* the metadata change and reset. There is no authorized pre-reset guest execution channel today: the
+  operator route is Compute metadata, reset and sanitized guest attributes, and the temporary SSH access was removed.
+  This source cannot enforce that ordering retrospectively, and rollback is not guaranteed from that state.
+  Activation stays blocked on an authorized guest channel or an owner-run equivalent, and separately on the
+  enrolled-phone edge proof.
+
+## 2a. Model selection: Muse (default) or the staged Qwen (MODELS-QWEN-SERVE-001; source only, never run as the service)
+
+**Default:** Muse Glimmer is the default. The payload built without `--model` is byte-identical to before (tested).
+
+**Qwen:** only an explicit build selects it, and the same model slot then serves Qwen:
+
+```bash
+python3 workspace/models/serving/service/build_bootstrap.py --out /tmp/rose-models-qwen --model qwen \
+  --qwen-settings proven --attestation-roots <deployed roots dir>
+```
+
+**What changes with `--model qwen`** (an overlay; every other file, including the edge, auth, TLS, the Muse launch
+scripts and config, and every diagnostic mode, is unchanged and tested):
+
+- **`bin/launch-qwen`:**
+  - the same cached image and startup guard;
+  - host networking bound to `127.0.0.1:8000` only, behind the existing edge;
+  - `/mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0` mounted read-only;
+  - offline: `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`, no usage stats;
+  - `vllm serve <staged dir> --served-model-name rose-qwen`.
+- **`bin/start-model`:** `verify_staged.py` checks the pinned rose_cloud manifest (sha256 `ebcfb082…`), every
+  file's size, and the hash of every non-weight file, then launches. Anything else exits 4, which systemd does not
+  restart. **There is no download branch.**
+- **`models-health`:** probes `rose-qwen` (the same readiness rule: `/v1/models` lists it, and a real completion
+  returns tokens). **`models-verify-full`** rehashes the staged weights daily.
+- **Unchanged names:** the unit (`muse-glimmer.service`) and container (`muse-glimmer`) keep their names. They are the
+  model slot that bootstrap's hold and stop logic, health and the edge already use; the unit description and the
+  service manifest say Qwen.
+
+**Settings:**
+- **`--qwen-settings proven`** (default) renders exactly the `vllm serve` flags of the original Mac's PR349 adapter run
+  and the PR350 warm runs (TP2, `--max-model-len 2048`, eager, one sequence, the vision limits). They are asserted
+  equal to `rose_cloud.qwen_gpu.SERVER_ARGS`.
+- **`--qwen-settings proposed`** adds `--max-model-len 8192` and `--reasoning-parser qwen3`. They are labelled **NOT
+  runtime-proven** in `bin/launch-qwen` and as `notRuntimeProven` in the service manifest. The Rose Models client needs
+  both (`rose-chat-core/tests/qwen_contract.rs`):
+  - with the proven flags, a thinking Qwen reply carries `<think>` inside `content`, and `local-agent-v1` refuses it;
+  - with the reasoning parser, the thinking goes to a separate field that the client never shows or replays.
+  - The bootstrap diagnostic `cloud-qwen-contract-once` (MODELS-QWEN-CONTRACT-001, `rose_cloud/README.md`) is the
+    isolated proof for exactly these proposed flags. Until the original Mac runs it at a merged payload, they stay
+    unproven.
+
+**`--qwen-settings nothink`** (MODELS-QWEN-SERVE-NOTHINK-001): the proposed settings plus
+`--default-chat-template-kwargs '{"enable_thinking": false}'`, asserted equal to
+`rose_cloud.qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS`.
+- **Evidence:** those flags passed the isolated `cloud-qwen-contract-nothink-once` diagnostic once (PR368 payload,
+  original Mac, 03:38:46 UTC 2026-11-02). Replies took 2.7–8.5 s on the four fixed cases, against 29.5–40.1 s with
+  thinking on (PR360). One run per case; variance and wider quality are not shown.
+- **Labels:** the manifest records `qwenSettings: "nothink"`, `notRuntimeProven` and an `evidence` line saying it is
+  not proven as the persistent service. The launcher's header lists the flags beyond the proven set.
+- **Payloads:** the Muse default payload is unchanged. The `proven` and `proposed` Qwen payloads differ only in the
+  `lib/qwen-fp8.json` they ship (which now holds this tier) and its manifest hash.
+- **How the service differs from the diagnostic:**
+  - the service runs `--network host` bound to `127.0.0.1:8000` behind the Nginx edge (TLS, service-auth-v1, 6
+    requests/min, one in flight, 120 s);
+  - its container has no `--read-only`, `--cap-drop`, `no-new-privileges`, CPU or memory limit, and no tmpfs: caches
+    go to the container's writable layer and are removed with it;
+  - it runs as the systemd model slot, with a verified start, restart on failure, the health timer and the daily
+    full re-hash;
+  - the same image ID, `--gpus all`, read-only staged weights, offline environment and 4096 MiB shm as the diagnostic.
+
+  None of that is runtime-proven for Qwen.
+- **Activating it is a separate decision:** a normal boot with such a payload serves Qwen in place of Muse and exposes
+  it through the edge to enrolled devices. It is the owner's call, run by the original Mac alone. It needs no new
+  credential, firewall or IAM change in source.
+
+**Separate owner dependency (Product, `dev.pixel.models`):**
+- the app compiles `ModelsService.MODEL = "muse-glimmer"` (there are no settings since 0.2) and fails any reply from
+  another model with `model_identity_mismatch` (tested);
+- its default system prompt is Muse's `Reasoning strength: low`.
+
+So the app reaches Qwen only after a Product change of that constant (and, preferably, of the prompt line). The
+server never answers as `muse-glimmer`.
+
+**Operator implications** (runtime only by the original Mac operator; nothing here is activated):
+- a normal boot (no diagnostic id) with a `--model qwen` payload starts Qwen instead of Muse. That lifts the Muse hold
+  in favour of Qwen, which is an owner decision. Both models do not fit on the two A100s;
+- the edge, auth and TLS are unchanged, with no new port, firewall rule, IAM or credential;
+- Qwen loads in about 350–465 s (measured in the diagnostics) before health reports ready;
+- a diagnostic boot still holds the model exactly as today.
+
+**Not shown:** the proposed settings, the app's real prompts and envelopes on Qwen, the latency through the edge, and
+PR288's voice/conductor (not part of this profile).
+
 ## 3. What the VM does on every boot
 
 These stages are rerun-safe and each command has a time bound.

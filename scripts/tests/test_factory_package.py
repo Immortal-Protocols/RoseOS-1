@@ -37,11 +37,13 @@ BOOTLOADER = 'deepspace-17.4-16119390'
 BASEBAND = 'g5400i-260604-260807-B-16035863'
 PKMD = {'frankel': b'synthetic frankel avb public key metadata', 'rango': b'synthetic rango avb public key metadata'}
 SPARSE = b'\x3a\xff\x26\xed'
+GSC = {'evt.ec.bin': b'synthetic gsc evt', 'prod.ec.bin': b'synthetic gsc prod'}
+GENERATOR = SCRIPTS/'tests/fixtures/factory-package/device_common-1f5ba267'
 BLOCK = 4096
 SSH = shutil.which('ssh-keygen')
 REAL_SIMG2IMG = shutil.which('simg2img')
 RETAINED = ['os/retained-rango/release.json', 'os/release-notes/rango-2026103001.md', 'os/devices/pixel10.json',
-            'os/release-pipeline/frankel.json', 'os/flavors/frankel.json', 'os/flavors/rango.json']
+            'os/release-pipeline/frankel.json', 'os/flavors/frankel.json', 'os/flavors/rango.json', 'os/flavors/blazer.json']
 
 def image(part):
     magic = {'boot': b'ANDROID!', 'init_boot': b'ANDROID!', 'vendor_boot': b'VNDRBOOT', 'vendor_kernel_boot': b'VNDRBOOT'}
@@ -152,6 +154,7 @@ def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
     entries = {'META/ab_partitions.txt': '\n'.join(ab or AB).encode(), 'META/misc_info.txt': misc.encode(),
                'OTA/android-info.txt': android_info(device), 'SYSTEM/build.prop': f'ro.build.version.incremental={build}\n'.encode(),
                'RADIO/bootloader.img': b'synthetic bootloader', 'RADIO/radio.img': b'synthetic radio'}
+    entries.update({f'VENDOR/firmware/dauntless/{name}': data for name, data in GSC.items()})
     for part in AB:
         if part not in DYNAMIC and part != 'abl':
             entries[f'IMAGES/{part}.img'] = image(part)
@@ -161,19 +164,39 @@ def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
     entries.update(images or {})
     return zip_bytes([(k, v) for k, v in entries.items() if k not in drop])
 
+def capture_script(device, images, segments, wipe=True):
+    """script.txt in the shape FlashCapturer writes (pinned optimize-factory-image excerpt); synthetic, never run."""
+    bootloader = f'flash bootloader bootloader-{device}-{BOOTLOADER}.img other-slot'
+    lines = [f'check-var product {device}', 'check-var slot-count 2', bootloader, 'toggle-active-slot', 'reboot-bootloader',
+             bootloader, 'toggle-active-slot', 'reboot-bootloader', '# size of partition splits depends on this value',
+             'check-var max-download-size 0x10000000', 'run-cmd set_active:a', 'check-var current-slot a',
+             f'flash radio radio-{device}-{BASEBAND}.img', 'reboot-bootloader', 'erase avb_custom_key',
+             'flash avb_custom_key avb_pkmd.bin', 'run-cmd oem uart disable', 'erase dpm_a', 'erase dpm_b',
+             'check-requirements android-info.txt', 'maybe-cancel-snapshot-update']
+    lines += [f'flash {p} {p}.img' for p in images]
+    lines += ['erase userdata', 'erase metadata'] if wipe else []
+    lines += [f'flash super super_{i}.img' for i in range(1, segments + 1)]
+    return ('\n'.join(lines) + '\n').encode()
+
+def android_info_zip(info):
+    return zip_bytes([('android-info.txt', info)])
+
 def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), extra=(), segments=None):
     top = top or f'{device}-install-{build}'
-    files = {'android-info.txt': info or android_info(device),
+    segments = segments or super_segments(super_partitions())
+    images = [p for p in AB if p not in DYNAMIC and p != 'abl']
+    info = info or android_info(device)
+    files = {'android-info.txt': info, 'android-info.zip': android_info_zip(info),
              'flash-all.sh': b'# synthetic stand-in, not a flasher\n# erase userdata\n',
-             'script.txt': b'# synthetic stand-in\n# erase userdata\n',
+             'flash-all.bat': b':: synthetic stand-in, not a flasher\n',
+             'script.txt': capture_script(device, images, len(segments)),
              'avb_pkmd.bin': PKMD[device],
              f'bootloader-{device}-{BOOTLOADER}.img': b'synthetic bootloader',
-             f'radio-{device}-{BASEBAND}.img': b'synthetic radio'}
-    for index, segment in enumerate(segments or super_segments(super_partitions()), 1):
+             f'radio-{device}-{BASEBAND}.img': b'synthetic radio', **GSC}
+    for index, segment in enumerate(segments, 1):
         files[f'super_{index}.img'] = segment
-    for part in AB:
-        if part not in DYNAMIC and part != 'abl':
-            files[f'{part}.img'] = image(part)
+    for part in images:
+        files[f'{part}.img'] = image(part)
     files.update(replace or {})
     entries = [(f'{top}/{k}', v) for k, v in files.items() if k not in drop] + list(extra)
     return zip_bytes(entries)
@@ -192,10 +215,15 @@ class Fixture(unittest.TestCase):
         self.work.mkdir()
         # A repository copy pinned to synthetic AVB keys and (when ssh-keygen exists) a throwaway factory-signing key.
         self.root = self.tmp/'repo'
-        for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/devices/pixel10.json',
+        for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/flavors/blazer.json', 'os/devices/pixel10.json',
+                    'os/retained-rango/release.json',
                     'os/release-pipeline/frankel.json', 'scripts/tests/fixtures/permission-apex/script/generate-release.sh') + tuple(
+                    f'scripts/tests/fixtures/factory-package/device_common-1f5ba267/{f}'
+                    for f in ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')) + tuple(
+                    f'scripts/tests/fixtures/factory-package/platform_system_core-322ff512/{f}'
+                    for f in ('fastboot-excerpt.json', 'PROVENANCE.json')) + tuple(
                     f'os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices/{d}/firmware/android-info.txt'
-                    for d in ('frankel', 'rango')):
+                    for d in ('frankel', 'rango', 'blazer')):
             (self.root/rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT/rel, self.root/rel)
         self.edit_json('os/release-pipeline/frankel.json', lambda d: d['identities'].update(
@@ -454,7 +482,7 @@ class Content(Fixture):
 class Evidence(Fixture):
     def test_firmware_carried_needs_bound_observation_never_absence(self):
         archive, tf = self.complete('frankel')
-        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=None), 'firmware-observation for A/B partitions without an IMAGES/ image: abl')
+        self.refused(self.classify(archive, 'frankel', tf, firmware_observation=None), 'firmware-observation for A/B partitions without an install image: abl')
         self.refused(self.classify(archive, 'frankel', tf, firmware_observation=self.firmware('frankel', partitions=())),
                      'firmware-carried evidence for abl')
         wrong = self.firmware('frankel', bootloader={'sha256': '0' * 64, 'partitions': ['abl']})
@@ -584,6 +612,370 @@ class Negative(Fixture):
         self.refused(self.classify(self.write('a.zip', install('frankel', replace=quiet)), 'frankel', tf), 'install-mode:')
         tf = self.write('tf.zip', target_files('frankel', misc=MISC.replace('ab_update=true', 'ab_update=false')))
         self.refused(self.classify(self.complete('frankel')[0], 'frankel', tf), 'install-semantics:target-files ab_update')
+
+class Generator(Fixture):
+    def test_pinned_device_common_fixtures_are_byte_identical_and_never_executable(self):
+        provenance = json.loads((GENERATOR/'PROVENANCE.json').read_text())
+        self.assertEqual(provenance['revision'], '1f5ba2671e4b04e3bd8899b3df2c5e30a894b35c')
+        for entry in provenance['files']:
+            data = (GENERATOR/entry['fixture']).read_bytes()
+            self.assertEqual(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), entry['gitBlob'])
+            self.assertEqual(hashlib.sha256(data).hexdigest(), entry['sha256'])
+            self.assertFalse((GENERATOR/entry['fixture']).stat().st_mode & 0o111)
+            self.assertIn(b'Licensed under the Apache License, Version 2.0', data)
+        for name in ('frankel', 'rango'):
+            pinned = fp.load_flavor(name)['inventory']['generatorFixture']['files']
+            self.assertEqual(pinned, {e['fixture']: e['sha256'] for e in provenance['files']})
+
+    def test_contract_layout_claims_are_anchored_in_the_generator(self):
+        flavor = fp.load_flavor('rango')
+        self.assertEqual(flavor['artifacts']['factory']['generatorMembers']['gscFirmware']['source'], 'VENDOR/firmware/dauntless/')
+        self.edit_json('os/flavors/rango.json', lambda d: d['artifacts']['factory']['generatorMembers']['gscFirmware'].update(
+            source='VENDOR/firmware/epic/'))
+        with self.assertRaisesRegex(fp.ContractError, 'gscFirmware.source'):
+            fp.load_flavor('rango', self.root)
+        self.edit_json('os/flavors/rango.json', lambda d: (d['artifacts']['factory']['generatorMembers']['gscFirmware'].update(
+            source='VENDOR/firmware/dauntless/'), d['artifacts']['factory']['generatorMembers']['anchors'].append(
+            'cp tmp/RADIO/guessed.img tmp/$PRODUCT-$VERSION/guessed.img')))
+        with self.assertRaisesRegex(fp.ContractError, 'generator anchor'):
+            fp.load_flavor('rango', self.root)
+
+    def test_frankel_and_rango_are_pinned_and_an_unpinned_contract_never_completes(self):
+        for name in ('frankel', 'rango'):
+            self.assertTrue(fp.pinned_layout(fp.load_flavor(name)), name)
+        # An older contract shape (no generatorMembers, as other flavors may still use) loads but cannot complete.
+        def unpin(d):
+            factory = d['artifacts']['factory']
+            for key in ('generatorMembers', 'optimizeMembers', 'intermediate'):
+                factory.pop(key)
+            d['inventory']['generatorFixture'] = {'status': 'not in this repository', 'files': ['generate-factory-images-common.sh']}
+        self.edit_json('os/flavors/rango.json', unpin)
+        self.assertFalse(fp.pinned_layout(fp.load_flavor('rango', self.root)))
+        archive, tf = self.complete('rango')
+        result = self.classify(archive, 'rango', tf)
+        self.refused(result, 'contract:rango pinned generator layout')
+        self.assertFalse(result['structurallyComplete'])
+
+    def test_fixture_drift_refuses_the_contract(self):
+        target = self.root/'scripts/tests/fixtures/factory-package/device_common-1f5ba267'
+        (target/'generate-factory-images-common.sh').write_bytes(
+            (GENERATOR/'generate-factory-images-common.sh').read_bytes().replace(b'GSCFIRMWARESRC=dauntless', b'GSCFIRMWARESRC=epic'))
+        with self.assertRaisesRegex(fp.ContractError, 'generatorFixture generate-factory-images-common.sh sha256'):
+            fp.load_flavor('frankel', self.root)
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class GscFirmware(Fixture):
+    def test_gsc_firmware_must_be_present_byte_equal_and_nothing_else(self):
+        archive, tf = self.complete('rango')
+        self.assertEqual(self.classify(archive, 'rango', tf)['inventory']['gscFirmware'], sorted(GSC))
+        self.refused(self.classify(self.write('a.zip', install('rango', drop=('evt.ec.bin',))), 'rango', tf),
+                     'factory:evt.ec.bin (GSC firmware from target-files)')
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'prod.ec.bin': b'other'})), 'rango', tf),
+                     'mixed-firmware:prod.ec.bin differs from target-files VENDOR/firmware/dauntless/prod.ec.bin')
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'notes.txt': b'x'})), 'rango', tf),
+                     'unexpected-member:notes.txt')
+        bat = self.classify(self.write('a.zip', install('rango', replace={'flash-all.bat': b':: synthetic'})), 'rango', tf)
+        self.assertTrue(bat['factoryReady'], bat)
+        tf = self.write('tf.zip', target_files('rango', drop=tuple(f'VENDOR/firmware/dauntless/{n}' for n in GSC)))
+        self.refused(self.classify(archive, 'rango', tf), 'target-files:VENDOR/firmware/dauntless/* (GSC firmware')
+        tf = self.write('tf.zip', target_files('rango', images={'VENDOR/firmware/dauntless/sub/x.bin': b'x'}))
+        self.refused(self.classify(archive, 'rango', tf), 'gsc-firmware-nested:VENDOR/firmware/dauntless/sub/x.bin')
+
+    def test_generator_intermediate_is_refused_as_not_the_release_artifact(self):
+        top = f'rango-factory-{BUILD}'
+        intermediate = zip_bytes([(f'{top}/image-rango-{BUILD}.zip', b'synthetic img zip'), (f'{top}/flash-all.sh', b'# synthetic'),
+                                  (f'{top}/bootloader-rango-{BOOTLOADER}.img', b'synthetic bootloader')])
+        result = self.classify(self.write(f'rango-factory-{BUILD}.zip', intermediate), 'rango', self.complete('rango')[1])
+        self.refused(result, 'not-factory:factory-intermediate')
+        self.assertEqual(result['role'], 'factory-intermediate')
+
+class PeerIdentity(Fixture):
+    """FOLD-FACTORY-004: AVB pins compared across every flavor through the real loader, never recursively."""
+    def frankel_pin(self):
+        return json.loads((self.root/'os/release-pipeline/frankel.json').read_text())['identities']['avbPublicKeySha256']
+
+    def set_pin(self, flavor, value, field='avbPublicKeySha256'):
+        self.edit_json(f'os/flavors/{flavor}.json', lambda d: d['identity'].update({field: value}))
+
+    def test_repository_flavors_have_distinct_or_unknown_pins(self):
+        pins = {name: fp.pinned_avb_key(fp.load_flavor(name)) for name in ('frankel', 'rango', 'blazer')}
+        self.assertIsNone(pins['blazer'])
+        self.assertEqual(len({p for p in pins.values() if p}), 2)
+
+    def test_blazer_rango_collision_refuses_both_loads(self):
+        self.set_pin('blazer', hashlib.sha256(PKMD['rango']).hexdigest())
+        for name, peer in (('blazer', 'rango'), ('rango', 'blazer')):
+            with self.assertRaisesRegex(fp.ContractError, f'{name}: signer_collision: the pinned AVB key equals the {peer} key'):
+                fp.load_flavor(name, self.root)
+        fp.load_flavor('frankel', self.root)
+
+    def test_frankel_collision_refuses_frankel_and_the_duplicate(self):
+        self.set_pin('blazer', self.frankel_pin())
+        for name, peer in (('blazer', 'frankel'), ('frankel', 'blazer')):
+            with self.assertRaisesRegex(fp.ContractError, f'{name}: signer_collision: the pinned AVB key equals the {peer} key'):
+                fp.load_flavor(name, self.root)
+
+    def test_distinct_and_unknown_pins_load(self):
+        self.set_pin('blazer', '2' * 64)
+        for name in ('frankel', 'rango', 'blazer'):
+            fp.load_flavor(name, self.root)
+        self.set_pin('blazer', None)
+        self.set_pin('rango', None)
+        # Two unknown identities are not a collision.
+        self.assertEqual([fp.pinned_avb_key(fp.load_flavor(n, self.root), self.root) for n in ('rango', 'blazer')], [None, None])
+
+    def test_malformed_peer_identity_is_never_skipped(self):
+        cases = ((lambda d: d['identity'].update(avbPublicKeySha256='not-a-sha256'), 'peer blazer: avbPublicKeySha256 is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256=7), 'peer blazer: avbPublicKeySha256 is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256='A' * 64), 'peer blazer: avbPublicKeySha256 is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256=None, avbPublicKeySha256From='os/release-pipeline/frankel.json identities.missing'),
+                  'peer blazer: avbPublicKeySha256From .* does not resolve'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256=None, avbPublicKeySha256From='os/release-pipeline/frankel.json target.device'),
+                  'peer blazer: avbPublicKeySha256From .* is not a sha256'),
+                 (lambda d: d['identity'].update(avbPublicKeySha256From=['x']), 'peer blazer: avbPublicKeySha256From is not text'),
+                 (lambda d: d.update(identity='none'), 'peer blazer: identity is not an object'),
+                 (lambda d: d.pop('identity'), 'peer blazer contract has no identity'),
+                 (lambda d: d.update(flavor='rango'), 'peer blazer contract has no identity for flavor blazer'))
+        original = (self.root/'os/flavors/blazer.json').read_text()
+        for change, pattern in cases:
+            (self.root/'os/flavors/blazer.json').write_text(original)
+            self.edit_json('os/flavors/blazer.json', change)
+            with self.assertRaisesRegex(fp.ContractError, 'rango: ' + pattern):
+                fp.load_flavor('rango', self.root)
+        (self.root/'os/flavors/blazer.json').write_text('{ not json')
+        with self.assertRaisesRegex(fp.ContractError, 'frankel: peer blazer contract is unreadable'):
+            fp.load_flavor('frankel', self.root)
+
+    def test_own_malformed_pin_refuses(self):
+        self.set_pin('rango', '')
+        self.edit_json('os/flavors/rango.json', lambda d: d['identity'].update(avbPublicKeySha256='', avbPublicKeySha256From=None))
+        with self.assertRaisesRegex(fp.ContractError, 'rango: avbPublicKeySha256 is not a sha256'):
+            fp.load_flavor('rango', self.root)
+
+    def test_peers_are_read_without_recursive_full_loads(self):
+        with mock.patch.object(fp, 'load_flavor', wraps=fp.load_flavor) as loader:
+            fp.load_flavor('rango', self.root)
+        self.assertEqual(loader.call_count, 1)
+
+class Readiness(Fixture):
+    """FOLD-FACTORY-004: the optional readiness declaration is strict and can never claim a result."""
+    def refuses(self, change, pattern, flavor='blazer'):
+        self.edit_json(f'os/flavors/{flavor}.json', change)
+        with self.assertRaisesRegex(fp.ContractError, f'{flavor}: ' + pattern):
+            fp.load_flavor(flavor, self.root)
+
+    def test_real_declaration_and_absent_block_load(self):
+        self.assertEqual({k: v for k, v in fp.load_flavor('blazer')['readiness'].items() if k != 'basis'},
+                         {'buildReady': False, 'factoryReady': False, 'phoneValidated': False, 'receipts': []})
+        for name in ('frankel', 'rango'):
+            self.assertNotIn('readiness', fp.load_flavor(name))
+        self.edit_json('os/flavors/rango.json', lambda d: d.update(readiness={'buildReady': False, 'factoryReady': False,
+            'phoneValidated': False, 'receipts': ['os-release run 40974306111 receipt']}))
+        fp.load_flavor('rango', self.root)
+
+    def test_positive_claims_are_unsupported(self):
+        for flag in fp.READINESS_FLAGS:
+            original = (self.root/'os/flavors/blazer.json').read_text()
+            self.refuses(lambda d: d['readiness'].update({flag: True, 'receipts': ['some real-looking receipt']}),
+                         rf"unsupported readiness claim \['{flag}'\]")
+            (self.root/'os/flavors/blazer.json').write_text(original)
+
+    def test_strict_types_keys_and_synthetic_receipts(self):
+        original = (self.root/'os/flavors/blazer.json').read_text()
+        for change, pattern in ((lambda d: d['readiness'].update(factoryReady=0), r"readiness \['factoryReady'\] must be true or false"),
+                                (lambda d: d['readiness'].update(phoneValidated='false'), r"readiness \['phoneValidated'\] must be"),
+                                (lambda d: d['readiness'].update(receipts='none'), 'readiness.receipts must be a list'),
+                                (lambda d: d['readiness'].update(receipts=['']), 'readiness.receipts must be a list'),
+                                (lambda d: d['readiness'].update(receipts=[{'id': 1}]), 'readiness.receipts must be a list'),
+                                (lambda d: d['readiness'].update(basis=1), 'readiness.basis must be text'),
+                                (lambda d: d['readiness'].update(otaReady=False), r"readiness keys: unknown \['otaReady'\]"),
+                                (lambda d: d['readiness'].pop('buildReady'), r"readiness keys: unknown \[\], missing \['buildReady'\]"),
+                                (lambda d: d.update(readiness=[False]), 'readiness must be an object'),
+                                (lambda d: d['readiness'].update(receipts=['Synthetic test package receipt']),
+                                 'readiness.receipts names synthetic evidence, which is never a readiness receipt')):
+            (self.root/'os/flavors/blazer.json').write_text(original)
+            self.refuses(change, pattern)
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_synthetic_artifact_success_never_changes_declared_readiness(self):
+        archive, tf = self.complete('rango')
+        self.assertTrue(self.classify(archive, 'rango', tf)['factoryReady'])
+        self.assertEqual(fp.load_flavor('blazer', self.root)['readiness']['factoryReady'], False)
+        self.assertNotIn('readiness', fp.load_flavor('rango', self.root))
+
+OPTIMIZER = SCRIPTS/'tests/fixtures/factory-package/platform_system_core-322ff512'
+
+class Optimizer(Fixture):
+    """FOLD-FACTORY-005: install-archive rules from the pinned fastboot optimize-factory-image excerpt."""
+    def test_pinned_excerpt_provenance_and_contract_derivations(self):
+        provenance = json.loads((OPTIMIZER/'PROVENANCE.json').read_text())
+        self.assertEqual(provenance['revision'], '322ff5129d865a5e8d958667e6c63ac943449493')
+        excerpt = json.loads((OPTIMIZER/'fastboot-excerpt.json').read_text())['files']
+        for entry in provenance['files']:
+            if 'excerpt' in entry:
+                numbers = {str(n) for r in entry['excerpt'] for n in range(int(r.split('-')[0]), int(r.split('-')[1]) + 1)}
+                self.assertEqual(set(excerpt[entry['path']]), numbers, entry['path'])
+                self.assertLessEqual(max(map(int, numbers)), entry['lines'])
+        license = (OPTIMIZER/'LICENSE').read_bytes()
+        self.assertEqual(hashlib.sha1(b'blob %d\0' % len(license) + license).hexdigest(),
+                         next(e['gitBlob'] for e in provenance['files'] if e['path'] == 'fastboot/LICENSE'))
+        for name in ('frankel', 'rango'):
+            factory = fp.load_flavor(name)['artifacts']['factory']
+            self.assertIn('vendor_kernel_boot', factory['fastbootImages'])
+            self.assertNotIn('userdata', factory['fastbootImages'])
+            self.assertEqual(factory['scriptChecks']['maxDownloadSize'], '0x10000000')
+
+    def test_contract_claims_must_match_the_excerpt(self):
+        for change, pattern in ((lambda f: f['fastbootImages'].append('modem'), 'fastbootImages'),
+                                (lambda f: f['optimizeMembers']['anchors'].append('AddFile("guessed.txt"'), 'optimize anchor'),
+                                (lambda f: f['scriptChecks'].update(maxDownloadSize='0x20000000'), 'scriptChecks.maxDownloadSize'),
+                                (lambda f: f['requiredMembers'].remove('android-info.zip'), 'requiredMembers')):
+            original = (self.root/'os/flavors/rango.json').read_text()
+            self.edit_json('os/flavors/rango.json', lambda d: change(d['artifacts']['factory']))
+            with self.assertRaisesRegex(fp.ContractError, pattern):
+                fp.load_flavor('rango', self.root)
+            (self.root/'os/flavors/rango.json').write_text(original)
+        excerpt = self.root/'scripts/tests/fixtures/factory-package/platform_system_core-322ff512/fastboot-excerpt.json'
+        provenance = excerpt.with_name('PROVENANCE.json')
+        original = provenance.read_text()
+        drifted = json.loads(original)
+        next(e for e in drifted['files'] if e['path'] == 'fastboot/task.cpp')['sha256'] = '0' * 64
+        provenance.write_text(json.dumps(drifted))
+        with self.assertRaisesRegex(fp.ContractError, 'optimizeFixture files'):
+            fp.load_flavor('rango', self.root)
+        provenance.write_text(original)
+        tampered = excerpt.read_text().replace('AddSplitSparsePartition', 'AddSplitSparseSegments')
+        self.assertNotEqual(tampered, excerpt.read_text())
+        excerpt.write_text(tampered)
+        with self.assertRaisesRegex(fp.ContractError, 'optimizeFixture excerpt sha256'):
+            fp.load_flavor('frankel', self.root)
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_android_info_zip_and_flash_all_bat_are_required(self):
+        _, tf = self.complete('rango')
+        for drop in (('android-info.zip',), ('flash-all.bat',)):
+            self.refused(self.classify(self.write('a.zip', install('rango', drop=drop)), 'rango', tf), f'factory:{drop[0]}')
+        other = android_info_zip(android_info('rango', baseband='g5400i-older'))
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'android-info.zip': other})), 'rango', tf),
+                     'install-script:android-info.zip is not exactly the archive android-info.txt')
+        self.refused(self.classify(self.write('a.zip', install('rango', replace={'android-info.zip': b'not a zip'})), 'rango', tf),
+                     'install-script:android-info.zip')
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_script_txt_carries_the_captured_checks(self):
+        _, tf = self.complete('frankel')
+        good = capture_script('frankel', [p for p in AB if p not in DYNAMIC and p != 'abl'], 2).decode()
+        for edit, code in ((lambda s: s.replace('check-var product frankel\n', ''), '`check-var product frankel`'),
+                           (lambda s: s.replace('0x10000000', '0x20000000'), '`check-var max-download-size 0x10000000`'),
+                           (lambda s: s.replace('check-var current-slot a\n', ''), '`check-var current-slot a`'),
+                           (lambda s: s.replace('check-requirements android-info.txt\n', ''), '`check-requirements android-info.txt`'),
+                           (lambda s: s.replace(f'flash bootloader bootloader-frankel-{BOOTLOADER}.img other-slot\n', '', 1),
+                            'has 1 `flash bootloader'),
+                           (lambda s: s.replace('flash super super_2.img\n', ''), 'super flashes'),
+                           (lambda s: s.replace('flash super super_1.img\nflash super super_2.img', 'flash super super_2.img\nflash super super_1.img'),
+                            'super flashes'),
+                           (lambda s: s + 'flash modem modem.img\n', 'flashes absent member modem.img')):
+            archive = self.write('a.zip', install('frankel', replace={'script.txt': edit(good).encode()}))
+            self.refused(self.classify(archive, 'frankel', tf), 'install-script:script.txt ' if 'flashes absent' not in code else code)
+            self.assertIn(code, ' '.join(self.classify(archive, 'frankel', tf)['problems']))
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_images_outside_the_fastboot_table_need_firmware_evidence(self):
+        archive, _ = self.complete('frankel')
+        tf = self.write('tf.zip', target_files('frankel', ab=AB + ['modem'], images={'IMAGES/modem.img': b'synthetic modem'}))
+        result = self.classify(archive, 'frankel', tf)
+        self.refused(result, 'firmware-carried evidence for modem')
+        self.assertEqual(result['inventory']['notFlashedByFastboot'], ['modem'])
+        fw = self.firmware('frankel', radio={'sha256': hashlib.sha256(b'synthetic radio').hexdigest(), 'partitions': ['modem']})
+        self.assertTrue(self.classify(archive, 'frankel', tf, firmware_observation=fw)['factoryReady'])
+        with_modem = self.write('b.zip', install('frankel', replace={'modem.img': b'synthetic modem'}))
+        self.refused(self.classify(with_modem, 'frankel', tf, firmware_observation=fw), 'unexpected-image:modem.img')
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_resparsed_non_dynamic_image_is_compared_flattened(self):
+        _, tf = self.complete('rango')
+        sparse = {'vendor_boot.img': sparse_image(image('vendor_boot'))}
+        result = self.classify(self.write('a.zip', install('rango', replace=sparse)), 'rango', tf)
+        # A whole-block sparse encoding flattens to the padded image, which is not byte-equal to IMAGES/vendor_boot.img.
+        self.refused(result, 'image-mismatch:vendor_boot.img (sparse) differs from target-files IMAGES/vendor_boot.img')
+        self.assertEqual(result['inventory']['sparseImages'], ['vendor_boot'])
+        aligned = image('vendor_boot') + b'\0' * (-len(image('vendor_boot')) % BLOCK)
+        tf = self.write('tf.zip', target_files('rango', images={'IMAGES/vendor_boot.img': aligned}))
+        ok = self.classify(self.write('a.zip', install('rango', replace={'vendor_boot.img': sparse_image(aligned)})), 'rango', tf)
+        self.assertTrue(ok['factoryReady'], ok)
+        self.assertEqual(ok['content']['sparseImages']['vendor_boot']['sha256'], hashlib.sha256(aligned).hexdigest())
+
+class Historical(Fixture):
+    """FLAVOR-HIST: historical inspection facts recorded without becoming readiness, layout or safety evidence."""
+    def test_rango_records_the_fold_artifact_identity_only(self):
+        rango = fp.load_flavor('rango')
+        [entry] = rango['inventory']['historicalObservations']
+        self.assertEqual((entry['run'], entry['artifact'], entry['build']), (41265984964, 13067510533, '2026103001'))
+        self.assertEqual(entry['artifactZipSha256'], '2f51fbc8f86343b46f21603f9bc77306d84bd858a028fffe88ac850b6e194d58')
+        self.assertEqual(entry['targetFiles'], {'role': 'signed target-files', 'sha256': '73db76e500bcb71757da6dbc43337067af23395a38eaac940b9ae7d5aca0baf0',
+                         'bytes': 4927914252, 'realMembers': 2874, 'includesMembersFor': ['bootloader', 'radio', 'firmware']})
+        self.assertEqual(entry['fastboot'], {'sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9',
+                                             'versionExit': 0, 'version': '37.0.0-2026103001'})
+        release = json.loads((ROOT/'os/retained-rango/release.json').read_text())
+        self.assertEqual(entry['otatools']['sha256'], release['signing']['otatoolsProvenance']['sha256'])
+        self.assertEqual(entry['build'], release['target']['build'])
+        self.assertLessEqual(entry['targetFiles']['bytes'], release['input']['limits']['targetFilesBytes'])
+        # Not a names-only observation, not an archive signing key, not readiness.
+        self.assertEqual(rango['inventory']['observed'], [])
+        self.assertEqual((rango['factorySigning']['principal'], rango['factorySigning']['publicKey']), (None, None))
+        self.assertNotIn(fp.pinned_avb_key(rango), json.dumps(entry))
+        self.assertEqual([r['factoryReady'] for r in rango['retained']], [False])
+        self.assertTrue(any('archive SSH signing identity' in x for x in entry['doesNotEstablish']))
+        self.assertTrue(any('carried-partition mapping' in x for x in entry['doesNotEstablish']))
+        self.assertIn('No `factory-package.py observe` names-only observation', rango['inventory']['observedBasis'])
+
+    def test_blazer_records_the_pro_run_and_references_the_existing_route(self):
+        blazer = fp.load_flavor('blazer')
+        [entry] = blazer['inventory']['historicalObservations']
+        self.assertEqual((entry['run'], entry['artifact']), (41255851279, 13063685882))
+        self.assertEqual(entry['artifactZipSha256'], '8218c2671c8c62d0fb3389f01ed66f0b55efb064e1d40669c3056c707b8b7d5e')
+        self.assertEqual((entry['notExecuted'], entry['unknown']), (['lunch blazer-cur-user', 'make'], ['Node']))
+        recipe = json.loads((ROOT/blazer['buildRoute']['recipe']).read_text())
+        self.assertIn(f"{recipe['factory']['file']} (expected sha256 {recipe['factory']['sha256']})", entry['absent'])
+        for key in ('recipe', 'tool', 'integration', 'integrationTool', 'updaterRoute'):
+            self.assertTrue((ROOT/blazer['buildRoute'][key]).is_file(), key)
+        self.assertEqual((recipe['preparation']['boundsKind'], recipe['capacity']['compileAllowanceBytes']), ('proposal', None))
+        inputs = [m['input'] for m in blazer['missingForFactory']]
+        self.assertTrue(any(i.startswith("operator review of the recipe's proposal preparation bounds") for i in inputs))
+        self.assertFalse(any(i.startswith('build-only recipe for blazer-cur-user') for i in inputs), 'the recipe already exists')
+        text = json.dumps(blazer)
+        for absent in ('S007', 'S008', 'peak'):
+            self.assertNotIn(absent, text)
+        self.assertEqual((blazer['readiness']['buildReady'], blazer['readiness']['receipts']), (False, []))
+
+    def test_historical_entries_are_validated(self):
+        original = (self.root/'os/flavors/rango.json').read_text()
+        cases = ((lambda e: e.update(historical=False), 'must be an object with historical: true'),
+                 (lambda e: e.pop('source'), 'must be an object with historical: true and a source'),
+                 (lambda e: e.update(doesNotEstablish=[]), 'doesNotEstablish must list'),
+                 (lambda e: e['targetFiles'].update(sha256='73DB'), r'targetFiles.sha256 is not a sha256'),
+                 (lambda e: e.update(artifactZipSha256=None), 'artifactZipSha256 is not a sha256'),
+                 (lambda e: e['fastboot'].update(factoryReady=False), 'fastboot.factoryReady: a historical observation makes no readiness'),
+                 (lambda e: e.update(safe=True), r'\.safe: a historical observation makes no readiness or safety claim'),
+                 (lambda e: e['otatools'].update(sha256='0' * 64), 'otatools.sha256From .* does not equal its sha256'),
+                 (lambda e: e['otatools'].update(sha256From='os/retained-rango/release.json signing.missing'), 'does not resolve'),
+                 (lambda e: e['otatools'].update(sha256From='prose'), 'does not equal its sha256'),
+                 (lambda e: e['otatools'].update(sha256From=['x']), 'otatools.sha256From is not text'))
+        for change, pattern in cases:
+            (self.root/'os/flavors/rango.json').write_text(original)
+            self.edit_json('os/flavors/rango.json', lambda d: change(d['inventory']['historicalObservations'][0]))
+            with self.assertRaisesRegex(fp.ContractError, r'rango: historicalObservations\[0\].*' + pattern):
+                fp.load_flavor('rango', self.root)
+        (self.root/'os/flavors/rango.json').write_text(original)
+        self.edit_json('os/flavors/rango.json', lambda d: d['inventory'].update(historicalObservations={}))
+        with self.assertRaisesRegex(fp.ContractError, 'historicalObservations must be a list'):
+            fp.load_flavor('rango', self.root)
+        self.assertNotIn('historicalObservations', fp.load_flavor('frankel', self.root)['inventory'])
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_historical_identity_never_stands_in_for_an_observation(self):
+        archive, tf = self.complete('rango')
+        self.refused(self.classify(archive, 'rango', tf, target_files_observation=None), 'target-files-observation (release:')
 
 if __name__ == '__main__':
     unittest.main()

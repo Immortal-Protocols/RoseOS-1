@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-blazer-prep-host",
+  "basis": "BLAZER-PREP workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-prep passes to scripts/blazer-build-only.py run. The host is the existing original builder (Infra reconciliation of a709ab3: protocols-465723/us-west2-a/immortal-os-builder, runner selectors [self-hosted, roseos-frankel-builder]); the lock is os/release-pipeline/frankel.json host.lockPath. sourceRoot (the isolated work tree), downloadDir and node are host facts not yet supplied: while any is null the hosted guard refuses before the controller starts. The receipt directory is a fresh per-attempt directory under the runner's temp directory. Nothing here was run on any host.",
+  "host": "immortal-os-builder",
+  "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
+  "sourceRoot": null,
+  "downloadDir": null,
+  "node": null,
+  "inspectCandidates": {
+    "rootTemplate": "/home/pixelbuild/rose-actions/blazer-prep-{run_id}-{attempt}",
+    "verified": false,
+    "binding": false,
+    "basis": "Proposed inspection candidate only (Chief/Infra 2026-11-02): blazer-build-only.py inspect --candidate-root derives source, downloads and receipts under it and reports metadata; not known to exist, not approved and never a preparation binding. sourceRoot, downloadDir and node above stay null until verified."
+  }
+}

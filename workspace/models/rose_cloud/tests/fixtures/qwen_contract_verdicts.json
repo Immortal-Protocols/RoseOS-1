@@ -1,0 +1,176 @@
+{
+  "schema": "rose-qwen-contract-verdicts/1",
+  "basis": "synthetic chat-completions bodies (not model output) with the verdict rose_chat_core::agent::Agent (model rose-qwen, allowlist calculator) reaches: rose-chat-core tests/qwen_contract.rs and rose_cloud tests/test_contract_session.py both assert every one",
+  "cases": [
+    {
+      "name": "final_with_reasoning",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\", \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "final"
+    },
+    {
+      "name": "final_with_reasoning_content",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\", \"reasoning_content\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "final"
+    },
+    {
+      "name": "final_with_both_reasoning_fields",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\", \"reasoning\": \"SECRET-FIXTURE-THINKING\", \"reasoning_content\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "final"
+    },
+    {
+      "name": "final_surrounding_whitespace",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"\\n  {\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\\n\\n\", \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "final"
+    },
+    {
+      "name": "final_null_app_id",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hi\\\",\\\"app_id\\\":null}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "final"
+    },
+    {
+      "name": "final_unreported_model",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}}",
+      "expect": "final"
+    },
+    {
+      "name": "open_app_calculator",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"calculator\\\"}\", \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "open_app:calculator"
+    },
+    {
+      "name": "open_app_not_allowed",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"notes\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:action_not_allowed"
+    },
+    {
+      "name": "wrong_model",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\", \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"muse-glimmer\"}",
+      "expect": "failed:model_identity_mismatch"
+    },
+    {
+      "name": "truncated",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"length\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\", \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:truncated_reply"
+    },
+    {
+      "name": "truncated_in_reasoning",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"length\", \"message\": {\"role\": \"assistant\", \"content\": null, \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:truncated_reply"
+    },
+    {
+      "name": "null_content",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": null, \"reasoning\": \"SECRET-FIXTURE-THINKING\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:empty_completion"
+    },
+    {
+      "name": "blank_content",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"   \\n\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:empty_completion"
+    },
+    {
+      "name": "too_long",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:reply_too_long"
+    },
+    {
+      "name": "prose",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"Hello! I am Rose.\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "code_fence",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"```json\\n{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\\n```\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "inline_think",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"<think>\\nSECRET-FIXTURE-THINKING\\n</think>\\n\\n{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "two_objects",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "array",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"[{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}]\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "duplicate_field",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"a\\\",\\\"text\\\":\\\"b\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "unknown_field",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"a\\\",\\\"mood\\\":\\\"ok\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "wrong_contract",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v2\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"a\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "missing_rose_action",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"a\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "unknown_type",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"search\\\",\\\"text\\\":\\\"a\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:unknown_action"
+    },
+    {
+      "name": "final_blank_text",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"  \\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "final_with_app_id",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"a\\\",\\\"app_id\\\":\\\"calculator\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "open_app_with_text",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"open_app\\\",\\\"app_id\\\":\\\"calculator\\\",\\\"text\\\":\\\"a\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "text_not_string",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":5}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "nan_value",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"a\\\",\\\"app_id\\\":NaN}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "lone_surrogate",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"\\\\ud800\\\"}\"}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_action"
+    },
+    {
+      "name": "content_not_string",
+      "body": "{\"model\": \"rose-qwen\", \"choices\": [{\"finish_reason\": \"stop\", \"message\": {\"content\": 5}}]}",
+      "expect": "failed:malformed_response"
+    },
+    {
+      "name": "reasoning_not_string",
+      "body": "{\"id\": \"chatcmpl-fixture\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"{\\\"rose_action\\\":\\\"local-agent-v1\\\",\\\"type\\\":\\\"final\\\",\\\"text\\\":\\\"Hello\\\"}\", \"reasoning\": 5}}], \"usage\": {\"prompt_tokens\": 900, \"completion_tokens\": 40}, \"model\": \"rose-qwen\"}",
+      "expect": "failed:malformed_response"
+    },
+    {
+      "name": "no_choices",
+      "body": "{\"model\": \"rose-qwen\", \"choices\": []}",
+      "expect": "failed:malformed_response"
+    },
+    {
+      "name": "not_json",
+      "body": "data: {}",
+      "expect": "failed:malformed_response"
+    }
+  ]
+}

@@ -46,21 +46,133 @@
       "file": "{device}-install-{build}.zip",
       "topDirectory": "{device}-install-{build}",
       "signature": "{device}-install-{build}.zip.sig (ssh-keygen -Y sign -n \"factory images\", only when the key directory holds id_ed25519)",
-      "producer": "generate-release.sh after the OTA: img_from_target_files -> device/common/generate-factory-images-common.sh -> fastboot -S 0x10000000 optimize-factory-image (MAX_DOWNLOAD_SIZE for rango|mustang|blazer|frankel)",
+      "producer": "generate-release.sh after the OTA: img_from_target_files -> device/common/generate-factory-images-common.sh ({device}-factory-{build}.zip) -> fastboot -S 0x10000000 optimize-factory-image ({device}-install-{build}.zip)",
       "currentlyProduced": false,
       "currentlyProducedBasis": "No RoseOS job runs the factory stage: host-sign.py derive_release_script cuts at the one '\\nimg_from_target_files' anchor (OTA only). The sole writer of that cut is the signing owner.",
       "requiredMembers": [
-        "android-info.txt",
         "flash-all.sh",
-        "script.txt",
         "avb_pkmd.bin",
         "bootloader-{device}-{bootloader}.img",
-        "radio-{device}-{baseband}.img"
+        "radio-{device}-{baseband}.img",
+        "android-info.txt",
+        "android-info.zip",
+        "script.txt",
+        "flash-all.bat"
       ],
-      "membersBasis": "Layout of a GrapheneOS-script install archive as checked by the historical os/reference-scripts/verify-factory-mustang.py (same release script family, Pixel 10 Pro XL); historical structure evidence, not a Frankel/Rango observation.",
       "dataWipe": true,
       "requiresUnlockedBootloader": true,
-      "dataWipeMarker": "erase userdata"
+      "dataWipeMarker": "erase userdata",
+      "generatorMembers": {
+        "members": [
+          "flash-all.sh",
+          "avb_pkmd.bin",
+          "bootloader-{device}-{bootloader}.img",
+          "radio-{device}-{baseband}.img"
+        ],
+        "optional": [
+          "flash-all.bat"
+        ],
+        "gscFirmware": {
+          "source": "VENDOR/firmware/dauntless/",
+          "copiedTo": "the archive top directory, same basenames, byte-equal"
+        },
+        "anchors": [
+          "cp tmp/RADIO/$BOOTLOADERSRC tmp/$PRODUCT-$VERSION/bootloader-$DEVICE-$BOOTLOADER.img",
+          "cp tmp/RADIO/$RADIOSRC tmp/$PRODUCT-$VERSION/radio-$DEVICE-$RADIO.img",
+          "cp \"$AVB_PKMD\" tmp/$PRODUCT-$VERSION/avb_pkmd.bin",
+          "cp -r tmp/VENDOR/firmware/$GSCFIRMWARESRC/* tmp/$PRODUCT-$VERSION",
+          "  BOOTLOADERSRC=bootloader.img",
+          "  RADIOSRC=radio.img",
+          "  GSCFIRMWARESRC=dauntless",
+          "fastboot -w --skip-reboot update image-$PRODUCT-$VERSION.zip",
+          "fastboot flash avb_custom_key avb_pkmd.bin"
+        ],
+        "basis": "Demonstrated by the pinned generator fixture scripts/tests/fixtures/factory-package/device_common-1f5ba267/generate-factory-images-common.sh with the variables generate-release.sh sets for rango|frankel (BOOTLOADER, RADIO, AVB_PKMD, DISABLE_UART, DISABLE_DPM; no BOOTLOADERFILE, RADIOFILE, SRCPREFIX or GSCFIRMWARESRC, so the RADIO/bootloader.img, RADIO/radio.img and dauntless defaults apply). Each anchor must occur in the fixture."
+      },
+      "optimizeMembers": {
+        "members": [
+          "android-info.txt",
+          "android-info.zip",
+          "script.txt",
+          "flash-all.bat"
+        ],
+        "images": "{partition}.img for each non-logical partition in fastbootImages that the update zip holds (raw, or Android sparse when larger than the limit); dynamic partitions only as super_1..N.img",
+        "copied": "every other factory-zip member except image-*.zip, flash-all.sh, flash-all.bat and flash-base.sh, flat by basename",
+        "anchors": [
+          "if (entry_base_name.starts_with(\"image-\") && entry_base_name.ends_with(\".zip\")) {",
+          "die(\"update zip is compressed\");",
+          "} else if (entry_base_name != \"flash-base.sh\") {",
+          "if (entry_base_name != \"flash-all.bat\") {",
+          "AddFile(entry_base_name, contents.data(), entry_len);",
+          "size_t flash_all_sh_prolog_end = flash_all_sh.find(\"\\n# PROLOG_END\");",
+          "AddCheckVarCommand(\"product\", product_name);",
+          "AddCheckVarCommand(\"slot-count\", \"2\"); // assumed in many places",
+          "if (line.find(\" update image-\") != std::string::npos) {",
+          "die(\"unexpected number of flash bootloader commands: %i\", bootloader_flash_counter);",
+          "fc.AddCheckVarCommand(\"max-download-size\", max_dl_size_hex.str());",
+          "fc.AddCommand(\"run-cmd set_active:a\");",
+          "fc.AddCheckVarCommand(\"current-slot\", \"a\");",
+          "fc->AddFile(\"android-info.txt\", contents.data(), contents.size());",
+          "fc->AddCommand(\"check-requirements android-info.txt\");",
+          "std::string aiz_name = \"android-info.zip\";",
+          "AddFile(\"script.txt\", script_.data(), script_.length());",
+          "AddFile(\"flash-all.sh\", sh_script_.data(), sh_script_.length());",
+          "AddFile(\"flash-all.bat\", bat_script_.data(), bat_script_.length());",
+          "pending_file_name_ = new std::string(base_partition_name + \".img\");",
+          "std::string file_name = (name + \"_\").append(std::to_string(i + 1)).append(\".img\");",
+          "fc->AddSplitSparsePartition(\"super\", files);",
+          "die(\"unexpected signature %s\", fname);",
+          "std::string cmd = \"erase \" + pname_;",
+          "std::string path = output_zip_outer_dir_name_ + \"/\" + name;"
+        ],
+        "basis": "Demonstrated by FlashCapturer::Run and its capture hooks in the pinned excerpt scripts/tests/fixtures/factory-package/platform_system_core-322ff512/fastboot-excerpt.json (GrapheneOS platform_system_core 322ff512 fastboot/). Each anchor must occur in the excerpt."
+      },
+      "dataWipeBasis": "Install flash-all.sh and script.txt carry `erase <partition>` only from WipeTask, which the capture runs for fastboot-info.txt `if-wipe` lines of the update zip (wants_wipe is forced); that file's content is not pinned here.",
+      "intermediate": {
+        "file": "{device}-factory-{build}.zip",
+        "topDirectory": "{device}-factory-{build}",
+        "contains": "image-{device}-{build}.zip, the generator members and GSC firmware",
+        "classification": "factory-intermediate: refused; generate-release.sh signs and ships only the optimized install archive"
+      },
+      "fastbootImages": [
+        "boot",
+        "dtbo",
+        "dts",
+        "init_boot",
+        "odm",
+        "odm_dlkm",
+        "product",
+        "pvmfw",
+        "recovery",
+        "system",
+        "system_dlkm",
+        "system_ext",
+        "vbmeta",
+        "vbmeta_system",
+        "vbmeta_vendor",
+        "vendor",
+        "vendor_boot",
+        "vendor_dlkm",
+        "vendor_kernel_boot"
+      ],
+      "fastbootImagesBasis": "Primary (non-secondary) BootCritical/Normal rows of the fastboot images[] table in the excerpt; Extra rows (cache, super, userdata) are never flashed by flashall. Logical ones go into super",
+      "scriptChecks": {
+        "required": [
+          "check-var product {device}",
+          "check-var slot-count 2",
+          "check-var max-download-size {maxDownloadSize}",
+          "run-cmd set_active:a",
+          "check-var current-slot a",
+          "check-requirements android-info.txt",
+          "flash avb_custom_key avb_pkmd.bin"
+        ],
+        "bootloaderOtherSlot": "flash bootloader bootloader-{device}-{bootloader}.img other-slot",
+        "bootloaderOtherSlotCount": 2,
+        "super": "flash super super_{index}.img, once per segment in order 1..N",
+        "references": "every `flash PARTITION FILE [other-slot]` line names a member of the archive",
+        "maxDownloadSize": "0x10000000",
+        "maxDownloadSizeBasis": "generate-release.sh MAX_DOWNLOAD_SIZE for rango|mustang|blazer|frankel, written by fastboot as 0x<hex>"
+      }
     }
   },
   "inventory": {
@@ -69,31 +181,48 @@
     "miscInfo": "META/misc_info.txt (ab_update, dynamic_partition_list, virtual_ab)",
     "androidInfo": "OTA/android-info.txt",
     "images": "IMAGES/{partition}.img: every A/B partition outside dynamic_partition_list that has one must appear byte-equal as {partition}.img",
-    "firmware": "RADIO/bootloader.img and RADIO/radio.img must equal the factory bootloader-/radio- images. An A/B partition without an IMAGES/ entry counts as firmware-carried only when a roseos.factory-firmware-observation.v1 bound to those two image digests lists it; absence alone never qualifies",
+    "firmware": "RADIO/bootloader.img and RADIO/radio.img must equal the factory bootloader-/radio- images (generator anchors). VENDOR/firmware/dauntless/* must appear byte-equal at the archive top level. An A/B partition without an IMAGES/ entry counts as firmware-carried only when a roseos.factory-firmware-observation.v1 bound to the bootloader/radio digests lists it",
     "dynamic": "dynamic_partition_list partitions: super_1..N.img rebuilt with simg2img and unpacked with lpunpack from the hash-pinned otatools archive (as the historical verify-factory-mustang.py did), the unpacked set and each logical image byte-equal to target-files IMAGES/{partition}.img (flattened with simg2img when sparse); _b outputs must be empty",
-    "layoutStatus": "unobserved",
-    "layoutBasis": "The RADIO/ and IMAGES/ layout is AOSP releasetools convention; no Frankel or Rango target-files listing is in this repository. A missing entry refuses, it never passes.",
-    "observation": "roseos.target-files-observation.v1 from `factory-package.py observe`: target-files sha256 and the names of META/ IMAGES/ RADIO/ OTA/ members, delivered by release through its normal receipt path",
+    "layoutStatus": "generator and optimizer pinned; target-files and update-zip content unobserved",
+    "layoutBasis": "The generator (device_common 1f5ba267) and optimize-factory-image (platform_system_core 322ff512) behaviour is pinned. No Frankel or Rango target-files, img zip or fastboot-info.txt listing is in this repository; a missing entry refuses, it never passes.",
+    "observation": "roseos.target-files-observation.v2 from `factory-package.py observe`: target-files sha256 and the names of META/ IMAGES/ RADIO/ OTA/ VENDOR/firmware/ members, delivered by release through its normal receipt path",
     "observed": [],
     "observedBasis": "No real signed target-files observation has been delivered yet; synthetic test observations are never listed here.",
     "generatorFixture": {
       "project": "device/common",
       "revision": "1f5ba2671e4b04e3bd8899b3df2c5e30a894b35c",
-      "files": [
-        "generate-factory-images-common.sh",
-        "clear-factory-images-variables.sh"
-      ],
-      "status": "not in this repository",
-      "basis": "os/pinned-manifest.xml device_common; generate-release.sh sources both. The install-archive member names here follow the historical mustang layout until these are reviewed fixtures"
+      "fixture": "scripts/tests/fixtures/factory-package/device_common-1f5ba267",
+      "provenance": "scripts/tests/fixtures/factory-package/device_common-1f5ba267/PROVENANCE.json",
+      "status": "pinned fixture (read only, never executed)",
+      "files": {
+        "generate-factory-images-common.sh": "33e8c16f9a2669d6d385d2eb7939a0d02f9160965db9b4d8c7a8914cd89dca49",
+        "clear-factory-images-variables.sh": "4311f6435e74c8b1f4941bfc6580ffe0bf8dc021a177dca66ebeb8e4ddf3c353"
+      }
+    },
+    "optimizeFixture": {
+      "project": "system/core",
+      "revision": "322ff5129d865a5e8d958667e6c63ac943449493",
+      "fixture": "scripts/tests/fixtures/factory-package/platform_system_core-322ff512",
+      "provenance": "scripts/tests/fixtures/factory-package/platform_system_core-322ff512/PROVENANCE.json",
+      "excerpt": "scripts/tests/fixtures/factory-package/platform_system_core-322ff512/fastboot-excerpt.json",
+      "status": "pinned excerpt (read only, never executed)",
+      "files": {
+        "fastboot/fastboot.cpp": "f22bfbee80af4bab95e754bfe104a4aa177d174654c6475b0d706591ec93c97b",
+        "fastboot/fastboot.h": "c15cd11e1ca95aecae20aca15d2aba7a6cadbfc6a21439cdde5192e19665edbc",
+        "fastboot/task.cpp": "14b3fe15cc312aa227d81c62ad1a96bd79a992cbc4e7fc055c983f9801ae6bd7",
+        "fastboot/fastboot_driver.cpp": "13c4828b58c43b2dc8bda096a3be8a7e9b3bb53e476208d2a627e6b47349cd84"
+      },
+      "excerptSha256": "969ca10af5da76a65eb44a1ec74e75fc0384faa66a4dddd1e5e0ebadd98d4432"
     }
   },
   "installSemantics": {
     "abUpdate": true,
-    "abUpdateBasis": "required to read ab_update=true from META/misc_info.txt; the archive flashes slot a and both bootloader slots per the historical install layout",
+    "abUpdateBasis": "required to read ab_update=true from META/misc_info.txt; the install script checks slot-count 2, flashes the bootloader to the other slot twice and pins current-slot a before flashing super (pinned optimize-factory-image excerpt)",
     "dynamicPartitions": "read from misc_info dynamic_partition_list per artifact",
     "virtualAb": "recorded from misc_info virtual_ab per artifact; OTA_ARGS=--disable_ublk for these devices in generate-release.sh",
     "rollback": "Not claimed. A factory install wipes data; downgrade and anti-rollback behaviour on these devices is unmeasured.",
-    "relock": "Bootloader relock eligibility needs avb_pkmd.bin equal to the flavor's AVB public key AND physical acceptance; the classifier checks only the first and never claims relock is safe."
+    "relock": "Bootloader relock eligibility needs avb_pkmd.bin equal to the flavor's AVB public key AND physical acceptance; the classifier checks only the first and never claims relock is safe.",
+    "generatorFlash": "Generator flash-all.sh (pinned fixture): refuses a different `fastboot getvar product`, flashes the bootloader to the other slot twice with set-active, flashes radio, erases and flashes avb_custom_key from avb_pkmd.bin, `oem uart disable`, erases dpm_a/dpm_b, then `fastboot -w --skip-reboot update` (wipes data). Never run here."
   },
   "identity": {
     "avbPublicKeySha256From": "os/release-pipeline/frankel.json identities.avbPublicKeySha256",
@@ -131,11 +260,6 @@
       "input": "firmware observation of bootloader/radio carried partitions",
       "owner": "signing (factory generator output mapping)",
       "next": "emit roseos.factory-firmware-observation.v1 from the generator's own inputs alongside the install archive"
-    },
-    {
-      "input": "device/common generator fixtures at 1f5ba267",
-      "owner": "Chief (upstream fixture scope)",
-      "next": "admit generate-factory-images-common.sh and clear-factory-images-variables.sh as reviewed fixtures to confirm member naming"
     },
     {
       "input": "physical first-install acceptance",

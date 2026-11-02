@@ -112,7 +112,7 @@ class CheckedInCandidateTest(unittest.TestCase):
              41081939395))
         self.assertNotIn(311, built)
         self.assertEqual(CONFIG['appRelease']['mustExceed'], 307)
-        self.assertEqual(CONFIG['appRelease']['publication']['preserveLatest'], 'frankel-2026102901')
+        self.assertEqual(CONFIG['appRelease']['publication']['latestTagPattern'], 'frankel-{build}')
         self.assertEqual(manifest_version('workspace/pixel-calculator-agent/AndroidManifest.xml')[:2], ('dev.pixel.calculator.agent', 4))
         self.assertEqual(manifest_version('os/background-control/agent-pip/AndroidManifest.xml'),
             ('dev.pixel.backgroundcontrol', 28, '2.1.5-pip'))
@@ -348,6 +348,102 @@ class BuilderControlTest(unittest.TestCase):
         with self.assertRaisesRegex(pipeline.CheckFailed, 'builder is SUSPENDED; refusing to start'):
             self.control('start', ['SUSPENDED'])
         self.assertEqual([c for c in self.calls() if c[2] != 'describe'], [])
+
+    def test_ownership_is_claimed_before_any_request_and_only_by_the_submitting_call(self):
+        claims = []
+
+        def claim(started):
+            claims.append((started, len([c for c in self.calls() if c[2] != 'describe'])))
+        (self.root/'states.json').write_text(json.dumps(['TERMINATED', 'RUNNING']))
+        (self.root/'action-exit').write_text('0')
+        self.assertEqual(pipeline.Production().control_builder('start', gcloud=str(self.gcloud), claim=claim,
+            sleep=lambda s: None), 'RUNNING')
+        self.assertEqual(claims, [(True, 0)])  # recorded before the start request was sent
+        for states in (['RUNNING'], ['STAGING', 'RUNNING']):
+            claims.clear()
+            (self.root/'states.json').write_text(json.dumps(states))
+            pipeline.Production().control_builder('start', gcloud=str(self.gcloud), claim=claim, sleep=lambda s: None)
+            self.assertEqual([c[0] for c in claims], [False])
+        claims.clear()
+        (self.root/'states.json').write_text(json.dumps(['TERMINATED']))
+        (self.root/'action-exit').write_text('1')
+        with self.assertRaises(pipeline.CheckFailed):
+            pipeline.Production().control_builder('start', gcloud=str(self.gcloud), claim=claim)
+        self.assertEqual([c[0] for c in claims], [True])  # a sent-but-denied request still counts as this operation's
+
+class BuilderOwnershipCliTest(unittest.TestCase):
+    """The opt-in ownership options, through main() with the fake adapter (no gcloud)."""
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.state = self.root/'fake'
+        self.record = self.root/'ownership.json'
+
+    def run_main(self, *argv):
+        import contextlib, io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = pipeline.main([*argv, '--adapter', 'fake', '--fake-state', str(self.state)])
+        return code, out.getvalue(), err.getvalue()
+
+    def events(self):
+        log = self.state/'events.log'
+        return log.read_text().splitlines() if log.exists() else []
+
+    def ownership(self):
+        code, out, _ = self.run_main('builder-ownership', '--ownership-record', str(self.record))
+        self.assertEqual(code, 0)
+        return out.strip()
+
+    def test_started_by_this_operation_is_stopped(self):
+        self.assertEqual(self.run_main('start-builder', '--ownership-record', str(self.record))[0], 0)
+        self.assertEqual(json.loads(self.record.read_text()), {'schema': 'rose-builder-ownership/v1',
+            'instance': 'immortal-os-builder', 'startedByThisOperation': True})
+        self.assertEqual(self.ownership(), 'started=true')
+        self.assertEqual(self.run_main('stop-builder', '--only-if-started', 'true')[0], 0)
+        self.assertEqual(self.events(), ['builder start', 'builder stop'])
+
+    def test_already_running_builder_is_left_running(self):
+        self.state.mkdir(parents=True)
+        (self.state/'builder-observed').write_text('RUNNING')
+        self.assertEqual(self.run_main('start-builder', '--ownership-record', str(self.record))[0], 0)
+        self.assertEqual(self.ownership(), 'started=false')
+        code, out, _ = self.run_main('stop-builder', '--only-if-started', 'false')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['skipped'], 'not started by this operation')
+        self.assertEqual(self.events(), ['builder start'])
+
+    def test_absent_record_means_no_request_and_unknown_output_refuses_to_stop(self):
+        self.assertEqual(self.ownership(), 'started=false')
+        for value in ('', 'True', 'yes'):
+            code, _, err = self.run_main('stop-builder', '--only-if-started', value)
+            self.assertEqual(code, 1)
+            self.assertIn('ownership is unknown; not stopping', err)
+        self.assertEqual(self.events(), [])
+
+    def test_malformed_or_reused_record_fails(self):
+        for text in ('not json', '[]', json.dumps({'schema': 'rose-builder-ownership/v1', 'instance': 'other',
+                'startedByThisOperation': True}), json.dumps({'schema': 'rose-builder-ownership/v1',
+                'instance': 'immortal-os-builder', 'startedByThisOperation': 'true'})):
+            self.record.write_text(text)
+            code, _, err = self.run_main('builder-ownership', '--ownership-record', str(self.record))
+            self.assertEqual(code, 1, text)
+        self.assertNotEqual(self.run_main('start-builder', '--ownership-record', str(self.record))[0], 0)
+        self.assertEqual(self.events(), [])  # an existing record is never overwritten and no request is sent
+
+    def test_options_are_rejected_where_they_do_not_belong(self):
+        for argv in (('start-builder', '--only-if-started', 'true'),
+                ('start-builder', '--ownership-record', str(self.record), '--only-if-started', 'true'),
+                ('stop-builder', '--ownership-record', str(self.record)),
+                ('stop-builder', '--only-if-started', 'true', '--ownership-record', str(self.record)),
+                ('builder-ownership',)):
+            self.assertEqual(self.run_main(*argv)[0], 2, argv)
+        self.assertEqual(self.events(), [])
+
+    def test_unconditional_start_and_stop_are_unchanged(self):
+        self.assertEqual(self.run_main('start-builder')[0], 0)
+        self.assertEqual(self.run_main('stop-builder')[0], 0)
+        self.assertEqual(self.events(), ['builder start', 'builder stop'])
+        self.assertFalse(self.record.exists())
 
 if __name__ == '__main__':
     unittest.main()

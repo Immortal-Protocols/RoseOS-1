@@ -48,6 +48,24 @@ class FakeHost(B.Host):
         self.gpu_listens = self.gpu_deadline = False
         self.probe_container = self.probe_timeout = False
         self.probe_rc, self.probe_out = 0, ''
+        self.cloud_container = self.cloud_timeout = False
+        self.cloud_rc, self.cloud_out = 0, ''
+        self.stage_container = self.stage_timeout = False
+        self.stage_rc, self.stage_out = 0, ''
+        self.redirect_container = self.redirect_timeout = False
+        self.redirect_rc, self.redirect_out = 0, ''
+        self.deps_container = self.deps_timeout = False
+        self.deps_rc, self.deps_out = 0, ''
+        self.qwen_container = self.qwen_timeout = False
+        self.qwen_rc, self.qwen_out = 0, ''
+        self.vision_container = self.vision_timeout = False
+        self.vision_rc, self.vision_out = 0, ''
+        self.adapter_container = self.adapter_timeout = False
+        self.adapter_rc, self.adapter_out = 0, ''
+        self.warm_container, self.warm_run_rc, self.warm_states, self.warm_runs = False, 0, [], {}
+        self.contract_container, self.contract_runs, self.contract_name = False, {}, 'rose-cloud-qwen-contract'
+        self.active_units = set()
+        self.sticky_enabled = set()
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -165,7 +183,16 @@ class FakeHost(B.Host):
                     return self.ps_results.pop(0)
                 names = [n for n, alive in (('muse-glimmer', self.model_container),
                                             ('muse-glimmer-validate', self.validate_container),
-                                            ('muse-glimmer-hfprobe', self.probe_container)) if alive]
+                                            ('muse-glimmer-hfprobe', self.probe_container),
+                                            ('rose-cloud-preflight', self.cloud_container),
+                                            ('rose-cloud-stage', self.stage_container),
+                                            ('rose-cloud-redirect-probe', self.redirect_container),
+                                            ('rose-cloud-validate', self.deps_container),
+                                            ('rose-cloud-qwen-gpu', self.qwen_container),
+                                            ('rose-cloud-qwen-vision', self.vision_container),
+                                            ('rose-cloud-qwen-adapter', self.adapter_container),
+                                            ('rose-cloud-qwen-warm', self.warm_container),
+                                            (self.contract_name, self.contract_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -176,7 +203,117 @@ class FakeHost(B.Host):
                     self.model_container = self.port_open = False
                 if argv[3] == 'muse-glimmer-hfprobe' and not self.rm_fails:
                     self.probe_container = False
+                if argv[3] == 'rose-cloud-preflight' and not self.rm_fails:
+                    self.cloud_container = False
+                if argv[3] == 'rose-cloud-stage' and not self.rm_fails:
+                    self.stage_container = False
+                if argv[3] == 'rose-cloud-redirect-probe' and not self.rm_fails:
+                    self.redirect_container = False
+                if argv[3] == 'rose-cloud-validate' and not self.rm_fails:
+                    self.deps_container = False
+                if argv[3] == 'rose-cloud-qwen-gpu' and not self.rm_fails:
+                    self.qwen_container = False
+                if argv[3] == 'rose-cloud-qwen-vision' and not self.rm_fails:
+                    self.vision_container = False
+                if argv[3] == 'rose-cloud-qwen-adapter' and not self.rm_fails:
+                    self.adapter_container = False
+                if argv[3] == 'rose-cloud-qwen-warm' and not self.rm_fails:
+                    self.warm_container = False
+                if argv[3] == self.contract_name and not self.rm_fails:
+                    self.contract_container = False
                 return (1, '') if self.rm_fails else (0, '')
+            if argv[1] == 'run' and 'rose-cloud-qwen-warm' in argv:
+                self.events.append(('qwenwarm', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.warm_container = self.warm_run_rc == 0
+                return self.warm_run_rc, 'f00dfeed\n'
+            if argv[1] == 'exec' and argv[2] == 'rose-cloud-qwen-warm':
+                if not self.warm_container:
+                    return 1, ''
+                if argv[3] == 'cat':
+                    return self.warm_states.pop(0) if self.warm_states else (0, '{"ready": true}')
+                case = argv[-1]
+                self.events.append(('warmexec', case, list(argv), timeout))
+                default = 'ROSE-CLOUD-QWEN-SESSION ' + json.dumps({'case': case, 'step': 'done', 'session': {
+                    'step': 'done', 'cancel': {'semantics': 'inflight_abort'}}})
+                return self.warm_runs.get(case, (0, default + '\n'))
+            if argv[1] == 'run' and ('rose-cloud-qwen-contract' in argv or 'rose-cloud-qwen-contract-nothink' in argv):
+                self.contract_name = next(n for n in ('rose-cloud-qwen-contract', 'rose-cloud-qwen-contract-nothink')
+                                          if n in argv)
+                self.events.append(('qwencontract', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.contract_container = self.warm_run_rc == 0
+                return self.warm_run_rc, 'f00dfeed\n'
+            if argv[1] == 'exec' and argv[2] == self.contract_name:
+                if not self.contract_container:
+                    return 1, ''
+                if argv[3] == 'cat':
+                    return self.warm_states.pop(0) if self.warm_states else (0, '{"ready": true}')
+                case = argv[-1]
+                self.events.append(('contractexec', case, list(argv), timeout))
+                default = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': case, 'step': 'done', 'contract': {
+                    'step': 'done', 'models': {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192,
+                                               'timedOut': False}, 'notRun': {},
+                    'chat': {'status': 200, 'verdict': 'final', 'expectMet': True, 'identityExact': True,
+                             'reasoningField': 'reasoning', 'reasoningChars': 200, 'thinkInContent': False},
+                    'reasoningSeparated': True, 'allExpected': True}})
+                return self.contract_runs.get(case, (0, default + '\n'))
+            if argv[1] == 'run' and 'rose-cloud-qwen-adapter' in argv:
+                self.events.append(('qwenadapter', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.adapter_container = True
+                if self.adapter_timeout:
+                    return 124, ''
+                self.adapter_container = self.leave_container
+                return self.adapter_rc, self.adapter_out
+            if argv[1] == 'run' and 'rose-cloud-qwen-vision' in argv:
+                self.events.append(('qwenvision', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.vision_container = True
+                if self.vision_timeout:
+                    return 124, ''
+                self.vision_container = self.leave_container
+                return self.vision_rc, self.vision_out
+            if argv[1] == 'run' and 'rose-cloud-qwen-gpu' in argv:
+                self.events.append(('qwengpu', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.qwen_container = True
+                if self.qwen_timeout:
+                    return 124, ''
+                self.qwen_container = self.leave_container
+                return self.qwen_rc, self.qwen_out
+            if argv[1] == 'run' and 'rose-cloud-validate' in argv:
+                self.events.append(('depsvalidate', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), timeout))
+                self.deps_container = True
+                if self.deps_timeout:
+                    return 124, ''
+                self.deps_container = self.leave_container
+                return self.deps_rc, self.deps_out
+            if argv[1] == 'run' and 'rose-cloud-redirect-probe' in argv:
+                self.events.append(('redirectprobe', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), self.path(B.STAGING).exists(), timeout))
+                self.redirect_container = True
+                if self.redirect_timeout:
+                    return 124, ''
+                self.redirect_container = self.leave_container
+                return self.redirect_rc, self.redirect_out
+            if argv[1] == 'run' and 'rose-cloud-stage' in argv:
+                self.events.append(('cloudstage', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists(), self.path(B.STAGING).is_dir()))
+                self.stage_container = True
+                if self.stage_timeout:
+                    return 124, ''
+                self.stage_container = self.leave_container
+                return self.stage_rc, self.stage_out
+            if argv[1] == 'run' and 'rose-cloud-preflight' in argv:
+                self.events.append(('cloudpreflight', list(argv), self.model_active, self.model_container,
+                                    self.path(B.MODEL_HOLD).exists()))
+                self.cloud_container = True
+                if self.cloud_timeout:
+                    return 124, ''  # Host.run killed the CLI at the deadline; the container is still there
+                self.cloud_container = self.leave_container
+                return self.cloud_rc, self.cloud_out
             if argv[1] == 'run' and 'muse-glimmer-hfprobe' in argv:
                 self.events.append(('hfprobe', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists()))
@@ -287,21 +424,29 @@ class FakeHost(B.Host):
     def systemctl(self, args):
         if args[0] == 'is-enabled':
             return (0, 'enabled') if args[1] in self.enabled else (1, 'disabled')
-        if args[0] == 'disable':
-            self.enabled -= set(args[2:])
+        if args[0] == 'disable':  # a unit in sticky_enabled stays enabled (static, linked or re-enabled elsewhere)
+            self.enabled -= {a for a in args[1:] if not a.startswith('--')} - self.sticky_enabled
             return 0, ''
         if args[0] == 'enable':
             self.enabled |= {a for a in args[1:] if not a.startswith('--')}
             if '--now' in args and 'muse-glimmer.service' in args:
                 self.model_active = self.model_container = True
             return 0, ''
+        if args[0] == 'start':
+            self.active_units |= {a for a in args[1:] if not a.startswith('--')}
+            if 'muse-glimmer.service' in args and not self.path(B.MODEL_HOLD).exists():  # ExecCondition: no hold
+                self.model_active = self.model_container = True
+            return 0, ''
         if args[0] == 'stop':
+            self.active_units -= set(args[1:])
             self.events.append(('stop', tuple(args[1:])))
             if 'muse-glimmer.service' in args and not self.model_stuck:
                 self.model_active = self.model_container = False
             return 0, ''
         if args[:2] == ['is-active', 'muse-glimmer.service']:
             return (0, 'active\n') if self.model_active else (3, 'inactive\n')
+        if args[0] == 'is-active':
+            return (0, 'active\n') if args[1] in self.active_units else (3, 'inactive\n')
         if args == ['restart', 'docker']:
             daemon = self.path(B.DAEMON_JSON)
             config = json.loads(daemon.read_text()) if daemon.exists() else {}
@@ -392,6 +537,16 @@ class FakeHost(B.Host):
         self.boot += 1
         self.mounted = self.disk['sig'] is not None  # fstab mounts it on boot
 
+    def power_cycle(self):
+        """A real reset, before this bootstrap runs: /run is empty, systemd starts every enabled unit, and an enabled
+        model unit starts the model (its ExecCondition sees no hold yet)."""
+        self.reboot()
+        self.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.model_active = self.model_container = False
+        self.active_units = set(self.enabled)
+        if 'muse-glimmer.service' in self.enabled:
+            self.model_active = self.model_container = True
+
     def count(self, *prefix):
         return sum(1 for c in self.calls if tuple(c[:len(prefix)]) == prefix)
 
@@ -473,7 +628,11 @@ class FirstBootToReady(Fixture):
         self.assertEqual(s['tls'], ('waiting', 'acme_not_authorized'))
         self.assertEqual(s['edge'], ('waiting', 'needs_tls_and_auth'))
         self.assertTrue(s['service'][1].startswith('enabled'))
-        self.assertTrue(set(B.MODEL_UNITS) <= self.host.enabled)
+        # MODELS-HOLD-ONLY-001: started by this bootstrap, never enabled for boot (systemd would start them before
+        # the hold and diagnostic keys are read)
+        self.assertFalse(set(B.MODEL_UNITS) & self.host.enabled)
+        self.assertIn(['systemctl', 'start', *B.MODEL_UNITS], self.host.calls)
+        self.assertTrue(self.host.model_active)
         self.assertNotIn('nginx.service', self.host.enabled)
         self.assertTrue((self.host.path('/etc/rose-models') / 'bin/start-model').stat().st_mode & 0o111)
         self.assertTrue(self.host.path('/etc/systemd/system/muse-glimmer.service').exists())
@@ -549,7 +708,7 @@ class Refusals(Fixture):
             (('apt-get', 'update'), 'packages', 'apt_update_failed'),
             (('nvidia-ctk',), 'container', 'nvidia_ctk_failed'),
             (('docker', 'pull'), 'image', 'image_pull_failed'),
-            (('systemctl', 'enable', '--now', B.MODEL_UNITS[0]), 'service', 'service_enable_failed'),
+            (('systemctl', 'start', B.MODEL_UNITS[0]), 'service', 'service_enable_failed'),
             (('/usr/sbin/nginx', '-p', '/run/rose-acme', '-c', '/etc/rose-models/edge/acme-only.conf'), 'tls',
              'acme_http_config_invalid'))
         self.host.md['attributes/rose-models-acme'] = B.ACME_FLAG
@@ -1044,7 +1203,7 @@ class AcmeHandshake(Fixture):
     def test_the_only_operator_channel_is_existing_instance_metadata_and_reset(self):
         self.host.ack()
         self.boot()
-        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY, B.DIAG_KEY,
+        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY, B.DIAG_KEY, B.HOLD_KEY,
                                                'network-interfaces/0/access-configs/0/external-ip'}, self.host.md_reads)
         readme = (HERE.parent / 'service/README.md').read_text()
         section = readme[readme.index('**Operator (Mac)'):readme.index('**Impact of that one reset')]
@@ -1142,7 +1301,7 @@ class Diagnostic(DiagnosticFixture):
         status, _ = self.boot()
         self.assertEqual(self.states(status)['diagnostic'], ('ok', 'ignored: attempt_already_used'))
         self.assertFalse([e for e in self.host.events if e[0] in ('stop', 'validate')])
-        self.assertIn(['systemctl', 'enable', '--now', *B.MODEL_UNITS], self.host.calls)  # normal service again
+        self.assertIn(['systemctl', 'start', *B.MODEL_UNITS], self.host.calls)  # normal service again
         self.assertFalse(self.host.path(B.MODEL_HOLD).exists())
 
     def test_other_payload_or_malformed_values_never_hold_or_run(self):
@@ -1443,6 +1602,1587 @@ class HfProbeOnce(DiagnosticFixture):
         self.host.path(B.MODEL_HOLD).unlink()
         self.host.model_active = self.host.model_container = True
         self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+
+
+class CloudPreflightOnce(DiagnosticFixture):
+    """cloud-preflight-once (MODELS-ROSE-CLOUD-003): one offline preflight in the cached image, the data disk
+    read-only, fixed tokens only. The probe line is produced by running the payload's own preflight.py as a real
+    subprocess (empty staging dir, fixture cpuinfo); the container itself is FakeHost's."""
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-preflight-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        manifest['stagingRoot'] = str(self.tmp / 'staging-empty')
+        (self.tmp / 'cpuinfo').write_text('flags : avx avx2 bmi1 bmi2 f16c fma abm movbe xsave\n')
+        manifest['probe']['cpuinfo'] = str(self.tmp / 'cpuinfo')
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'preflight.py').read_text(),
+                                  json.dumps(manifest)], 60)
+        self.assertEqual(code, 0)
+        return 'image warning on stdout\n' + out
+
+    def model_started(self):
+        return [c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart', 'enable')
+                and 'muse-glimmer.service' in c]
+
+    def test_exact_offline_argv_hold_and_receipt(self):
+        status, code = self.probe('pass', cloud_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'][0], code, list(status['stages'])), ('ok', 0, ['diagnostic']))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual({k: r[k] for k in ('check', 'exitCode', 'timedOut', 'cleanup', 'prerequisite', 'modelHeld')},
+                         {'check': 'cloud-preflight-once', 'exitCode': 0, 'timedOut': False, 'cleanup': 'removed',
+                          'prerequisite': None, 'modelHeld': True})
+        self.assertEqual(r['probe']['filesComplete'], {'qwen': False, 'phonon': False, 'voices': False,
+                                                       'ptts': False})
+        self.assertEqual(r['probe']['files']['qwen']['missing'], 54)
+        self.assertEqual(r['probe']['cpu']['x8664v3'], True)
+        _, argv, active, container, held = next(e for e in self.host.events if e[0] == 'cloudpreflight')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                                '--name', 'rose-cloud-preflight', '-v', '/mnt/models-data:/mnt/models-data:ro',
+                                '--entrypoint', 'python3', RUNTIME['image_id'], '-c',
+                                (lib / 'preflight.py').read_text(), (lib / 'manifest.json').read_text()])
+        rose_cloud = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        self.assertEqual((lib / 'preflight.py').read_text(), (rose_cloud / 'preflight.py').read_text())
+        self.assertEqual((lib / 'manifest.json').read_text(), (rose_cloud / 'manifest.json').read_text())
+        for forbidden in ('--gpus', '--privileged', '--mount', '-e', 'HF_TOKEN', '--network=host'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if ':' in a and a.startswith('/')], ['/mnt/models-data:/mnt/models-data:ro'])
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'cloudpreflight', 'rm')],
+                         ['stop', 'cloudpreflight', 'rm'])
+        self.assertTrue(self.host.path(B.MODEL_HOLD).exists())
+        self.assertEqual(self.model_started(), [])
+        self.assertNoProvisioning()
+
+    def test_hostile_oversized_and_missing_lines(self):
+        marker = 'ROSE-CLOUD-PREFLIGHT '
+        for attempt, out in (('hostile', marker + json.dumps({'python': '3.12 SECRET /root', 'packages': {
+                                 'vllm': 'SECRET'}, 'ptts': {'apiFrom': '/root/.cache/SECRET'}}) + '\n'),
+                             ('huge', marker + '{"python": "' + 'x' * 10000 + '"}\n'),
+                             ('garbled', marker + '{not json SECRET\n'), ('none', 'Traceback SECRET\n'),
+                             ('list', marker + '[1, 2]\n')):
+            with self.subTest(attempt):
+                status, _ = self.probe(attempt, cloud_out=out, cloud_rc=1 if attempt != 'hostile' else 0)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertNotIn('/root', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                if attempt == 'hostile':
+                    r = self.published()['probe']
+                    self.assertEqual((r['python'], r['packages']['vllm'], r['ptts']['apiFrom']), ('other', 'other', None))
+                else:
+                    self.assertIsNone(self.published()['probe'])
+                    self.assertEqual(self.states(status)['diagnostic'],
+                                     ('ok', 'inference held; cloud preflight gave no result'))
+                self.host.model_active = self.host.model_container = True
+
+    def test_timeout_and_cleanup_outcomes(self):
+        status, _ = self.probe('slow', cloud_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['probe'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; cloud preflight timed out'))
+        self.assertEqual(B.CLOUD_SECONDS, 120)
+        self.assertFalse(self.host.cloud_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', cloud_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+
+    def test_unknown_cleanup_is_reported_not_assumed(self):
+        real = self.host.run
+
+        def run(argv, *a, **k):
+            if argv[:3] == ['docker', 'ps', '--all'] and 'name=rose-cloud-preflight' in argv:
+                return 1, ''  # docker did not answer the absence check
+            return real(argv, *a, **k)
+        self.host.run = run
+        status, code = self.probe('psfail', cloud_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'unknown')
+
+    def test_refusals(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                status, code = self.probe(attempt, **flags)
+                self.assertEqual((self.states(status)['diagnostic'], code),
+                                 (('failed', 'diagnostic_prerequisite_missing'), 1))
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+                self.assertNoProvisioning()
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        saved = {k: v for k, v in self.host.images.items()}
+        for attempt, change, category in (('digest', lambda i: (i[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *i[2:]),
+                                           'image_digest_mismatch'),
+                                          ('platform', lambda i: (*i[:3], 'arm64'), 'image_digest_mismatch')):
+            with self.subTest(attempt):
+                self.host.images.update({k: change(v) for k, v in saved.items()})
+                self.probe(attempt)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+                self.host.images.update(saved)
+                self.host.model_active = self.host.model_container = True
+        self.host.images.clear()
+        self.probe('noimage')
+        self.assertEqual(self.published()['prerequisite'], 'image_missing')
+
+    def test_once_per_id_and_default_boots_unchanged(self):
+        self.probe('once', cloud_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual(code, 0)
+        self.assertNotIn('cloudpreflight', [e[0] for e in self.host.events])
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'not requested'))
+
+    def test_mode_value_is_exact(self):
+        for value in (f'cloud-preflight-once:{SHA}:a1', f'hf-probe-once:{SHA}:a1'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(value))
+        for value in (f'cloud-preflight:{SHA}:a1', f'cloud-preflight-once:{SHA[:-1]}:a1',
+                      f'cloud-preflight-once:{SHA}:A1', f'cloud-preflight-once:{SHA}:a1 x'):
+            self.assertIsNone(B.DIAG_VALUE.fullmatch(value))
+
+
+class CloudStageOnce(DiagnosticFixture):
+    """cloud-stage-once (CLOUD-STAGING-SOURCE-001): the exact container, limits and controls. The stage line
+    comes from the payload's own stage.py run as a real subprocess on a case that needs no network (a differing
+    existing file refuses the run before any fetch); the container is FakeHost's. Nothing downloads."""
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-stage-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        root = self.tmp / 'staging'
+        manifest['stagingRoot'] = str(root)
+        first = manifest['groups']['qwen']
+        target = root / first['dir'] / first['files'][0][0]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('not the pinned file')
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'stage.py').read_text(), json.dumps(manifest),
+                                  B.stage_limits()], 60)
+        self.assertEqual(code, 0)
+        return 'pip notice on stdout\n' + out
+
+    def test_exact_container_limits_and_hold(self):
+        status, code = self.probe('stage', stage_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; cloud staging stopped: refused_existing'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['stage']['stop'],
+                          r['stage']['firstFailure']['qwen'], r['stage']['bytesIn']),
+                         ('cloud-stage-once', 'removed', None, True, 'refused_existing', 'existing_differs', 0))
+        _, argv, active, container, held, staging = next(e for e in self.host.events if e[0] == 'cloudstage')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'bridge',
+                                '--name', 'rose-cloud-stage', '--cap-drop', 'ALL', '--security-opt',
+                                'no-new-privileges', '-v', '/mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:rw',
+                                '--entrypoint', 'python3', RUNTIME['image_id'], '-c', (lib / 'stage.py').read_text(),
+                                (lib / 'manifest.json').read_text(), B.stage_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'deadlineS': 3600, 'maxBytes': 45_000_000_000, 'readTimeoutS': 30})
+        for forbidden in ('--gpus', '--privileged', '-e', '--env', '--network=host', 'host'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if a.startswith('/') and ':' in a],
+                         ['/mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:rw'])  # nothing else mounted
+        self.assertEqual((active, container, held, staging), (False, False, True, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'cloudstage', 'rm')],
+                         ['stop', 'cloudstage', 'rm'])
+        self.assertEqual(hashlib.sha256((lib / 'manifest.json').read_bytes()).hexdigest(), B.STAGE_MANIFEST_SHA256)
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_manifest_must_be_the_pinned_one(self):
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        m.write_text(m.read_text().replace('"apache-2.0"', '"other"', 1))
+        status, code = self.probe('edited')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_prerequisite_missing'), 1))
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        self.assertNotIn('cloudstage', [e[0] for e in self.host.events])
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', stage_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['stage'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; cloud staging timed out'))
+        self.assertFalse(self.host.stage_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', stage_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-STAGE '
+        for attempt, out in (('hostile', marker + json.dumps({'stop': 'done; rm -rf /', 'bytesIn': 'SECRET',
+                                                              'firstFailure': {'qwen': 'https://x/?sig=SECRET'}})),
+                             ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, stage_out=out + '\n', stage_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                stage = self.published()['stage']
+                if attempt == 'hostile':
+                    self.assertEqual((stage['stop'], stage['bytesIn'], stage['firstFailure']['qwen']), (None, None, None))
+                else:
+                    self.assertIsNone(stage)
+
+    def test_refused_hosts_reach_the_receipt_as_hostnames_only(self):
+        marker = 'ROSE-CLOUD-STAGE '
+        long_host = '.'.join(['a' * 63] * 3) + '.' + 'b' * 61  # 253 characters, the DNS maximum
+        raw = {'stop': 'file_failures', 'bytesIn': 24245215, 'refusedOther': 3, 'refusedHosts': [
+            {'host': 'CDN-LFS.Example.', 'reason': 'host_not_allowed', 'count': 45},
+            {'host': 'https://evil.example/x?X-Amz-Signature=SECRET', 'reason': 'host_not_allowed', 'count': 1},
+            {'host': None, 'reason': 'malformed', 'count': 1}] + [
+            {'host': long_host, 'reason': 'host_not_allowed', 'count': 1 << 40}] * 6}
+        self.probe('refused', stage_out=marker + json.dumps(raw) + '\n')
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        self.assertNotIn('SECRET', line)
+        self.assertNotIn('X-Amz', line)
+        stage = self.published()['stage']
+        self.assertEqual(stage['refusedHosts'][:2], [{'host': 'cdn-lfs.example', 'reason': 'host_not_allowed',
+                                                      'count': 45},
+                                                     {'host': None, 'reason': 'malformed', 'count': 1}])
+        self.assertEqual((len(stage['refusedHosts']), stage['refusedOther']), (4, 3))
+
+    def test_refusals_once_per_id_and_default_boot(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                self.probe(attempt, **flags)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('cloudstage', [e[0] for e in self.host.events])
+                self.assertFalse(self.host.path(B.STAGING).exists())  # nothing created on a refusal
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        saved = dict(self.host.images)
+        self.host.images.update({k: (v[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *v[2:]) for k, v in saved.items()})
+        self.probe('digest')
+        self.assertEqual(self.published()['prerequisite'], 'image_digest_mismatch')
+        self.host.images.update(saved)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', stage_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('cloudstage', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('cloudstage', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-stage-once:{SHA}:s1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-stage:{SHA}:s1'))
+
+
+class CloudRedirectProbeOnce(DiagnosticFixture):
+    """cloud-redirect-probe-once (CLOUD-REDIRECT-HEAD-001): the exact container, limits and controls. The probe line
+    comes from the payload's own stage.py run as a real subprocess in HEAD mode over the real pinned manifest, against
+    a local server that redirects every file to a refused CDN-like host (test-only hubBase/sources/allowHosts; nothing
+    leaves 127.0.0.1). The container is FakeHost's."""
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-redirect-probe-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        seen = []
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_HEAD(self):
+                seen.append(self.command)
+                self.send_response(302)
+                self.send_header('Location', 'https://CAS-Bridge.XetHub.hf.co/xet-bridge-us/abc?X-Amz-Signature=SECRET'
+                                             '&X-Amz-Credential=SECRET')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+            do_GET = do_HEAD
+
+        srv = ThreadingHTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        wheel = manifest['groups']['ptts']['files'][0][0]
+        base = f'http://127.0.0.1:{srv.server_address[1]}'
+        limits = dict(json.loads(B.probe_limits()), hubBase=base + '/hub', allowHosts=['127.0.0.1'], allowHttp=True,
+                      sources={f'ptts/{wheel}': f'{base}/pypi/{wheel}'})
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'stage.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, ['HEAD'] * 59)  # one HEAD per pinned file; no GET, no follow
+        return 'pip notice on stdout\n' + out
+
+    def test_exact_container_limits_and_hold(self):
+        status, code = self.probe('head', redirect_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; redirect probe stopped: done '
+                                 '(1 refused destination(s) in rose-models/diagnostic)'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        for leak in ('SECRET', 'X-Amz', 'xet-bridge-us', 'abc', '127.0.0.1', 'https'):
+            self.assertNotIn(leak, line)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['timedOut'], r['exitCode']),
+                         ('cloud-redirect-probe-once', 'removed', None, True, False, 0))
+        self.assertEqual((r['probe']['mode'], r['probe']['stop'], r['probe']['refusedHosts'], r['probe']['refusedOther']),
+                         ('head', 'done', [{'host': 'cas-bridge.xethub.hf.co', 'reason': 'host_not_allowed',
+                                            'count': 59}], 0))
+        self.assertEqual(r['probe']['groups']['qwen'], {'expected': 54, 'reachable': 0, 'refused': 54, 'failed': 0})
+        _, argv, active, container, held, staging, timeout = next(e for e in self.host.events
+                                                                  if e[0] == 'redirectprobe')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'bridge',
+                                '--name', 'rose-cloud-redirect-probe', '--cap-drop', 'ALL', '--security-opt',
+                                'no-new-privileges', '--read-only', '--entrypoint', 'python3', RUNTIME['image_id'],
+                                '-c', (lib / 'stage.py').read_text(), (lib / 'manifest.json').read_text(),
+                                B.probe_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'mode': 'head', 'deadlineS': 100, 'maxBytes': 0, 'readTimeoutS': 10})
+        self.assertEqual(timeout, 120)  # the diagnostic cap: the container is killed at 120 s, no grace
+        self.assertLess(json.loads(argv[-1])['deadlineS'], timeout)
+        for forbidden in ('--gpus', '--privileged', '-e', '--env', '-v', '--volume', '--mount', '--network=host', 'host',
+                          '--cap-add'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if a.startswith('/')], [])  # nothing mounted
+        self.assertEqual((active, container, held, staging), (False, False, True, False))  # no staging dir created
+        self.assertFalse(self.host.path(B.STAGING).exists())
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'redirectprobe', 'cloudstage', 'rm')],
+                         ['stop', 'redirectprobe', 'rm'])
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_manifest_must_be_the_pinned_one(self):
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        m.write_text(m.read_text().replace('"apache-2.0"', '"other"', 1))
+        status, code = self.probe('edited')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_prerequisite_missing'), 1))
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', redirect_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['probe'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; redirect probe timed out'))
+        self.assertFalse(self.host.redirect_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', redirect_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-HEAD '
+        long_host = '.'.join(['a' * 63] * 3) + '.' + 'b' * 61
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'mode': 'head', 'stop': 'done; rm -rf /', 'elapsedS': 'SECRET',
+                                                 'firstFailure': {'qwen': 'https://x/?sig=SECRET'},
+                                                 'refusedHosts': [{'host': 'https://x/?sig=SECRET',
+                                                                   'reason': 'host_not_allowed', 'count': 1}]})),
+                ('worst', marker + json.dumps({'mode': 'head', 'stop': 'deadline', 'refusedOther': 1 << 40,
+                                               'refusedHosts': [{'host': long_host, 'reason': 'host_not_allowed',
+                                                                 'count': 1 << 40}] * 9})),
+                ('stage', 'ROSE-CLOUD-STAGE ' + json.dumps({'stop': 'done'})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, redirect_out=out + '\n', redirect_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                probe = self.published()['probe']
+                if attempt == 'hostile':
+                    self.assertEqual((probe['stop'], probe['elapsedS'], probe['firstFailure']['qwen'],
+                                      probe['refusedHosts']), (None, None, None, []))
+                elif attempt == 'worst':
+                    self.assertEqual((len(probe['refusedHosts']), probe['refusedOther']), (4, 1 << 40))
+                else:
+                    self.assertIsNone(probe)
+
+    def test_refusals_once_per_id_and_default_boot(self):
+        self.probe('nodocker', docker_down=True)
+        self.assertEqual(self.published()['prerequisite'], 'docker_unavailable')
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+        self.host.docker_down = False
+        self.host.model_active = self.host.model_container = True
+        self.probe('unmounted', data_mounted=False, redirect_out='')  # no data disk needed: nothing is mounted
+        self.assertIsNone(self.published()['prerequisite'])
+        self.host.data_mounted = True
+        self.host.model_active = self.host.model_container = True
+        saved = dict(self.host.images)
+        self.host.images.update({k: (v[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *v[2:]) for k, v in saved.items()})
+        self.probe('digest')
+        self.assertEqual(self.published()['prerequisite'], 'image_digest_mismatch')
+        self.host.images.update(saved)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', redirect_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('redirectprobe', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-redirect-probe-once:{SHA}:r1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-redirect-probe:{SHA}:r1'))
+        for mode in ('offline-validate', 'gpu-start-once', 'hf-probe-once', 'cloud-preflight-once', 'cloud-stage-once'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:r1'))  # existing modes unchanged
+        self.assertEqual(json.loads(B.stage_limits()), {'deadlineS': 3600, 'maxBytes': 45_000_000_000,
+                                                       'readTimeoutS': 30})
+
+
+class CloudValidateOnce(DiagnosticFixture):
+    """cloud-validate-once (CLOUD-DEPS-VALIDATE-001): the exact container, bounds and controls. The helper line comes
+    from the payload's own validate.py run as a real subprocess over the real pinned manifest, with test-only fixture
+    mount/net/dev tables, on paths that refuse before any install (so nothing is installed or imported here). The
+    container is FakeHost's."""
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(B.STAGING).mkdir(parents=True, exist_ok=True)
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-validate-once:{SHA}:{attempt}')
+
+    def real_line(self, net=('lo', 'eth0')):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        fx = self.tmp / 'validate-fixture'
+        for d in [fx / 'net' / n for n in net] + [fx / 'dev', fx / 'tmp']:
+            d.mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        manifest['stagingRoot'] = str(self.tmp / 'empty-staging')
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw,size=524288k 0 0\n"
+                                   f"/dev/sdb {manifest['stagingRoot']} ext4 ro 0 0\n")
+        limits = dict(json.loads(B.validate_limits()), mountsFile=str(fx / 'mounts'), netDir=str(fx / 'net'),
+                      devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'validate.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])  # refused before anything was installed
+        return 'pip notice on stdout\n' + out
+
+    def test_exact_container_bounds_and_hold(self):
+        status, code = self.probe('deps', deps_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; dependency validation stopped: not_isolated'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['timedOut'], r['exitCode']),
+                         ('cloud-validate-once', 'removed', None, True, False, 0))
+        v = r['validate']
+        self.assertEqual((v['stop'], v['isolation']['networkOnlyLo'], v['isolation']['tmpBounded'], v['ptts'],
+                          v['qwen']), ('not_isolated', False, False, None, None))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'depsvalidate')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--network', 'none',
+                                '--name', 'rose-cloud-validate', '--cap-drop', 'ALL', '--security-opt',
+                                'no-new-privileges', '--read-only',
+                                '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=536870912,mode=1777',
+                                '--cpus', '2', '--memory', '4294967296', '--memory-swap', '4294967296',
+                                '-v', '/mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:ro',
+                                '--entrypoint', 'python3', RUNTIME['image_id'], '-c', (lib / 'validate.py').read_text(),
+                                (lib / 'manifest.json').read_text(), B.validate_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'deadlineS': 270, 'tmpMaxBytes': 512 << 20})
+        self.assertEqual(timeout, 300)  # the container is killed at 300 s; the helper stops itself at 270 s
+        for forbidden in ('--gpus', '--privileged', '-e', '--env', '--cap-add', '--network=host', 'bridge', 'host'):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual([a for a in argv if a.startswith('/') and ':' in a and a != argv[argv.index('--tmpfs') + 1]],
+                         ['/mnt/models-data/rose-cloud:/mnt/models-data/rose-cloud:ro'])  # only staging, read-only
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'depsvalidate', 'rm')],
+                         ['stop', 'depsvalidate', 'rm'])
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_refusals_once_per_id_and_default_boot(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                self.probe(attempt, **flags)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('depsvalidate', [e[0] for e in self.host.events])
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        self.host.path(B.STAGING).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertFalse(self.host.path(B.STAGING).exists())  # never created: docker must not create it either
+        self.host.path(B.STAGING).mkdir(parents=True)
+        self.host.model_active = self.host.model_container = True
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        saved = m.read_text()
+        m.write_text(saved.replace('"apache-2.0"', '"other"', 1))
+        self.probe('edited')
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        m.write_text(saved)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', deps_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('depsvalidate', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('depsvalidate', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-validate-once:{SHA}:v1'))
+        for mode in ('offline-validate', 'gpu-start-once', 'hf-probe-once', 'cloud-preflight-once', 'cloud-stage-once',
+                     'cloud-redirect-probe-once'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:v1'))  # existing modes unchanged
+        self.assertEqual(json.loads(B.stage_limits()), {'deadlineS': 3600, 'maxBytes': 45_000_000_000,
+                                                       'readTimeoutS': 30})
+        self.assertEqual(json.loads(B.probe_limits()), {'mode': 'head', 'deadlineS': 100, 'maxBytes': 0,
+                                                       'readTimeoutS': 10})
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', deps_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['validate'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; dependency validation timed out'))
+        self.assertFalse(self.host.deps_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', deps_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-VALIDATE '
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'stop': 'done; rm -rf /', 'ptts': {'error': 'Err: SECRET',
+                                                                                   'version': '/x/SECRET'},
+                                                 'qwen': {'errors': {'config': 'ValueError: SECRET'}}})),
+                ('stage', 'ROSE-CLOUD-STAGE ' + json.dumps({'stop': 'done'})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, deps_out=out + '\n', deps_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                v = self.published()['validate']
+                if attempt == 'hostile':
+                    self.assertEqual((v['stop'], v['ptts']['error'], v['ptts']['version'], v['qwen']['errors']['config']),
+                                     (None, None, 'other', None))
+                else:
+                    self.assertIsNone(v)
+
+
+class CloudQwenGpuOnce(DiagnosticFixture):
+    """cloud-qwen-gpu-once (CLOUD-QWEN-GPU-001): the exact container, bounds and controls, and that it shares nothing
+    with Muse's gpu-start-once. The helper line comes from the payload's own qwen_gpu.py run as a real subprocess over
+    the real pinned manifest with fixture isolation facts, on a path that refuses before vLLM is imported (no GPU, no
+    model here). The container is FakeHost's."""
+
+    QWEN_DIR = '/mnt/models-data/rose-cloud/qwen3.6-35b-a3b-fp8-95a723d0'
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-qwen-gpu-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        fx = self.tmp / 'qwen-fixture'
+        for d in (fx / 'net' / 'lo', fx / 'net' / 'eth0', fx / 'dev', fx / 'tmp', fx / 'shm'):
+            d.mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        manifest['stagingRoot'] = str(self.tmp / 'empty-staging')
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw 0 0\n")
+        limits = dict(json.loads(B.qwen_gpu_limits()), mountsFile=str(fx / 'mounts'), netDir=str(fx / 'net'),
+                      devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'), shmRoot=str(fx / 'shm'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'qwen_gpu.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])  # refused before vLLM or any cache
+        return 'vllm log noise on stdout\n' + out
+
+    def test_exact_container_bounds_hold_and_no_muse_path(self):
+        status, code = self.probe('qwen', qwen_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; Qwen GPU check stopped: not_isolated'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['timedOut'], r['exitCode']),
+                         ('cloud-qwen-gpu-once', 'removed', None, True, False, 0))
+        self.assertEqual((r['qwen']['stop'], r['qwen']['isolation']['networkOnlyLo'],
+                          r['qwen']['isolation']['gpuDevices'], r['qwen']['engine']), ('not_isolated', False, 0, None))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'qwengpu')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        self.assertEqual(argv, ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all',
+                                '--network', 'none', '--name', 'rose-cloud-qwen-gpu', '--cap-drop', 'ALL',
+                                '--security-opt', 'no-new-privileges', '--read-only',
+                                '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777',
+                                '--shm-size', '4294967296', '--cpus', '16',
+                                '--memory', '68719476736', '--memory-swap', '68719476736',
+                                '-v', f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro', '--entrypoint', 'python3',
+                                RUNTIME['image_id'], '-c', (lib / 'qwen_gpu.py').read_text(),
+                                (lib / 'manifest.json').read_text(), B.qwen_gpu_limits()])
+        self.assertEqual(json.loads(argv[-1]), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30})
+        self.assertEqual(timeout, 900)  # load plus request: the container is killed at 900 s, the helper stops at 870
+        for forbidden in ('-e', '--env', '--privileged', '--cap-add', '-p', '--publish', '--network=host', 'host',
+                          'bridge', '--ipc'):
+            self.assertNotIn(forbidden, argv)
+        joined = ' '.join(argv[:argv.index('-c')])
+        for muse in ('muse-glimmer', '/mnt/models-data/hf', 'launch-', 'verify_model', 'meta-models', 'vllm serve',
+                     ':8000', 'startup_guard'):
+            self.assertNotIn(muse, joined)  # nothing of Muse's model, cache, launch script, port or container
+        self.assertEqual([a for a in argv if ':' in a and a.startswith('/') and not a.startswith('/tmp:')],
+                         [f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro'])  # only the Qwen directory, read-only
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'qwengpu', 'validate', 'rm')],
+                         ['stop', 'qwengpu', 'rm'])  # never the Muse launch (FakeHost.validate), only this container
+        self.assertFalse([c for c in self.host.calls if 'verify_model.py' in ' '.join(c)])
+        self.assertEqual([c for c in self.host.calls if c[:1] == ['systemctl'] and c[1] in ('start', 'restart')
+                          and 'muse-glimmer.service' in c], [])
+        self.assertNoProvisioning()
+
+    def test_refusals_once_per_id_default_boot_and_muse_mode_unchanged(self):
+        for attempt, flags, category in (('unmounted', dict(data_mounted=False), 'data_not_mounted'),
+                                         ('nodocker', dict(docker_down=True), 'docker_unavailable')):
+            with self.subTest(attempt):
+                self.probe(attempt, **flags)
+                self.assertEqual(self.published()['prerequisite'], category)
+                self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+                self.host.data_mounted, self.host.docker_down = True, False
+                self.host.model_active = self.host.model_container = True
+        self.host.path(self.QWEN_DIR).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertFalse(self.host.path(self.QWEN_DIR).exists())  # never created, by bootstrap or by docker
+        self.host.path(self.QWEN_DIR).mkdir(parents=True)
+        self.host.model_active = self.host.model_container = True
+        m = self.payload / 'etc-rose-models/lib/rose_cloud/manifest.json'
+        saved = m.read_text()
+        m.write_text(saved.replace('"apache-2.0"', '"other"', 1))
+        self.probe('edited')
+        self.assertEqual(self.published()['prerequisite'], 'manifest_mismatch')
+        m.write_text(saved)
+        saved_images = dict(self.host.images)
+        self.host.images.update({k: (v[0], ['vllm/vllm-openai@sha256:' + '0' * 64], *v[2:])
+                                 for k, v in saved_images.items()})
+        self.host.model_active = self.host.model_container = True
+        self.probe('digest')
+        self.assertEqual(self.published()['prerequisite'], 'image_digest_mismatch')
+        self.host.images.update(saved_images)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', qwen_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+        self.host.md.pop(B.DIAG_KEY, None)
+        self.host.reboot()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, code = self.boot()
+        self.assertEqual((code, self.states(status)['diagnostic']), (0, ('ok', 'not requested')))
+        self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-gpu-once:{SHA}:q1'))
+        for bad in (f'cloud-qwen-gpu:{SHA}:q1', f'cloud-qwen-gpu-once:{"0" * 63}:q1', f'cloud-qwen-gpu-once:{SHA}:Q1'):
+            self.assertIsNone(B.DIAG_VALUE.fullmatch(bad))
+        for mode in ('offline-validate', 'gpu-start-once', 'hf-probe-once', 'cloud-preflight-once', 'cloud-stage-once',
+                     'cloud-redirect-probe-once', 'cloud-validate-once'):
+            self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'{mode}:{SHA}:q1'))  # existing modes unchanged
+        self.assertEqual((B.GPU_SECONDS, json.loads(B.validate_limits())), (900, {'deadlineS': 270,
+                                                                             'tmpMaxBytes': 512 << 20}))
+
+    def test_other_payload_is_ignored(self):
+        self.probe('x')  # a binding for this payload runs (FakeHost's container returns no line)
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        status, _ = self.boot(f'cloud-qwen-gpu-once:{"1" * 64}:fresh')
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'ignored: other_payload'))
+        self.assertNotIn('qwengpu', [e[0] for e in self.host.events])
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', qwen_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['exitCode'], r['qwen'], r['cleanup']), (True, None, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; Qwen GPU check timed out'))
+        self.assertFalse(self.host.qwen_container)
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', qwen_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'failed')
+        self.host.rm_fails = False
+        self.host.model_active = self.host.model_container = True
+        # the model's absence answers; then docker does not answer this container's absence check: never "removed"
+        self.host.ps_results = [(0, ''), (1, '')]
+        status, code = self.probe('psfail', qwen_out='')
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.assertEqual(self.published()['cleanup'], 'unknown')
+        marker = 'ROSE-CLOUD-QWEN-GPU '
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'stop': 'done; rm', 'engine': {
+                    'text': 'generated SECRET', 'error': 'Error: SECRET', 'vllm': '/x/SECRET',
+                    'outputSha256': 'SECRET'}})),
+                ('validate', 'ROSE-CLOUD-VALIDATE ' + json.dumps({'stop': 'done'})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}'), ('none', 'Traceback SECRET')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, qwen_out=out + '\n', qwen_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                q = self.published()['qwen']
+                if attempt == 'hostile':
+                    self.assertEqual((q['stop'], q['engine']['error'], q['engine']['vllm'],
+                                      q['engine']['outputSha256']), (None, None, 'other', None))
+                    self.assertNotIn('text', q['engine'])
+                else:
+                    self.assertIsNone(q)
+
+
+class CloudQwenVisionOnce(DiagnosticFixture):
+    """cloud-qwen-vision-once (CLOUD-QWEN-VISION-001): cloud-qwen-gpu-once's container controls and bounds with the
+    helper in vision mode, in its own container; the text mode stays exactly as PR345 ran it. The helper line comes
+    from the payload's own qwen_gpu.py (vision mode) run as a real subprocess on a path that refuses before vLLM."""
+
+    QWEN_DIR = CloudQwenGpuOnce.QWEN_DIR
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-qwen-vision-once:{SHA}:{attempt}')
+
+    def real_line(self):
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        fx = self.tmp / 'vision-fixture'
+        for d in (fx / 'net' / 'lo', fx / 'net' / 'eth0', fx / 'dev', fx / 'tmp', fx / 'shm'):
+            d.mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((lib / 'manifest.json').read_text())
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw 0 0\n")
+        limits = dict(json.loads(B.qwen_gpu_limits(vision=True)), mountsFile=str(fx / 'mounts'),
+                      netDir=str(fx / 'net'), devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'), shmRoot=str(fx / 'shm'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (lib / 'qwen_gpu.py').read_text(), json.dumps(manifest),
+                                  json.dumps(limits)], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])
+        return out
+
+    def test_exact_container_differs_from_text_only_in_name_and_mode(self):
+        status, code = self.probe('vision', vision_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; Qwen vision check stopped: not_isolated'), 0))
+        line = self.host.guest['diagnostic']
+        self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+        r = json.loads(line)
+        self.assertEqual((r['check'], r['cleanup'], r['prerequisite'], r['modelHeld'], r['qwen']['mode'],
+                          r['qwen']['stop'], r['qwen']['engine']),
+                         ('cloud-qwen-vision-once', 'removed', None, True, 'vision', 'not_isolated', None))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'qwenvision')
+        lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+        text_argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all', '--network', 'none',
+                     '--name', 'rose-cloud-qwen-gpu', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                     '--read-only', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777',
+                     '--shm-size', '4294967296', '--cpus', '16', '--memory', '68719476736',
+                     '--memory-swap', '68719476736', '-v', f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro',
+                     '--entrypoint', 'python3', RUNTIME['image_id'], '-c', (lib / 'qwen_gpu.py').read_text(),
+                     (lib / 'manifest.json').read_text(), B.qwen_gpu_limits()]
+        expected = list(text_argv)
+        expected[expected.index('rose-cloud-qwen-gpu')] = 'rose-cloud-qwen-vision'
+        expected[-1] = B.qwen_gpu_limits(vision=True)
+        self.assertEqual(argv, expected)  # same controls and bounds; only the container name and helper mode differ
+        self.assertEqual(json.loads(argv[-1]), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30,
+                                                'mode': 'vision'})
+        self.assertEqual(json.loads(B.qwen_gpu_limits()), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30,
+                                                           'shmMaxBytes': 4 << 30})  # PR345 text limits unchanged
+        self.assertEqual(timeout, 900)
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'qwenvision', 'qwengpu', 'validate',
+                                                                       'rm')], ['stop', 'qwenvision', 'rm'])
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'], ['rose-cloud-qwen-vision'])
+        self.assertNoProvisioning()
+
+    def test_refusals_once_per_id_and_text_mode_unaffected(self):
+        self.host.path(self.QWEN_DIR).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertNotIn('qwenvision', [e[0] for e in self.host.events])
+        self.host.path(self.QWEN_DIR).mkdir(parents=True)
+        self.host.model_active = self.host.model_container = True
+        self.probe('once', vision_out=self.real_line())
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink()
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.assertEqual(self.states(self.boot()[0])['diagnostic'], ('ok', 'ignored: attempt_already_used'))
+        self.host.md[B.DIAG_KEY] = f'cloud-qwen-gpu-once:{SHA}:text-after'
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.host.model_active = self.host.model_container = True
+        self.host.events.clear()
+        self.boot()
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('qwengpu', 'qwenvision')], ['qwengpu'])
+        self.assertEqual(self.published()['check'], 'cloud-qwen-gpu-once')
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-vision-once:{SHA}:v1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-vision:{SHA}:v1'))
+
+    def test_timeout_cleanup_and_hostile_lines(self):
+        status, _ = self.probe('slow', vision_timeout=True)
+        r = self.published()
+        self.assertEqual((r['timedOut'], r['qwen'], r['cleanup']), (True, None, 'removed'))
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; Qwen vision check timed out'))
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', vision_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-QWEN-GPU '
+        for attempt, out in (
+                ('hostile', marker + json.dumps({'mode': 'vision; x', 'stop': 'done', 'engine': {
+                    'answer': 'Red SECRET', 'imageTokens': 'SECRET', 'expectedWordSeen': 'yes SECRET'}})),
+                ('huge', marker + '{"stop": "' + 'x' * 10000 + '"}')):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, vision_out=out + '\n', vision_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertNotIn('SECRET', line)
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                q = self.published()['qwen']
+                if attempt == 'hostile':
+                    self.assertEqual((q['mode'], q['engine']['imageTokens'], q['engine']['expectedWordSeen']),
+                                     (None, None, None))
+                    self.assertNotIn('answer', q['engine'])
+                else:
+                    self.assertIsNone(q)
+
+
+class CloudQwenAdapterOnce(DiagnosticFixture):
+    """cloud-qwen-adapter-once (CLOUD-QWEN-ADAPTER-001): cloud-qwen-gpu-once's container controls and bounds, its own
+    container, the helper in adapter mode with the payload's adapter sources as a bundle argument. The helper line
+    comes from the payload's own qwen_gpu.py (adapter mode) run as a real subprocess on a path that refuses before
+    any server or vLLM import."""
+
+    QWEN_DIR = CloudQwenGpuOnce.QWEN_DIR
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+        self.lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+
+    def probe(self, attempt, **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        return self.boot(f'cloud-qwen-adapter-once:{SHA}:{attempt}')
+
+    def bundle(self):
+        return json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_ADAPTER_FILES}, sort_keys=True)
+
+    def real_line(self):
+        fx = self.tmp / 'adapter-fixture'
+        for d in (fx / 'net' / 'lo', fx / 'net' / 'eth0', fx / 'dev', fx / 'tmp', fx / 'shm'):
+            d.mkdir(parents=True, exist_ok=True)
+        (fx / 'mounts').write_text(f"overlay / overlay ro 0 0\ntmpfs {fx / 'tmp'} tmpfs rw 0 0\n")
+        limits = dict(json.loads(B.qwen_gpu_limits(adapter=True)), mountsFile=str(fx / 'mounts'),
+                      netDir=str(fx / 'net'), devDir=str(fx / 'dev'), tmpRoot=str(fx / 'tmp'), shmRoot=str(fx / 'shm'))
+        code, out = B.Host().run([sys.executable, '-I', '-c', (self.lib / 'qwen_gpu.py').read_text(),
+                                  (self.lib / 'manifest.json').read_text(), json.dumps(limits), self.bundle()], 60)
+        self.assertEqual(code, 0)
+        self.assertEqual(os.listdir(fx / 'tmp'), [])  # refused before the bundle, a server or vLLM
+        return out
+
+    def test_exact_container_and_bundle(self):
+        status, code = self.probe('adapter', adapter_out=self.real_line())
+        self.assertEqual((self.states(status)['diagnostic'], code),
+                         (('ok', 'inference held; Qwen adapter session stopped: not_isolated'), 0))
+        r = json.loads(self.host.guest['diagnostic'])
+        self.assertEqual((r['check'], r['cleanup'], r['qwen']['mode'], r['qwen']['stop']),
+                         ('cloud-qwen-adapter-once', 'removed', 'adapter', 'not_isolated'))
+        _, argv, active, container, held, timeout = next(e for e in self.host.events if e[0] == 'qwenadapter')
+        self.assertEqual(argv[argv.index('--name') + 1], 'rose-cloud-qwen-adapter')
+        self.assertEqual(json.loads(argv[-2]), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30,
+                                                'mode': 'adapter'})
+        self.assertEqual(argv[-1], self.bundle())
+        self.assertEqual(sorted(json.loads(argv[-1])), sorted(B.QWEN_ADAPTER_FILES))
+        text_argv = ['docker', 'run', '--rm', '--pull=never', '--runtime=runc', '--gpus', 'all', '--network', 'none',
+                     '--name', 'rose-cloud-qwen-adapter', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                     '--read-only', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=8589934592,mode=1777',
+                     '--shm-size', '4294967296', '--cpus', '16', '--memory', '68719476736',
+                     '--memory-swap', '68719476736', '-v', f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro',
+                     '--entrypoint', 'python3', RUNTIME['image_id'], '-c', (self.lib / 'qwen_gpu.py').read_text(),
+                     (self.lib / 'manifest.json').read_text()]
+        self.assertEqual(argv[:-2], text_argv)  # the same controls and bounds; no -p/--publish, no host network
+        self.assertLess(max(len(a) for a in argv), 128 * 1024)  # each argument under Linux's per-argument limit
+        self.assertEqual(timeout, 900)
+        self.assertEqual((active, container, held), (False, False, True))
+        self.assertEqual([e[0] for e in self.host.events if e[0] in ('stop', 'qwenadapter', 'qwengpu', 'qwenvision',
+                                                                       'rm')], ['stop', 'qwenadapter', 'rm'])
+        self.assertNoProvisioning()
+
+    def test_refusals_and_once_per_id(self):
+        (self.lib / 'pump.py').unlink()
+        self.probe('nosrc')
+        self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')
+        self.assertNotIn('qwenadapter', [e[0] for e in self.host.events])
+        self.host.model_active = self.host.model_container = True
+        self.host.path(self.QWEN_DIR).rmdir()
+        self.probe('nostaging')
+        self.assertEqual(self.published()['prerequisite'], 'staging_missing')
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-adapter-once:{SHA}:a1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-adapter:{SHA}:a1'))
+        self.assertEqual(json.loads(B.qwen_gpu_limits()), {'deadlineS': 870, 'tmpMaxBytes': 8 << 30,
+                                                           'shmMaxBytes': 4 << 30})  # PR345 text limits unchanged
+
+    def test_timeout_cleanup_and_hostile_or_worst_case_lines(self):
+        status, _ = self.probe('slow', adapter_timeout=True)
+        self.assertEqual(self.states(status)['diagnostic'], ('ok', 'inference held; Qwen adapter session timed out'))
+        self.assertEqual(self.published()['cleanup'], 'removed')
+        self.host.model_active = self.host.model_container = True
+        status, code = self.probe('rmfail', adapter_timeout=True, rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+        self.host.rm_fails = False
+        marker = 'ROSE-CLOUD-QWEN-GPU '
+        turn = {'tokens': 1 << 40, 'endedWithImEnd': True, 'firstTokenS': 999999.9, 'totalS': 999999.9,
+                'promptExact': True, 'tokenSha256': 'f' * 64}
+        worst = {'mode': 'adapter', 'stop': 'done', 'elapsedS': 1 << 40, 'engine': {
+            'run': 'ok', 'step': 'done', 'vllm': '9' * 32, 'unsupported': [], 'serverReadyS': 999999.9,
+            'serverExit': -255, 'error': 'E' * 64, 'module': 'm' * 64, 'session': {
+                'step': 'done', 'imageTokens': 1 << 40, 'imagesInHistory': 1 << 40,
+                **{k: turn for k in ('turn1', 'turn2', 'turn3', 'rewound', 'staleText')},
+                'history': {'rewindExact': True, 'forkUntouched': True, 'staleImageDropped': True,
+                            'staleRequestSent': True, 'forkImages': 1 << 40},
+                'cancel': {'fired': True, 'noLateAppend': True, 'workerJoined': True, 'tokensAtCancel': 1 << 40,
+                           'appended': 1 << 40, 'probeTokens': 1 << 40, 'clientStopS': 999999.9,
+                           'requestS': 999999.9, 'runningAfter': 999999.9, 'idleAfterS': 999999.9,
+                           'probeS': 999999.9, 'semantics': 'inflight_abort_probe_only'},
+                'lateCancel': {'tokens': 1 << 40, 'lateCancelNoop': True, 'workerJoined': True}}},
+            'isolation': {k: True for k in ('ok', 'tmpfs', 'tmpBounded', 'tmpExec', 'shmBounded', 'rootReadOnly',
+                                            'modelReadOnly', 'networkOnlyLo')},
+            'inputs': {'qwenFiles': {'expected': 11, 'verified': 11, 'missing': 0, 'mismatch': 0},
+                       'weights': {'expected': 43, 'sizeOk': 43, 'missing': 0, 'sizeMismatch': 0}}}
+        hostile = {'mode': 'adapter', 'stop': 'done', 'engine': {'step': 'done', 'session': {
+            'step': 'done', 'reply': 'Red SECRET', 'turn1': {'tokens': 3, 'text': 'SECRET', 'tokenSha256': 'SECRET'},
+            'cancel': {'semantics': 'aborted SECRET', 'fired': 'SECRET'}, 'prompt': 'SECRET'}}}
+        for attempt, raw in (('worst', worst), ('hostile', hostile)):
+            with self.subTest(attempt):
+                self.host.model_active = self.host.model_container = True
+                self.probe(attempt, adapter_out=marker + json.dumps(raw) + '\n', adapter_timeout=False)
+                line = self.host.guest['diagnostic']
+                self.assertLessEqual(len(line), B.CLOUD_RECEIPT)
+                self.assertNotIn('SECRET', line)
+                q = self.published()['qwen']
+                if attempt == 'worst':
+                    self.assertIsNotNone(q)  # the full worst-case session receipt fits in 4 KiB
+                    self.assertEqual(q['engine']['session']['cancel']['semantics'], 'inflight_abort_probe_only')
+                else:
+                    s = q['engine']['session']
+                    self.assertNotIn('reply', s)
+                    self.assertNotIn('text', s['turn1'])
+                    self.assertEqual((s['turn1']['tokenSha256'], s['cancel']['semantics'], s['cancel']['fired']),
+                                     (None, None, None))
+
+
+class CloudQwenWarmOnce(DiagnosticFixture):
+    """cloud-qwen-warm-once (CLOUD-QWEN-WARM-001): the adapter container started detached and kept loaded; the first
+    case, then payload-defined cases on fresh metadata requests, until the window, idle expiry or the session cap; then
+    removal with verified absence. The container and its exec runs are FakeHost's; the request key is FakeHost
+    metadata changed from the sleep hook (as an operator would set it between polls)."""
+
+    QWEN_DIR = CloudQwenGpuOnce.QWEN_DIR
+
+    def setUp(self):
+        super().setUp()
+        self.host.path(self.QWEN_DIR).mkdir(parents=True, exist_ok=True)
+        self.lib = self.payload / 'etc-rose-models/lib/rose_cloud'
+
+    def warm(self, attempt='warm1', requests=(), **flags):
+        """``requests``: (poll number, metadata value) pairs set by the sleep hook."""
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        plan, polls = dict(requests), {'n': 0}
+
+        def operator(host):
+            polls['n'] += 1
+            if polls['n'] in plan:
+                host.md[B.QWEN_WARM_KEY] = plan[polls['n']]
+        self.host.on_sleep = operator
+        return self.boot(f'cloud-qwen-warm-once:{SHA}:{attempt}')
+
+    def sessions(self):
+        return [json.loads(e[1][len('ROSE-MODELS-QWEN-SESSION '):]) for e in self.host.events
+                if e[0] == 'publish' and e[1].startswith('ROSE-MODELS-QWEN-SESSION ')]
+
+    def test_one_load_then_requests_until_idle(self):
+        # an unchanged value is no new request; a replayed id after another value is refused
+        status, code = self.warm(requests=((2, f'{SHA}:req-1:text'), (4, f'{"1" * 64}:req-2:image'),
+                                           (6, f'{SHA}:req-1:text'), (8, f'{SHA}:req-3:evil'),
+                                           (10, f'{SHA}:req-4:cancel')))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(status)['diagnostic'],
+                         ('ok', 'inference held; Qwen warm container ended by idle after 2 request(s)'))
+        r = self.published()
+        self.assertEqual((r['check'], r['phase'], r['started'], r['ready'], r['sessions'], r['ignored'], r['endedBy'],
+                          r['cleanup']), ('cloud-qwen-warm-once', 'final', True, 'ready', 2, 3, 'idle', 'removed'))
+        self.assertEqual(r['first'], {'exitCode': 0, 'step': 'done', 'sessionStep': 'done',
+                                      'semantics': 'inflight_abort'})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'warmexec'], ['full', 'text', 'cancel'])
+        recs = self.sessions()
+        self.assertEqual([(x.get('requestId'), x.get('case'), x.get('index'), x.get('ignored')) for x in recs],
+                         [('first', 'full', 0, None), ('req-1', 'text', 1, None), (None, None, None, 'other_payload'),
+                          (None, None, None, 'id_already_used'), (None, None, None, 'malformed'),
+                          ('req-4', 'cancel', 2, None)])
+        self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
+        # one container start (detached), the same controls as the adapter container, the runner from the payload
+        (start,) = [e for e in self.host.events if e[0] == 'qwenwarm']
+        _, argv, active, container, held, timeout = start
+        bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_ADAPTER_FILES}, sort_keys=True)
+        expected = B.qwen_argv('rose-cloud-qwen-warm', RUNTIME['image_id'], self.QWEN_DIR,
+                               (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text(),
+                               B.qwen_gpu_limits(warm=True), bundle, detach=True)
+        self.assertEqual(argv, expected)
+        self.assertEqual(argv[:5], ['docker', 'run', '-d', '--rm', '--pull=never'])
+        adapter = B.qwen_argv('rose-cloud-qwen-adapter', RUNTIME['image_id'], self.QWEN_DIR,
+                              (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text(),
+                              B.qwen_gpu_limits(adapter=True), bundle)
+        self.assertEqual([a for a in argv if a not in ('-d', 'rose-cloud-qwen-warm', B.qwen_gpu_limits(warm=True))],
+                         [a for a in adapter if a not in ('rose-cloud-qwen-adapter', B.qwen_gpu_limits(adapter=True))])
+        self.assertEqual(json.loads(B.qwen_gpu_limits(warm=True)),
+                         {'deadlineS': 870 + 7200, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30, 'mode': 'warm'})
+        self.assertEqual((active, container, held), (False, False, True))
+        spec = __import__('importlib.util').util.spec_from_file_location('qg', self.lib / 'qwen_gpu.py')
+        qg = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(qg)
+        execs = [e for e in self.host.events if e[0] == 'warmexec']
+        self.assertEqual(execs[1][2], ['docker', 'exec', 'rose-cloud-qwen-warm', 'python3', '-I', '-B', '-c',
+                                       qg.RUNNER, '/tmp/rose-qwen-gpu', self.QWEN_DIR, 'text'])
+        self.assertEqual({e[3] for e in execs}, {B.QWEN_WARM_SESSION_S})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-warm'])
+        self.assertFalse(self.host.warm_container)
+        self.assertNoProvisioning()
+
+    def test_window_and_session_cap_end_it(self):
+        self.patch('QWEN_WARM_IDLE_S', 10 ** 6)
+        status, _ = self.warm('w-window')
+        self.assertEqual(self.published()['endedBy'], 'window')
+        self.assertGreaterEqual(self.host.now, B.QWEN_WARM_WINDOW_S)
+        self.host.reboot()
+        self.host.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.host.model_active = self.host.model_container = True
+        self.patch('QWEN_WARM_MAX_SESSIONS', 2)
+        status, _ = self.warm('w-cap', requests=[(n, f'{SHA}:r{n}:text') for n in range(1, 10)])
+        r = self.published()
+        self.assertEqual((r['endedBy'], r['sessions']), ('max_sessions', 2))
+
+    def patch(self, name, value):
+        old = getattr(B, name)
+        setattr(B, name, value)
+        self.addCleanup(setattr, B, name, old)
+
+    def test_not_ready_gone_and_timeouts(self):
+        self.host.warm_states = [(1, '')] * 1000  # never ready
+        status, code = self.warm('w-slow')
+        r = self.published()
+        self.assertEqual((r['ready'], r['endedBy'], r['cleanup'], code), ('not_ready', 'not_ready', 'removed', 0))
+        self.assertEqual([e for e in self.host.events if e[0] == 'warmexec'], [])
+        self.host.warm_states = []
+        self.host.model_active = self.host.model_container = True
+        self.host.warm_run_rc = 125  # docker refused to start it
+        status, code = self.warm('w-nostart')
+        self.assertEqual((self.published()['started'], self.published()['endedBy']), (False, 'not_started'))
+        self.host.warm_run_rc = 0
+        self.host.model_active = self.host.model_container = True
+        self.host.warm_runs = {'full': (124, '')}  # the first session timed out: recorded, the loop still serves
+        status, code = self.warm('w-timeout', requests=((1, f'{SHA}:q1:image'),))
+        recs = self.sessions()
+        self.assertEqual((recs[0]['timedOut'], recs[0]['run'], recs[1]['case']), (True, None, 'image'))
+        self.host.warm_runs = {}
+        self.host.model_active = self.host.model_container = True
+
+        def vanish(host):
+            host.warm_container = False  # the container ended by itself (its own deadline, or a crash)
+            host.md[B.QWEN_WARM_KEY] = f'{SHA}:z1:text'
+        self.host.events.clear()
+        self.host.md[B.DIAG_KEY] = f'cloud-qwen-warm-once:{SHA}:w-gone'
+        self.host.on_sleep = vanish
+        self.boot()
+        self.assertEqual(self.published()['endedBy'], 'container_gone')
+        self.host.model_active = self.host.model_container = True
+        status, code = self.warm('w-rmfail', rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+
+    def test_reserved_and_own_ids_are_replays(self):
+        self.warm('w-own', requests=((1, f'{SHA}:first:text'), (2, f'{SHA}:w-own:text'), (3, f'{SHA}:fresh:text')))
+        self.assertEqual([(x.get('ignored'), x.get('requestId')) for x in self.sessions()],
+                         [(None, 'first'), ('id_already_used', None), ('id_already_used', None), (None, 'fresh')])
+
+    def test_hostile_runner_output_and_refusals(self):
+        hostile = 'ROSE-CLOUD-QWEN-SESSION ' + json.dumps({'case': 'full; x', 'step': 'done', 'reply': 'Red SECRET',
+                                                         'session': {'step': 'done', 'turn1': {'text': 'SECRET'},
+                                                                     'cancel': {'semantics': 'SECRET'}}})
+        self.warm('w-hostile', warm_runs={'full': (0, hostile + '\n'), 'text': (0, 'x' * 10000 + '\n')},
+                  requests=((1, f'{SHA}:h1:text'),))
+        recs = self.sessions()
+        self.assertNotIn('SECRET', json.dumps(recs))
+        self.assertEqual((recs[0]['run']['case'], recs[0]['run']['session']['cancel']['semantics']), (None, None))
+        self.assertIsNone(recs[1]['run'])  # no marker line
+        self.host.warm_runs = {}
+        self.host.model_active = self.host.model_container = True
+        (self.lib / 'adapter_session.py').unlink()
+        self.warm('w-nosrc')
+        self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')
+        self.assertNotIn('qwenwarm', [e[0] for e in self.host.events])
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-warm-once:{SHA}:w1'))
+        self.host.model_active = self.host.model_container = True
+        self.warm('w-first', requests=((1, f'{SHA}:first:text'), (2, f'{SHA}:w-first:text')))
+        self.assertEqual(self.published()['prerequisite'], 'adapter_sources_missing')  # still missing: refused
+        for bad in (f'{SHA}:Q1:text', f'{SHA}:q1:text;rm', f'{SHA}:q1:', f'{SHA[:-1]}:q1:text', f'{SHA}:q1:full\n'):
+            self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(bad))
+
+
+class CloudQwenContractOnce(CloudQwenWarmOnce):
+    """cloud-qwen-contract-once (MODELS-QWEN-CONTRACT-001): the warm machinery with the proposed serving profile in
+    its own container; the first run is the whole contract, later requests name contract cases only."""
+
+    def warm(self, attempt='contract1', requests=(), **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        plan, polls = dict(requests), {'n': 0}
+
+        def operator(host):
+            polls['n'] += 1
+            if polls['n'] in plan:
+                host.md[B.QWEN_WARM_KEY] = plan[polls['n']]
+        self.host.on_sleep = operator
+        return self.boot(f'cloud-qwen-contract-once:{SHA}:{attempt}')
+
+    # the warm tests whose expectations are the adapter cases are re-stated below for the contract cases
+    test_one_load_then_requests_until_idle = test_not_ready_gone_and_timeouts = None
+    test_reserved_and_own_ids_are_replays = test_hostile_runner_output_and_refusals = None
+    test_window_and_session_cap_end_it = None
+
+    def test_one_load_then_contract_cases_until_idle(self):
+        status, code = self.warm(requests=((2, f'{SHA}:c-1:long'), (4, f'{SHA}:c-2:full'), (6, f'{SHA}:c-1:chat'),
+                                           (8, f'{"1" * 64}:c-3:tool'), (10, f'{SHA}:c-4:tool')))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(status)['diagnostic'],
+                         ('ok', 'inference held; Qwen contract container ended by idle after 2 request(s)'))
+        r = self.published()
+        self.assertEqual((r['check'], r['phase'], r['started'], r['ready'], r['sessions'], r['ignored'], r['endedBy'],
+                          r['cleanup'], r['modelHeld']),
+                         ('cloud-qwen-contract-once', 'final', True, 'ready', 2, 3, 'idle', 'removed', True))
+        self.assertEqual(r['first'], {'exitCode': 0, 'step': 'done', 'allExpected': True})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'contractexec'], ['contract', 'long', 'tool'])
+        recs = self.sessions()
+        self.assertEqual([(x.get('requestId'), x.get('case'), x.get('ignored')) for x in recs],
+                         [('first', 'contract', None), ('c-1', 'long', None), (None, None, 'malformed'),
+                          (None, None, 'id_already_used'), (None, None, 'other_payload'), ('c-4', 'tool', None)])
+        self.assertEqual(recs[0]['run']['contract']['models'], {'status': 200, 'ids': 1, 'idsExact': True,
+                                                                'maxModelLen': 8192, 'timedOut': False})
+        self.assertEqual(recs[0]['run']['contract']['notRun'], {})
+        self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
+        # one detached container: exactly the warm container's controls and bounds, its own name, the contract
+        # helper mode and the contract bundle; no adapter sources, no published port, no network
+        (start,) = [e for e in self.host.events if e[0] == 'qwencontract']
+        _, argv, active, container, held, timeout = start
+        bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_CONTRACT_FILES}, sort_keys=True)
+        source, manifest = (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text()
+        self.assertEqual(argv, B.qwen_argv('rose-cloud-qwen-contract', RUNTIME['image_id'], self.QWEN_DIR, source,
+                                           manifest, B.qwen_gpu_limits(contract=True), bundle, detach=True))
+        warm_bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_ADAPTER_FILES}, sort_keys=True)
+        warm = B.qwen_argv('rose-cloud-qwen-warm', RUNTIME['image_id'], self.QWEN_DIR, source, manifest,
+                           B.qwen_gpu_limits(warm=True), warm_bundle, detach=True)
+        self.assertEqual(argv[:-3], [a if a != 'rose-cloud-qwen-warm' else 'rose-cloud-qwen-contract'
+                                     for a in warm[:-3]])
+        for flag in ('--network', '--cpus', '--memory', '--memory-swap', '--shm-size', '--tmpfs'):
+            self.assertEqual(argv[argv.index(flag) + 1], warm[warm.index(flag) + 1])
+        self.assertEqual((argv[argv.index('--network') + 1], argv[argv.index('--cpus') + 1],
+                          argv[argv.index('--memory') + 1], argv[argv.index('--memory-swap') + 1]),
+                         ('none', '16', str(64 << 30), str(64 << 30)))
+        self.assertIn(f'{self.QWEN_DIR}:{self.QWEN_DIR}:ro', argv)
+        self.assertFalse({'-p', '--publish', '-P', '--network=host', '-e', '--env'} & set(argv))
+        self.assertNotIn('vllm_brain.py', argv[-1])
+        self.assertEqual(json.loads(B.qwen_gpu_limits(contract=True)),
+                         {'deadlineS': 870 + 7200, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30, 'mode': 'contract'})
+        self.assertEqual((active, container, held, timeout), (False, False, True, 120))
+        spec = __import__('importlib.util').util.spec_from_file_location('qg', self.lib / 'qwen_gpu.py')
+        qg = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(qg)
+        execs = [e for e in self.host.events if e[0] == 'contractexec']
+        self.assertEqual(execs[1][2], ['docker', 'exec', 'rose-cloud-qwen-contract', 'python3', '-I', '-B', '-c',
+                                       qg.CONTRACT_RUNNER, '/tmp/rose-qwen-gpu', 'long'])
+        self.assertEqual({e[3] for e in execs}, {B.QWEN_WARM_SESSION_S})
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-contract'])
+        self.assertFalse(self.host.contract_container)
+        self.assertNotIn('qwenwarm', [e[0] for e in self.host.events])
+        self.assertNoProvisioning()
+
+    def test_window_idle_cap_gone_timeouts_and_cleanup(self):
+        self.patch('QWEN_WARM_IDLE_S', 10 ** 6)
+        self.warm('c-window')
+        self.assertEqual(self.published()['endedBy'], 'window')
+        self.host.model_active = self.host.model_container = True
+        self.patch('QWEN_WARM_MAX_SESSIONS', 2)
+        self.warm('c-cap', requests=[(n, f'{SHA}:r{n}:chat') for n in range(1, 10)])
+        self.assertEqual((self.published()['endedBy'], self.published()['sessions']), ('max_sessions', 2))
+        self.host.model_active = self.host.model_container = True
+        self.host.warm_states = [(1, '')] * 1000
+        self.warm('c-slow')
+        self.assertEqual((self.published()['ready'], self.published()['cleanup']), ('not_ready', 'removed'))
+        self.host.warm_states = []
+        self.host.model_active = self.host.model_container = True
+        self.warm('c-timeout', contract_runs={'contract': (124, '')})
+        self.assertEqual((self.sessions()[0]['timedOut'], self.sessions()[0]['run'], self.published()['first']),
+                         (True, None, {'exitCode': None, 'step': None, 'allExpected': None}))
+        self.host.contract_runs = {}
+        self.host.model_active = self.host.model_container = True
+        status, code = self.warm('c-rmfail', rm_fails=True)
+        self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+
+    def test_timeouts_and_not_run_reach_the_receipt(self):
+        """MODELS-QWEN-CONTRACT-002: a request that hit the client's timeout and requests that were not sent arrive in
+        rose-models/qwen-session as such, and the payload's case budget fits this bootstrap's per-run bound."""
+        timed = {'status': None, 'verdict': 'failed:timeout_response', 'expectMet': False, 'timedOut': True,
+                 'identityExact': False, 'seconds': 120.0}
+        line = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': 'contract', 'step': 'done', 'contract': {
+            'step': 'done', 'models': {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192,
+                                       'timedOut': False},
+            'chat': {'status': 200, 'verdict': 'final', 'expectMet': True, 'timedOut': False, 'identityExact': True},
+            'tool': timed, 'notRun': {'toolAfter': 'no_proposal', 'long': 'budget', 'evil': 'budget',
+                                      'chat': 'SECRET'},
+            'reasoningSeparated': True, 'allExpected': False}})
+        self.warm('c-timed', contract_runs={'contract': (0, line + '\n')})
+        c = self.sessions()[0]['run']['contract']
+        self.assertEqual((c['tool']['verdict'], c['tool']['timedOut'], c['tool']['seconds'], c['allExpected']),
+                         ('failed:timeout_response', True, 120.0, False))
+        self.assertEqual(c['notRun'], {'toolAfter': 'no_proposal', 'long': 'budget'})
+        self.assertEqual(self.published()['first'], {'exitCode': 0, 'step': 'done', 'allExpected': False})
+        spec = __import__('importlib.util').util.spec_from_file_location('cs', self.lib / 'contract_session.py')
+        cs = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(cs)
+        self.assertLess(cs.CASE_BUDGET_S + 5, B.QWEN_WARM_SESSION_S)  # the whole case, with the runner's start
+        self.assertEqual(cs.REQUEST_TIMEOUT_S, 120)  # the client's own wait, from the payload's generated fixture
+
+    def test_hostile_output_bad_requests_and_missing_sources(self):
+        hostile = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({
+            'case': 'contract; x', 'step': 'done', 'reply': 'SECRET', 'contract': {
+                'step': 'done', 'chat': {'verdict': 'SECRET', 'text': 'SECRET', 'status': 'SECRET',
+                                         'reasoning': 'SECRET', 'reasoningField': 'SECRET'},
+                'models': {'ids': ['SECRET'], 'maxModelLen': 'SECRET'}, 'reasoning': 'SECRET', 'allExpected': 'yes'}})
+        self.warm('c-hostile', contract_runs={'contract': (0, hostile + '\n'), 'chat': (0, 'x' * 10000 + '\n')},
+                  requests=((1, f'{SHA}:h1:chat'),))
+        recs = self.sessions()
+        self.assertNotIn('SECRET', json.dumps(recs))
+        c = recs[0]['run']['contract']
+        self.assertEqual((recs[0]['run']['case'], c['chat']['verdict'], c['allExpected'], c['models']['ids']),
+                         (None, None, None, None))
+        self.assertIsNone(recs[1]['run'])
+        self.host.contract_runs = {}
+        for bad in (f'{SHA}:q1:full', f'{SHA}:q1:text', f'{SHA}:q1:contract;rm', f'{SHA}:Q1:chat', f'{SHA}:q1:'):
+            self.assertIsNone(B.QWEN_CONTRACT_VALUE.fullmatch(bad))
+        self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(f'{SHA}:q1:contract'))  # the warm container never runs them
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-once:{SHA}:c1'))
+        self.host.model_active = self.host.model_container = True
+        (self.lib / 'qwen_contract_requests.json').unlink()
+        self.warm('c-nosrc')
+        self.assertEqual(self.published()['prerequisite'], 'contract_sources_missing')
+        self.assertNotIn('qwencontract', [e[0] for e in self.host.events])
+
+
+class CloudQwenContractNothinkOnce(CloudQwenContractOnce):
+    """cloud-qwen-contract-nothink-once (MODELS-QWEN-CONTRACT-NOTHINK-001): the contract machinery, controls, bounds,
+    cases and cleanup unchanged, in its own container, with the helper's no-thinking profile."""
+
+    def warm(self, attempt='nothink1', requests=(), **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        plan, polls = dict(requests), {'n': 0}
+
+        def operator(host):
+            polls['n'] += 1
+            if polls['n'] in plan:
+                host.md[B.QWEN_WARM_KEY] = plan[polls['n']]
+        self.host.on_sleep = operator
+        return self.boot(f'cloud-qwen-contract-nothink-once:{SHA}:{attempt}')
+
+    # the contract tests that pin the thinking container's exact argv and name are re-stated below
+    test_one_load_then_contract_cases_until_idle = None
+
+    def test_conformance_request_runs_the_fixed_case(self):
+        line = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': 'conformance', 'step': 'done', 'contract': {
+            'step': 'done', 'notRun': {'conformance': 'budget'}, 'allExpected': False, 'conformance': {
+                'summary': {'total': 20, 'sent': 17, 'notRun': 3, 'parsed': 17, 'conforming': 17, 'minParsed': 19,
+                            'wrongLaunchTarget': 0, 'openAppOutsideLaunch': 0, 'timedOut': 0, 'failures': {},
+                            'existingBarPass': False, 'pass': False, 'secondsMax': 9.5, 'secondsTotal': 120.0},
+                'results': [{'v': 'final', 'ok': True, 's': 7.0, 'ct': 40, 'id': True, 'to': False, 'rs': False,
+                             'tc': False}] * 17 + [{'notRun': 'budget'}] * 3}}})
+        self.warm('n-conf', requests=((2, f'{SHA}:c-9:conformance'),), contract_runs={'conformance': (0, line + '\n')})
+        recs = self.sessions()
+        self.assertEqual([(x.get('requestId'), x.get('case')) for x in recs],
+                         [('first', 'contract'), ('c-9', 'conformance')])
+        c = recs[1]['run']['contract']
+        self.assertEqual((c['notRun'], c['allExpected'], c['conformance']['summary']['notRun'],
+                          c['conformance']['results'][-1]), ({'conformance': 'budget'}, False, 3, {'notRun': 'budget'}))
+        self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
+        self.assertNotIn('receiptTooLarge', recs[1])
+        self.host.contract_runs = {}
+
+    def test_own_container_and_profile_same_controls(self):
+        status, code = self.warm(requests=((2, f'{SHA}:n-1:tool'),))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(status)['diagnostic'],
+                         ('ok', 'inference held; Qwen contract (no thinking) container ended by idle after 1 '
+                                'request(s)'))
+        r = self.published()
+        self.assertEqual((r['check'], r['cleanup'], r['modelHeld'], r['first']['allExpected']),
+                         ('cloud-qwen-contract-nothink-once', 'removed', True, True))
+        (start,) = [e for e in self.host.events if e[0] == 'qwencontract']
+        _, argv, active, container, held, timeout = start
+        bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_CONTRACT_FILES}, sort_keys=True)
+        source, manifest = (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text()
+        self.assertEqual(argv, B.qwen_argv('rose-cloud-qwen-contract-nothink', RUNTIME['image_id'], self.QWEN_DIR,
+                                           source, manifest, B.qwen_gpu_limits(contract=True, nothink=True), bundle,
+                                           detach=True))
+        thinking = B.qwen_argv('rose-cloud-qwen-contract', RUNTIME['image_id'], self.QWEN_DIR, source, manifest,
+                               B.qwen_gpu_limits(contract=True), bundle, detach=True)
+        swap = {'rose-cloud-qwen-contract-nothink': 'rose-cloud-qwen-contract',
+                B.qwen_gpu_limits(contract=True, nothink=True): B.qwen_gpu_limits(contract=True)}
+        self.assertEqual([swap.get(a, a) for a in argv], thinking)  # only the name and the helper mode differ
+        self.assertEqual(json.loads(B.qwen_gpu_limits(contract=True, nothink=True)),
+                         {'deadlineS': 870 + 7200, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30,
+                          'mode': 'contract-nothink'})
+        self.assertEqual(json.loads(B.qwen_gpu_limits(contract=True))['mode'], 'contract')  # the thinking one: as is
+        execs = [e for e in self.host.events if e[0] == 'contractexec']
+        self.assertEqual([(e[1], e[2][2], e[3]) for e in execs],
+                         [('contract', 'rose-cloud-qwen-contract-nothink', 300),
+                          ('tool', 'rose-cloud-qwen-contract-nothink', 300)])
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-contract-nothink'])
+        self.assertEqual((active, container, held, timeout), (False, False, True, 120))
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothink-once:{SHA}:n1'))
+        self.assertIsNotNone(B.QWEN_CONTRACT_VALUE.fullmatch(f'{SHA}:n2:conformance'))  # the 20-prompt case
+        self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(f'{SHA}:n2:conformance'))  # never the adapter container's
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothinking-once:{SHA}:n1'))
+        self.assertNoProvisioning()
+
+
+class HoldOnly(DiagnosticFixture):
+    """MODELS-HOLD-ONLY-001: metadata rose-models-hold holds the model on every boot until removed. With the model
+    units never enabled for boot, systemd starts no model before this bootstrap reads the key; a hold boot stops and
+    disables the model and health units and verifies them inactive, disabled and the slot container absent. It never
+    runs or consumes a diagnostic, provisions nothing and leaves certificates, auth, the edge and the data alone."""
+
+    UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-health.service')
+
+    def hold_boot(self, hold=SHA, diagnostic=None):
+        self.host.md[B.HOLD_KEY] = hold
+        if diagnostic is not None:
+            self.host.md[B.DIAG_KEY] = diagnostic
+        self.host.calls.clear()
+        self.host.events.clear()
+        return B.run(self.host, self.payload, SHA)
+
+    def receipt(self):
+        return json.loads(self.host.guest['hold'])
+
+    def model_starts(self):
+        return [c for c in self.host.calls if c[:2] == ['systemctl', 'start'] and 'muse-glimmer.service' in c]
+
+    def assertHeldWithoutSideEffects(self, status, code):
+        self.assertEqual((code, list(status['stages']), status['stages']['hold']['state']), (0, ['hold'], 'ok'))
+        self.assertFalse(self.host.model_active or self.host.model_container)
+        self.assertEqual(self.model_starts(), [])
+        made = [c for c in self.host.calls for p in (('apt-get',), ('apt-mark',), ('docker', 'pull'), ('nvidia-ctk',),
+                                                      ('mkfs.ext4',), ('mount',), ('certbot',), ('systemctl', 'enable'),
+                                                      ('systemctl', 'daemon-reload'), ('systemctl', 'restart'),
+                                                      ('systemctl', '--no-block', 'reboot'), ('nvidia-smi',))
+                if tuple(c[:len(p)]) == p]
+        self.assertEqual(made, [])  # nothing provisioned, no GPU command, nothing (re)started or enabled
+        self.assertFalse([c for c in self.host.calls if 'models-edge.service' in c and c[1] != 'is-active'])
+        self.assertFalse([c for c in self.host.calls if 'models-auth.service' in c and c[1] != 'is-active'])
+        self.assertTrue(self.host.path('/etc/rose-models/tls/current/fullchain.pem').exists())  # certificate kept
+        self.assertFalse(set(self.UNITS) & self.host.enabled)
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['modelHeld'], r['containerAbsent'], r['enabledAfter']),
+                         (True, True, True, {u: 'disabled' for u in self.UNITS}))
+        self.assertTrue(all(v in ('inactive', 'failed') for v in r['active'].values()))
+        self.assertLessEqual(len(json.dumps(r, separators=(',', ':'))), B.CLOUD_RECEIPT)
+
+    def test_after_a_new_payload_boot_no_reset_starts_the_model_while_the_key_is_set(self):
+        # the setUp's normal boot ran this payload's stage_service: the units were started, never enabled
+        self.assertFalse(set(B.MODEL_UNITS) & self.host.enabled)
+        for n in range(3):
+            with self.subTest(reset=n):
+                self.host.power_cycle()
+                self.assertFalse(self.host.model_active)  # systemd started no model before this bootstrap ran
+                status, code = self.hold_boot()
+                self.assertHeldWithoutSideEffects(status, code)
+                r = self.receipt()
+                self.assertEqual((r['key'], r['enabledBefore']), ('this_payload', {u: 'disabled' for u in self.UNITS}))
+                self.assertEqual(self.host.path(B.MODEL_HOLD).read_text(), 'hold\n')
+        # removing the key is the only way back: this bootstrap starts the model again (still never enabled)
+        del self.host.md[B.HOLD_KEY]
+        self.host.power_cycle()
+        self.host.calls.clear()
+        status, code = B.run(self.host, self.payload, SHA)
+        self.assertEqual(status['stages']['service']['state'], 'ok')
+        self.assertIn(['systemctl', 'start', *B.MODEL_UNITS], self.host.calls)
+        self.assertTrue(self.host.model_active)
+        self.assertFalse(set(B.MODEL_UNITS) & self.host.enabled)
+
+    def test_units_enabled_by_an_older_payload_are_reported_then_disabled(self):
+        # Not guaranteed: an older payload enabled the units, so the first reset starts the model before this
+        # bootstrap runs. The hold reports it (enabledBefore), stops and disables it; later resets start nothing.
+        self.host.enabled |= set(B.MODEL_UNITS)
+        self.host.power_cycle()
+        self.assertTrue(self.host.model_active)  # the residual case, visible, never assumed safe
+        status, code = self.hold_boot()
+        self.assertHeldWithoutSideEffects(status, code)
+        self.assertEqual(self.receipt()['enabledBefore'],
+                         {'muse-glimmer.service': 'enabled', 'models-health.timer': 'enabled',
+                          'models-health.service': 'disabled'})
+        self.host.power_cycle()
+        self.assertFalse(self.host.model_active)
+        status, code = self.hold_boot()
+        self.assertHeldWithoutSideEffects(status, code)
+
+    def test_a_hold_never_runs_or_consumes_a_diagnostic(self):
+        for diag in (f'offline-validate:{SHA}:fresh-1', f'cloud-qwen-gpu-once:{SHA}:fresh-1'):
+            with self.subTest(diag):
+                self.host.power_cycle()
+                status, code = self.hold_boot(diagnostic=diag)
+                self.assertHeldWithoutSideEffects(status, code)
+                self.assertTrue(self.receipt()['diagnosticSuppressed'])
+                self.assertNotIn('diagnostic', status['stages'])
+                self.assertFalse([e for e in self.host.events if e[0] in ('validate', 'qwen', 'qwenwarm')])
+                self.assertFalse((self.host.path(B.STATE) / 'diagnostic-fresh-1').exists())  # not consumed
+        # a consumed id with the hold key: still held, never the normal (Muse-starting) path
+        (self.host.path(B.STATE) / 'diagnostic-used-1').write_text(SHA + '\n')
+        self.host.power_cycle()
+        status, code = self.hold_boot(diagnostic=f'offline-validate:{SHA}:used-1')
+        self.assertHeldWithoutSideEffects(status, code)
+        self.assertNotIn('service', status['stages'])
+        # the hold removed, the fresh id was never consumed: it runs now, as a diagnostic
+        del self.host.md[B.HOLD_KEY]
+        self.host.power_cycle()
+        self.host.md[B.DIAG_KEY] = f'offline-validate:{SHA}:fresh-1'
+        status, code = self.boot()
+        self.assertEqual(list(status['stages']), ['diagnostic'])
+        self.assertTrue((self.host.path(B.STATE) / 'diagnostic-fresh-1').exists())
+
+    def test_any_value_holds_and_is_reported(self):
+        for value, key in (('cd' * 32, 'other_payload'), ('yes', 'malformed'), ('HOLD', 'malformed'),
+                           (SHA, 'this_payload')):
+            with self.subTest(value):
+                self.host.power_cycle()
+                status, code = self.hold_boot(hold=value)
+                self.assertHeldWithoutSideEffects(status, code)
+                self.assertEqual(self.receipt()['key'], key)
+        self.host.power_cycle()
+        self.host.md[B.HOLD_KEY] = '   '  # blank is no key: the normal path
+        self.host.calls.clear()
+        status, _ = B.run(self.host, self.payload, SHA)
+        self.assertNotIn('hold', status['stages'])
+        self.assertTrue(self.host.model_active)
+
+    def test_an_unverified_hold_fails_and_starts_nothing(self):
+        self.host.enabled |= set(B.MODEL_UNITS)
+        self.host.power_cycle()
+        self.host.model_stuck = True  # the model will not stop
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['state'], status['stages']['hold']['detail']),
+                         (1, 'failed', 'hold_model_not_stopped'))
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['failure']), (False, 'hold_model_not_stopped'))
+        self.assertEqual(self.model_starts(), [])
+        self.assertNotIn('service', status['stages'])
+        self.host.model_stuck = False
+        self.host.power_cycle()
+        self.host.ps_results = [(1, '')] * 50  # docker does not answer: absence is never assumed
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['detail']), (1, 'hold_container_state_unknown'))
+        self.assertFalse(self.receipt()['verified'])
+        self.host.ps_results = []
+
+    def test_a_unit_that_stays_enabled_fails_the_hold(self):
+        # disable "succeeds" but the timer stays enabled: the next reset would start health (and it the model)
+        self.host.enabled |= {'models-health.timer'}
+        self.host.sticky_enabled = {'models-health.timer'}
+        self.host.power_cycle()
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['detail']), (1, 'hold_units_still_enabled'))
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['enabledAfter']['models-health.timer']), (False, 'enabled'))
+        self.assertEqual(self.model_starts(), [])
+        self.host.sticky_enabled = set()
+
+    def test_receipt_reports_edge_and_auth_without_touching_them(self):
+        self.host.active_units |= {'models-edge.service', 'models-auth.service'}
+        self.host.power_cycle()
+        self.host.active_units |= {'models-edge.service', 'models-auth.service'}
+        status, code = self.hold_boot()
+        self.assertHeldWithoutSideEffects(status, code)
+        r = self.receipt()
+        self.assertEqual((r['edge'], r['auth']), ('active', 'active'))
+        self.assertNotIn('SECRET', self.host.guest['hold'])
 
 
 class HostValidate(unittest.TestCase):

@@ -795,6 +795,180 @@ function toast(text, kind = '') {
   setTimeout(() => el.remove(), kind === 'bad' ? 7000 : 4000);
 }
 
+// --------------------------------------------------------------- pairing
+// "Pair phone": a one-time QR code (10 minutes, single use) from /api/pair/new
+// that Rose Agent scans to reach this Mac over Wi-Fi or Tailscale; the list of
+// paired phones with Remove buttons. The server keeps the code; this page only
+// shows the QR image and polls /api/pair/status until a phone uses it.
+// note: a message that replaces the countdown until the next code (e.g. the lockout).
+const PAIR = {open: false, expiresAt: 0, done: false, note: '', poll: null, tick: null, busy: false};
+
+async function getJson(path) {
+  const res = await fetch(path, {cache: 'no-store'});
+  let data = {};
+  try { data = await res.json(); } catch { /* empty */ }
+  if (!res.ok || data.ok === false) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  return data;
+}
+
+function routeOf(host) {
+  if (host.endsWith('.ts.net')) return 'Tailscale';
+  const m = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  return m && +m[1] === 100 && +m[2] >= 64 && +m[2] <= 127 ? 'Tailscale' : 'Wi-Fi';
+}
+
+function ago(ms) {
+  if (!ms) return 'never';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(ms).toLocaleDateString();
+}
+
+function pairError(text) {
+  const el = $('pair-error');
+  el.hidden = !text;
+  el.textContent = text || '';
+}
+
+function pairCountdown() {
+  const left = PAIR.expiresAt - Date.now();
+  const box = $('pair-qr-box');
+  if (PAIR.done) return;
+  if (PAIR.note) { $('pair-count').textContent = PAIR.note; return; }
+  if (!PAIR.expiresAt) { $('pair-count').textContent = '—'; return; }
+  if (left <= 0) {
+    box.classList.add('stale');
+    $('pair-count').textContent = 'Expired. Make a new code.';
+    return;
+  }
+  box.classList.remove('stale');
+  const s = Math.ceil(left / 1000);
+  $('pair-count').textContent = `Valid for ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}, once`;
+}
+
+async function newPairCode() {
+  if (PAIR.busy) return;
+  PAIR.busy = true;
+  PAIR.done = false;
+  PAIR.note = '';
+  $('pair-done').hidden = true;
+  $('pair-new').disabled = true;
+  pairError('');
+  try {
+    const inv = await post('/api/pair/new', {});
+    const img = $('pair-qr');
+    img.onload = () => {
+      // Whole device pixels per module keep the edges sharp (the PNG is 8 px per module).
+      const modules = img.naturalWidth / 8;
+      const per = Math.max(3, Math.floor(300 / modules));
+      img.style.width = img.style.height = `${modules * per}px`;
+    };
+    img.src = inv.png;
+    $('pair-name').textContent = inv.serverName;
+    // The phone's confirm screen shows the same ID (the first 16 hex of the certificate pin) to compare.
+    $('pair-id').textContent = (inv.pin || '').slice(0, 16).match(/.{1,4}/g)?.join(' ') || '';
+    const hosts = $('pair-hosts');
+    hosts.replaceChildren(...inv.hosts.map((host) => {
+      const row = h('div', 'pair-host');
+      row.append(h('span', 'mono', host), h('span', 'pill', routeOf(host)));
+      return row;
+    }));
+    PAIR.expiresAt = inv.expiresAt;
+    PAIR.note = '';  // a status poll from before this code may have set the lockout note
+  } catch (err) {
+    PAIR.expiresAt = 0;
+    $('pair-qr').removeAttribute('src');
+    $('pair-qr-box').classList.add('stale');
+    pairError(err.message);
+  } finally {
+    PAIR.busy = false;
+    $('pair-new').disabled = false;
+    pairCountdown();
+  }
+}
+
+async function loadPairedDevices() {
+  const list = $('pair-devices');
+  let devices;
+  try {
+    devices = (await getJson('/api/pair/devices')).devices.filter((d) => !d.revoked);
+  } catch (err) {
+    list.replaceChildren(h('li', 'none', `Could not load paired phones: ${err.message}`));
+    return [];
+  }
+  if (!devices.length) {
+    list.replaceChildren(h('li', 'none', 'None yet.'));
+    return devices;
+  }
+  list.replaceChildren(...devices.map((d) => {
+    const li = h('li', 'pair-device');
+    const text = h('div', 'pair-device-text');
+    text.append(h('b', null, d.name), h('span', 'muted', d.model ? ` ${d.model}` : ''));
+    const seen = d.lastAddress ? `${ago(d.lastSeen)} via ${routeOf(d.lastAddress)} (${d.lastAddress})` : ago(d.lastSeen);
+    text.append(h('div', 'muted small', `Paired ${new Date(d.pairedAt).toLocaleDateString()} · last seen ${seen}`));
+    const rm = h('button', 'ghost danger', 'Remove');
+    rm.type = 'button';
+    rm.onclick = async () => {
+      if (!confirm(`Remove ${d.name}? It will lose its connection to Rose until it is paired again.`)) return;
+      try {
+        await post('/api/pair/revoke', {deviceId: d.id});
+        toast(`Removed ${d.name}`, 'ok');
+      } catch (err) {
+        toast(`Could not remove: ${err.message}`, 'bad');
+      }
+      loadPairedDevices();
+    };
+    li.append(text, rm);
+    return li;
+  }));
+  return devices;
+}
+
+async function pollPair() {
+  if (!PAIR.open || PAIR.done) return;
+  let st;
+  try { st = await getJson('/api/pair/status'); } catch { return; }
+  if (st.pairedDeviceId) {
+    PAIR.done = true;
+    const name = st.pairedDeviceName || 'your phone';
+    const done = $('pair-done');
+    done.textContent = `Paired with ${name}`;
+    done.hidden = false;
+    $('pair-count').textContent = 'Used';
+    loadPairedDevices();
+    toast(`Paired with ${name}`, 'ok');
+    setTimeout(() => { if (PAIR.done) closePair(); }, 2000);
+  } else if (!st.pending && st.state === 'locked') {
+    PAIR.expiresAt = 0;
+    PAIR.note = 'Too many wrong attempts. Make a new code.';
+    $('pair-qr-box').classList.add('stale');
+    pairCountdown();
+  }
+}
+
+function openPair() {
+  if (PAIR.open) return;
+  PAIR.open = true;
+  $('pair-modal').hidden = false;
+  $('pair-close').focus();
+  newPairCode();
+  loadPairedDevices();
+  PAIR.poll = setInterval(pollPair, 1000);
+  PAIR.tick = setInterval(pairCountdown, 500);
+}
+
+function closePair() {
+  PAIR.open = false;
+  PAIR.done = false;
+  PAIR.note = '';
+  clearInterval(PAIR.poll);
+  clearInterval(PAIR.tick);
+  $('pair-modal').hidden = true;
+  $('pair').focus();
+}
+
 // ----------------------------------------------------------------- setup
 function setup() {
   const chips = $('chips');
@@ -815,6 +989,10 @@ function setup() {
   $('say-form').addEventListener('submit', (e) => { e.preventDefault(); say($('say-text').value); });
   $('mic').addEventListener('click', () => toggleMic());
   $('reset').addEventListener('click', () => post('/api/reset', {}).catch((err) => toast(err.message, 'bad')));
+  $('pair').addEventListener('click', () => openPair());
+  $('pair-close').addEventListener('click', () => closePair());
+  $('pair-new').addEventListener('click', () => newPairCode());
+  $('pair-modal').addEventListener('click', (e) => { if (e.target === e.currentTarget) closePair(); });
   $('voice').addEventListener('change', async (e) => {
     const sel = e.target;
     try {
@@ -824,6 +1002,8 @@ function setup() {
     }
   });
   document.addEventListener('keydown', (e) => {
+    if (PAIR.open && e.key === 'Escape') { closePair(); return; }
+    if (PAIR.open) return;  // the modal owns the keyboard
     if (e.code !== 'Space' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
     e.preventDefault();
     if (e.target instanceof HTMLElement && e.target !== document.body) e.target.blur();

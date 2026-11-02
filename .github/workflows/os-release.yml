@@ -1,6 +1,6 @@
 name: Build & publish latest Pixel 10
 # RELEASE020: a campaign run carries its campaign in the run name; scripts/release-chain.py finds successors by it.
-run-name: ${{ inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || 'Build & publish latest Pixel 10' }}
+run-name: ${{ inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || 'Build & publish latest Pixel 10' }}
 
 # Build, sign, verify and publish one Frankel candidate on the existing builder. The default mode, latest-beta, is the
 # normal button (OCT30-INFRA-S014): it needs no input. Every other mode and input is advanced. Proposed setup is
@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: latest-beta (default, the normal button) builds the main commit this run was started from for Pixel 10 (frankel) Beta with a freshly allocated build number, BUILD_DATETIME and app versions, signs and verifies it, publishes a PUBLIC pixel-ota release and makes it the Beta Latest only after verification and the download check (this is not the production channel; older releases stay for rollback); leave every other field at its default. Advanced modes - os-release builds the whole candidate from explicit pins; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); models-sign signs the retained unsigned Models APK with the protected models-v0 bootstrap identity (candidate_sha = this workflow commit, models_bootstrap_run = the bootstrap run; no build, OS signing or publication; the hosted guard first reads and verifies the original pinned unsigned input with its own token; any ingress failure stops before a host starts); rango-retained checks the retained Rango (Pixel 10 Pro Fold) signing and separate-release bindings of os/retained-rango/release.json on the hosted guard only and only when every binding is bound signs it on the original builder under the shared lock, verifies it, and publishes a separate public rango-{build} release that never becomes Latest (refused before the controller while any binding is unbound)
+        description: latest-beta (default, the normal button) builds the main commit this run was started from for Pixel 10 (frankel) Beta with a freshly allocated build number, BUILD_DATETIME and app versions, signs and verifies it, publishes a PUBLIC pixel-ota release and makes it the Beta Latest only after verification and the download check (this is not the production channel; older releases stay for rollback); leave every other field at its default. Advanced modes - os-release builds the whole candidate from explicit pins; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); models-sign signs the retained unsigned Models APK with the protected models-v0 bootstrap identity (candidate_sha = this workflow commit, models_bootstrap_run = the bootstrap run; no build, OS signing or publication; the hosted guard first reads and verifies the original pinned unsigned input with its own token; any ingress failure stops before a host starts); rango-retained checks the retained Rango (Pixel 10 Pro Fold) signing and separate-release bindings of os/retained-rango/release.json on the hosted guard only and only when every binding is bound signs it on the original builder under the shared lock, verifies it, and publishes a separate public rango-{build} release that never becomes Latest (refused before the controller while any binding is unbound); rango-factory-observe (manual only) runs scripts/rango-factory-observe.py on the original builder under the nonblocking shared lock and reads only the retained Rango build 2026103001 signed marker and target-files, the TRANSFER007 hash-bound input receipt and otatools and the committed contracts, and uploads only its three JSON receipts (candidate_sha = empty, the recipe is this workflow commit; no build, signing, secrets, login, download, enrollment, recovery or publication; Blazer is never observed); blazer-prep (manual only) runs one Pixel 10 Pro (blazer) preparation stage of scripts/blazer-build-only.py (blazer_prep_stage = source, download, vendor or lunch; source is a byte copy of the production working tree whose provenance stays unverified), or its metadata-only inspect (blazer_prep_stage = inspect; at most 20 minutes, no process, network, lock or write), on the original builder in an isolated work tree under the nonblocking shared lock, with the committed os/build-only/blazer-prep-host.json inputs (refused before the controller while any is unbound), and uploads only its three JSON receipts (candidate_sha = empty; no compile, make, signing, secrets, login, enrollment, recovery or publication; it stops the builder afterwards only if its own controller started it); rango-factory-package (manual only) runs the packaging-only scripts/host-factory-package.py on the original builder for the retained signed Rango build 2026103001 with literal historical expected pins (checked before use; the helper holds the nonblocking shared lock), then inspects the generated install ZIP with scripts/factory-package.py observe and classify, keeping the ZIP, receipts and capped raw log in a new task directory on the builder and uploading only the package receipt, the observation, the classify report and the cleanup report (candidate_sha = empty; no signing, keys, secrets, signer login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it)
         type: choice
-        options: [latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, rango-retained, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export]
+        options: [latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, rango-factory-package, models-sign, rango-retained, blazer-prep, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe]
         default: latest-beta
       device:
         description: Device to build and publish; only admitted devices are offered (FAM-02-INFRA-S001; frankel only)
@@ -36,7 +36,7 @@ on:
         options: [beta, prod]
         default: beta
       apps:
-        description: 'Advanced, explicit modes only (empty for latest-beta) - JSON [[package, versionCode], ...] expected in the image'
+        description: 'Advanced, explicit modes only (empty for latest-beta) - JSON [[package, versionCode], ...] expected in the image; app-only also takes auto (a fresh Rose Agent version allocated on the builder, or nothing built when these sources are already published)'
         required: false
         default: ''
       promote:
@@ -93,6 +93,11 @@ on:
         description: rango-retained only, and only if os/retained-rango/release.json selects the first-use identity policy (not selected) - this run enrols the durable first-use identity record; false requires an existing matching record
         type: boolean
         default: false
+      blazer_prep_stage:
+        description: blazer-prep only - the one preparation stage this run executes (none for every other mode)
+        type: choice
+        options: [none, source, download, vendor, lunch, inspect]
+        default: none
       campaign:
         description: latest-beta only - empty (default) is one run; 'start' begins a 24h back-to-back campaign in which each healthy run (publish and cleanup succeeded) dispatches the next fresh latest-beta run from main; '<id>.<deadline>.<generation>' is set by the chain itself. Stop with repository variable RELEASE_CAMPAIGN_STOP (campaign id or 'all') or by cancelling
         type: string
@@ -129,6 +134,7 @@ env:
   ROSE_FIRST_USE_ENROLL: ${{ inputs.rango_first_use_enroll }}
   ROSE_RECOVER_RUN: ${{ inputs.rango_recover_run }}
   CAMPAIGN: ${{ inputs.campaign }}
+  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}
 
 jobs:
   guard:
@@ -138,6 +144,14 @@ jobs:
     permissions:
       contents: read
       actions: read  # emulator-alpha-export and models-sign only: fixed original artifacts are read from their own runs
+    outputs:
+      blazer_prep_outer_seconds: ${{ steps.blazer-prep.outputs.outer_seconds }}
+      blazer_prep_job_minutes: ${{ steps.blazer-prep.outputs.job_minutes }}
+      factory_package_seconds: ${{ steps.factory-package.outputs.package_seconds }}
+      factory_observe_seconds: ${{ steps.factory-package.outputs.observe_seconds }}
+      factory_classify_seconds: ${{ steps.factory-package.outputs.classify_seconds }}
+      factory_stage_seconds: ${{ steps.factory-package.outputs.stage_seconds }}
+      factory_job_minutes: ${{ steps.factory-package.outputs.job_minutes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -161,9 +175,39 @@ jobs:
             # The retained Rango route pins its device, product and build in os/retained-rango/release.json; no input pins.
             [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
             [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" ]]
+          elif [[ "$MODE" == app-only && "$APPS" == auto ]]; then
+            # AGENT-BETA-AUTO: the dispatched app route pins exactly one main commit; the builder allocates the Rose Agent
+            # version under the shared lock and no OS build identity exists, so no build number or BUILD_DATETIME pin is
+            # admitted. The exact-commit-on-main check below still applies.
+            [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" ]]
+          elif [[ "$MODE" == rango-factory-observe ]]; then
+            # FOLD-OBSERVE-WIRE-001: read-only observation; every binding is committed, the recipe is this workflow commit.
+            # No pins, resume, promotion, campaign, publication, signing profile, enrollment or recovery input is admitted.
+            [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
+            [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && -z "$RESUME_UNSIGNED_SHA256" && -z "$RESUME_SIGNED_SHA256" ]]
+            [[ -z "${CAMPAIGN:-}" && "$APP_PUBLISH" == false && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
+            [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "${MODELS_BOOTSTRAP_RUN:-}" && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
+          elif [[ "$MODE" == rango-factory-package ]]; then
+            # FOLD-FACTORY-PACKAGE: packaging plus inspection of the retained signed build; every pin is committed, the
+            # recipe is this workflow commit. No pins, resume, promotion, campaign, publication, signing profile,
+            # enrollment, recovery or preparation stage is admitted.
+            [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
+            [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && -z "$RESUME_UNSIGNED_SHA256" && -z "$RESUME_SIGNED_SHA256" ]]
+            [[ -z "${CAMPAIGN:-}" && "$APP_PUBLISH" == false && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
+            [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "${MODELS_BOOTSTRAP_RUN:-}" && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
+          elif [[ "$MODE" == blazer-prep ]]; then
+            # BLAZER-PREP: one preparation stage; every input is committed, the recipe is this workflow commit.
+            # No pins, resume, promotion, campaign, publication, signing profile, enrollment or recovery input is admitted.
+            [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
+            [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && -z "$RESUME_UNSIGNED_SHA256" && -z "$RESUME_SIGNED_SHA256" ]]
+            [[ -z "${CAMPAIGN:-}" && "$APP_PUBLISH" == false && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
+            [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "${MODELS_BOOTSTRAP_RUN:-}" && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
+            [[ "${BLAZER_PREP_STAGE:-none}" =~ ^(source|download|vendor|lunch|inspect)$ ]]
           else
             [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$BUILD_NUMBER" =~ ^[0-9]{10}$ && "$BUILD_TIMESTAMP" =~ ^[0-9]{10}$ ]]
           fi
+          # A preparation stage is selectable only in blazer-prep mode.
+          [[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]
           # The device names attempt directories and artifacts: a plain codename, admitted by the pipeline's allowlist.
           [[ "$ROSE_DEVICE" =~ ^[a-z][a-z0-9]{1,31}$ ]]
           python3 -c 'import importlib.util, os; s = importlib.util.spec_from_file_location("p", "scripts/release-pipeline.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); m.resolve_device(os.environ["ROSE_DEVICE"])'
@@ -173,8 +217,8 @@ jobs:
           [[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]
           [[ "$MODE" == rango-retained || "${ROSE_FIRST_USE_ENROLL:-false}" == false ]]
           [[ -z "${ROSE_RECOVER_RUN:-}" || ( "$MODE" == rango-retained && "$ROSE_RECOVER_RUN" =~ ^[1-9][0-9]{0,19}$ && "${ROSE_FIRST_USE_ENROLL:-false}" == false ) ]]
-          [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
-          [[ "$MODE" == latest-beta || "$MODE" == rango-retained ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
+          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
           [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
@@ -192,7 +236,7 @@ jobs:
           # models-sign: bound to this workflow recipe and one numeric bootstrap run; the run input exists only there.
           [[ "$MODE" != models-sign || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
           [[ ( "$MODE" == models-sign && "${MODELS_BOOTSTRAP_RUN:-}" =~ ^[1-9][0-9]{0,19}$ ) || ( "$MODE" != models-sign && -z "${MODELS_BOOTSTRAP_RUN:-}" ) ]]
-          [[ "$MODE" != app-only ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
+          [[ "$MODE" != app-only || "$APPS" == auto ]] || python3 -c 'import json, os; apps = json.loads(os.environ["APPS"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice"'
           # app-reuse: exactly Rose Agent and an explicit binding to the original run; the binding exists only there.
           [[ -z "$REUSE_BINDING" || "$MODE" == app-reuse ]]
           [[ "$MODE" != app-reuse ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); b = json.loads(os.environ["REUSE_BINDING"]); assert len(apps) == 1 and apps[0][0] == "dev.pixel.voice" and sorted(b) == ["apkSha256", "signedTargetFilesSha256", "sourceRun", "unsignedTargetFilesSha256"] and type(b["sourceRun"]) is int and b["sourceRun"] > 0 and all(isinstance(b[k], str) and re.fullmatch("[0-9a-f]{64}", b[k]) for k in b if k != "sourceRun")'
@@ -257,6 +301,22 @@ jobs:
       - name: Device-readiness contract check
         if: inputs.mode == 'device-readiness'
         run: python3 scripts/device-readiness.py check
+      # FOLD-OBSERVE-WIRE-001: the committed observation bindings, hosted-only (no host path read), before any host starts.
+      - name: Rango factory observation check
+        if: inputs.mode == 'rango-factory-observe'
+        run: python3 scripts/rango-factory-observe.py check
+      # BLAZER-PREP: recipe drift, the committed host binding (unbound exits 4) and the stage bounds, hosted-only (no host
+      # path read), before any host starts.
+      # FOLD-FACTORY-PACKAGE: the literal pins against their committed sources and the step bounds, hosted-only (no
+      # host path read), before any host starts.
+      - name: Rango factory package check
+        id: factory-package
+        if: inputs.mode == 'rango-factory-package'
+        run: python3 scripts/rango-factory-package-wiring.py check >> "$GITHUB_OUTPUT"
+      - name: Blazer preparation check
+        id: blazer-prep
+        if: inputs.mode == 'blazer-prep'
+        run: python3 scripts/blazer-prep-wiring.py check --stage "$BLAZER_PREP_STAGE" >> "$GITHUB_OUTPUT"
       # Fails closed before the controller starts unless the profile is resource-bound with an approved inventory, tool
       # identities and unexpired access, and every other option is at its non-publishing default.
       - name: Signing-bootstrap guard
@@ -327,6 +387,8 @@ jobs:
     needs: guard
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      started: ${{ steps.ownership.outputs.started }}
     permissions:
       contents: read
       id-token: write
@@ -339,7 +401,16 @@ jobs:
           persist-credentials: false
       - run: python3 scripts/release-pipeline.py preflight --job controller
       - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
-      - run: python3 scripts/release-pipeline.py start-builder
+      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package'
+        run: python3 scripts/release-pipeline.py start-builder
+      # blazer-prep and rango-factory-package only: record, before any start request, whether this operation is the one
+      # starting the builder.
+      - if: inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package'
+        run: python3 scripts/release-pipeline.py start-builder --ownership-record "$RUNNER_TEMP/builder-ownership.json"
+      - name: Builder ownership
+        id: ownership
+        if: always() && (inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package')
+        run: python3 scripts/release-pipeline.py builder-ownership --ownership-record "$RUNNER_TEMP/builder-ownership.json" >> "$GITHUB_OUTPUT"
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
 
@@ -615,6 +686,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      candidate_sha: ${{ steps.allocate.outputs.candidate_sha }}
+      apps: ${{ steps.allocate.outputs.apps }}
+      app_skip: ${{ steps.allocate.outputs.app_skip }}
     env:
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
@@ -632,14 +707,24 @@ jobs:
           test ! -e "$base"
           mkdir -p "$base"
           echo "ROSE_BASE=$base" >> "$GITHUB_ENV"
+      # AGENT-BETA-AUTO (apps=auto): under the shared lock, before any signer access, allocate one fresh Rose Agent version
+      # above every consumed one from the dispatched main commit, or skip when these sources are already published.
+      # Exports CANDIDATE_SHA (the version-only derived candidate), APPS and APP_SKIP.
+      - name: Allocate Rose Agent (apps=auto)
+        id: allocate
+        if: env.APPS == 'auto'
+        run: python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"
       - name: Signer access for app signing
+        if: env.APP_SKIP != 'true'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - name: Build, sign and verify Rose Agent
+        if: env.APP_SKIP != 'true'
         run: ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"
       - name: Drop signer access
         if: always()
         run: python3 scripts/actions-gcp-login.py logout
       - name: Private Actions artifact
+        if: env.APP_SKIP != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: app-release-dev.pixel.voice-${{ github.run_id }}
@@ -902,6 +987,191 @@ jobs:
         if: always()
         run: python3 scripts/device-readiness.py cleanup --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
+  # FOLD-OBSERVE-WIRE-001: read-only factory observation of the retained Rango build 2026103001 on the original builder
+  # (scripts/rango-factory-observe.py; its own nonblocking shared lock, fixed committed read set, first-use material,
+  # secrets, held artifacts and Blazer excluded). contents: read only - no OIDC token, signer login, secret or publication.
+  # Bounds: the helper's internal 18 min, the outer timeout 20 min (+5 s kill), the job 22 min. LIMITATION: these do NOT
+  # guarantee the builder VM stops within 30 minutes if scheduling, the control plane or cleanup fails; no independent
+  # stop within that window is established (the existing 12h automatic STOP is the only fallback). Runtime is not approved.
+  rango-factory-observe:
+    needs: controller
+    if: inputs.mode == 'rango-factory-observe'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: 22
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: New task directory for this attempt
+        run: |
+          set -euo pipefail
+          task="$RUNNER_TEMP/rango-factory-observe-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$task"
+          mkdir -m 0700 "$task"
+          { echo "TASK_ROOT=$task"; echo "TASK_OUTPUT=$task/output"; echo "TASK_RECEIPTS=$task/receipts"; } >> "$GITHUB_ENV"
+      - name: Observe the retained Rango build (bounded, under the shared lock)
+        run: timeout --kill-after=5s 20m python3 scripts/rango-factory-observe.py run --run-id "$GITHUB_RUN_ID" --recipe-sha "$GITHUB_SHA" --out "$TASK_OUTPUT"
+      - name: Allowlisted JSON receipts only
+        if: always()
+        run: |
+          set -euo pipefail
+          test -n "${TASK_ROOT:-}" || exit 0
+          mkdir -m 0700 "$TASK_RECEIPTS"
+          for name in rango-factory-observe.json target-files-observation.json firmware-members.json; do
+            if [[ -f "$TASK_OUTPUT/$name" && ! -L "$TASK_OUTPUT/$name" ]]; then cp -- "$TASK_OUTPUT/$name" "$TASK_RECEIPTS/$name"; fi
+          done
+      - name: Receipts artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rango-factory-observe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.TASK_RECEIPTS }}
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove this attempt's task directory
+        if: always()
+        run: test -z "${TASK_ROOT:-}" || rm -rf -- "$TASK_ROOT"
+
+  blazer-prep:
+    # BLAZER-PREP: one Pixel 10 Pro preparation stage (source, download, vendor or lunch) of scripts/blazer-build-only.py on the
+    # original builder, with the committed os/build-only/blazer-prep-host.json inputs, in an isolated work tree (never the
+    # production source root), under the nonblocking shared lock. The helper refuses symlinks, the production tree,
+    # existing outputs, a held lock and insufficient space before a stage; vendor/lunch byte bounds are checked only
+    # after execution (not an enforced quota), and descendant cleanup on timeout is not yet proven. No compile, make,
+    # signing, secret, OIDC token or publication; contents: read only. Time: the helper's own stage timeout, the outer
+    # timeout (+300 s, +30 s kill) and the job (+10 min), all derived from os/build-only/blazer.json by the hosted guard.
+    # inspect (metadata only): the helper's --max-seconds 900, the outer 960 s (+30 s kill) and a 20-minute job; it passes
+    # the bound host facts (none yet) and the proposed --candidate-root of this run (never a binding; refused when no
+    # candidates are committed), and its stdout is the write-once inspection.json receipt.
+    # source: the helper's 7200 s copy (own-staging cleanup within its 240 s), the outer 7500 s (+30 s kill) and a 136-min
+    # job. Exit 0 with complete:true means the byte copy finished, nothing more: provenance stays a production working-tree
+    # snapshot with project revisions and the pinned manifest unverified. Exit 1 is refused/stopped (completed.json names
+    # any staging left); 124/137 or a missing completed.json is UNKNOWN and never usable. Stage order is the helper's.
+    # Cleanup stops the builder only if this run's controller started it. Runtime is not approved.
+    needs: [guard, controller]
+    if: inputs.mode == 'blazer-prep'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.blazer_prep_job_minutes || '1') }}
+    permissions:
+      contents: read
+    env:
+      OUTER_SECONDS: ${{ needs.guard.outputs.blazer_prep_outer_seconds }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: New task directory for this attempt
+        run: |
+          set -euo pipefail
+          task="$RUNNER_TEMP/blazer-prep-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$task"
+          mkdir -m 0700 "$task"
+          { echo "TASK_ROOT=$task"; echo "TASK_RUN=$task/run"; echo "TASK_RECEIPTS=$task/receipts"; } >> "$GITHUB_ENV"
+      - name: Preparation stage (bounded, under the shared lock)
+        run: |
+          set -euo pipefail
+          [[ "$OUTER_SECONDS" =~ ^[1-9][0-9]{0,5}$ ]]
+          python3 scripts/blazer-prep-wiring.py check --stage "$BLAZER_PREP_STAGE" | grep -qx "outer_seconds=$OUTER_SECONDS"
+          timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/blazer-prep-wiring.py run --stage "$BLAZER_PREP_STAGE" --receipt-dir "$TASK_RUN" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Allowlisted JSON receipts only
+        if: always()
+        run: |
+          set -euo pipefail
+          test -n "${TASK_ROOT:-}" || exit 0
+          mkdir -m 0700 "$TASK_RECEIPTS"
+          for name in preflight.json started.json completed.json inspection.json; do
+            if [[ -f "$TASK_RUN/$name" && ! -L "$TASK_RUN/$name" ]]; then cp -- "$TASK_RUN/$name" "$TASK_RECEIPTS/$name"; fi
+          done
+      - name: Receipts artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: blazer-prep-${{ inputs.blazer_prep_stage }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.TASK_RECEIPTS }}
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Remove this attempt's task directory
+        if: always()
+        run: test -z "${TASK_ROOT:-}" || rm -rf -- "$TASK_ROOT"
+
+  rango-factory-package:
+    # FOLD-FACTORY-PACKAGE: packaging-only install ZIP of the retained signed Rango build 2026103001 by the Signing helper
+    # scripts/host-factory-package.py (it holds the nonblocking shared builder lock for its whole run), then the existing
+    # inspection commands of scripts/factory-package.py (observe, then classify; exit 3 with signatureVerified:false and
+    # firmware-carried partitions missing is the expected truthful result). The pins in
+    # scripts/rango-factory-package-wiring.py are historical expected values checked before use, not current byte
+    # proof. Everything stays in a new task directory under /home/pixelbuild/rose-actions (a proposed parent, refused
+    # when absent). Two private run artifacts leave: the reports (package receipt, observation, classify report, cleanup
+    # report, and the package attempt record, which keeps the exit code and the helper's one-line JSON result when it
+    # refuses before its receipt exists; 7 days) and, only after inspection reported and the ZIP's regular-file, size (proposed 8 GiB cap) and
+    # sha256 checks against the helper receipt pass, the installer (exactly SHA256SUMS and the ZIP; 3 days). Never the
+    # capped raw log or the target-files; nothing is published. contents: read only: no OIDC token, signer login, secret,
+    # signing, download, install, phone action or publication. Time: per-step wrapper ceilings from the hosted guard
+    # (package 5400 s, observe 900 s, classify 7200 s, stage 900 s, each +30 s kill; upload 45 min; job 297 min), not
+    # measurements or a guaranteed stop. 128 GiB free is the helper's precondition, not a usage cap. Cleanup stops the
+    # builder only if this run's controller started it.
+    # Runtime is not approved.
+    needs: [guard, controller]
+    if: inputs.mode == 'rango-factory-package'
+    runs-on: [self-hosted, roseos-frankel-builder]
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.factory_job_minutes || '1') }}
+    permissions:
+      contents: read
+    env:
+      PACKAGE_SECONDS: ${{ needs.guard.outputs.factory_package_seconds }}
+      OBSERVE_SECONDS: ${{ needs.guard.outputs.factory_observe_seconds }}
+      CLASSIFY_SECONDS: ${{ needs.guard.outputs.factory_classify_seconds }}
+      STAGE_SECONDS: ${{ needs.guard.outputs.factory_stage_seconds }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Recheck the pins and bounds on the builder
+        run: |
+          set -euo pipefail
+          for bound in "$PACKAGE_SECONDS" "$OBSERVE_SECONDS" "$CLASSIFY_SECONDS" "$STAGE_SECONDS"; do [[ "$bound" =~ ^[1-9][0-9]{0,5}$ ]]; done
+          python3 scripts/rango-factory-package-wiring.py check > "$RUNNER_TEMP/factory-package-bounds"
+          grep -qx "package_seconds=$PACKAGE_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
+          grep -qx "observe_seconds=$OBSERVE_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
+          grep -qx "classify_seconds=$CLASSIFY_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
+          grep -qx "stage_seconds=$STAGE_SECONDS" "$RUNNER_TEMP/factory-package-bounds"
+      - name: Package the install archive (bounded, under the helper's shared lock)
+        run: timeout --kill-after=30s "${PACKAGE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py package --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --attempt-record "$RUNNER_TEMP/rango-factory-package-attempt-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+      - name: Observe the signed target-files (bounded)
+        run: timeout --kill-after=30s "${OBSERVE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py observe --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Classify the install archive (bounded)
+        run: timeout --kill-after=30s "${CLASSIFY_SECONDS}s" python3 scripts/rango-factory-package-wiring.py classify --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Stage the installer for the private artifact (bounded)
+        id: installer
+        run: timeout --kill-after=30s "${STAGE_SECONDS}s" python3 scripts/rango-factory-package-wiring.py stage-installer --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Private installer artifact (exactly SHA256SUMS and the ZIP)
+        id: installer-artifact
+        timeout-minutes: 45
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rango-install-2026103001-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.installer.outputs.root }}/SHA256SUMS
+            ${{ steps.installer.outputs.root }}/package/rango-install-2026103001.zip
+          retention-days: 3
+          if-no-files-found: error
+          compression-level: 0
+      - name: Cleanup report and allowlisted receipts
+        if: always()
+        env:
+          INSTALLER_UPLOAD: ${{ steps.installer-artifact.outcome || 'skipped' }}
+        run: python3 scripts/rango-factory-package-wiring.py report --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/rango-factory-package-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --installer-upload "$INSTALLER_UPLOAD" --attempt-record "$RUNNER_TEMP/rango-factory-package-attempt-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+      - name: Receipts artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rango-factory-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rango-factory-package-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+
   publisher:
     needs: [builder, signed-builder]
     # The existing route (signed-builder skipped) or the dedicated route only after signed-builder succeeded.
@@ -959,11 +1229,14 @@ jobs:
     needs: [app-builder, app-reuse]
     if: >-
       !cancelled() && inputs.app_publish &&
-      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success') ||
+      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success' && needs.app-builder.outputs.app_skip != 'true') ||
       (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
+      # apps=auto: the builder's allocated candidate and version; explicit app-only and app-reuse keep their inputs.
+      CANDIDATE_SHA: ${{ needs.app-builder.outputs.candidate_sha || inputs.candidate_sha }}
+      APPS: ${{ needs.app-builder.outputs.apps || inputs.apps }}
       PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
       PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
       PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
@@ -1187,7 +1460,7 @@ jobs:
         run: python3 scripts/rango-retained.py publish --artifact-dir "$RUNNER_TEMP/rango-artifact"
 
   cleanup:
-    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]
+    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1204,7 +1477,14 @@ jobs:
       - run: python3 scripts/release-pipeline.py preflight --job cleanup
       - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
       # The existing 12h automatic STOP on the builder remains the independent fallback.
-      - run: python3 scripts/release-pipeline.py stop-builder
+      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package'
+        run: python3 scripts/release-pipeline.py stop-builder
+      # blazer-prep and rango-factory-package only: stop only a builder this run's controller started; unknown ownership
+      # fails without stopping.
+      - if: inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package'
+        env:
+          STARTED: ${{ needs.controller.outputs.started }}
+        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
 

@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import re
 import textwrap
 import unittest
+import unittest.mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 PY = sys.executable
@@ -110,6 +112,58 @@ class AppBuildTest(unittest.TestCase):
         (self.sdk/'build-tools/android-15/core-lambda-stubs.jar').unlink()
         with self.assertRaisesRegex(SystemExit, 'core-lambda-stubs.jar'):
             app_build.build(self.candidate, self.root/'release-2', self.sdk, self.root/'jdk', self.assets, run=self.run_fake)
+
+class ZxingSetupTest(unittest.TestCase):
+    """PR288: a fresh candidate has no .tools/zxing; its build.sh requires the jar its own pinned setup-zxing.sh fetches."""
+    JAR = '.tools/zxing/core-3.5.4.jar'
+
+    run_fake = AppBuildTest.run_fake
+
+    def setUp(self):
+        AppBuildTest.setUp(self)
+        write(self.candidate/'workspace/rose-agent/build.sh', f'''
+            set -e; test -f {self.JAR} || {{ echo "Missing build input: {self.JAR}" >&2; exit 1; }}
+            d=$(mktemp -d out/rose-agent.XXXXXX); echo voice > "$d/rose-agent-unsigned.apk"''')
+        app_build.stage(self.source, self.assets, self.candidate)
+        self.order = []
+
+    def run_logged(self, argv, cwd, env, check):
+        self.order.append(argv[1] if argv[0] == 'bash' else argv[0])
+        return self.run_fake(argv, cwd, env, check)
+
+    def test_fresh_candidate_without_a_jar_runs_its_setup_before_the_app_build(self):
+        self.assertFalse((self.candidate/'.tools').exists())
+        write(self.candidate/app_build.ZXING_SETUP, f'''
+            set -e; cd "$(dirname "$0")/.."; mkdir -p .tools/zxing; echo pinned > {self.JAR}''')
+        hashes = app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_logged, voice_only=True)
+        self.assertEqual(set(hashes), {'voice'})
+        self.assertEqual(self.order, ['npm', app_build.ZXING_SETUP, 'workspace/rose-agent/build.sh'])
+        self.assertTrue((self.candidate/self.JAR).is_file())
+
+    def test_the_real_pinned_setup_refuses_bytes_that_are_not_the_pinned_jar(self):
+        shutil.copy(SCRIPTS/'setup-zxing.sh', self.candidate/app_build.ZXING_SETUP)
+        bin_dir = self.root/'bin'
+        write(bin_dir/'curl', '#!/bin/sh\nwhile [ "$1" != --output ]; do shift; done; echo not-zxing > "$2"\n', 0o755)
+        with unittest.mock.patch.dict(os.environ, {'PATH': f'{bin_dir}:' + os.environ['PATH']}):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_logged)
+        self.assertEqual(raised.exception.cmd, ['bash', app_build.ZXING_SETUP])
+        self.assertNotIn('workspace/rose-agent/build.sh', self.order)
+        self.assertFalse((self.candidate/self.JAR).exists())
+        self.assertFalse((self.release/'unsigned').exists())
+
+    def test_a_candidate_without_the_setup_script_builds_as_before(self):
+        self.assertFalse((self.candidate/app_build.ZXING_SETUP).exists())
+        write(self.candidate/self.JAR, 'preinstalled')
+        app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_logged, voice_only=True)
+        self.assertEqual(self.order, ['npm', 'workspace/rose-agent/build.sh'])
+
+    def test_the_wired_script_is_the_hash_pinned_one_the_candidate_build_checks(self):
+        setup, build_sh = (SCRIPTS/'setup-zxing.sh').read_text(), (SCRIPTS.parent/'workspace/rose-agent/build.sh').read_text()
+        pin = re.search(r'^SHA256=([0-9a-f]{64})$', setup, re.M)[1]
+        self.assertIn(f'ZXING_SHA256={pin}', build_sh)
+        self.assertIn('JAR="$DIR/core-3.5.4.jar"', setup)
+        self.assertIn('ZXING="$ROOT/.tools/zxing/core-3.5.4.jar"', build_sh)
 
 class SdkLayoutTest(unittest.TestCase):
     def setUp(self):
@@ -227,8 +281,10 @@ class RetainedIntegrationOutputTest(unittest.TestCase):
             for name in {list(reconcile.FRAMEWORKS_BASE_SEQUENCE)!r}:
                 patch = os.path.join(here, 'os/patches', name)
                 if os.path.isfile(patch):
+                    # The #156 device-snapshot and multi-session admission hunks touch files this fixture does not hold.
                     subprocess.run(['git', '-C', os.path.join(sys.argv[1], 'frameworks/base'), 'apply',
-                        '--include={CC}/*', patch], check=True)''')
+                        '--exclude={CC}/AutomatedPackagesRepository.java',
+                        '--exclude={CC}/ComputerControlSessionAdmission.java', '--include={CC}/*', patch], check=True)''')
         # The retained tree: the 10-27 bundle applied by hand before reconcile; the only receipt does not name it.
         self.retained = self.patched(bundles['old'])
         (self.source/SESSION).write_bytes(self.retained)
@@ -591,6 +647,101 @@ class TrayOverlayReconcileTest(unittest.TestCase):
             self.run_reconcile(self.candidate('current', self.current), '2026102806')
         self.assertFalse((self.source/self.PROJECT/self.SHELL/'AgentTrayLink.java').exists())
         self.assertEqual(sorted(p.name for p in self.receipts.glob('*.json')), ['0001-2026102805.json'])
+
+class RetainedOverlayLineageTest(unittest.TestCase):
+    """AGENT-TRAY-RECONCILE-001 (run 41309344025, candidate 2026110101): an overlay file the retained tree has held since
+    before any receipt, byte-identical to every candidate until one changes it, is in no receipt: adopt records only the
+    conflicts of its time and apply records only files it changes. AgentStatusControls.java was unchanged from import
+    (ff87296) to PR #320 (450009c), so the first candidate changing it read as an owner change. Bytes equal to an earlier
+    version of the candidate's own os/overlays file at that path are Rose's output; anything else still conflicts."""
+    PROJECT = 'frameworks/base'
+    RELATIVE = 'libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java'
+    OVERLAY = 'os/overlays/frameworks/base/' + RELATIVE
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = self.root = Path(temp.name)
+        self.config = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['host']['integrate']['reconcile']
+        self.source, self.receipts, self.release = root/'R', root/'receipts', root/'release'
+        self.release.mkdir()
+        write(self.source/self.PROJECT/'core/res/res/values/config.xml', '<resources/>\n')
+        git('init', '-q', cwd=self.source/self.PROJECT)
+        git('add', '-A', cwd=self.source/self.PROJECT)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'pinned', cwd=self.source/self.PROJECT)
+        # The real lineage of the file: the import bytes, then PR #320's.
+        show = lambda commit: subprocess.run(['git', '-C', str(ROOT), 'show', f'{commit}:{self.OVERLAY}'],
+            capture_output=True, check=True).stdout
+        self.imported, self.changed = show('ff87296'), show('450009c')
+        self.assertEqual(hashlib.sha256(self.imported).hexdigest(), 'f5eed27e1491c99edb79807f550d8833d0394c5d080a97bec49ac6ad2be2927c')
+        self.assertEqual(hashlib.sha256(self.changed).hexdigest(), '488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c')
+        # The candidate repository: a stand-in patcher that copies os/overlays as apply-os-changes.py does, with the
+        # overlay's history (import, then the change) in git, checked out at the changing commit.
+        self.candidate = root/'candidate'
+        write(self.candidate/'scripts/apply-os-changes.py', '''
+            import pathlib, sys
+            source, bundle = pathlib.Path(sys.argv[1]), pathlib.Path(__file__).resolve().parents[1]/'os/overlays'
+            for file in bundle.rglob('*'):
+                if file.is_file():
+                    target = source/file.relative_to(bundle)
+                    if target.exists() and target.read_bytes() != file.read_bytes():
+                        sys.exit(f'Unexpected existing overlay target: {target}')
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(file.read_bytes())''')
+        commit = lambda message: git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', message,
+            cwd=self.candidate)
+        (self.candidate/self.OVERLAY).parent.mkdir(parents=True)
+        (self.candidate/self.OVERLAY).write_bytes(self.imported)
+        git('init', '-q', cwd=self.candidate)
+        git('add', '-A', cwd=self.candidate)
+        commit('import')
+        self.import_commit = subprocess.run(['git', '-C', str(self.candidate), 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, check=True).stdout.strip()
+        # The hand-made integration placed the import bytes before reconcile kept receipts.
+        self.target = self.source/self.PROJECT/self.RELATIVE
+        self.target.parent.mkdir(parents=True)
+        self.target.write_bytes(self.imported)
+        # Every candidate that still carries the import bytes leaves the file out of the receipt.
+        self.assertEqual(self.run_reconcile('2026103101')['changed'], [])
+        self.assertNotIn(f'{self.PROJECT}/{self.RELATIVE}', json.loads(next(self.receipts.glob('0001-*.json')).read_text())['entries'])
+        (self.candidate/self.OVERLAY).write_bytes(self.changed)
+        git('add', '-A', cwd=self.candidate)
+        commit('PR #320')
+
+    def run_reconcile(self, label):
+        return reconcile.reconcile(self.source, self.candidate, self.release, [], self.receipts, [self.PROJECT],
+            self.config['integrationOwnedRoots'], self.config['sparsePaths'], label)
+
+    def test_unreceipted_earlier_overlay_bytes_are_replaced_with_their_lineage_recorded(self):
+        record = self.run_reconcile('2026110101')
+        path = f'{self.PROJECT}/{self.RELATIVE}'
+        self.assertEqual(record['changed'], [path])
+        sha = lambda data: hashlib.sha256(data).hexdigest()
+        self.assertEqual((record['entries'][path]['before'], record['entries'][path]['after']), (sha(self.imported), sha(self.changed)))
+        self.assertEqual(record['entries'][path]['reproducedFrom'], self.import_commit)
+        self.assertEqual(self.target.read_bytes(), self.changed)
+        self.assertEqual((self.receipts/f'0002-2026110101-backup/{path}').read_bytes(), self.imported)
+        self.assertEqual(self.run_reconcile('2026110101-rerun')['changed'], [])
+
+    def test_owner_edit_of_the_overlay_target_still_conflicts_and_nothing_is_written(self):
+        self.target.write_bytes(self.imported + b'// owner edit\n')
+        with self.assertRaisesRegex(reconcile.Conflict, 'owner changes conflict.*AgentStatusControls.java'):
+            self.run_reconcile('2026110101')
+        self.assertEqual(self.target.read_bytes(), self.imported + b'// owner edit\n')
+        self.assertEqual(sorted(p.name for p in self.receipts.glob('*.json')), ['0001-2026103101.json'])
+
+    def test_bytes_from_another_path_s_history_are_not_lineage(self):
+        other = self.candidate/'os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/Other.java'
+        other.write_bytes(b'// other overlay\n')
+        git('add', '-A', cwd=self.candidate)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'other', cwd=self.candidate)
+        other.unlink()
+        git('add', '-A', cwd=self.candidate)
+        git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'drop other', cwd=self.candidate)
+        self.target.write_bytes(b'// other overlay\n')
+        with self.assertRaisesRegex(reconcile.Conflict, 'AgentStatusControls.java'):
+            self.run_reconcile('2026110101')
+        self.assertEqual(self.target.read_bytes(), b'// other overlay\n')
 
 if __name__ == '__main__':
     unittest.main()

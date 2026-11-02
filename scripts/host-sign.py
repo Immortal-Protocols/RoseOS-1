@@ -6,7 +6,8 @@ ROSE_CANDIDATE_SHA, BUILD_NUMBER, BUILD_DATETIME, OUT_DIR and ROSE_RELEASE_DIR s
 1. create releases/{build} (or resume only an exact task-owned state) and copy the selected unsigned target-files
    and the built otatools package into it with fresh mtimes;
 2. derive the release script from the source tree's script/generate-release.sh: truncate before
-   img_from_target_files (OTA only), source the absolute script/common.sh, point PERSISTENT_KEY_DIR at the
+   img_from_target_files (OTA only; with the opt-in host.sign.factory, keep the factory tail instead: see
+   derive_release_script), source the absolute script/common.sh, point PERSISTENT_KEY_DIR at the
    discovered key directory and replace script/decrypt-keys with host-decrypt-keys.py (file passphrase). Each
    anchor must occur exactly once; original and derived hashes are recorded;
 3. read the pinned PIXEL_OS_SIGNING_* versions with the job's short-lived signer identity into owner-only RAM,
@@ -29,15 +30,74 @@ import sys
 import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_secrets  # noqa: E402
+import factory_signing  # noqa: E402
 import sign_trace  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = ('project', 'keysSecret', 'passphraseSecret', 'secretVersion', 'otatools', 'javaHome', 'updateNotes')
+# The factory tail of generate-release.sh, each anchor required exactly once (GrapheneOS/script 09d65184 shape).
+FACTORY_SOURCE = r'^source device/common/generate-factory-images-common\.sh$'
+FACTORY_FASTBOOT = r'^fastboot -S \$MAX_DOWNLOAD_SIZE optimize-factory-image \$DEVICE-factory-\$BUILD_NUMBER\.zip \$DEVICE-install-\$BUILD_NUMBER$'
+FACTORY_SSH_SIGN = (r'^if \[\[ -f "\$KEY_DIR/id_ed25519" \]\]; then\n    export PATH="\$OLD_PATH"\n'
+                    r'    ssh-keygen -Y sign -n "factory images" -f "\$KEY_DIR/id_ed25519" \$DEVICE-install-\$BUILD_NUMBER\.zip\nfi\n')
 
 def missing_inputs(config):
     sign = config['host'].get('sign') or {}
     return [f'host.sign.{k}' for k in REQUIRED if not sign.get(k)]
+
+SIGNING_KEYS = ('project', 'keySecret', 'keyVersion', 'passphraseSecret', 'passphraseVersion', 'sshKeygen', 'sshKeygenSha256')
+FACTORY_RUNNER = [factory_signing.run_bounded]  # the ssh-keygen process boundary (tests substitute a mock)
+
+def factory_contract(device):
+    """The flavor's install-archive name template and factorySigning pin (scripts/factory-package.py load_flavor)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('factory_package', ROOT/'scripts/factory-package.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        flavor = module.load_flavor(device)
+        return flavor['artifacts']['factory']['file'], flavor.get('factorySigning')
+    except (module.ContractError, KeyError, TypeError) as error:
+        raise AdapterFailed(f'no factory artifact contract for {device}: {error}') from None
+
+def factory_inputs(sign, device):
+    """The opt-in factory stage (absent: OTA only, unchanged). host.sign.factory is {"fastbootSha256": H} plus, only
+    once os/flavors/<device>.json factorySigning is bound, "signing": {project, keySecret, keyVersion, passphraseSecret,
+    passphraseVersion, sshKeygen, sshKeygenSha256}. The otatools bin/fastboot must hash to H. The generator's own
+    ssh-keygen step is always removed; the archive is signed afterwards by factory_signing (pinned askpass, verified
+    against the pin) only when the pin is bound and signing is configured. An unbound pin keeps the archive unsigned,
+    and signing configured without a bound pin refuses. Checked before any secret is read."""
+    factory = sign.get('factory')
+    if factory is None:
+        return None
+    if not isinstance(factory, dict) or not factory.get('fastbootSha256'):
+        raise AdapterSetupMissing(['host.sign.factory.fastbootSha256'])
+    if set(factory) - {'fastbootSha256', 'signing'}:
+        raise AdapterFailed('host.sign.factory takes only fastbootSha256 and signing')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(factory['fastbootSha256'])):
+        raise AdapterFailed('host.sign.factory.fastbootSha256 must be a sha256')
+    artifact, signing = factory_contract(device)
+    try:
+        pin = factory_signing.bound_pin(signing)
+    except factory_signing.Refused as error:
+        raise AdapterFailed(f'os/flavors/{device}.json {error}') from None
+    config = factory.get('signing')
+    if pin is None and config is not None:
+        raise AdapterFailed(f'host.sign.factory.signing is set but os/flavors/{device}.json factorySigning principal and '
+                            'publicKey are not bound')
+    if pin is not None:
+        if not isinstance(config, dict) or not all(config.get(k) for k in SIGNING_KEYS):
+            raise AdapterSetupMissing([f'host.sign.factory.signing.{k}' for k in SIGNING_KEYS
+                                       if not isinstance(config, dict) or not config.get(k)])
+        if set(config) != set(SIGNING_KEYS) or not all(re.fullmatch(r'[1-9][0-9]*', str(config[k]))
+                                                         for k in ('keyVersion', 'passphraseVersion')):
+            raise AdapterFailed('host.sign.factory.signing needs exactly project, secret names and pinned numeric versions')
+        tool = Path(str(config['sshKeygen']))
+        if not tool.is_absolute() or tool.is_symlink() or not tool.is_file() \
+                or sha256(tool.read_bytes()) != config['sshKeygenSha256']:
+            raise AdapterFailed('host.sign.factory.signing.sshKeygen is not the pinned regular file')
+    return {'fastbootSha256': factory['fastbootSha256'], 'installTemplate': artifact, 'pin': pin, 'signing': config}
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -89,7 +149,7 @@ def write_key_path_wrappers(wrapper_dir, release_keys, trace=None):
         path.chmod(0o700)
 
 def derive_release_script(original, common_sh, key_dir, passfile, release_keys, wrapper_dir, trace=None, python=sys.executable,
-                          helper=str(ROOT/'scripts/host-decrypt-keys.py')):
+                          helper=str(ROOT/'scripts/host-decrypt-keys.py'), factory=None):
     """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing.
 
     release_keys is the absolute path of the `keys` link the script creates in its release directory (to the RAM key
@@ -99,7 +159,12 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     the signapk call for an APK nested in an APEX (run 40643229025) both failed that way, while top-level APKs signed
     with the same relative paths. So the operational paths become absolute at the subprocess boundary instead:
     wrapper_dir holds key_path_wrapper() for KEY_TOOLS and is put first on PATH after KEY_DIR=keys and after every
-    later `export PATH=`. The APEX payload key arguments also name the absolute path directly."""
+    later `export PATH=`. The APEX payload key arguments also name the absolute path directly.
+
+    factory (factory_inputs) keeps the tail after img_from_target_files instead of cutting it: the factory images
+    source line and the optimize-factory-image call must each occur once, the otatools bin/fastboot is checked against
+    the pinned sha256 immediately before that call, and the id_ed25519 ssh-keygen signing block (exactly once) is
+    removed, so no archive signature is made with an unbound key."""
     def once(pattern, text, flags=0):
         found = list(re.finditer(pattern, text, flags))
         if len(found) != 1:
@@ -107,7 +172,18 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
         return found[0]
     cut = once(r'\nimg_from_target_files', original)
     text = original[:cut.start() + 1]
-    source = once(r'^source [^\n]*common\.sh[^\n]*$', text, re.M)
+    if factory is not None:
+        text = original
+        once(FACTORY_SOURCE, text, re.M)
+        fastboot = once(FACTORY_FASTBOOT, text, re.M)
+        check = (f"printf '%s  bin/fastboot\\n' {factory['fastbootSha256']} | sha256sum --check --status"
+                 " || { echo 'bin/fastboot differs from host.sign.factory.fastbootSha256' >&2; exit 1; }\n")
+        text = text[:fastboot.start()] + check + 'bin/' + text[fastboot.start():]
+        ssh = once(FACTORY_SSH_SIGN, text, re.M)
+        text = text[:ssh.start()] + '# factory archive SSH signing removed: no factorySigning identity is bound\n' + text[ssh.end():]
+        if 'ssh-keygen' in text or 'id_ed25519' in text:
+            raise AdapterFailed('the release script still names ssh-keygen or id_ed25519 outside the removed block')
+    source = once(r'^source (?![^\n]*generate-factory-images-common)[^\n]*common\.sh[^\n]*$', text, re.M)
     text = text[:source.start()] + 'source ' + shlex.quote(str(common_sh)) + text[source.end():]
     keys = once(r'^PERSISTENT_KEY_DIR=keys/\$DEVICE$', text, re.M)
     text = text[:keys.start()] + 'PERSISTENT_KEY_DIR=' + shlex.quote(str(key_dir)) + text[keys.end():]
@@ -139,6 +215,51 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
             lines.insert(i, 'rose_trace_exit_trap() { printf \'{"event":"exit-trap","wall":%s,"pid":%d}\\n\' '
                 f'"$EPOCHREALTIME" $$ >> {shlex.quote(str(trace))} 2>/dev/null || true; }}\n')
     return ''.join(lines)
+
+FACTORY_VARIABLES = r'^source device/common/clear-factory-images-variables\.sh$'
+FACTORY_SIGN_START = r'^sign_target_files_apks '
+FACTORY_AVB_PKMD = r'^AVB_PKMD="\$KEY_DIR/avb_pkmd\.bin"$'
+FACTORY_IMG = r'^img_from_target_files \$TARGET_FILES \$DEVICE-img-\$BUILD_NUMBER\.zip$'
+
+def derive_factory_only_script(original, device, build, avb_pkmd, fastboot_sha256):
+    """Packaging only, for an already signed target-files (FOLD-FACTORY-PACKAGE): from the pinned generate-release.sh,
+    exactly two segments, each anchored once: the factory variables (clear-factory-images-variables.sh through the line
+    before sign_target_files_apks: radio/bootloader versions from OTA/android-info.txt, device switches, AVB_PKMD) with
+    AVB_PKMD rebound to the pinned public avb_pkmd.bin, and the factory tail (img_from_target_files through
+    optimize-factory-image) with the otatools bin/fastboot checked against its pin immediately before use. No key,
+    decrypt, signing, OTA or archive-signing line is kept; any KEY_DIR, ssh-keygen or signing tool left refuses."""
+    def once(pattern, text):
+        found = list(re.finditer(pattern, text, re.M))
+        if len(found) != 1:
+            raise AdapterFailed(f'release script anchor {pattern!r} found {len(found)} times, expected once')
+        return found[0]
+    if not re.fullmatch(r'[a-z][a-z0-9]{1,31}', device) or not re.fullmatch(r'[0-9]{10}', build):
+        raise AdapterFailed('device must be a plain codename and build ten digits')
+    if not re.fullmatch(r'/[\w./-]+', str(avb_pkmd)) or not re.fullmatch(r'[0-9a-f]{64}', str(fastboot_sha256)):
+        raise AdapterFailed('avb_pkmd must be a plain absolute path and the fastboot pin a sha256')
+    start, end = once(FACTORY_VARIABLES, original), once(FACTORY_SIGN_START, original)
+    if end.start() <= start.start():
+        raise AdapterFailed('factory variables do not precede sign_target_files_apks')
+    variables = original[start.start():end.start()]
+    avb = once(FACTORY_AVB_PKMD, variables)
+    variables = variables[:avb.start()] + 'AVB_PKMD=' + shlex.quote(str(avb_pkmd)) + variables[avb.end():]
+    image, fastboot = once(FACTORY_IMG, original), once(FACTORY_FASTBOOT, original)
+    once(FACTORY_SOURCE, original)
+    if not image.start() < original.index('source device/common/generate-factory-images-common.sh') < fastboot.start():
+        raise AdapterFailed('the factory tail is not img_from_target_files, then the generator, then optimize-factory-image')
+    tail = original[image.start():fastboot.end()] + '\n'
+    tail = tail.replace(fastboot.group(0), (f"printf '%s  bin/fastboot\\n' {fastboot_sha256} | sha256sum --check --status"
+        " || { echo 'bin/fastboot differs from the fastboot pin' >&2; exit 1; }\n") + 'bin/' + fastboot.group(0), 1)
+    body = variables + tail
+    for forbidden in ('KEY_DIR', 'ssh-keygen', 'id_ed25519', 'sign_target_files_apks', 'ota_from_target_files', 'decrypt-keys'):
+        if forbidden in body:
+            raise AdapterFailed(f'the factory-only script would still contain {forbidden}')
+    header = ('#!/bin/bash\nset -o errexit -o pipefail\n'
+              "user_error() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+              f'DEVICE={device}\nBUILD_NUMBER={build}\nset -- "$DEVICE" "$BUILD_NUMBER"\n'
+              'TARGET_FILES=$DEVICE-target_files.zip\nTARGET_FILES_INPUT=$PWD/$TARGET_FILES\n'
+              'export PATH="$PWD/bin:/usr/bin:/bin"\n')
+    return header + body
 
 def candidate_file(sha, path, repo=ROOT):
     result = subprocess.run(['git', '-C', str(repo), 'show', f'{sha}:{path}'], capture_output=True)
@@ -244,6 +365,7 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         raise AdapterSetupMissing(missing)
     sign, source_root = config['host']['sign'], Path(os.getcwd())
     device, build, stamp, sha = config['target']['device'], env['BUILD_NUMBER'], env['BUILD_DATETIME'], env['ROSE_CANDIDATE_SHA']
+    factory = factory_inputs(sign, device)
     release_dir = Path(env['ROSE_RELEASE_DIR'])
     notes = release_notes(sign, sha, device, build)
     releases = prepare_release_dir(source_root, device, build, sha, env.get('ROSE_SIGN_RESUME_ARCHIVE') or None)
@@ -271,7 +393,7 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         wrappers, trace_path = release_dir/'key-path-tools', release_dir/'sign-trace.jsonl'
         write_key_path_wrappers(wrappers, release_keys, trace_path)
         derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase,
-            release_keys, wrappers, trace_path)
+            release_keys, wrappers, trace_path, factory=factory)
         script = private/'generate-release-derived.sh'
         script.write_text(derived)
         java = Path(sign['javaHome'])
@@ -298,6 +420,39 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         if not produced.is_file():
             raise AdapterFailed(f'release script did not produce {produced.name}')
         shutil.copyfile(produced, target)
+    factory_record = None
+    if factory is not None:
+        # Never a public asset and never in `outputs` (whose exact set recovery checks); kept beside them durably.
+        install = output/factory['installTemplate'].format(device=device, build=build)
+        if not install.is_file():
+            raise AdapterFailed(f'release script did not produce {install.name}')
+        if Path(f'{install}.sig').exists():
+            raise AdapterFailed(f'{install.name}.sig exists although archive signing was removed')
+        signature = None
+        if factory['pin'] is not None:
+            signing = factory['signing']
+            with host_secrets.private_directory('rose-factory-signing-') as private:
+                key = host_secrets.fetch_secret(signing['project'], signing['keySecret'], signing['keyVersion'],
+                    private/factory_signing.KEY_FILE, gcloud)
+                passfile = host_secrets.fetch_secret(signing['project'], signing['passphraseSecret'],
+                    signing['passphraseVersion'], private/'passphrase', gcloud)
+                try:
+                    signature = factory_signing.sign_and_verify(install, key, passfile, factory['pin'], private,
+                                                                signing['sshKeygen'], FACTORY_RUNNER[0])
+                except factory_signing.Refused as error:
+                    raise AdapterFailed(f'factory archive signing refused: {error}') from None
+        (release_dir/'factory').mkdir()
+        shutil.copyfile(install, release_dir/'factory'/install.name)
+        if signature:
+            shutil.copyfile(Path(f'{install}.sig'), release_dir/'factory'/signature['file'])
+        digest = hashlib.sha256()
+        with open(install, 'rb') as f:
+            for block in iter(lambda: f.read(8 << 20), b''):
+                digest.update(block)
+        factory_record = {'file': install.name, 'sha256': digest.hexdigest(), 'size': install.stat().st_size,
+            'fastbootSha256': factory['fastbootSha256'], 'signature': signature,
+            'signatureBasis': f'signed and verified against os/flavors/{device}.json factorySigning' if signature else
+                f'unsigned: os/flavors/{device}.json factorySigning principal and publicKey are not bound'}
     feed = config['publication']['channels']['beta']['feedChannel']
     (public/f'{device}-stable').write_text(f'{build} {stamp} {device} {feed}\n')
     (public/'UPDATE.md').write_bytes(notes)
@@ -308,9 +463,14 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         'keyDirectoryInArchive': key_location, 'releaseScriptSha256': sha256(original), 'derivedScriptSha256': sha256(derived.encode()),
         'outputs': {p.name: sha256(p.read_bytes()) for p in sorted(public.iterdir())},
         'signedTargetFilesSha256': sha256((release_dir/'signed-target_files.zip').read_bytes())}
+    if factory_record:
+        receipt['factory'] = factory_record
+        shutil.copytree(release_dir/'factory', releases/'factory')
     (release_dir/'sign-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
-    (releases/SIGNED).write_text(json.dumps({'candidate': sha, 'build': build, 'outputs': receipt['outputs'],
-        'signedTargetFilesSha256': receipt['signedTargetFilesSha256']}, sort_keys=True) + '\n')
+    marker = {'candidate': sha, 'build': build, 'outputs': receipt['outputs'], 'signedTargetFilesSha256': receipt['signedTargetFilesSha256']}
+    if factory_record:
+        marker['factory'] = factory_record
+    (releases/SIGNED).write_text(json.dumps(marker, sort_keys=True) + '\n')
     return 0
 
 if __name__ == '__main__':

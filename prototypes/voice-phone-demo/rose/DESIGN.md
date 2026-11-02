@@ -73,8 +73,12 @@ uvicorn on 127.0.0.1:8091). The dashboard is served at `/`.
 
 ### Brain (`rose/brain.py`)
 
-- Loads Qwen3.6-35B-A3B via `mlx_vlm.load`, uses the text language model
-  directly (no vision in the talker path).
+- Loads Qwen3.6-35B-A3B via `mlx_vlm.load` and drives its language model
+  directly. Images go in with `Sequence.append_image`: the vision tower runs in
+  groups of blocks and the merged embeddings prefill in 32-token chunks, each
+  unit under ~60 ms. Qwen's M-RoPE gives image patches 3-D positions, so a
+  `Sequence` keeps its own next position (`pos`, saved in marks), which falls
+  behind the token count after an image.
 - `Sequence`: a cache list for one conversation. `prefill(tokens)` (chunked
   generator), `decode(sampler, max_tokens)` (generator of token ids),
   `snapshot()` / `restore(snap)` (KV caches trimmed by offset, linear-attention
@@ -174,10 +178,17 @@ State: `listening | user_speaking | thinking | speaking`, plus background tasks.
 ### Background tasks (`rose/tasks.py`)
 
 - Phone agent: forks a pre-filled agent sequence (system prompt + action
-  tools), observes the compact UI tree (text; no screenshots by default),
+  tools), observes the compact UI tree plus, on the real phone, a screenshot
+  (vision; `tap_point` for things the tree lacks),
   acts with `open_app`, `tap`, `type_text`, `back`, `home`, `finish(summary)`;
   several actions per step allowed. P3 priority, prompt cache across steps.
   Taps are animated on the dashboard phone (~250 ms each).
+- Calculations (real phone): `press_keys("50*51/2=")` taps a calculator's keys
+  by name, one normal tap each (only digits and operators, so never a Send),
+  and the prompt asks for the shortest expression with the same result. A
+  success finish for a calculation goal is refused while its summary claims a
+  number the screen does not show (`_unseen_number`): on the Pixel 10 the agent
+  once "calculated" 1+...+50 by typing 1225 into nothing and reported it.
 - Deep think: forks the talker context and reasons with thinking on, then
   returns a short answer for Rose to say.
 - Every task: id, goal, status, steps (for the dashboard), cancel event,
@@ -192,6 +203,60 @@ per-task views (two tasks can drive the phone at once), and Music
 distance, address and hours; walking and driving directions). The talker's
 context includes what is playing and any active directions; places are only
 known by looking them up in Maps.
+
+### Rose's workspace (`rose/background.py`, real phone)
+
+RoseOS phones carry a background controller (`dev.pixel.backgroundcontrol`):
+Android ComputerControl runs one app on a separate virtual display, with a
+floating viewer and an ongoing notification whose Stop belongs to the owner.
+Rose's phone tasks run there by default, so the screen in the user's hand
+stays theirs. `Workspace` is a port of the Node backend's `BackgroundPhone`
+(`workspace/rose-agent/server/background-phone.mjs`), reached with the
+ordinary `app_command` over the existing link (no phone-side change):
+
+- One target app per session; another app starts a new one, `home` closes it.
+- The controller needs the latest snapshot id (< 30 s) for every action, and a
+  screenshot or an accepted action clears its node map. So each node action
+  re-inspects and re-finds the same node by its identity (refusing
+  `stale_screen` if it is gone or ambiguous), `back` gets a fresh snapshot,
+  and an agent step's screenshot is taken before its tree.
+- Schema 3 tags a session with the `taskId` given at start: Rose uses one id
+  per workspace generation (`rose-ws-<nonce>-<n>-<package>`, the nonce new per
+  process because the controller remembers owner-stopped ids across Rose
+  restarts) so a follow-up task ("open Calculator", then "add 1 to 50")
+  continues in the same workspace.
+- Lifetime: kept open after a task; closed by home, another app, the owner's
+  Stop (latched: never reopened for that task), 180 s unused
+  (`WORKSPACE_IDLE_S`), and reset. A Stop pressed while the workspace sat open
+  between tasks only closes it (never charged to the next task); a Stop around
+  a link reconnect is still matched to the session held before it. The
+  controller's own deadline, and a session Android closed or failed, close the
+  workspace (`workspace_closed`: "open_app opens the app there again"); a reused
+  session is renewed at open_app before it nears 200 operations / 600 s.
+- The probe decides only on a definite answer: a controller state (workspace)
+  or "unavailable" (visible screen). A timeout or an error is "don't know":
+  the task stays off the user's screen and the next read probes again.
+- Sends: the runner judges the real control (text, description, view id such
+  as `ic_send`; for `tap_point` what is under the point), never taps money or
+  commitments (payments, "Send $20", transfers, rides, bookings), and a
+  confirmed Send needs the exact approved draft in the field on the same
+  workspace session. A draft is kept 170 s (`READY_TTL_S`), inside the idle
+  close.
+- Refusals are said plainly and never worked around: the OS allowlist
+  (`target_not_allowed`: "Android doesn't let Rose open Amazon in her
+  workspace; nothing was opened."), consent, a blocked session (kept), and the
+  lock ("The phone is locked; unlock it and I'll continue."). Nothing then
+  happens on the visible screen.
+- A task uses the visible screen only when started `on_screen`
+  (`RealPhone.session(name, on_screen=True)`) or when the phone has no
+  controller (older phones, the Fold). Alarms, timers, music and media keys
+  stay direct intents (audio and alarms are the user's), directions too
+  (navigation is for the user); `search_places` opens Maps in the workspace.
+- Surface for the talker and the agent: `background_available()`,
+  `workspace_app()`, `look_workspace()` (next to `look()`, the visible
+  screen), `RealSession.background`. The fake phone has no workspace
+  (`False`/`None`), so the eval is unchanged. `/api/realphone` shows the
+  workspace state; `ROSE_WORKSPACE=off` keeps every task on the visible screen.
 
 ### Dashboard (`rose/web/`)
 

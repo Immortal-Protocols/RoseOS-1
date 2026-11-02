@@ -281,12 +281,22 @@ def matches(asset, expected):
     digest, size = expected
     return asset.get('state', 'uploaded') == 'uploaded' and asset.get('size') == size and asset.get('digest') in (None, 'sha256:' + digest)
 
+def os_latest(client, publication):
+    """(tag, build) of the current Latest when it is an OS release of latestTagPattern (frankel-{build}), else None.
+    Publication preserves whatever OS release is Latest: an app prerelease, no Latest or a move back is refused; a
+    legitimate newer OS promotion during publication is not."""
+    prefix, _, suffix = publication['latestTagPattern'].partition('{build}')
+    tag = client.latest_tag()
+    match = re.fullmatch(re.escape(prefix) + r'(\d{10})' + re.escape(suffix), tag or '')
+    return (tag, match[1]) if match else None
+
 def publish(client, config, document, files, directory, download_dir, source=None):
     """Own versioned prerelease holding exactly `files`; Latest is checked before and after. Returns the release."""
     publication = config['appRelease']['publication']
     tag, name = document['tag'], f'Rose Agent {document["versionCode"]} ({document["versionName"]})'
-    if client.latest_tag() != publication['preserveLatest']:
-        raise CheckFailed(f'Latest is not {publication["preserveLatest"]}; nothing is published')
+    before = os_latest(client, publication)
+    if before is None:
+        raise CheckFailed(f'Latest is not an OS release ({publication["latestTagPattern"]}); nothing is published')
     origin = (f'the same signed bytes RoseOS frankel {source["osBuild"]} bundles (RoseOS-1 {document["candidate"]}), '
         'not rebuilt or re-signed' if source else f'from RoseOS-1 {document["candidate"]}')
     body = (f'Rose Agent {document["versionName"]} for {document["packageName"]}, versionCode {document["versionCode"]}, '
@@ -315,8 +325,9 @@ def publish(client, config, document, files, directory, download_dir, source=Non
     release = client.get_release(release['id'])
     if release.get('draft') or not release.get('prerelease') or release.get('tag_name') != tag:
         raise CheckFailed(f'{tag} is not a published prerelease')
-    if client.latest_tag() != publication['preserveLatest']:
-        raise CheckFailed(f'Latest moved away from {publication["preserveLatest"]}')
+    after = os_latest(client, publication)
+    if after is None or int(after[1]) < int(before[1]):
+        raise CheckFailed(f'Latest moved away from {before[0]} (now {after[0] if after else "not an OS release"})')
     download_dir = Path(download_dir)
     download_dir.mkdir(parents=True)
     assets = {a['name']: a for a in release.get('assets', [])}

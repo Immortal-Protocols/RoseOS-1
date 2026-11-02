@@ -420,16 +420,17 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
         self.assertIn("    if: always() && needs.builder.result == 'success' && ", self.jobs['publisher'])  # skipped whenever builder is
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, models-sign, rango-retained, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export\]\n        default: latest-beta\n")
+        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, rango-factory-package, models-sign, rango-retained, blazer-prep, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe\]\n        default: latest-beta\n")
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']
         self.assertIn("    needs: controller\n    if: inputs.mode == 'app-only'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", app)
         runs = re.findall(r'^      (?:- |  )run: (.+)$', app, re.M)
         self.assertEqual(runs, ['python3 scripts/release-pipeline.py preflight --job builder', 'python3 scripts/host-app-release.py --check',
-            '|', 'python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"',
+            '|', 'python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"',
+            'python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"',
             'ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"',
             'python3 scripts/actions-gcp-login.py logout', 'test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"'])
         for absent in ('os-release-stage', 'secrets.', 'PIXEL_OTA', 'GCP_CONTROLLER', 'release-pipeline.py build', 'release-pipeline.py sign'):
@@ -438,12 +439,23 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         # Signer access is dropped and the attempt removed on success or failure.
         self.assertIn('      - name: Drop signer access\n        if: always()\n', app)
         self.assertIn('      - name: Remove the app attempt from the builder\n        if: always()\n', app)
+        # AGENT-BETA-AUTO: apps=auto allocates before any signer access; a skip (already published) builds and signs nothing.
+        self.assertLess(app.index('release-allocate.py app'), app.index('actions-gcp-login.py login'))
+        self.assertIn("      - name: Allocate Rose Agent (apps=auto)\n        id: allocate\n        if: env.APPS == 'auto'\n", app)
+        for step in ('Signer access for app signing', 'Build, sign and verify Rose Agent', 'Private Actions artifact'):
+            self.assertIn(f"      - name: {step}\n        if: env.APP_SKIP != 'true'\n", app)
+        self.assertIn('      app_skip: ${{ steps.allocate.outputs.app_skip }}\n', app)
 
     def test_guard_limits_app_only_to_rose_agent_without_resume_or_promotion(self):
         guard = self.jobs['guard']
+        # AGENT-BETA-AUTO: the literal apps=auto is admitted only for app-only (the builder allocates the version).
+        self.assertIn('[[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3', guard)
+        publisher = self.jobs['app-publisher']
+        self.assertIn('      CANDIDATE_SHA: ${{ needs.app-builder.outputs.candidate_sha || inputs.candidate_sha }}\n', publisher)
+        self.assertIn('      APPS: ${{ needs.app-builder.outputs.apps || inputs.apps }}\n', publisher)
         self.assertIn('PROMOTE: ${{ inputs.promote }}', guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
-        check = re.search(r"\[\[ \"\$MODE\" != app-only \]\] \|\| python3 -c '(.+)'", guard)[1]
+        check = re.search(r"\[\[ \"\$MODE\" != app-only \|\| \"\$APPS\" == auto \]\] \|\| python3 -c '(.+)'", guard)[1]
         for apps, ok in (([['dev.pixel.voice', 304]], True), ([['dev.pixel.voice', 304], ['dev.pixel.backgroundcontrol', 28]], False),
                          ([['dev.pixel.calculator.agent', 5]], False)):
             result = subprocess.run([PY, '-c', check], env=dict(os.environ, APPS=json.dumps(apps)), capture_output=True)

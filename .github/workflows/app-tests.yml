@@ -9,6 +9,20 @@ on:
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
+      - 'os/overlays/**'
+      - 'os/patches/**'
+      - 'os/tests/test_tray_contract.py'
+      - 'os/tests/AgentStatusControlsTest.java'
+      - 'os/tests/AgentTrayLinkTest.java'
+      - 'os/tests/test_rose_switcher.py'
+      - 'os/tests/RoseAgentWorkTest.java'
+      - 'os/tests/fixtures/rose-switcher/**'
+      - 'os/tests/test_automated_devices_contract.py'
+      - 'os/tests/automated-devices/**'
+      - 'os/tests/fixtures/automated-devices/**'
+      - 'scripts/background_apks.py'
+      - 'scripts/apply-os-changes.py'
+      - 'os/devices/pixel10.json'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   push:
@@ -18,6 +32,20 @@ on:
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
+      - 'os/overlays/**'
+      - 'os/patches/**'
+      - 'os/tests/test_tray_contract.py'
+      - 'os/tests/AgentStatusControlsTest.java'
+      - 'os/tests/AgentTrayLinkTest.java'
+      - 'os/tests/test_rose_switcher.py'
+      - 'os/tests/RoseAgentWorkTest.java'
+      - 'os/tests/fixtures/rose-switcher/**'
+      - 'os/tests/test_automated_devices_contract.py'
+      - 'os/tests/automated-devices/**'
+      - 'os/tests/fixtures/automated-devices/**'
+      - 'scripts/background_apks.py'
+      - 'scripts/apply-os-changes.py'
+      - 'os/devices/pixel10.json'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   workflow_dispatch:
@@ -32,7 +60,9 @@ concurrency:
 jobs:
   offline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The offline suite alone now takes about 9.3-9.5 min on the hosted runner (run 41498203106 attempts 1 and 2),
+    # plus the PR288 no-skip step after it; 10 min cut that step off. Every step and skip check is unchanged.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -43,5 +73,27 @@ jobs:
           node --version
           python3 --version
           java -version
+      - name: Models PR288 inputs (pinned head e1b702e voice-phone-demo, its pinned numpy/pillow/fastapi, cryptography)
+        run: |
+          set -euo pipefail
+          pr288="$RUNNER_TEMP/pr288"
+          mkdir -p "$pr288"
+          git archive e1b702ee3b8a6bf656b5cc59bd765787622ae543 prototypes/voice-phone-demo | tar -x -C "$pr288"
+          python3 -m venv "$RUNNER_TEMP/pr288-venv"
+          "$RUNNER_TEMP/pr288-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
+            $(grep -E '^(numpy|pillow|fastapi)==' "$pr288/prototypes/voice-phone-demo/requirements.txt") cryptography
+          "$RUNNER_TEMP/pr288-venv/bin/pip" list --disable-pip-version-check | grep -iE '^(numpy|pillow|fastapi|cryptography) '
+          echo "ROSE_PR288_DIR=$pr288/prototypes/voice-phone-demo" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/pr288-venv/bin" >> "$GITHUB_PATH"
       - name: Offline suite
         run: bash scripts/test-local.sh
+      - name: Models PR288 cases executed, not skipped (only the unpinned jinja2 render case may skip)
+        run: |
+          set -euo pipefail
+          for t in test_vllm_brain test_contract test_pr288_tasks test_coop test_speech_wire test_preflight test_listen test_vision; do
+            out="$(python3 -I "workspace/models/rose_cloud/tests/$t.py" -v 2>&1)" || { printf '%s\n' "$out"; exit 1; }
+            printf '%s\n' "$out" | grep -E '^(Ran|OK|FAILED)'
+            # The only skip allowed: test_vision's jinja2 render case (jinja2 is not a pinned PR288 dependency).
+            skips="$(grep -E " \.\.\. skipped '" <<<"$out" | grep -v "^RAW_TEMPLATE with jinja2 .* skipped 'jinja2 not installed'$" || true)"
+            if [[ -n "$skips" ]]; then printf '%s\n' "$skips"; echo "$t skipped cases" >&2; exit 1; fi
+          done

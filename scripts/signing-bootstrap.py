@@ -5,7 +5,9 @@ One reviewed profile from os/signing-bootstrap/profiles.json selects what may be
 the Fold key files) or models-v0 (OCT30-INFRA-S012: one PKCS12 store, alias rose-models, made with the measured
 keytool through its password-file options, its reloaded public listing and certificate checked before import, and the
 two secrets rechecked empty immediately before the first add). Both are resource-bound and both refuse until their
-installed tool identities are measured. A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
+installed tool identities are measured. FOLD-FACTORY-IDENTITY adds archive.format "openssh-ed25519" (one
+passphrase-encrypted factory-archive SSH key made through scripts/factory_signing.py's pinned askpass route; its
+profile fold-rango-factory-v1 is unbound and refuses until its containers, access, tool identity and approval exist). A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
 
 guard      on the hosted guard job, before the controller starts: the mode, profile and options must be exactly a
            bootstrap of a ready profile, bound to this workflow commit on main from a manual dispatch.
@@ -52,6 +54,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_secrets  # noqa: E402
+import factory_signing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES_PATH = 'os/signing-bootstrap/profiles.json'
@@ -60,11 +63,14 @@ MODE = 'signing-bootstrap'
 RECEIPT_SCHEMA = 'roseos.signing-bootstrap-receipt.v1'
 OUTPUTS = ('keys.tar.gz', 'passphrase')
 PKCS12_OUTPUTS = ('keystore.p12', 'passphrase')
+OPENSSH_OUTPUTS = (factory_signing.KEY_FILE, 'passphrase')
 
 
 def profile_outputs(profile):
-    """The exact workspace projection a generator must leave: a tar of key files (Fold) or one PKCS12 store (Models)."""
-    return PKCS12_OUTPUTS if (profile.get('archive') or {}).get('format') == 'pkcs12' else OUTPUTS
+    """The exact workspace projection a generator must leave: a tar of key files (Fold), one PKCS12 store (Models) or
+    one encrypted OpenSSH key (factory-archive signing)."""
+    kind = (profile.get('archive') or {}).get('format')
+    return PKCS12_OUTPUTS if kind == 'pkcs12' else OPENSSH_OUTPUTS if kind == 'openssh-ed25519' else OUTPUTS
 MEMBER = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}')
 SECRET_NAME = re.compile(r'[A-Za-z0-9_-]{1,255}')
 HEX64 = re.compile(r'[0-9a-f]{64}')
@@ -144,8 +150,11 @@ def readiness(name, profiles, now):
     missing = (profile.get('generation') or {}).get('missing') or []
     if missing:
         reasons.append(('recipe-missing', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing)))
-    reasons += [('recipe-missing' if code == 'missing' else 'recipe-invalid', detail)
-        for code, detail in recipe_problems(profile)]
+    if (profile.get('archive') or {}).get('format') != 'openssh-ed25519':  # fixed generate_openssh, no recipe vocabulary
+        reasons += [('recipe-missing' if code == 'missing' else 'recipe-invalid', detail)
+            for code, detail in recipe_problems(profile)]
+    elif not factory_signing.PRINCIPAL.fullmatch(str(profile.get('principal'))):
+        reasons.append(('profile-principal', 'an openssh-ed25519 profile needs a plain principal'))
     access = profile.get('access', {})
     margin = timedelta(seconds=access.get('minimumRemainingSeconds', 1800))
     for key in ('addVersionExpires', 'accessorExpires'):
@@ -519,6 +528,8 @@ def generate_keys(workspace, profile, runner, token=None):
     missing = (profile.get('generation') or {}).get('missing') or []
     if missing:
         raise Blocked('recipe-missing', '; '.join(m['fact'] if isinstance(m, dict) else str(m) for m in missing))
+    if (profile.get('archive') or {}).get('format') == 'openssh-ed25519':
+        return generate_openssh(workspace, profile, token=token)
     problems = recipe_problems(profile)
     if problems:
         raise Blocked('recipe-missing' if problems[0][0] == 'missing' else 'recipe-invalid', problems[0][1])
@@ -713,6 +724,19 @@ def pkcs12_identity(cert_pem, listing, generation):
         raise Blocked('pkcs12-identity', '; '.join(problems))
     return {'certificateSha256': fingerprint, 'alias': expected['alias'], **{k: facts[k] for k in
         ('keyAlgorithm', 'keySize', 'signatureAlgorithm', 'subject', 'validityDays', 'notBefore')}}
+
+
+def generate_openssh(workspace, profile, runner=None, token=None):
+    """Factory-archive signing key: no recipe vocabulary; exactly factory_signing.generate_key, after the measured
+    ssh-keygen identity is approved. The passphrase reaches ssh-keygen only through the pinned askpass helper."""
+    identity = (profile.get('tools') or {}).get('ssh-keygen') or {}
+    if not tool_approved(identity):
+        raise Blocked('tool-unapproved', 'ssh-keygen: no measured installed path and sha256; nothing is run')
+    try:
+        public = factory_signing.generate_key(workspace, tool_path(identity), runner or factory_signing.run_bounded, token=token)
+    except factory_signing.Refused as error:
+        raise Blocked('generator-failed', str(error)) from None
+    return dict(public, principal=profile['principal'], namespace=factory_signing.NAMESPACE)
 
 
 def subprocess_runner(tool, argv, cwd, stdin_path, timeout=900, stdout_path=None):
@@ -979,7 +1003,7 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
         return stop('workspace-unprotected', 'workspace must be an owner-only directory')
     # Runtime revalidation: pinned tool trees are recomputed again immediately before anything runs.
-    for tool in sorted({step['tool'] for step in profile['generation']['recipe']}):
+    for tool in sorted({step['tool'] for step in profile['generation'].get('recipe') or []}):
         identity = profile['tools'][tool]
         if identity.get('kind') == 'pinned-tree':
             problem = pinned_tree_mismatch(executor, identity['trust'])
@@ -999,7 +1023,16 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     private.extend([passphrase, passphrase.strip()])
     if not passphrase.strip():
         return stop('passphrase-empty', 'passphrase output is empty', 'failed')
-    if outputs == PKCS12_OUTPUTS:
+    if outputs == OPENSSH_OUTPUTS:
+        try:
+            header = factory_signing.inspect_private(created/factory_signing.KEY_FILE)
+        except factory_signing.Refused as error:
+            return stop('unexpected-output', str(error), 'failed')
+        if not isinstance(generated, dict) or generated.get('publicKey') != header['publicKey'] \
+                or generated.get('principal') != profile.get('principal'):
+            return stop('unexpected-output', 'the reported public identity is not the generated key', 'failed')
+        identity = dict(header, principal=profile['principal'], namespace=factory_signing.NAMESPACE)
+    elif outputs == PKCS12_OUTPUTS:
         try:
             identity = verified_pkcs12(generated, created/'keystore.p12', profile)
         except Blocked as error:

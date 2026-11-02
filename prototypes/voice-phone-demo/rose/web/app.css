@@ -434,3 +434,58 @@ h2 { font-size: 13px; letter-spacing: 0.02em; color: var(--muted); text-transfor
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* ------------------------------------------------------- pair a phone */
+/* The QR always sits on white with its quiet zone, whatever the theme, so
+   the phone's camera sees black-on-white contrast. */
+.modal {
+  position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px;
+  background: color-mix(in srgb, #000 45%, transparent); animation: rise 0.15s ease-out;
+}
+.modal-card {
+  width: min(720px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 18px 22px 20px;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.icon-btn {
+  width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--panel);
+  font-size: 20px; line-height: 1; display: grid; place-items: center;
+}
+.icon-btn:hover { background: var(--panel-2); }
+.pair-body { display: flex; gap: 22px; align-items: flex-start; }
+.qr-box {
+  position: relative; flex: none; width: 316px; height: 316px; padding: 8px; border-radius: 14px;
+  background: #ffffff; border: 1px solid var(--line-strong); display: grid; place-items: center;
+}
+.qr-box img { display: block; width: 300px; height: 300px; image-rendering: pixelated; }
+.qr-box img:not([src]) { visibility: hidden; }
+.qr-box.stale img { opacity: 0.12; }
+.pair-done {
+  position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center;
+  border-radius: 14px; background: rgba(255, 255, 255, 0.94); color: #14663f; font-size: 18px; font-weight: 600;
+}
+.pair-info { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.pair-lead { margin: 0; }
+.pair-facts { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; }
+.pair-facts dt { color: var(--muted); }
+.pair-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pair-host { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pair-host + .pair-host { margin-top: 4px; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.small { font-size: 12px; }
+.pair-error { color: var(--bad); font-size: 13px; }
+#pair-new { align-self: flex-start; }
+.pair-sub { margin: 20px 0 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); text-transform: uppercase; }
+.pair-devices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.pair-device {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2);
+}
+.pair-device-text { min-width: 0; }
+.ghost.danger { color: var(--bad); }
+@media (max-width: 760px) {
+  .pair-body { flex-direction: column; align-items: center; }
+  .qr-box { width: min(316px, 100%); height: auto; aspect-ratio: 1; }
+  .qr-box img { max-width: 100%; height: auto !important; }
+}

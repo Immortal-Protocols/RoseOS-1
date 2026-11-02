@@ -19,8 +19,9 @@ import android.widget.FrameLayout;
 import android.widget.Toast;
 import java.lang.reflect.Method;
 
-/** A PiP presentation of the existing session. Closing it never closes the agent. A Watch from Rose
- * Agent binds it to one task and session (WatchBinding); it then closes rather than show any other. */
+/** The viewer of the existing session, full screen by default (automatic picture-in-picture is off; see
+ * ViewerPresentation). Closing it never closes the agent. A Watch from Rose Agent binds it to one task and session
+ * (WatchBinding); it then closes rather than show any other. */
 public final class AgentPipActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private View mirror;
@@ -30,7 +31,7 @@ public final class AgentPipActivity extends Activity {
     private boolean visible;
     private WatchBinding binding = WatchBinding.UNBOUND;
     private WatchBinding attachedBinding;
-    // Full screen for an explicit Watch; picture-in-picture for the automatic show and unbound reopens (ViewerPresentation).
+    // Full screen for every entry while automatic picture-in-picture is off (ViewerPresentation.AUTOMATIC_PIP).
     private ViewerPresentation.Mode presentation;
 
     @Override public void onCreate(Bundle saved) {
@@ -41,16 +42,21 @@ public final class AgentPipActivity extends Activity {
         if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
         presentation = recreated ? ViewerPresentation.restore(saved.getString(KEY_PRESENTATION))
             : ViewerPresentation.forEntry(binding.mode == WatchBinding.Mode.BOUND, null);
-        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+        // Only the floating presentation needs picture-in-picture; the full-screen viewer works without it.
+        if (ViewerPresentation.entersPip(presentation)
+                && !getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             fail("Picture-in-picture is unavailable on this phone", null);
             return;
         }
         synchronized (Controller.class) {
-            if (Controller.session == null) {
+            // The bound session's own slot, or slot 0 for an unbound entry while no other session is live (never a guess).
+            Controller.Slot viewed = Controller.viewed(binding);
+            if (viewed == null) { unavailable(); return; }
+            if (viewed.session == null) {
                 fail("Start an agent task first, then tap its notification to watch", null);
                 return;
             }
-            if (!binding.allows(Controller.id, Controller.taskId)) { unavailable(); return; }
+            if (!binding.allows(viewed.id, viewed.taskId)) { unavailable(); return; }
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         getWindow().setDecorFitsSystemWindows(false);
@@ -79,13 +85,14 @@ public final class AgentPipActivity extends Activity {
 
     private PictureInPictureParams parameters() {
         int width, height;
-        synchronized (Controller.class) { width = Controller.width; height = Controller.height; }
+        synchronized (Controller.class) { Controller.Slot viewed = Controller.viewed(binding); width = viewed == null ? 0 : viewed.width; height = viewed == null ? 0 : viewed.height; }
         if (width <= 0 || height <= 0) { width = 9; height = 20; }
         // Android's standard PiP window permits ratios from 1:2.39 to 2.39:1.
         double ratio = Math.max(100.0 / 239, Math.min(239.0 / 100, (double) width / height));
         PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
             .setAspectRatio(new Rational((int) Math.round(ratio * 10000), 10000))
-            .setAutoEnterEnabled(true)
+            // Leaving a full-screen viewer (Home, another app) never floats it on its own.
+            .setAutoEnterEnabled(ViewerPresentation.AUTOMATIC_PIP)
             .setSeamlessResizeEnabled(false);
         Rect bounds = new Rect();
         if (frame != null && frame.getGlobalVisibleRect(bounds)) builder.setSourceRectHint(bounds);
@@ -106,8 +113,8 @@ public final class AgentPipActivity extends Activity {
         WatchBinding incoming = fromIntent(intent);
         binding = WatchBinding.next(binding, incoming);
         if (binding.mode == WatchBinding.Mode.INVALID) { unavailable(); return; }
-        // An explicit Watch is shown full screen and is never pushed back into the floating view here; launching the
-        // viewer's task brings it out of picture-in-picture. An unbound reopen keeps the current presentation.
+        // Every entry is shown full screen and is never pushed back into the floating view here; launching the viewer's
+        // task brings it out of picture-in-picture.
         presentation = ViewerPresentation.forEntry(incoming.mode == WatchBinding.Mode.BOUND, presentation);
         if (visible) { handler.removeCallbacks(refresh); handler.post(refresh); }
         if (frame != null && ViewerPresentation.entersPip(presentation)) frame.post(() -> enterFloatingView());
@@ -157,10 +164,14 @@ public final class AgentPipActivity extends Activity {
             if (!visible || isFinishing() || setSession == null) return;
             Object current;
             boolean allowed;
+            boolean ambiguous;
             synchronized (Controller.class) {
-                current = Controller.session;
-                allowed = binding.allows(Controller.id, Controller.taskId);
+                Controller.Slot viewed = Controller.viewed(binding);
+                ambiguous = viewed == null;
+                current = viewed == null ? null : viewed.session;
+                allowed = viewed != null && binding.allows(viewed.id, viewed.taskId);
             }
+            if (ambiguous) { unavailable(); return; }
             if (current == null) { finishAndRemoveTask(); return; }
             // Same session re-tagged to another task, or a different session: never follow it.
             if (!allowed) { unavailable(); return; }
@@ -172,10 +183,11 @@ public final class AgentPipActivity extends Activity {
                 } catch (Throwable error) { fail("The agent view could not attach", error); return; }
                 // The controller may have moved on while attaching; re-check before showing a frame.
                 synchronized (Controller.class) {
-                    allowed = Controller.session == current && binding.allows(Controller.id, Controller.taskId);
+                    Controller.Slot viewed = Controller.viewed(binding);
+                    allowed = viewed != null && viewed.session == current && binding.allows(viewed.id, viewed.taskId);
                 }
                 if (!allowed) { unavailable(); return; }
-                android.util.Log.i("PixelAgentPip", "attached session=" + Controller.id);
+                android.util.Log.i("PixelAgentPip", "attached " + (binding.mode == WatchBinding.Mode.BOUND ? "bound" : "unbound") + " session");
             }
             handler.postDelayed(this, 500);
         }

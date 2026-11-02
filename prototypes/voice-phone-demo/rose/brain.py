@@ -11,6 +11,15 @@ DeltaNet state arrays, so rewinding to a mark is O(1) and exact.
 
 Prompts are never re-rendered: each Sequence appends token segments built
 from the chat template's own formats, so the cache is always valid.
+
+Images (``Sequence.append_image``) go through the model's own vision tower,
+one small unit at a time (patch embedding, a few vision blocks, the merger),
+and their merged embeddings are prefilled in chunks like text. Qwen3.5 uses
+M-RoPE: every token has a 3-D position (t, h, w). Text tokens use the same
+value on all three axes; an image's tokens use (base, base + row, base + col),
+and the text after it continues at base + max(rows, cols). A Sequence keeps
+that next text position in ``pos`` (equal to the token count until the first
+image), and marks and forks carry it.
 """
 
 from __future__ import annotations
@@ -29,6 +38,24 @@ REPO = os.environ.get("ROSE_BRAIN", "mlx-community/Qwen3.6-35B-A3B-4bit")
 IM_START, IM_END = "<|im_start|>", "<|im_end|>"
 GEN_FAST = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
 GEN_THINK = "<|im_start|>assistant\n<think>\n"
+
+# Screenshots are scaled so their long side is at most this many pixels
+# before encoding. Measured on 1248x1972 Fold cover screenshots
+# (rose/tests/bench_vision.py, M-series GPU shared with a running server):
+#   side   tokens  encode ms  prefill ms  reads every visible item
+#    640     260      115        380      no (misreads a half-covered row)
+#    768     360      157        525      yes (Claude, Settings, Maps, Spotify)
+#    896     504      230        775      yes
+#   1024     640      312       1070      yes (skips the half-covered row)
+#   1280    1000      610       1720      yes
+# 768 reads everything 896+ does at ~2/3 of the cost (~0.7 s per screenshot).
+IMAGE_MAX_SIDE = 768
+# Each yielded unit of image work aims to stay under this many milliseconds.
+UNIT_BUDGET_MS = 60.0
+# Image embeddings are prefilled this many tokens per unit: one unit costs
+# ~33 ms at 16, ~46 ms at 32, ~72 ms at 48, ~144 ms at 128 (a fixed ~20 ms
+# per forward), so 32 is the largest chunk inside the budget.
+IMAGE_CHUNK = 32
 
 
 def user_segment(text: str) -> str:
@@ -57,6 +84,7 @@ class Mark:
     tokens: int
     state: list[Any]
     logits: Any
+    pos: int  # next text position (Sequence.pos)
 
 
 class Brain:
@@ -72,6 +100,11 @@ class Brain:
         self.im_end = self._single("<|im_end|>")
         self.eos = {self.im_end, self._single("<|endoftext|>")}
         self.tool_call_start = self._single("<tool_call>")
+        cfg = self.model.config
+        self.vision_start = cfg.vision_start_token_id
+        self.vision_end = cfg.vision_end_token_id
+        self.image_pad = cfg.image_token_id
+        self.merge = cfg.vision_config.spatial_merge_size
         self.load_s = time.perf_counter() - t
 
     def _single(self, text: str) -> int:
@@ -94,6 +127,107 @@ class Brain:
             add_generation_prompt=False, enable_thinking=False, preserve_thinking=True)
         return rendered[: rendered.index(f"{IM_START}user")]
 
+    # ------------------------------------------------------------ images
+    def image_size(self, width: int, height: int, max_side: int | None = None) -> tuple[int, int]:
+        """(width, height) an image is resized to before encoding.
+
+        The long side is scaled down (never up) to ``max_side``, then both
+        sides are rounded to the vision grid (patch 16 x merge 2 = 32 px),
+        never past ``max_side``.
+        """
+
+        max_side = max_side or IMAGE_MAX_SIDE
+        unit = self.processor.image_processor.patch_size * self.merge
+        scale = min(1.0, max_side / max(width, height))
+        cap = max(unit, max_side // unit * unit)
+
+        def fit(n: int) -> int:
+            return min(cap, max(unit, round(n * scale / unit) * unit))
+
+        return fit(width), fit(height)
+
+    def image_tokens(self, width: int, height: int, max_side: int | None = None) -> int:
+        """Number of image pad tokens ``append_image`` adds for this size."""
+
+        w, h = self.image_size(width, height, max_side)
+        return int(self.processor.image_processor.num_image_tokens(h, w))
+
+    def image_inputs(self, image, max_side: int | None = None) -> tuple[mx.array, tuple[int, int, int]]:
+        """(pixel_values, (t, h, w) patch grid) for a PIL image (CPU only).
+
+        The image is resized here (bicubic, like the processor) to exactly
+        ``image_size``, so the processor's own smart resize leaves it as is.
+        """
+
+        from PIL import Image
+
+        image = image.convert("RGB")
+        size = self.image_size(*image.size, max_side)
+        if size != image.size:
+            image = image.resize(size, resample=Image.BICUBIC)
+        out = self.processor.image_processor([image])
+        grid = tuple(int(x) for x in out["image_grid_thw"][0])
+        return mx.array(out["pixel_values"]), grid
+
+    def encode_image(self, image, max_side: int | None = None, budget_ms: float = UNIT_BUDGET_MS,
+                     units: list[float] | None = None):
+        """Generator: the vision tower in small units; returns (ids, embeds, (rows, cols)).
+
+        ``ids`` are ``<|vision_start|>`` + one ``<|image_pad|>`` per merged
+        patch + ``<|vision_end|>``; ``embeds`` (1, len(ids), hidden) are their
+        input embeddings with the image features in place of the pads (what
+        mlx_vlm's get_input_embeddings builds); (rows, cols) is the merged
+        patch grid. Runs as mlx_vlm's VisionModel.__call__ for one image (this
+        model has no deepstack layers), yielding after the CPU preprocessing,
+        the patch embedding, every few blocks (as many as fit ``budget_ms``,
+        at least one) and the merger. Each unit's milliseconds go to ``units``.
+        """
+
+        vt = self.model.vision_tower
+        units = [] if units is None else units
+        t = time.perf_counter()
+        pixels, (gt, gh, gw) = self.image_inputs(image, max_side)
+        units.append((time.perf_counter() - t) * 1e3)
+        yield None
+
+        assert not vt.deepstack_visual_indexes, "deepstack vision features are not supported"
+        assert gt == 1, "still images have one temporal patch"
+        t = time.perf_counter()
+        grid_thw = mx.array([[gt, gh, gw]], dtype=mx.int32)
+        h = vt.patch_embed(pixels.astype(vt.patch_embed.proj.weight.dtype))
+        h = h + vt.fast_pos_embed_interpolate(grid_thw)
+        rot = vt.rot_pos_emb(grid_thw)
+        n_patch = h.shape[0]
+        h, rot = h.reshape(n_patch, -1), rot.reshape(n_patch, -1)
+        cu = mx.array([0, n_patch], dtype=mx.int32)  # one image: attention over all patches
+        mx.eval(h, rot)
+        units.append((time.perf_counter() - t) * 1e3)
+        yield None
+
+        i, per = 0, 1
+        while i < len(vt.blocks):
+            t = time.perf_counter()
+            for blk in vt.blocks[i : i + per]:
+                h = blk(h, cu_seqlens=cu, rotary_pos_emb=rot)
+            mx.eval(h)
+            ms = (time.perf_counter() - t) * 1e3
+            units.append(ms)
+            i += per
+            per = max(1, int(budget_ms * 0.8 / max(ms / per, 1e-3)))
+            yield None
+
+        t = time.perf_counter()
+        rows, cols = gh // self.merge, gw // self.merge
+        feats = vt.merger(h)
+        assert feats.shape[0] == rows * cols, (feats.shape, gh, gw)
+        edge = self.lm.model.embed_tokens(mx.array([self.vision_start, self.vision_end], dtype=mx.int32))
+        embeds = mx.concatenate([edge[:1], feats.astype(edge.dtype), edge[1:]])[None]
+        mx.eval(embeds)
+        units.append((time.perf_counter() - t) * 1e3)
+        yield None
+        ids = [self.vision_start] + [self.image_pad] * (rows * cols) + [self.vision_end]
+        return ids, embeds, (rows, cols)
+
     def sequence(self, name: str = "seq") -> "Sequence":
         return Sequence(self, name)
 
@@ -111,16 +245,19 @@ class Sequence:
         self.name = name
         self.cache = brain.lm.make_cache()
         self.tokens: list[int] = []
+        self.pos = 0  # next text position (M-RoPE); == len(tokens) until an image
         self.logits: mx.array | None = None  # next-token logits after self.tokens
         self.prefill_tokens = 0
         self.decode_tokens = 0
+        self.image_tokens = 0  # image pad tokens appended so far
+        self.last_image: dict | None = None  # stats of the latest append_image
 
     # ------------------------------------------------------------ marks
     def mark(self) -> Mark:
         from mlx_vlm.models.cache import ArraysCache
 
         state = [list(c.cache) if isinstance(c, ArraysCache) else c.offset for c in self.cache]
-        return Mark(len(self.tokens), state, self.logits)
+        return Mark(len(self.tokens), state, self.logits, self.pos)
 
     def rewind(self, mark: Mark) -> None:
         from mlx_vlm.models.cache import ArraysCache
@@ -131,6 +268,7 @@ class Sequence:
             else:
                 c.offset = s
         del self.tokens[mark.tokens:]
+        self.pos = mark.pos
         self.logits = mark.logits
 
     def fork(self, name: str) -> "Sequence":
@@ -152,26 +290,37 @@ class Sequence:
             other.cache.append(n)
         mx.eval([c.state for c in other.cache if getattr(c, "state", None) is not None])
         other.tokens = list(self.tokens)
+        other.pos = self.pos
         other.logits = self.logits
         other.prefill_tokens = other.decode_tokens = 0
+        other.image_tokens = self.image_tokens
+        other.last_image = None
         return other
 
     # ------------------------------------------------------------ forward
-    def _forward(self, ids: list[int], want_logits: bool) -> None:
-        off = len(self.tokens)
+    def _run(self, ids: list[int], pos: mx.array, want_logits: bool,
+             embeds: mx.array | None = None) -> None:
+        """One forward of ``ids`` (or their ``embeds``) at 3-D ``pos`` (3, 1, L)."""
+
         inputs = mx.array([ids], dtype=mx.int32)
-        pos = mx.arange(off, off + len(ids), dtype=mx.int32)[None]
         if want_logits:
-            out = self.brain.lm(inputs, cache=self.cache, position_ids=pos,
+            out = self.brain.lm(inputs, inputs_embeds=embeds, cache=self.cache, position_ids=pos,
                                 return_hidden=True, skip_logits=True)
             hidden = out.hidden_states[-1][:, -1:, :]
             self.logits = self.brain.logits_for(hidden)[0, -1].astype(mx.float32)
             mx.eval(self.logits, [c.state for c in self.cache])
         else:
-            self.brain.lm(inputs, cache=self.cache, position_ids=pos, skip_logits=True)
+            self.brain.lm(inputs, inputs_embeds=embeds, cache=self.cache, position_ids=pos,
+                          skip_logits=True)
             mx.eval([c.state for c in self.cache])
             self.logits = None
         self.tokens.extend(ids)
+
+    def _forward(self, ids: list[int], want_logits: bool) -> None:
+        # Text: the same position on all three M-RoPE axes.
+        pos = mx.arange(self.pos, self.pos + len(ids), dtype=mx.int32)
+        self._run(ids, mx.broadcast_to(pos[None, None], (3, 1, len(ids))), want_logits)
+        self.pos += len(ids)
 
     def prefill(self, ids: list[int], chunk: int = 256) -> Iterator[None]:
         """Append ``ids``; leaves next-token logits ready. Yields per chunk."""
@@ -183,6 +332,45 @@ class Sequence:
             self._forward(part, want_logits=i + chunk >= len(ids))
             self.prefill_tokens += len(part)
             yield None
+
+    def append_image(self, image, max_side: int | None = None, want_logits: bool = False,
+                     chunk: int = IMAGE_CHUNK, budget_ms: float = UNIT_BUDGET_MS) -> Iterator[None]:
+        """Append ``<|vision_start|>`` + image pads + ``<|vision_end|>`` for a PIL image.
+
+        Call it where the chat format puts an image: inside a user (or tool
+        response) turn, between text. Yields after every bounded unit: the
+        CPU resize/patchify, the patch embedding, a few vision blocks at a
+        time (as many as fit ``budget_ms``, at least one), the merger, and
+        each ``chunk`` of merged embeddings prefilled. Next-token logits are
+        left ready only with ``want_logits`` (usually text follows). Returns
+        the number of image tokens; stats go to ``self.last_image``.
+        """
+
+        units: list[float] = []
+        ids, embeds, grid = yield from self.brain.encode_image(image, max_side, budget_ms, units)
+        n_encode = len(units)
+        pos, end = image_positions(self.pos, grid)
+        t_pre = time.perf_counter()
+        total = len(ids)
+        for s in range(0, total, chunk):
+            t = time.perf_counter()
+            e = min(total, s + chunk)
+            self._run(ids[s:e], pos[..., s:e], want_logits and e == total, embeds[:, s:e])
+            self.prefill_tokens += e - s
+            units.append((time.perf_counter() - t) * 1e3)
+            yield None
+        n = total - 2
+        self.pos = end
+        self.image_tokens += n
+        patch = self.brain.model.vision_tower.config.patch_size * self.brain.merge
+        self.last_image = {
+            "tokens": n, "grid": grid, "size": (grid[1] * patch, grid[0] * patch),
+            "preprocess_ms": units[0], "encode_ms": sum(units[1:n_encode]),
+            "encode_max_ms": max(units[1:n_encode]),
+            "prefill_ms": (time.perf_counter() - t_pre) * 1e3, "prefill_max_ms": max(units[n_encode:]),
+            "max_unit_ms": max(units), "units": len(units), "unit_ms": units,
+        }
+        return n
 
     def append_text(self, text: str, chunk: int = 256) -> Iterator[None]:
         yield from self.prefill(self.brain.encode(text), chunk)
@@ -208,6 +396,24 @@ class Sequence:
             yield token
             if token in stop:
                 return
+
+
+def image_positions(start: int, grid: tuple[int, int]) -> tuple[mx.array, int]:
+    """M-RoPE positions (3, 1, rows*cols + 2) of an image segment, and the next text position.
+
+    As mlx_vlm's get_rope_index: ``<|vision_start|>`` (text) at ``start``,
+    the merged patches row by row at base + (0, row, col) with
+    base = start + 1, and ``<|vision_end|>`` at base + max(rows, cols).
+    """
+
+    rows, cols = grid
+    base = start + 1
+    r = mx.repeat(mx.arange(rows, dtype=mx.int32), cols)
+    c = mx.tile(mx.arange(cols, dtype=mx.int32), rows)
+    img = mx.stack([mx.zeros_like(r), r, c]) + base
+    end = base + max(rows, cols)
+    pos = mx.concatenate([mx.full((3, 1), start, mx.int32), img, mx.full((3, 1), end, mx.int32)], axis=1)
+    return pos[:, None, :], end + 1
 
 
 def _sample(logits: mx.array, s: Sampling, seen: dict[int, int]) -> int:

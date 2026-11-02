@@ -7,6 +7,11 @@ cd "$ROOT"
 node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent/tests/app-delivery.test.mjs workspace/rose-agent/tests/task-continuity.test.mjs workspace/rose-agent/tests/spoken-progress.test.mjs workspace/rose-agent/tests/renderer-recovery.test.mjs
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
 node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
+node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
+# Local Rose task events from the real PR318 producer, through the local() provider bridge.
+node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
+# Local Rose task list from the producer through the page and bridge into the native overview feed (LOCAL-TASK-FEED-002).
+node --test workspace/rose-agent/tests/local-task-feed.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
@@ -36,6 +41,12 @@ python3 os/background-control/tests/test_policy.py
 python3 os/background-control/tests/test_stop_wiring.py
 python3 os/background-control/tests/test_watch_wiring.py
 python3 os/background-control/tests/test_anyapp_wiring.py
+python3 os/background-control/tests/test_notification_wording.py
+python3 os/background-control/tests/test_preview_wiring.py
+python3 os/background-control/tests/test_current_apps_wiring.py
+python3 os/background-control/tests/test_current_apps_parity.py
+python3 os/background-control/tests/test_replacement_wiring.py
+python3 os/background-control/tests/test_multi_session_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
@@ -47,6 +58,7 @@ python3 os/tests/test_updater_releases.py
 python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 os/tests/test_rose_switcher.py
+python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_background_control_prototype.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
@@ -61,6 +73,7 @@ python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_release_chain.py
+python3 scripts/tests/test_agent_beta_auto.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
 python3 scripts/tests/test_signing_job.py
@@ -78,6 +91,19 @@ python3 scripts/tests/test_device_contract.py
 python3 scripts/tests/test_device_readiness.py
 python3 scripts/tests/test_signing_tool_observation.py
 python3 scripts/tests/test_blazer_preparation_preflight.py
+# Blazer (Pixel 10 Pro) flavor contract and unsigned build-only recipe (synthetic tree, fake runner).
+python3 os/tests/test_blazer_flavor.py
+python3 scripts/tests/test_blazer_build_only.py
+python3 scripts/tests/test_blazer_integration.py
+# Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
+python3 scripts/tests/test_factory_package.py
+# Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
+python3 scripts/tests/test_rango_factory_observe.py
+python3 scripts/tests/test_rango_factory_observe_workflow.py
+# Blazer (Pixel 10 Pro) preparation workflow wiring (stand-ins and the fake builder adapter; no host, download or vendor run).
+python3 scripts/tests/test_blazer_prep_workflow.py
+# Fold factory package workflow wiring (stand-ins and mocks; no host, lock, generation or inspection run).
+python3 scripts/tests/test_rango_factory_package_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -97,6 +123,25 @@ python3 qa/models/test_fixture_server.py
 python3 qa/systemui-trial/test_trial_plan.py
 # Models serving draft: pins, Agent Platform container shape and derived capacity stay consistent.
 python3 workspace/models/serving/tests/test_serving_config.py
+# Models rose_cloud (stand-in brain and speech, no model or audio). The PR288 cases need ROSE_PR288_DIR (PR288 head
+# e1b702e prototypes/voice-phone-demo) and its numpy/pillow/fastapi/cryptography; without them they skip and say why.
+python3 -I workspace/models/rose_cloud/tests/test_vllm_brain.py
+python3 -I workspace/models/rose_cloud/tests/test_contract.py
+python3 -I workspace/models/rose_cloud/tests/test_pr288_tasks.py
+python3 -I workspace/models/rose_cloud/tests/test_coop.py
+python3 -I workspace/models/rose_cloud/tests/test_speech_wire.py
+python3 -I workspace/models/rose_cloud/tests/test_preflight.py
+python3 -I workspace/models/rose_cloud/tests/test_listen.py
+python3 -I workspace/models/rose_cloud/tests/test_vision.py
+# Staging and its HEAD-only refused-destination probe against local 127.0.0.1 fixture servers (no Hub, PyPI or VM).
+python3 -I workspace/models/rose_cloud/tests/test_stage.py
+python3 -I workspace/models/rose_cloud/tests/test_head_probe.py
+# Offline dependency/config validation helper against a synthetic wheel and stand-in modules (no model, no network).
+python3 -I workspace/models/rose_cloud/tests/test_validate.py
+# One-shot Qwen text GPU diagnostic helper against a stand-in vllm package (no GPU, model or network).
+python3 -I workspace/models/rose_cloud/tests/test_qwen_gpu.py
+# One bounded live adapter session (multi-turn, image history, cancellation) against a stand-in vLLM server.
+python3 -I workspace/models/rose_cloud/tests/test_adapter_session.py
 python3 workspace/models/serving/tests/test_startup_guard.py
 python3 workspace/models/serving/tests/test_render_upload.py
 python3 workspace/models/serving/tests/test_local_profile.py
@@ -107,7 +152,7 @@ node --test workspace/rose-agent/delivery/catalog.test.mjs
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT
-for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip AnyAppControl:agent-pip ViewerPresentation:agent-pip \
+for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip AnyAppControl:agent-pip ViewerPresentation:agent-pip PreviewPolicy:agent-pip CurrentApps:agent-pip Replacement:agent-pip \
  PanePolicy:agent-split InstallerRecoveryPolicy:agent-split; do
  name="${pair%%:*}" variant="${pair##*:}"
  java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/$name" \
@@ -115,6 +160,11 @@ for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-
   "os/background-control/tests/${name}Test.java"
  java -cp "$JAVA_TESTS/$name" "dev.pixel.backgroundcontrol.${name}Test"
 done
+# MultiSession (two-app routing) uses CurrentApps' validated per-session answer.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MultiSession" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MultiSession.java \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java os/background-control/tests/MultiSessionTest.java
+java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \
@@ -168,6 +218,9 @@ java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppLayout" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/tests/HomeAppLayoutTest.java
 java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
+java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DockLabel" \
  workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java workspace/rose-agent/app/tests/DockLabelTest.java
 java -Djava.awt.headless=true -cp "$JAVA_TESTS/DockLabel" dev.pixel.voice.DockLabelTest workspace/rose-agent/app/assets/fonts/nunito.ttf
@@ -201,6 +254,29 @@ java -cp "$JAVA_TESTS/TaskPresentation" dev.pixel.voice.TaskPresentationTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TaskControl" \
  workspace/rose-agent/app/src/dev/pixel/voice/TaskControl.java workspace/rose-agent/app/tests/TaskControlTest.java
 java -cp "$JAVA_TESTS/TaskControl" dev.pixel.voice.TaskControlTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverview" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/tests/WorkspaceOverviewTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverview" dev.pixel.voice.WorkspaceOverviewTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverviewFeed" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverviewFeed.java workspace/rose-agent/app/tests/WorkspaceOverviewFeedTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverviewFeed" dev.pixel.voice.WorkspaceOverviewFeedTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/WorkspaceOverviewPreview" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverviewPreview.java \
+ workspace/rose-agent/app/tests/WorkspaceOverviewPreviewTest.java
+java -cp "$JAVA_TESTS/WorkspaceOverviewPreview" dev.pixel.voice.WorkspaceOverviewPreviewTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CurrentApps" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/CurrentApps.java \
+ workspace/rose-agent/app/tests/CurrentAppsTest.java
+java -cp "$JAVA_TESTS/CurrentApps" dev.pixel.voice.CurrentAppsTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CurrentAppsReply" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/CurrentApps.java \
+ workspace/rose-agent/app/tests/CurrentAppsReplyTest.java
+java -cp "$JAVA_TESTS/CurrentAppsReply" dev.pixel.voice.CurrentAppsReplyTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CurrentAppsParity" \
+ workspace/rose-agent/app/src/dev/pixel/voice/WorkspaceOverview.java workspace/rose-agent/app/src/dev/pixel/voice/CurrentApps.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/tests/CurrentAppsParityTest.java
+java -cp "$JAVA_TESTS/CurrentAppsParity" dev.pixel.voice.CurrentAppsParityTest qa/parity/current-apps-parity.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RendererRecovery" \
  workspace/rose-agent/app/src/dev/pixel/voice/RendererRecovery.java workspace/rose-agent/app/tests/RendererRecoveryTest.java
 java -cp "$JAVA_TESTS/RendererRecovery" dev.pixel.voice.RendererRecoveryTest

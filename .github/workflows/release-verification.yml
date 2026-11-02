@@ -9,6 +9,19 @@ on:
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
       - 'scripts/release-chain.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe_workflow.py'
+      - 'scripts/blazer-prep-wiring.py'
+      - 'scripts/blazer-build-only.py'
+      - 'os/build-only/**'
+      - 'scripts/tests/test_blazer_prep_workflow.py'
+      - 'scripts/rango-factory-package-wiring.py'
+      - 'scripts/host-factory-package.py'
+      - 'scripts/factory-package.py'
+      - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/agent-beta-auto.py'
+      - 'scripts/tests/test_agent_beta_auto.py'
+      - '.github/workflows/agent-beta-auto.yml'
       - 'scripts/release-transport.py'
       - 'scripts/signing-job.py'
       - 'scripts/tests/test_signing_*.py'
@@ -96,6 +109,15 @@ on:
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
       - 'os/tests/fixtures/adevtool-17df3b79/**'
+      - 'scripts/factory-package.py'
+      - 'scripts/tests/test_factory_package.py'
+      - 'scripts/tests/fixtures/factory-package/**'
+      - 'os/flavors/**'
+      - 'os/devices/pixel10.json'
+      - 'os/release-pipeline/frankel.json'
+      - 'os/retained-rango/release.json'
+      - 'os/release-notes/rango-2026103001.md'
+      - 'scripts/tests/fixtures/permission-apex/**'
       - '.github/workflows/release-verification.yml'
   push:
     branches: [main]
@@ -106,6 +128,19 @@ on:
       - 'scripts/release-pipeline.py'
       - 'scripts/release-allocate.py'
       - 'scripts/release-chain.py'
+      - 'scripts/rango-factory-observe.py'
+      - 'scripts/tests/test_rango_factory_observe_workflow.py'
+      - 'scripts/blazer-prep-wiring.py'
+      - 'scripts/blazer-build-only.py'
+      - 'os/build-only/**'
+      - 'scripts/tests/test_blazer_prep_workflow.py'
+      - 'scripts/rango-factory-package-wiring.py'
+      - 'scripts/host-factory-package.py'
+      - 'scripts/factory-package.py'
+      - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/agent-beta-auto.py'
+      - 'scripts/tests/test_agent_beta_auto.py'
+      - '.github/workflows/agent-beta-auto.yml'
       - 'scripts/release-transport.py'
       - 'scripts/signing-job.py'
       - 'scripts/tests/test_signing_*.py'
@@ -193,6 +228,15 @@ on:
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
       - 'os/tests/fixtures/adevtool-17df3b79/**'
+      - 'scripts/factory-package.py'
+      - 'scripts/tests/test_factory_package.py'
+      - 'scripts/tests/fixtures/factory-package/**'
+      - 'os/flavors/**'
+      - 'os/devices/pixel10.json'
+      - 'os/release-pipeline/frankel.json'
+      - 'os/retained-rango/release.json'
+      - 'os/release-notes/rango-2026103001.md'
+      - 'scripts/tests/fixtures/permission-apex/**'
       - '.github/workflows/release-verification.yml'
   workflow_dispatch:
     inputs:
@@ -228,6 +272,10 @@ jobs:
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_release_chain.py
+          python3 scripts/tests/test_rango_factory_observe_workflow.py
+          python3 scripts/tests/test_blazer_prep_workflow.py
+          python3 scripts/tests/test_rango_factory_package_workflow.py
+          python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py
           python3 scripts/tests/test_signing_job.py
@@ -256,6 +304,13 @@ jobs:
           python3 scripts/tests/test_models_publication.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
+      - name: Factory package verifier (signature cases must run, so ssh-keygen is required)
+        run: |
+          set -euo pipefail
+          command -v ssh-keygen
+          out="$(python3 scripts/tests/test_factory_package.py -v 2>&1)" || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          if grep -q "skipped 'needs OpenSSH ssh-keygen'" <<<"$out"; then echo "ssh-keygen cases skipped" >&2; exit 1; fi
 
   public-distribution:
     if: github.event_name == 'workflow_dispatch'

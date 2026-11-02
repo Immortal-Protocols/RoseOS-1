@@ -11,6 +11,10 @@ the same time without stealing each other's screen, and every action is
 atomic under one lock. The dashboard shows whichever view acted last.
 ``notify()`` simulates an incoming message so Rose can be proactive.
 
+Vision is off by default (``Phone.vision``; ``vision=True`` or ``ROSE_FAKE_VISION=1`` turns it
+on), which keeps the text-only agent's latency and eval baselines. With it on, the phone agent
+also sees ``look()`` (the screen rendered without id marks) and may ``tap_point`` in it.
+
 Listeners are called as ``listener(what, info)`` outside the lock, on the
 thread that made the change ("reset", "action", "notification").
 """
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import io
+import os
 import re
 import threading
 import time
@@ -194,7 +199,10 @@ class View:
 
 
 class Phone:
-    def __init__(self, bus: Bus | None = None):
+    def __init__(self, bus: Bus | None = None, vision: bool | None = None):
+        if vision is None:
+            vision = os.environ.get("ROSE_FAKE_VISION", "").strip().lower() in ("1", "true", "yes", "on")
+        self.vision = vision  # the phone agent gets screenshots and tap_point
         self._lock = threading.RLock()
         self.listeners: list[Callable[[str, dict], None]] = []
         self.bus = bus
@@ -225,10 +233,30 @@ class Phone:
             self.views[name] = v
         return v
 
-    def session(self, name: str) -> PhoneSession:
+    def session(self, name: str, on_screen: bool = False) -> PhoneSession:
+        """A task's display. ``on_screen`` is accepted for the real phone's surface: the fake
+        phone has no separate workspace, so every task works on its own view as before."""
+
         with self._lock:
             self._view(name)
         return PhoneSession(self, name)
+
+    # ----- Rose's workspace: the real phone's background screen (rose/background.py). The fake
+    # phone has none, so these keep the eval's behaviour unchanged.
+    def background_available(self) -> bool:
+        return False
+
+    def app_labels(self) -> list[str]:
+        """The fake phone's app labels (RealPhone.app_labels() on the real one)."""
+
+        return list(APPS)
+
+    def workspace_app(self) -> str | None:
+        return None
+
+    def look_workspace(self) -> Image.Image | None:
+        self.look_status = "the fake phone has no separate workspace"
+        return None
 
     def close_session(self, name: str) -> None:
         """Drop a task's view; if it is on show, it becomes the main screen."""
@@ -380,6 +408,11 @@ class Phone:
     def tap(self, mark, view: str | None = None) -> ActionResult:
         return self._act(view, "tap", lambda v: self._tap(v, mark))
 
+    def tap_point(self, x: int, y: int, view: str | None = None) -> ActionResult:
+        """Tap screen pixel (x, y) of a W x H screen: the smallest element there, like a finger."""
+
+        return self._act(view, "tap_point", lambda v: self._tap_at(v, x, y))
+
     def type_text(self, mark, text: str, view: str | None = None) -> ActionResult:
         return self._act(view, "type_text", lambda v: self._type(v, mark, text))
 
@@ -417,6 +450,17 @@ class Phone:
         if v.route != before:
             v.last_tap = None
         return result
+
+    def _tap_at(self, v: View, x: int, y: int) -> ActionResult:
+        hits = [e for e in v.screen.elements if e.box[0] <= x < e.box[2] and e.box[1] <= y < e.box[3]]
+        if not hits:
+            return ActionResult(False, "Nothing to tap at that point.")
+        # Controls before plain text, then the smallest box (the innermost one).
+        el = min(hits, key=lambda e: (e.kind == "text", (e.box[2] - e.box[0]) * (e.box[3] - e.box[1])))
+        if el.kind == "text":
+            v.last_tap = el.box
+            return ActionResult(True, f"Touched \"{el.label}\" (nothing happens).")
+        return self._tap(v, el.mark)
 
     def _type(self, v: View, mark, text: str) -> ActionResult:
         el = self._find(v, mark)
@@ -779,6 +823,12 @@ class Phone:
         return s
 
     # ----- rendering ---------------------------------------------------
+    def look(self, view: str | None = None) -> Image.Image:
+        """The screen as a phone screenshot (no id marks): ``view``, or the one on show."""
+
+        with self._lock:
+            return self._render(self.views.get(view or self.shown) or self.views[MAIN], marks=False)
+
     def screenshot_png(self, marks: bool = True, view: str | None = None) -> bytes:
         with self._lock:
             img = self._render(self.views.get(view or self.shown) or self.views[MAIN], marks)
@@ -896,6 +946,8 @@ def _search_places(places: list[dict], query: str) -> list[dict]:
 class PhoneSession:
     """One task's display on the shared phone."""
 
+    background = False  # never Rose's workspace (the real phone's RealSession may be)
+
     def __init__(self, phone: Phone, name: str):
         self.phone, self.name = phone, name
 
@@ -914,6 +966,22 @@ class PhoneSession:
 
     def tap(self, mark) -> ActionResult:
         return self.phone.tap(mark, view=self.name)
+
+    def look(self) -> Image.Image | None:
+        """This display as a screenshot (only with vision on)."""
+
+        return self.phone.look(self.name) if self.phone.vision else None
+
+    def no_image_reason(self) -> str:
+        return "vision is off"
+
+    def tap_point(self, x: float, y: float, target: str = "") -> ActionResult:
+        """Tap a point of the screenshot, ``x`` and ``y`` from 0 to 1000 (left to right, top to bottom)."""
+
+        if not (0 <= x <= 1000 and 0 <= y <= 1000):
+            return ActionResult(False, "x and y go from 0 to 1000 across the screenshot.")
+        px, py = min(W - 1, round(x / 1000 * W)), min(H - 1, round(y / 1000 * H))
+        return self.phone.tap_point(px, py, view=self.name)
 
     def type_text(self, mark, text: str) -> ActionResult:
         return self.phone.type_text(mark, text, view=self.name)

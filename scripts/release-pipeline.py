@@ -180,10 +180,12 @@ def publisher_inputs(env):
 class Production:
     simulated = False
 
-    def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic):
+    def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic,
+            claim=None):
         """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
         this one instance, no operations read), within the 10-minute job limit. Never resubmits: a failed or uncertain request is reconciled against
-        the observed state. RUNNING is the VM state, not runner readiness."""
+        the observed state. RUNNING is the VM state, not runner readiness. `claim`, when given, is told before any
+        request is sent whether this call is the one submitting it (see record_ownership)."""
         target, source, passing = BUILDER_STATES[action]
         where = [f'--project={BUILDER["project"]}', f'--zone={BUILDER["zone"]}']
 
@@ -194,6 +196,8 @@ class Production:
                 raise CheckFailed(f'builder describe failed (exit {result.returncode})')
             return result.stdout.strip()
         state = describe()
+        if claim:
+            claim(state == source)
         if state == source:
             result = subprocess.run([gcloud, 'compute', 'instances', action, BUILDER['instance'], *where, '--async', '--quiet'],
                 capture_output=True, text=True)
@@ -272,7 +276,10 @@ class Fake:
         with open(self.state/'events.log', 'a') as f:
             f.write(event + '\n')
 
-    def control_builder(self, action):
+    def control_builder(self, action, claim=None):
+        if claim:
+            observed = self.state/'builder-observed'
+            claim((observed.read_text().strip() if observed.exists() else 'TERMINATED') == BUILDER_STATES[action][1])
         self.log(f'builder {action}')
 
     def make(self, config, cand, env):
@@ -297,6 +304,36 @@ class Fake:
     def promote(self, config, cand, draft):
         draft.rename(draft.parent/'latest')
         self.log('promoted latest')
+
+# ---------------------------------------------------------------- builder ownership
+# Opt-in for a mode that may stop the shared builder only when its own controller started it (the Pro preparation
+# mode). The record is written before any start request is sent, so a missing record means no request was sent.
+# Modes that do not pass these options keep the unconditional stop-builder cleanup unchanged.
+OWNERSHIP_SCHEMA = 'rose-builder-ownership/v1'
+
+def record_ownership(path):
+    def claim(started):
+        try:
+            f = open(path, 'x')  # one operation, one record; never overwritten
+        except FileExistsError:
+            raise CheckFailed('builder ownership record already exists; refusing to reuse it')
+        with f:
+            json.dump({'schema': OWNERSHIP_SCHEMA, 'instance': BUILDER['instance'], 'startedByThisOperation': started}, f)
+    return claim
+
+def read_ownership(path):
+    """'true'/'false' for a job output. Absent means no start request was sent; anything malformed fails."""
+    path = Path(path)
+    if not path.exists():
+        return 'false'
+    try:
+        record = json.loads(path.read_text())
+    except ValueError:
+        raise CheckFailed('builder ownership record is not JSON')
+    if (not isinstance(record, dict) or record.get('schema') != OWNERSHIP_SCHEMA or record.get('instance') != BUILDER['instance']
+            or not isinstance(record.get('startedByThisOperation'), bool) or set(record) != {'schema', 'instance', 'startedByThisOperation'}):
+        raise CheckFailed('builder ownership record is malformed')
+    return 'true' if record['startedByThisOperation'] else 'false'
 
 def host_token(value):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', str(value)):
@@ -1251,8 +1288,8 @@ def latest_notes(a, cand, artifact):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=['preflight', 'start-builder', 'stop-builder', 'build', 'verify-build', 'sign',
-        'verify-signed', 'stage-artifact', 'publish'])
+    p.add_argument('command', choices=['preflight', 'start-builder', 'stop-builder', 'builder-ownership', 'build',
+        'verify-build', 'sign', 'verify-signed', 'stage-artifact', 'publish'])
     p.add_argument('--job', choices=['guard', 'controller', 'builder', 'publisher', 'cleanup'])
     p.add_argument('--adapter', choices=['production', 'fake'], default='production')
     p.add_argument('--fake-state', help='Fake adapter state directory (tests only)')
@@ -1267,6 +1304,8 @@ def main(argv=None):
     p.add_argument('--apps', default='[]', help='JSON list of [package, versionCode] expected in this candidate')
     p.add_argument('--promote', action='store_true')
     p.add_argument('--allocation', help='normal button only: the reserved allocation record of this candidate')
+    p.add_argument('--ownership-record', help='start-builder/builder-ownership: this operation\'s builder ownership record')
+    p.add_argument('--only-if-started', help='stop-builder: the controller\'s ownership output; stops only on "true"')
     a = p.parse_args(argv)
     try:
         if a.adapter == 'fake' and not a.fake_state:
@@ -1281,7 +1320,28 @@ def main(argv=None):
             if missing:
                 raise SetupMissing(missing)
             report = {'job': a.job, 'preflight': 'ready'}
+        elif a.command == 'start-builder' and a.ownership_record:
+            if a.only_if_started is not None:
+                raise InvalidInput('--only-if-started is for stop-builder')
+            report = {'builder': a.command, 'observed': adapter.control_builder('start',
+                claim=record_ownership(a.ownership_record))}
+        elif a.command == 'stop-builder' and a.only_if_started is not None:
+            if a.ownership_record:
+                raise InvalidInput('--ownership-record is for start-builder/builder-ownership')
+            if a.only_if_started == 'false':
+                report = {'builder': a.command, 'skipped': 'not started by this operation'}
+            elif a.only_if_started == 'true':
+                report = {'builder': a.command, 'observed': adapter.control_builder('stop')}
+            else:
+                raise CheckFailed('builder ownership is unknown; not stopping (the automatic STOP remains the fallback)')
+        elif a.command == 'builder-ownership':
+            if not a.ownership_record or a.only_if_started is not None:
+                raise InvalidInput('builder-ownership needs --ownership-record only')
+            print(f'started={read_ownership(a.ownership_record)}')
+            return 0
         elif a.command in ('start-builder', 'stop-builder'):
+            if a.ownership_record or a.only_if_started is not None:
+                raise InvalidInput('--only-if-started is for stop-builder; --ownership-record for start-builder/builder-ownership')
             report = {'builder': a.command, 'observed': adapter.control_builder(a.command.split('-')[0])}
         else:
             cand = candidate(a, device)

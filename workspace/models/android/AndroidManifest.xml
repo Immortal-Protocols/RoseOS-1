@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Rose Models: a distinct text-chat app. Not dev.pixel.voice; no HOME role, accessibility,
-     overlay, microphone, device-owner or background-control authority. versionCode 2 upgrades
-     signed v1 in place (app data kept); Infra confirms the version and signs. -->
+     overlay, microphone, device-owner or background-control authority. versionCode 4 upgrades
+     signed v1/v2 in place (app data kept); Infra confirms the version and signs. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.pixel.models" android:versionCode="2" android:versionName="0.2.0">
+    package="dev.pixel.models" android:versionCode="4" android:versionName="0.4.0">
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <queries>

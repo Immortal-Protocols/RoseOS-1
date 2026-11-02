@@ -1,0 +1,2322 @@
+{
+ "contract": "#156/#225 current-apps parity: the switcher's Rose row (Launcher3) and Rose's apps (Home) show the SAME set, or the same explicit cannot-confirm state.",
+ "categories": {
+  "cards": "a complete, same-user list: exactly these packages are shown, nothing else",
+  "genuine_empty": "attested complete and empty: 'not using any apps'",
+  "cannot_confirm": "incomplete, unavailable, locked, malformed or not yet reported: no app cards at all, an explicit status, never genuine_empty"
+ },
+ "scope": "Membership scope is every ComputerControl session device the controller owns in the owner's own user, as the platform's atomic owned-device snapshot lists it (PR374 getOwnedAutomatedDevices; Launcher3's per-device listener reads the same repository). The controller may hold up to two sessions (two stable slots, PR386; a second only where sessionLimit is 2), and a lingering or failed-close device stays listed until the platform removes it, so the snapshot can list several devices. Membership is the snapshot only (snapshot-only rule, agreed by Home, OS Product and App Core): the union of every listed device's apps without the controller package; complete only when every device is complete and no package is on more than one device. Controller sessions are bindings (preview, Stop, Watch), never membership or completeness. Without a snapshot (an older build or a failed read) the controller falls back to its single-session views (knownGaps).",
+ "inputs": {
+  "platform": "the per-device view both sources come from: devices[{owner: controller|other, complete, apps}] (PR361 listener / getAutomatedApps). null: no paired platform state (controller-only case).",
+  "controllerReply": "the phone-local call(\"current_apps\") reply App Core derives from it (PR364 shape). null: a case only Launcher3 can see.",
+  "controllerInputs": "optional: the controller state App Core's test (os/background-control/tests/test_current_apps_parity.py) runs through the production controller CurrentApps; the reply it produces must match controllerReply's status, sessionStatus, complete, incompleteReason, source and apps (packageName/front/target, in order). target: one package or the list of every bound live slot's target; front: every bound live slot's one front package (its topmost application window). owned: the PR374 owned-device snapshot as typed values (A int[], Z boolean[]), or null when unavailable.",
+  "illustrative": "sessionId, taskId, generation, controllerEpoch, apps[].sessionId and sessions[] are illustrative bindings: their rules are in bindingsContract and are tested by App Core's controller tests, not by this replay. Parity compares categories and sorted app sets; card order is not part of parity."
+ },
+ "cases": [
+  {
+   "name": "complete_list",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 4,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": true,
+      "target": false
+     },
+     {
+      "packageName": "com.android.calculator2",
+      "front": false,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2",
+     "com.google.android.apps.maps"
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.google.android.apps.maps"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   }
+  },
+  {
+   "name": "complete_list_blocked_session",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "blocked",
+    "generation": 5,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": false,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2"
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "blocked",
+    "blocked": true,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   }
+  },
+  {
+   "name": "open_session_empty_after_handover",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": []
+     }
+    ]
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 6,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      []
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   }
+  },
+  {
+   "name": "no_session",
+   "platform": {
+    "devices": []
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 7,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "session_windows",
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": false,
+    "status": "idle",
+    "blocked": false,
+    "target": null,
+    "front": null,
+    "platform": null
+   },
+   "note": "source is session_windows: with no live session the controller does not read the platform (App Core correction of Home's draft value; source never changes the category)."
+  },
+  {
+   "name": "none_without_attestation",
+   "platform": {
+    "unavailable": true
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 7,
+    "complete": false,
+    "incompleteReason": "",
+    "source": "session_windows",
+    "apps": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   },
+   "note": "an empty list that is not attested complete is never genuine_empty"
+  },
+  {
+   "name": "incomplete_other_user_activity",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": false,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 8,
+    "complete": false,
+    "incompleteReason": "other_user_omitted",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      false
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   }
+  },
+  {
+   "name": "platform_unavailable_session_windows_only",
+   "platform": {
+    "unavailable": true
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 9,
+    "complete": false,
+    "incompleteReason": "behind_front_unlisted",
+    "source": "session_windows",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null
+   }
+  },
+  {
+   "name": "windows_unreadable",
+   "platform": {
+    "unavailable": true
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 10,
+    "complete": false,
+    "incompleteReason": "windows_unreadable",
+    "source": "session_windows",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": false,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": null
+   }
+  },
+  {
+   "name": "locked",
+   "platform": {
+    "locked": true
+   },
+   "controllerReply": {
+    "status": "locked",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 11,
+    "complete": false,
+    "incompleteReason": "locked",
+    "source": "session_windows",
+    "apps": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   },
+   "controllerInputs": {
+    "locked": true,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": null
+   }
+  },
+  {
+   "name": "malformed_complete_without_session_status",
+   "platform": {
+    "malformed": true
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "two_live_controller_devices",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerReply": null,
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2",
+     "com.google.android.apps.maps"
+    ]
+   },
+   "note": "Launcher3 only: two complete controller-owned devices with no shared package are their union (snapshot-only rule)."
+  },
+  {
+   "name": "other_owner_device_ignored",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     },
+     {
+      "owner": "other",
+      "complete": false,
+      "apps": [
+       "com.example.other"
+      ]
+     }
+    ]
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 13,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2"
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   }
+  },
+  {
+   "name": "session_unreleased_cleanup_failed",
+   "note": "App Core: the controller still holds a session whose close failed (cleanup_failed); its device may still run apps, so this is never genuine_empty. platform is null: Launcher3 cannot see that the session is unreleased (see residualDifferences).",
+   "platform": null,
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": null
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 9,
+    "complete": false,
+    "incompleteReason": "session_unreleased",
+    "source": "session_windows",
+    "apps": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "target_finished_other_app_remains",
+   "note": "A finished target removes it; the app still on the session device stays (membership is the platform's, never the session target).",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.packageinstaller"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": [
+     "com.google.android.packageinstaller"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.google.android.packageinstaller"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 9,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.google.android.packageinstaller",
+      "front": true,
+      "target": false
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.google.android.packageinstaller"
+    ]
+   }
+  },
+  {
+   "name": "closed_session",
+   "platform": {
+    "devices": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": false,
+    "status": "closed",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": null
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 9,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "session_windows",
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "malformed_platform_answer",
+   "note": "The platform answer itself is malformed (here the userId has the wrong type): Launcher3 rejects the snapshot; the controller falls back to its session windows, marked incomplete.",
+   "platform": {
+    "malformed": true
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ],
+     "userId": [
+      "X",
+      "0"
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 9,
+    "complete": false,
+    "incompleteReason": "behind_front_unlisted",
+    "source": "session_windows",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_front_and_hidden_apps",
+   "note": "PR374 owned-device snapshot: one complete device; the hidden app is a member.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.google.android.apps.maps"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps",
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": true,
+      "target": false
+     },
+     {
+      "packageName": "com.android.calculator2",
+      "front": false,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2",
+     "com.google.android.apps.maps"
+    ]
+   }
+  },
+  {
+   "name": "owned_no_device",
+   "platform": {
+    "devices": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": false,
+    "status": "idle",
+    "blocked": false,
+    "target": null,
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      []
+     ],
+     "deviceComplete": [
+      "Z",
+      []
+     ],
+     "appDeviceIds": [
+      "A",
+      []
+     ],
+     "appPackageNames": [
+      "S",
+      []
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_controller_only_device",
+   "note": "A device whose only app is the controller has no members: genuine_empty on both surfaces (Product confirmation).",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "dev.pixel.backgroundcontrol"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "dev.pixel.backgroundcontrol"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_other_user_activity",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": false,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       false
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "other_user_omitted",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_lingering_unreleased_device",
+   "note": "Closes knownGaps lingering_unreleased_device: the controller holds an unreleased session (cleanup_failed); the platform still lists its device, so both surfaces show its attested apps. sessionStatus is informational.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "cleanup_failed",
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": false,
+      "target": false
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.google.android.apps.maps"
+    ]
+   }
+  },
+  {
+   "name": "owned_unreleased_device_removed",
+   "note": "The unreleased session's device has actually been removed: the platform lists nothing, so genuine_empty on both surfaces.",
+   "platform": {
+    "devices": []
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      []
+     ],
+     "deviceComplete": [
+      "Z",
+      []
+     ],
+     "appDeviceIds": [
+      "A",
+      []
+     ],
+     "appPackageNames": [
+      "S",
+      []
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": []
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_replacement_old_and_new_devices",
+   "note": "Closes knownGaps replacement_old_and_new_devices: the old device (7) still lists Maps until the platform removes it and the new session's device (9) lists Calculator; both complete, no shared package, so both surfaces show the union. Maps is shown unbound (no preview or Stop).",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps",
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "controllerEpoch": "e-1",
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 20,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true,
+      "sessionId": "s-1"
+     },
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": false,
+      "target": false,
+      "sessionId": null
+     }
+    ],
+    "sessions": [
+     {
+      "slot": 0,
+      "sessionId": "s-1",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.android.calculator2",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2",
+     "com.google.android.apps.maps"
+    ]
+   }
+  },
+  {
+   "name": "owned_two_sessions_calculator_and_clock",
+   "note": "Two live sessions (slot 0 Calculator on device 7, slot 1 Clock on device 9, PR386 alongside): the union, each app bound to its own session, one front app per session.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.deskclock"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ],
+    "front": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      30
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2",
+       "com.google.android.deskclock"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 31,
+    "controllerEpoch": "e-1",
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 30,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true,
+      "sessionId": "s-1"
+     },
+     {
+      "packageName": "com.google.android.deskclock",
+      "front": true,
+      "target": true,
+      "sessionId": "s-2"
+     }
+    ],
+    "sessions": [
+     {
+      "slot": 0,
+      "sessionId": "s-1",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.android.calculator2",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     },
+     {
+      "slot": 1,
+      "sessionId": "s-2",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.google.android.deskclock",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ]
+   }
+  },
+  {
+   "name": "owned_duplicate_package_two_devices",
+   "note": "Maps is listed on both devices (Calculator's session navigated to it while slot 1 also holds it): cannot_confirm with no members and no guessed owner.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": [
+     "com.android.calculator2",
+     "com.google.android.apps.maps"
+    ],
+    "front": [
+     "com.google.android.apps.maps",
+     "com.google.android.apps.maps"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      30
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2",
+       "com.google.android.apps.maps",
+       "com.google.android.apps.maps"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 31,
+    "controllerEpoch": "e-1",
+    "complete": false,
+    "incompleteReason": "duplicate_package",
+    "source": "owned_devices",
+    "snapshotGeneration": 30,
+    "apps": [],
+    "sessions": [
+     {
+      "slot": 0,
+      "sessionId": "s-1",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.android.calculator2",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     },
+     {
+      "slot": 1,
+      "sessionId": "s-2",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.google.android.apps.maps",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_controller_only_two_devices",
+   "note": "Both devices list only the controller's own package (removed before the duplicate check): genuine_empty, not a duplicate.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "dev.pixel.backgroundcontrol"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "dev.pixel.backgroundcontrol"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "launching",
+    "blocked": false,
+    "target": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ],
+    "front": [],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      30
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "dev.pixel.backgroundcontrol",
+       "dev.pixel.backgroundcontrol"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "launching",
+    "generation": 31,
+    "controllerEpoch": "e-1",
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 30,
+    "apps": [],
+    "sessions": [
+     {
+      "slot": 0,
+      "sessionId": "s-1",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.android.calculator2",
+      "sessionStatus": "launching",
+      "bound": true,
+      "frontKnown": false
+     },
+     {
+      "slot": 1,
+      "sessionId": "s-2",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.google.android.deskclock",
+      "sessionStatus": "launching",
+      "bound": true,
+      "frontKnown": false
+     }
+    ]
+   },
+   "expected": {
+    "category": "genuine_empty",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_unbound_lingering_device_plus_live",
+   "note": "After a controller restart the old device (7, Maps) is still listed and no slot binds it; slot 0 now runs Clock on device 9. Both are shown; Maps is unbound (no preview, Stop or Watch) until the platform removes its device.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.deskclock"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.google.android.deskclock",
+    "front": [
+     "com.google.android.deskclock"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      30
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.google.android.apps.maps",
+       "com.google.android.deskclock"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-9",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 31,
+    "controllerEpoch": "e-1",
+    "complete": true,
+    "incompleteReason": "",
+    "source": "owned_devices",
+    "snapshotGeneration": 30,
+    "apps": [
+     {
+      "packageName": "com.google.android.deskclock",
+      "front": true,
+      "target": true,
+      "sessionId": "s-9"
+     },
+     {
+      "packageName": "com.google.android.apps.maps",
+      "front": false,
+      "target": false,
+      "sessionId": null
+     }
+    ],
+    "sessions": [
+     {
+      "slot": 0,
+      "sessionId": "s-9",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.google.android.deskclock",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cards",
+    "apps": [
+     "com.google.android.apps.maps",
+     "com.google.android.deskclock"
+    ]
+   }
+  },
+  {
+   "name": "owned_one_incomplete_of_two",
+   "note": "Device 9 omitted another user's activity: the whole membership is cannot_confirm.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": false,
+      "apps": [
+       "com.google.android.deskclock"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ],
+    "front": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      30
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       false
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2",
+       "com.google.android.deskclock"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 31,
+    "controllerEpoch": "e-1",
+    "complete": false,
+    "incompleteReason": "other_user_omitted",
+    "source": "owned_devices",
+    "snapshotGeneration": 30,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true,
+      "sessionId": "s-1"
+     },
+     {
+      "packageName": "com.google.android.deskclock",
+      "front": true,
+      "target": true,
+      "sessionId": "s-2"
+     }
+    ],
+    "sessions": [
+     {
+      "slot": 0,
+      "sessionId": "s-1",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.android.calculator2",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     },
+     {
+      "slot": 1,
+      "sessionId": "s-2",
+      "taskId": "rose-ws-1",
+      "targetPackage": "com.google.android.deskclock",
+      "sessionStatus": "ready",
+      "bound": true,
+      "frontKnown": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_locked_two_devices",
+   "note": "Locked: the snapshot is not read and nothing is listed, whatever the devices.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.deskclock"
+      ]
+     }
+    ],
+    "locked": true
+   },
+   "controllerInputs": {
+    "locked": true,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": [
+     "com.android.calculator2",
+     "com.google.android.deskclock"
+    ],
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      30
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true,
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7,
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2",
+       "com.google.android.deskclock"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "locked",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 31,
+    "controllerEpoch": "e-1",
+    "complete": false,
+    "incompleteReason": "locked",
+    "source": "session_windows",
+    "apps": [],
+    "sessions": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_snapshot_malformed_falls_back",
+   "note": "A malformed owned snapshot (an app on an unlisted device) is refused; the controller falls back to the per-session answer, marked by its own source.",
+   "platform": {
+    "malformed": true
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       9
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-1",
+    "taskId": "rose-ws-1",
+    "sessionStatus": "ready",
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "behind_front_unlisted",
+    "source": "session_windows",
+    "snapshotGeneration": null,
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  },
+  {
+   "name": "owned_locked",
+   "platform": {
+    "locked": true
+   },
+   "controllerInputs": {
+    "locked": true,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": null,
+    "platform": null,
+    "owned": {
+     "generation": [
+      "L",
+      20
+     ],
+     "deviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "deviceComplete": [
+      "Z",
+      [
+       true
+      ]
+     ],
+     "appDeviceIds": [
+      "A",
+      [
+       7
+      ]
+     ],
+     "appPackageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "locked",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 12,
+    "complete": false,
+    "incompleteReason": "locked",
+    "source": "session_windows",
+    "snapshotGeneration": null,
+    "apps": []
+   },
+   "expected": {
+    "category": "cannot_confirm",
+    "apps": []
+   }
+  }
+ ],
+ "sequences": [
+  {
+   "name": "launch_change_incomplete_close_reconnect",
+   "steps": [
+    {
+     "case": "no_session",
+     "expected": {
+      "category": "genuine_empty",
+      "apps": []
+     }
+    },
+    {
+     "case": "complete_list_blocked_session",
+     "expected": {
+      "category": "cards",
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    },
+    {
+     "case": "complete_list",
+     "expected": {
+      "category": "cards",
+      "apps": [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     }
+    },
+    {
+     "case": "incomplete_other_user_activity",
+     "expected": {
+      "category": "cannot_confirm",
+      "apps": []
+     }
+    },
+    {
+     "case": "open_session_empty_after_handover",
+     "expected": {
+      "category": "genuine_empty",
+      "apps": []
+     }
+    },
+    {
+     "reconnect": true,
+     "expected": {
+      "category": "cannot_confirm",
+      "apps": []
+     }
+    },
+    {
+     "case": "complete_list",
+     "expected": {
+      "category": "cards",
+      "apps": [
+       "com.android.calculator2",
+       "com.google.android.apps.maps"
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "owner": "App Core owns this common transport parity fixture (#156/#225). Home owns its reader/render tests, OS Product its Launcher3 tests; both read this file and do not edit it. Add cases through App Core.",
+ "knownGaps": [
+  {
+   "name": "lingering_unreleased_device",
+   "parity": "not_claimed",
+   "description": "A close failed (controller cleanup_failed) and the old device still runs apps. Launcher3 sees one complete controller-owned device and shows its apps; the controller knows the session is unreleased but cannot read the old device's apps through its session view, so Home shows cannot_confirm. Genuinely controlled apps must not be hidden, so neither side may switch to empty.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": null,
+    "platform": null
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 9,
+    "complete": false,
+    "incompleteReason": "session_unreleased",
+    "source": "session_windows",
+    "apps": []
+   },
+   "launcherCategory": "cards",
+   "homeCategory": "cannot_confirm",
+   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract).",
+   "appliesWhen": "only when the owned-device snapshot is unavailable (an OS build before PR374, or the read failed): the controller then falls back to its per-session view",
+   "closedBy": "owned_lingering_unreleased_device"
+  },
+  {
+   "name": "replacement_old_and_new_devices",
+   "parity": "not_claimed",
+   "description": "The old session closed and a new one started while the old device's activities are still finishing. Launcher3 sees two complete controller-owned devices and shows their union (snapshot-only rule); the controller's session view sees only the new device and Home shows only its app, hiding the old device's. Same category, different sets: not parity.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-2",
+    "taskId": "rose-ws-2",
+    "sessionStatus": "ready",
+    "generation": 10,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "launcherCategory": "cards",
+   "homeCategory": "cards",
+   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract).",
+   "appliesWhen": "only when the owned-device snapshot is unavailable (an OS build before PR374, or the read failed): the controller then falls back to its per-session view",
+   "closedBy": "owned_replacement_old_and_new_devices",
+   "launcherApps": [
+    "com.android.calculator2",
+    "com.google.android.apps.maps"
+   ],
+   "homeApps": [
+    "com.android.calculator2"
+   ]
+  }
+ ],
+ "ownerDeviceViewContract": {
+  "status": "implemented by OS Core PR374 (merged 43b960f); consumed by the controller's current_apps (source owned_devices)",
+  "method": "public android.os.Bundle getOwnedAutomatedDevices() on the existing extensions entry the controller already uses (com.android.extensions.computercontrol.ComputerControlExtensions), reflective like the rest; it needs no session object, so it also answers after a failed close or between sessions",
+  "caller": "Binder.getCallingUid(): only devices whose recorded owner uid equals the caller's uid are returned; never another owner's device, package or count; no permission, role or exemption",
+  "user": "the caller's own user only (UserHandle.getUserId(callingUid)); another user's activity on a listed device is omitted and that device's deviceComplete is false",
+  "keys": {
+   "generation": "long: the SAME global generation as the AutomatedPackageListener onAutomatedDevicesChanged/onAutomatedDeviceAppsChanged snapshot that contains this content",
+   "deviceIds": "int[]: every caller-owned ComputerControl session device that currently runs apps (the listener's rule)",
+   "deviceComplete": "boolean[] parallel to deviceIds",
+   "appDeviceIds": "int[]",
+   "appPackageNames": "String[] parallel to appDeviceIds: non-finishing activities of the owner's user, front or hidden"
+  },
+  "atomicity": "read under the AutomatedPackagesRepository lock as one snapshot, identical to what the listener dispatches for that generation",
+  "lifecycle": "a device appears when it runs apps and leaves when its apps finish or it closes, exactly as in the listener; a lingering device after a failed close stays listed; no history",
+  "errors": "IllegalStateException when unavailable (the controller then keeps today's fail-closed fallback)",
+  "consumerRule": "both surfaces apply one rule to the same snapshot: no device, or only the controller's own package, is genuine_empty; otherwise the union of every device's apps without the controller package (removed before the duplicate check) is cards when every device is complete and no package is on more than one device; any incomplete device is cannot_confirm (other_user_omitted); a package on more than one device is cannot_confirm (duplicate_package) with no members and no guessed owner; locked, unavailable or malformed is cannot_confirm",
+  "scope": "exactly the subset of Launcher3's listener snapshot whose devices the caller owns: same repository, same generation, same per-device apps and completeness, including a device still being torn down or left by a failed close, until the repository drops it (its apps finish or onDeviceClosed); Launcher3 filters its snapshot to owner package dev.pixel.backgroundcontrol with the controller's uid, the controller receives only its own devices, so both evaluate the same device set",
+  "alternativesConsidered": {
+   "retainedSessionGetAutomatedApps": "Does not close either gap. lingering_unreleased_device: PR361 ComputerControlSessionImpl.close sets the sticky mAutomatedAppsClosed before the device is torn down, so after a failed close the retained session answers closed with no apps while Launcher3 still lists the device; Home would show genuine_empty and hide controlled apps. replacement_old_and_new_devices: after a successful close the controller holds no binder for the old device at all.",
+   "releasingSignal": "Could make lingering_unreleased_device fail closed on both sides (Launcher3 marks a releasing device cannot_confirm), but not replacement_old_and_new_devices, where the controller has no view of the old device; it also needs a new per-device state in the listener."
+  },
+  "homeGate": "for source owned_devices, Home shows cards when complete, status live and apps non-empty, whatever sessionStatus says (it may be cleanup_failed, or null with no session held); ready/blocked/launching gates only the platform and session_windows sources"
+ },
+ "bindingsContract": {
+  "sessions": "current_apps.sessions[]: one entry per occupied controller slot, in slot order: slot (int 0|1), sessionId, taskId, targetPackage (string or null), sessionStatus (starting|consent_required|launching|ready|blocked|cleanup_failed), bound (bool: its attested deviceId is listed by the snapshot), frontKnown (bool). Bindings only: they never decide membership or completeness.",
+  "apps": "apps[].sessionId: the bound slot whose device lists the app, or null for an unbound device (a lingering device after a controller restart): such an app is shown but has no preview, Stop or Watch. apps[].front: true only for each bound, ready, unlocked, unblocked session's one front app (its topmost application window); never chosen by a consumer. apps[].target: the bound slot's target.",
+  "preview": "a card may request a preview only when its sessionId is bound, that slot's sessionStatus is ready, frontKnown and its front are true, and membership is complete; preview still needs sessionId and taskId. A surface's own independent capture may differ in availability; membership never differs.",
+  "ownerStop": "owner_stop {sessionId, taskId}: the owner's Stop of that whole session (every app in its slot), never the other slot. taskId must equal the slot's (null only for an untagged slot); a missing or unheld sessionId is stale_session and stops nothing. Confirmed only when a reply shows that slot status stopped, stopReason user, stoppedSessionId and stoppedTaskId equal to the request; the owner_stop reply carries confirmed (bool) by exactly this rule. cleanup_failed, an accepted request and stale_session never confirm. Refused on Rose Agent's app_command (Mac) path; not advertised.",
+  "generation": "generation (long) covers the whole reply: membership, bindings, front, sessionStatus and lock. It rises on every change and never falls within one controllerEpoch (string, new for every controller process). Apply a reply when its controllerEpoch differs (replace everything) or its generation is greater than the last applied; equal is unchanged; lower is stale. No timestamps.",
+  "selection": "Watch selection binds only a slot whose session is held and ready, whose own display (read live from its accessibility windows) is the requested display and whose target is the requested package; never cleanup_failed, a closed session's historical ids, an unbound device or the attested displayId."
+ }
+}

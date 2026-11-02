@@ -18,6 +18,7 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest import mock
 import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -377,6 +378,551 @@ class SignAdapterTest(Base):
             capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('outside a temporary RAM directory', result.stderr)
+
+# The factory tail of the real generate-release.sh (GrapheneOS/script 09d65184), verbatim after img_from_target_files.
+FACTORY_TAIL = r"""
+BUILD_NUMBER=$BUILD
+source device/common/generate-factory-images-common.sh
+
+if [[ $DEVICE == @(yogi|kodiak|grizzly|cubs) ]]; then
+    MAX_DOWNLOAD_SIZE=0x20000000
+elif [[ $DEVICE == @(rango|mustang|blazer|frankel) ]]; then
+    MAX_DOWNLOAD_SIZE=0x10000000
+else
+    MAX_DOWNLOAD_SIZE=0xf900000
+fi
+
+# Second arg to optimize-factory-image is the name of outer zip directory.
+# Output zip name defaults to <outer zip dir name>.zip
+fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image $DEVICE-factory-$BUILD_NUMBER.zip $DEVICE-install-$BUILD_NUMBER
+
+if [[ -f "$KEY_DIR/id_ed25519" ]]; then
+    export PATH="$OLD_PATH"
+    ssh-keygen -Y sign -n "factory images" -f "$KEY_DIR/id_ed25519" $DEVICE-install-$BUILD_NUMBER.zip
+fi
+"""
+
+class SignFactoryTest(SignAdapterTest):
+    """Opt-in factory stage: synthetic stand-ins for img_from_target_files, the factory images generator and the otatools
+    fastboot (no real generator, signer or fastboot runs), plus an id_ed25519 in the key archive and an ssh-keygen on PATH
+    that must never run."""
+    def setUp(self):
+        super().setUp()
+        (self.src/'script/generate-release.sh').write_text(RELEASE_SCRIPT + FACTORY_TAIL)
+        self.calls = self.root/'calls.log'
+        self.fastboot = script(self.root/'fastboot-src', f"""
+            import sys, zipfile
+            open({str(self.calls)!r}, 'a').write('fastboot ' + ' '.join(sys.argv[1:]) + '\\n')
+            with zipfile.ZipFile(sys.argv[-1] + '.zip', 'w') as z: z.writestr(sys.argv[-1] + '/flash-all.sh', 'synthetic')""")
+        fastboot_bytes = Path(self.fastboot).read_bytes()
+        self.fastboot_sha = hashlib.sha256(fastboot_bytes).hexdigest()
+        # Like the otatools unzip: the generator source and bin/fastboot appear in the release directory.
+        script(self.tools/'img_from_target_files', f"""
+            import os, pathlib, shutil, sys
+            open({str(self.calls)!r}, 'a').write('img_from_target_files ' + ' '.join(sys.argv[1:]) + '\\n')
+            pathlib.Path(sys.argv[2]).write_bytes(b'img')
+            pathlib.Path('device/common').mkdir(parents=True)
+            pathlib.Path('device/common/generate-factory-images-common.sh').write_text(
+                'printf "factory\\\\n" > "$DEVICE-factory-$BUILD_NUMBER.zip"; echo "generator $DEVICE $BUILD_NUMBER" >> {self.calls}\\n')
+            shutil.copy({self.fastboot!r}, 'bin/fastboot'); os.chmod('bin/fastboot', 0o755)""")
+        script(self.tools/'ssh-keygen', f"open({str(self.calls)!r}, 'a').write('ssh-keygen RAN\\n')")
+        self.members.append(('release/keys/frankel/id_ed25519', b'synthetic unbound factory key'))
+        key_archive(self.secrets/'KEYS', self.members)
+        self.env['PATH'] = f'{self.tools}:' + self.env['PATH']
+        self.set_factory({'fastbootSha256': self.fastboot_sha})
+
+    def set_factory(self, factory):
+        config = json.loads(self.config.read_text())
+        config['host']['sign']['factory'] = factory
+        self.config.write_text(json.dumps(config))
+
+    def test_factory_stage_maps_the_install_archive_unsigned_beside_the_unchanged_public_outputs(self):
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(calls, ['img_from_target_files frankel-target_files.zip factory.zip', 'generator frankel 2026102802',
+            'fastboot -S 0x10000000 optimize-factory-image frankel-factory-2026102802.zip frankel-install-2026102802'])
+        install = self.release/'factory/frankel-install-2026102802.zip'
+        self.assertEqual(zipfile.ZipFile(install).namelist(), ['frankel-install-2026102802/flash-all.sh'])
+        self.assertEqual(sorted(os.listdir(self.release/'factory')), ['frankel-install-2026102802.zip'])  # no .sig
+        public = sorted(p.name for p in (self.release/'public').iterdir())
+        self.assertEqual(public, sorted(['frankel-ota_update-2026102802.zip', 'frankel-stable', 'releasekey.x509.pem',
+                                         'avb_pkmd.bin', 'UPDATE.md']))
+        receipt = json.loads((self.release/'sign-receipt.json').read_text())
+        marker = json.loads((self.src/'releases/2026102802/.rose-actions-signed.json').read_text())
+        self.assertEqual(sorted(receipt['outputs']), public)
+        self.assertEqual(sorted(marker['outputs']), public)  # recovery's exact five public outputs are unchanged
+        record = {'file': 'frankel-install-2026102802.zip', 'sha256': hashlib.sha256(install.read_bytes()).hexdigest(),
+                  'size': install.stat().st_size, 'fastbootSha256': self.fastboot_sha, 'signature': None,
+                  'signatureBasis': 'unsigned: os/flavors/frankel.json factorySigning principal and publicKey are not bound'}
+        self.assertEqual((receipt['factory'], marker['factory']), (record, record))
+        self.assertEqual((self.src/'releases/2026102802/factory/frankel-install-2026102802.zip').read_bytes(), install.read_bytes())
+        self.assertNotIn('ssh-keygen', self.calls.read_text())
+        self.assert_secrets_gone()
+
+    def test_ota_only_without_the_opt_in(self):
+        config = json.loads(self.config.read_text())
+        del config['host']['sign']['factory']
+        self.config.write_text(json.dumps(config))
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        self.assertNotIn('img_from_target_files', self.calls.read_text() if self.calls.exists() else '')
+        self.assertFalse((self.release/'factory').exists())
+        self.assertNotIn('factory', json.loads((self.release/'sign-receipt.json').read_text()))
+
+    def test_missing_or_invalid_factory_inputs_refuse_before_any_secret(self):
+        for factory, error, pattern in (({}, host_sign.AdapterSetupMissing, None),
+                                        ({'fastbootSha256': 'abc'}, host_sign.AdapterFailed, 'must be a sha256'),
+                                        ({'fastbootSha256': self.fastboot_sha, 'archiveSigning': {'principal': 'x'}},
+                                         host_sign.AdapterFailed, 'takes only fastbootSha256 and signing'),
+                                        ({'fastbootSha256': self.fastboot_sha, 'signing': {'project': 'p'}},
+                                         host_sign.AdapterFailed, 'factorySigning principal and publicKey are not bound')):
+            with self.subTest(factory):
+                self.set_factory(factory)
+                with self.assertRaises(error) as ctx:
+                    host_sign.main(self.config, self.env, self.gcloud)
+                if pattern:
+                    self.assertIn(pattern, str(ctx.exception))
+                else:
+                    self.assertEqual(ctx.exception.missing, ['host.sign.factory.fastbootSha256'])
+                self.assertFalse(self.log.exists(), 'no secret is read')
+
+    def test_wrong_fastboot_stops_before_optimize_factory_image(self):
+        self.set_factory({'fastbootSha256': '0' * 64})
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaisesRegex(host_sign.AdapterFailed, 'derived release script exited'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertNotIn('fastboot -S', self.calls.read_text())
+        self.assertFalse((self.release/'factory').exists())
+        self.assert_secrets_gone()
+
+    def test_generator_output_must_exist_and_stay_unsigned(self):
+        script(self.root/'fastboot-src', f"open({str(self.calls)!r}, 'a').write('fastboot made nothing\\n')")
+        self.set_factory({'fastbootSha256': hashlib.sha256((self.root/'fastboot-src').read_bytes()).hexdigest()})
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'did not produce frankel-install-2026102802.zip'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse((self.src/'releases/2026102802/.rose-actions-signed.json').exists())
+
+    def test_a_signature_beside_the_install_archive_refuses(self):
+        script(self.root/'fastboot-src', """
+            import sys, zipfile
+            with zipfile.ZipFile(sys.argv[-1] + '.zip', 'w') as z: z.writestr('x', 'y')
+            open(sys.argv[-1] + '.zip.sig', 'w').write('unexpected signature')""")
+        self.set_factory({'fastbootSha256': hashlib.sha256((self.root/'fastboot-src').read_bytes()).hexdigest()})
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'frankel-install-2026102802.zip.sig exists'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse((self.release/'factory').exists())
+
+    # ---- FOLD-FACTORY-IDENTITY: signing only behind a bound pin (mock pin, mock ssh-keygen runner, synthetic secrets)
+    def bind_pin(self):
+        public = 'ssh-ed25519 ' + base64.b64encode(b'\0\0\0\x0bssh-ed25519\0\0\0 ' + bytes(range(32))).decode()
+        pin = {'namespace': 'factory images', 'principal': 'roseos-factory-images-rango-v1', 'publicKey': public, 'status': 'bound'}
+        original = host_sign.factory_contract
+        host_sign.factory_contract = lambda device: ('{device}-install-{build}.zip', pin)
+        self.addCleanup(setattr, host_sign, 'factory_contract', original)
+        self.sshkeygen = self.root/'ssh-keygen-stand-in'
+        self.sshkeygen.write_bytes(b'synthetic stand-in bytes, never executed')
+        (self.secrets/'FACTORY_KEY').write_bytes(b'synthetic factory key bytes')
+        (self.secrets/'FACTORY_PASS').write_text('SYNTHETIC-factory-passphrase\n')
+        self.signing = {'project': 'p', 'keySecret': 'FACTORY_KEY', 'keyVersion': '1', 'passphraseSecret': 'FACTORY_PASS',
+                        'passphraseVersion': '1', 'sshKeygen': str(self.sshkeygen),
+                        'sshKeygenSha256': hashlib.sha256(self.sshkeygen.read_bytes()).hexdigest()}
+        return pin
+
+    def mock_keygen(self, verify='ok'):
+        self.keygen_calls = []
+
+        def runner(argv, env, cwd, seconds, stdin_path=None):
+            self.keygen_calls.append({'argv': argv, 'env': dict(env), 'keyPresent': (Path(cwd)/'id_ed25519').is_file(),
+                                      'helper': Path(env['SSH_ASKPASS']).read_bytes() if 'SSH_ASKPASS' in env else None})
+            if argv[1:3] == ['-Y', 'sign']:
+                Path(argv[-1] + '.sig').write_text('-----BEGIN SSH SIGNATURE-----\nc3lu\n-----END SSH SIGNATURE-----\n')
+                return {'exit': 0, 'category': 'ok', 'outputBytes': 0, 'outputSha256': None}
+            return {'exit': 0 if verify == 'ok' else 255, 'category': verify, 'outputBytes': 0, 'outputSha256': None}
+        original = host_sign.FACTORY_RUNNER[0]
+        host_sign.FACTORY_RUNNER[0] = runner
+        self.addCleanup(host_sign.FACTORY_RUNNER.__setitem__, 0, original)
+
+    def test_bound_pin_signs_and_verifies_the_install_archive_with_the_pinned_key(self):
+        pin = self.bind_pin()
+        self.mock_keygen()
+        self.set_factory({'fastbootSha256': self.fastboot_sha, 'signing': self.signing})
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        sign, verify = self.keygen_calls
+        install = 'frankel-install-2026102802.zip'
+        self.assertEqual(sign['argv'][:6], [str(self.sshkeygen), '-Y', 'sign', '-n', 'factory images', '-f'])
+        self.assertTrue(sign['argv'][-1].endswith(install) and sign['keyPresent'])
+        self.assertEqual(sorted(sign['env']), ['LANG', 'PATH', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'])
+        self.assertRegex(sign['helper'].decode(), r'^#!/bin/sh\nexec cat /\S+/passphrase\n$')
+        self.assertEqual(verify['argv'][verify['argv'].index('-I') + 1], pin['principal'])
+        self.assertEqual(sorted(os.listdir(self.release/'factory')), [install, install + '.sig'])
+        record = json.loads((self.release/'sign-receipt.json').read_text())['factory']
+        self.assertEqual((record['signature']['principal'], record['signature']['namespace'], record['signature']['publicKey']),
+                         (pin['principal'], 'factory images', pin['publicKey']))
+        self.assertEqual(record['signatureBasis'], 'signed and verified against os/flavors/frankel.json factorySigning')
+        fetched = [json.loads(l)[json.loads(l).index('--secret') + 1] for l in self.log.read_text().splitlines()]
+        self.assertEqual(fetched, ['KEYS', 'PASS', 'FACTORY_KEY', 'FACTORY_PASS'])
+        self.assert_secrets_gone()  # the factory key and passphrase copies are removed too
+        everything = b''.join(p.read_bytes() for p in self.release.rglob('*') if p.is_file())
+        self.assertNotIn(b'SYNTHETIC-factory-passphrase', everything)
+        self.assertNotIn('SYNTHETIC-factory-passphrase', json.dumps(self.keygen_calls, default=str))
+        self.assertNotIn('ssh-keygen RAN', self.calls.read_text())  # the generator's own signing step stays removed
+
+    def test_signing_prerequisites_refuse_before_any_secret(self):
+        self.bind_pin()
+        self.mock_keygen()
+        self.set_factory({'fastbootSha256': self.fastboot_sha})
+        with self.assertRaises(host_sign.AdapterSetupMissing) as ctx:
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertIn('host.sign.factory.signing.sshKeygen', ctx.exception.missing)
+        for change, pattern in (({'sshKeygenSha256': '0' * 64}, 'not the pinned regular file'),
+                                ({'keyVersion': 'latest'}, 'pinned numeric versions'), ({'extra': 'x'}, 'pinned numeric versions')):
+            with self.subTest(change):
+                self.set_factory({'fastbootSha256': self.fastboot_sha, 'signing': dict(self.signing, **change)})
+                with self.assertRaisesRegex(host_sign.AdapterFailed, pattern):
+                    host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse(self.log.exists(), 'no secret is read')
+        self.assertEqual(self.keygen_calls, [])
+
+    def test_failed_verification_maps_nothing_and_writes_no_marker(self):
+        self.bind_pin()
+        self.mock_keygen(verify='nonzero_exit')
+        self.set_factory({'fastbootSha256': self.fastboot_sha, 'signing': self.signing})
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'verify_failed'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse((self.release/'factory').exists())
+        self.assertFalse((self.src/'releases/2026102802/.rose-actions-signed.json').exists())
+        self.assertFalse(list((self.src/'releases/2026102802').rglob('*.sig')))
+        self.assert_secrets_gone()
+
+    def test_factory_anchor_drift_refuses(self):
+        args = ('/c/common.sh', '/k', '/p', '/R/rel/keys', '/R/wrap')
+        factory = {'fastbootSha256': '1' * 64, 'installTemplate': '{device}-install-{build}.zip'}
+        full = RELEASE_SCRIPT + FACTORY_TAIL
+        derived = host_sign.derive_release_script(full, *args, factory=factory)
+        self.assertIn("printf '%s  bin/fastboot\\n' " + '1' * 64 + ' | sha256sum --check --status', derived)
+        self.assertIn('\nbin/fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image', derived)
+        self.assertNotIn('ssh-keygen', derived)
+        self.assertNotIn('id_ed25519', derived)
+        self.assertNotIn('img_from_target_files', host_sign.derive_release_script(full, *args))  # OTA-only cut unchanged
+        fastboot_line = 'fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image $DEVICE-factory-$BUILD_NUMBER.zip $DEVICE-install-$BUILD_NUMBER\n'
+        for name, text in (('no fastboot', full.replace(fastboot_line, '')),
+                           ('two fastboot', full.replace(fastboot_line, fastboot_line * 2)),
+                           ('no generator', full.replace('source device/common/generate-factory-images-common.sh\n', '')),
+                           ('changed ssh block', full.replace('    export PATH="$OLD_PATH"\n', '')),
+                           ('extra signing', full + 'ssh-keygen -Y sign -f "$KEY_DIR/id_ed25519" x.zip\n')):
+            with self.subTest(name), self.assertRaises(host_sign.AdapterFailed):
+                host_sign.derive_release_script(text, *args, factory=factory)
+
+
+# The OTA-only tests run once, in SignAdapterTest; SignFactoryTest reuses only its fixture.
+for _name in [n for n in vars(SignAdapterTest) if n.startswith('test_')]:
+    setattr(SignFactoryTest, _name, None)
+
+# ---- FOLD-FACTORY-PACKAGE: packaging-only install archive from a retained signed target-files (mocked runner only)
+_spec = importlib.util.spec_from_file_location('host_factory_package', SCRIPTS/'host-factory-package.py')
+hfp = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(hfp)
+RELEASE_FIXTURE = SCRIPTS/'tests/fixtures/permission-apex/script/generate-release.sh'
+GENERATOR_FIXTURE = SCRIPTS/'tests/fixtures/factory-package/device_common-1f5ba267'
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def synthetic_vbmeta(public, auth=64, aux=128, pk_offset=0, magic=b'AVB0', pk_size=None):
+    """An AVB vbmeta layout around PUBLIC (random bytes standing in for a public key; no key pair exists)."""
+    header = bytearray(256)
+    header[:4] = magic
+    header[12:28] = auth.to_bytes(8, 'big') + aux.to_bytes(8, 'big')
+    header[64:80] = pk_offset.to_bytes(8, 'big') + (len(public) if pk_size is None else pk_size).to_bytes(8, 'big')
+    aux_block = bytearray(aux)
+    aux_block[pk_offset:pk_offset + len(public)] = public[:max(0, aux - pk_offset)]
+    return bytes(header) + bytes(auth) + bytes(aux_block)
+
+
+def target_files_zip(members):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as z:
+        for name, data in members:
+            if isinstance(data, zipfile.ZipInfo):
+                z.writestr(data, b'x')
+            else:
+                z.writestr(name, data)
+    return buffer.getvalue()
+
+
+@contextlib.contextmanager
+def warnings_ignored():
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        yield
+
+
+class FactoryPackageTest(unittest.TestCase):
+    """No bash, img_from_target_files, generator or fastboot runs: the runner is a mock that checks the derived script
+    and the work directory, then writes a stand-in install archive."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.retained = self.root/'releases/2026103001'
+        (self.retained/'release-rango-2026103001').mkdir(parents=True)
+        self.tf = self.retained/'release-rango-2026103001/rango-target_files.zip'
+        self.public = os.urandom(64)
+        self.vbmeta = synthetic_vbmeta(self.public)
+        self.tf.write_bytes(target_files_zip([('META/misc_info.txt', b'ab_update=true\n'), ('IMAGES/vbmeta.img', self.vbmeta)]))
+        self.generator = {n: (GENERATOR_FIXTURE/n).read_bytes() for n in
+                          ('clear-factory-images-variables.sh', 'generate-factory-images-common.sh')}
+        self.otatools = self.retained/'rango-otatools.zip'
+        self.write_otatools()
+        self.out = self.root/'package-run-1'
+        self.before = {p: p.read_bytes() for p in (self.tf, self.otatools)}
+        self.listing = sorted(str(p) for p in self.retained.rglob('*'))
+        original = hfp.flavor_pins
+        hfp.flavor_pins = lambda device, root=hfp.ROOT: {'install': '{device}-install-{build}.zip',
+            'avb': sha(self.public), 'generator': {n: sha(b) for n, b in self.generator.items()}}
+        self.addCleanup(setattr, hfp, 'flavor_pins', original)
+        self.calls = []
+
+    def write_otatools(self, generator=None, extra=(), link=None):
+        with zipfile.ZipFile(self.otatools, 'w') as z:
+            for name, data in (generator or self.generator).items():
+                z.writestr(f'device/common/{name}', data)
+            z.writestr('bin/fastboot', b'synthetic fastboot stand-in, never executed')
+            for name, data in extra:
+                z.writestr(name, data)
+            if link:
+                info = zipfile.ZipInfo(link)
+                info.external_attr = (0o120777 << 16)
+                z.writestr(info, 'target')
+
+    def args(self, **change):
+        values = {'device': 'rango', 'build': '2026103001', 'target_files': str(self.tf),
+                  'target_files_sha256': sha(self.tf.read_bytes()), 'otatools': str(self.otatools),
+                  'otatools_sha256': sha(self.otatools.read_bytes()), 'release_script': str(RELEASE_FIXTURE),
+                  'release_script_sha256': sha(RELEASE_FIXTURE.read_bytes()),
+                  'fastboot_sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9', 'out': str(self.out),
+                  'lock': str(self.root/'builder.lock')}
+        values.update(change)
+        return type('Args', (), values)
+
+    def runner(self, category='ok', produce=True, sig=False, mutate=False):
+        def run(script, cwd, log):
+            self.calls.append({'script': Path(script).read_text(), 'cwd': Path(cwd),
+                               'files': sorted(str(p.relative_to(cwd)) for p in Path(cwd).rglob('*') if p.is_file())})
+            if mutate:
+                self.tf.write_bytes(b'changed')
+            if produce:
+                (Path(cwd)/'rango-install-2026103001.zip').write_bytes(b'synthetic install archive')
+            if sig:
+                (Path(cwd)/'rango-install-2026103001.zip.sig').write_text('x')
+            return category, (0 if category == 'ok' else 1)
+        return run
+
+    def package(self, args=None, **kw):
+        return hfp.package(args or self.args(), runner=kw.pop('runner', self.runner()), free=kw.pop('free', lambda p: 200 << 30))
+
+    def assertRetained(self):
+        self.assertEqual({p: p.read_bytes() for p in (self.tf, self.otatools)}, self.before)
+        self.assertEqual(sorted(str(p) for p in self.retained.rglob('*')), self.listing)
+
+    def test_packages_into_a_fresh_root_and_never_touches_the_retained_release(self):
+        receipt = self.package()
+        self.assertRetained()
+        self.assertEqual(sorted(os.listdir(self.out)), ['avb_pkmd.bin', 'factory-package-receipt.json',
+                                                        'rango-install-2026103001.zip'])
+        self.assertEqual((self.out/'avb_pkmd.bin').read_bytes(), self.public)  # only the derived public bytes
+        call = self.calls[0]
+        self.assertEqual(call['script'], hfp._module('hs', SCRIPTS/'host-sign.py').derive_factory_only_script(
+            RELEASE_FIXTURE.read_text(), 'rango', '2026103001', self.out/'avb_pkmd.bin', self.args().fastboot_sha256))
+        self.assertEqual(receipt['inputs']['avbPkmd'], {'path': str(self.out/'avb_pkmd.bin'), 'sha256': sha(self.public),
+            'derivedFrom': {'member': 'IMAGES/vbmeta.img', 'memberSha256': sha(self.vbmeta), 'memberSize': len(self.vbmeta),
+                            'targetFiles': sha(self.tf.read_bytes())}})
+        self.assertIn('rango-target_files.zip', call['files'])  # a copy inside work/, not the retained path
+        self.assertIn('device/common/generate-factory-images-common.sh', call['files'])
+        self.assertEqual(call['cwd'], self.out/'work')
+        self.assertEqual((receipt['status'], receipt['output']['sha256'], receipt['signature'], receipt['workRemoved']),
+                         ('packaged', sha(b'synthetic install archive'), None, True))
+        self.assertEqual(json.loads((self.out/'factory-package-receipt.json').read_text())['status'], 'packaged')
+
+    def test_wrong_inputs_or_hashes_refuse_before_any_output(self):
+        for change, pattern in (({'target_files_sha256': '0' * 64}, 'hash_mismatch: target-files'),
+                                ({'otatools_sha256': '0' * 64}, 'hash_mismatch: otatools'),
+                                ({'release_script_sha256': '0' * 64}, 'hash_mismatch: release script'),
+                                ({'fastboot_sha256': 'x'}, 'usage_refused'),
+                                ({'target_files': 'relative.zip'}, 'input_refused'),
+                                ({'target_files': str(self.root/'missing.zip')}, 'input_missing')):
+            with self.subTest(change), self.assertRaisesRegex(hfp.Refused, pattern):
+                self.package(self.args(**change))
+            self.assertFalse(self.out.exists())
+        link = self.root/'tf-link.zip'
+        link.symlink_to(self.tf)
+        with self.assertRaisesRegex(hfp.Refused, 'input_missing'):
+            self.package(self.args(target_files=str(link)))
+        self.assertEqual(self.calls, [])
+        self.assertRetained()
+
+    def test_held_shared_lock_refuses_before_anything_is_written(self):
+        import fcntl
+        holder = os.open(self.root/'builder.lock', os.O_RDWR | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self.assertRaisesRegex(hfp.Refused, 'lock_held'):
+            self.package()
+        self.assertFalse(self.out.exists())
+        self.assertEqual(self.calls, [])
+        with self.assertRaisesRegex(hfp.Refused, 'usage_refused: --lock'):
+            self.package(self.args(lock='relative.lock'))
+        self.assertRetained()
+
+    def test_receipt_records_measured_phase_timings(self):
+        timings = self.package()['timings']
+        self.assertEqual(sorted(timings), ['generateSeconds', 'recheckSeconds', 'stageSeconds', 'verifySeconds'])
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in timings.values()))
+
+    def tf_with(self, members):
+        self.tf.write_bytes(target_files_zip(members))
+        return self.args(target_files_sha256=sha(self.tf.read_bytes()))
+
+    def test_public_avb_key_comes_only_from_the_pinned_target_files_vbmeta(self):
+        link = zipfile.ZipInfo('IMAGES/vbmeta.img')
+        link.external_attr = 0o120777 << 16
+        cases = (
+            ('wrong public key', [('IMAGES/vbmeta.img', synthetic_vbmeta(os.urandom(64)))], 'avb_mismatch'),
+            ('missing member', [('META/misc_info.txt', b'x')], 'vbmeta_missing'),
+            ('duplicate member', [('IMAGES/vbmeta.img', self.vbmeta), ('IMAGES/vbmeta.img', self.vbmeta)], 'vbmeta_missing'),
+            ('link member', [('IMAGES/vbmeta.img', link)], 'is not a regular member'),
+            ('oversized member', [('IMAGES/vbmeta.img', self.vbmeta + bytes(1 << 20))], 'exceeds'),
+            ('not AVB', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, magic=b'XXXX'))], 'not an AVB vbmeta'),
+            ('short image', [('IMAGES/vbmeta.img', self.vbmeta[:200])], 'not an AVB vbmeta'),
+            ('blocks beyond image', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public)[:300])], 'block sizes exceed'),
+            ('key outside aux', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, pk_offset=96))], 'outside the auxiliary'),
+            ('zero-size key', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, pk_size=0))], 'outside the auxiliary'),
+            ('unsafe name', [('IMAGES/vbmeta.img', self.vbmeta), ('../escape', b'x')], 'target_files_unsafe'),
+            ('absolute name', [('IMAGES/vbmeta.img', self.vbmeta), ('/abs', b'x')], 'target_files_unsafe'),
+        )
+        for name, members, pattern in cases:
+            with self.subTest(name), warnings_ignored():
+                args = self.tf_with(members)
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(args)
+                self.assertFalse(self.out.exists(), 'refused before NEW_ROOT exists')
+        self.tf.write_bytes(b'not a zip')
+        with self.assertRaisesRegex(hfp.Refused, 'target_files_invalid'):
+            self.package(self.args(target_files_sha256=sha(b'not a zip')))
+        with self.assertRaisesRegex(hfp.Refused, 'hash_mismatch: target-files'):
+            self.package(self.args(target_files_sha256='0' * 64))  # the vbmeta is never read from an unpinned file
+        self.assertEqual(self.calls, [])
+
+    def test_extraction_matches_the_existing_signing_layout(self):
+        spec = importlib.util.spec_from_file_location('signing_job_for_layout', SCRIPTS/'signing-job.py')
+        job = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(job)
+        for vbmeta in (self.vbmeta, synthetic_vbmeta(os.urandom(520), auth=576, aux=1088, pk_offset=64)):
+            self.assertEqual(hfp.avb_public_key(vbmeta), job.avb_public_key(vbmeta))
+
+    def test_output_collisions_and_capacity_refuse(self):
+        self.out.mkdir()
+        (self.out/'keep').write_text('mine')
+        with self.assertRaisesRegex(hfp.Refused, 'output_exists'):
+            self.package()
+        self.assertEqual((self.out/'keep').read_text(), 'mine')
+        inside = self.retained/'release-rango-2026103001/new-run'
+        with self.assertRaisesRegex(hfp.Refused, 'inside the directory of rango-target_files.zip'):
+            self.package(self.args(out=str(inside)))
+        with self.assertRaisesRegex(hfp.Refused, 'capacity_unavailable'):
+            self.package(self.args(out=str(self.root/'run-2')), free=lambda p: (128 << 30) - 1)
+        self.assertFalse((self.root/'run-2').exists())
+        self.assertRetained()
+
+    def test_generator_and_otatools_must_be_the_pinned_plain_files(self):
+        changed = dict(self.generator, **{'generate-factory-images-common.sh': self.generator['generate-factory-images-common.sh'] + b'\n# drift\n'})
+        for n, (kw, pattern) in enumerate((({'generator': changed}, 'generator_mismatch'),
+                                           ({'extra': [('../escape', b'x')]}, 'otatools_unsafe'),
+                                           ({'link': 'lib64/liblink.so'}, 'otatools_unsafe'))):
+            with self.subTest(n):
+                self.write_otatools(**kw)
+                out = self.root/f'run-unsafe-{n}'
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(self.args(otatools_sha256=sha(self.otatools.read_bytes()), out=str(out)))
+                receipt = json.loads((out/'factory-package-receipt.json').read_text())
+                self.assertEqual((receipt['status'], receipt['workRemoved']), ('failed', True))
+                self.assertEqual(sorted(os.listdir(out)), ['avb_pkmd.bin', 'factory-package-receipt.json'])
+        self.assertEqual(self.calls, [])
+
+    def test_failed_generation_maps_nothing_and_cleans_up(self):
+        for n, (runner, pattern) in enumerate(((self.runner('timeout'), 'ended timeout'),
+                                               (self.runner('nonzero_exit'), 'ended nonzero_exit'),
+                                               (self.runner('log_overflow'), 'ended log_overflow'),
+                                               (self.runner(produce=False), 'output_missing'),
+                                               (self.runner(sig=True), 'output_unexpected'),
+                                               (self.runner(mutate=True), 'input_changed'))):
+            with self.subTest(pattern):
+                out = self.root/f'fail-{n}'
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(self.args(out=str(out)), runner=runner)
+                self.assertEqual(sorted(os.listdir(out)), ['avb_pkmd.bin', 'factory-package-receipt.json'])
+                self.assertEqual(json.loads((out/'factory-package-receipt.json').read_text())['status'], 'failed')
+                if pattern != 'input_changed':
+                    self.assertRetained()
+
+    def test_factory_only_script_keeps_exactly_the_variables_and_the_tail(self):
+        derive = hfp._module('hs', SCRIPTS/'host-sign.py').derive_factory_only_script
+        original = RELEASE_FIXTURE.read_text()
+        script = derive(original, 'rango', '2026103001', '/srv/public/avb_pkmd.bin', '1' * 64)
+        for kept in ('source device/common/clear-factory-images-variables.sh', 'BOOTLOADER=$(get_radio_image bootloader)',
+                     'AVB_PKMD=/srv/public/avb_pkmd.bin', 'img_from_target_files $TARGET_FILES $DEVICE-img-$BUILD_NUMBER.zip',
+                     'source device/common/generate-factory-images-common.sh', 'MAX_DOWNLOAD_SIZE=0x10000000',
+                     "printf '%s  bin/fastboot\\n' " + '1' * 64 + ' | sha256sum --check --status',
+                     'bin/fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image'):
+            self.assertIn(kept, script)
+        for dropped in ('KEY_DIR', 'decrypt-keys', 'sign_target_files_apks', 'ota_from_target_files', 'ssh-keygen',
+                        'generate-metadata', 'rm -rf $RELEASE_OUT'):
+            self.assertNotIn(dropped, script)
+        self.assertTrue(script.endswith('optimize-factory-image $DEVICE-factory-$BUILD_NUMBER.zip $DEVICE-install-$BUILD_NUMBER\n'))
+        for name, text in (('no AVB_PKMD', original.replace('AVB_PKMD="$KEY_DIR/avb_pkmd.bin"\n', '')),
+                           ('two img', original.replace('img_from_target_files $TARGET_FILES', 'img_from_target_files $TARGET_FILES $DEVICE-img-$BUILD_NUMBER.zip\nimg_from_target_files $TARGET_FILES', 1)),
+                           ('no signing anchor', original.replace('sign_target_files_apks ', 'signed_elsewhere ')),
+                           ('key in variables', original.replace('AVB_ALGORITHM=SHA256_RSA4096', 'AVB_ALGORITHM=SHA256_RSA4096 # $KEY_DIR'))):
+            with self.subTest(name), self.assertRaises(host_sign.AdapterFailed):
+                derive(text, 'rango', '2026103001', '/srv/public/avb_pkmd.bin', '1' * 64)
+        with self.assertRaises(host_sign.AdapterFailed):
+            derive(original, 'rango', '2026103001', 'relative/avb_pkmd.bin', '1' * 64)
+
+    def test_run_script_bounds_and_group_cleanup(self):
+        class Proc:
+            def __init__(self, data, exits):
+                r, w = os.pipe()
+                self.stdout, self.pid, self.returncode, self.exits = os.fdopen(r, 'rb'), 4242, None, exits
+                os.write(w, data)
+                if exits:
+                    os.close(w)
+                else:
+                    self.w = w
+
+            def poll(self):
+                return 0 if self.exits else None
+
+            def wait(self, timeout=None):
+                if hasattr(self, 'w'):
+                    os.close(self.w)
+                    del self.w
+                self.returncode = 0 if self.exits else -9
+                return self.returncode
+        log = self.root/'run.log'
+        for proc, clock, expected in ((Proc(b'ok\n', True), None, 'ok'), (Proc(b'', False), iter([0, 0] + [10 ** 6] * 9), 'timeout')):
+            kills = []
+            with mock.patch.object(hfp.os, 'killpg', lambda pid, sig: kills.append(sig)):
+                kw = {'clock': (lambda c=clock: next(c))} if clock else {}
+                category, _ = hfp.run_script(self.root/'s.sh', self.root, log, popen=lambda argv, **k: proc, **kw)
+            self.assertEqual(category, expected)
+            self.assertEqual(kills, [hfp.signal.SIGTERM, hfp.signal.SIGKILL])
+        with mock.patch.dict(hfp.LIMITS, {'logBytes': 10}), mock.patch.object(hfp.os, 'killpg', lambda pid, sig: None):
+            category, _ = hfp.run_script(self.root/'s.sh', self.root, log, popen=lambda argv, **k: Proc(b'x' * 100, False))
+        self.assertEqual(category, 'log_overflow')
+
 
 class IntegrateAdapterTest(Base):
     def setUp(self):

@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+"""Stage the pinned bring-up files (manifest.json) into the staging root, verified (CLOUD-STAGING-SOURCE-001).
+
+  python3 -c <this source> <manifest JSON> <limits JSON>
+
+bootstrap's cloud-stage-once diagnostic would run it once in the exact cached image, with only the staging root
+mounted read-write and no credentials, when a separate runtime decision sets that mode. It has not run on a VM.
+
+For every manifest file, in manifest order:
+- an existing final file is verified (size, then sha256 or git blob sha1): if it matches it is kept; if it differs the
+  whole run is refused BEFORE any download, and nothing is changed;
+- otherwise it is fetched from its one pinned source (SOURCES / the Hub resolve URL at the pinned revision) into
+  ``<name>.partial``, resuming an existing partial with an HTTP Range request. Only https to ALLOW_HOSTS is accepted,
+  for the first request and every redirect; any other host or scheme, a 401/403 (no credentials are ever sent), a
+  Content-Length or body larger than the pinned size, or a server that ignores the Range stops that file;
+- complete files are hashed and only an exact match is renamed into place. A mismatch, an interruption, the
+  deadline or the byte cap leaves ``.partial`` where it is (partials and caches are never deleted).
+
+The run stops at ``deadlineS`` or once ``maxBytes`` have been read. It prints one MARKER line of fixed tokens
+(sanitize() is the allowlist bootstrap re-applies): counts per group, bytes in, elapsed seconds, the stop reason and,
+for refused destinations, at most MAX_REFUSED_HOSTS sanitized hostnames with a fixed reason and a count. Never a URL,
+scheme, userinfo, port, path, query, fragment, header, path outside the manifest's names, or exception text.
+
+HEAD-only mode (CLOUD-REDIRECT-HEAD-001): limits ``{"mode": "head", ...}`` run head_probe() instead: one HEAD request
+per manifest file at the same pinned source, every redirect checked by the same Fetcher.check (ALLOW_HOSTS, https only,
+no userinfo, at most MAX_REDIRECTS hops). A refused destination is recorded (sanitized host, reason, count) and never
+requested. No response body is read (http.client reads none for HEAD; responses are closed unread), the staging root
+and existing files are never opened, nothing is written, and the run stops at deadlineS, enforced by a real-time alarm
+in main(). It prints one HEAD_MARKER line that sanitize_head() re-checks.
+
+Unverified until a separately approved run: the image's Python ssl/CA store, GET (not only HEAD) success through the
+Hub's redirects from the VM's region (the approved HEAD probe found us.gcp.cdn.hf.co, now allowed), Range support on
+those hosts, and the throughput needed to finish 37.6 GB inside the deadline.
+"""
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import sys
+import time
+
+MARKER = 'ROSE-CLOUD-STAGE '
+HUB = 'https://huggingface.co'
+# The exact PyPI file for the pinned wheel (PyPI JSON for ptts 0.6.0); its sha256 is the manifest's.
+SOURCES = {('ptts', 'ptts-0.6.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl'):
+           'https://files.pythonhosted.org/packages/62/5f/2c68115af9499a1c8d4395850eb758efd95aca20bc351c8d969962a39c53/'
+           'ptts-0.6.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl'}
+# us.gcp.cdn.hf.co (CLOUD-STAGING-ALLOW-GCP-CDN-001): the one destination the approved HEAD probe found refused for
+# 45 of 59 sources from the VM; added alone by owner approval. Exact hostnames only: no wildcard, no subdomain.
+ALLOW_HOSTS = ('huggingface.co', 'us.aws.cdn.hf.co', 'us.gcp.cdn.hf.co', 'files.pythonhosted.org')
+MAX_REDIRECTS = 5
+CHUNK = 1 << 20
+STOPS = ('done', 'refused_existing', 'insufficient_space', 'deadline', 'byte_cap', 'file_failures', 'bad_manifest')
+FAILURES = ('existing_differs', 'redirect_refused', 'auth_required', 'http_error', 'size_mismatch', 'range_refused',
+            'hash_mismatch', 'network')
+GROUP_KEYS = ('expected', 'present', 'downloaded', 'resumed', 'failed', 'bytesIn')
+# Why a destination was refused, and which host it was: the hostname only (lower case, no trailing dot, DNS syntax or
+# an IP literal), never the scheme, userinfo, port, path, query, fragment or headers. At most MAX_REFUSED_HOSTS
+# distinct hosts are kept, each with a count; the rest are counted in refusedOther.
+REFUSAL_REASONS = ('host_not_allowed', 'scheme_not_https', 'userinfo', 'malformed')
+MAX_REFUSED_HOSTS = 4
+MAX_URL_CHARS = 8192
+_LABEL = re.compile(r'^(?!-)[a-z0-9-]{1,63}(?<!-)$')
+# HEAD-only probe receipt: per group, files expected, reachable (final 2xx on allowed hosts), refused (a redirect to a
+# destination Fetcher.check refuses) and failed; the first failure per group as a fixed token.
+HEAD_MARKER = 'ROSE-CLOUD-HEAD '
+HEAD_KEYS = ('expected', 'reachable', 'refused', 'failed')
+HEAD_STOPS = ('done', 'deadline', 'bad_manifest')
+HEAD_FAILURES = ('redirect_refused', 'redirect_limit', 'auth_required', 'http_error', 'size_mismatch', 'network')
+
+
+def clean_host(host):
+    """The hostname as a fixed-syntax token, or None: DNS names (<= 253 chars, labels a-z0-9-) or an IP literal."""
+    if not isinstance(host, str):
+        return None
+    host = host.strip().lower().rstrip('.')
+    if '%' in host:
+        return None  # an IPv6 zone/scope id is free text: never a hostname token
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    if not 0 < len(host) <= 253 or not all(_LABEL.match(label) for label in host.split('.')):
+        return None
+    return host
+
+
+class Stop(Exception):
+    pass
+
+
+class FileFailure(Exception):
+    pass
+
+
+def url_for(name, group, rel, limits):
+    """The one source of a file. ``hubBase``/``sources`` in limits exist for offline tests; bootstrap never sets them
+    (its tests assert the exact limits it passes)."""
+    if 'repo' in group:
+        return '%s/%s/resolve/%s/%s' % (limits.get('hubBase', HUB), group['repo'], group['revision'], rel)
+    sources = dict(SOURCES)
+    sources.update({tuple(k.split('/', 1)): v for k, v in limits.get('sources', {}).items()})
+    return sources[(name, rel)]
+
+
+def hasher(kind, size):
+    h = hashlib.sha256() if kind == 'sha256' else hashlib.sha1()
+    if kind == 'gitsha1':
+        h.update(b'blob %d\0' % size)
+    return h
+
+
+def file_matches(path, size, kind, digest):
+    if os.path.getsize(path) != size:
+        return False
+    h = hasher(kind, size)
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(CHUNK), b''):
+            h.update(block)
+    return h.hexdigest() == digest
+
+
+class Fetcher:
+    """Bounded HTTP(S) GET with every hop checked against the allowlist; no credentials, no cookies."""
+
+    def __init__(self, limits, clock=time.monotonic):
+        import urllib.request
+        self.allow = tuple(limits.get('allowHosts', ALLOW_HOSTS))
+        self.schemes = ('https', 'http') if limits.get('allowHttp') else ('https',)
+        self.timeout = float(limits.get('readTimeoutS', 30))
+        self.deadline = clock() + float(limits['deadlineS'])
+        self.max_bytes = int(limits['maxBytes'])
+        self.clock, self.bytes_in = clock, 0
+        self.refused = {}  # (host or None, reason) -> count, at most MAX_REFUSED_HOSTS keys
+        self.refused_other = 0
+        self.head_only, self.hops = limits.get('mode') == 'head', 0
+        fetcher = self
+
+        class Hop(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                if fetcher.head_only:
+                    fetcher.hops += 1
+                    left = fetcher.deadline - fetcher.clock()
+                    try:
+                        if left <= 0:
+                            raise Stop('deadline')
+                        fetcher.check(newurl)
+                    except (Stop, FileFailure):
+                        fp.close()  # the redirect response is closed unread; the destination is never requested
+                        raise
+                    req.timeout = min(fetcher.timeout, left)  # http_error_302 opens the next hop with req.timeout
+                    new = super().redirect_request(req, fp, code, msg, headers, newurl)
+                    if new is not None:
+                        new.method = 'HEAD'  # a HEAD stays a HEAD on every hop, whatever this Python's default
+                    return new
+                fetcher.check(newurl)
+                new = super().redirect_request(req, fp, code, msg, headers, newurl)
+                if new is not None and req.get_header('Range'):
+                    new.add_unredirected_header('Range', req.get_header('Range'))
+                return new
+
+        Hop.max_redirections = MAX_REDIRECTS
+        self.opener = urllib.request.build_opener(Hop)
+        self.opener.addheaders = [('User-Agent', 'rose-cloud-stage/1')]
+
+    def check(self, url):
+        """Refuse anything but https to an allowed host without userinfo; record which host and why (sanitized)."""
+        import urllib.parse
+        reason, host = None, None
+        try:
+            if not isinstance(url, str) or len(url) > MAX_URL_CHARS:
+                raise ValueError
+            u = urllib.parse.urlsplit(url)
+            host = clean_host(u.hostname)
+            u.port  # noqa: B018 - raises ValueError for a malformed port
+        except ValueError:
+            reason = 'malformed'
+        if reason is None:
+            if host is None:
+                reason = 'malformed'
+            elif u.username is not None or u.password is not None:
+                reason = 'userinfo'
+            elif u.scheme not in self.schemes:
+                reason = 'scheme_not_https'
+            elif host not in self.allow:
+                reason = 'host_not_allowed'
+        if reason is not None:
+            self.note_refusal(host if reason != 'malformed' else None, reason)
+            raise FileFailure('redirect_refused')
+
+    def note_refusal(self, host, reason):
+        key = (host, reason)
+        if key in self.refused or len(self.refused) < MAX_REFUSED_HOSTS:
+            self.refused[key] = self.refused.get(key, 0) + 1
+        else:
+            self.refused_other += 1
+
+    def refusals(self):
+        ordered = sorted(self.refused.items(), key=lambda kv: (-kv[1], kv[0][1], kv[0][0] or ''))
+        return [{'host': h, 'reason': r, 'count': n} for (h, r), n in ordered], self.refused_other
+
+    def get(self, url, offset):
+        import urllib.error
+        import urllib.request
+        self.check(url)
+        req = urllib.request.Request(url, headers={'Range': 'bytes=%d-' % offset} if offset else {})
+        try:
+            return self.opener.open(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            e.close()
+            raise FileFailure('auth_required' if e.code in (401, 403) else 'http_error') from None
+        except FileFailure:
+            raise
+        except (OSError, ValueError):
+            raise FileFailure('network') from None
+
+    def head(self, url):
+        """One HEAD request (the redirects Hop checks): (status, Content-Length or None). No body is ever read."""
+        import http.client
+        import urllib.error
+        import urllib.request
+        self.check(url)
+        left = self.deadline - self.clock()
+        if left <= 0:
+            raise Stop('deadline')
+        self.hops = 0
+        try:
+            resp = self.opener.open(urllib.request.Request(url, method='HEAD'), timeout=min(self.timeout, left))
+        except urllib.error.HTTPError as e:
+            e.close()
+            if 300 <= e.code < 400:
+                raise FileFailure('redirect_limit' if self.hops > MAX_REDIRECTS else 'http_error') from None
+            raise FileFailure('auth_required' if e.code in (401, 403) else 'http_error') from None
+        except (FileFailure, Stop):
+            raise
+        except (OSError, ValueError, http.client.HTTPException):
+            raise FileFailure('network') from None
+        try:
+            return getattr(resp, 'status', 200), resp.headers.get('Content-Length')
+        finally:
+            resp.close()  # unread
+
+    def pull(self, url, part, size, kind, digest):
+        """Fetch into ``part`` (resuming it), then True if the whole file hashes to ``digest``."""
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        if have > size:
+            raise FileFailure('size_mismatch')
+        h = hasher(kind, size)
+        if have:
+            with open(part, 'rb') as f:
+                for block in iter(lambda: f.read(CHUNK), b''):
+                    h.update(block)
+        if have < size:
+            resp = self.get(url, have)
+            try:
+                status = getattr(resp, 'status', 200)
+                if have and status != 206:
+                    raise FileFailure('range_refused')  # the partial stays exactly as it was
+                length = resp.headers.get('Content-Length')
+                if length is not None and (not length.isdigit() or int(length) != size - have):
+                    raise FileFailure('size_mismatch')
+                read = getattr(resp, 'read1', resp.read)  # what has arrived, so the deadline is checked often
+                with open(part, 'ab') as out:
+                    while True:
+                        if self.clock() >= self.deadline:
+                            raise Stop('deadline')
+                        if self.bytes_in >= self.max_bytes:
+                            raise Stop('byte_cap')
+                        try:
+                            block = read(min(CHUNK, self.max_bytes - self.bytes_in))
+                        except OSError:
+                            raise FileFailure('network') from None
+                        if not block:
+                            break
+                        self.bytes_in += len(block)
+                        have += len(block)
+                        if have > size:
+                            raise FileFailure('size_mismatch')
+                        out.write(block)
+                        h.update(block)
+            finally:
+                resp.close()
+        if have != size:
+            raise FileFailure('size_mismatch')
+        return h.hexdigest() == digest
+
+
+def stage(manifest, limits, clock=time.monotonic):
+    t0 = clock()
+    root = manifest['stagingRoot']
+    groups = manifest['groups']
+    counts = {g: dict.fromkeys(GROUP_KEYS, 0) for g in groups}
+    failures = {g: None for g in groups}
+    result = {'stop': None, 'bytesIn': 0, 'elapsedS': 0, 'groups': counts, 'firstFailure': failures,
+              'freeBytes': None, 'needBytes': None, 'refusedHosts': [], 'refusedOther': 0}
+    plan = []
+    for name, group in groups.items():
+        for rel, size, kind, digest in group['files']:
+            if '..' in rel.split('/') or rel.startswith('/'):
+                result['stop'] = 'bad_manifest'
+                return result
+            counts[name]['expected'] += 1
+            plan.append((name, group, rel, size, kind, digest, os.path.join(root, group['dir'], rel)))
+    # 1. existing files: keep exact ones, refuse the run if any differs (nothing is changed)
+    todo, need = [], 0
+    for item in plan:
+        name, group, rel, size, kind, digest, path = item
+        if os.path.exists(path):
+            if not file_matches(path, size, kind, digest):
+                result['stop'] = 'refused_existing'
+                failures[name] = 'existing_differs'
+                return result
+            counts[name]['present'] += 1
+        else:
+            part = path + '.partial'
+            need += size - (os.path.getsize(part) if os.path.exists(part) else 0)
+            todo.append(item)
+    os.makedirs(root, exist_ok=True)
+    stat = os.statvfs(root)
+    result['freeBytes'], result['needBytes'] = stat.f_bavail * stat.f_frsize, need
+    if result['freeBytes'] < need * 1.1:
+        result['stop'] = 'insufficient_space'
+        return result
+    # 2. fetch what is missing
+    fetcher = Fetcher(limits, clock)
+    try:
+        for name, group, rel, size, kind, digest, path in todo:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            part = path + '.partial'
+            before, resumed = fetcher.bytes_in, os.path.exists(part)
+            try:
+                ok = fetcher.pull(url_for(name, group, rel, limits), part, size, kind, digest)
+            except FileFailure as e:
+                counts[name]['failed'] += 1
+                failures[name] = failures[name] or str(e)
+                continue
+            finally:
+                counts[name]['bytesIn'] += fetcher.bytes_in - before
+            if not ok:
+                counts[name]['failed'] += 1
+                failures[name] = failures[name] or 'hash_mismatch'
+                continue
+            os.rename(part, path)
+            counts[name]['resumed' if resumed else 'downloaded'] += 1
+        result['stop'] = 'file_failures' if any(c['failed'] for c in counts.values()) else 'done'
+    except Stop as s:
+        result['stop'] = str(s)
+    result['bytesIn'] = fetcher.bytes_in
+    result['refusedHosts'], result['refusedOther'] = fetcher.refusals()
+    result['elapsedS'] = round(clock() - t0)
+    return result
+
+
+def head_probe(manifest, limits, clock=time.monotonic):
+    """HEAD-only refused-destination probe: see the module docstring. Touches no file and reads no body."""
+    t0 = clock()
+    groups = manifest['groups']
+    counts = {g: dict.fromkeys(HEAD_KEYS, 0) for g in groups}
+    failures = {g: None for g in groups}
+    result = {'mode': 'head', 'stop': None, 'elapsedS': 0, 'groups': counts, 'firstFailure': failures,
+              'refusedHosts': [], 'refusedOther': 0}
+    plan = []
+    for name, group in groups.items():
+        for rel, size, *_ in group['files']:
+            if '..' in rel.split('/') or rel.startswith('/'):
+                result['stop'] = 'bad_manifest'
+                return result
+            counts[name]['expected'] += 1
+            plan.append((name, group, rel, size))
+    fetcher = Fetcher(dict(limits, mode='head'), clock)
+    try:
+        for name, group, rel, size in plan:
+            try:
+                status, length = fetcher.head(url_for(name, group, rel, limits))
+                if status == 200 and length is not None and (not length.isdigit() or int(length) != size):
+                    raise FileFailure('size_mismatch')
+            except FileFailure as e:
+                counts[name]['refused' if str(e) == 'redirect_refused' else 'failed'] += 1
+                failures[name] = failures[name] or str(e)
+                continue
+            counts[name]['reachable'] += 1
+        result['stop'] = 'done'
+    except Stop as s:
+        result['stop'] = str(s)
+    result['refusedHosts'], result['refusedOther'] = fetcher.refusals()
+    result['elapsedS'] = round(clock() - t0)
+    return result
+
+
+def head_main(manifest, limits):
+    """head_probe under a real-time alarm at deadlineS, so no blocking socket call can outlive the deadline."""
+    import signal
+
+    def expire(*_):
+        raise Stop('deadline')
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, float(limits['deadlineS']))
+    try:
+        return head_probe(manifest, limits)
+    except Stop:  # the alarm landed outside head_probe's own handler
+        return {'mode': 'head', 'stop': 'deadline'}
+    except OSError:
+        return {'mode': 'head', 'stop': None}
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+# ----------------------------------------------------------------- the allowlist bootstrap re-applies
+def _count(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 1 << 50 else None
+
+
+def sanitize(raw, manifest):
+    if not isinstance(raw, dict):
+        return None
+    g = raw.get('groups') if isinstance(raw.get('groups'), dict) else {}
+    f = raw.get('firstFailure') if isinstance(raw.get('firstFailure'), dict) else {}
+    return {
+        'stop': raw.get('stop') if raw.get('stop') in STOPS else None,
+        'bytesIn': _count(raw.get('bytesIn')), 'elapsedS': _count(raw.get('elapsedS')),
+        'freeBytes': _count(raw.get('freeBytes')), 'needBytes': _count(raw.get('needBytes')),
+        'groups': {n: {k: _count((g.get(n) if isinstance(g.get(n), dict) else {}).get(k)) for k in GROUP_KEYS}
+                   for n in manifest['groups']},
+        'firstFailure': {n: f.get(n) if f.get(n) in FAILURES else None for n in manifest['groups']},
+        'refusedHosts': _refused(raw.get('refusedHosts')),
+        'refusedOther': _count(raw.get('refusedOther')),
+    }
+
+
+def sanitize_head(raw, manifest):
+    """The HEAD-only receipt with only fixed tokens, bounded counts and _refused() hostnames."""
+    if not isinstance(raw, dict) or raw.get('mode') != 'head':
+        return None
+    g = raw.get('groups') if isinstance(raw.get('groups'), dict) else {}
+    f = raw.get('firstFailure') if isinstance(raw.get('firstFailure'), dict) else {}
+    return {
+        'mode': 'head',
+        'stop': raw.get('stop') if raw.get('stop') in HEAD_STOPS else None,
+        'elapsedS': _count(raw.get('elapsedS')),
+        'groups': {n: {k: _count((g.get(n) if isinstance(g.get(n), dict) else {}).get(k)) for k in HEAD_KEYS}
+                   for n in manifest['groups']},
+        'firstFailure': {n: f.get(n) if f.get(n) in HEAD_FAILURES else None for n in manifest['groups']},
+        'refusedHosts': _refused(raw.get('refusedHosts')),
+        'refusedOther': _count(raw.get('refusedOther')),
+    }
+
+
+def _refused(entries):
+    """At most MAX_REFUSED_HOSTS entries of {host: clean_host or None, reason: fixed token, count}; anything else
+    is dropped, so no URL, path, query, userinfo or header can pass through."""
+    out = []
+    for e in entries if isinstance(entries, list) else []:
+        if len(out) >= MAX_REFUSED_HOSTS:
+            break
+        if not isinstance(e, dict) or e.get('reason') not in REFUSAL_REASONS or _count(e.get('count')) is None:
+            continue
+        host = clean_host(e.get('host')) if e.get('host') is not None else None
+        if e.get('host') is not None and host is None:
+            continue  # not a hostname: drop the entry rather than pass any of it on
+        out.append({'host': host, 'reason': e['reason'], 'count': e['count']})
+    return out
+
+
+def main(argv):
+    if len(argv) != 2:
+        raise SystemExit(__doc__)
+    manifest, limits = json.loads(argv[0]), json.loads(argv[1])
+    if limits.get('mode') == 'head':
+        try:
+            result = head_main(manifest, limits)
+        except Stop:  # the alarm fired while head_main was disarming it
+            result = {'mode': 'head', 'stop': 'deadline'}
+        print(HEAD_MARKER + json.dumps(result, sort_keys=True, separators=(',', ':')), flush=True)
+        return
+    try:
+        result = stage(manifest, limits)
+    except OSError:
+        result = {'stop': 'file_failures'}
+    print(MARKER + json.dumps(result, sort_keys=True, separators=(',', ':')), flush=True)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
