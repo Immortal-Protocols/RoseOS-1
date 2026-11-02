@@ -1018,10 +1018,11 @@ jobs:
     # BLAZER-PREP: one Pixel 10 Pro preparation stage (download, vendor or lunch) of scripts/blazer-build-only.py on the
     # original builder, with the committed os/build-only/blazer-prep-host.json inputs, in an isolated work tree (never the
     # production source root), under the nonblocking shared lock. The helper refuses symlinks, the production tree,
-    # existing outputs, a held lock and insufficient space, and enforces each stage's proposal byte/time bound. No
-    # compile, make, signing, secret, OIDC token or publication; contents: read only. Bounds: the helper's own stage
-    # timeout, the outer timeout (+300 s, +30 s kill) and the job (+10 min), all derived from os/build-only/blazer.json by
-    # the hosted guard. Cleanup stops the builder only if this run's controller started it. Runtime is not approved.
+    # existing outputs, a held lock and insufficient space before a stage; vendor/lunch byte bounds are checked only
+    # after execution (not an enforced quota), and descendant cleanup on timeout is not yet proven. No compile, make,
+    # signing, secret, OIDC token or publication; contents: read only. Time: the helper's own stage timeout, the outer
+    # timeout (+300 s, +30 s kill) and the job (+10 min), all derived from os/build-only/blazer.json by the hosted guard.
+    # Cleanup stops the builder only if this run's controller started it. Runtime is not approved.
     needs: [guard, controller]
     if: inputs.mode == 'blazer-prep'
     runs-on: [self-hosted, roseos-frankel-builder]
