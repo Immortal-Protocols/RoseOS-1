@@ -967,6 +967,11 @@
   "atomicity": "read under the AutomatedPackagesRepository lock as one snapshot, identical to what the listener dispatches for that generation",
   "lifecycle": "a device appears when it runs apps and leaves when its apps finish or it closes, exactly as in the listener; a lingering device after a failed close stays listed; no history",
   "errors": "IllegalStateException when unavailable (the controller then keeps today's fail-closed fallback)",
-  "consumerRule": "both surfaces then apply one rule to the same snapshot: no device -> genuine_empty; exactly one complete device -> its apps (cards, or genuine_empty when none); more than one device or any incomplete -> cannot_confirm"
+  "consumerRule": "both surfaces then apply one rule to the same snapshot: no device -> genuine_empty; exactly one complete device -> its apps (cards, or genuine_empty when none); more than one device or any incomplete -> cannot_confirm",
+  "scope": "exactly the subset of Launcher3's listener snapshot whose devices the caller owns: same repository, same generation, same per-device apps and completeness, including a device still being torn down or left by a failed close, until the repository drops it (its apps finish or onDeviceClosed); Launcher3 filters its snapshot to owner package dev.pixel.backgroundcontrol with the controller's uid, the controller receives only its own devices, so both evaluate the same device set",
+  "alternativesConsidered": {
+   "retainedSessionGetAutomatedApps": "Does not close either gap. lingering_unreleased_device: PR361 ComputerControlSessionImpl.close sets the sticky mAutomatedAppsClosed before the device is torn down, so after a failed close the retained session answers closed with no apps while Launcher3 still lists the device; Home would show genuine_empty and hide controlled apps. replacement_old_and_new_devices: after a successful close the controller holds no binder for the old device at all.",
+   "releasingSignal": "Could make lingering_unreleased_device fail closed on both sides (Launcher3 marks a releasing device cannot_confirm), but not replacement_old_and_new_devices, where the controller has no view of the old device; it also needs a new per-device state in the listener."
+  }
  }
 }

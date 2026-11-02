@@ -113,7 +113,9 @@ public final class CurrentAppsTest {
         expect(CurrentApps.NONE.equals(closed.status) && closed.apps.isEmpty() && closed.complete, "closed: nothing, for good, even if the controller still says ready");
         expect(CurrentApps.NONE.equals(CurrentApps.of(false, false, "stopped", MAPS, ok, null, CONTROLLER).status) && CurrentApps.of(false, false, "stopped", MAPS, ok, null, CONTROLLER).complete, "a session the controller ended lists nothing");
         expect(!CurrentApps.of(false, true, "cleanup_failed", MAPS, ok, null, CONTROLLER).complete, "held but unreleased: not complete, even with a platform answer");
-        expect(CurrentApps.of(false, true, "cleanup_failed", MAPS, CurrentApps.platform(Long.MAX_VALUE, new String[0], 0, true, true, me), null, CONTROLLER).complete, "unless the platform says that session is closed");
+        CurrentApps.Result retainedClosed = CurrentApps.of(false, true, "cleanup_failed", MAPS, CurrentApps.platform(Long.MAX_VALUE, new String[0], 0, true, true, me), null, CONTROLLER);
+        expect(!retainedClosed.complete && CurrentApps.SESSION_UNRELEASED.equals(retainedClosed.incompleteReason),
+            "even a retained session answering closed stays unconfirmed: the platform marks closed when the close begins, before the device is gone");
         expect(CurrentApps.LOCKED.equals(CurrentApps.of(true, true, "ready", MAPS, ok, null, CONTROLLER).status), "locked lists nothing");
         expect(!CurrentApps.signature(p, "s1").equals(CurrentApps.signature(read(false, true, "ready", MAPS, AMAZON), "s1")), "a change of source is a new generation");
         // The fallback stays marked incomplete and says where it came from.

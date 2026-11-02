@@ -21,7 +21,7 @@ import java.util.List;
  * another user's activity was omitted: other_user_omitted); a closed session lists nothing. Front windows still mark
  * which members are visible now. A missing, failed or malformed platform answer falls back to the session windows
  * above, marked incomplete. A session the controller still holds but could not release (cleanup_failed) is never a
- * genuine empty (session_unreleased), unless the platform says that session is closed.
+ * genuine empty (session_unreleased), whatever its retained binder answers.
  *
  * Rendering contract shared with Launcher3 and Home (#156/#225 parity, qa/parity/current-apps-parity.json):
  * complete with apps shows exactly those apps; complete and empty is genuine empty; anything not complete shows no app
@@ -85,8 +85,11 @@ final class CurrentApps {
   * (sorted) order; the controller never; completeness the platform's; closed lists nothing. */
  static Result of(boolean locked, boolean hasSession, String status, String target, Platform platform, List<String> front, String controller) {
   if (locked) return new Result(LOCKED, new ArrayList<App>(), false, LOCKED, PLATFORM);
-  if (platform.closed) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
+  // An unreleased session stays unconfirmed even when its retained binder answers closed: the platform marks a session
+  // closed when its close begins (PR361 ComputerControlSessionImpl.close), before the device is torn down, so after a
+  // failed close the device may still run apps that Launcher3 lists.
   if (hasSession && !live(status)) return new Result(NONE, new ArrayList<App>(), false, SESSION_UNRELEASED, PLATFORM);
+  if (platform.closed) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
   if (!hasSession || !live(status)) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
   List<App> apps = new ArrayList<>();
   if (front != null) for (String p : front)
