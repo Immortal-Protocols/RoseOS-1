@@ -287,6 +287,9 @@ def render(out_dir, config_path=capacity.CONFIG, root=ROOT, model='muse', qwen_s
         manifest.update(profile=qwen['id'], servedModel=qwen['served_model_name'], qwenSettings=qwen_settings,
                         notRuntimeProven=proposed,
                         model=f"{qwen['model']['repo']}@{qwen['model']['revision']}")
+        if qwen_settings == 'nothink':  # what proved these flags, and what it did not (other manifests unchanged)
+            manifest['evidence'] = ('isolated contract diagnostic cloud-qwen-contract-nothink-once (PR368, original '
+                                    'Mac, 03:38:46 UTC 2026-11-02); not proven as the persistent service')
     (out_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest
 
@@ -296,7 +299,7 @@ def main(argv=None):
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--config', type=Path, default=capacity.CONFIG)
     p.add_argument('--model', choices=MODELS, default='muse', help='the model the persistent slot serves (default muse)')
-    p.add_argument('--qwen-settings', choices=('proven', 'proposed'), default='proven')
+    p.add_argument('--qwen-settings', choices=render_local.QWEN_SETTINGS, default='proven')
     a = p.parse_args(argv)
     try:
         manifest = render(a.out, a.config, model=a.model, qwen_settings=a.qwen_settings)

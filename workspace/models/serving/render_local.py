@@ -78,20 +78,30 @@ exec {' '.join(q(x) for x in run)} "$GUARD" {' '.join(q(x) for x in tail)}
 """, limits
 
 
+QWEN_SETTINGS = ('proven', 'proposed', 'nothink')
+
+
 def qwen_args(qwen, settings):
     """The vllm serve flags for the selectable Qwen profile: the runtime-proven set, plus the proposed overrides and
-    additions only when ``settings`` is 'proposed'. Returns (args, the flags that are proposed, not runtime-proven)."""
-    if settings not in ('proven', 'proposed'):
-        raise render_upload.Rejected('qwen settings must be proven or proposed')
+    additions when ``settings`` is 'proposed', plus the nothink additions on top of those when it is 'nothink'.
+    Returns (args, the flags beyond the proven set: not runtime-proven as this service)."""
+    if settings not in QWEN_SETTINGS:
+        raise render_upload.Rejected('qwen settings must be proven, proposed or nothink')
     args = list(qwen['settings']['proven']['args'])
     proposed = []
-    if settings == 'proposed':
+    if settings in ('proposed', 'nothink'):
         p = qwen['settings']['proposed']
         for flag, value in p['overrides'].items():
             args[args.index(flag) + 1] = value
             proposed.append(flag)
         args += p['add']
         proposed += [a for a in p['add'] if a.startswith('--')]
+    if settings == 'nothink':
+        n = qwen['settings']['nothink']
+        if n.get('extends') != 'proposed':
+            raise render_upload.Rejected('the nothink settings must extend the proposed settings')
+        args += n['add']
+        proposed += [a for a in n['add'] if a.startswith('--')]
     return args, proposed
 
 

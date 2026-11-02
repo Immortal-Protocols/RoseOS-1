@@ -122,7 +122,8 @@ CONTRACT_NOTHINK_SERVER_ARGS = CONTRACT_SERVER_ARGS + ['--default-chat-template-
                                                        json.dumps(CONTRACT_NOTHINK_KWARGS)]
 CONTRACT_NOTHINK_FRONTEND = ('default_chat_template_kwargs',)
 CONTRACT_MODES = ('contract', 'contract-nothink')
-CONTRACT_CASES = ('contract', 'chat', 'tool', 'long')
+CONTRACT_CASES = ('contract', 'chat', 'tool', 'long', 'conformance')
+CONFORMANCE_PROMPTS = 20  # serving/conformance/prompts.json, as contract_session.CONFORMANCE
 CONTRACT_MARKER = 'ROSE-CLOUD-QWEN-CONTRACT '
 CONTRACT_VERDICTS = ('final', 'open_app:calculator', 'failed:model_identity_mismatch', 'failed:truncated_reply',
                      'failed:empty_completion', 'failed:reply_too_long', 'failed:malformed_action',
@@ -691,6 +692,7 @@ def sanitize_contract(raw):
         **{k: _count(x.get(k)) for k in ('reasoningChars', 'contentChars', 'promptTokens', 'completionTokens')},
         'seconds': _secs(x.get('seconds'))}
     m = c.get('models') if isinstance(c, dict) else None
+    conf = c.get('conformance') if isinstance(c, dict) else None
     return {'case': raw.get('case') if raw.get('case') in CONTRACT_CASES else None,
             'step': raw.get('step') if raw.get('step') in ('state', 'contract', 'done') else None,
             'error': _match(raw.get('error'), TOKEN), 'module': _match(raw.get('module'), MODULE),
@@ -701,9 +703,32 @@ def sanitize_contract(raw):
                     'ids': _count(m.get('ids')), 'idsExact': _flag(m.get('idsExact')),
                     'maxModelLen': _count(m.get('maxModelLen')), 'timedOut': _flag(m.get('timedOut'))},
                 'notRun': None if not isinstance(c.get('notRun'), dict) else {
-                    k: v for k, v in c['notRun'].items() if k in CONTRACT_REPLIES and v in CONTRACT_NOT_RUN},
+                    k: v for k, v in c['notRun'].items()
+                    if k in CONTRACT_REPLIES + ('conformance',) and v in CONTRACT_NOT_RUN},
                 **{k: reply(c.get(k)) for k in CONTRACT_REPLIES if k in c},
+                **({'conformance': _conformance(conf)} if 'conformance' in c else {}),
                 **{k: _flag(c.get(k)) for k in ('thinking', 'reasoningSeparated', 'noThinking', 'allExpected')}}}
+
+
+def _conformance(c):
+    """contract_session's conformance block: per-prompt verdicts, flags, seconds and token counts, and the summary's
+    counts, or None. At most CONFORMANCE_PROMPTS results."""
+    if not isinstance(c, dict):
+        return None
+    s, res = c.get('summary'), c.get('results')
+    one = lambda x: None if not isinstance(x, dict) else (  # noqa: E731
+        {'notRun': 'budget'} if x.get('notRun') == 'budget' else {
+            'v': x.get('v') if x.get('v') in CONTRACT_VERDICTS else None, 's': _secs(x.get('s')),
+            'ct': _count(x.get('ct')), **{k: _flag(x.get(k)) for k in ('ok', 'id', 'to', 'rs', 'tc')}})
+    return {
+        'summary': None if not isinstance(s, dict) else {
+            **{k: _count(s.get(k)) for k in ('total', 'sent', 'notRun', 'parsed', 'conforming', 'minParsed',
+                                            'wrongLaunchTarget', 'openAppOutsideLaunch', 'timedOut')},
+            **{k: _flag(s.get(k)) for k in ('existingBarPass', 'pass')},
+            **{k: _secs(s.get(k)) for k in ('secondsMax', 'secondsTotal')},
+            'failures': None if not isinstance(s.get('failures'), dict) else {
+                k: _count(v) for k, v in s['failures'].items() if 'failed:' + str(k) in CONTRACT_VERDICTS}},
+        'results': None if not isinstance(res, list) else [one(x) for x in res[:CONFORMANCE_PROMPTS]]}
 
 
 def _status(v):

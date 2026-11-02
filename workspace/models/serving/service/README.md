@@ -96,6 +96,30 @@ scripts and config, and every diagnostic mode, is unchanged and tested):
     isolated proof for exactly these proposed flags. Until the original Mac runs it at a merged payload, they stay
     unproven.
 
+**`--qwen-settings nothink`** (MODELS-QWEN-SERVE-NOTHINK-001): the proposed settings plus
+`--default-chat-template-kwargs '{"enable_thinking": false}'`, asserted equal to
+`rose_cloud.qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS`.
+- **Evidence:** those flags passed the isolated `cloud-qwen-contract-nothink-once` diagnostic once (PR368 payload,
+  original Mac, 03:38:46 UTC 2026-11-02). Replies took 2.7–8.5 s on the four fixed cases, against 29.5–40.1 s with
+  thinking on (PR360). One run per case; variance and wider quality are not shown.
+- **Labels:** the manifest records `qwenSettings: "nothink"`, `notRuntimeProven` and an `evidence` line saying it is
+  not proven as the persistent service. The launcher's header lists the flags beyond the proven set.
+- **Payloads:** the Muse default payload is unchanged. The `proven` and `proposed` Qwen payloads differ only in the
+  `lib/qwen-fp8.json` they ship (which now holds this tier) and its manifest hash.
+- **How the service differs from the diagnostic:**
+  - the service runs `--network host` bound to `127.0.0.1:8000` behind the Nginx edge (TLS, service-auth-v1, 6
+    requests/min, one in flight, 120 s);
+  - its container has no `--read-only`, `--cap-drop`, `no-new-privileges`, CPU or memory limit, and no tmpfs: caches
+    go to the container's writable layer and are removed with it;
+  - it runs as the systemd model slot, with a verified start, restart on failure, the health timer and the daily
+    full re-hash;
+  - the same image ID, `--gpus all`, read-only staged weights, offline environment and 4096 MiB shm as the diagnostic.
+
+  None of that is runtime-proven for Qwen.
+- **Activating it is a separate decision:** a normal boot with such a payload serves Qwen in place of Muse and exposes
+  it through the edge to enrolled devices. It is the owner's call, run by the original Mac alone. It needs no new
+  credential, firewall or IAM change in source.
+
 **Separate owner dependency (Product, `dev.pixel.models`):**
 - the app compiles `ModelsService.MODEL = "muse-glimmer"` (there are no settings since 0.2) and fails any reply from
   another model with `model_identity_mismatch` (tested);

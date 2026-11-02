@@ -1159,6 +1159,23 @@ Nothing falls back silently.
 **Running it:** same machinery, bounds, cases and request key as `cloud-qwen-contract-once`, in its own container
 `rose-cloud-qwen-contract-nothink`. The thinking profile and its mode are unchanged.
 
+**Conformance case** (MODELS-QWEN-SERVE-NOTHINK-001; a request `<P>:<fresh id>:conformance` in either contract
+mode):
+- **The prompts:** the existing 20-prompt envelope set (`serving/conformance/prompts.json`: 10 chat, 8 calculator
+  launches, 2 not-allowed apps). Each prompt is the first turn of a fresh client agent, built by rose-chat-core's test
+  with the Qwen config (no system prompt). One request each, nothing executed.
+- **Limits:** the client's 120 s per request and the 300 s run budget. A prompt that could not get a full wait is
+  listed as `{"notRun": "budget"}` and counts as neither parsed nor conforming.
+- **Per prompt:** verdict, `ok`, seconds, completion tokens, identity, timeout and thinking flags.
+- **Summary:**
+  - `existingBarPass` is the harness's own bar: at least 19 parsed, no `open_app` naming another app, and no `open_app`
+    outside launch prompts;
+  - `pass` additionally needs at least 19 replies meeting their expectation, so a parsed envelope never stands in for
+    the right action;
+  - `allExpected` also needs every prompt sent, exact identity and the profile's thinking rule.
+- **Not a guarantee:** at the measured 2.7–8.5 s per reply the 20 prompts should fit, but each request needs a full
+  client wait left to be sent, so slower replies end in `notRun`.
+
 **Operator packet** (original Mac only, after merge):
 1. Build the payload at the merge commit.
 2. Set `rose-models-diagnostic=cloud-qwen-contract-nothink-once:<P>:<fresh id>` and do one reset.

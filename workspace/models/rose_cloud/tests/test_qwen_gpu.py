@@ -823,6 +823,56 @@ class ContractNothink(Contract):
                        bundle=self.bundle)
         self.assertEqual(r['stop'], 'engine_arg_unsupported')  # still no cli_args module: refused before serve
 
+    def test_conformance_through_the_real_runner_and_its_receipt_size(self):
+        """MODELS-QWEN-SERVE-NOTHINK-001: the conformance case on the loaded no-thinking stand-in through
+        CONTRACT_RUNNER, sanitized as bootstrap publishes it, and a worst-case receipt inside 4 KiB."""
+        from rose_cloud import contract_session as C
+        right = {json.loads(json.loads(p['body'])['messages'][-1]['content'])['text']:
+                 ('final' if p['expect'] in ('final', 'no_open_app') else p['expect']) for p in C.CONFORMANCE}
+        launch = json.loads(json.loads(C.CONFORMANCE[10]['body'])['messages'][-1]['content'])['text']
+        self.serve_mode({'answers': {**right, launch: 'malformed'}})
+        t, box, state = self.start(deadline=12)
+        raw = self.runner('conformance')
+        run = G.sanitize_contract(raw)
+        c = run['contract']
+        s = c['conformance']['summary']
+        self.assertEqual((run['case'], run['step'], c['step'], c['allExpected'], c['noThinking']),
+                         ('conformance', 'done', 'done', True, True))
+        self.assertEqual((s['total'], s['sent'], s['parsed'], s['conforming'], s['failures'], s['existingBarPass'],
+                          s['pass']), (20, 20, 19, 19, {'malformed_action': 1}, True, True))
+        self.assertEqual(c['conformance']['results'][10]['v'], 'failed:malformed_action')
+        self.assertEqual(raw['contract']['conformance'], c['conformance'])  # nothing dropped by the sanitizer
+        t.join(60)
+        worst = G.sanitize_contract({'case': 'conformance', 'step': 'done', 'error': 'E' * 64, 'module': 'm' * 64,
+                                     'contract': {'step': 'done', 'models': {'status': 599, 'ids': (1 << 50) - 1,
+                                                                             'idsExact': False, 'timedOut': True,
+                                                                             'maxModelLen': (1 << 50) - 1},
+                                                  'notRun': {'conformance': 'budget'}, 'thinking': False,
+                                                  'reasoningSeparated': False, 'noThinking': False,
+                                                  'allExpected': False, 'conformance': {
+                                                      'summary': {k: (1 << 50) - 1 for k in (
+                                                          'total', 'sent', 'notRun', 'parsed', 'conforming',
+                                                          'minParsed', 'wrongLaunchTarget', 'openAppOutsideLaunch',
+                                                          'timedOut')} | {'existingBarPass': False, 'pass': False,
+                                                                          'secondsMax': 999999.9,
+                                                                          'secondsTotal': 999999.9,
+                                                                          'failures': {k[7:]: 20 for k in
+                                                                                       G.CONTRACT_VERDICTS
+                                                                                       if k.startswith('failed:')}},
+                                                      'results': [{'v': 'failed:model_identity_mismatch',
+                                                                   's': 999999.9, 'ct': (1 << 50) - 1, 'ok': False,
+                                                                   'id': False, 'to': False, 'rs': False,
+                                                                   'tc': False}] * 25}}})
+        self.assertEqual(len(worst['contract']['conformance']['results']), 20)  # at most the 20 prompts
+        record = {'schema': 'rose-models-qwen-session/1', 'payloadSha256': 'f' * 64, 'bootId': 'b' * 36,
+                  'attemptId': 'a' * 32, 'requestId': 'r' * 32, 'case': 'conformance', 'index': 24, 'exitCode': 255,
+                  'timedOut': False, 'run': worst}
+        self.assertLess(len(json.dumps(record, sort_keys=True, separators=(',', ':'))), 4096)
+        hostile = G.sanitize_contract({'case': 'conformance', 'step': 'done', 'contract': {'conformance': {
+            'summary': {'failures': {'SECRET': 1, 'malformed_action': 'x'}, 'note': 'SECRET'},
+            'results': [{'v': 'SECRET', 'text': 'SECRET', 's': 'SECRET'}, 'SECRET', {'notRun': 'SECRET'}]}}})
+        self.assertNotIn('SECRET', json.dumps(hostile))
+
     def test_profile_is_the_contract_profile_plus_thinking_off_and_others_unchanged(self):
         self.assertEqual(G.CONTRACT_NOTHINK_SERVER_ARGS,
                          G.CONTRACT_SERVER_ARGS + ['--default-chat-template-kwargs', '{"enable_thinking": false}'])
