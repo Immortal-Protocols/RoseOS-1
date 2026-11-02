@@ -122,6 +122,15 @@ public final class CurrentAppsTest {
             expect(launcher.read(CurrentApps.of(false, true, "ready", MAPS, pl, null, CONTROLLER), "s1") && launcher.shown.equals(Arrays.asList(step)), "platform step " + Arrays.toString(step));
         }
         expect(launcher.read(CurrentApps.of(false, true, "ready", MAPS, CurrentApps.platform(Long.MAX_VALUE, new String[0], 0, true, true, me), null, CONTROLLER), "s1") && launcher.shown.isEmpty(), "close");
+        // Home's normalized contract (PR362): the consumer generation is the controller's counter, not the platform's.
+        CurrentApps.Platform first = CurrentApps.platform(5L, new String[] {MAPS}, 0, true, false, me);
+        CurrentApps.Platform replacement = CurrentApps.platform(1L, new String[] {MAPS}, 0, true, false, me);
+        CurrentApps.Result a = CurrentApps.of(false, true, "ready", MAPS, first, null, CONTROLLER), b2 = CurrentApps.of(false, true, "ready", MAPS, replacement, null, CONTROLLER);
+        expect(CurrentApps.signature(a, "s1", "ready").equals(CurrentApps.signature(CurrentApps.of(false, true, "ready", MAPS, CurrentApps.platform(6L, new String[] {MAPS}, 0, true, false, me), null, CONTROLLER), "s1", "ready")),
+            "a platform generation step with identical content is no change for the consumer");
+        expect(!CurrentApps.signature(a, "s1", "ready").equals(CurrentApps.signature(b2, "s2", "ready")), "a replacement session whose platform generation restarted is still a change");
+        expect(!CurrentApps.signature(a, "s1", "ready").equals(CurrentApps.signature(a, "s1", "blocked")), "the session status is part of what the consumer sees");
+        expect(CurrentApps.signature(closed, "s1", "ready").equals(CurrentApps.signature(closed, null, null)), "closed: no session, no session status");
         System.out.println("CurrentAppsTest: " + checks + " checks passed");
     }
 }

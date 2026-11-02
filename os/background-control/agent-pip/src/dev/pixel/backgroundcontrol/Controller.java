@@ -203,10 +203,13 @@ public final class Controller {
   }catch(Throwable e){platform=null;}
   CurrentApps.Result r=platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())
    :CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());
-  String signature=CurrentApps.signature(r,id);if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
+  // generation: the controller's own counter, rising on every change and across session replacement; the platform's
+  // per-device generation restarts with each device and is never forwarded.
+  String signature=CurrentApps.signature(r,id,status);if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
   boolean listed=CurrentApps.LIVE.equals(r.status);JSONArray apps=new JSONArray();
   for(CurrentApps.App a:r.apps)apps.put(new JSONObject().put("packageName",a.packageName).put("front",a.front).put("target",a.target));
   return new JSONObject().put("status",r.status).put("sessionId",listed?id:JSONObject.NULL).put("taskId",listed?nullable(taskId):JSONObject.NULL)
+   .put("sessionStatus",listed?status:JSONObject.NULL)
    .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source).put("apps",apps);
  }
  static JSONObject capture()throws Exception{

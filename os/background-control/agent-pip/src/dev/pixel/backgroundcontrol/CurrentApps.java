@@ -105,9 +105,16 @@ final class CurrentApps {
   return new Result(LIVE, apps, false, reason);
  }
 
- /** What a consumer sees, for the generation: status, session and members in order. */
+ /** What a consumer sees, for the generation: status, session, its controller status, completeness, source and members
+  * in order. The platform's own per-device generation is not part of it: it restarts with each session device (and is
+  * Long.MAX_VALUE once closed), so the consumer's generation is the controller's counter, which rises across sessions. */
  static String signature(Result r, String sessionId) {
-  StringBuilder b = new StringBuilder(r.status).append('|').append(LIVE.equals(r.status) && sessionId != null ? sessionId : "")
+  return signature(r, sessionId, null);
+ }
+ static String signature(Result r, String sessionId, String sessionStatus) {
+  boolean live = LIVE.equals(r.status);
+  StringBuilder b = new StringBuilder(r.status).append('|').append(live && sessionId != null ? sessionId : "")
+   .append('|').append(live && sessionStatus != null ? sessionStatus : "")
    .append('|').append(r.complete).append('|').append(r.incompleteReason).append('|').append(r.source);
   for (App a : r.apps) b.append('|').append(a.packageName).append(a.front ? ":f" : ":-").append(a.target ? "t" : "-");
   return b.toString();

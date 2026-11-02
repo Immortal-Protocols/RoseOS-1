@@ -56,7 +56,11 @@ class CurrentAppsWiringTest(unittest.TestCase):
 
     def test_reply_shape(self):
         self.assertEqual(re.findall(r'\.put\("(\w+)"', self.body),
-                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'generation', 'complete', 'incompleteReason', 'source', 'apps'])
+                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'sessionStatus', 'generation', 'complete', 'incompleteReason', 'source', 'apps'])
+        self.assertIn('.put("sessionStatus",listed?status:JSONObject.NULL)', self.body, 'the live session\'s ready/blocked/launching status, null otherwise')
+        self.assertIn('String signature=CurrentApps.signature(r,id,status);', self.body)
+        self.assertIn('.put("generation",appsGeneration)', self.body, 'the controller\'s rising counter, never the platform\'s generation')
+        self.assertNotIn('platform.generation', self.body)
 
     def test_same_signer_only_not_advertised_never_a_phone_command(self):
         signer = PROVIDER.index('checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH')
