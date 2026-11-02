@@ -34,7 +34,7 @@ class ReplacementWiringTest(unittest.TestCase):
         self.assertNotIn('main.post(()->{', START, 'the request is not posted from start itself')
         self.assertIn('Runnable request=()->{', START)
         self.assertIn('pending=request;pendingToken=token;dispatch();', START)
-        self.assertEqual(CONTROLLER.count('main.post(r);'), 1, 'only dispatch posts a request')
+        self.assertEqual(CONTROLLER.count('main.post(in(active,()->{posting=false;r.run();dispatch();}));'), 1, 'only dispatch posts a request')
         self.assertEqual(CONTROLLER.count('"requestSession"'), 1, 'exactly one request call: no retry')
         self.assertIn('synchronized(Controller.class){if(token!=generation)return;replacement.requested(token);}\n    type.getMethod("requestSession",', START)
 
@@ -64,11 +64,13 @@ class ReplacementWiringTest(unittest.TestCase):
         self.assertIn('String blocker(){return !unanswered.isEmpty()?REQUEST_UNANSWERED:!awaiting.isEmpty()?REPLACING:"";}', REPLACEMENT)
 
     def test_dispatch_waits_for_the_platform_and_drops_older_starts(self):
-        self.assertEqual(DISPATCH.strip(), 'static void dispatch(){if(pending==null)return;if(pendingToken!=generation){pending=null;return;}'
-                         'if(!replacement.clear())return;Runnable r=pending;pending=null;main.post(r);}')
+        self.assertIn('static void dispatchOne(){if(pending==null)return;if(pendingToken!=generation){pending=null;return;}'
+                      'if(!replacement.clear()||posting||othersUnanswered())return;Runnable r=pending;pending=null;posting=true;', DISPATCH)
+        # One request at a time across both slots: another slot's posted or unanswered request holds this one.
+        self.assertIn('static boolean othersUnanswered(){for(Slot s:slots)if(s!=active&&Replacement.REQUEST_UNANSWERED.equals(s.replacement.blocker()))return true;return false;}', DISPATCH)
         # No guessed wait: the only delayed post is the start's existing 600 s deadline.
         self.assertEqual(CONTROLLER.count('postDelayed('), 1)
-        self.assertIn('main.postDelayed(()->{synchronized(Controller.class){if(token==generation)stop(c,StopLedger.DEADLINE);}},DEADLINE);', START)
+        self.assertIn('main.postDelayed(in(slot,()->{synchronized(Controller.class){if(token==generation)stop(c,StopLedger.DEADLINE);}}),DEADLINE);', START)
 
     def test_only_a_successful_close_is_waited_on_and_cleanup_failed_is_held(self):
         self.assertIn('if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}'
@@ -104,7 +106,9 @@ class ReplacementWiringTest(unittest.TestCase):
     def test_name_unchanged_and_no_concurrency_claim(self):
         # Unique names alone would only turn the name refusal into the session-limit refusal.
         self.assertEqual(CONTROLLER.count('setName'), 1)
-        self.assertIn('b.getMethod("setName",String.class).invoke(builder,"pixel-voice-background");', START)
+        # One stable name per slot; slot 0's is byte-identical (MultiSessionTest checks MultiSession.name(0)).
+        self.assertIn('b.getMethod("setName",String.class).invoke(builder,MultiSession.name(slot.index));', START)
+        self.assertIn('static String name(int slot){return slot==0?"pixel-voice-background":"pixel-voice-background-"+slot;}', (SRC/'MultiSession.java').read_text())
         self.assertEqual(CONTROLLER.count('static Object session;'), 1, 'one session: real multi-app is a separate platform change')
 
     def test_current_apps_never_calls_a_releasing_session_empty(self):

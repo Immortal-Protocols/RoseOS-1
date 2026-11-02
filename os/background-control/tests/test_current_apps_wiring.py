@@ -66,7 +66,8 @@ class CurrentAppsWiringTest(unittest.TestCase):
 
     def test_same_signer_only_not_advertised_never_a_phone_command(self):
         signer = PROVIDER.index('checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH')
-        self.assertLess(signer, PROVIDER.index('case "current_apps":result=Controller.currentApps(getContext());break;'))
+        self.assertLess(signer, PROVIDER.index('case "current_apps":result=Controller.route(getContext(),"current_apps",p);break;'))
+        self.assertIn('case "current_apps":return currentApps(c).put("sessions",membership(c));', CONTROLLER, 'the route reaches the same overview read')
         caps = re.search(r'case "capabilities":.*?new String\[\]\{([^}]*)\}', PROVIDER).group(1)
         self.assertEqual(caps, '"list_apps","start","get_state","command","stop"')
         guard = PHONE.index('"current_apps".equals(command.optString("operation"))')

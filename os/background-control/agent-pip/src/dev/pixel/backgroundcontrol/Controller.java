@@ -19,16 +19,43 @@ public final class Controller {
  static final Handler main=new Handler(Looper.getMainLooper());
  static final Executor worker=Executors.newSingleThreadExecutor();
  static Object session; static long generation,started; static String id,target,taskId,status="idle",error="",snapshotId;
- static final StopLedger stops=new StopLedger(); static int width,height,operations; static boolean blocked; static IntentSender consent;
+ static StopLedger stops=new StopLedger(); static int width,height,operations; static boolean blocked; static IntentSender consent;
  // The replacement race (Replacement): sessionToken is the start token of the held session; pending is a start's request
  // waiting for the earliest point Android can admit it. Closed sessions stay unconfirmed until Android admits a later request.
- static final Replacement replacement=new Replacement(); static long sessionToken,pendingToken; static Runnable pending;
- static final Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();
- static final Map<Integer,Integer> parents=new HashMap<>(); static final Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>(); static boolean truncated;
+ static Replacement replacement=new Replacement(); static long sessionToken,pendingToken; static Runnable pending;
+ static Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();
+ static Map<Integer,Integer> parents=new HashMap<>(); static Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>(); static boolean truncated;
  static long snapshotTime; static final long DEADLINE=600000;
  // Whether this OS build lets this controller drive any app (AnyAppControl); read at each start. observed: the app in
  // front of the workspace at the last inspection, which may differ from the target (an installer, a sign-in screen).
  static boolean anyApp; static String observed;
+ /** Two stable slots (MultiSession; OS Core MULTI-SESSION-DESIGN). Each Slot keeps one session's complete state: session,
+  * start token, ids, status, its own StopLedger record, Replacement (per-name admission), pending request, snapshot,
+  * node map, freshness, preview rate and size. The static fields above hold the state of the slot being worked on
+  * (`active`): enter() saves the active slot and loads another, leave() restores, always under this class's lock. Between
+  * calls slot 0 is loaded, so every single-session path and every reader of these fields (viewer, MainActivity, overview
+  * selection) is exactly slot 0 as before. Callbacks, lifecycle events, launch, the deadline and the dispatched request
+  * run inside their own slot (in(), executor()), so a late or stale event of one session never touches the other. */
+ static final class Slot{
+  final int index;Object session;long generation,started,sessionToken,pendingToken,snapshotTime,lastPreview;
+  String id,target,taskId,status="idle",error="",snapshotId,observed;StopLedger stops=new StopLedger();int width,height,operations;
+  boolean blocked,truncated,anyApp;IntentSender consent;Replacement replacement=new Replacement();Runnable pending;
+  Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();Map<Integer,Integer> parents=new HashMap<>();Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>();
+  Slot(int index){this.index=index;}
+ }
+ static final Slot[] slots={new Slot(0),new Slot(1)}; static Slot active=slots[0];
+ static void save(Slot s){s.session=session;s.generation=generation;s.started=started;s.sessionToken=sessionToken;s.pendingToken=pendingToken;s.snapshotTime=snapshotTime;s.lastPreview=lastPreview;
+  s.id=id;s.target=target;s.taskId=taskId;s.status=status;s.error=error;s.snapshotId=snapshotId;s.observed=observed;s.stops=stops;s.width=width;s.height=height;s.operations=operations;
+  s.blocked=blocked;s.truncated=truncated;s.anyApp=anyApp;s.consent=consent;s.replacement=replacement;s.pending=pending;s.nodes=nodes;s.parents=parents;s.labels=labels;}
+ static void load(Slot s){session=s.session;generation=s.generation;started=s.started;sessionToken=s.sessionToken;pendingToken=s.pendingToken;snapshotTime=s.snapshotTime;lastPreview=s.lastPreview;
+  id=s.id;target=s.target;taskId=s.taskId;status=s.status;error=s.error;snapshotId=s.snapshotId;observed=s.observed;stops=s.stops;width=s.width;height=s.height;operations=s.operations;
+  blocked=s.blocked;truncated=s.truncated;anyApp=s.anyApp;consent=s.consent;replacement=s.replacement;pending=s.pending;nodes=s.nodes;parents=s.parents;labels=s.labels;}
+ static Slot enter(Slot s){Slot was=active;if(s!=was){save(was);load(s);active=s;}return was;}
+ static void leave(Slot was){enter(was);}
+ /** r, run later under the lock inside slot s. */
+ static Runnable in(Slot s,Runnable r){return ()->{synchronized(Controller.class){Slot was=enter(s);try{r.run();}finally{leave(was);}}};}
+ /** The executor for one slot's Android callbacks (session and lifecycle): each runs inside that slot. */
+ static Executor executor(Slot s){return r->main.post(in(s,r));}
  static Throwable root(Throwable e){while(e instanceof InvocationTargetException&&e.getCause()!=null)e=e.getCause();return e;}
  static synchronized JSONObject state(Context c)throws Exception{return new JSONObject().put("status",status).put("sessionId",id==null?JSONObject.NULL:id).put("targetPackage",target==null?JSONObject.NULL:target).put("error",error).put("reason",reason(c)).put("deviceLocked",locked(c)).put("blocked",blocked).put("width",width).put("height",height).put("operationCount",operations).put("elapsedMs",started==0?0:SystemClock.elapsedRealtime()-started).put("foregroundFallback",false).put("taskId",nullable(taskId)).put("anyAppControl",anyApp).put("stopReason",stops.reason()).put("stoppedSessionId",nullable(stops.sessionId())).put("stoppedTaskId",nullable(stops.taskId()));}
  static Object nullable(String s){return s==null?JSONObject.NULL:s;}
@@ -68,19 +95,20 @@ public final class Controller {
   if(pkg.equals(c.getPackageName())||c.getPackageManager().getLaunchIntentForPackage(pkg)==null)throw new IllegalArgumentException("Target must be an installed launchable app");
   if(session!=null&&pkg.equals(target)&&"ready".equals(status)){if(task!=null)taskId=task;return state(c);}
   stop(c,StopLedger.AGENT);if(session!=null)throw new IllegalStateException("Previous session cleanup is incomplete");stops.started();final long token=++generation;target=pkg;taskId=task;id=UUID.randomUUID().toString();started=SystemClock.elapsedRealtime();operations=0;width=height=0;error="";blocked=false;status="starting";
+  final Slot slot=active;final String sid=id;
   Runnable request=()->{
    try{
     synchronized(Controller.class){if(token!=generation)return;}
     NotificationManager nm=c.getSystemService(NotificationManager.class);nm.createNotificationChannel(new NotificationChannel("background-live","Background app control",NotificationManager.IMPORTANCE_LOW));
-    PendingIntent stop=PendingIntent.getBroadcast(c,0,new Intent(c,StopReceiver.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-    PendingIntent view=PendingIntent.getActivity(c,1,new Intent(c,AgentPipActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+    PendingIntent stop=PendingIntent.getBroadcast(c,slot.index,new Intent(c,StopReceiver.class).putExtra("sessionId",sid),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+    PendingIntent view=PendingIntent.getActivity(c,1+10*slot.index,watch(new Intent(c,AgentPipActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),slot.index,sid,task),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
     Notification.Builder nb=new Notification.Builder(c,"background-live").setSmallIcon(android.R.drawable.ic_menu_view).setContentTitle("Rose Agent is using "+c.getPackageManager().getApplicationLabel(c.getPackageManager().getApplicationInfo(pkg,0))).setContentText("Tap to watch full screen. Rose keeps working in the background.").setContentIntent(view).setOngoing(true).addAction(new Notification.Action.Builder(null,"Stop",stop).build());
     // The lock screen shows that a session is running, not which app it controls.
     nb.setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(new Notification.Builder(c,"background-live").setSmallIcon(android.R.drawable.ic_menu_view).setContentTitle("Rose Agent is using an app").setContentText("Unlock to see or stop it").build());
     Notification.Builder.class.getMethod("setRequestPromotedOngoing",boolean.class).invoke(nb,true);
     Class<?> type=Class.forName(EXT+"ComputerControlExtensions");int version=((Number)type.getMethod("getVersion").invoke(null)).intValue();Object ext=type.getMethod("getInstance",Context.class,int.class).invoke(null,c,version);
-    Class<?> b=Class.forName(EXT+"ComputerControlSession$Params$Builder");Object builder=b.getConstructor(Context.class).newInstance(c);b.getMethod("setName",String.class).invoke(builder,"pixel-voice-background");b.getMethod("setTargetPackageNames",List.class).invoke(builder,Arrays.asList(pkg));
-    Class<?> n=Class.forName(EXT+"ComputerControlSession$NotificationParams$Builder");Object nBuilder=n.getConstructor(Notification.class,int.class).newInstance(nb.build(),102);b.getMethod("setNotificationParams",Class.forName(EXT+"ComputerControlSession$NotificationParams")).invoke(builder,n.getMethod("build").invoke(nBuilder));
+    Class<?> b=Class.forName(EXT+"ComputerControlSession$Params$Builder");Object builder=b.getConstructor(Context.class).newInstance(c);b.getMethod("setName",String.class).invoke(builder,MultiSession.name(slot.index));b.getMethod("setTargetPackageNames",List.class).invoke(builder,Arrays.asList(pkg));
+    Class<?> n=Class.forName(EXT+"ComputerControlSession$NotificationParams$Builder");Object nBuilder=n.getConstructor(Notification.class,int.class).newInstance(nb.build(),MultiSession.notificationId(slot.index));b.getMethod("setNotificationParams",Class.forName(EXT+"ComputerControlSession$NotificationParams")).invoke(builder,n.getMethod("build").invoke(nBuilder));
     Class<?> cb=Class.forName(EXT+"ComputerControlSession$Callback");Object callback=Proxy.newProxyInstance(cb.getClassLoader(),new Class<?>[]{cb},(proxy,method,args)->{
      if(method.getName().equals("hashCode"))return System.identityHashCode(proxy);if(method.getName().equals("equals"))return proxy==args[0];if(method.getName().equals("toString"))return "PixelVoiceBackgroundCallback";
      synchronized(Controller.class){
@@ -89,18 +117,18 @@ public final class Controller {
       if(token!=generation){if(method.getName().equals("onSessionCreated")){args[0].getClass().getMethod("close").invoke(args[0]);replacement.closing(token,args[0]);}dispatch();return null;}
       switch(method.getName()){
        case "onSessionPending":consent=(IntentSender)args[0];status="consent_required";Activity a=MainActivity.visible.get();if(a!=null)requestConsent(a);break;
-       case "onSessionCreated":session=args[0];sessionToken=token;consent=null;status="launching";attachLifecycle(token);worker.execute(()->launch(c,token));break;
+       case "onSessionCreated":session=args[0];sessionToken=token;consent=null;status="launching";attachLifecycle(token);worker.execute(()->launch(c,token,slot));break;
        case "onSessionCreationFailed":status="rejected";error="Android session error "+args[0];break;
        case "onSessionClosed":session=null;clearNodes();status="closed";error="Android close reason "+(args==null||args.length==0?"unspecified":args[0]);break;
       }
      }return null;
     });
     synchronized(Controller.class){if(token!=generation)return;replacement.requested(token);}
-    type.getMethod("requestSession",Class.forName(EXT+"ComputerControlSession$Params"),Executor.class,cb).invoke(ext,b.getMethod("build").invoke(builder),(Executor)(r->main.post(r)),callback);
+    type.getMethod("requestSession",Class.forName(EXT+"ComputerControlSession$Params"),Executor.class,cb).invoke(ext,b.getMethod("build").invoke(builder),executor(slot),callback);
    }catch(Throwable e){synchronized(Controller.class){replacement.answered(token);if(token==generation){error=root(e).toString();status=AnyAppControl.targetRefused(error)?"target_not_allowed":Replacement.listed(error)?"rejected":"failed";}dispatch();}}
   };
   pending=request;pendingToken=token;dispatch();
-  main.postDelayed(()->{synchronized(Controller.class){if(token==generation)stop(c,StopLedger.DEADLINE);}},DEADLINE);
+  main.postDelayed(in(slot,()->{synchronized(Controller.class){if(token==generation)stop(c,StopLedger.DEADLINE);}}),DEADLINE);
   return state(c);
  }
  static void attachLifecycle(long token)throws Exception{
@@ -112,19 +140,27 @@ public final class Controller {
     case "onActive":blocked=false;if(session!=null&&!status.equals("launching"))status="ready";break;
     case "onClosed":session=null;clearNodes();status="closed";error="Android close reason "+(args==null||args.length==0?"unspecified":args[0]);break;
    }}return null;
-  });session.getClass().getMethod("setLifecycleCallback",Executor.class,cb).invoke(session,(Executor)(r->main.post(r)),listener);
+  });session.getClass().getMethod("setLifecycleCallback",Executor.class,cb).invoke(session,executor(active),listener);
  }
- static void launch(Context c,long token){try{
-  synchronized(Controller.class){if(token!=generation||session==null)return;session.getClass().getMethod("launchApplication",String.class).invoke(session,target);}
+ static void launch(Context c,long token,Slot slot){try{
+  synchronized(Controller.class){Slot was=enter(slot);try{if(token!=generation||session==null)return;
+   // One app per session: Rose's sessions may launch any app, so never launch one another slot holds (MultiSession).
+   if(otherHolds(slot,target))throw new IllegalStateException(MultiSession.APP_IN_OTHER_SESSION);
+   session.getClass().getMethod("launchApplication",String.class).invoke(session,target);}finally{leave(was);}}
   long until=SystemClock.elapsedRealtime()+15000;
-  while(SystemClock.elapsedRealtime()<until){synchronized(Controller.class){if(token!=generation||session==null)return;Image frame=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(frame!=null){width=frame.getWidth();height=frame.getHeight();frame.close();status="ready";return;}}Thread.sleep(150);}
+  while(SystemClock.elapsedRealtime()<until){synchronized(Controller.class){Slot was=enter(slot);try{if(token!=generation||session==null)return;Image frame=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(frame!=null){width=frame.getWidth();height=frame.getHeight();frame.close();status="ready";return;}}finally{leave(was);}}Thread.sleep(150);}
   throw new IllegalStateException("Target did not produce an allowed background frame");
- }catch(Throwable e){synchronized(Controller.class){if(token==generation){++generation;error=root(e).toString();Object old=session;session=null;clearNodes();status="failed";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(token,old);}catch(Throwable ignored){}}}}}
+ }catch(Throwable e){synchronized(Controller.class){Slot was=enter(slot);try{if(token==generation){++generation;error=root(e).toString();Object old=session;session=null;clearNodes();status="failed";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(token,old);}catch(Throwable ignored){}}}finally{leave(was);}}}}
  /** Sends the pending start's one request at the earliest point Android can admit it (Replacement.clear: every session
   * this controller closed has reported onClosed and no earlier request is unanswered); Android decides admission itself.
   * An older start's request is dropped. No timer and no retry: it runs, under the lock, when a start is made, a request is
   * answered or a closed session is reported; the start's own deadline still applies while it waits. */
- static void dispatch(){if(pending==null)return;if(pendingToken!=generation){pending=null;return;}if(!replacement.clear())return;Runnable r=pending;pending=null;main.post(r);}
+ static void dispatch(){dispatchOne();for(Slot s:slots)if(s!=active){Slot was=enter(s);try{dispatchOne();}finally{leave(was);}}}
+ // One request at a time across both slots (agreed P1): none is sent while another slot's request is posted or unanswered;
+ // when a posted request has run (sent, or dropped as stale), every slot is tried again.
+ static boolean posting;
+ static void dispatchOne(){if(pending==null)return;if(pendingToken!=generation){pending=null;return;}if(!replacement.clear()||posting||othersUnanswered())return;Runnable r=pending;pending=null;posting=true;main.post(in(active,()->{posting=false;r.run();dispatch();}));}
+ static boolean othersUnanswered(){for(Slot s:slots)if(s!=active&&Replacement.REQUEST_UNANSWERED.equals(s.replacement.blocker()))return true;return false;}
  static void require(JSONObject p)throws Exception{if(session==null||!"ready".equals(status)||blocked)throw new IllegalStateException("Background session is not ready: "+status);if(!id.equals(p.getString("sessionId")))throw new IllegalArgumentException("Stale session ID");if(SystemClock.elapsedRealtime()-started>DEADLINE)throw new IllegalStateException("Session expired");}
  static void fresh(JSONObject p)throws Exception{if(snapshotId==null||SystemClock.elapsedRealtime()-snapshotTime>30000||!snapshotId.equals(p.optString("snapshotId",p.optString("screenshotId"))))throw new IllegalArgumentException("Fresh background snapshot required");}
  static synchronized JSONObject command(Context c,JSONObject p)throws Exception{
@@ -237,6 +273,98 @@ public final class Controller {
    .put("sessionStatus",held?status:JSONObject.NULL)
    .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source)
    .put("snapshotGeneration",owned!=null?(Object)owned.generation:JSONObject.NULL).put("apps",apps);
+ }
+ // ---- Two-app routing (MultiSession). Every provider operation enters the slot its request names, runs the unchanged
+ // single-session operation there and leaves; replies add "sessions" (each slot's summary). Legacy requests (no mode,
+ // no sessionId) are slot 0 exactly as before; nothing guesses between two live sessions.
+ interface Op{JSONObject run()throws Exception;}
+ static JSONObject in(int slot,Op op)throws Exception{Slot was=enter(slots[slot]);try{return op.run();}finally{leave(was);}}
+ /** A later slot's notification opens the viewer bound to that session (WatchBinding extras); slot 0 keeps its legacy
+  * unbound entry. A slot without a valid task id is an invalid binding: the viewer shows unavailable, never slot 0. */
+ static Intent watch(Intent i,int slot,String session,String task){if(slot>0){i.putExtra(WatchBinding.EXTRA_SESSION,session);if(task!=null)i.putExtra(WatchBinding.EXTRA_TASK,task);}return i;}
+ /** The packages Android attests for an open session of this controller's own user (getAutomatedApps), else empty. */
+ static List<String> attested(Object s){
+  if(s==null)return Collections.emptyList();
+  try{Bundle b=(Bundle)s.getClass().getMethod("getAutomatedApps").invoke(s);CurrentApps.Platform pl=b==null?null:CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
+   return pl==null||pl.closed?Collections.<String>emptyList():pl.packages;}catch(Throwable e){return Collections.emptyList();}
+ }
+ /** Whether another slot's session targets or is attested to hold pkg. Called inside slot own (others are saved). */
+ static boolean otherHolds(Slot own,String pkg){for(Slot s:slots)if(s!=own&&s.session!=null&&(pkg.equals(s.target)||attested(s.session).contains(pkg)))return true;return false;}
+ static MultiSession.Slot[] view(boolean members){
+  save(active);MultiSession.Slot[] v=new MultiSession.Slot[slots.length];
+  for(int i=0;i<slots.length;i++){Slot s=slots[i];v[i]=new MultiSession.Slot(s.id,s.target,s.status,MultiSession.occupied(s.session!=null,s.status),members?attested(s.session):null);}
+  return v;
+ }
+ /** The owned-device snapshot Bundle (PR374), or null on an older build or any failure. */
+ static Bundle owned(Context c){
+  try{Class<?> type=Class.forName(EXT+"ComputerControlExtensions");int version=((Number)type.getMethod("getVersion").invoke(null)).intValue();
+   Object ext=type.getMethod("getInstance",Context.class,int.class).invoke(null,c,version);return ext==null?null:(Bundle)type.getMethod("getOwnedAutomatedDevices").invoke(ext);}catch(Throwable e){return null;}
+ }
+ /** The platform's sessionLimit capability: 2 or 1, conservative 1 when absent or unreadable. Never free slots. */
+ static int sessionLimit(Context c){Bundle b=owned(c);return MultiSession.sessionLimit(b==null?null:b.get("sessionLimit"));}
+ static JSONArray summary()throws Exception{
+  save(active);JSONArray a=new JSONArray();
+  for(Slot s:slots)a.put(new JSONObject().put("slot",s.index).put("sessionId",nullable(s.id)).put("targetPackage",nullable(s.target)).put("taskId",nullable(s.taskId)).put("status",s.status)
+   .put("stopReason",s.stops.reason()).put("stoppedSessionId",nullable(s.stops.sessionId())).put("stoppedTaskId",nullable(s.stops.taskId())));
+  return a;
+ }
+ static JSONObject refused(MultiSession.Route r,Context c)throws Exception{return new JSONObject().put("status",r.refusal).put("actionExecuted",false).put("ownLive",r.ownLive).put("current",state(c)).put("sessions",summary());}
+ static synchronized JSONObject route(Context c,String op,JSONObject p)throws Exception{
+  String sid=p.isNull("sessionId")?null:p.optString("sessionId",null);
+  switch(op){
+   case "start":{
+    String task=taskParam(p),mode=p.isNull("mode")?"":p.optString("mode","");
+    // An owner Stop of a task in any slot refuses later starts of that task in every slot.
+    save(active);for(Slot s:slots)if(s.stops.refuses(task))return refusal(s.stops.refusal(task),state(c)).put("sessions",summary());
+    MultiSession.Route r=MultiSession.start(view(true),p.getString("packageName"),mode,mode.isEmpty()?1:sessionLimit(c));
+    if(r.refused())return refused(r,c);
+    return in(r.slot,()->start(c,p)).put("sessions",summary());
+   }
+   case "get_state":{
+    MultiSession.Route r=MultiSession.state(view(false),sid);
+    if(r.refused())return new JSONObject().put("status",r.refusal).put("sessionId",sid).put("sessions",summary());
+    return in(r.slot,()->state(c)).put("sessions",summary());
+   }
+   case "command":{
+    MultiSession.Route r=MultiSession.target(view(false),sid);
+    if("open_app".equals(p.optString("action"))&&MultiSession.APP_IN_OTHER_SESSION.equals(MultiSession.openApp(view(true),r.slot,p.isNull("packageName")?null:p.optString("packageName",null))))
+     return new JSONObject().put("status",MultiSession.APP_IN_OTHER_SESSION).put("actionExecuted",false).put("sessionId",sid);
+    return in(r.slot,()->command(c,p));
+   }
+   case "preview":return in(MultiSession.target(view(false),sid).slot,()->preview(c,p));
+   case "stop":{
+    MultiSession.Route r=MultiSession.stop(view(false),sid);
+    if(r.refused())return refused(r,c);
+    return in(r.slot,()->agentStop(c,p)).put("sessions",summary());
+   }
+   case "current_apps":return currentApps(c).put("sessions",membership(c));
+   default:throw new IllegalArgumentException("Unknown background operation");
+  }
+ }
+ /** The owner's Stop from one session's notification: that session only (MultiSession.ownerStop). */
+ static synchronized void ownerStop(Context c,String sessionId){int i=MultiSession.ownerStop(view(false),sessionId);if(i<0)return;Slot was=enter(slots[i]);try{stop(c,StopLedger.USER);}finally{leave(was);}}
+ /** current_apps.sessions: each occupied slot's attested membership (MultiSession.sessions), not read while locked. */
+ static JSONArray membership(Context c)throws Exception{
+  MultiSession.Slot[] v=view(false);JSONArray out=new JSONArray();
+  List<MultiSession.Entry> entries;
+  if(locked(c)){entries=new ArrayList<>();for(int i=0;i<v.length;i++)if(v[i].occupied)entries.add(new MultiSession.Entry(i,Collections.<String>emptyList(),false,CurrentApps.LOCKED));}
+  else{
+   Bundle ob=owned(c);CurrentApps.Owned o=ob==null?null:CurrentApps.owned(ob.get("generation"),ob.get("deviceIds"),ob.get("deviceComplete"),ob.get("appDeviceIds"),ob.get("appPackageNames"));
+   Set<Integer> devices=null;if(o!=null){devices=new HashSet<>();for(int d:o.deviceIds)devices.add(d);}
+   MultiSession.Membership[] m=new MultiSession.Membership[slots.length];for(int i=0;i<slots.length;i++)m[i]=member(slots[i].session);
+   entries=MultiSession.sessions(v,m,devices,c.getPackageName());
+  }
+  for(MultiSession.Entry e:entries){Slot s=slots[e.slot];out.put(new JSONObject().put("sessionId",nullable(s.id)).put("taskId",nullable(s.taskId)).put("targetPackage",nullable(s.target))
+   .put("complete",e.complete).put("incompleteReason",e.incompleteReason).put("apps",new JSONArray(e.apps)));}
+  return out;
+ }
+ /** One session's attested membership with its fixed deviceId; anything unreadable or malformed is UNKNOWN. */
+ static MultiSession.Membership member(Object s){
+  if(s==null)return MultiSession.Membership.UNKNOWN;
+  try{Bundle b=(Bundle)s.getClass().getMethod("getAutomatedApps").invoke(s);if(b==null)return MultiSession.Membership.UNKNOWN;
+   CurrentApps.Platform pl=CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
+   return pl==null?MultiSession.Membership.UNKNOWN:new MultiSession.Membership(true,pl.closed,pl.complete,MultiSession.deviceId(b.get("deviceId")),pl.packages);
+  }catch(Throwable e){return MultiSession.Membership.UNKNOWN;}
  }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");
