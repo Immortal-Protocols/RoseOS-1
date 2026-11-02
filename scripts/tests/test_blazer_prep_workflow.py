@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('download', 'vendor', 'lunch', 'inspect'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('download', 'vendor', 'lunch', 'inspect'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -116,7 +116,7 @@ class Guard(unittest.TestCase):
     def test_mode_input_and_hosted_check_before_the_controller(self):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
-                      'executes (none for every other mode)\n        type: choice\n        options: [none, download, vendor, '
+                      'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
                       'lunch, inspect]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
@@ -140,7 +140,7 @@ class Wiring(unittest.TestCase):
     def test_committed_binding_is_unbound_so_every_stage_refuses_before_the_controller(self):
         self.assertEqual(BINDING['host'], 'immortal-os-builder')
         self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
-        for stage, missing in (('download', 'downloadDir'), ('vendor', 'downloadDir, sourceRoot, node'), ('lunch', 'sourceRoot')):
+        for stage, missing in (('source', 'sourceRoot'), ('download', 'downloadDir'), ('vendor', 'downloadDir, sourceRoot, node'), ('lunch', 'sourceRoot')):
             result = wire('check', '--stage', stage)
             self.assertEqual(result.returncode, 4, stage)
             self.assertEqual(result.stdout, '')
@@ -149,7 +149,7 @@ class Wiring(unittest.TestCase):
 
     def test_bounds_are_derived_from_the_recipe_seconds(self):
         binding = bound(self.tmp)
-        expected = {'download': (3600, 3900, 76), 'vendor': (10800, 11100, 196), 'lunch': (1800, 2100, 46)}
+        expected = {'source': (7200, 7500, 136), 'download': (3600, 3900, 76), 'vendor': (10800, 11100, 196), 'lunch': (1800, 2100, 46)}
         for stage, (helper_seconds, outer, minutes) in expected.items():
             self.assertEqual(RECIPE['preparation'][stage]['timeoutSeconds'], helper_seconds)
             result = wire('check', '--stage', stage, '--binding', str(binding))
@@ -161,7 +161,7 @@ class Wiring(unittest.TestCase):
         original = os.execv
         os.execv = lambda exe, argv: seen.append(argv) or (_ for _ in ()).throw(SystemExit(0))
         try:
-            for stage in ('download', 'vendor', 'lunch'):
+            for stage in ('source', 'download', 'vendor', 'lunch'):
                 with self.assertRaises(SystemExit), open(os.devnull, 'w') as null:
                     stdout, sys.stdout = sys.stdout, null
                     try:
@@ -173,6 +173,7 @@ class Wiring(unittest.TestCase):
         head = [sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'run']
         common = ['--host', 'immortal-os-builder', '--lock', LOCK]
         self.assertEqual(seen, [
+            head + ['--stage', 'source', *common, '--source-root', '/srv/rose-blazer/src', '--receipt-dir', '/tmp/r'],
             head + ['--stage', 'download', *common, '--download-dir', '/srv/rose-blazer-dl', '--receipt-dir', '/tmp/r'],
             head + ['--stage', 'vendor', *common, '--download-dir', '/srv/rose-blazer-dl', '--source-root', '/srv/rose-blazer/src',
                     '--node', '/usr/bin/node', '--receipt-dir', '/tmp/r'],
@@ -214,7 +215,7 @@ class Inspect(unittest.TestCase):
         record = BINDING['inspectCandidates']
         self.assertEqual((record['rootTemplate'], record['verified'], record['binding']), (self.ROOT_TEMPLATE, False, False))
         self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
-        for stage in ('download', 'vendor', 'lunch'):  # candidates never satisfy a preparation stage
+        for stage in ('source', 'download', 'vendor', 'lunch'):  # candidates never satisfy a preparation stage
             self.assertEqual(wire('check', '--stage', stage).returncode, 4, stage)
 
     def test_inspect_passes_host_lock_and_this_runs_candidate_root_with_its_own_bounds(self):

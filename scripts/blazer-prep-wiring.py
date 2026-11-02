@@ -37,7 +37,7 @@ HELPER = ROOT/'scripts/blazer-build-only.py'
 OUTER_MARGIN_SECONDS = 300
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
-STAGE_INPUTS = {'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',)}
+STAGE_INPUTS = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',)}
 INSPECT_INPUTS = ('sourceRoot', 'downloadDir', 'node')  # each passed only when bound
 # inspect: the helper's own bound (its cap is INSPECT_MAX_SECONDS), then an outer timeout and a 20-minute job.
 INSPECT = {'maxEntries': 200000, 'maxSeconds': 900, 'outerSeconds': 960, 'jobMinutes': 20}
