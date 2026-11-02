@@ -35,7 +35,7 @@ class CurrentAppsWiringTest(unittest.TestCase):
 
     def test_membership_is_the_live_session_only(self):
         self.assertIn('boolean locked=locked(c),live=session!=null&&CurrentApps.live(status);', self.body)
-        self.assertIn('CurrentApps.Result r=CurrentApps.of(locked,session!=null,status,target,front,c.getPackageName());', self.body)
+        self.assertIn('CurrentApps.Result r=CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());', self.body)
         # Nothing from task history: no stop ledger, StopLedger ids, or remembered sets feed the members.
         for source in ('stops.', 'stoppedTaskId', 'StopLedger', 'observed', 'labels', 'nodes'):
             self.assertNotIn(source, self.body, source)
@@ -49,14 +49,14 @@ class CurrentAppsWiringTest(unittest.TestCase):
             self.assertNotIn(call, self.body, call)
         self.assertIn('n.recycle();', self.body)
         self.assertIn('w.recycle();', self.body)
-        self.assertIn('catch(Throwable e){front.clear();}', self.body, 'a failed read lists only the target, never a guess')
+        self.assertIn('catch(Throwable e){front=null;}', self.body, 'a failed read lists only the target and says it is incomplete')
         self.assertEqual(sorted(set(re.findall(r'(?<![\w.])(\w+)\s*=(?!=)', self.body)) - {
-            'locked', 'live', 'front', 'windows', 'n', 'pkg', 'r', 'signature', 'listed', 'apps'}), ['appsSignature'])
+            'locked', 'live', 'front', 'read', 'windows', 'n', 'pkg', 'r', 'signature', 'listed', 'apps'}), ['appsSignature'])
         self.assertTrue(writes(self.body, 'appsGeneration'), 'the generation rises on change')
 
     def test_reply_shape(self):
         self.assertEqual(re.findall(r'\.put\("(\w+)"', self.body),
-                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'generation', 'apps'])
+                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'generation', 'complete', 'incompleteReason', 'apps'])
 
     def test_same_signer_only_not_advertised_never_a_phone_command(self):
         signer = PROVIDER.index('checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH')

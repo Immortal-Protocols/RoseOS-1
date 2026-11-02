@@ -26,7 +26,10 @@ public final class CurrentAppsTest {
         }
     }
     static CurrentApps.Result read(boolean locked, boolean session, String status, String target, String... front) {
-        return CurrentApps.of(locked, session, status, target, Arrays.asList(front), CONTROLLER);
+        return CurrentApps.of(locked, session, status, "blocked".equals(status), target, Arrays.asList(front), CONTROLLER);
+    }
+    static CurrentApps.Result unread(String status, String target) {
+        return CurrentApps.of(false, true, status, "blocked".equals(status), target, null, CONTROLLER);
     }
     static List<String> names(CurrentApps.Result r) {
         String[] n = new String[r.apps.size()];
@@ -43,7 +46,7 @@ public final class CurrentAppsTest {
 
         // Live: the front windows, then the target; the controller itself never; no duplicates; order kept.
         expect(names(read(false, true, "ready", MAPS, MAPS)).equals(Arrays.asList(MAPS + "*!")), "target in front");
-        expect(names(read(false, true, "ready", MAPS)).equals(Arrays.asList(MAPS + "!")), "front not read (blocked, or the read failed): only the target");
+        expect(names(unread("ready", MAPS)).equals(Arrays.asList(MAPS + "!")), "front not read (the read failed): only the target");
         expect(names(read(false, true, "ready", MAPS, INSTALLER, MAPS, CONTROLLER, "", null)).equals(Arrays.asList(INSTALLER + "*", MAPS + "*!")), "installer over the target");
         expect(names(read(false, true, "ready", MAPS, INSTALLER)).equals(Arrays.asList(INSTALLER + "*", MAPS + "!")), "the target behind the installer stays a member");
         expect(names(read(false, true, "launching", MAPS)).equals(Arrays.asList(MAPS + "!")) && names(read(false, true, "blocked", MAPS)).equals(Arrays.asList(MAPS + "!")), "launching and blocked are live");
@@ -68,6 +71,15 @@ public final class CurrentAppsTest {
         expect(home.read(read(true, true, "ready", AMAZON, AMAZON), "s4") && home.shown.isEmpty(), "locking hides it");
         expect(home.read(read(false, true, "ready", AMAZON, AMAZON), "s4") && home.shown.equals(Arrays.asList(AMAZON)), "unlocking shows the live set again, from the session");
         expect(home.read(read(false, true, "failed", AMAZON), "s4") && home.shown.isEmpty(), "failure removes it");
+        // Completeness: empty is complete only when no session is live; a live set always says why it is not complete.
+        expect(read(false, false, "idle", null).complete && read(false, true, "stopped", MAPS).complete && "".equals(read(false, true, "closed", MAPS).incompleteReason), "no live session: genuinely empty");
+        expect(!read(true, true, "ready", MAPS, MAPS).complete && CurrentApps.LOCKED.equals(read(true, true, "ready", MAPS, MAPS).incompleteReason), "locked is unknown, never empty");
+        expect(!read(false, true, "ready", MAPS, MAPS).complete && CurrentApps.BEHIND_FRONT_UNLISTED.equals(read(false, true, "ready", MAPS, MAPS).incompleteReason), "a live set never claims completeness");
+        expect(CurrentApps.WINDOWS_UNREADABLE.equals(unread("ready", MAPS).incompleteReason) && !unread("ready", MAPS).complete, "an unread front says so");
+        expect(CurrentApps.BLOCKED.equals(unread("blocked", MAPS).incompleteReason), "blocked says so");
+        expect(CurrentApps.BLOCKED.equals(CurrentApps.of(false, true, "ready", true, MAPS, null, CONTROLLER).incompleteReason), "the blocked flag wins over a ready status");
+        expect(!read(false, true, "ready", null).complete && read(false, true, "ready", null).apps.isEmpty(), "live but nothing identified: empty yet not complete");
+        expect(!CurrentApps.signature(read(false, true, "ready", MAPS), "s1").equals(CurrentApps.signature(unread("ready", MAPS), "s1")), "a change in completeness is a new generation");
         expect(CurrentApps.signature(read(false, true, "ready", MAPS), null).equals(CurrentApps.signature(read(false, true, "ready", MAPS), "")), "no session id is no session id");
         System.out.println("CurrentAppsTest: " + checks + " checks passed");
     }
