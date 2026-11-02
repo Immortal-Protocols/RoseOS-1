@@ -351,13 +351,16 @@ public class MainActivity extends Activity {
   int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():-1;
   Intent query=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
   ArrayList<ResolveInfo> ourApps=new ArrayList<>(),systemApps=new ArrayList<>(),storeApps=new ArrayList<>(),otherApps=new ArrayList<>();HashSet<String> seen=new HashSet<>(),suiteSeen=new HashSet<>();
+  closeSystemFolder();
   String cameraPackage=AppLabels.preferredCamera(getPackageManager());
   for(ResolveInfo app:getPackageManager().queryIntentActivities(query,0)){
    String key=app.activityInfo.packageName+"/"+app.activityInfo.name;
    if(!app.activityInfo.packageName.equals(getPackageName())&&seen.add(key)){
     String packageName=app.activityInfo.packageName;
-    if(AppLabels.suiteIndex(packageName,cameraPackage)>=0){if(suiteSeen.add(packageName))ourApps.add(app);}
-    else (ourBuild(packageName)?otherApps:preinstalled(app)?systemApps:fromPlayStore(packageName)?storeApps:otherApps).add(app);
+    // System and duplicate apps go in the "…" folder (HomeAppGroups, #403); the rest keep their places.
+    int group=HomeAppGroups.group(packageName,AppLabels.suiteIndex(packageName,cameraPackage)>=0,ourBuild(packageName),preinstalled(app),cameraPackage);
+    if(group==HomeAppGroups.SUITE){if(suiteSeen.add(packageName))ourApps.add(app);}
+    else (group==HomeAppGroups.SYSTEM?systemApps:fromPlayStore(packageName)?storeApps:otherApps).add(app);
    }
   }
   Comparator<ResolveInfo> byName=(a,b)->AppLabels.label(getPackageManager(),a.activityInfo.packageName,a.loadLabel(getPackageManager()).toString()).compareToIgnoreCase(AppLabels.label(getPackageManager(),b.activityInfo.packageName,b.loadLabel(getPackageManager()).toString()));
@@ -366,11 +369,14 @@ public class MainActivity extends Activity {
   ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>();
   // Home, then the app pages next to it under the fixed tray, and nothing after them (HomePages, #223).
   titles.add("Home");pages.add(new ArrayList<>());
-  // One continuous real inventory, our apps first, then preinstalled, Play Store and other installs, each in name order;
-  // the page count follows from it and the inset viewport (HomeAppLayout), never a fixed count.
-  ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,systemApps,storeApps,otherApps))launchable.addAll(group);
-  planAppPages();int appPages=HomeAppLayout.pages(launchable.size(),appPerPage);
-  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(launchable.size(),appPerPage,i);pages.add(new ArrayList<>(launchable.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
+  // One continuous real inventory, our apps first, then Play Store and other installs, each in name order, then the
+  // one "…" System folder cell (a null entry) holding the system and duplicate apps; the page count follows from it and
+  // the inset viewport (HomeAppLayout), never a fixed count.
+  ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,storeApps,otherApps))launchable.addAll(group);
+  ArrayList<ResolveInfo> entries=new ArrayList<>(launchable);if(!systemApps.isEmpty())entries.add(null);
+  folderApps=systemApps;launchable.addAll(systemApps); // Home's default apps may be system apps
+  planAppPages();int appPages=HomeAppLayout.pages(entries.size(),appPerPage);
+  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(entries.size(),appPerPage,i);pages.add(new ArrayList<>(entries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
   int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;
   selected=HomePages.restore(selected,count);
   // One wallpaper behind every page, drawn at the scroll position so it stays put while the pages slide.
@@ -383,7 +389,7 @@ public class MainActivity extends Activity {
   homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
   launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),homeColumns));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
-  for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),launchable.isEmpty()));
+  for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),entries.isEmpty()));
   if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
   setContentView(homeFrame);drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
@@ -423,20 +429,14 @@ public class MainActivity extends Activity {
  View appPage(ArrayList<ResolveInfo> apps,String title,boolean noApps){
   View result;
   if(noApps){TextView none=appLabel("No other apps are installed.");none.setGravity(Gravity.CENTER);none.setMaxLines(3);result=none;}
-  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(appTile(app));result=grid;}
+  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(app==null?folderTile():appTile(app));result=grid;}
   result.setContentDescription(title);
   result.setPadding(dp(HomeAppLayout.MARGIN_DP),dp(HomeAppLayout.TOP_DP),dp(HomeAppLayout.MARGIN_DP),0);
   result.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
   return result;
  }
- /** The reference label (.app .label): 12.5sp system sans at weight 500 (the HiFi's Inter falls back to the system UI
-  * sans), white over the wallpaper with its 0 1px 3px rgba(8,22,45,.75) shadow, wrapping to two lines. */
- TextView appLabel(String label){
-  TextView name=new TextView(this);name.setText(label);name.setTextSize(12.5f);name.setTextColor(0xffffffff);name.setTypeface(Typeface.create(Typeface.SANS_SERIF,500,false));name.setLetterSpacing(.005f);
-  name.setShadowLayer(dp(3),0,dp(1),0xbf08162d);name.setIncludeFontPadding(false);name.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
-  name.setMaxLines(HomeAppLayout.LABEL_LINES);name.setEllipsize(android.text.TextUtils.TruncateAt.END);
-  return name;
- }
+ /** The reference label (HomeAppTile.label). */
+ TextView appLabel(String label){return HomeAppTile.label(this,label);}
  LinearLayout makePageDots(ArrayList<String> titles){
   LinearLayout dots=new LinearLayout(this);dots.setGravity(Gravity.CENTER);dots.setOrientation(0);
   for(int i=0;i<titles.size();i++){
@@ -446,21 +446,39 @@ public class MainActivity extends Activity {
   }
   return dots;
  }
- /** A real app's cell: its own icon in the 64dp HiFi glass tile (HomeGlassTile) and its label, opening it (WorkspaceLauncher). */
+ /** A real app's cell (HomeAppTile): its simplified mark on the subdued tile and its label, opening it (WorkspaceLauncher). */
  View appTile(ResolveInfo app){
-  LinearLayout tile=new LinearLayout(this);tile.setOrientation(1);tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);tile.setPadding(dp(2),dp(HomeAppLayout.CELL_PAD_DP),dp(2),dp(HomeAppLayout.CELL_PAD_DP));
-  String originalLabel=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
-  final String label=originalLabel;tile.setContentDescription(label);tile.setClickable(true);tile.setFocusable(true);
-  tile.setOnClickListener(v->WorkspaceLauncher.open(this,app,label));
-  FrameLayout iconFrame=new FrameLayout(this);iconFrame.setBackground(new HomeGlassTile(getResources().getDisplayMetrics().density));iconFrame.setElevation(dp(4));
-  int iconResource=AppLabels.icon(getPackageManager(),app.activityInfo.packageName);
-  ImageView icon=new ImageView(this);icon.setImageDrawable(iconResource==0?app.loadIcon(getPackageManager()):getDrawable(iconResource));icon.setScaleType(ImageView.ScaleType.FIT_CENTER);icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-  iconFrame.addView(icon,new FrameLayout.LayoutParams(dp(HomeAppLayout.ICON_DP),dp(HomeAppLayout.ICON_DP),Gravity.CENTER));
-  tile.addView(iconFrame,new LinearLayout.LayoutParams(dp(HomeAppLayout.TILE_DP),dp(HomeAppLayout.TILE_DP)));
-  TextView name=appLabel(label);name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-  LinearLayout.LayoutParams labelParams=new LinearLayout.LayoutParams(-1,HomeAppLayout.LABEL_LINES*name.getLineHeight());labelParams.topMargin=dp(HomeAppLayout.LABEL_GAP_DP);tile.addView(name,labelParams);
+  final String label=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
+  View tile=HomeAppTile.tile(this,appMark(app),label);
+  tile.setOnClickListener(v->{closeSystemFolder();WorkspaceLauncher.open(this,app,label);});
   return tile;
  }
+ /** The app's mark (#403): a suite app's or a duplicate's simplified glyph (HomeAppGroups.glyph), else the app's own
+  * monochrome themed layer, else its own icon unchanged, so another app's identity is never redrawn. */
+ android.graphics.drawable.Drawable appMark(ResolveInfo app){
+  String glyph=HomeAppGroups.glyph(app.activityInfo.packageName,AppLabels.preferredCamera(getPackageManager()));
+  if(glyph!=null&&HomeGlyph.known(glyph))return new HomeGlyph(glyph);
+  try{android.graphics.drawable.Drawable themed=HomeGlyph.themed(app.activityInfo.loadUnbadgedIcon(getPackageManager()));if(themed!=null)return themed;}
+  catch(RuntimeException unavailable){/* the app's own icon below */}
+  return app.loadIcon(getPackageManager());
+ }
+ ArrayList<ResolveInfo> folderApps=new ArrayList<>();Dialog systemFolder;
+ /** The "…" System folder's cell on the app pages; opens HomeFolder. */
+ View folderTile(){
+  View tile=HomeAppTile.tile(this,new HomeGlyph("more"),HomeAppGroups.FOLDER_LABEL);
+  tile.setContentDescription(HomeAppGroups.folderDescription(folderApps.size()));
+  tile.setOnClickListener(v->openSystemFolder());
+  return tile;
+ }
+ void openSystemFolder(){
+  closeSystemFolder();if(folderApps.isEmpty()||isFinishing())return;
+  ArrayList<View> tiles=new ArrayList<>();for(ResolveInfo app:folderApps)tiles.add(appTile(app));
+  Dialog folder=new Dialog(this,android.R.style.Theme_Translucent_NoTitleBar);
+  folder.setContentView(new HomeFolder(this,HomeAppGroups.FOLDER_LABEL,tiles,appColumns,this::closeSystemFolder));
+  folder.setOnDismissListener(d->{if(systemFolder==d)systemFolder=null;});
+  systemFolder=folder;folder.show();
+ }
+ void closeSystemFolder(){Dialog folder=systemFolder;systemFolder=null;if(folder!=null&&folder.isShowing())folder.dismiss();}
 
  String audioLabel(VoiceService s){if(!s.communicating)return "Microphone off";AudioDeviceInfo d=s.audio==null?null:s.audio.getCommunicationDevice();if(d==null)return "Connecting audio…";if(VoiceService.isBluetooth(d))return "Glasses";if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)return "Phone speaker";if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)return "Phone earpiece";return d.getProductName().toString();}
  final Runnable tick=new Runnable(){public void run(){refresh();handler.postDelayed(this,250);}};
@@ -532,7 +550,7 @@ public class MainActivity extends Activity {
  /** The conversation's Settings opens the Home options over Home (the setup that used to sit on the voice page). */
  void showSettingsFor(Intent intent){if(intent!=null&&ACTION_SETTINGS.equals(intent.getAction())&&homeFrame!=null)homeFrame.post(()->{if(!isFinishing())homeOptions(homeFrame);});}
  /** HOME returning from an app or the conversation keeps the page left (previous); HOME on Home, or the app icon, shows Home (HomePages). */
- void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome)closeVoiceControls();if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
+ void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome){closeVoiceControls();closeSystemFolder();}if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
  void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
  /** The tray's Rose from what VoiceService already publishes, once per refresh tick; hidden or paused stops its animation. */
  void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown));}
@@ -561,7 +579,7 @@ public class MainActivity extends Activity {
   if(macPanel!=null){macPanel.destroy();macPanel=null;}
   if(screenDetail!=null&&screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
  }
- @Override protected void onDestroy(){if(homeTray!=null)homeTray.release();homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
+ @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}
