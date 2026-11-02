@@ -834,8 +834,139 @@
   }
  ],
  "owner": "App Core owns this common transport parity fixture (#156/#225). Home owns its reader/render tests, OS Product its Launcher3 tests; both read this file and do not edit it. Add cases through App Core.",
- "residualDifferences": [
-  "session_unreleased_cleanup_failed: with a single lingering device after a failed close, Launcher3 cannot tell the session is unreleased and would show that device's complete apps, while Home shows cannot_confirm. The controller refuses a new session while one is unreleased, so this is limited to that failure state; closing it needs a platform signal Launcher3 does not have.",
-  "A platform failure on one side only (controller read exception, listener not yet registered) is not an identical input: that side shows cannot_confirm until both read the same generation."
- ]
+ "knownGaps": [
+  {
+   "name": "lingering_unreleased_device",
+   "parity": "not_claimed",
+   "description": "A close failed (controller cleanup_failed) and the old device still runs apps. Launcher3 sees one complete controller-owned device and shows its apps; the controller knows the session is unreleased but cannot read the old device's apps through its session view, so Home shows cannot_confirm. Genuinely controlled apps must not be hidden, so neither side may switch to empty.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "cleanup_failed",
+    "blocked": false,
+    "target": "com.google.android.apps.maps",
+    "front": null,
+    "platform": null
+   },
+   "controllerReply": {
+    "status": "none",
+    "sessionId": null,
+    "taskId": null,
+    "sessionStatus": null,
+    "generation": 9,
+    "complete": false,
+    "incompleteReason": "session_unreleased",
+    "source": "session_windows",
+    "apps": []
+   },
+   "launcherCategory": "cards",
+   "homeCategory": "cannot_confirm",
+   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract)."
+  },
+  {
+   "name": "replacement_old_and_new_devices",
+   "parity": "not_claimed",
+   "description": "The old session closed and a new one started while the old device's activities are still finishing. Launcher3 sees two controller-owned devices and shows cannot_confirm; the controller's session view sees only the new device and Home shows its apps.",
+   "platform": {
+    "devices": [
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.google.android.apps.maps"
+      ]
+     },
+     {
+      "owner": "controller",
+      "complete": true,
+      "apps": [
+       "com.android.calculator2"
+      ]
+     }
+    ]
+   },
+   "controllerInputs": {
+    "locked": false,
+    "session": true,
+    "status": "ready",
+    "blocked": false,
+    "target": "com.android.calculator2",
+    "front": [
+     "com.android.calculator2"
+    ],
+    "platform": {
+     "generation": [
+      "L",
+      3
+     ],
+     "packageNames": [
+      "S",
+      [
+       "com.android.calculator2"
+      ]
+     ],
+     "userId": [
+      "I",
+      0
+     ],
+     "complete": [
+      "B",
+      true
+     ],
+     "closed": [
+      "B",
+      false
+     ]
+    }
+   },
+   "controllerReply": {
+    "status": "live",
+    "sessionId": "s-2",
+    "taskId": "rose-ws-2",
+    "sessionStatus": "ready",
+    "generation": 10,
+    "complete": true,
+    "incompleteReason": "",
+    "source": "platform",
+    "apps": [
+     {
+      "packageName": "com.android.calculator2",
+      "front": true,
+      "target": true
+     }
+    ]
+   },
+   "launcherCategory": "cannot_confirm",
+   "homeCategory": "cards",
+   "closesWith": "OS Core owner-scoped device view: the controller reads the same per-device snapshot Launcher3 gets, for the devices it owns (see ownerDeviceViewContract)."
+  }
+ ],
+ "ownerDeviceViewContract": {
+  "status": "proposed to OS Core; not implemented; no framework edit until agreed",
+  "method": "public android.os.Bundle getOwnedAutomatedDevices() on the existing extensions entry the controller already uses (com.android.extensions.computercontrol.ComputerControlExtensions), reflective like the rest; it needs no session object, so it also answers after a failed close or between sessions",
+  "caller": "Binder.getCallingUid(): only devices whose recorded owner uid equals the caller's uid are returned; never another owner's device, package or count; no permission, role or exemption",
+  "user": "the caller's own user only (UserHandle.getUserId(callingUid)); another user's activity on a listed device is omitted and that device's deviceComplete is false",
+  "keys": {
+   "generation": "long: the SAME global generation as the AutomatedPackageListener onAutomatedDevicesChanged/onAutomatedDeviceAppsChanged snapshot that contains this content",
+   "deviceIds": "int[]: every caller-owned ComputerControl session device that currently runs apps (the listener's rule)",
+   "deviceComplete": "boolean[] parallel to deviceIds",
+   "appDeviceIds": "int[]",
+   "appPackageNames": "String[] parallel to appDeviceIds: non-finishing activities of the owner's user, front or hidden"
+  },
+  "atomicity": "read under the AutomatedPackagesRepository lock as one snapshot, identical to what the listener dispatches for that generation",
+  "lifecycle": "a device appears when it runs apps and leaves when its apps finish or it closes, exactly as in the listener; a lingering device after a failed close stays listed; no history",
+  "errors": "IllegalStateException when unavailable (the controller then keeps today's fail-closed fallback)",
+  "consumerRule": "both surfaces then apply one rule to the same snapshot: no device -> genuine_empty; exactly one complete device -> its apps (cards, or genuine_empty when none); more than one device or any incomplete -> cannot_confirm"
+ }
 }

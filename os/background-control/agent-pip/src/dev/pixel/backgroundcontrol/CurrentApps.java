@@ -23,7 +23,7 @@ import java.util.List;
  * above, marked incomplete. A session the controller still holds but could not release (cleanup_failed) is never a
  * genuine empty (session_unreleased), unless the platform says that session is closed.
  *
- * Rendering contract shared with Launcher3 and Home (#156/#225 parity, os/tests/fixtures/current-apps-parity.json):
+ * Rendering contract shared with Launcher3 and Home (#156/#225 parity, qa/parity/current-apps-parity.json):
  * complete with apps shows exactly those apps; complete and empty is genuine empty; anything not complete shows no app
  * cards and an explicit cannot-confirm status. Pure logic, no Android types. */
 final class CurrentApps {

@@ -96,8 +96,26 @@ class ParityTest(unittest.TestCase):
         c = self.cases['session_unreleased_cleanup_failed']
         self.assertEqual(c['expected']['category'], 'cannot_confirm')
         self.assertEqual(c['controllerReply']['incompleteReason'], 'session_unreleased')
-        self.assertTrue(any('session_unreleased' in r for r in FIXTURE['residualDifferences']))
         self.assertEqual(set(FIXTURE['categories']), {'cards', 'genuine_empty', 'cannot_confirm'})
+
+    def test_known_gaps_are_real_differences_never_counted_as_parity(self):
+        gaps = FIXTURE['knownGaps']
+        self.assertEqual({g['name'] for g in gaps}, {'lingering_unreleased_device', 'replacement_old_and_new_devices'})
+        self.assertFalse({g['name'] for g in gaps} & set(self.cases), 'a gap is never a passing case')
+        for g, got in zip(gaps, self.run_controller([g['controllerInputs'] for g in gaps])):
+            with self.subTest(g['name']):
+                self.assertEqual(g['parity'], 'not_claimed')
+                for k in ('status', 'complete', 'incompleteReason', 'source', 'sessionStatus', 'apps'):
+                    self.assertEqual(got[k], g['controllerReply'][k], k)
+                self.assertEqual(render_platform(g['platform'])['category'], g['launcherCategory'])
+                self.assertEqual(render_reply(g['controllerReply'])['category'], g['homeCategory'])
+                # Still a real gap: if both surfaces ever agree here, it must move to cases with one expected category.
+                self.assertNotEqual(g['launcherCategory'], g['homeCategory'])
+                # Fail closed, never empty: neither surface may call genuinely controlled apps genuine_empty.
+                self.assertNotIn('genuine_empty', (g['launcherCategory'], g['homeCategory']))
+        contract = FIXTURE['ownerDeviceViewContract']
+        for k in ('method', 'caller', 'user', 'keys', 'atomicity', 'lifecycle', 'errors', 'consumerRule'):
+            self.assertIn(k, contract)
 
 
 if __name__ == '__main__':
