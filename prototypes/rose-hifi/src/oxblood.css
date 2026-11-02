@@ -332,3 +332,189 @@
 #device[data-theme=oxblood] .sw-rose{left:0;top:0;width:34px;height:34px}
 #device[data-theme=oxblood] .sw-rose .rose-slot canvas,#device[data-theme=oxblood] .sw-rose .rose-slot .rose-fallback{width:40px;height:40px}
 #device[data-theme=oxblood] .sw-link{z-index:4;pointer-events:none}
+
+/* ======================================================================================
+   High-fidelity pass (2026-11-02): measured against Rose-09 (Home), Rose-11 (Rose),
+   Rose-13 (switcher + work manager). All values from reference pixel/geometry samples.
+   ====================================================================================== */
+
+/* ---------- One ruby pearl everywhere (replaces the WebGL form in Oxblood) ----------
+   Rose's state stays readable on the pearl: ruby while the mic is on, silver when muted;
+   a fine ruby ring while listening; a soft breathing halo while speaking (static under
+   reduced motion). The WebGL renderer remains the Classic look. */
+#device[data-theme=oxblood] .rose-slot canvas,#device[data-theme=oxblood] .rose-slot .rose-fallback{display:none!important}
+#device[data-theme=oxblood] .screen{--pearl:radial-gradient(circle at 34% 28%,#ffe6e8 0 7%,#e8606f 20%,#c43048 46%,#8a1428 76%,#4a0612 100%);
+  --pearl-shadow:0 2px 3px rgba(0,0,0,.6),inset 0 -1px 2px rgba(0,0,0,.35)}
+#device[data-theme=oxblood] .screen[data-mic=muted]{--pearl:radial-gradient(circle at 34% 28%,#ffffff 0 8%,#d9d4d2 24%,#9b9391 55%,#5c5452 85%,#3a3433 100%)}
+#device[data-theme=oxblood] .pearl,#device[data-theme=oxblood] .screen #home-tray .rose-slot::after,#device[data-theme=oxblood] .peek-pearl,
+#device[data-theme=oxblood] .ag-pearl,#device[data-theme=oxblood] .sw-rose::before,#device[data-theme=oxblood] .rose-head h2::before{
+  background:var(--pearl);box-shadow:var(--pearl-shadow);border-radius:50%}
+#device[data-theme=oxblood] .screen #home-tray .rose-slot{position:relative;inset:auto;width:16px;height:16px}
+#device[data-theme=oxblood] .screen #home-tray .rose-slot::after{content:'';position:absolute;inset:0}
+#device[data-theme=oxblood] .peek-pearl{width:16px;height:16px}
+
+/* ---------- Home field + layout (Rose-09) ---------- */
+#device[data-theme=oxblood] .home-date{top:65px;left:33px;font-size:22px;letter-spacing:0;font-weight:400;color:#eadbd0;text-shadow:none}
+#device[data-theme=oxblood] .home-page:is(.sparse,.full,.few) .app-grid{top:475px;bottom:auto;left:0;right:0;grid-template-columns:repeat(4,60px);column-gap:17.5px;row-gap:14px;justify-content:center;align-content:start}
+#device[data-theme=oxblood] .home-page .app{width:60px;padding:0;gap:0}
+#device[data-theme=oxblood] .home-page.full .app{width:72px;gap:5px}
+#device[data-theme=oxblood] .home-page.full .app-grid{grid-template-columns:repeat(4,72px);column-gap:6px}
+#device[data-theme=oxblood] .tile{width:59px;height:59px;border-radius:14px}
+#device[data-theme=oxblood] .mono-app .tile{background:rgba(255,232,222,.055);box-shadow:inset 0 0 0 1px rgba(255,232,222,.07),inset 0 1px 0 rgba(255,232,222,.1)}
+#device[data-theme=oxblood] .mono-app .tile svg{width:46px;height:46px;color:#ecdccb}
+#device[data-theme=oxblood] .home-page .app:not(.mono-app) .tile{background:rgba(255,232,222,.055);box-shadow:inset 0 0 0 1px rgba(255,232,222,.07),inset 0 1px 0 rgba(255,232,222,.1)}
+#device[data-theme=oxblood] .home-page .app:not(.mono-app) .tile::before{display:none}
+#device[data-theme=oxblood] .home-page .app:not(.mono-app) .tile img,#device[data-theme=oxblood] .home-page .app:not(.mono-app) .tile svg{width:40px;height:40px}
+#device[data-theme=oxblood] .page-dots{gap:0;bottom:106px}
+#device[data-theme=oxblood] .page-dots button{width:19px;height:32px}
+#device[data-theme=oxblood] .page-dots button i{width:7px;height:7px;background:rgba(200,190,186,.45);box-shadow:none}
+#device[data-theme=oxblood] .page-dots button[aria-current=true] i{width:7.5px;height:7.5px;background:#f4ede0;box-shadow:0 0 4px rgba(255,235,220,.45)}
+#device[data-theme=oxblood] .screen[data-view=home] .glass{opacity:.35}
+
+/* ---------- Home edge: shallow, smooth burgundy aluminium with a concave top (Rose-09) ---------- */
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray){height:92px;padding:34px 0 0;gap:20px;align-items:center;justify-content:center;left:0;right:0;bottom:0;width:auto;margin:0;transform:none}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray)::before{inset:0;transform:none;border-radius:0;
+  background:linear-gradient(180deg,rgba(255,150,165,.07) 0,rgba(255,150,165,0) 40%),repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),linear-gradient(180deg,#4a141a 34px,#3c0e13 50%,#330c10 100%);
+  background-size:auto;background-blend-mode:normal;box-shadow:0 -10px 24px rgba(0,0,0,.45);
+  -webkit-mask:linear-gradient(#000,#000) 0 34px/100% calc(100% - 34px) no-repeat,radial-gradient(circle at 100% 0,transparent 33.5px,#000 34px) 0 0/34px 34px no-repeat,radial-gradient(circle at 0 0,transparent 33.5px,#000 34px) 100% 0/34px 34px no-repeat;
+  mask:linear-gradient(#000,#000) 0 34px/100% calc(100% - 34px) no-repeat,radial-gradient(circle at 100% 0,transparent 33.5px,#000 34px) 0 0/34px 34px no-repeat,radial-gradient(circle at 0 0,transparent 33.5px,#000 34px) 100% 0/34px 34px no-repeat}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray)::after{content:'';position:absolute;left:0;right:0;top:-60px;height:94px;border-radius:0 0 34px 34px;box-shadow:0 1px 0 rgba(214,84,104,.65),0 4px 10px rgba(0,0,0,.45);pointer-events:none;z-index:-1}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well{height:36px;border-radius:8px;color:#efe1d2;background:linear-gradient(180deg,rgba(20,4,7,.28),rgba(70,18,28,.12));box-shadow:inset 0 0 0 1px rgba(236,205,190,.40),inset 0 1px 2px rgba(0,0,0,.4)}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-rose,#peek-rose){width:103px}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-overview,#peek-overview){width:106px}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic){width:32px;height:32px;border-radius:9px;position:relative}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic)::after{display:block;content:'';position:absolute;inset:-6px;background:none;box-shadow:none}
+#device[data-theme=oxblood] .screen :is(#tray-mic,#peek-mic) svg{width:20px;height:20px;color:#e6d4c3}
+#device[data-theme=oxblood] .screen :is(#tray-mic,#peek-mic)[data-muted=true]{color:#ff8c9a;box-shadow:inset 0 0 0 1.4px rgba(255,90,110,.75),inset 0 1px 2px rgba(0,0,0,.4),0 0 10px rgba(255,70,95,.3)}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) svg.stacks-glyph,#device[data-theme=oxblood] #peek-overview svg{width:75px;height:25px}
+#device[data-theme=oxblood] .screen.peek .home-bar{height:22px;bottom:2px}
+
+/* ---------- Rose (Rose-11): near-black field, small white header, hairline controls ---------- */
+#device[data-theme=oxblood] #v-rose{--margin:30px;--ox-ink:#fff;--ox-ink-2:rgba(255,255,255,.78)}
+#device[data-theme=oxblood] .screen[data-view=rose] .glass{opacity:0}
+#device[data-theme=oxblood] .screen .rose-stage{opacity:0;pointer-events:none}
+#device[data-theme=oxblood] .rose-head{top:52px;right:21px}
+#device[data-theme=oxblood] .screen .rose-head h2{position:relative;padding-left:29px;font-size:23px;font-weight:400;color:#fff;letter-spacing:0}
+#device[data-theme=oxblood] .rose-head h2::before{content:'';position:absolute;left:0;top:50%;width:16px;height:16px;margin-top:-8px}
+#device[data-theme=oxblood] .screen[data-view=rose][data-voice=listening] .rose-head h2::before{box-shadow:var(--pearl-shadow),0 0 0 3px rgba(20,8,10,.9),0 0 0 4px rgba(230,80,100,.55)}
+#device[data-theme=oxblood] .screen[data-view=rose][data-voice=speaking] .rose-head h2::before{animation:pearl-speak 1.6s ease-in-out infinite}
+@keyframes pearl-speak{0%,100%{box-shadow:var(--pearl-shadow),0 0 0 3px rgba(20,8,10,.9),0 0 0 4px rgba(230,80,100,.5),0 0 8px 3px rgba(230,80,100,.25)}50%{box-shadow:var(--pearl-shadow),0 0 0 4px rgba(20,8,10,.9),0 0 0 5.5px rgba(255,120,140,.75),0 0 14px 6px rgba(230,80,100,.35)}}
+#device[data-theme=oxblood] .static-motion .rose-head h2::before{animation:none!important}
+#device[data-theme=oxblood] .screen .rose-caption,#device[data-theme=oxblood] .screen[data-result=true] .rose-caption{color:#fff;top:122px;left:var(--margin);font-size:15px}
+#device[data-theme=oxblood] .screen .rose-output,#device[data-theme=oxblood] .screen[data-result=true] .rose-output{top:170px;right:auto;max-width:324px}
+#device[data-theme=oxblood] .screen[data-view=rose] .rose-caption:not(:empty)+.rose-output:empty::before{content:'What would you like to do?';display:block;margin-top:8px;font-size:26px;line-height:1.2;font-weight:400;letter-spacing:-.005em;color:#fff}
+#device[data-theme=oxblood] .rose-output h3{color:#fff;font-weight:400;font-size:42px;line-height:1.08;letter-spacing:-.02em}
+#device[data-theme=oxblood] .rose-output p{color:rgba(255,255,255,.78);font-weight:400;font-size:19px;line-height:1.4}
+#device[data-theme=oxblood] .rose-output .facts li{background:rgba(14,8,11,.55);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border-radius:10px;box-shadow:inset 0 0 0 1px rgba(241,233,225,.22);color:rgba(255,255,255,.72)}
+#device[data-theme=oxblood] .rose-output .facts b{color:#fff;font-weight:500}
+#device[data-theme=oxblood] .work-btn{width:38px;height:38px;border-radius:10px;background:transparent;box-shadow:inset 0 0 0 1.5px rgba(200,182,174,.62)}
+#device[data-theme=oxblood] .work-btn::before{content:'';position:absolute;inset:-4px}
+#device[data-theme=oxblood] .work-glyph{grid-template-columns:8px 8px;gap:4px}
+#device[data-theme=oxblood] .work-glyph i{width:8px;height:8px;border-radius:2px;box-shadow:inset 0 0 0 1.5px #fff}
+#device[data-theme=oxblood] .work-btn[data-working=true]{box-shadow:inset 0 0 0 1.5px rgba(255,150,165,.7),0 0 12px rgba(230,70,95,.35)}
+#device[data-theme=oxblood] .conn-btn{height:36px;min-width:154px;padding:0 26px;gap:11px;border-radius:10px;bottom:46px;font-size:15px;font-weight:400;color:#fff;letter-spacing:0;
+  background:rgba(34,12,14,.82);-webkit-backdrop-filter:none;backdrop-filter:none;box-shadow:inset 0 0 0 1px rgba(241,233,225,.78)}
+#device[data-theme=oxblood] .conn-ico svg{width:15px;height:15px;color:#d93a55}
+#device[data-theme=oxblood] .conn-ico svg *{stroke-width:1.6}
+#device[data-theme=oxblood] .screen[data-view=rose] .notices .notice.cue{display:none}
+
+/* ---------- Work manager (Rose-13, right) ---------- */
+#device[data-theme=oxblood] .ag-head{top:40px;gap:16px}
+#device[data-theme=oxblood] .ag-head .back-btn{width:40px;height:40px;border-radius:10px;background:rgba(20,10,12,.25);box-shadow:inset 0 0 0 1.25px rgba(190,180,174,.85)}
+#device[data-theme=oxblood] .ag-pearl{width:18px;height:18px}
+#device[data-theme=oxblood] .agents-surface{padding-top:100px}
+#device[data-theme=oxblood] .agrid{gap:20px 18px}
+#device[data-theme=oxblood] .wcard,#device[data-theme=oxblood] .hcard{border-radius:13px}
+#device[data-theme=oxblood] :is(.wcard,.hcard) header{left:9px;top:9px;padding:7px;border-radius:10px;background:rgba(40,30,26,.38);-webkit-backdrop-filter:blur(14px) saturate(1.3);backdrop-filter:blur(14px) saturate(1.3);box-shadow:inset 0 0 0 1px rgba(236,222,214,.55),0 2px 6px rgba(0,0,0,.25)}
+#device[data-theme=oxblood] :is(.wcard,.hcard) .mini-ico{width:24px;height:24px}
+#device[data-theme=oxblood] :is(.wbody,.hbody)>:is(.c-browser,.c-notes,.c-cal,.c-mail,.c-files,.c-editor,.c-list,.c-msg){padding-top:52px}
+#device[data-theme=oxblood] :is(.wbody,.hbody) .c-photos{padding:0;gap:2px;background:#1a0a0d}
+#device[data-theme=oxblood] :is(.wbody,.hbody) .c-photos .ph{border-radius:0}
+#device[data-theme=oxblood] .wcard .stop-btn{width:44px;height:44px;background:none;box-shadow:none;margin:-5px;position:relative;color:#f9304a;-webkit-backdrop-filter:none;backdrop-filter:none}
+#device[data-theme=oxblood] .wcard .stop-btn::before{content:'';position:absolute;inset:5px;border-radius:8px;background:rgba(52,34,28,.62);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:inset 0 0 0 1.25px rgba(236,222,214,.78),0 2px 6px rgba(0,0,0,.35)}
+#device[data-theme=oxblood] .wcard .stop-btn svg{position:relative;width:28px;height:28px}
+#device[data-theme=oxblood] .wcard .stop-btn svg rect{rx:1}
+#device[data-theme=oxblood] .wcard .stop-btn:disabled{color:#8a7a76;background:none}
+#device[data-theme=oxblood] .wcard .active-edge{padding:2px;background:conic-gradient(from var(--edge-a,0deg),transparent 0 300deg,rgba(255,236,228,.9) 330deg,#ff6a80 348deg,transparent 360deg),linear-gradient(180deg,#f1cfc8 0,#c44a5e 14%,#9a3848 55%,#c4574e 100%)}
+#device[data-theme=oxblood] .wcard[data-state=running]{box-shadow:0 0 0 .5px rgba(255,150,160,.35),0 -3px 12px -2px rgba(255,120,140,.35),0 0 18px rgba(200,40,70,.22),0 12px 26px rgba(0,0,0,.5)}
+#device[data-theme=oxblood] .hcard{box-shadow:inset 0 0 0 1px rgba(214,200,170,.55),0 18px 36px rgba(0,0,0,.55)}
+#device[data-theme=oxblood] .wcard:not([data-state=running]) .wbody .pill{display:none}
+#device[data-theme=oxblood] .wcard:is([data-state=stopped],[data-state=done]){filter:saturate(.35) brightness(.55)}
+#device[data-theme=oxblood] .wcard[data-state=stopping]{filter:saturate(.6) brightness(.7)}
+#device[data-theme=oxblood] #v-agents .ivory-bg,#device[data-theme=oxblood] #v-window .ivory-bg,#device[data-theme=oxblood] #v-app .ivory-bg{background-image:var(--ox-rose)}
+
+/* ---------- System switcher (Rose-13, left): two centred fans, pearl beside Rose's ---------- */
+#device[data-theme=oxblood] .screen[data-view=switcher] #v-switcher .wall,#device[data-theme=oxblood] #v-switcher .wall{background-image:var(--ox-rose);background-position:center top;background-size:cover;filter:none;transform:none}
+#device[data-theme=oxblood] .sw-veil{background:transparent}
+#device[data-theme=oxblood] .sw-human{top:70px;height:420px;gap:0;padding:30px calc(50% - 98px)}
+#device[data-theme=oxblood] .hcard{flex:0 0 196px;height:344px}
+#device[data-theme=oxblood].unfolded .hcard{flex-basis:230px;height:380px}
+#device[data-theme=oxblood].unfolded .sw-human{padding:30px calc(50% - 115px)}
+#device[data-theme=oxblood] .sw-agent{top:auto;bottom:96px;height:170px;gap:0;padding:12px calc(50% - 62px);scroll-padding-left:0;align-items:center}
+#device[data-theme=oxblood] .sw-agent .aitem{flex-basis:124px;scroll-snap-align:center}
+#device[data-theme=oxblood] .sw-agent .wcard{height:146px;border-radius:12px}
+#device[data-theme=oxblood] .sw-agent .wcard footer{display:none}
+#device[data-theme=oxblood] .sw-link{bottom:170px;left:22px;top:auto;width:30px;height:30px}
+#device[data-theme=oxblood] .sw-rose .rose-slot{visibility:hidden}
+#device[data-theme=oxblood] .sw-rose::before{content:'';position:absolute;left:6px;top:6px;width:18px;height:18px}
+
+/* ---------- Edge gesture: live tracking, notices out of the way ---------- */
+#device[data-theme=oxblood] .screen.peek-drag :is(#v-app,#v-window,#v-rose,#v-agents){transition:none;
+  transform:translateY(calc(-58px * var(--pk) - 40px * var(--pk2,0))) scale(calc(1 - .12 * var(--pk) - .26 * var(--pk2,0)));border-radius:calc(34px * var(--pk));overflow:hidden}
+#device[data-theme=oxblood] .screen.peek-drag #peek-tray{display:flex!important;animation:none;transform:translateY(calc((1 - var(--pk)) * 100%))}
+#device[data-theme=oxblood] .screen.peek-drag{background:#0f0406}
+#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window,#v-rose,#v-agents){transform:translateY(-58px) scale(.88);border-radius:34px;overflow:hidden;box-shadow:0 0 0 1px rgba(236,205,190,.25),0 24px 50px rgba(0,0,0,.6)}
+#device[data-theme=oxblood] :is(#v-app,#v-window,#v-rose,#v-agents){transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease)}
+#device[data-theme=oxblood] .screen:is(.peek,.peek-drag) #notices{opacity:0;pointer-events:none;transition:opacity var(--t-fast)}
+
+/* ---------- App content in the dark system (study 13 previews read as dark, photographic) ---------- */
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) :is(.c-browser,.c-notes,.c-cal,.c-mail,.c-files,.c-list,.c-msg){background:#1b1416;color:#efe4da}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-browser .url{background:rgba(255,240,230,.08);color:#d9cbc0}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-browser p,#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-cal .cal-head span{color:#b9aaa0}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-notes p,#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-mail{color:#e6d8cc}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .box{box-shadow:inset 0 0 0 1.5px rgba(236,220,205,.6)}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-mail .subj{border-bottom-color:rgba(255,240,230,.1)}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) :is(.c-files p,.c-list p){color:#e6d8cc;border-bottom-color:rgba(255,240,230,.08)}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-files p.hit{background:rgba(255,120,140,.14)}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .cal-grid{background:repeating-linear-gradient(180deg,transparent 0 calc(100%/6 - 1px),rgba(255,240,230,.09) calc(100%/6 - 1px) calc(100%/6))}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-msg .in{background:rgba(255,240,230,.1)}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-big{background:linear-gradient(180deg,#221a1c,#161012);color:#f2e6d9}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-music{background:linear-gradient(180deg,#221a1c,#161012);color:#f2e6d9}
+#device[data-theme=oxblood] :is(.wbody,.hbody,.detail-frame) .c-maps{filter:brightness(.72) saturate(.85) contrast(1.05)}
+#device[data-theme=oxblood] .detail-frame{background:#1b1416}
+
+/* ---------- 44 px hit areas, reference-size visuals ----------
+   Each control is a 44 px-tall transparent button; its visible plate is drawn by ::before at the
+   size measured from the references. */
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well{height:44px;background:none;box-shadow:none}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well::before{display:block;content:'';position:absolute;left:0;right:0;top:4px;bottom:4px;border-radius:8px;transform:none;padding:0;
+  background:linear-gradient(180deg,rgba(20,4,7,.28),rgba(70,18,28,.12));box-shadow:inset 0 0 0 1px rgba(236,205,190,.40),inset 0 1px 2px rgba(0,0,0,.4);-webkit-mask:none;mask:none;opacity:1;z-index:0}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well>*{position:relative;z-index:1}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic){width:44px;height:44px;border-radius:9px}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic)::before{left:6px;right:6px;top:6px;bottom:6px;border-radius:9px}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic)::after{display:none}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic)[data-muted=true]{box-shadow:none}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:is(#tray-mic,#peek-mic)[data-muted=true]::before{box-shadow:inset 0 0 0 1.4px rgba(255,90,110,.75),inset 0 1px 2px rgba(0,0,0,.4),0 0 10px rgba(255,70,95,.3)}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray){gap:14px}
+#device[data-theme=oxblood] .screen :is(#home-tray,.peek-tray) .well:focus-visible{outline-offset:-2px}
+#device[data-theme=oxblood] .screen #home-tray .rose-slot{position:relative;display:block}
+/* Work button: 44 px hit, 38 px outlined square. */
+#device[data-theme=oxblood] .work-btn,#device[data-theme=oxblood] .work-btn[data-working=true]{width:44px;height:44px;border-radius:12px;background:none;box-shadow:none}
+#device[data-theme=oxblood] .work-btn::before{inset:3px;border-radius:10px;box-shadow:inset 0 0 0 1.5px rgba(200,182,174,.62)}
+#device[data-theme=oxblood] .work-btn[data-working=true]::before{box-shadow:inset 0 0 0 1.5px rgba(255,150,165,.7),0 0 12px rgba(230,70,95,.35)}
+#device[data-theme=oxblood] .work-btn[data-working=true]::after{right:0;top:0}
+#device[data-theme=oxblood] .rose-head{right:18px;top:49px}
+/* Connection control: 44 px hit, 36 px hairline pill. */
+#device[data-theme=oxblood] .conn-btn{height:44px;background:none;box-shadow:none;bottom:42px}
+#device[data-theme=oxblood] .conn-btn::before{content:'';position:absolute;left:0;right:0;top:4px;bottom:4px;border-radius:10px;z-index:-1;background:rgba(34,12,14,.82);box-shadow:inset 0 0 0 1px rgba(241,233,225,.78)}
+#device[data-theme=oxblood] .conn-btn{isolation:isolate}
+/* Manager back: 44 px hit, 40 px outlined square. */
+#device[data-theme=oxblood] .ag-head .back-btn{width:44px;height:44px;background:none;box-shadow:none;position:relative}
+#device[data-theme=oxblood] .ag-head .back-btn::before{content:'';position:absolute;inset:2px;border-radius:10px;background:rgba(20,10,12,.25);box-shadow:inset 0 0 0 1.25px rgba(190,180,174,.85)}
+#device[data-theme=oxblood] .ag-head .back-btn svg{position:relative}
+/* Page dots are indicators in Oxblood (Rose-09); paging is by swipe and arrow keys. */
+#device[data-theme=oxblood] .page-dots{pointer-events:none}
+#device[data-theme=oxblood] .page-dots button:disabled{opacity:1}
+/* Raised edge: the home handle sits under the controls, not across them. */
+#device[data-theme=oxblood] .screen.peek .home-bar{height:8px;bottom:0;align-items:end}
+#device[data-theme=oxblood] .screen.peek .home-bar i{width:110px;height:4px}

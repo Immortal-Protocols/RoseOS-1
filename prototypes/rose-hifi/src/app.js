@@ -62,7 +62,7 @@
       page.className = 'home-page ' + (i === 0 ? 'sparse' : i === 1 ? 'full' : 'few');
       page.setAttribute('role', 'group'); page.setAttribute('aria-roledescription', 'page');
       page.setAttribute('aria-label', 'Page ' + (i + 1) + ' of ' + pages.length);
-      if (i === 0) page.innerHTML = '<div class="home-date">Thursday, October 29</div>';
+      if (i === 0) page.innerHTML = '<div class="home-date">' + (ox ? 'Thu, Oct 29' : 'Thursday, October 29') + '</div>';
       const grid = document.createElement('div'); grid.className = 'app-grid';
       for (const id of apps) {
         const b = document.createElement('button');
@@ -91,7 +91,7 @@
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) { drag.moved = true; pages.setPointerCapture(drag.id); track.classList.add('dragging'); }
       if (drag.moved) {
-        const max = M.HOME_PAGES.length - 1, p = state.homePage;
+        const max = $('home-track').children.length - 1, p = state.homePage;
         const resist = (p === 0 && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
         track.style.transform = 'translateX(' + (-p * drag.w + dx * resist) + 'px)';
       }
@@ -103,7 +103,7 @@
       if (moved) {
         suppressClick = true;
         const next = Math.abs(dx) > w * 0.18 ? state.homePage + (dx < 0 ? 1 : -1) : state.homePage;
-        dispatch({ type: 'homePage', value: next });
+        dispatch({ type: 'homePage', value: next, max: $('home-track').children.length });
         render();
       }
     };
@@ -113,7 +113,7 @@
     pages.addEventListener('dragstart', (e) => e.preventDefault());
     pages.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1) });
+      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: $('home-track').children.length });
       const first = $('home-track').children[state.homePage].querySelector('.app'); if (first) first.focus({ preventScroll: true });
     });
   }
@@ -302,7 +302,9 @@
     // Home
     $('home-track').style.transform = 'translateX(' + (-state.homePage * 100) + '%)';
     [...$('home-track').children].forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
-    [...$('page-dots').children].forEach((d, i) => d.setAttribute('aria-current', String(i === state.homePage)));
+    const oxDots = device.dataset.theme === 'oxblood';
+    [...$('page-dots').children].forEach((d, i) => { d.setAttribute('aria-current', String(i === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
+    $('page-dots').setAttribute('aria-hidden', String(oxDots));
     const callLive = state.connection !== 'disconnected';
     $('tray-rose').setAttribute('aria-label', callLive ? 'Return to Rose call' : 'Open Rose');
     // Universal microphone mute (Oxblood Home tray, study 09): stable name + aria-pressed.
@@ -311,6 +313,13 @@
     mb.setAttribute('aria-pressed', String(state.muted));
     mb.dataset.muted = String(state.muted);
     mb.title = state.muted ? 'Microphone muted everywhere — tap to unmute' : 'Mute microphone everywhere';
+    // The raised edge mirrors Home's mic exactly.
+    const pm = $('peek-mic');
+    pm.innerHTML = mb.innerHTML; pm.setAttribute('aria-pressed', String(state.muted)); pm.dataset.muted = String(state.muted); pm.title = mb.title;
+    // Ruby pearl state (Oxblood): mic, connection and voice drive restrained CSS cues.
+    screen.dataset.mic = state.muted ? 'muted' : 'on';
+    screen.dataset.conn = state.connection;
+    screen.dataset.voice = M.voiceSurround(state);
     // Rose's voice (output) mute: stable name + aria-pressed, icon and a visible "muted" mark.
     const vb = $('tray-voice');
     vb.innerHTML = (state.voiceMuted ? I.UI.voiceOff : I.UI.voice) + '<span class="voice-state" aria-hidden="true">' + (state.voiceMuted ? 'Muted' : '') + '</span>';
@@ -338,7 +347,7 @@
     $('rose-agents').innerHTML = I.UI.grid;
     // Background-work entry (Oxblood: upper right). Highlight only while a task is actually running.
     $('rose-work').dataset.working = String(M.taskActivity(state).length > 0);
-    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? (state.voiceMuted ? 'Rose speaking · voice muted' : 'Rose speaking') : state.muted ? 'Microphone muted' : 'Listening') : '';
+    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? (state.voiceMuted ? 'Rose speaking · voice muted' : 'Rose speaking') : state.muted ? 'Microphone muted' : 'Listening') : device.dataset.theme === 'oxblood' ? 'Disconnected' : '';
     $('rose-caption').textContent = caption;
     renderResult();
     renderNotices();
@@ -420,7 +429,7 @@
     const app = e.target.closest('.app[data-app]');
     if (app) { dispatch({ type: 'openApp', value: app.dataset.app }); return; }
     const dot = e.target.closest('#page-dots button');
-    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page }); return; }
+    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: $('home-track').children.length }); return; }
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
@@ -436,40 +445,82 @@
   $('rose-end').addEventListener('click', () => { dispatch({ type: 'endCall' }); if (state.view === 'home') $('tray-rose').focus({ preventScroll: true }); });
   $('rose-agents').addEventListener('click', () => dispatch({ type: 'agents' }));
   $('rose-work').addEventListener('click', () => dispatch({ type: 'agents' }));
-  // ---------- Swipe up inside an app (Oxblood exploration) ----------
-  // In an ordinary app or a Rose app window, dragging up from the bottom edge scrunches the app and
-  // raises Home's own control edge (Rose · microphone · switcher). Tapping the app, swiping down or
-  // Escape restores it; tapping the home bar still goes Home. Presentation only: no state change.
-  const peekable = () => device.dataset.theme === 'oxblood' && ['app', 'window', 'rose'].includes(state.view) && !state.locked && !state.pendingStop;
-  function setPeek(on) {
+  // ---------- Bottom-edge gestures (Oxblood) ----------
+  // Swipe up from the bottom edge in an app, a Rose app window, Rose or Rose's apps: the surface
+  // follows the finger, scrunches, and Home's own control edge rises. A short swipe leaves the edge
+  // up while the surface keeps working normally; a long swipe or a fling goes Home. Swipe down or
+  // press Escape to lower it; leaving for Home or the switcher lowers it too. In the switcher a bottom-edge swipe goes Home. Presentation only.
+  const PEEK_VIEWS = ['app', 'window', 'rose', 'agents'];
+  const peekable = () => device.dataset.theme === 'oxblood' && PEEK_VIEWS.includes(state.view) && !state.locked && !state.pendingStop;
+  let peekReturn = null, swallowClick = false;
+  // The click that ends a gesture must not also act on whatever is under the finger.
+  window.addEventListener('click', (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); swallowClick = false; } }, true);
+  const swallowNextClick = () => { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); };
+  function clearDragStyle() { screen.classList.remove('peek-drag'); screen.style.removeProperty('--pk'); }
+  function setPeek(on, opts) {
     on = !!on && peekable();
     if (on === peek) return;
     peek = on;
+    clearDragStyle();
     screen.classList.toggle('peek', peek);
     $('peek-tray').hidden = !peek;
-    if (peek) { $('peek-mic').innerHTML = state.muted ? I.UI.micOff : I.UI.mic; $('peek-overview').innerHTML = $('tray-overview').querySelector('.stacks-glyph').outerHTML.replace('id="ruby-edge"', 'id="ruby-edge-peek"').replace('url(#ruby-edge)', 'url(#ruby-edge-peek)'); $('peek-rose').focus({ preventScroll: true }); }
-    $('announcer').textContent = peek ? 'System tray shown. Tap the app to return.' : '';
+    $('home-bar').setAttribute('aria-expanded', String(peek));
+    if (peek) {
+      peekReturn = document.activeElement && screen.contains(document.activeElement) ? document.activeElement : null;
+      $('peek-overview').innerHTML = $('tray-overview').querySelector('.stacks-glyph').outerHTML.replace('id="ruby-edge"', 'id="ruby-edge-peek"').replace('url(#ruby-edge)', 'url(#ruby-edge-peek)');
+      if (!(opts && opts.quiet)) $('peek-rose').focus({ preventScroll: true });
+    } else if (peekReturn && peekReturn.isConnected && !state.pendingStop && !(opts && opts.leaving)) {
+      peekReturn.focus({ preventScroll: true });
+    }
+    $('announcer').textContent = peek ? 'System controls shown. Swipe down to hide them.' : '';
   }
+  function goHomeFromGesture() { setPeek(false, { leaving: true }); dispatch({ type: 'home' }); }
   screen.addEventListener('pointerdown', (e) => {
-    if (!peekable() && !peek) return;
+    if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
-    if ((r.bottom - e.clientY) / k > 56) return;
-    peekDrag = { y: e.clientY, k };
+    const fromEdge = (r.bottom - e.clientY) / k <= 56;
+    if (peek || (fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
   });
-  window.addEventListener('pointerup', (e) => {
+  window.addEventListener('pointermove', (e) => {
     if (!peekDrag) return;
-    const dy = (e.clientY - peekDrag.y) / peekDrag.k; peekDrag = null;
-    if (dy < -36 && !peek) { suppressHomeTap = true; setPeek(true); }
-    else if (dy > 36 && peek) { suppressHomeTap = true; setPeek(false); }
-    // Only the click that belongs to this gesture is suppressed; clear before any later tap.
-    if (suppressHomeTap) setTimeout(() => { suppressHomeTap = false; }, 0);
+    const dy = (e.clientY - peekDrag.y) / peekDrag.k;
+    if (Math.abs(dy) > 8) peekDrag.moved = true;
+    if (peekDrag.wasPeek || state.view === 'switcher' || reduced()) return;
+    // Follow the finger: 0 → 1 over the first 120px, then keep shrinking toward "release = Home".
+    const p = Math.max(0, -dy) / 120;
+    screen.classList.add('peek-drag');
+    screen.style.setProperty('--pk', Math.min(1, p).toFixed(3));
+    screen.style.setProperty('--pk2', Math.max(0, Math.min(1, (p - 1) / 1.2)).toFixed(3));
   });
+  const endDrag = (e) => {
+    if (!peekDrag) return;
+    const d = peekDrag; peekDrag = null;
+    const dy = (e.clientY - d.y) / d.k, dt = Math.max(1, performance.now() - d.t), v = dy / dt;
+    const homeSwipe = dy < -240 || (dy < -120 && v < -0.9);
+    if (d.moved) swallowNextClick();
+    clearDragStyle();
+    if (state.view === 'switcher') { if (dy < -36) goHomeFromGesture(); return; }
+    if (!d.wasPeek) {
+      if (homeSwipe) goHomeFromGesture();
+      else if (dy < -36) setPeek(true);
+    } else {
+      if (dy > 36) setPeek(false);
+      else if (dy < -120) goHomeFromGesture();
+    }
+  };
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', () => { peekDrag = null; clearDragStyle(); });
   $('h-peek').onclick = () => setPeek(!peek);
-  $('peek-rose').addEventListener('click', () => { setPeek(false); dispatch({ type: 'openRose' }); });
-  $('peek-mic').addEventListener('click', () => { dispatch({ type: 'micMute' }); $('peek-mic').innerHTML = state.muted ? I.UI.micOff : I.UI.mic; $('peek-mic').setAttribute('aria-pressed', String(state.muted)); $('peek-mic').dataset.muted = String(state.muted); });
-  $('peek-overview').addEventListener('click', () => { setPeek(false); dispatch({ type: 'switcher' }); });
-  for (const v of ['app', 'window', 'rose']) viewEl(v).addEventListener('click', (e) => { if (peek) { e.stopPropagation(); e.preventDefault(); setPeek(false); } }, true);
-  $('home-bar').addEventListener('click', () => { if (suppressHomeTap) { suppressHomeTap = false; return; } setPeek(false); dispatch({ type: 'home' }); });
+  $('peek-rose').addEventListener('click', () => { setPeek(false, { leaving: true }); dispatch({ type: 'openRose' }); });
+  $('peek-mic').addEventListener('click', () => dispatch({ type: 'micMute' }));
+  $('peek-overview').addEventListener('click', () => { setPeek(false, { leaving: true }); dispatch({ type: 'switcher' }); });
+  // The scrunched surface stays fully interactive while the edge is up (taps act normally).
+  $('home-bar').setAttribute('aria-keyshortcuts', 'ArrowUp');
+  $('home-bar').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' && peekable() && !peek) { e.preventDefault(); setPeek(true); }
+    else if (e.key === 'ArrowDown' && peek) { e.preventDefault(); setPeek(false); }
+  });
+  $('home-bar').addEventListener('click', () => { if (suppressHomeTap) { suppressHomeTap = false; return; } goHomeFromGesture(); });
   $('unlock').addEventListener('click', () => dispatch({ type: 'unlock' }));
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || state.locked) return;

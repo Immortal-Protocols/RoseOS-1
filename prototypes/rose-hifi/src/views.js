@@ -197,7 +197,9 @@
   }
   const cards = (el) => [...el.children].filter((c) => !c.hidden);
   // Human cards snap to the centre; agent cards snap to the leading edge.
-  const startAligned = (el) => el.classList.contains('sw-agent');
+  // Classic: agent cards start-aligned. Oxblood (study 13): both carousels are centred fans.
+  const oxTheme = () => document.getElementById('device').dataset.theme === 'oxblood';
+  const startAligned = (el) => el.classList.contains('sw-agent') && !oxTheme();
   function anchor(el, card) {
     if (startAligned(el)) return card.offsetLeft - parseFloat(getComputedStyle(el).paddingLeft);
     return card.offsetLeft + card.offsetWidth / 2 - el.clientWidth / 2;
@@ -209,18 +211,28 @@
   }
   function scrollToIndex(el, i, instant) {
     const card = cards(el)[i]; if (!card) return;
-    el.scrollTo({ left: anchor(el, card), behavior: instant || ctx.reduced() ? 'instant' : 'smooth' });
+    const left = anchor(el, card), smooth = !(instant || ctx.reduced());
+    el.scrollTo({ left, behavior: smooth ? 'smooth' : 'instant' });
+    // A re-render during a smooth scroll can cancel it part-way; land exactly on the card.
+    if (smooth) setTimeout(() => { if (Math.abs(el.scrollLeft - left) > 2 && Math.abs(el.scrollLeft - left) < el.scrollWidth) el.scrollTo({ left, behavior: 'instant' }); }, 650);
   }
   function step(el, dir) { scrollToIndex(el, Math.max(0, Math.min(cards(el).length - 1, centerIndex(el) + dir))); }
   function snap(el) { scrollToIndex(el, centerIndex(el)); }
   // Side cards turn away slightly, like the reference; transform-only for performance.
   function depth(el) {
-    if (!el.classList.contains('sw-human')) return;
+    const ox = oxTheme();
+    if (!el.classList.contains('sw-human') && !ox) return;
     const c = el.scrollLeft + el.clientWidth / 2;
+    const agent = el.classList.contains('sw-agent');
     for (const card of cards(el)) {
       const off = (card.offsetLeft + card.offsetWidth / 2 - c) / card.offsetWidth;
       const k = Math.max(-1.4, Math.min(1.4, off));
-      card.style.transform = ctx.reduced() ? '' : 'perspective(900px) rotateY(' + (-k * 22).toFixed(1) + 'deg) scale(' + (1 - Math.min(1, Math.abs(k)) * 0.12).toFixed(3) + ')';
+      if (ox) {
+        // Study 13 fan: neighbours tuck behind the centre card and turn strongly away. Static
+        // geometry, so it stays under reduced motion.
+        const t = agent ? [40, 40, 0.2] : [62, 44, 0.16];
+        card.style.transform = 'perspective(760px) translateX(' + (-k * t[0]).toFixed(1) + 'px) rotateY(' + (-k * t[1]).toFixed(1) + 'deg) scale(' + (1 - Math.min(1, Math.abs(k)) * t[2]).toFixed(3) + ')';
+      } else card.style.transform = ctx.reduced() ? '' : 'perspective(900px) rotateY(' + (-k * 22).toFixed(1) + 'deg) scale(' + (1 - Math.min(1, Math.abs(k)) * 0.12).toFixed(3) + ')';
       card.style.zIndex = String(10 - Math.round(Math.abs(k) * 4));
     }
   }
@@ -280,9 +292,14 @@
     if (ak !== lastAgentKey) {
       const keepFocus = agent.contains(document.activeElement) ? document.activeElement.getAttribute('data-stop') || document.activeElement.getAttribute('data-open-window') : null;
       lastAgentKey = ak;
-      agent.innerHTML = vis.length ? vis.map((w) => '<div role="listitem" class="aitem">' + windowCard(w, s, 'small') + '</div>').join('') : '<p class="sw-empty">No background work</p>';
+      // Same windows in the same order: refresh each card in place so an in-flight scroll/snap is
+      // not interrupted by replacing the carousel's children.
+      const items = [...agent.querySelectorAll(':scope > .aitem')];
+      if (vis.length && items.length === vis.length && items.every((it, i) => it.firstElementChild && it.firstElementChild.dataset.window === vis[i])) {
+        items.forEach((it, i) => { it.innerHTML = windowCard(vis[i], s, 'small'); });
+      } else agent.innerHTML = vis.length ? vis.map((w) => '<div role="listitem" class="aitem">' + windowCard(w, s, 'small') + '</div>').join('') : '<p class="sw-empty">No background work</p>';
       if (keepFocus) { const el = agent.querySelector('[data-stop="' + keepFocus + '"],[data-open-window="' + keepFocus + '"]'); if (el) el.focus({ preventScroll: true }); }
-      requestAnimationFrame(() => { if (s.view === 'switcher' && !agent.dataset.placed) { scrollToIndex(agent, Math.min(s.agentCarousel, vis.length - 1), true); agent.dataset.placed = '1'; } });
+      requestAnimationFrame(() => { if (s.view === 'switcher' && !agent.dataset.placed) { scrollToIndex(agent, Math.min(oxTheme() && s.agentCarousel === 0 && vis.length >= 3 ? 1 : s.agentCarousel, vis.length - 1), true); agent.dataset.placed = '1'; } depth(agent); });
     }
     requestAnimationFrame(routeWire);
     const running = ctx.M.taskActivity(s).length;

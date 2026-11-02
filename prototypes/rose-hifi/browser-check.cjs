@@ -57,7 +57,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('swipe advances to the full app page', (await st()).homePage === 1);
   check('tray fixed during swipe', JSON.stringify(trayBefore) === JSON.stringify(trayDuring));
   await shot('03-home-app-page');
-  await page.locator('#page-dots button').first().click();
+  if (OX) { await page.locator('.home-page[aria-hidden=false] .app').first().focus(); await page.keyboard.press('ArrowLeft'); } else await page.locator('#page-dots button').first().click();
   await settle();
   check('page dot returns to first page', (await st()).homePage === 0);
 
@@ -127,7 +127,9 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await page.locator('#h-static').check();
   await page.waitForTimeout(400);
   r = await rs();
-  check('static fallback visible', r.mode === 'static-forced' && await page.locator('#rose-fallback').isVisible());
+  // Oxblood draws Rose as a CSS pearl (WebGL canvas not displayed); the renderer's visual checks run in Classic.
+  if (!OX) check('static fallback visible', r.mode === 'static-forced' && await page.locator('#rose-fallback').isVisible());
+  else check('Oxblood: renderer reports forced fallback mode', r.mode === 'static-forced');
   await shot('13-rose-static-fallback');
   await page.locator('#h-static').uncheck();
   await page.locator('#h-lose').click();
@@ -146,7 +148,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('hidden page suspends drawing', d1 === d2, d1 + ' → ' + d2);
   await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
   await page.waitForTimeout(600);
-  check('visible page resumes drawing', (await rs()).draws > d2);
+  if (!OX) check('visible page resumes drawing', (await rs()).draws > d2);
+  else check('Oxblood: pearl visible after page returns', await page.evaluate(() => getComputedStyle(document.querySelector('#v-rose .rose-head h2'), '::before').width === '16px'));
 
   // Resize + unfold preserve call state.
   await page.locator('#h-unfolded').click();
@@ -244,6 +247,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await settle(800);
+  // Wait for smooth scroll + snap to come to rest before comparing positions.
+  for (let i = 0, prev = -1; i < 20; i++) { const v = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft + ',' + document.getElementById('sw-human').scrollLeft); if (v === prev) break; prev = v; await page.waitForTimeout(250); }
   const hAfter = await page.evaluate(() => document.getElementById('sw-human').scrollLeft);
   const aAfter = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft);
   check('agent carousel moves independently', aAfter > aBefore && hAfter === hBefore, aBefore + '→' + aAfter + ' / human ' + hBefore + '→' + hAfter);
@@ -421,8 +426,22 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     const pk = await page.evaluate(() => ({ peek: document.getElementById('screen').classList.contains('peek'), tray: !document.getElementById('peek-tray').hidden, view: window.__rose.getState().view }));
     check('swipe up in an app scrunches it and shows the system edge', pk.peek && pk.tray && pk.view === 'app', JSON.stringify(pk));
     await shot('52-oxblood-app-swipe-up');
-    await page.locator('#v-app').click({ position: { x: 120, y: 260 } }); await settle(400);
-    check('tapping the app restores it', !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    // The scrunched app keeps working: a tap acts in the app and the edge stays up.
+    await page.locator('#v-app .back-btn').click(); await settle(500);
+    check('scrunched app stays interactive (its Back works)', (await st()).view === 'home');
+    await page.locator('.home-page[aria-hidden=false] .app').first().click(); await settle(500);
+    await page.locator('#h-peek').click(); await settle(300);
+    const sb2 = await page.locator('#screen').boundingBox();
+    await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5 + i * 12);
+    await page.mouse.up(); await settle(400);
+    check('swipe down lowers the edge; app still open', !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    await page.locator('#h-peek').click(); await settle(300);
+    await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 30); await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 30 - i * 25);
+    await page.mouse.up(); await settle(500);
+    check('long swipe up goes Home', (await st()).view === 'home');
+    await page.locator('.home-page[aria-hidden=false] .app').first().click(); await settle(500);
     await page.locator('#h-peek').click(); await settle(300);
     await page.locator('#peek-overview').click(); await settle(600);
     check('switcher from the raised edge', (await st()).view === 'switcher' && !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))));
