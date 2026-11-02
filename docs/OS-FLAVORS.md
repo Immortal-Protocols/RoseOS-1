@@ -226,9 +226,19 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
   `out-blazer-lunch`. A failed download removes only the `.part` it created.
 - **Exit status**: 0 ready/success, 1 not ready or failed, 2 invalid input.
 - **`inspect`** (schema v2; proposed for a later observation of at most 20 minutes; not authorized or run). Usage:
-  `inspect --host H --lock L [--candidate-root R] [--candidate-source-root S] [--candidate-download-dir D]
-  [--candidate-receipts-dir X] [--candidate-node N] [--reference-source-root P] [--max-entries 200000] [--max-seconds 900]`.
-  - `--candidate-root R` proposes `R/source`, `R/downloads` and `R/receipts`; explicit candidate flags override those.
+  `inspect --host H --lock L --candidate-root R --candidate-node-from-path [--max-entries 200000] [--max-seconds 900]`
+  is Release's call shape. Optional: `--candidate-source-root S`, `--candidate-download-dir D`,
+  `--candidate-receipts-dir X`, `--candidate-node N` (exclusive with `--candidate-node-from-path`) and
+  `--reference-source-root P`.
+  - `--candidate-root R` proposes the children in `preparation.candidateLayout` (`R/source`,
+    `R/downloads`, `R/receipts`); the explicit flags override those. Every candidate is labelled
+    `verified: false, binding: false`.
+  - Ancestor `lstat` chains stop at `candidateLayout.ancestorBoundary` (`/home/pixelbuild`, the parent
+    of the production root). `statvfs` is read only on each path's nearest existing ancestor, never by
+    walking up to `/`.
+  - `sameDeviceAsProduction` is reported as a fact only; reflink and hardlinks are never inferred.
+  - `--candidate-node-from-path` reports `node` as the job's `PATH` resolves it, with the matching
+    `pathEntry`, realpath, mode, owner and inode. It is never executed.
   - Candidates are proposals, never bindings. `plan`, `preflight` and `run` refuse every candidate or
     reference flag (exit 2), and null `--source-root`/`--download-dir`/`--node` still refuse preparation.
   - The output has `bound` (the prep inputs as given, normally null) and `candidates` (`proposed: true`).
