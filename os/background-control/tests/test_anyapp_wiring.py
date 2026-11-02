@@ -26,7 +26,7 @@ class AnyAppWiringTest(unittest.TestCase):
 
     def test_a_refused_target_is_typed_not_generic(self):
         start = method('static synchronized JSONObject start(Context context,JSONObject p)')
-        self.assertIn('status=AnyAppControl.targetRefused(error)?"target_not_allowed":"failed";', start)
+        self.assertIn('status=AnyAppControl.targetRefused(error)?"target_not_allowed":Replacement.listed(error)?"rejected":"failed";', start)
 
     def test_inspection_and_actions_use_the_same_package_rule(self):
         walk, node = method('static void walk('), method('static AccessibilityNodeInfo node(JSONObject p)')

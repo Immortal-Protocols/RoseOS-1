@@ -35,7 +35,7 @@ class CurrentAppsWiringTest(unittest.TestCase):
 
     def test_membership_is_the_live_session_only(self):
         self.assertIn('boolean locked=locked(c),live=session!=null&&CurrentApps.live(status);', self.body)
-        self.assertIn(':CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());', self.body)
+        self.assertIn(':CurrentApps.of(locked,session!=null||replacement.releasing(),status,blocked,target,front,c.getPackageName());', self.body)
         # Nothing from task history: no stop ledger, StopLedger ids, or remembered sets feed the members.
         for source in ('stops.', 'stoppedTaskId', 'StopLedger', 'observed', 'labels', 'nodes'):
             self.assertNotIn(source, self.body, source)
@@ -81,7 +81,7 @@ class CurrentAppsWiringTest(unittest.TestCase):
         self.assertIn('if(owned==null&&live&&!locked)try{', self.body.split('getAutomatedApps")')[0].rsplit('CurrentApps.Platform platform=null;', 1)[1])
         self.assertIn('}catch(Throwable e){platform=null;}', self.body, 'SecurityException, IllegalStateException or a missing method: fallback')
         self.assertIn(':platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())', self.body)
-        self.assertIn(':CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());', self.body)
+        self.assertIn(':CurrentApps.of(locked,session!=null||replacement.releasing(),status,blocked,target,front,c.getPackageName());', self.body)
 
 
     def test_owned_devices_first_session_independent_with_fallbacks(self):
