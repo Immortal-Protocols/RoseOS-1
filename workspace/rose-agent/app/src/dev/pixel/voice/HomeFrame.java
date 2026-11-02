@@ -5,55 +5,48 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.widget.FrameLayout;
 
-/** The pager with the fixed HomeTray floating over its bottom edge (OS-HIFI-HOME-001) and the one row of page
- * dots just above it (OS-PAGING-158-M001); neither moves while the pages slide. The pages still run full
- * height, so the shared wallpaper continues behind the tray, but they receive the tray's and dots' height as
- * extra bottom inset and keep their content above both. The tray itself sits above the system navigation
- * inset; production status and navigation bars are unchanged. */
+/** The pager with Home's fixed edge (HomeTray) across the bottom and the one row of page dots just above it (#410
+ * Oxblood geometry; OS-PAGING-158-M001); neither moves while the pages slide. The pages run full height so the field
+ * continues under the edge. They receive as bottom inset the band's bottom: the edge plus BAND_BOTTOM_DP, so their
+ * grids sit in the reference band above the dots. The edge reaches the screen bottom, 92dp tall plus the tappable
+ * navigation inset (three-button navigation; gesture navigation needs none), and the dots' centre is 30dp above it. */
 final class HomeFrame extends FrameLayout {
  final LauncherPager pager;
  final HomeTray tray;
  final View dots;
- final int side, gap, dotsHeight, reserved;
+ final int dotsHeight;
 
  HomeFrame(MainActivity activity, LauncherPager pager, HomeTray tray, View dots) {
   super(activity);
   this.pager = pager;
   this.tray = tray;
   this.dots = dots;
-  side = activity.dp(HomeTray.SIDE_DP);
-  gap = activity.dp(HomeTray.GAP_DP);
   dotsHeight = activity.dp(DOTS_DP);
-  reserved = activity.dp(HomeTray.HEIGHT_DP) + 2 * gap + dotsHeight;
   addView(pager, new LayoutParams(-1, -1));
-  LayoutParams trayParams = new LayoutParams(-1, activity.dp(HomeTray.HEIGHT_DP), Gravity.BOTTOM);
-  trayParams.setMargins(side, 0, side, gap);
-  addView(tray, trayParams);
+  addView(tray, new LayoutParams(-1, tray.heightPx(), Gravity.BOTTOM));
   LayoutParams dotsParams = new LayoutParams(-1, dotsHeight, Gravity.BOTTOM);
-  dotsParams.setMargins(side, 0, side, dotsBottom(0));
+  dotsParams.bottomMargin = dotsBottom();
   addView(dots, dotsParams);
  }
 
- static final int DOTS_DP = 44;
+ static final int DOTS_DP = HomeAppLayout.DOTS_DP, DOTS_ABOVE_EDGE_DP = HomeAppLayout.DOTS_ABOVE_EDGE_DP;
 
- /** The dots sit one gap above the tray. */
- int dotsBottom(int navigationInset) {
-  return navigationInset + gap + tray.getLayoutParams().height + gap / 2;
+ /** The dots' row is centred DOTS_ABOVE_EDGE_DP above the edge's top. */
+ int dotsBottom() {
+  return tray.heightPx() + Math.round(DOTS_ABOVE_EDGE_DP * tray.density) - dotsHeight / 2;
  }
 
  @Override public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
   int left = insets.getSystemWindowInsetLeft(), right = insets.getSystemWindowInsetRight();
-  int bottom = insets.getSystemWindowInsetBottom();
-  pager.dispatchApplyWindowInsets(insets.replaceSystemWindowInsets(left, insets.getSystemWindowInsetTop(), right,
-    bottom + reserved));
+  int tappable = insets.getTappableElementInsets().bottom;
+  if (tray.navigationExtra != tappable) tray.navigationExtra = tappable;
   LayoutParams trayParams = (LayoutParams) tray.getLayoutParams();
-  if (trayParams.leftMargin != side + left || trayParams.rightMargin != side + right || trayParams.bottomMargin != gap + bottom) {
-   trayParams.setMargins(side + left, 0, side + right, gap + bottom);
-   tray.setLayoutParams(trayParams);
-  }
+  if (trayParams.height != tray.heightPx()) { trayParams.height = tray.heightPx(); tray.setLayoutParams(trayParams); }
+  pager.dispatchApplyWindowInsets(insets.replaceSystemWindowInsets(left, insets.getSystemWindowInsetTop(), right,
+    tray.heightPx() + Math.round(HomeAppLayout.BAND_BOTTOM_DP * tray.density)));
   LayoutParams dotsParams = (LayoutParams) dots.getLayoutParams();
-  if (dotsParams.bottomMargin != dotsBottom(bottom) || dotsParams.leftMargin != side + left) {
-   dotsParams.setMargins(side + left, 0, side + right, dotsBottom(bottom));
+  if (dotsParams.bottomMargin != dotsBottom() || dotsParams.leftMargin != left || dotsParams.rightMargin != right) {
+   dotsParams.setMargins(left, 0, right, dotsBottom());
    dots.setLayoutParams(dotsParams);
   }
   return insets;

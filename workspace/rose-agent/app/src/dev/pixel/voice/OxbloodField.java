@@ -17,8 +17,8 @@ import android.graphics.drawable.Drawable;
  * The Oxblood fields of the committed Rose HiFi prototype (#410; main f6503a0, prototypes/rose-hifi/src/assets
  * oxblood-home.svg and oxblood-rose.svg), drawn natively from the same geometry instead of a raster: polygons, linear
  * and radial gradients in each shape's own bounding box (SVG objectBoundingBox units), hairlines, and the two Gaussian
- * blurs (the beam's soft glow and the join's bloom). The 390x844 artwork is placed like preserveAspectRatio
- * "xMidYMid slice": scaled to cover and centred, so it never stretches. HOME is Home and the app pages; ROSE is the
+ * blurs (the beam's soft glow and the join's bloom). The 390x844 artwork is placed as the reference CSS places it
+ * (background-size cover, background-position center top): scaled to cover, centred across and top-aligned, never stretched. HOME is Home and the app pages; ROSE is the
  * conversation and Background Work. Decorative: no text, no touch, no state.
  */
 final class OxbloodField extends Drawable {
@@ -34,7 +34,7 @@ final class OxbloodField extends Drawable {
  @Override protected void onBoundsChange(Rect b) {
   scale = Math.max(b.width() / VIEW_W, b.height() / VIEW_H);
   dx = b.left + (b.width() - VIEW_W * scale) / 2f;
-  dy = b.top + (b.height() - VIEW_H * scale) / 2f;
+  dy = b.top; // background-position: center top (oxblood.css:20-22)
  }
 
  @Override public void draw(Canvas canvas) {

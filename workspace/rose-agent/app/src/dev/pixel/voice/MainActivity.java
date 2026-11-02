@@ -60,7 +60,7 @@ public class MainActivity extends Activity {
  void requestLocationContext(){getSharedPreferences("location-context",0).edit().putBoolean("asked",true).apply();requestPermissions(new String[]{"android.permission.ACCESS_COARSE_LOCATION","android.permission.ACCESS_FINE_LOCATION"},72);}
  void requestPhotoAccess(){if(Build.VERSION.SDK_INT>=34)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES","android.permission.READ_MEDIA_VISUAL_USER_SELECTED"},74);else if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES"},74);else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},74);}
  @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==74){if(galleryWidget!=null)galleryWidget.reload();return;}if(r==72){VoiceService s=VoiceService.instance;if(s!=null){s.notification(s.communicating);PhoneEnvironment.get(this).setActive(s.communicating);s.appWindowChanged();}return;}if(checkSelfPermission("android.permission.RECORD_AUDIO")==PackageManager.PERMISSION_GRANTED){startForegroundService(new Intent(this,VoiceService.class));command("talk");}}
- void base(){if(taskCard!=null)taskCard.dispose();destroyMacScreen();visualDetail=null;page=new LinearLayout(this);page.setOrientation(1);page.setBackground(new PlayfulTheme.World());page.setPadding(dp(24),dp(18),dp(24),dp(12));setContentView(page);page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(24)+i.getSystemWindowInsetLeft(),dp(18)+i.getSystemWindowInsetTop(),dp(24)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());if(!drawer&&voiceCenter!=null)voiceCenter.setVisibility(chatMode||i.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);return i.consumeSystemWindowInsets();});}
+ void base(){PixelAppearance.bars(this);if(taskCard!=null)taskCard.dispose();destroyMacScreen();visualDetail=null;page=new LinearLayout(this);page.setOrientation(1);page.setBackground(new PlayfulTheme.World());page.setPadding(dp(24),dp(18),dp(24),dp(12));setContentView(page);page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(24)+i.getSystemWindowInsetLeft(),dp(18)+i.getSystemWindowInsetTop(),dp(24)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());if(!drawer&&voiceCenter!=null)voiceCenter.setVisibility(chatMode||i.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);return i.consumeSystemWindowInsets();});}
  void home(){
   saveDraft();drawer=false;chatMode=false;experimentalHome=getPreferences(0).getBoolean("conversation-home",true);if(!experimentalHome)chatMode=false;seenConversation=-2;base();page.setFocusableInTouchMode(true);
   LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);TextView brand=text(experimentalHome?"":"✦ Pixel",28,ink);brand.setOnLongClickListener(v->{homeOptions(brand);return true;});brand.setTypeface(null,Typeface.BOLD);guardianName=brand;header.addView(brand,new LinearLayout.LayoutParams(0,dp(44),1));guardianBack=button("Back to Pixel",()->command("guardian_back"));guardianBack.setTextSize(12);guardianBack.setVisibility(View.GONE);header.addView(guardianBack,new LinearLayout.LayoutParams(-2,dp(44)));brand.setGravity(Gravity.CENTER_VERTICAL);route=text("Microphone off",12,ink);route.setPadding(dp(12),dp(9),dp(12),dp(9));route.setBackground(raised(0xeafffff6,PixelAppearance.color(0xffd5e7f2),18));route.setVisibility(View.GONE);header.addView(route);if(experimentalHome){Button options=button("···",()->{});options.setTextSize(24);options.setBackgroundColor(Color.TRANSPARENT);options.setContentDescription("Home options");options.setOnClickListener(v->homeOptions(options));header.addView(options,new LinearLayout.LayoutParams(dp(44),dp(44)));}page.addView(header);
@@ -369,29 +369,29 @@ public class MainActivity extends Activity {
   ArrayList<ArrayList<ResolveInfo>> pages=new ArrayList<>();ArrayList<String> titles=new ArrayList<>();
   // Home, then the app pages next to it under the fixed tray, and nothing after them (HomePages, #223).
   titles.add("Home");pages.add(new ArrayList<>());
-  // One continuous real inventory, our apps first, then Play Store and other installs, each in name order, then the
-  // one "…" System folder cell (a null entry) holding the system and duplicate apps; the page count follows from it and
-  // the inset viewport (HomeAppLayout), never a fixed count.
+  // One continuous real inventory, our apps first, then Play Store and other installs, each in name order; the page
+  // count follows from it and the inset viewport (HomeAppLayout), never a fixed count. The system and duplicate apps
+  // are in the one System folder, whose cell is Home's last (#410: the reference's 'System apps' cell).
   ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,storeApps,otherApps))launchable.addAll(group);
-  ArrayList<ResolveInfo> entries=new ArrayList<>(launchable);if(!systemApps.isEmpty())entries.add(null);
+  ArrayList<ResolveInfo> entries=new ArrayList<>(launchable);
   folderApps=systemApps;launchable.addAll(systemApps); // Home's default apps may be system apps
   planAppPages();int appPages=HomeAppLayout.pages(entries.size(),appPerPage);
   for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(entries.size(),appPerPage,i);pages.add(new ArrayList<>(entries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
   int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;
   selected=HomePages.restore(selected,count);
-  // One wallpaper behind every page, drawn at the scroll position so it stays put while the pages slide.
-  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new RoseHomeView.Wallpaper(getResources()));
+  // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
+  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));
   launcherPager.permission=this::canSwipePages;
   launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   // The one row of page dots is fixed in the HomeFrame.
   homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
-  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.dockApps(getPackageManager(),getPackageName(),launchable),homeColumns));
+  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.homeApps(getPackageManager(),getPackageName(),launchable,!folderApps.isEmpty()),homeColumns));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),entries.isEmpty()));
   if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
-  setContentView(homeFrame);drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
+  setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
  /** A small square uses one of two columns; wide screens do not inflate it. */
@@ -414,9 +414,9 @@ public class MainActivity extends Activity {
  void planAppPages(){
   float density=getResources().getDisplayMetrics().density;android.content.res.Configuration c=getResources().getConfiguration();
   float width=appAreaWidth>0?appAreaWidth:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
-  float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp,HomeTray.HEIGHT_DP,HomeTray.GAP_DP,HomeFrame.DOTS_DP)*density;
+  float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp)*density;
   float cell=appCellHeight>0?appCellHeight:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
-  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);homeColumns=HomeAppLayout.homeColumns(width,height,cell,density);
+  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);homeColumns=HomeAppLayout.homeColumns(width/density);
  }
  /** A page measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
  void appPageMeasured(int width,int height,float cell){
@@ -429,7 +429,7 @@ public class MainActivity extends Activity {
  View appPage(ArrayList<ResolveInfo> apps,String title,boolean noApps){
   View result;
   if(noApps){TextView none=appLabel("No other apps are installed.");none.setGravity(Gravity.CENTER);none.setMaxLines(3);result=none;}
-  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(app==null?folderTile():appTile(app));result=grid;}
+  else{HomeAppPage grid=new HomeAppPage(this,appColumns,this::appPageMeasured);for(ResolveInfo app:apps)grid.addView(appTile(app));result=grid;}
   result.setContentDescription(title);
   result.setPadding(dp(HomeAppLayout.MARGIN_DP),dp(HomeAppLayout.TOP_DP),dp(HomeAppLayout.MARGIN_DP),0);
   result.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetLeft(),dp(HomeAppLayout.TOP_DP)+i.getSystemWindowInsetTop(),dp(HomeAppLayout.MARGIN_DP)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
@@ -437,35 +437,41 @@ public class MainActivity extends Activity {
  }
  /** The reference label (HomeAppTile.label). */
  TextView appLabel(String label){return HomeAppTile.label(this,label);}
+ /** Light status and navigation icons over the dark Oxblood field (#410), whatever the system theme. base() restores
+  * the theme's own bars for every other screen. */
+ void homeBars(){View decor=getWindow().getDecorView();decor.setSystemUiVisibility(decor.getSystemUiVisibility()&~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));}
  LinearLayout makePageDots(ArrayList<String> titles){
   LinearLayout dots=new LinearLayout(this);dots.setGravity(Gravity.CENTER);dots.setOrientation(0);
+  // #410: an indicator only, as in the reference (19dp apart); paging is by swipe, and the pager names the page and
+  // offers scroll actions to accessibility services.
+  dots.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
   for(int i=0;i<titles.size();i++){
-   final int target=i;TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density));dot.setTag(i);dot.setSelected(i==0);
-   dot.setContentDescription("Go to "+titles.get(i).toLowerCase(Locale.ROOT));dot.setFocusable(true);dot.setOnClickListener(v->launcherPager.showPage(target,true));
-   dots.addView(dot,new LinearLayout.LayoutParams(dp(HomeFrame.DOTS_DP),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
+   TextView dot=new TextView(this);dot.setBackground(new HomeDot(getResources().getDisplayMetrics().density));dot.setTag(i);dot.setSelected(i==0);
+   dots.addView(dot,new LinearLayout.LayoutParams(dp(19),dp(HomeFrame.DOTS_DP)));pageDots.add(dot);
   }
   return dots;
  }
- /** A real app's cell (HomeAppTile): its simplified mark on the subdued tile and its label, opening it (WorkspaceLauncher). */
- View appTile(ResolveInfo app){
+ /** A real app's cell (HomeAppTile) on the app pages or in the folder: its mark on the glass tile and its name, opening
+  * it (WorkspaceLauncher). */
+ View appTile(ResolveInfo app){return appTile(app,true);}
+ /** labelled=false: Home's cell, the same mark and launch path with the name as its accessible name only. */
+ View appTile(ResolveInfo app,boolean labelled){
   final String label=AppLabels.label(getPackageManager(),app.activityInfo.packageName,app.loadLabel(getPackageManager()).toString());
-  View tile=HomeAppTile.tile(this,appMark(app),label);
+  String glyph=HomeAppGroups.glyph(app.activityInfo.packageName,AppLabels.preferredCamera(getPackageManager()));
+  boolean mono=glyph!=null&&HomeGlyph.known(glyph);
+  View tile=HomeAppTile.tile(this,mono?new HomeGlyph(glyph):appMark(app),label,mono,labelled);
   tile.setOnClickListener(v->{closeSystemFolder();WorkspaceLauncher.open(this,app,label);});
   return tile;
  }
- /** The app's mark (#403): a suite app's or a duplicate's simplified glyph (HomeAppGroups.glyph), else the app's own
-  * monochrome themed layer, else its own icon unchanged, so another app's identity is never redrawn. */
+ /** Any other app's mark (#410): its own icon, unrestyled, so a regular installed app keeps its identity. Rose's suite
+  * and its duplicates draw the simplified glyph instead (appTile, HomeAppGroups.glyph). */
  android.graphics.drawable.Drawable appMark(ResolveInfo app){
-  String glyph=HomeAppGroups.glyph(app.activityInfo.packageName,AppLabels.preferredCamera(getPackageManager()));
-  if(glyph!=null&&HomeGlyph.known(glyph))return new HomeGlyph(glyph);
-  try{android.graphics.drawable.Drawable themed=HomeGlyph.themed(app.activityInfo.loadUnbadgedIcon(getPackageManager()));if(themed!=null)return themed;}
-  catch(RuntimeException unavailable){/* the app's own icon below */}
   return app.loadIcon(getPackageManager());
  }
  ArrayList<ResolveInfo> folderApps=new ArrayList<>();Dialog systemFolder;
- /** The "…" System folder's cell on the app pages; opens HomeFolder. */
- View folderTile(){
-  View tile=HomeAppTile.tile(this,new HomeGlyph("more"),HomeAppGroups.FOLDER_LABEL);
+ /** The System folder's cell, Home's last (#410: the reference's four-circle 'System apps' mark); opens HomeFolder. */
+ View folderTile(boolean labelled){
+  View tile=HomeAppTile.tile(this,new HomeGlyph("system"),HomeAppGroups.FOLDER_LABEL,true,labelled);
   tile.setContentDescription(HomeAppGroups.folderDescription(folderApps.size()));
   tile.setOnClickListener(v->openSystemFolder());
   return tile;

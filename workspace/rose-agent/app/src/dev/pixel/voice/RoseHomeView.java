@@ -3,43 +3,39 @@ package dev.pixel.voice;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.ColorFilter;
-import android.graphics.Paint;
-import android.graphics.PixelFormat;
-import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.provider.MediaStore;
+import android.text.format.DateFormat;
+import android.view.Gravity;
 import android.view.WindowInsets;
 import android.widget.FrameLayout;
+import android.widget.TextClock;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * Launcher Home page of the selected HiFi (prototypes/rose-hifi at ce126f56, the sparse first page): the owner's
- * default phone, messages, camera and browser apps as a plain grid on the wallpaper, in the same cells as the app
- * pages, above the fixed page dots and HomeTray. There is no second shortcut bar: the tray is the one persistent
- * control bar (#157), and every other installed app is a swipe or a page dot away. The wallpaper is one Wallpaper
- * drawable behind the whole pager (OS-PAGING-158-M001), so it stays continuous while Home and the app pages slide
- * over it; this page draws none of its own. Rose lives in the fixed HomeTray, drawn by App's RosePresenceView;
- * this page owns no voice state.
+ * Home, the first page (#410; the committed Oxblood Rose HiFi, main f6503a0, oxblood.css:353-360; model.js
+ * HOME_PAGES_OXBLOOD): today's date at the upper left, and above the dots one unlabelled grid of system-app marks,
+ * four across, in the app pages' cells (HomeAppTile) and band (HomeAppPage). Its apps are real: the owner's default
+ * phone, messages, camera and browser apps, then Rose's Mail, Calendar and Notes where installed, then the System
+ * folder (the reference's last cell), at most eight. A role with no single default, or an app that is not installed, is
+ * left out rather than shown as a stand-in. Every other installed app is a swipe away. The Oxblood field is one
+ * drawable behind the whole pager (MainActivity), so it stays continuous while the pages slide; this page draws none of
+ * its own. Rose lives in the fixed edge (HomeTray); this page owns no voice state.
  */
 final class RoseHomeView extends FrameLayout {
- static final int DOCK_SIZE = 4;
- /** Decoded once per process: MainActivity rebuilds its pages on every HOME press. */
- static Bitmap cachedWallpaper;
+ static final int HOME_SIZE = 8, DATE_LEFT_DP = HomeAppLayout.DATE_LEFT_DP, DATE_TOP_DP = HomeAppLayout.DATE_TOP_DP,
+   DATE_SP = HomeAppLayout.DATE_SP, DATE_INK = HomeAppLayout.DATE_INK;
+ final TextClock date;
 
- RoseHomeView(MainActivity activity, List<ResolveInfo> dock, int columns) {
+ /** entries: the Home apps in order, with null standing for the System folder cell. */
+ RoseHomeView(MainActivity activity, List<ResolveInfo> entries, int columns) {
   super(activity);
   setContentDescription("Home");
-  // The app pages' own grid and cells (MainActivity.appTile): same tile, label and launch path, bottom-aligned
-  // above the dots; Home only differs in its column count. No measurement report: Home never re-plans the pages.
-  HomeAppPage grid = new HomeAppPage(activity, columns, null);
-  for (ResolveInfo app : dock) grid.addView(activity.appTile(app));
+  HomeAppPage grid = new HomeAppPage(activity, columns, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, null);
+  for (ResolveInfo app : entries) grid.addView(app == null ? activity.folderTile(false) : activity.appTile(app, false));
   int side = activity.dp(HomeAppLayout.MARGIN_DP), top = activity.dp(HomeAppLayout.TOP_DP);
   grid.setPadding(side, top, side, 0);
   grid.setOnApplyWindowInsetsListener((v, i) -> {
@@ -48,23 +44,50 @@ final class RoseHomeView extends FrameLayout {
    return i;
   });
   addView(grid, new LayoutParams(-1, -1));
+
+  // The date (oxblood.css:353): 22sp regular, warm ivory, no shadow, the owner's locale; TextClock keeps it current.
+  date = new TextClock(activity);
+  String pattern = DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEMMMd");
+  date.setFormat12Hour(pattern);
+  date.setFormat24Hour(pattern);
+  date.setTextSize(DATE_SP);
+  date.setTextColor(DATE_INK);
+  date.setIncludeFontPadding(false);
+  LayoutParams dateParams = new LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+  dateParams.leftMargin = activity.dp(DATE_LEFT_DP);
+  dateParams.topMargin = activity.dp(DATE_TOP_DP);
+  addView(date, dateParams);
+  int dateTop = activity.dp(DATE_TOP_DP), dateLeft = activity.dp(DATE_LEFT_DP);
+  date.setOnApplyWindowInsetsListener((v, i) -> {
+   LayoutParams p = (LayoutParams) v.getLayoutParams();
+   // Never under the status bar or a cutout: the reference's 65dp, or 21dp below the inset where that is lower.
+   int wantTop = Math.max(dateTop, i.getSystemWindowInsetTop() + activity.dp(21)), wantLeft = dateLeft + i.getSystemWindowInsetLeft();
+   if (p.topMargin != wantTop || p.leftMargin != wantLeft) { p.topMargin = wantTop; p.leftMargin = wantLeft; v.setLayoutParams(p); }
+   return i;
+  });
  }
 
  /**
-  * The owner's default phone, messages, camera and browser apps, in that order, taken from the
-  * launchable apps. A role with no single default (a chooser) or no launchable activity is left out.
+  * Home's apps, in order: the owner's default phone, messages, camera and browser apps (taken from the launchable
+  * apps), then the suite's Mail, Calendar and Notes (HomeAppGroups.HOME_SUITE) where installed and not already here,
+  * at most HOME_SIZE - 1, followed by null for the System folder when there is one.
   */
- static List<ResolveInfo> dockApps(PackageManager pm, String self, List<ResolveInfo> launchable) {
-  ArrayList<ResolveInfo> dock = new ArrayList<>();
-  for (String pkg : dockRolePackages(pm, self)) {
-   if (dock.size() == DOCK_SIZE) break;
-   for (ResolveInfo app : launchable) if (pkg.equals(app.activityInfo.packageName)) { dock.add(app); break; }
+ static List<ResolveInfo> homeApps(PackageManager pm, String self, List<ResolveInfo> launchable, boolean folder) {
+  ArrayList<ResolveInfo> home = new ArrayList<>();
+  HashSet<String> used = new HashSet<>();
+  ArrayList<String> wanted = new ArrayList<>(dockRolePackages(pm, self));
+  for (String pkg : HomeAppGroups.HOME_SUITE) wanted.add(pkg);
+  for (String pkg : wanted) {
+   if (home.size() == HOME_SIZE - 1) break;
+   if (!used.add(pkg)) continue;
+   for (ResolveInfo app : launchable) if (pkg.equals(app.activityInfo.packageName)) { home.add(app); break; }
   }
-  return dock;
+  if (folder) home.add(null);
+  return home;
  }
 
- /** The packages holding those defaults, in order, without enumerating apps: four resolutions, cheap
-  * enough to compare on every HOME so a changed default app rebuilds the dock. */
+ /** The packages holding the default phone, messages, camera and browser roles, in order, without enumerating apps:
+  * four resolutions, cheap enough to compare on every HOME so a changed default app rebuilds Home. */
  static List<String> dockRolePackages(PackageManager pm, String self) {
   Intent[] roles = {
    new Intent(Intent.ACTION_DIAL, Uri.parse("tel:")),
@@ -86,35 +109,5 @@ final class RoseHomeView extends FrameLayout {
  @Override public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
   for (int i = 0; i < getChildCount(); i++) getChildAt(i).dispatchApplyWindowInsets(insets);
   return insets;
- }
-
- /** The shared Home wallpaper: the selected HiFi's own image (prototypes/rose-hifi/src/assets/wallpaper.jpg at
-  * ce126f56, the same bytes as rose_home_wallpaper) drawn behind the pager as its .wall: background-size: cover at
-  * background-position 62% 30%. */
- static final class Wallpaper extends Drawable {
-  final Bitmap wallpaper;
-  final Rect source = new Rect();
-  final Paint picture = new Paint(Paint.FILTER_BITMAP_FLAG);
-
-  Wallpaper(android.content.res.Resources resources) {
-   if (cachedWallpaper == null) cachedWallpaper = BitmapFactory.decodeResource(resources, R.drawable.rose_home_wallpaper);
-   wallpaper = cachedWallpaper;
-  }
-
-  @Override protected void onBoundsChange(Rect bounds) {
-   source.setEmpty();
-   if (wallpaper == null) return;
-   int[] crop = HomeAppLayout.cover(wallpaper.getWidth(), wallpaper.getHeight(), bounds.width(), bounds.height(),
-     HomeAppLayout.WALL_X, HomeAppLayout.WALL_Y);
-   source.set(crop[0], crop[1], crop[2], crop[3]);
-  }
-
-  @Override public void draw(Canvas canvas) {
-   if (wallpaper != null && !source.isEmpty()) canvas.drawBitmap(wallpaper, source, getBounds(), picture);
-   else canvas.drawColor(0xffdfe8e0);
-  }
-  @Override public void setAlpha(int alpha) {}
-  @Override public void setColorFilter(ColorFilter filter) {}
-  @Override public int getOpacity() { return PixelFormat.OPAQUE; }
  }
 }

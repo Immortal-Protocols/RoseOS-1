@@ -74,6 +74,8 @@
             <testInclude>dev/pixel/voice/TrayMaterial.java</testInclude>
             <testInclude>dev/pixel/voice/HomeGlassTile.java</testInclude>
             <testInclude>dev/pixel/voice/OxbloodField.java</testInclude>
+            <testInclude>dev/pixel/voice/OxbloodEdge.java</testInclude>
+            <testInclude>dev/pixel/voice/RosePearl.java</testInclude>
             <testInclude>dev/pixel/voice/HomeGlyph.java</testInclude>
             <testInclude>dev/pixel/voice/HomeAppTile.java</testInclude>
             <testInclude>dev/pixel/voice/HomeAppPage.java</testInclude>
