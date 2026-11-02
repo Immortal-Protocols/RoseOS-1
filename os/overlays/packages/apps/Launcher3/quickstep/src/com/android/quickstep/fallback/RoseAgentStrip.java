@@ -42,8 +42,9 @@ import java.util.Map;
  * RoseOS (#156): the agent row of the fallback overview, below Launcher3's own human-task carousel and scrolling
  * independently of it. Cards are Rose Agent's real running work (RoseAgentWork). Selecting one opens Rose's viewer of
  * that work only while it is the agent screen's current task. #410: the row is the Oxblood HiFi's Rose carousel, a
- * centred fan with depth (RoseAgentFan, RoseFan) beside a static ruby pearl, with Oxblood card materials; the fan
- * only places the cards this row reads, and nothing about membership, capture or selection changes. Uses only what this recents component already holds:
+ * centred fan with depth (RoseAgentFan, RoseFan) beside a static ruby pearl, with Oxblood card materials from the
+ * shared contract; the fan only places the cards this row reads, and nothing about membership, capture or selection
+ * changes. Uses only what this recents component already holds:
  * the platform lets the configured recents component read all tasks (ActivityTaskManagerService.isGetTasksAllowed)
  * and receive its complete snapshots of which owner each ComputerControl session device belongs to
  * (VirtualDeviceManagerService.checkCallerIsRecentsOrHomeRoleHolder). Rose's session display stays private: it is
@@ -82,7 +83,7 @@ public final class RoseAgentStrip extends LinearLayout {
         pearl.setShape(GradientDrawable.OVAL);
         pearl.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         pearl.setGradientCenter(0.34f, 0.28f);
-        pearl.setGradientRadius(dp(PEARL_DP));
+        pearl.setGradientRadius(PEARL_RADIUS_DP * getResources().getDisplayMetrics().density);
         pearl.setColors(PEARL_COLORS, PEARL_STOPS);
         connector.setBackground(pearl);
         connector.setAlpha(IDLE);
@@ -216,15 +217,18 @@ public final class RoseAgentStrip extends LinearLayout {
     private static final int PREVIEW_HEIGHT_DP = 112;
     private static final int LINK_ROW_DP = 22, PEARL_DP = 18;
     /**
-     * Oxblood materials, Launcher3's own copy of the shared contract (qa/oxblood/oxblood-contract.json, Home's) as the
-     * frozen HiFi draws them (f6503a0d oxblood.css:292, 313-319, 342, 451): the card fill, its fine inset ring, the
-     * ruby rim marking the card that is the current screen of Rose's display (static: the HiFi's reduced-motion edge),
-     * the ruby pearl, and ivory text.
+     * Oxblood materials: Launcher3's own copy of the shared contract (qa/oxblood/oxblood-contract.json, written by Home;
+     * test_rose_switcher compares these key for key): manager.card.fill and .neutralRing, ink.primary and
+     * .secondary, and the ruby pearl (pearl.ruby.stops, pearl.sizes.switcher). The contract's running edge is only for
+     * work that is authoritatively running, which Launcher3 cannot see, so it is never drawn here: the card that is the
+     * current screen of Rose's display is marked with the ink.secondary ring instead.
      */
-    static final int CARD_FILL = 0xFF1A0A0D, CARD_RING = 0x29ECD5C6, RUBY_EDGE = 0xFFC44A5E, TEXT = 0xFFF2E6DC,
-            TEXT_MUTED = 0xB3F2E6DC;
+    static final int CARD_FILL = 0xFF1A0A0D, CARD_RING = 0x29ECD5C6, CURRENT_RING = 0xFFD2B9AB, TEXT = 0xFFF2E6D9,
+            TEXT_MUTED = 0xFFD2B9AB;
     static final int[] PEARL_COLORS = {0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612};
     static final float[] PEARL_STOPS = {0.07f, 0.20f, 0.46f, 0.76f, 1f};
+    /** The ruby gradient's radius: from its centre (34%, 28%) to the farthest corner of the 18 dp pearl. */
+    private static final float PEARL_RADIUS_DP = (float) Math.hypot(0.66 * PEARL_DP, 0.72 * PEARL_DP);
 
     /**
      * The row's height when this context belongs to the fallback overview (RecentsActivity, whose layout holds the
@@ -537,11 +541,12 @@ public final class RoseAgentStrip extends LinearLayout {
         name.setEllipsize(TextUtils.TruncateAt.END);
         name.setPadding(dp(8), dp(6), dp(8), dp(6));
         card.addView(name, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-        // The card Rose is working in now has the ruby rim; background apps keep the fine ring.
+        // The current screen of Rose's display has the brighter ink ring; background apps keep the fine neutral ring.
+        // Never the ruby running edge: Launcher3 cannot see whether the work is authoritatively running.
         GradientDrawable edge = new GradientDrawable();
         edge.setCornerRadius(dp(RoseFan.CARD_RADIUS_DP));
         edge.setColor(0);
-        if (task.topOfDisplay) edge.setStroke(dp(2), RUBY_EDGE);
+        if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), CURRENT_RING);
         else edge.setStroke(Math.max(1, dp(1)), CARD_RING);
         card.setForeground(edge);
         card.setContentDescription(task.label + (task.topOfDisplay ? ", Rose is working in it now" : ", in Rose's background")

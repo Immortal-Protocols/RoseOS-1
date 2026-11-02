@@ -291,8 +291,10 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertIn('connector.setAlpha(working ? 1f : IDLE);', working)
         for animated in ('ObjectAnimator', 'setRepeatCount', 'ValueAnimator.INFINITE', 'pulse'):
             self.assertNotIn(animated, self.STRIP, animated)
-        self.assertIn('if (task.topOfDisplay) edge.setStroke(dp(2), RUBY_EDGE);', show, 'the current card has the ruby rim')
+        self.assertIn('if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), CURRENT_RING);', show,
+            'the current screen of Rose\'s display is marked')
         self.assertIn('else edge.setStroke(Math.max(1, dp(1)), CARD_RING);', show)
+        self.assertNotIn('RUBY_EDGE', self.STRIP, 'no running edge: Launcher3 cannot see authoritative running state')
         self.assertIn('Rose is working in it now', show)
 
     def test_empty_and_error_states_invent_nothing(self):
@@ -1051,8 +1053,33 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
             self.STRIP, 'the task keeps its own aspect')
         self.assertIn('live.setScaleType(ImageView.ScaleType.MATRIX);', self.STRIP, 'its top at 1:1, no crop-zoom')
 
+    def test_oxblood_materials_match_homes_contract_key_for_key(self):
+        """qa/oxblood/oxblood-contract.json is Home's (single writer); Launcher3 keeps its own copy and asks for changes
+        on #410. A mismatch here is a coordination signal, never a reason to edit the contract from this side."""
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())
+        def argb(name):
+            return int(re.search(rf'\b{name} = (0x[0-9A-F]{{8}})', self.STRIP)[1], 16)
+        def hexval(value):
+            return int(value.lstrip('#'), 16)
+        self.assertEqual(argb('CARD_FILL'), hexval(contract['manager']['card']['fill']))
+        self.assertEqual(argb('CARD_RING'), hexval(contract['manager']['card']['neutralRing']['color']))
+        self.assertEqual(argb('TEXT'), hexval(contract['ink']['primary']))
+        self.assertEqual(argb('TEXT_MUTED'), hexval(contract['ink']['secondary']))
+        self.assertEqual(argb('CURRENT_RING'), hexval(contract['ink']['secondary']))
+        colors = [int(c, 16) for c in re.search(r'PEARL_COLORS = \{([^}]*)\}', self.STRIP)[1].replace(' ', '').split(',')]
+        stops = [float(v.rstrip('f')) for v in re.search(r'PEARL_STOPS = \{([^}]*)\}', self.STRIP)[1].replace(' ', '').split(',')]
+        ruby = [(stop, hexval(color)) for stop, color in contract['pearl']['ruby']['stops'] if stop > 0]
+        self.assertEqual(list(zip(stops, colors)), [(round(a, 2), b) for a, b in ruby])
+        self.assertEqual(contract['pearl']['ruby']['stops'][0][1], contract['pearl']['ruby']['stops'][1][1],
+            'the first stop holds the colour of the 0.07 stop (GradientDrawable clamps before its first offset)')
+        self.assertIn(f"PEARL_DP = {contract['pearl']['sizes']['switcher']}", self.STRIP)
+        self.assertIn('radius = distance to the farthest corner', contract['pearl']['ruby']['gradient'])
+        self.assertIn('Math.hypot(0.66 * PEARL_DP, 0.72 * PEARL_DP)', self.STRIP)
+        self.assertIn('runningEdge', contract['manager'])
+        self.assertIn('authoritatively running only', contract['manager']['runningEdge']['when'])
+
     def test_oxblood_materials_and_the_pearl_show_no_mic_or_call_state(self):
-        self.assertIn('static final int CARD_FILL = 0xFF1A0A0D, CARD_RING = 0x29ECD5C6, RUBY_EDGE = 0xFFC44A5E', self.STRIP)
         self.assertIn('static final int[] PEARL_COLORS = {0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612};',
             self.STRIP)
         for real in ('SensorPrivacy', 'setMicrophoneMute', 'isMicrophoneMute', 'RECORD_AUDIO', 'AudioManager'):
