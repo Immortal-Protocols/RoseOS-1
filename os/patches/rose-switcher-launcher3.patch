@@ -20,15 +20,20 @@ index 65f606a..e068d38 100644
  </com.android.launcher3.LauncherRootView>
 diff --git a/quickstep/res/values/rose_agent_strip.xml b/quickstep/res/values/rose_agent_strip.xml
 new file mode 100644
-index 0000000..bbd6949
+index 0000000..7d45106
 --- /dev/null
 +++ b/quickstep/res/values/rose_agent_strip.xml
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,11 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- RoseOS (#156): the agent row's fixed height in the fallback overview. FallbackActivityInterface claims it below
 +     the task cards and OverviewActionsView keeps it free above the action buttons; the layout uses the same value. -->
 +<resources>
-+    <dimen name="rose_agent_strip_height">160dp</dimen>
++    <dimen name="rose_agent_strip_height">200dp</dimen>
++    <!-- RoseOS (#410): the fallback overview's scrim, the Oxblood switcher base (qa/oxblood/oxblood-contract.json
++         fields.screenBase), applied by RecentsActivity after OverviewBlurFallbackStyle. -->
++    <style name="RoseOverviewOxblood">
++        <item name="overviewScrimColor">#FF170609</item>
++    </style>
 +</resources>
 diff --git a/quickstep/src/com/android/quickstep/BaseContainerInterface.java b/quickstep/src/com/android/quickstep/BaseContainerInterface.java
 index 37eac47..fbcab76 100644
@@ -59,30 +64,37 @@ index 37eac47..fbcab76 100644
          Resources res = context.getResources();
          float maxScale = res.getFloat(R.dimen.overview_max_scale);
 diff --git a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-index d9f14ac..2b8ce81 100644
+index d9f14ac..3a8cda8 100644
 --- a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
 +++ b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-@@ -33,6 +33,7 @@ import androidx.annotation.Nullable;
- 
- import com.android.app.displaylib.PerDisplayRepository;
- import com.android.launcher3.DeviceProfile;
-+import com.android.launcher3.R;
- import com.android.launcher3.dagger.LauncherAppSingleton;
- import com.android.launcher3.display.DisplayController;
- import com.android.launcher3.statemanager.StateManager;
-@@ -72,6 +73,12 @@ public final class FallbackActivityInterface extends
+@@ -72,6 +72,13 @@ public final class FallbackActivityInterface extends
          super(false, DEFAULT, BACKGROUND_APP, taskAnimationManagerRepo.get(DEFAULT_DISPLAY));
      }
  
 +    /** RoseOS (#156): the fallback overview's agent row (RoseAgentStrip) sits below the task cards. */
 +    @Override
 +    protected int getOverviewClaimedSpaceBelow(Context context) {
-+        return context.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
++        // The agent row's measured height: its default, or more at a large font scale (RoseAgentStrip.rowHeight).
++        return com.android.quickstep.fallback.RoseAgentStrip.rowHeight(context.getResources());
 +    }
 +
      /** 2 */
      @Override
      public int getSwipeUpDestinationAndLength(DeviceProfile dp, Context context, Rect outRect,
+diff --git a/quickstep/src/com/android/quickstep/RecentsActivity.java b/quickstep/src/com/android/quickstep/RecentsActivity.java
+index 34a3adb..7f3a26b 100644
+--- a/quickstep/src/com/android/quickstep/RecentsActivity.java
++++ b/quickstep/src/com/android/quickstep/RecentsActivity.java
+@@ -150,6 +150,9 @@ public final class RecentsActivity extends StatefulActivity<RecentsState> implem
+      */
+     private void setupViews() {
+         getTheme().applyStyle(R.style.OverviewBlurFallbackStyle, true);
++        // RoseOS (#410): the Oxblood switcher backdrop behind both carousels (Home's contract, fields.screenBase): the
++        // fallback overview's own scrim colour, applied after the stock fallback style. Nothing else changes.
++        getTheme().applyStyle(R.style.RoseOverviewOxblood, true);
+         SystemUiProxy systemUiProxy = SystemUiProxy.INSTANCE.get(this);
+         // SplitSelectStateController needs to be created before setContentView()
+         mSplitSelectStateController =
 diff --git a/quickstep/src/com/android/quickstep/views/OverviewActionsView.java b/quickstep/src/com/android/quickstep/views/OverviewActionsView.java
 index 13c6ffe..997f8c8 100644
 --- a/quickstep/src/com/android/quickstep/views/OverviewActionsView.java
