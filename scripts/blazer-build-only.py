@@ -25,7 +25,21 @@ Build stage (outside preparation, unchanged): compile --host --jobs --lock --sou
 
 Every stage refuses on a symlink in an operator path, a held lock (probed non-blocking, held with LOCK_NB while
 running), an existing output (nothing is deleted, reused or overwritten except the stage's own .part) or available
-bytes minus the stage bound below capacity.reserveBytes. Bounds are labelled proposals, not measurements.
+bytes minus the stage bound below capacity.reserveBytes. Bounds are labelled proposals, not measurements; the stage
+timeouts total 4.5 h, excluding construction of the isolated tree.
+
+vendor and lunch run in their own session and process group with PATH limited to /usr/bin:/bin (vendor: the verified
+node's directory first, so adevtool resolves exactly that file; its identity is re-checked just before the run). The
+byte limit is a sampled stop, not a filesystem quota: every preparation.limits.sampleSeconds the watched outputs are
+compared with the bound and the filesystem's available bytes with the reserve, and an overrun or the timeout ends the
+group (SIGTERM, then SIGKILL after killGraceSeconds); live members left after a normal exit are ended the same way.
+Writes between samples can overshoot, and descendants that start their own session are not reached: an enforced quota
+and full containment need host-side cgroup/quota configuration that this tool does not have.
+
+  blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
+            metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
+            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes and the node file
+            identity and PATH resolution; starts no process, opens no connection and writes nothing
 Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. Source tests use synthetic trees, a fake
 fetcher and a fake runner only.
 """
@@ -36,8 +50,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from xml.etree import ElementTree
@@ -58,6 +75,7 @@ TREE_NEEDS = ('vendor/adevtool/bin/run', 'build/envsetup.sh', 'prebuilts/build-t
 HOST_LABEL = re.compile(r'[a-z0-9][a-z0-9.-]{0,62}')
 CHUNK = 1 << 20
 LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_DEVICE')
+SAFE_PATH = '/usr/bin:/bin'
 
 class InvalidInput(Exception):
     pass
@@ -141,6 +159,12 @@ def preparation_problems(recipe, root, contract):
     prep, problems = recipe.get('preparation') or {}, []
     if prep.get('stages') != list(PREPARATION):
         return [f'preparation.stages must be exactly {list(PREPARATION)}']
+    limits = prep.get('limits') or {}
+    if limits.get('enforcement') != 'sampled-stop' or not (positive(limits.get('sampleSeconds')) and positive(limits.get('killGraceSeconds'))):
+        problems.append('preparation.limits must be the sampled-stop enforcement with positive sampleSeconds and killGraceSeconds')
+    total = sum(((prep.get(stage) or {}).get('timeoutSeconds') or 0) for stage in PREPARATION)
+    if prep.get('totalTimeoutSeconds') != total:
+        problems.append(f'preparation.totalTimeoutSeconds must be the sum of the stage timeouts ({total})')
     if prep.get('boundsKind') != 'proposal':
         problems.append('preparation bounds must be labelled proposal: no Blazer preparation has been measured')
     for stage in PREPARATION:
@@ -210,11 +234,13 @@ def commands(recipe, op):
     if op['sourceRoot'] is not None:
         src = str(op['sourceRoot'])
         if op['downloadDir'] is not None:
-            rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir'])},
+            node_dir = str(op['node'].parent) if op['node'] else None
+            rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir']),
+                    'PATH': f'{node_dir}:{SAFE_PATH}' if node_dir else SAFE_PATH},
                 'argv': list(recipe['generate']['argv']), 'timeoutSeconds': prep['vendor']['timeoutSeconds'],
                 'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version']}
         checks = ' && '.join(f'echo {v}=${v}' for v in LUNCH_VARS[:3]) + ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)'
-        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir']},
+        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH},
             'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {checks}'],
             'timeoutSeconds': prep['lunch']['timeoutSeconds']}
         if op['jobs'] is not None:
@@ -387,6 +413,11 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         node = op['node']
         if node.is_symlink() or not node.is_file() or not os.access(node, os.X_OK):
             problems.append(f'node {node} is not an executable regular file')
+        elif node.name != 'node':
+            problems.append(f'node {node} must be named node so that PATH resolution reaches exactly that file')
+        else:
+            # The child PATH starts with node's own directory, so it resolves there; run() re-checks identity and PATH.
+            facts['node'] = file_identity(node)
     elif stage == 'lunch':
         if not (src/'build/envsetup.sh').is_file():
             problems.append('build/envsetup.sh is missing from the source tree')
@@ -419,6 +450,185 @@ def tree_bytes(path):
             except OSError:
                 pass
     return total + os.lstat(path).st_blocks * 512
+
+def file_identity(path):
+    """Metadata identity of a regular file (no content read)."""
+    st = os.stat(path, follow_symlinks=False)
+    return {'path': str(path), 'device': st.st_dev, 'inode': st.st_ino, 'size': st.st_size, 'mode': oct(st.st_mode),
+            'mtimeNs': st.st_mtime_ns}
+
+def node_binding_problem(node, path_env):
+    """adevtool reaches node through PATH; the child PATH must resolve `node` to exactly the verified file."""
+    resolved = shutil.which('node', path=path_env)
+    try:
+        if resolved is None or not os.path.samefile(resolved, node):
+            return f'PATH {path_env!r} resolves node to {resolved!r}, not the verified {node}'
+    except OSError:
+        return f'PATH {path_env!r} resolves node to {resolved!r}, which cannot be compared with {node}'
+    return None
+
+def group_alive(pgid):
+    """True while a non-zombie process is in group PGID. Linux /proc is read so that exited members awaiting reaping by
+    init are not counted; without /proc the signal-0 probe is used (zombies then count as alive)."""
+    proc = Path('/proc')
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                fields = (entry/'stat').read_text().rsplit(')', 1)[1].split()
+            except (OSError, IndexError):
+                continue
+            if fields[0] != 'Z' and int(fields[2]) == pgid:
+                return True
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+def end_group(pgid, grace, clock, sleep):
+    """SIGTERM the stage's process group, then SIGKILL whatever is left after the grace period. Returns what was done.
+    Descendants that started their own session are outside the group and are not reached (needs cgroup containment)."""
+    if not group_alive(pgid):
+        return None
+    os.killpg(pgid, signal.SIGTERM)
+    deadline = clock() + grace
+    while clock() < deadline and group_alive(pgid):
+        sleep(0.05)
+    if group_alive(pgid):
+        os.killpg(pgid, signal.SIGKILL)
+        return 'SIGKILL'
+    return 'SIGTERM'
+
+def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, measure=None, capture=False,
+              clock=time.monotonic, sleep=time.sleep):
+    """Run ARGV in its own session and process group. Every limits['sampleSeconds'] the watched paths' bytes are compared
+    with limits['boundBytes'] and the filesystem's available bytes with limits['reserveBytes']; an overrun or the timeout
+    stops the whole group (SIGTERM, then SIGKILL after killGraceSeconds), and members left after a normal exit are ended
+    the same way. This is a sampled stop, not a filesystem quota: writes between samples can overshoot the bound."""
+    measure = measure or tree_bytes
+    out = tempfile.TemporaryFile() if capture else subprocess.DEVNULL
+    started = clock()
+    proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out, start_new_session=True)
+    pgid, stopped, peak, low = proc.pid, None, 0, None
+    while True:
+        try:
+            proc.wait(timeout=limits['sampleSeconds'])
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if clock() - started > timeout:
+            stopped = f'exceeded {timeout} s'
+        else:
+            used = sum(measure(Path(path)) for path in watch)
+            peak = max(peak, used)
+            fs = statvfs(cwd)
+            available = fs.f_bavail * fs.f_frsize
+            low = available if low is None else min(low, available)
+            if used > limits['boundBytes']:
+                stopped = f'watched paths reached {used} bytes, above the {limits["boundBytes"]}-byte bound'
+            elif available < limits['reserveBytes']:
+                stopped = f'available {available} fell below the reserve {limits["reserveBytes"]}'
+        if stopped:
+            end_group(pgid, limits['killGraceSeconds'], clock, sleep)
+            proc.wait()
+            break
+    leftover = end_group(pgid, limits['killGraceSeconds'], clock, sleep)
+    used = sum(measure(Path(path)) for path in watch)
+    result = {'returncode': proc.returncode, 'stopped': stopped, 'leftoverGroupEnded': leftover,
+              'consumedBytes': used, 'peakSampledBytes': max(peak, used), 'lowestSampledAvailableBytes': low,
+              'enforcement': 'sampled-stop', 'sampleSeconds': limits['sampleSeconds']}
+    if capture:
+        out.seek(0)
+        result['stdout'] = out.read().decode(errors='replace')
+        out.close()
+    return result
+
+INSPECTION = 'roseos.blazer-preparation-inspection.v1'
+INSPECT_MAX_SECONDS = 1200
+
+def meta(path):
+    """lstat metadata of one path; never follows a link and never reads content."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return {'path': str(path), 'exists': False}
+    except OSError as error:
+        return {'path': str(path), 'exists': None, 'error': type(error).__name__}
+    kind = 'link' if os.path.islink(path) else 'dir' if os.path.isdir(path) else 'file' if os.path.isfile(path) else 'other'
+    return {'path': str(path), 'exists': True, 'type': kind, 'mode': oct(st.st_mode), 'uid': st.st_uid, 'device': st.st_dev,
+            'inode': st.st_ino, 'size': st.st_size}
+
+def bounded_bytes(path, budget, clock):
+    """Allocated bytes under PATH (no links followed) within the shared entry and time budget."""
+    if not os.path.lexists(path):
+        return {'exists': False, 'bytes': 0, 'entries': 0, 'truncated': False}
+    total, entries = os.lstat(path).st_blocks * 512, 0
+    for base, dirs, files in os.walk(path, followlinks=False):
+        for name in dirs + files:
+            if budget['entries'] <= 0 or clock() > budget['deadline']:
+                return {'exists': True, 'bytes': total, 'entries': entries, 'truncated': True}
+            budget['entries'] -= 1
+            entries += 1
+            try:
+                total += os.lstat(os.path.join(base, name)).st_blocks * 512
+            except OSError:
+                pass
+    return {'exists': True, 'bytes': total, 'entries': entries, 'truncated': False}
+
+def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_seconds=900, clock=time.monotonic):
+    """Metadata-only observation for a later, separately approved run: path identities, isolation, filesystem space,
+    pinned project presence, bounded sizes of collision and download paths, and the --node file identity and its PATH
+    resolution. Reads lstat/statvfs and at most 128 bytes of out_adevtool_deps/adevtool_revision; starts no process,
+    opens no network connection and writes nothing."""
+    if not 0 < max_seconds <= INSPECT_MAX_SECONDS or max_entries < 1:
+        raise InvalidInput(f'--max-seconds must be 1..{INSPECT_MAX_SECONDS} and --max-entries positive')
+    started = clock()
+    budget = {'entries': max_entries, 'deadline': started + max_seconds}
+    prep, factory = recipe['preparation'], recipe['factory']
+    production = pointer(root, prep['productionSourceRootFrom'])
+    report = {'schema': INSPECTION, 'device': DEVICE, 'host': op['host'], 'metadataOnly': True, 'processesStarted': 0,
+              'network': False, 'writes': False, 'productionSourceRoot': production, 'paths': {}, 'isolation': {},
+              'filesystems': {}, 'limits': {'maxEntries': max_entries, 'maxSeconds': max_seconds}}
+    for name in ('sourceRoot', 'downloadDir', 'lock', 'node'):
+        if op[name] is None:
+            continue
+        report['paths'][name] = dict(meta(op[name]), symlinkComponent=str(symlink_in(op[name]) or '') or None)
+        if name in ('sourceRoot', 'downloadDir'):
+            report['isolation'][name] = isolation_problem(op[name], production)
+            probe = op[name] if op[name].exists() else op[name].parent
+            if probe.is_dir():
+                fs = statvfs(probe)
+                report['filesystems'][name] = {'queried': str(probe), 'availableBytes': fs.f_bavail * fs.f_frsize,
+                    'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.stat(probe).st_dev}
+    src = op['sourceRoot']
+    if src is not None and src.is_dir() and not symlink_in(src):
+        report['projects'] = {rel: meta(src/rel) for rel in [*recipe['pins'], recipe['kernelDir'], *TREE_NEEDS, '.repo/manifest.xml']}
+        revision = src/recipe['adevtool']['depsDir']/'adevtool_revision'
+        if revision.is_file() and not revision.is_symlink():
+            with open(revision, 'rb') as f:
+                report['adevtoolRevision'] = f.read(128).decode(errors='replace').strip()
+        report['adevtoolRevisionPinned'] = recipe['pins']['vendor/adevtool']
+        report['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in prep['vendor']['collisionPaths']}
+        report['collisions'][prep['lunch']['outDir']] = bounded_bytes(src/prep['lunch']['outDir'], budget, clock)
+    if op['downloadDir'] is not None:
+        report['download'] = {'archive': meta(op['downloadDir']/factory['file']),
+            'part': meta(op['downloadDir']/(factory['file'] + prep['download']['partSuffix'])),
+            'expectedSha256': factory['sha256'], 'hashed': False}
+    if op['node'] is not None:
+        node_path = f'{op["node"].parent}:{SAFE_PATH}'
+        resolved = shutil.which('node', path=node_path)
+        report['node'] = {'given': str(op['node']), 'realpath': os.path.realpath(op['node']),
+            'resolvedThroughStagePath': resolved, 'nameIsNode': op['node'].name == 'node',
+            'sameFile': bool(resolved) and os.path.exists(op['node']) and os.path.samefile(resolved, op['node']),
+            'version': 'not executed (metadata only)'}
+    report['elapsedSeconds'] = round(clock() - started, 3)
+    report['truncated'] = budget['entries'] <= 0 or clock() > budget['deadline']
+    return report
 
 def fetch(url, timeout):
     return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310 - the pinned https URL only
@@ -459,13 +669,13 @@ def node_major(text):
     match = re.fullmatch(r'v?(\d+)\.\d+\.\d+', (text or '').strip())
     return int(match[1]) if match else None
 
-def run(recipe, stage, op, receipt_dir, runner=subprocess.run, now=time.time, fetcher=fetch, clock=time.monotonic,
-        measure=tree_bytes, **probes):
+def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time.monotonic, measure=tree_bytes,
+        sleep=time.sleep, statvfs=os.statvfs, **probes):
     """Preflight, then the stage under the operator's lock (LOCK_NB), with write-once receipts."""
     receipt_dir = Path(receipt_dir)
     if os.path.lexists(receipt_dir) or symlink_in(receipt_dir):
         raise InvalidInput(f'{receipt_dir} already exists or passes through a symlink; use a new receipt directory')
-    report = preflight(recipe, stage, op, **probes)
+    report = preflight(recipe, stage, op, statvfs=statvfs, **probes)
     receipt_dir.mkdir(parents=True)
     release_receipts.write_once(receipt_dir/'preflight.json', {**report, 'at': stamp(now)})
     if not report['ready']:
@@ -483,44 +693,50 @@ def run(recipe, stage, op, receipt_dir, runner=subprocess.run, now=time.time, fe
             ok, outcome = download(recipe, command, fetcher, clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
             return 0 if ok else 1
-        env = {**os.environ, **command['env']}
+        env = {**{k: v for k, v in os.environ.items() if k not in ('PATH',)}, **command['env']}
+        prep, capacity = recipe['preparation'], recipe['capacity']
+        limits = {**prep['limits'], 'boundBytes': prep[stage]['boundBytes'], 'reserveBytes': capacity['reserveBytes']}
         if stage == 'vendor':
-            node = runner(command['nodeVersion'], cwd=command['cwd'], env=env, capture_output=True, text=True,
-                          timeout=recipe['preparation']['vendor']['node']['versionTimeoutSeconds'])
-            major = node_major(getattr(node, 'stdout', ''))
-            floor = recipe['preparation']['vendor']['node']['minMajor']
-            if node.returncode or major is None or major < floor:
+            if file_identity(op['node']) != report['facts'].get('node') or node_binding_problem(op['node'], env['PATH']):
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
-                    'nodeVersion': (getattr(node, 'stdout', '') or '').strip(), 'error': f'node must be >= {floor}', 'at': stamp(now)})
+                    'error': 'node changed or no longer resolves through PATH after preflight', 'at': stamp(now)})
                 return 1
-        try:
-            result = runner(command['argv'], cwd=command['cwd'], env=env, capture_output=stage == 'lunch', text=True,
-                            timeout=command['timeoutSeconds'])
-        except subprocess.TimeoutExpired:
-            release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
-                'error': f'exceeded {command.get("timeoutSeconds")} s', 'at': stamp(now)})
-            return 1
-        outcome = {'returncode': result.returncode}
-        ok = result.returncode == 0
-        if stage in PREPARATION:
-            paths = recipe['preparation']['vendor']['collisionPaths'] if stage == 'vendor' else [recipe['preparation']['lunch']['outDir']]
-            consumed = sum(measure(op['sourceRoot']/rel) for rel in paths)
-            bound = recipe['preparation'][stage]['boundBytes']
-            outcome.update(consumedBytes=consumed, boundBytes=bound, boundKind=recipe['preparation']['boundsKind'])
-            if consumed > bound:
-                ok, outcome['error'] = False, f'consumed {consumed} bytes, above the {bound}-byte bound (outputs are kept, not deleted)'
-        if stage == 'lunch' and result.returncode == 0:
-            seen = dict(line.split('=', 1) for line in (result.stdout or '').splitlines() if '=' in line)
+            node = supervise(command['nodeVersion'], command['cwd'], env, prep['vendor']['node']['versionTimeoutSeconds'],
+                             limits, capture=True, statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
+            major = node_major(node.get('stdout'))
+            floor = prep['vendor']['node']['minMajor']
+            if node['returncode'] or node['stopped'] or major is None or major < floor:
+                release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False, 'node': report['facts']['node'],
+                    'nodeVersion': (node.get('stdout') or '').strip(), 'error': f'node must be >= {floor}', 'at': stamp(now)})
+                return 1
+        paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
+        watch = [str(op['sourceRoot']/rel) for rel in paths]
+        outcome = supervise(command['argv'], command['cwd'], env, command['timeoutSeconds'], limits, watch=watch,
+                            capture=stage == 'lunch', statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
+        stdout = outcome.pop('stdout', '')
+        outcome.update(boundBytes=limits['boundBytes'], boundKind=prep['boundsKind'])
+        ok = outcome['returncode'] == 0 and not outcome['stopped']
+        if outcome['stopped']:
+            outcome['error'] = f'stopped: {outcome["stopped"]} (outputs are kept, not deleted)'
+        elif outcome['consumedBytes'] > limits['boundBytes']:
+            ok, outcome['error'] = False, (f'consumed {outcome["consumedBytes"]} bytes, above the {limits["boundBytes"]}-byte '
+                                           'bound between samples (outputs are kept, not deleted)')
+        if stage == 'vendor':
+            outcome['node'] = report['facts']['node']
+        if stage == 'lunch' and outcome['returncode'] == 0 and not outcome['stopped']:
+            seen = dict(line.split('=', 1) for line in stdout.splitlines() if '=' in line)
             outcome['targets'] = {k: seen.get(k) for k in LUNCH_VARS}
-            if outcome['targets'] != recipe['preparation']['lunch']['expect']:
-                ok, outcome['error'] = False, f'lunch targets {outcome["targets"]} are not {recipe["preparation"]["lunch"]["expect"]}'
+            if outcome['targets'] != prep['lunch']['expect']:
+                ok, outcome['error'] = False, f'lunch targets {outcome["targets"]} are not {prep["lunch"]["expect"]}'
         release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
     return 0 if ok else 1
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('action', choices=('plan', 'preflight', 'run'))
-    parser.add_argument('--stage', required=True, choices=STAGES)
+    parser.add_argument('action', choices=('plan', 'preflight', 'run', 'inspect'))
+    parser.add_argument('--stage', choices=STAGES)
+    parser.add_argument('--max-entries', type=int, default=200000)
+    parser.add_argument('--max-seconds', type=int, default=900)
     parser.add_argument('--recipe', default=str(RECIPE))
     parser.add_argument('--host', required=True)
     parser.add_argument('--lock', required=True)
@@ -536,6 +752,11 @@ def main(argv=None):
         recipe = load(a.recipe)
         op = operator(a.host, a.source_root, a.jobs, a.lock, a.download_dir, a.integration_dir,
             recipe['compile']['maxJobs'], a.inputs_receipt, a.node)
+        if a.action == 'inspect':
+            print(json.dumps(inspect(recipe, op, max_entries=a.max_entries, max_seconds=a.max_seconds), indent=2, default=str))
+            return 0
+        if a.stage is None:
+            raise InvalidInput(f'{a.action} needs --stage')
         if a.action == 'run':
             if not a.receipt_dir:
                 raise InvalidInput('run needs --receipt-dir')

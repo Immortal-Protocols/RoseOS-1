@@ -192,6 +192,16 @@
       "next": "adopt the device_common 1f5ba267 and platform_system_core 322ff512 fixtures as frankel/rango do; until then classify reports `contract:blazer pinned generator layout` and no blazer archive can complete"
     },
     {
+      "input": "enforced byte quota and full descendant containment for the preparation stages",
+      "owner": "Infra with Chief (host-side authority)",
+      "next": "the helper's limits are a sampled stop of the stage's process group; an enforced quota (project quota, loop device or cgroup io) and containment of descendants that start their own session (cgroup or systemd scope) need host configuration that is not authorized"
+    },
+    {
+      "input": "isolated source tree construction for preparation",
+      "owner": "Infra (separately scoped)",
+      "next": "copy or reconstruct the pinned tree outside the production source root with no writable hardlinks and no assumed reflink, excluding outputs, signing material and caches; byte and time cost unknown and not in the 4.5 h / 144 GiB stage figures"
+    },
+    {
       "input": "physical first-install acceptance on a Pixel 10 Pro",
       "owner": "QA with an explicit device handback",
       "next": "only after a classifier-ready archive exists"
