@@ -144,8 +144,10 @@ final class CurrentApps {
   * sessionId, taskId, generation, apps[{packageName, front, target}], read as fields (null when absent). Proposed
   * additions this also reads, absent in PR355: instance (the controller process's epoch, so a restart is a new
   * registration even though its generation starts again), sessionStatus (ready|blocked|launching, for each card's
-  * state) and complete (true only when the list is attested to be every app on the session's device). Without complete
-  * the list is never shown as the whole set (INCOMPLETE); without sessionStatus the read is malformed (no state is
+  * state) and complete (true only when the list is attested to be every app on the session's device). Without
+  * complete:true neither a list nor an empty "none" is shown as authoritative (INCOMPLETE, the loading/unavailable
+  * state); App Core's incompleteReason enum is not settled, so its value is not read. Without sessionStatus the read is
+  * malformed (no state is
   * guessed). The preview handle goes only to the topmost front app: PR340 frames the session display, so the apps
   * behind it say live view isn't available. registrationFallback names this reader when instance is absent. */
  static final class ReplyApp { final String packageName;final boolean front,target;
@@ -156,7 +158,10 @@ final class CurrentApps {
   if(status==null||generation==null)return Snapshot.unavailable(reg,gen,UNREADABLE);
   switch(status){
    case "locked":return Snapshot.unavailable(reg,gen,LOCKED);
-   case "none":return apps==null||apps.isEmpty()?new Snapshot(reg,gen,true,"",Collections.<App>emptyList()):Snapshot.unavailable(reg,gen,MALFORMED);
+   // An empty list is authoritative only when attested complete (App Core's correction: the reply could not tell
+   // incomplete from genuinely empty); anything else is unavailable, never "none running".
+   case "none":if(apps!=null&&!apps.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+    return Boolean.TRUE.equals(complete)?new Snapshot(reg,gen,true,"",Collections.<App>emptyList()):Snapshot.unavailable(reg,gen,INCOMPLETE);
    case "live":break;
    default:return Snapshot.unavailable(reg,gen,UNREADABLE);
   }

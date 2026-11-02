@@ -42,10 +42,14 @@ public final class CurrentAppsReplyTest {
         expect(CurrentApps.text(CurrentApps.INCOMPLETE).contains("every app"), "said plainly");
 
         // none / locked / malformed / unreadable.
-        expect(CurrentApps.fromReply("r", "none", null, null, 3L, Collections.<ReplyApp>emptyList(), "i", null, null).available, "none: nothing running, no completeness needed");
-        expect(CurrentApps.fromReply("r", "none", null, null, 3L, Collections.<ReplyApp>emptyList(), "i", null, null).apps.isEmpty(), "none: empty");
+        Snapshot attestedNone = CurrentApps.fromReply("r", "none", null, null, 3L, Collections.<ReplyApp>emptyList(), "i", null, true);
+        expect(attestedNone.available && attestedNone.apps.isEmpty(), "none attested complete: authoritatively nothing running");
+        for (Boolean c : new Boolean[]{null, false}) {
+            Snapshot n = CurrentApps.fromReply("r", "none", null, null, 3L, Collections.<ReplyApp>emptyList(), "i", null, c);
+            expect(!n.available && n.reason.equals(CurrentApps.INCOMPLETE), "none with complete=" + c + ": unavailable, never 'none running'");
+        }
         expect(CurrentApps.fromReply("r", "locked", null, null, 3L, Collections.<ReplyApp>emptyList(), "i", null, null).reason.equals(CurrentApps.LOCKED), "locked");
-        expect(CurrentApps.fromReply("r", "none", null, null, 3L, apps(new ReplyApp(CALC, true, true)), "i", null, null).reason.equals(CurrentApps.MALFORMED), "none with members: malformed");
+        expect(CurrentApps.fromReply("r", "none", null, null, 3L, apps(new ReplyApp(CALC, true, true)), "i", null, true).reason.equals(CurrentApps.MALFORMED), "none with members: malformed");
         expect(live(8, null, true, new ReplyApp(CALC, true, true)).reason.equals(CurrentApps.MALFORMED), "no sessionStatus: no guessed state");
         expect(live(8, "ready", true, new ReplyApp("", true, true)).reason.equals(CurrentApps.MALFORMED), "empty package");
         expect(CurrentApps.fromReply("r", "live", "", "t", 1L, apps(new ReplyApp(CALC, true, true)), "i", "ready", true).reason.equals(CurrentApps.MALFORMED), "live without session");
@@ -55,10 +59,10 @@ public final class CurrentAppsReplyTest {
         // Controller restart: a new instance is a new registration even though its generation starts again.
         Tracker r = new Tracker();
         r.apply(live(40, "ready", true, new ReplyApp(CALC, true, true)));
-        Snapshot restarted = CurrentApps.fromReply("reader-1", "none", null, null, 1L, Collections.<ReplyApp>emptyList(), "i-2", null, null);
+        Snapshot restarted = CurrentApps.fromReply("reader-1", "none", null, null, 1L, Collections.<ReplyApp>emptyList(), "i-2", null, true);
         expect(r.apply(restarted) && r.state() == State.EMPTY, "restart: the lower generation of a new instance applies");
         expect(!r.apply(live(41, "ready", true, new ReplyApp(CALC, true, true))) && r.apps().isEmpty(), "the old instance's late reply never resurrects");
-        Snapshot noInstance = CurrentApps.fromReply("reader-7", "none", null, null, 1L, Collections.<ReplyApp>emptyList(), null, null, null);
+        Snapshot noInstance = CurrentApps.fromReply("reader-7", "none", null, null, 1L, Collections.<ReplyApp>emptyList(), null, null, true);
         expect(noInstance.registration.equals("reader-7"), "without instance: the reader's own registration");
         System.out.println("CurrentAppsReplyTest: " + checks + " checks passed");
     }
