@@ -1039,7 +1039,8 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
         move = self.FAN[self.FAN.index('private boolean move(int orderStep)'):self.FAN.index('protected void onMeasure(')]
         self.assertIn('int from = focused != null ? cards.indexOfChild(focused) : centred();', move)
         self.assertIn('if (target == from) return false;', move)
-        for action in ('ACTION_SCROLL_FORWARD) return move(1);', 'ACTION_SCROLL_BACKWARD) return move(-1);',
+        for action in ('ACTION_SCROLL_FORWARD) return move(RoseFan.orderStep(1, rtl()));',
+                'ACTION_SCROLL_BACKWARD) return move(RoseFan.orderStep(-1, rtl()));',
                 'accessibilityActionScrollRight) return move(RoseFan.orderStep(1, rtl()));'):
             self.assertIn(action, self.FAN, 'a screen reader scroll moves exactly one card')
         self.assertIn('move(RoseFan.orderStep(h > 0 ? 1 : -1, rtl()));', self.FAN, 'a wheel notch moves one card')

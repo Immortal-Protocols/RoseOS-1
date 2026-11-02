@@ -225,9 +225,11 @@ final class RoseAgentFan extends HorizontalScrollView {
 
     @Override
     public boolean performAccessibilityAction(int action, Bundle arguments) {
-        // A screen reader's scroll moves one card, never a page that stops between cards.
-        if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) return move(1);
-        if (action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) return move(-1);
+        // A screen reader's scroll moves one card, never a page that stops between cards. HorizontalScrollView offers
+        // forward and backward by scroll position (forward = toward a larger scroll), so they follow the screen
+        // direction like right and left; in card order they would do nothing at an end in right to left.
+        if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) return move(RoseFan.orderStep(1, rtl()));
+        if (action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) return move(RoseFan.orderStep(-1, rtl()));
         if (action == android.R.id.accessibilityActionScrollRight) return move(RoseFan.orderStep(1, rtl()));
         if (action == android.R.id.accessibilityActionScrollLeft) return move(RoseFan.orderStep(-1, rtl()));
         return super.performAccessibilityAction(action, arguments);
