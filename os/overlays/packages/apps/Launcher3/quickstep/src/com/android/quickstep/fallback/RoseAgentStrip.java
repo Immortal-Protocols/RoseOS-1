@@ -184,6 +184,23 @@ public final class RoseAgentStrip extends LinearLayout {
             }
         }
 
+        /**
+         * The same dispatch's devices with their current apps, front or hidden: the platform's one membership source
+         * (#156 parity), applied by the same generation rule. Membership never comes from task history.
+         */
+        @Override
+        public void onAutomatedDeviceAppsChanged(long snapshotGeneration, int[] deviceIds, String[] ownerPackages,
+                int[] ownerUids, boolean[] deviceComplete, int[] appDeviceIds, String[] appPackageNames) {
+            synchronized (this) {
+                if (!ownership.acceptApps(snapshotGeneration, deviceIds, ownerPackages, ownerUids, deviceComplete,
+                        appDeviceIds, appPackageNames)) {
+                    return;
+                }
+                generation++;
+            }
+            refreshStrips();
+        }
+
         synchronized RoseAgentWork.Owners owners() { return ownership.snapshot(); }
 
         /** The session displays seen before and not listed now; remembers the ones listed now. */
@@ -335,6 +352,7 @@ public final class RoseAgentStrip extends LinearLayout {
         Map<Integer, Bitmap> frames = new HashMap<>();
         if (work.state != RoseAgentWork.State.AVAILABLE) return frames;
         for (RoseAgentWork.Task task : work.items) {
+            if (task.taskId == RoseAgentWork.NO_TASK) continue; // a member without its own task: nothing to capture
             if (RoseAgentWork.preview(task, locked) != RoseAgentWork.Preview.CAPTURE) continue;
             Bitmap frame = frame(task.taskId, framePx);
             if (frame != null) frames.put(task.taskId, frame);

@@ -12,8 +12,8 @@ import java.util.Map;
  * Replays fixtures/rose-switcher/automated-devices-scenarios.json (converted line by line by test_rose_switcher.py)
  * through the production RoseAgentWork.Ownership and RoseAgentWork.of. Reads stdin; prints one result line per
  * scenario: name|state|cards|unconfirmed|reason. Lines: S name, R (reset), G gen ids pkgs uids (each "n:a,b" or "~" for
- * a null array; "^" for a null element), D display:device,..., L released,..., T id display user pkg top,
- * E (evaluate).
+ * a null array; "^" for a null element), A gen ids pkgs uids complete appIds appPkgs (onAutomatedDeviceAppsChanged),
+ * D display:device,..., L released,..., T id display user pkg top, E (evaluate).
  */
 public final class RoseAgentScenarios {
     /** "n:a,b,..." with n elements (so [""] and [] differ), or "~" for a null array. */
@@ -36,6 +36,13 @@ public final class RoseAgentScenarios {
         String[] parts = elements(s);
         if (parts != null) for (int i = 0; i < parts.length; i++) if (parts[i].equals("^")) parts[i] = null;
         return parts;
+    }
+    static boolean[] bools(String s) {
+        String[] parts = elements(s);
+        if (parts == null) return null;
+        boolean[] out = new boolean[parts.length];
+        for (int i = 0; i < parts.length; i++) out[i] = Boolean.parseBoolean(parts[i]);
+        return out;
     }
     static String join(List<RoseAgentWork.Task> tasks) {
         StringBuilder b = new StringBuilder();
@@ -60,6 +67,10 @@ public final class RoseAgentScenarios {
                     break;
                 case "R": ownership.reset(); break;
                 case "G": ownership.accept(Long.parseLong(f[1]), ints(f[2]), strings(f[3]), ints(f[4])); break;
+                case "A":
+                    ownership.acceptApps(Long.parseLong(f[1]), ints(f[2]), strings(f[3]), ints(f[4]), bools(f[5]),
+                        ints(f[6]), strings(f[7]));
+                    break;
                 case "D": devices.put(Integer.parseInt(f[1]), Integer.parseInt(f[2])); break;
                 case "L": released.add(Integer.parseInt(f[1])); break;
                 case "T":

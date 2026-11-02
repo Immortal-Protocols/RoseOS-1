@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class RoseAgentWorkTest {
     static int checks;
@@ -37,8 +39,28 @@ public final class RoseAgentWorkTest {
         Arrays.fill(uids, CONTROLLER_UID);
         return owned(1, deviceIds, packages, uids);
     }
+    /**
+     * The per-device apps the platform reports in the same dispatch when it is current: every package of the owner's
+     * user with an activity (here: a task) on that device's displays. Owners not yet received stay so.
+     */
+    static RoseAgentWork.Owners withTaskApps(RoseAgentWork.Owners o, Map<Integer, Integer> devices,
+            List<RoseAgentWork.Task> tasks) {
+        if (o == null || !o.received || devices == null || tasks == null) return o;
+        Map<Integer, Set<String>> apps = new HashMap<>();
+        for (int d : o.byDevice.keySet()) apps.put(d, new HashSet<>());
+        for (RoseAgentWork.Task t : tasks) {
+            Integer d = devices.get(t.displayId);
+            if (d != null && apps.containsKey(d) && t.userId == o.byDevice.get(d).uid / 100000) apps.get(d).add(t.packageName);
+        }
+        return new RoseAgentWork.Owners(true, false, o.byDevice, o.generation, true, false, o.generation, apps,
+            Collections.emptySet());
+    }
+    static RoseAgentWork derived(int controllerUid, int user, RoseAgentWork.Owners owners, Map<Integer, Integer> devices,
+            List<Integer> released, List<RoseAgentWork.Task> tasks, boolean complete) {
+        return RoseAgentWork.of(controllerUid, user, withTaskApps(owners, devices, tasks), devices, released, tasks, complete);
+    }
     static RoseAgentWork work(RoseAgentWork.Owners owners, Map<Integer, Integer> sessionDevices, List<RoseAgentWork.Task> tasks) {
-        return RoseAgentWork.of(CONTROLLER_UID, 0, owners, sessionDevices, Collections.emptyList(), tasks, true);
+        return derived(CONTROLLER_UID, 0, owners, sessionDevices, Collections.emptyList(), tasks, true);
     }
     static List<Integer> ids(List<RoseAgentWork.Task> tasks) {
         List<Integer> out = new ArrayList<>();
@@ -75,9 +97,10 @@ public final class RoseAgentWorkTest {
         expect(RoseAgentWork.decide(mail, moved) == RoseAgentWork.Open.CHANGED, "Same task id on a new session display");
         RoseAgentWork replaced = work(rose, devices(7, 7), Arrays.asList(task(2, 7, 0, "com.example.chat", true)));
         expect(RoseAgentWork.decide(mail, replaced) == RoseAgentWork.Open.CHANGED, "Same task id, another app: changed");
-        RoseAgentWork otherUser = RoseAgentWork.of(CONTROLLER_UID, 10, rose, devices(7, 7), Collections.emptyList(),
+        RoseAgentWork otherUser = derived(CONTROLLER_UID, 10, rose, devices(7, 7), Collections.emptyList(),
             Arrays.asList(task(2, 7, 10, "com.example.mail", true)), true);
-        expect(RoseAgentWork.decide(mail, otherUser) == RoseAgentWork.Open.CHANGED, "Another user's task is never opened");
+        expect(RoseAgentWork.decide(mail, otherUser) != RoseAgentWork.Open.WATCH && otherUser.items.isEmpty(),
+            "Another user's task on Rose's device is not in the platform's list for Rose's user: never a card, never opened");
         RoseAgentWork gone = work(rose, devices(7, 7), Arrays.asList(task(3, 7, 0, "com.example.maps", true)));
         expect(RoseAgentWork.decide(mail, gone) == RoseAgentWork.Open.GONE, "A closed task is gone");
         expect(RoseAgentWork.decide(mail, RoseAgentWork.unavailable("x")) == RoseAgentWork.Open.GONE
@@ -119,7 +142,7 @@ public final class RoseAgentWorkTest {
         expect(work(rose, devices(11, 11), Arrays.asList(task(9, 11, 0, "com.example.mail", true))).items.isEmpty(),
             "4: a stale owner entry never makes another device's task Rose's");
         // 5. A display released but still holding a task: unconfirmed, never a card.
-        RoseAgentWork released = RoseAgentWork.of(CONTROLLER_UID, 0, rose, devices(), Arrays.asList(7),
+        RoseAgentWork released = derived(CONTROLLER_UID, 0, rose, devices(), Arrays.asList(7),
             Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
         expect(released.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(released.reason)
             && ids(released.unattributed).equals(Arrays.asList(2)), "5: released session display: unconfirmed");
@@ -203,20 +226,20 @@ public final class RoseAgentWorkTest {
             .state == RoseAgentWork.State.EMPTY, "Not received, no session task: a truthful empty row");
 
         // Read-level fail-closed states.
-        expect(RoseAgentWork.of(CONTROLLER_UID, 0, rose, devices(7, 7), Collections.emptyList(), tasks, false).items.isEmpty()
-            && RoseAgentWork.UNCONFIRMED.equals(RoseAgentWork.of(CONTROLLER_UID, 0, rose, devices(7, 7),
+        expect(derived(CONTROLLER_UID, 0, rose, devices(7, 7), Collections.emptyList(), tasks, false).items.isEmpty()
+            && RoseAgentWork.UNCONFIRMED.equals(derived(CONTROLLER_UID, 0, rose, devices(7, 7),
                 Collections.emptyList(), tasks, false).reason), "A possibly truncated task list: unconfirmed");
         expect(RoseAgentWork.unconfirmed().items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(RoseAgentWork.unconfirmed().reason),
             "A snapshot applied during a read gives no card");
-        expect(RoseAgentWork.of(-1, 0, rose, devices(7, 7), Collections.emptyList(), tasks, true).state
+        expect(derived(-1, 0, rose, devices(7, 7), Collections.emptyList(), tasks, true).state
             == RoseAgentWork.State.UNAVAILABLE, "No controller for this user is unavailable, not empty");
-        expect(RoseAgentWork.of(CONTROLLER_UID, 0, null, devices(7, 7), Collections.emptyList(), tasks, true).state
+        expect(derived(CONTROLLER_UID, 0, null, devices(7, 7), Collections.emptyList(), tasks, true).state
             == RoseAgentWork.State.UNAVAILABLE
-            && RoseAgentWork.of(CONTROLLER_UID, 0, rose, null, Collections.emptyList(), tasks, true).state
+            && derived(CONTROLLER_UID, 0, rose, null, Collections.emptyList(), tasks, true).state
             == RoseAgentWork.State.UNAVAILABLE
-            && RoseAgentWork.of(CONTROLLER_UID, 0, rose, devices(7, 7), null, tasks, true).state
+            && derived(CONTROLLER_UID, 0, rose, devices(7, 7), null, tasks, true).state
             == RoseAgentWork.State.UNAVAILABLE
-            && RoseAgentWork.of(CONTROLLER_UID, 0, rose, devices(7, 7), Collections.emptyList(), null, true).state
+            && derived(CONTROLLER_UID, 0, rose, devices(7, 7), Collections.emptyList(), null, true).state
             == RoseAgentWork.State.UNAVAILABLE, "An unreadable platform state is unavailable");
         expect("Rose's work could not be read (tasks)".equals(RoseAgentWork.failed(RoseAgentWork.Step.TASKS).reason)
             && "Rose's work could not be read (controller)".equals(RoseAgentWork.failed(RoseAgentWork.Step.CONTROLLER).reason)
@@ -288,13 +311,13 @@ public final class RoseAgentWorkTest {
         RoseAgentWork closed = work(life.snapshot(), devices(7, 7), Arrays.asList(task(2, 7, 0, "com.example.mail", true)));
         expect(ids(closed.items).equals(Arrays.asList(2)), "close: the closed app is gone at once");
         life.accept(2, new int[0], new String[0], new int[0]);
-        RoseAgentWork releasedControl = RoseAgentWork.of(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
+        RoseAgentWork releasedControl = derived(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
             Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
         expect(releasedControl.items.isEmpty() && !releasedControl.hasLiveView(false),
             "control released (session closed, display released): no card and no capture, even if the task lingers");
-        RoseAgentWork gone2 = RoseAgentWork.of(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
+        RoseAgentWork gone2 = derived(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
             Collections.emptyList(), true);
-        RoseAgentWork reentry = RoseAgentWork.of(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
+        RoseAgentWork reentry = derived(CONTROLLER_UID, 0, life.snapshot(), devices(), Arrays.asList(7),
             Collections.emptyList(), true);
         expect(gone2.state == RoseAgentWork.State.EMPTY && reentry.state == RoseAgentWork.State.EMPTY && reentry.items.isEmpty(),
             "re-entry and recreation do not resurrect the old card: each read keeps nothing");
@@ -305,6 +328,116 @@ public final class RoseAgentWorkTest {
         life.accept(1, new int[] {8}, new String[] {RoseAgentWork.CONTROLLER}, new int[] {CONTROLLER_UID});
         expect(ids(work(life.snapshot(), devices(8, 8), Arrays.asList(task(4, 8, 0, "com.example.chat", true))).items)
             .equals(Arrays.asList(4)), "after reconnect only the new session's app, never the old one");
+        // #156 parity: membership is the platform's per-device app list (onAutomatedDeviceAppsChanged), front or hidden,
+        // never task history. One ledger fed exactly as one dispatch delivers: devices, then apps, same generation.
+        String C = RoseAgentWork.CONTROLLER;
+        RoseAgentWork.Ownership par = new RoseAgentWork.Ownership();
+        par.accept(4, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
+        expect(RoseAgentWork.NOT_REPORTED.equals(RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7),
+            Collections.emptyList(), Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true).reason),
+            "devices without their apps yet: not reported, never a guessed card");
+        par.acceptApps(4, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {true},
+            new int[] {7, 7, 7}, new String[] {"com.example.mail", "com.example.maps", "com.example.notes"});
+        List<RoseAgentWork.Task> parTasks = Arrays.asList(task(2, 7, 0, "com.example.mail", true),
+            task(3, 7, 0, "com.example.maps", false), task(8, 7, 0, "com.example.maps", false));
+        RoseAgentWork parity = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            parTasks, true);
+        expect(ids(parity.items).equals(Arrays.asList(2, 3, RoseAgentWork.NO_TASK)) && parity.reason == null,
+            "one card per member app: mail (front), maps (its front-most task only), notes (hidden in another task)");
+        RoseAgentWork.Task notes = parity.items.get(2);
+        expect(notes.packageName.equals("com.example.notes") && notes.displayId == 7 && !notes.topOfDisplay
+            && RoseAgentWork.preview(notes, false) == RoseAgentWork.Preview.BEHIND
+            && RoseAgentWork.decide(notes, parity) == RoseAgentWork.Open.NOT_CURRENT,
+            "a member without its own task: shown, never captured, never opened as Rose's current screen");
+        expect(parity.working() == 1 && "1 task in progress".equals(parity.linkLabel()), "only the front app is in progress");
+        // A task on Rose's device whose app is not (yet) in the platform's list is in flight: held, not a card.
+        RoseAgentWork inFlightApp = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            Arrays.asList(task(9, 7, 0, "com.example.chat", true), task(2, 7, 0, "com.example.mail", false)), true);
+        expect(ids(inFlightApp.items).contains(2) && !ids(inFlightApp.items).contains(9)
+            && ids(inFlightApp.unattributed).equals(Arrays.asList(9)) && RoseAgentWork.UNCONFIRMED.equals(inFlightApp.reason),
+            "an unlisted running task is unconfirmed, the listed apps stay");
+        // A read between the two callbacks of one dispatch (devices at 5, apps still at 4) is not one state.
+        par.accept(5, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
+        RoseAgentWork between = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            parTasks, true);
+        expect(between.items.isEmpty() && RoseAgentWork.UNCONFIRMED.equals(between.reason), "mid-dispatch read: unconfirmed");
+        // Launch: the next dispatch lists a new app; a finished logical task removes nothing; close removes it.
+        par.acceptApps(5, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {true},
+            new int[] {7, 7}, new String[] {"com.example.mail", "com.example.chat"});
+        RoseAgentWork launchedApp = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            Arrays.asList(task(9, 7, 0, "com.example.chat", true), task(2, 7, 0, "com.example.mail", false)), true);
+        expect(ids(launchedApp.items).equals(Arrays.asList(9, 2)) && launchedApp.reason == null,
+            "launch: the platform's list and the task agree; maps and notes left the list and are gone");
+        par.accept(6, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
+        par.acceptApps(6, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {true},
+            new int[] {7}, new String[] {"com.example.mail"});
+        RoseAgentWork closedApp = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
+        expect(ids(closedApp.items).equals(Arrays.asList(2)), "close: chat's activities finished, so it is gone");
+        RoseAgentWork stillRunning = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7),
+            Collections.emptyList(), Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
+        expect(ids(stillRunning.items).equals(Arrays.asList(2)),
+            "a completed logical task with mail still running keeps mail: membership is activities, not task status");
+        // Another user's activity on Rose's device (deviceComplete false): the listed apps show, the row says some is not.
+        par.accept(7, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
+        par.acceptApps(7, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {false},
+            new int[] {7}, new String[] {"com.example.mail"});
+        RoseAgentWork partly2 = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
+        expect(ids(partly2.items).equals(Arrays.asList(2)) && RoseAgentWork.INCOMPLETE.equals(partly2.reason),
+            "incomplete device: the attested apps with an explicit note, never claimed complete");
+        par.accept(8, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
+        par.acceptApps(8, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {false},
+            new int[0], new String[0]);
+        RoseAgentWork onlyOther = RoseAgentWork.of(CONTROLLER_UID, 0, par.snapshot(), devices(7, 7), Collections.emptyList(),
+            Collections.emptyList(), true);
+        expect(onlyOther.state == RoseAgentWork.State.UNAVAILABLE && RoseAgentWork.INCOMPLETE.equals(onlyOther.reason),
+            "only another user's activity on Rose's device: unavailable, not \"No background work\"");
+        // Malformed per-device apps are never partly applied; the row names the step and the baseline is kept.
+        Object[][] badApps = {
+            {new boolean[] {true, true}, new int[0], new String[0]},
+            {null, new int[0], new String[0]},
+            {new boolean[] {true}, new int[] {7}, new String[0]},
+            {new boolean[] {true}, new int[] {11}, new String[] {"com.example.mail"}},
+            {new boolean[] {true}, new int[] {7, 7}, new String[] {"com.example.mail", "com.example.mail"}},
+            {new boolean[] {true}, new int[] {7}, new String[] {null}},
+            {new boolean[] {true}, new int[] {7}, new String[] {""}},
+            {new boolean[] {true}, null, new String[0]}};
+        for (Object[] bad : badApps) {
+            RoseAgentWork.Ownership o = new RoseAgentWork.Ownership();
+            o.accept(3, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID});
+            o.acceptApps(3, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {true},
+                new int[] {7}, new String[] {"com.example.mail"});
+            o.acceptApps(4, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, (boolean[]) bad[0], (int[]) bad[1],
+                (String[]) bad[2]);
+            RoseAgentWork row = RoseAgentWork.of(CONTROLLER_UID, 0, o.snapshot(), devices(7, 7), Collections.emptyList(),
+                Arrays.asList(task(2, 7, 0, "com.example.mail", true)), true);
+            expect(o.snapshot().appsMalformed && row.items.isEmpty()
+                && "Rose's work could not be read (ownership)".equals(row.reason), "malformed apps rejected whole");
+            expect(!o.acceptApps(3, new int[] {7}, new String[] {C}, new int[] {CONTROLLER_UID}, new boolean[] {true},
+                new int[] {7}, new String[] {"com.example.mail"}) && o.acceptApps(4, new int[] {7}, new String[] {C},
+                new int[] {CONTROLLER_UID}, new boolean[] {true}, new int[] {7}, new String[] {"com.example.mail"}),
+                "the apps baseline did not advance: the old generation stays rejected, the next valid one restores");
+        }
+        // Two members without tasks: refusing one never names the other.
+        RoseAgentWork.Ownership twoDev = new RoseAgentWork.Ownership();
+        twoDev.accept(1, new int[] {7, 8}, new String[] {C, C}, new int[] {CONTROLLER_UID, CONTROLLER_UID});
+        twoDev.acceptApps(1, new int[] {7, 8}, new String[] {C, C}, new int[] {CONTROLLER_UID, CONTROLLER_UID},
+            new boolean[] {true, true}, new int[] {7, 8}, new String[] {"com.example.notes", "com.example.docs"});
+        RoseAgentWork placed = RoseAgentWork.of(CONTROLLER_UID, 0, twoDev.snapshot(), devices(7, 7), Collections.emptyList(),
+            Collections.emptyList(), true);
+        RoseAgentWork.Task notesCard = placed.items.get(0);
+        expect(placed.items.size() == 1 && notesCard.packageName.equals("com.example.notes") && placed.unattributed.size() == 1
+            && placed.unattributed.get(0).packageName.equals("com.example.docs")
+            && RoseAgentWork.decide(notesCard, placed) == RoseAgentWork.Open.NOT_CURRENT,
+            "a member whose device has no known display is unconfirmed; the placed one is not refused in its name");
+        expect(RoseAgentWork.decide(new RoseAgentWork.Task(RoseAgentWork.NO_TASK, 0, 0, "com.example.docs", "Docs", false),
+            placed) == RoseAgentWork.Open.UNATTRIBUTED, "and the unconfirmed one is refused as unconfirmed");
+
+        par.reset();
+        expect(!par.snapshot().received && !par.snapshot().appsReceived && par.snapshot().appsByDevice.isEmpty(),
+            "reconnect clears devices and apps");
+
         System.out.println("RoseAgentWorkTest: " + checks + " checks passed");
     }
 }
