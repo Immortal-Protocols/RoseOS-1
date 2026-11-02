@@ -161,6 +161,12 @@ QWEN_CONTRACT_FILES = ('contract_session.py', 'qwen_contract_requests.json')
 QWEN_CONTRACT_VALUE = re.compile(
     r'([0-9a-f]{64}):([a-z0-9][a-z0-9-]{0,31}):(contract|chat|tool|long|conformance)')
 MODEL_HOLD = '/run/rose-models/model-hold'  # muse-glimmer.service's ExecCondition: no model start while it exists
+# Hold-only rollback (MODELS-HOLD-ONLY-001): metadata rose-models-hold set to anything holds the model on every boot
+# until it is removed. It is never consumed and never runs a diagnostic. Its value should be the payload sha256; any
+# other value still holds (fail closed) and is reported. The model units are never enabled for boot (stage_service
+# starts them itself), so on a VM where they are disabled systemd starts no model before this is read.
+HOLD_KEY, HOLD_VALUE = 'attributes/rose-models-hold', re.compile(r'[0-9a-f]{64}')
+HOLD_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-health.service')
 DIAG_CONTAINER, DIAG_SECONDS, DIAG_BYTES, DIAG_STOP_S = 'muse-glimmer-validate', 120, 2 << 20, 120
 MODEL_UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-verify-full.timer',
                'models-attestation-status.timer')
@@ -602,12 +608,15 @@ def stage_service(host, ctx):
     os.chmod(host.path('/var/lib/rose-models/acme'), 0o755)  # nginx workers read the webroot unprivileged
     if changed:
         must(host, ['systemctl', 'daemon-reload'], 'daemon_reload_failed', 120)
-    if host.path(MODEL_HOLD).exists():  # diagnostic branch: enable for later boots, start nothing that runs the model
-        must(host, ['systemctl', 'enable', *MODEL_UNITS], 'service_enable_failed', 300)
+    # The model units are never enabled for boot (MODELS-HOLD-ONLY-001): systemd would start them before this
+    # bootstrap reads the hold and diagnostic keys. They are disabled (undoing any older payload's enable) and started
+    # here, on every boot, only after that decision.
+    must(host, ['systemctl', 'disable', *MODEL_UNITS], 'service_enable_failed', 300)
+    if host.path(MODEL_HOLD).exists():  # held this boot: start nothing that runs the model
         must(host, ['systemctl', 'start', 'models-verify-full.timer', 'models-attestation-status.timer'],
              'service_enable_failed', 300)
     else:
-        must(host, ['systemctl', 'enable', '--now', *MODEL_UNITS], 'service_enable_failed', 300)
+        must(host, ['systemctl', 'start', *MODEL_UNITS], 'service_enable_failed', 300)
     health = host.path('/run/rose-models/health.json')
     try:
         model = json.loads(health.read_text()).get('status', 'unknown')
@@ -881,6 +890,84 @@ def stage_edge(host, ctx):
     must(host, ['systemctl', 'enable', '--now', *RENEWAL_UNITS], 'renewal_timer_enable_failed', 120)
     host.run(['systemctl', 'start', '--no-block', 'models-renewal-status.service'], 30)  # evidence now, not in 5 min
     return 'active'
+
+
+def hold_request(host, ctx):
+    """None (no hold key) or the key's validity: 'this_payload', 'other_payload' or 'malformed'. Any value holds."""
+    raw = (host.metadata(HOLD_KEY) or '').strip()
+    if not raw:
+        return None
+    if not HOLD_VALUE.fullmatch(raw):
+        return 'malformed'
+    return 'this_payload' if raw == ctx['payloadSha256'] else 'other_payload'
+
+
+def stage_hold(host, ctx):
+    """MODELS-HOLD-ONLY-001: stop and disable the model and health units, then positively verify they are inactive and
+    disabled and that the model slot's container is absent. Nothing is provisioned, no diagnostic runs (none is
+    consumed), and certificates, auth state, the data disk, the GPUs and the installed payload are untouched; the edge
+    and auth units are reported, not changed. The receipt goes to rose-models/hold."""
+    result = {'schema': 'rose-models-hold/1', 'payloadSha256': ctx['payloadSha256'], 'bootId': host.boot_id(),
+              'key': ctx['hold'], 'diagnosticSuppressed': bool((host.metadata(DIAG_KEY) or '').strip()),
+              'modelHeld': True, 'enabledBefore': unit_enabled(host, HOLD_UNITS), 'verified': False}
+
+    def publish():
+        line = json.dumps(result, sort_keys=True, separators=(',', ':'))
+        host.put_guest_attribute('hold', line)
+        host.publish('ROSE-MODELS-HOLD ' + line)
+
+    try:
+        must(host, ['systemctl', 'stop', 'models-health.timer', 'models-health.service', 'muse-glimmer.service'],
+             'hold_stop_failed', 180)
+        must(host, ['systemctl', 'disable', *HOLD_UNITS], 'hold_disable_failed', 120)
+        deadline = host.clock() + DIAG_STOP_S
+        while True:
+            active = unit_active(host, HOLD_UNITS)
+            names = container_names(host, 'muse-glimmer')
+            if names is None:
+                raise Failed('hold_container_state_unknown')
+            if all(v in ('inactive', 'failed') for v in active.values()) and not names:
+                break
+            if host.clock() >= deadline:
+                raise Failed('hold_model_not_stopped', [{'active': active, 'containerGone': not names}])
+            host.sleep(2)
+        enabled = unit_enabled(host, HOLD_UNITS)
+        result.update(active=active, containerAbsent=True, enabledAfter=enabled)
+        if any(v != 'disabled' for v in enabled.values()):
+            raise Failed('hold_units_still_enabled', [{'enabled': enabled}])
+        result['verified'] = True
+    except Failed as f:
+        result['failure'] = str(f)
+        raise
+    finally:
+        result.update(edge=unit_active(host, ('models-edge.service',))['models-edge.service'],
+                      auth=unit_active(host, ('models-auth.service',))['models-auth.service'])
+        publish()
+    return f"held ({ctx['hold']}); model and health stopped, disabled and verified absent"
+
+
+UNIT_STATES = ('active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading', 'enabled', 'disabled',
+               'static', 'masked', 'linked', 'indirect', 'generated', 'transient', 'alias', 'not-found')
+
+
+def unit_active(host, units):
+    """{unit: systemctl is-active state}, a fixed state or 'unknown'."""
+    out = {}
+    for u in units:
+        _, text = host.run(['systemctl', 'is-active', u], 30)
+        state = (text or '').strip()
+        out[u] = state if state in UNIT_STATES else 'unknown'
+    return out
+
+
+def unit_enabled(host, units):
+    """{unit: systemctl is-enabled state}, a fixed state or 'unknown'."""
+    out = {}
+    for u in units:
+        _, text = host.run(['systemctl', 'is-enabled', u], 30)
+        state = (text or '').strip()
+        out[u] = state if state in UNIT_STATES else 'unknown'
+    return out
 
 
 def diagnostic_request(host, ctx):
@@ -1736,6 +1823,7 @@ STAGES = (('disk', stage_disk), ('packages', stage_packages), ('driver', stage_d
           ('service', stage_service), ('diagnostic', stage_diagnostic), ('auth', stage_auth), ('tls', stage_tls),
           ('edge', stage_edge))
 DIAGNOSTIC_STAGES = (('diagnostic', stage_diagnostic),)  # a diagnostic boot provisions nothing
+HOLD_STAGES = (('hold', stage_hold),)  # a hold boot provisions nothing and runs no diagnostic
 INDEPENDENT = {'tls'}  # may still run while auth waits
 
 
@@ -1760,13 +1848,15 @@ def run(host, payload, payload_sha256, now=time.time):
         option = next(o for o in config['options'] if o['id'] == 'a100x2-bf16-vllm-persistent')
         ctx = {'payload': payload, 'runtime': option['runtime'], 'serveArgs': option['container_spec']['args'],
                'model': config['model'], 'results': {}, 'payloadSha256': payload_sha256}
-        ctx['diagnostic'] = diagnostic_request(host, ctx)
-        if ctx['diagnostic'] and ctx['diagnostic'][0] == 'requested':  # before any stage can start the model
+        ctx['hold'] = hold_request(host, ctx)
+        # a hold never runs, or consumes, a diagnostic: the diagnostic key is not even evaluated
+        ctx['diagnostic'] = None if ctx['hold'] else diagnostic_request(host, ctx)
+        if ctx['hold'] or (ctx['diagnostic'] and ctx['diagnostic'][0] == 'requested'):  # before any stage starts it
             host.path(MODEL_HOLD).parent.mkdir(parents=True, exist_ok=True)
-            host.path(MODEL_HOLD).write_text(ctx['diagnostic'][1] + '\n')
+            host.path(MODEL_HOLD).write_text(('hold' if ctx['hold'] else ctx['diagnostic'][1]) + '\n')
         stopped = None
         requested = ctx['diagnostic'] and ctx['diagnostic'][0] == 'requested'
-        for name, fn in DIAGNOSTIC_STAGES if requested else STAGES:
+        for name, fn in HOLD_STAGES if ctx['hold'] else DIAGNOSTIC_STAGES if requested else STAGES:
             if stopped and not (stopped == 'waiting' and name in INDEPENDENT | {'edge'}):
                 ctx['results'][name] = ('skipped', stopped, 0.0)
                 continue
