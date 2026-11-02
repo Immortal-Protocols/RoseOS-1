@@ -674,7 +674,8 @@ class FactoryPackageTest(unittest.TestCase):
                   'target_files_sha256': sha(self.tf.read_bytes()), 'otatools': str(self.otatools),
                   'otatools_sha256': sha(self.otatools.read_bytes()), 'release_script': str(RELEASE_FIXTURE),
                   'release_script_sha256': sha(RELEASE_FIXTURE.read_bytes()), 'avb_pkmd': str(self.avb),
-                  'fastboot_sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9', 'out': str(self.out)}
+                  'fastboot_sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9', 'out': str(self.out),
+                  'lock': str(self.root/'builder.lock')}
         values.update(change)
         return type('Args', (), values)
 
@@ -729,6 +730,24 @@ class FactoryPackageTest(unittest.TestCase):
             self.package(self.args(target_files=str(link)))
         self.assertEqual(self.calls, [])
         self.assertRetained()
+
+    def test_held_shared_lock_refuses_before_anything_is_written(self):
+        import fcntl
+        holder = os.open(self.root/'builder.lock', os.O_RDWR | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self.assertRaisesRegex(hfp.Refused, 'lock_held'):
+            self.package()
+        self.assertFalse(self.out.exists())
+        self.assertEqual(self.calls, [])
+        with self.assertRaisesRegex(hfp.Refused, 'usage_refused: --lock'):
+            self.package(self.args(lock='relative.lock'))
+        self.assertRetained()
+
+    def test_receipt_records_measured_phase_timings(self):
+        timings = self.package()['timings']
+        self.assertEqual(sorted(timings), ['generateSeconds', 'recheckSeconds', 'stageSeconds', 'verifySeconds'])
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in timings.values()))
 
     def test_output_collisions_and_capacity_refuse(self):
         self.out.mkdir()
