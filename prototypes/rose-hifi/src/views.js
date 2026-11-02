@@ -128,7 +128,8 @@
       '<button class="wopen" data-open-window="' + wid + '" aria-label="Inspect ' + esc(app.name + ' — ' + w.label + ', ' + ctx.M.TASKS[w.task].title + ', ' + LABEL[t.state]) + '"></button>' +
       '<header><span class="mini-ico">' + ctx.I.appArt(w.app) + '</span><span class="wl">' + esc(w.label) + '</span></header>' +
       '<div class="wbody" aria-hidden="true">' + windowContent(wid, s, true) + '</div>' +
-      '<footer>' + dot(t.state) + '<span class="wstate">' + esc(SHORT[t.state]) + '</span>' + stopButton(w.task, s) + '</footer></article>';
+      '<footer>' + dot(t.state) + '<span class="wstate">' + esc(SHORT[t.state]) + '</span>' + stopButton(w.task, s) + '</footer>' +
+      '<span class="active-edge" aria-hidden="true"></span></article>';
   }
   function visibleWindows(s) { return ctx.M.WINDOW_ORDER.filter((wid) => s.tasks[ctx.M.WINDOWS[wid].task].state !== 'idle'); }
 
@@ -143,12 +144,13 @@
       '<span class="sw-link-label" id="sw-link-label"></span></div>' +
       '<div class="sw-agent" id="sw-agent" role="list" aria-label="Rose’s background apps" tabindex="0"></div>';
     $('v-agents').innerHTML =
-      '<div class="ivory-bg" aria-hidden="true"></div><div class="surface agents-surface"><h2 class="sr">Rose’s apps</h2><div class="agrid" id="agrid"></div><p class="a-empty" id="a-empty">Rose isn’t using any apps right now.</p></div>' +
+      '<div class="ivory-bg" aria-hidden="true"></div><header class="ag-head"><span class="ag-pearl" aria-hidden="true"></span><button class="back-btn" id="ag-head-back" aria-label="Back to Rose">' + ctx.I.UI.back + '</button></header><div class="surface agents-surface"><h2 class="sr">Rose’s apps</h2><div class="agrid" id="agrid"></div><p class="a-empty" id="a-empty">Rose isn’t using any apps right now.</p></div>' +
       '<div class="tray" role="toolbar" aria-label="Rose’s apps controls"><button class="well" id="ag-back" aria-label="Back">' + ctx.I.UI.back + '</button><button class="well" id="ag-mid"></button><span class="well selected" id="ag-self" role="img" aria-label="Rose’s apps, current screen">' + ctx.I.UI.grid + '</span></div>';
     $('v-window').innerHTML = '<div class="ivory-bg" aria-hidden="true"></div><div class="surface detail" id="wdetail"></div>';
     $('v-app').innerHTML = '<div class="ivory-bg" aria-hidden="true"></div><div class="surface detail" id="appdetail"></div>';
 
     $('ag-back').addEventListener('click', () => ctx.dispatch({ type: 'back' }));
+    $('ag-head-back').addEventListener('click', () => ctx.dispatch({ type: 'back' }));
     $('ag-mid').addEventListener('click', () => { const s = ctx.getState(); ctx.dispatch({ type: s.connection === 'disconnected' ? 'openRose' : 'endCall' }); });
     document.addEventListener('click', onClick);
     for (const id of ['sw-human', 'sw-agent']) bindCarousel($(id), id === 'sw-human' ? 'human' : 'agent');

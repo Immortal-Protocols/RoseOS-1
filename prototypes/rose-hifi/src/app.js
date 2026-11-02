@@ -226,7 +226,7 @@
   }
   function defaultFocus(view) {
     if (view === 'home') return $('tray-rose');
-    if (view === 'rose') return !$('rose-mic').disabled ? $('rose-mic') : $('rose-end').disabled ? $('rose-agents') : $('rose-end');
+    if (view === 'rose') return device.dataset.theme === 'oxblood' ? $('rose-conn') : !$('rose-mic').disabled ? $('rose-mic') : $('rose-end').disabled ? $('rose-agents') : $('rose-end');
     if (view === 'switcher') return $('sw-human');
     if (view === 'agents') return viewEl('agents').querySelector('[data-open-window]') || $('ag-back');
     return viewEl(view).querySelector('.back-btn');
@@ -327,6 +327,14 @@
     mic.disabled = state.connection !== 'connected';
     $('rose-end').innerHTML = '<span class="end">' + I.UI.end + '</span>';
     $('rose-end').disabled = !callLive;
+    // Study 11: one connection control. Disconnect while connected/connecting, Connect otherwise.
+    const cb = $('rose-conn');
+    cb.dataset.live = String(callLive);
+    cb.querySelector('.conn-label').textContent = callLive ? 'Disconnect' : 'Connect';
+    cb.setAttribute('aria-label', callLive ? 'Disconnect from Rose' : 'Connect to Rose');
+    cb.querySelector('.conn-ico').innerHTML = callLive ? I.UI.end : '';
+    $('h-mic').setAttribute('aria-pressed', String(state.muted));
+    $('h-mic').textContent = state.muted ? 'Mic muted (universal)' : 'Mic (universal)';
     $('rose-agents').innerHTML = I.UI.grid;
     // Background-work entry (Oxblood: upper right). Highlight only while a task is actually running.
     $('rose-work').dataset.working = String(M.taskActivity(state).length > 0);
@@ -423,6 +431,8 @@
     $('announcer').textContent = state.voiceMuted ? "Rose's voice muted." : "Rose's voice on.";
   });
   $('rose-mic').addEventListener('click', () => dispatch({ type: 'mute' }));
+  $('rose-conn').addEventListener('click', () => dispatch(state.connection === 'disconnected' ? { type: 'openRose' } : { type: 'endCall', stay: true }));
+  $('h-mic').addEventListener('click', () => dispatch({ type: 'micMute' }));
   $('rose-end').addEventListener('click', () => { dispatch({ type: 'endCall' }); if (state.view === 'home') $('tray-rose').focus({ preventScroll: true }); });
   $('rose-agents').addEventListener('click', () => dispatch({ type: 'agents' }));
   $('rose-work').addEventListener('click', () => dispatch({ type: 'agents' }));

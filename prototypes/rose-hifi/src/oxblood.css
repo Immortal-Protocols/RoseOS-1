@@ -257,3 +257,78 @@
 #device[data-theme=oxblood] .screen.peek .home-bar{z-index:46}
 #device[data-theme=oxblood] .peek-tray .well::before,#device[data-theme=oxblood] .peek-tray .well::after{display:none}
 #device[data-theme=oxblood] .peek-tray .stacks-glyph{display:block}
+
+/* ---------- Study 11: Rose — tray retracted, one connection control ---------- */
+.conn-btn,.ag-head,.active-edge{display:none}
+#device[data-theme=oxblood] .screen #v-rose .tray{display:none}
+#device[data-theme=oxblood] .conn-btn{display:flex;align-items:center;justify-content:center;gap:10px;position:absolute;left:50%;bottom:40px;transform:translateX(-50%);
+  min-width:150px;height:48px;padding:0 22px;border-radius:14px;z-index:20;color:#f2e6d9;font-size:16px;font-weight:450;letter-spacing:.01em;
+  background:linear-gradient(180deg,rgba(40,10,15,.72),rgba(20,5,8,.82));-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  box-shadow:inset 0 0 0 1px rgba(236,213,198,.5),inset 0 1px 0 rgba(255,236,224,.25),0 10px 22px rgba(0,0,0,.45);
+  transition:opacity var(--t-med) var(--ease),transform var(--t-med) var(--ease)}
+#device[data-theme=oxblood] .conn-btn:active{transform:translateX(-50%) translateY(1px)}
+#device[data-theme=oxblood] .conn-ico svg{width:20px;height:20px;color:var(--ox-red);display:block}
+#device[data-theme=oxblood] .conn-btn[data-live=false] .conn-ico{width:12px;height:12px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%)}
+/* The tray slides away as Rose opens; the single control rises in its place. */
+#device[data-theme=oxblood] .screen[data-view=rose] .conn-btn{animation:conn-in var(--t-slow) var(--ease) .12s both}
+@keyframes conn-in{from{opacity:0;transform:translateX(-50%) translateY(24px)}}
+/* Header: pearl beside "Rose", state line under it, compact at all times (study 11). */
+#device[data-theme=oxblood] .screen .rose-stage{transform:translate(-159px,-264px) scale(.17)}
+#device[data-theme=oxblood] .screen .rose-head h2{padding-left:30px}
+#device[data-theme=oxblood] .screen .rose-caption{text-align:left;left:var(--margin);top:118px;font-size:15px;color:#e8dcd0;letter-spacing:.01em}
+#device[data-theme=oxblood] .screen .rose-output{top:178px;bottom:110px}
+#device[data-theme=oxblood] .screen[data-result=true] .rose-caption{left:var(--margin);top:118px;font-size:15px}
+#device[data-theme=oxblood] .screen[data-result=true] .rose-output{top:178px}
+
+/* ---------- Study 13: full-card previews, overlay controls, active Rose edges ---------- */
+/* Previews stay clear: no global burgundy wash over content. */
+#device[data-theme=oxblood] :is(.wbody,.hbody)>*{filter:none}
+#device[data-theme=oxblood] :is(.wbody,.hbody)::after{display:none}
+/* Manager: pearl + back at top left, no bottom tray; content fills each card. */
+#device[data-theme=oxblood] .screen #v-agents .tray{display:none}
+#device[data-theme=oxblood] .ag-head{display:flex;align-items:center;gap:14px;position:absolute;top:56px;left:var(--margin);z-index:5}
+#device[data-theme=oxblood] .ag-pearl{width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%);box-shadow:0 2px 4px rgba(0,0,0,.5)}
+#device[data-theme=oxblood] .ag-head .back-btn{margin:0}
+#device[data-theme=oxblood] .agents-surface{padding-top:118px;padding-bottom:40px;-webkit-mask-image:none;mask-image:none}
+#device[data-theme=oxblood] .agrid{gap:14px}
+#device[data-theme=oxblood] .agrid .wcard{height:276px}
+#device[data-theme=oxblood] .device.unfolded .agrid .wcard,#device[data-theme=oxblood].unfolded .agrid .wcard{height:300px}
+#device[data-theme=oxblood] .wcard,#device[data-theme=oxblood] .hcard{background:#1a0a0d;border-radius:18px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px rgba(236,213,198,.16),0 12px 26px rgba(0,0,0,.5)}
+#device[data-theme=oxblood] .wcard .wbody,#device[data-theme=oxblood] .hcard .hbody{position:absolute;inset:0;margin:0;padding:0;border-radius:0;background:#1a0a0d}
+#device[data-theme=oxblood] .wcard .wbody>*,#device[data-theme=oxblood] .hcard .hbody>*{border-radius:0}
+/* Identity: small frosted icon chip, upper left. */
+#device[data-theme=oxblood] .wcard header,#device[data-theme=oxblood] .hcard header{position:absolute;left:8px;top:8px;z-index:3;padding:6px;border-radius:11px;
+  background:rgba(30,14,16,.42);-webkit-backdrop-filter:blur(10px) saturate(1.2);backdrop-filter:blur(10px) saturate(1.2);box-shadow:inset 0 0 0 1px rgba(255,236,224,.28)}
+#device[data-theme=oxblood] .wcard header .wl,#device[data-theme=oxblood] .hcard header>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+#device[data-theme=oxblood] .wcard .mini-ico,#device[data-theme=oxblood] .hcard .mini-ico{width:22px;height:22px}
+/* Stop: frosted square, lower right; state chip only when not simply running. */
+#device[data-theme=oxblood] .wcard footer{position:absolute;left:8px;right:8px;bottom:8px;padding:0;z-index:3;gap:6px;justify-content:flex-end}
+#device[data-theme=oxblood] .wcard footer .sdot{display:none}
+#device[data-theme=oxblood] .wcard footer .wstate{margin-right:auto;padding:4px 9px;border-radius:9px;font-size:11.5px;color:#f2e6d9;
+  background:rgba(30,14,16,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:inset 0 0 0 1px rgba(255,236,224,.22)}
+#device[data-theme=oxblood] .wcard[data-state=running] footer .wstate{visibility:hidden}
+#device[data-theme=oxblood] .wcard .stop-btn{border-radius:11px;color:#ff3b4c;background:rgba(30,14,16,.45);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  box-shadow:inset 0 0 0 1px rgba(255,236,224,.3)}
+#device[data-theme=oxblood] .wcard .stop-btn:disabled{color:#8a7a76;background:rgba(30,14,16,.35)}
+#device[data-theme=oxblood] .wcard[data-state=stopped],#device[data-theme=oxblood] .wcard[data-state=done]{filter:saturate(.45) brightness(.8)}
+/* Active Rose edge: fine dim ruby border with a short platinum-to-rose segment travelling slowly
+   around the perimeter, only while that task is running. Human cards stay neutral. */
+#device[data-theme=oxblood] .wcard .active-edge{display:block;position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:4;padding:1.5px;opacity:0;
+  background:conic-gradient(from var(--edge-a,0deg),rgba(150,30,50,.55) 0deg,rgba(150,30,50,.55) 300deg,#ffd9cf 330deg,#ff5068 348deg,rgba(150,30,50,.55) 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+#device[data-theme=oxblood] .wcard[data-state=running] .active-edge{opacity:1;animation:edge-run 6s linear infinite}
+@property --edge-a{syntax:'<angle>';inherits:false;initial-value:0deg}
+@keyframes edge-run{to{--edge-a:360deg}}
+#device[data-theme=oxblood] .static-motion .wcard[data-state=running] .active-edge{animation:none;--edge-a:40deg}
+#device[data-theme=oxblood] .sw-agent .wcard[data-state=running]::after{display:none}
+/* Switcher: pearl beside the agent carousel; running status is carried by the card edges. */
+#device[data-theme=oxblood] #sw-links,#device[data-theme=oxblood] .sw-link-label,#device[data-theme=oxblood] .sw-halo{display:none}
+#device[data-theme=oxblood] .sw-agent{padding-left:64px}
+#device[data-theme=oxblood] .sw-agent .aitem{flex-basis:150px}
+#device[data-theme=oxblood] .sw-agent .wcard{height:170px}
+#device[data-theme=oxblood] .hcard{height:440px}
+#device[data-theme=oxblood] .sw-link{top:auto;bottom:118px;height:20px;left:16px;width:40px}
+#device[data-theme=oxblood] .sw-rose{left:0;top:0;width:34px;height:34px}
+#device[data-theme=oxblood] .sw-rose .rose-slot canvas,#device[data-theme=oxblood] .sw-rose .rose-slot .rose-fallback{width:40px;height:40px}
+#device[data-theme=oxblood] .sw-link{z-index:4;pointer-events:none}

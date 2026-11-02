@@ -15,6 +15,11 @@ const OUT = path.resolve(process.argv[2] || path.join(__dirname, 'out'));
 const OX = !process.env.ROSE_TRAY && process.env.ROSE_THEME !== 'classic';
 const FILE = 'file://' + path.join(__dirname, 'Rose-HiFi.html') + (process.env.ROSE_TRAY ? '?tray=' + process.env.ROSE_TRAY : OX ? '' : '?theme=classic');
 const WORK = OX ? '#rose-work' : '#rose-agents';
+// Oxblood (study 11): Rose has one connection control; universal mic mute lives on Home's edge,
+// the swipe-up edge and the harness, so in-Rose mic steps use the harness control.
+const MIC = OX ? '#h-mic' : '#rose-mic';
+const END = OX ? '#rose-conn' : '#rose-end';
+const endCallToHome = async (page) => { await page.locator(END).click(); if (OX) { await page.waitForTimeout(250); await page.locator('#home-bar').click(); } };
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -74,7 +79,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await shot('06-rose-speaking-result');
 
   // Mute while Rose speaks: speech continues, mic silver.
-  await page.locator('#rose-mic').click();
+  await page.locator(MIC).click();
   await page.waitForTimeout(300);
   s = await st();
   check('mute while speaking keeps speech', s.muted && s.speaking);
@@ -87,7 +92,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('speech ends independently while muted', !s.speaking && s.muted);
   await shot('08-rose-muted-quiet');
   await page.keyboard.press('Tab');
-  await page.locator('#rose-mic').focus();
+  await page.locator(MIC).focus();
   await page.keyboard.press('Enter');
   await page.waitForTimeout(400);
   s = await st();
@@ -96,7 +101,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
 
   // Start tasks, then end call: tasks must survive.
   await page.locator('#h-tasks').click();
-  await page.locator('#rose-end').click();
+  await endCallToHome(page);
   await page.waitForTimeout(250);
   await shot('10-end-call-transition');
   await page.waitForTimeout(700);
@@ -182,7 +187,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await settle(900);
   const cardsVisible = await page.evaluate(() => { const s = document.getElementById('screen').getBoundingClientRect(); return [...document.querySelectorAll('#agrid .wcard')].filter((c) => { const r = c.getBoundingClientRect(); return r.top >= s.top && r.bottom <= s.bottom && r.left >= s.left && r.right <= s.right; }).length; });
   check('eight windows fully visible unfolded', cardsVisible === 8, cardsVisible);
-  const trayTop = await page.evaluate(() => document.querySelector('#v-agents .tray').getBoundingClientRect().top);
+  const trayTop = await page.evaluate(() => { const t = document.querySelector('#v-agents .tray').getBoundingClientRect(); return t.height ? t.top : document.getElementById('screen').getBoundingClientRect().bottom; });
   const maxCardBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('#agrid .wcard')].map((c) => c.getBoundingClientRect().bottom)));
   check('stop controls not obscured by tray', maxCardBottom <= trayTop, maxCardBottom + ' <= ' + trayTop);
   await shot('22-agents-unfolded-8');
@@ -334,7 +339,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     await page.locator('#tray-rose').click(); await settle(700);
     await page.evaluate(() => window.__rose.dispatch({ type: 'speak', ms: 4000 })); await settle(300);
     check('Rose caption reflects muted voice while speaking', /voice muted/.test(await page.locator('#rose-caption').textContent()));
-    await page.locator('#rose-mic').click(); await settle(300);
+    await page.locator(MIC).click(); await settle(300);
     v = await st();
     check('microphone mute is separate from voice mute', v.muted && v.voiceMuted);
     await page.locator('#home-bar').click(); await settle(500);
@@ -368,12 +373,13 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
       const head = document.querySelector('#v-rose .rose-head').getBoundingClientRect(), sr = document.getElementById('screen').getBoundingClientRect();
       return { vis, w: r.width / k, h: r.height / k, name: b.getAttribute('aria-label'), upperRight: r.right > sr.left + sr.width * 0.75 && r.top < sr.top + sr.height * 0.15, working: b.dataset.working };
     });
-    check('Rose tray holds only microphone and end call', JSON.stringify(ctl.vis) === JSON.stringify(['rose-mic', 'rose-end']), JSON.stringify(ctl.vis));
+    const conn = await page.evaluate(() => { const b = document.getElementById('rose-conn'); const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const r = b.getBoundingClientRect(); return { label: b.textContent.trim(), name: b.getAttribute('aria-label'), w: r.width / k, h: r.height / k }; });
+    check('Rose: tray retracted, one Disconnect control (study 11)', ctl.vis.length === 0 && conn.label === 'Disconnect' && /disconnect/i.test(conn.name) && conn.w >= 44 && conn.h >= 44, JSON.stringify({ vis: ctl.vis, conn }));
     check('Background-work entry is upper right, named, ≥44 px', ctl.upperRight && ctl.w >= 44 && ctl.h >= 44 && /background work/i.test(ctl.name), JSON.stringify(ctl));
     check('work entry is not highlighted without running work', ctl.working === 'false');
     await page.locator('#h-tasks').click(); await settle(300);
     check('work entry highlights while work runs', await page.locator('#rose-work').getAttribute('data-working') === 'true');
-    await page.locator('#rose-mic').click(); await settle(200);
+    await page.locator(MIC).click(); await settle(200);
     let ox = await st();
     check('mic mute keeps call and work', ox.muted && ox.connection === 'connected' && Object.values(ox.tasks).every((t) => t.state === 'running'));
     const workHit = await page.evaluate(() => { const w = document.getElementById('rose-work').getBoundingClientRect(); return document.elementFromPoint(w.left + w.width / 2, w.top + w.height / 2).closest('#rose-work') !== null; });
@@ -384,7 +390,13 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     await shot('50-oxblood-agents');
     await page.keyboard.press('Escape'); await settle(400);
     check('back returns to Rose', (await st()).view === 'rose');
-    await page.locator('#rose-end').click(); await settle(700);
+    await page.locator('#rose-conn').click(); await settle(500);
+    ox = await st();
+    check('Disconnect stays on Rose and offers Connect; work continues', ox.view === 'rose' && ox.connection === 'disconnected' && (await page.locator('#rose-conn').textContent()).trim() === 'Connect' && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    await page.locator('#rose-conn').click(); await page.waitForFunction(() => window.__rose.getState().connection === 'connected');
+    check('Connect reconnects in place', (await st()).view === 'rose');
+    await page.locator('#rose-conn').click(); await settle(300);
+    await page.locator('#home-bar').click(); await settle(700);
     ox = await st();
     check('end call returns Home; work continues; universal mic mute persists', ox.view === 'home' && ox.connection === 'disconnected' && ox.muted && Object.values(ox.tasks).every((t) => t.state === 'running'));
     const micBox = await page.evaluate(() => { const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const b = document.getElementById('tray-mic'); const r = b.getBoundingClientRect(); return { w: r.width / k, h: r.height / k, pressed: b.getAttribute('aria-pressed'), name: b.getAttribute('aria-label') }; });
@@ -396,8 +408,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     await page.locator('#tray-rose').click(); await page.waitForFunction(() => window.__rose.getState().connection === 'connected'); await settle(300);
     ox = await st();
     check('a call starts in the universal mute state', ox.muted && ox.connection === 'connected');
-    await page.locator('#rose-mic').click(); await settle(200);
-    await page.locator('#rose-end').click(); await settle(700);
+    await page.locator(MIC).click(); await settle(200);
+    await endCallToHome(page); await settle(700);
     // Swipe up inside an ordinary app: scrunch + Home's control edge; tap the app to return.
     await page.locator('#tray-overview').click(); await settle(500);
     await page.locator('#home-bar').click(); await settle(400);

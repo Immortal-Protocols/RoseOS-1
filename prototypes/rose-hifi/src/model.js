@@ -180,7 +180,8 @@ function transition(previous, event) {
       if (s.connection !== 'disconnected') {
         s.connection = 'disconnected'; s.speaking = false;
         notice('cue', 'Call ended'); effects.push({ type: 'endVoice' });
-        if (s.view === 'rose') { go('home', { app: null, window: null }); s.back = []; }
+        // Classic returns Home; Oxblood (study 11) stays on Rose with Connect in the same place.
+        if (s.view === 'rose' && !event.stay) { go('home', { app: null, window: null }); s.back = []; }
       }
       break;
 
