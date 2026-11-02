@@ -588,11 +588,17 @@ class InitialLoadAttributionTest(unittest.TestCase):
         work = (OVERLAY/'RoseAgentWork.java').read_text()
         decide = work[work.index('static RoseAgentWork of(int controllerUid'):work.index('static RoseAgentWork unconfirmed()')]
         self.assertIn('if (owners.malformed || owners.appsMalformed) return failed(Step.OWNERSHIP);', decide)
-        self.assertIn('if (rose.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);', decide,
-            'no controller device in the snapshot: confirmed empty')
-        self.assertIn('if (rose.size() > 1 || owners.incompleteDevices.contains(rose.get(0))) return unavailable(UNCONFIRMED);',
-            decide, 'more than one, or any incomplete: cannot confirm')
+        self.assertIn('if (owners.incompleteDevices.contains(device)) return unavailable(UNCONFIRMED);', decide,
+            'any of Rose\'s devices incomplete: cannot confirm')
+        self.assertLess(decide.index('if (CONTROLLER.equals(pkg)) continue;'),
+            decide.index('if (deviceOf.put(pkg, device) != null) return unavailable(DUPLICATE);'),
+            'the controller is removed before the duplicate check; an app on two devices: cannot confirm')
+        self.assertIn('if (deviceOf.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);', decide,
+            'no controller device, or only the controller on them: confirmed empty')
         self.assertIn('members.remove(CONTROLLER);', decide, 'the controller itself is never a member')
+        self.assertNotIn('rose.size()', decide, 'every complete Rose device counts: no device-count rule')
+        self.assertIn('if (on == null || on.intValue() != device || t.userId != currentUser) continue;', decide,
+            'a task attaches only to a member of its own device, for the current user')
         decision = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
         for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
             self.assertNotIn(timed, decision, f'{timed}: no time in the attribution decision')
@@ -917,7 +923,7 @@ class CommonParityReplayTest(unittest.TestCase):
                 self.assertEqual(self.category(g[1], g[5]), (c['expected']['category'], sorted(c['expected']['apps'])))
         self.assertEqual(not_replayable, ['session_unreleased_cleanup_failed'],
             'only the controller-only case is not replayable here; any new one must be added to the fixture and resolved')
-        gaps = ' '.join(g['description'] for g in data['knownGaps'])
+        gaps = ' '.join(g['description'] for g in data.get('knownGaps', []))
         self.assertIn('cleanup_failed', gaps, 'the controller-only case is a named known gap, not a parity pass')
 
     def test_sequences_replay_through_one_ledger(self):
@@ -940,17 +946,16 @@ class CommonParityReplayTest(unittest.TestCase):
                 self.assertEqual([self.category(g[1], g[5]) for g in got], expected)
 
     def test_each_known_gap_replays_to_launcher3s_stated_side_and_stays_not_claimed(self):
-        """knownGaps (lingering_unreleased_device, replacement_old_and_new_devices): Launcher3's own side is replayed
-        from the gap's platform input and must equal its launcherCategory; the gap is parity not_claimed, with the two
-        surfaces in different categories. Encoded as an open difference until App Core's current_apps reads the owner
-        device view (PR374) and the fixture moves these into cases."""
+        """Each of the fixture's knownGaps with a platform input, whichever App Core lists: Launcher3's own side is
+        replayed from the gap's platform input and must equal its launcherCategory; the gap is parity not_claimed, with
+        the two surfaces in different categories. A gap is an open difference, never a parity pass."""
         data = self.load()
-        gaps = data['knownGaps']
-        self.assertEqual({g['name'] for g in gaps}, {'lingering_unreleased_device', 'replacement_old_and_new_devices'})
+        gaps = [g for g in data.get('knownGaps', []) if g.get('platform') is not None]
         lines = []
         for g in gaps:
             lines += self.lines(g['name'], g['platform'], 1)
         got = self.run_lines(lines)
+        self.assertEqual([row[0] for row in got], [g['name'] for g in gaps])
         for g, row in zip(gaps, got):
             with self.subTest(gap=g['name']):
                 self.assertEqual(row[0], g['name'])
