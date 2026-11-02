@@ -22,8 +22,8 @@ import java.util.List;
 /**
  * Rose Models text chat: transcript, input and Send, status, Stop, Continue and the last app
  * action. Conversation and agent state live in Core's local-agent-v1 agent on this phone
- * (NativeAgent); inference goes only to the public Rose Models service (ModelsService): Muse
- * Glimmer, or Qwen when Settings selects it. Its access token comes from service-auth-v1
+ * (NativeAgent); inference goes only to the public Rose Models service (ModelsService): Qwen,
+ * or Muse Glimmer when Settings selects it. Its access token comes from service-auth-v1
  * (DeviceAuth: an attested Keystore key), stays in memory and is renewed automatically; nothing is typed and no secret ships in the APK.
  */
 public final class MainActivity extends Activity implements TurnView {
