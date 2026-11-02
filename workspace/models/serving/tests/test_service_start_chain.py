@@ -447,6 +447,34 @@ class QwenStartChain(unittest.TestCase):
         self.assertEqual(self.docker_runs(), [])
 
 
+class QwenNothinkStartChain(QwenStartChain):
+    """MODELS-QWEN-SERVE-NOTHINK-001: the same installed chain with --qwen-settings nothink: verified staged files,
+    then exactly the no-thinking contract profile's flags, serving rose-qwen and never Muse."""
+
+    def setUp(self):
+        super().setUp(settings='nothink')
+
+    test_verified_staged_files_launch_qwen_offline_with_the_proven_flags = None  # the proven tier's, under its class
+
+    def test_verified_staged_files_launch_qwen_with_the_nothink_flags(self):
+        sys.path.insert(0, str(HERE.parents[1] / 'rose_cloud'))
+        from rose_cloud import qwen_gpu
+        proc = self.systemd()
+        self.assertEqual(self.wait_ready(proc), (True, 'ready'))
+        self.assertEqual(H.probe(f'http://127.0.0.1:{self.port}', 'muse-glimmer')[0], False)
+        run, = self.docker_runs()
+        serve = run[run.index('--') + 1:]
+        staged = self.QWEN['model']['staged_dir'].replace('/mnt/models-data', str(self.data))
+        self.assertEqual(serve, ['vllm', 'serve', staged, '--served-model-name', 'rose-qwen', '--host', '127.0.0.1',
+                                 '--port', str(self.port)] + qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS)
+        self.assertEqual(serve[-2:], ['--default-chat-template-kwargs', '{"enable_thinking": false}'])
+        self.assertIn(f'{staged}:{staged}:ro', run)
+        self.assertEqual((run[run.index('--network') + 1], run[run.index('--name') + 1]), ('host', 'muse-glimmer'))
+        self.assertEqual(self.phase()['phase'], 'launching_offline')
+        proc.terminate()
+        self.assertEqual(proc.wait(30), -15)
+
+
 class QwenProposed(unittest.TestCase):
     def test_proposed_settings_are_labelled_and_only_on_request(self):
         vm = Installed(self, model='qwen', qwen_settings='proposed')

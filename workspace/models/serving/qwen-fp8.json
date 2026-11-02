@@ -10,7 +10,7 @@
     "license": "apache-2.0"
   },
   "served_model_name": "rose-qwen",
-  "served_model_name_basis": "proposed. The Rose Models app (dev.pixel.models) compiles ModelsService.MODEL = \"muse-glimmer\" and refuses a reply from any other model (local-agent-v1 model_identity_mismatch), so using this profile from the app needs a Product change of that constant; the server never pretends to be Muse.",
+  "served_model_name_basis": "the Rose Models app (dev.pixel.models) names it explicitly: ModelsService.Model.QWEN is rose-qwen with no system prompt, Muse stays the app's default, and a reply naming any other model fails local-agent-v1 with model_identity_mismatch (Product #352). The server never pretends to be Muse.",
   "runtime_from": "muse-glimmer-30b.json profile a100x2-bf16-vllm-persistent (the same cached image ID and digest: no pull, no new image)",
   "launch": {
     "container_name": "muse-glimmer",
@@ -38,6 +38,11 @@
       "basis": "NOT runtime-proven. local-agent-v1 needs a longer context (max_reply_chars 8000 plus history) than the proven 2048, and its closed JSON envelope must be the whole message content, so Qwen's thinking must go to the separate reasoning field (the client ignores it). FP8 weights are about 18.75 GB per A100 at TP2; the extra KV cache for 8192 tokens and one sequence is derived to fit, not measured. The qwen3 reasoning parser name is from the model card, unverified on the cached image",
       "overrides": {"--max-model-len": "8192"},
       "add": ["--reasoning-parser", "qwen3"]
+    },
+    "nothink": {
+      "basis": "the proposed settings plus a server-wide chat-template default that turns the model's thinking off (the client sends no chat_template_kwargs, so it applies to every request). Exactly rose_cloud.qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS, which passed the isolated cloud-qwen-contract-nothink-once diagnostic once (original Mac, PR368 payload, 03:38:46 UTC 2026-11-02: allExpected, noThinking, the image's FrontendArgs check, replies 2.7-8.5 s on the four fixed cases). NOT proven as the persistent service: its network, container limits and lifecycle differ from the diagnostic's",
+      "extends": "proposed",
+      "add": ["--default-chat-template-kwargs", "{\"enable_thinking\": false}"]
     }
   }
 }

@@ -153,7 +153,7 @@ def main(argv=None):
     p.add_argument('--attestation-roots', type=Path)
     p.add_argument('--model', choices=render_service.MODELS, default='muse',
                    help='what the persistent model slot serves (default muse; qwen only when selected)')
-    p.add_argument('--qwen-settings', choices=('proven', 'proposed'), default='proven')
+    p.add_argument('--qwen-settings', choices=render_service.render_local.QWEN_SETTINGS, default='proven')
     a = p.parse_args(argv)
     try:
         m = build(a.out, a.attestation_roots, model=a.model, qwen_settings=a.qwen_settings)

@@ -144,6 +144,53 @@ class QwenSelection(unittest.TestCase):
                          (self.QWEN['id'], 'rose-qwen', 'proven', [],
                           'Qwen/Qwen3.6-35B-A3B-FP8@95a723d08a9490559dae23d0cff1d9466213d989'))
 
+    def test_nothink_tier_is_the_diagnostic_profile_and_only_on_request(self):
+        """MODELS-QWEN-SERVE-NOTHINK-001: --qwen-settings nothink serves exactly the flags that passed the isolated
+        no-thinking contract diagnostic; it changes only the launcher and the manifest of the qwen tree, and nothing
+        else (Muse, the edge, auth and TLS) moves."""
+        rose = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
+        sys.path.insert(0, str(rose.parent))
+        from rose_cloud import qwen_gpu
+        args, flags = R.render_local.qwen_args(self.QWEN, 'nothink')
+        self.assertEqual(args, qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS)
+        self.assertEqual(flags, ['--max-model-len', '--reasoning-parser', '--default-chat-template-kwargs'])
+        self.assertEqual(R.render_local.qwen_args(self.QWEN, 'proposed')[0], qwen_gpu.CONTRACT_SERVER_ARGS)
+        self.assertEqual(R.render_local.qwen_args(self.QWEN, 'proven')[0], qwen_gpu.SERVER_ARGS)
+        for bad in ('fast', 'NOTHINK', '', None):
+            with self.assertRaises(R.render_local.render_upload.Rejected):
+                R.render_local.qwen_args(self.QWEN, bad)
+            with self.assertRaises(R.render_local.render_upload.Rejected):
+                R.render(self.tmp / f'bad-{bad}', model='qwen', qwen_settings=bad)
+        broken = json.loads(json.dumps(self.QWEN))
+        broken['settings']['nothink']['extends'] = 'proven'
+        with self.assertRaises(R.render_local.render_upload.Rejected):
+            R.render_local.qwen_args(broken, 'nothink')
+        muse, proposed, nothink = self.tree('m'), self.tree('p', model='qwen', qwen_settings='proposed'), \
+            self.tree('n', model='qwen', qwen_settings='nothink')
+        changed = sorted(k for k in set(proposed) | set(nothink) if proposed.get(k) != nothink.get(k))
+        self.assertEqual(changed, ['bin/launch-qwen', 'manifest.json', 'systemd/muse-glimmer.service'])
+        unit_p, unit_n = (t['systemd/muse-glimmer.service'].decode().split('\n') for t in (proposed, nothink))
+        self.assertEqual([(a, b) for a, b in zip(unit_p, unit_n) if a != b],
+                         [(unit_p[2], unit_p[2].replace(', proposed)', ', nothink)'))])  # only the Description's tier
+        for kept in ('edge/nginx.conf', 'edge/acme-only.conf', 'systemd/models-edge.service',
+                     'systemd/models-auth.service', 'bin/launch-offline', 'bin/launch-online',
+                     'lib/muse-glimmer-30b.json'):
+            self.assertEqual(muse[kept], nothink[kept], kept)
+        script = nothink['bin/launch-qwen'].decode()
+        self.assertIn("settings: nothink", script)
+        self.assertIn('NOT runtime-proven here: --max-model-len --reasoning-parser --default-chat-template-kwargs',
+                      script)
+        self.assertIn("--default-chat-template-kwargs '{\"enable_thinking\": false}'", script)
+        m = json.loads(nothink['manifest.json'])
+        self.assertEqual((m['qwenSettings'], m['servedModel'], m['notRuntimeProven']),
+                         ('nothink', 'rose-qwen', flags))
+        self.assertIn('not proven as the persistent service', m['evidence'])
+        for other in (proposed, self.tree('v', model='qwen'), muse):
+            self.assertNotIn('evidence', json.loads(other['manifest.json']))  # other manifests unchanged
+        sys.path.insert(0, str(HERE.parent / 'service'))
+        import build_bootstrap
+        self.assertEqual(build_bootstrap.render_service.render_local.QWEN_SETTINGS, ('proven', 'proposed', 'nothink'))
+
     def test_pins_match_the_staged_manifest_and_the_runtime_proven_flags(self):
         import hashlib
         rose = HERE.parents[1] / 'rose_cloud' / 'rose_cloud'
