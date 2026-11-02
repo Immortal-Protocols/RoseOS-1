@@ -37,8 +37,27 @@ final class OxbloodField extends Drawable {
   dy = b.top; // background-position: center top (oxblood.css:20-22)
  }
 
+ /** The field drawn once per size and blitted after: as the pager's background it is redrawn on every swipe frame,
+  * and re-recording its gradients and blurs each time would cost far more than one cached bitmap. */
+ android.graphics.Bitmap cache;
+
  @Override public void draw(Canvas canvas) {
-  if (getBounds().isEmpty()) return;
+  Rect b = getBounds();
+  if (b.isEmpty()) return;
+  if (cache == null || cache.getWidth() != b.width() || cache.getHeight() != b.height()) {
+   if (cache != null) cache.recycle();
+   try {
+    cache = android.graphics.Bitmap.createBitmap(b.width(), b.height(), android.graphics.Bitmap.Config.ARGB_8888);
+    Canvas c = new Canvas(cache);
+    c.translate(-b.left, -b.top);
+    paintField(c);
+   } catch (RuntimeException | OutOfMemoryError tooLarge) { cache = null; }
+  }
+  if (cache != null) canvas.drawBitmap(cache, b.left, b.top, null);
+  else paintField(canvas);
+ }
+
+ private void paintField(Canvas canvas) {
   int save = canvas.save();
   canvas.clipRect(getBounds());
   canvas.translate(dx, dy);

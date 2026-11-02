@@ -56,7 +56,7 @@ final class HomeTray extends LinearLayout {
   rose.setContentDescription("Open Rose");
   rose.setOnClickListener(v -> openRose.run());
   presence = rose;
-  addView(rose, new LayoutParams(activity.dp(ROSE_W_DP), activity.dp(CONTROL_H_DP)));
+  addView(rose, new LayoutParams(activity.dp(ROSE_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP)));
 
   FrameLayout switcher = control(activity);
   View glyph = new View(activity);
@@ -67,7 +67,7 @@ final class HomeTray extends LinearLayout {
   overview = switcher;
   this.overviewAvailable = overviewAvailable;
   applyOverview(overviewAvailable.getAsBoolean());
-  LayoutParams switcherParams = new LayoutParams(activity.dp(SWITCHER_W_DP), activity.dp(CONTROL_H_DP));
+  LayoutParams switcherParams = new LayoutParams(activity.dp(SWITCHER_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP));
   switcherParams.leftMargin = activity.dp(GAP_DP);
   addView(switcher, switcherParams);
  }
@@ -80,6 +80,7 @@ final class HomeTray extends LinearLayout {
   control.setFocusable(true);
   control.setClipChildren(false);
   control.setStateListAnimator(HomeAppTile.pressAnimator(activity, View.TRANSLATION_Y, 0, activity.dp(1), 160));
+  control.setForeground(HomeAppTile.focusRing(activity.getResources().getDisplayMetrics().density, OxbloodEdge.Well.RADIUS_DP));
   return control;
  }
 

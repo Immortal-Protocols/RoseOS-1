@@ -27,6 +27,8 @@ final class OxbloodEdge {
  static final int HEIGHT_DP = 92, FLAT_TOP_DP = 34, FILLET_DP = 34;
  /** HomeTray's controls (oxblood.css:379-380,487-496): Rose 103 and switcher 106 wide, 44dp hit height, 14dp apart; the pearl. */
  static final int ROSE_W_DP = 103, SWITCHER_W_DP = 106, CONTROL_H_DP = 44, GAP_DP = 14, PEARL_DP = 16;
+ /** The controls' touch height: the reference's 44, raised to Android's 48dp minimum (the 36dp plate is unchanged). */
+ static final int TARGET_H_DP = 48;
  static final int PLATE_TOP = 0xff4a141a, PLATE_MID = 0xff3c0e13, PLATE_BOTTOM = 0xff330c10;
  static final int SHEEN = 0x12ff96a5, HAIRLINE = 0xa6d65468, FALLOFF = 0x73000000;
 

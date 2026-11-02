@@ -49,8 +49,9 @@ final class HomeAppTile {
   iconFrame.setClipChildren(false);
   iconFrame.setDuplicateParentStateEnabled(true);
   iconFrame.setStateListAnimator(pressAnimator(context, View.SCALE_X, 1f, .94f, 160, View.SCALE_Y));
+  iconFrame.setForeground(focusRing(density, HomeGlassTile.RADIUS_DP));
   ImageView image = new ImageView(context);
-  image.setImageDrawable(glyph ? icon : new Shadowed(icon, density));
+  image.setImageDrawable(glyph ? icon : new Shadowed(icon, density, dp(density, HomeAppLayout.ICON_DP)));
   image.setScaleType(ImageView.ScaleType.FIT_CENTER);
   image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
   int mark = dp(density, glyph ? HomeAppLayout.GLYPH_DP : HomeAppLayout.ICON_DP);
@@ -105,6 +106,17 @@ final class HomeAppTile {
   return a;
  }
 
+ /** The reference focus ring (style.css:18, oxblood.css:13: 3px #f2c9b6) drawn as a foreground only while the view
+  * has keyboard or D-pad focus, following the control's radius. */
+ static Drawable focusRing(float density, float radiusDp) {
+  android.graphics.drawable.GradientDrawable ring = new android.graphics.drawable.GradientDrawable();
+  ring.setCornerRadius(radiusDp * density);
+  ring.setStroke(Math.max(1, Math.round(3 * density)), 0xfff2c9b6);
+  android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+  states.addState(new int[]{android.R.attr.state_focused}, ring);
+  return states;
+ }
+
  /** As MainActivity.dp: truncated, so the cells keep their sizes exactly. */
  static int dp(float density, float value) { return (int) (value * density); }
 
@@ -112,12 +124,16 @@ final class HomeAppTile {
  static final class Shadowed extends Drawable {
   final Drawable icon;
   final float density;
+  /** The rendered size (the 40dp icon box), reported as intrinsic so the view draws it unscaled and the shadow keeps
+   * the reference's 2dp offset and 1.5dp blur. */
+  final int size;
   final Paint shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
   Bitmap mask;
   final int[] offset = new int[2];
-  Shadowed(Drawable icon, float density) {
+  Shadowed(Drawable icon, float density, int size) {
    this.icon = icon;
    this.density = density;
+   this.size = size;
    shadow.setColor(0x73000000);
   }
   @Override protected void onBoundsChange(Rect b) {
@@ -140,8 +156,8 @@ final class HomeAppTile {
    if (mask != null) c.drawBitmap(mask, b.left + offset[0], b.top + offset[1] + 2 * density, shadow);
    icon.draw(c);
   }
-  @Override public int getIntrinsicWidth() { return icon.getIntrinsicWidth(); }
-  @Override public int getIntrinsicHeight() { return icon.getIntrinsicHeight(); }
+  @Override public int getIntrinsicWidth() { return size; }
+  @Override public int getIntrinsicHeight() { return size; }
   @Override public void setAlpha(int alpha) { icon.setAlpha(alpha); }
   @Override public void setColorFilter(ColorFilter filter) { icon.setColorFilter(filter); }
   @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }

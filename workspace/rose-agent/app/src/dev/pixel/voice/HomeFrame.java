@@ -39,7 +39,9 @@ final class HomeFrame extends FrameLayout {
  @Override public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
   int left = insets.getSystemWindowInsetLeft(), right = insets.getSystemWindowInsetRight();
   int tappable = insets.getTappableElementInsets().bottom;
-  if (tray.navigationExtra != tappable) tray.navigationExtra = tappable;
+  // Under three-button navigation the edge grows by the bar's height and pads it out, so the controls stay centred in
+  // the flat area above the bar (never partly behind it).
+  if (tray.navigationExtra != tappable) { tray.navigationExtra = tappable; tray.setPadding(0, tray.getPaddingTop(), 0, tappable); }
   LayoutParams trayParams = (LayoutParams) tray.getLayoutParams();
   if (trayParams.height != tray.heightPx()) { trayParams.height = tray.heightPx(); tray.setLayoutParams(trayParams); }
   pager.dispatchApplyWindowInsets(insets.replaceSystemWindowInsets(left, insets.getSystemWindowInsetTop(), right,

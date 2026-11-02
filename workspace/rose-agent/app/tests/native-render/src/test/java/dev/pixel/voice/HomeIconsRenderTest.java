@@ -152,7 +152,7 @@ public class HomeIconsRenderTest {
         int side = px(HomeAppLayout.TILE_DP), icon = px(HomeAppLayout.ICON_DP), inset = (side - icon) / 2;
         ShapeDrawable own = new ShapeDrawable(new OvalShape());
         own.getPaint().setColor(0xffd97757);
-        Bitmap b = tile(new HomeAppTile.Shadowed(own, density()), OXBLOOD_FIELD, icon);
+        Bitmap b = tile(new HomeAppTile.Shadowed(own, density(), px(HomeAppLayout.ICON_DP)), OXBLOOD_FIELD, icon);
         assertEquals("its own colour, unrestyled", 0xffd97757, b.getPixel(side / 2, side / 2));
         int below = b.getPixel(side / 2, inset + icon + px(1));
         assertTrue("a soft dark shadow under it", luminance(below) <= luminance(b.getPixel(side / 2, px(2))) + .001);
