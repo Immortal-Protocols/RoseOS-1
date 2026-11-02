@@ -281,9 +281,10 @@ class RetainedIntegrationOutputTest(unittest.TestCase):
             for name in {list(reconcile.FRAMEWORKS_BASE_SEQUENCE)!r}:
                 patch = os.path.join(here, 'os/patches', name)
                 if os.path.isfile(patch):
-                    # The #156 device-snapshot hunk touches a file this fixture does not hold.
+                    # The #156 device-snapshot and multi-session admission hunks touch files this fixture does not hold.
                     subprocess.run(['git', '-C', os.path.join(sys.argv[1], 'frameworks/base'), 'apply',
-                        '--exclude={CC}/AutomatedPackagesRepository.java', '--include={CC}/*', patch], check=True)''')
+                        '--exclude={CC}/AutomatedPackagesRepository.java',
+                        '--exclude={CC}/ComputerControlSessionAdmission.java', '--include={CC}/*', patch], check=True)''')
         # The retained tree: the 10-27 bundle applied by hand before reconcile; the only receipt does not name it.
         self.retained = self.patched(bundles['old'])
         (self.source/SESSION).write_bytes(self.retained)
