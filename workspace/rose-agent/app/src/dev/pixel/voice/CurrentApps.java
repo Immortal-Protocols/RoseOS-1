@@ -29,6 +29,8 @@ final class CurrentApps {
 
  /** Fixed reasons (never exception text or identifiers). */
  static final String NOT_REPORTED="not_reported",UNREADABLE="unreadable",LOCKED="locked",NOT_INSTALLED="not_installed",MALFORMED="malformed";
+ /** The source could not attest that its list is every app under control: nothing is shown as if it were. */
+ static final String INCOMPLETE="incomplete";
  static final String STATE_RUNNING="running",STATE_STARTING="starting",STATE_WAITING="waiting";
 
  /** How the overview may ask for this app's live content (PR340 preview params): the app's OWN controller session and
@@ -134,8 +136,46 @@ final class CurrentApps {
    case NOT_INSTALLED:return "Rose’s background control isn’t on this phone.";
    case MALFORMED:return "Rose’s apps couldn’t be read.";
    case NOT_REPORTED:return "Rose is checking which apps it’s using.";
+   case INCOMPLETE:return "Rose can’t confirm every app it’s using yet.";
    default:return "Rose couldn’t check which apps it’s using.";
   }
+ }
+ /** One reply of the controller's phone-local call("current_apps") (App Core PR355): status live|none|locked,
+  * sessionId, taskId, generation, apps[{packageName, front, target}], read as fields (null when absent). Proposed
+  * additions this also reads, absent in PR355: instance (the controller process's epoch, so a restart is a new
+  * registration even though its generation starts again), sessionStatus (ready|blocked|launching, for each card's
+  * state) and complete (true only when the list is attested to be every app on the session's device). Without complete
+  * the list is never shown as the whole set (INCOMPLETE); without sessionStatus the read is malformed (no state is
+  * guessed). The preview handle goes only to the topmost front app: PR340 frames the session display, so the apps
+  * behind it say live view isn't available. registrationFallback names this reader when instance is absent. */
+ static final class ReplyApp { final String packageName;final boolean front,target;
+  ReplyApp(String packageName,boolean front,boolean target){this.packageName=packageName;this.front=front;this.target=target;} }
+ static Snapshot fromReply(String registrationFallback,String status,String sessionId,String taskId,Long generation,List<ReplyApp> apps,
+   String instance,String sessionStatus,Boolean complete){
+  String reg=nz(instance).isEmpty()?registrationFallback:"controller:"+instance;long gen=generation==null?Long.MIN_VALUE:generation;
+  if(status==null||generation==null)return Snapshot.unavailable(reg,gen,UNREADABLE);
+  switch(status){
+   case "locked":return Snapshot.unavailable(reg,gen,LOCKED);
+   case "none":return apps==null||apps.isEmpty()?new Snapshot(reg,gen,true,"",Collections.<App>emptyList()):Snapshot.unavailable(reg,gen,MALFORMED);
+   case "live":break;
+   default:return Snapshot.unavailable(reg,gen,UNREADABLE);
+  }
+  if(apps==null||nz(sessionId).isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+  String state;
+  switch(nz(sessionStatus)){
+   case "ready":state=STATE_RUNNING;break;case "blocked":state=STATE_WAITING;break;case "launching":state=STATE_STARTING;break;
+   default:return Snapshot.unavailable(reg,gen,MALFORMED);
+  }
+  if(!Boolean.TRUE.equals(complete))return Snapshot.unavailable(reg,gen,INCOMPLETE);
+  List<App> out=new ArrayList<>();boolean previewed=false;
+  for(ReplyApp a:apps){
+   if(a==null)return Snapshot.unavailable(reg,gen,MALFORMED);
+   Preview p=null;
+   if(a.front&&!previewed&&!nz(taskId).isEmpty()){p=new Preview(sessionId,taskId);previewed=true;}
+   out.add(new App(sessionId+"/"+nz(a.packageName),a.packageName,state,p));
+  }
+  for(App a:out)if(a.packageName.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+  return new Snapshot(reg,gen,true,"",out);
  }
  static String nz(String s){return s==null?"":s;}
 }
