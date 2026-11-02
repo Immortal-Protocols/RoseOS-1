@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 
@@ -30,7 +31,7 @@ PIN = 'cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3'
 PAYLOAD = b'synthetic factory archive bytes'
 
 def fs(available):
-    return lambda path: types.SimpleNamespace(f_bavail=available, f_frsize=1)
+    return lambda path: types.SimpleNamespace(f_bavail=available, f_frsize=1, f_blocks=available * 2)
 
 class Response(io.BytesIO):
     def __enter__(self):
@@ -47,6 +48,8 @@ class Fixture(unittest.TestCase):
         self.synthetic = json.loads(json.dumps(self.recipe))
         self.synthetic['factory']['sha256'] = hashlib.sha256(PAYLOAD).hexdigest()
         self.synthetic['capacity']['compileAllowanceBytes'] = 10
+        # Test-speed sampling (the checked-in recipe samples every 5 s with a 30 s grace).
+        self.synthetic['preparation']['limits'].update(sampleSeconds=0.05, killGraceSeconds=1)
         # A checked-in-source copy whose production source root is a temporary tree, so isolation is exercised for real.
         self.root = self.tmp/'repo'
         (self.root/'os/release-pipeline').mkdir(parents=True)
@@ -71,9 +74,9 @@ class Fixture(unittest.TestCase):
         (self.src/self.recipe['kernelDir']).mkdir(parents=True)
         self.lock = self.tmp/'frankel-build.lock'
         self.download = self.tmp/'dl'
-        self.node = self.tmp/'node'
-        self.node.write_text('#!/bin/sh\n')
-        os.chmod(self.node, 0o755)
+        (self.tmp/'nodebin').mkdir()
+        self.node = self.tmp/'nodebin/node'
+        self.script(self.node, 'print("v24.11.0")')
 
     def op(self, **change):
         values = dict(host='operator-builder-1', source_root=str(self.src), jobs=16, lock=str(self.lock),
@@ -96,6 +99,12 @@ class Fixture(unittest.TestCase):
         (vendor/'blazer.mk').write_text('# generated\n')
         (vendor/'adevtool-version-check.mk').write_text(f'# adevtool {ADEVTOOL}\n')
         return vendor
+
+    def script(self, path, body):
+        """A real executable synthetic child (Python), never a real tool."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'#!{sys.executable}\nimport os, sys, time, shutil, subprocess\n{body}\n')
+        os.chmod(path, 0o755)
 
     def problems(self, stage, **change):
         return ' '.join(self.preflight(stage, **change)['problems'])
@@ -145,10 +154,12 @@ class RecipeTest(Fixture):
         self.assertEqual(rendered['download'], {'url': 'https://dl.google.com/dl/android/aosp/' + FACTORY,
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
             'maxBytes': 8 << 30, 'timeoutSeconds': 3600})
+        self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
+            'PATH': f'{self.node.parent}:/usr/bin:/bin'})
         self.assertEqual(rendered['vendor'], {'cwd': str(self.src), 'env': {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download)},
             'argv': ['vendor/adevtool/bin/run', 'generate-all', '-d', 'blazer'], 'timeoutSeconds': 10800,
-            'nodeVersion': [str(self.node), '--version']})
-        self.assertEqual(rendered['lunch']['env'], {'OUT_DIR': 'out-blazer-lunch'})
+            'nodeVersion': [str(self.node), '--version']} | {'env': rendered['vendor']['env']})
+        self.assertEqual(rendered['lunch']['env'], {'OUT_DIR': 'out-blazer-lunch', 'PATH': '/usr/bin:/bin'})
         self.assertEqual(rendered['lunch']['argv'][2], 'source build/envsetup.sh && lunch blazer-cur-user && echo TARGET_PRODUCT=$TARGET_PRODUCT'
             ' && echo TARGET_RELEASE=$TARGET_RELEASE && echo TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT'
             ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)')
@@ -171,6 +182,9 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation']['vendor']['node'].update(minMajor=0), 'node needs'),
             (lambda r: r['preparation']['lunch']['expect'].update(TARGET_BUILD_VARIANT='userdebug'), 'lunch.expect'),
             (lambda r: r['preparation']['lunch'].update(outDir='out-blazer-build'), 'its own top-level OUT_DIR'),
+            (lambda r: r['preparation'].update(totalTimeoutSeconds=2700), 'sum of the stage timeouts'),
+            (lambda r: r['preparation']['limits'].update(enforcement='quota'), 'sampled-stop enforcement'),
+            (lambda r: r['preparation']['limits'].update(sampleSeconds=0), 'sampled-stop enforcement'),
             (lambda r: r['preparation'].update(productionSourceRootFrom='os/release-pipeline/frankel.json host.missing'), 'must resolve'),
             (lambda r: r['generate'].update(note='os/fold-port'), 'os/fold-port')):
             recipe = json.loads(json.dumps(self.recipe))
@@ -295,57 +309,6 @@ class VendorTest(Fixture):
         self.assertIn('not the pinned revision', self.problems('vendor'))
         self.assertIn('outside the source tree', self.problems('vendor', download_dir=str(self.src/'dl')))
 
-    def fake(self, node='v24.11.0\n', returncode=0, grow=0, timeout=False):
-        calls = []
-        def runner(argv, cwd, env, capture_output, text, timeout):
-            calls.append((argv, cwd, env.get('ADEVTOOL_IMG_DOWNLOAD_DIR'), timeout))
-            if argv[-1] == '--version':
-                return types.SimpleNamespace(returncode=0, stdout=node)
-            if timeout_flag:
-                raise subprocess.TimeoutExpired(argv, timeout)
-            vendor = self.src/'vendor/google_devices/blazer'
-            vendor.mkdir(parents=True)
-            (vendor/'blazer.mk').write_bytes(b'x' * grow)
-            return types.SimpleNamespace(returncode=returncode, stdout='')
-        timeout_flag = timeout
-        return runner, calls
-
-    def run_vendor(self, runner, recipe=None, out='r'):
-        code = bb.run(recipe or self.synthetic, 'vendor', self.op(), self.tmp/out, runner=runner, now=lambda: 0,
-            statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
-        return code, json.loads((self.tmp/out/'completed.json').read_text())
-
-    def test_fake_generation_checks_node_then_runs_isolated_and_measures(self):
-        self.archive()
-        runner, calls = self.fake(grow=10)
-        code, done = self.run_vendor(runner)
-        self.assertEqual((code, done['ok'], done['boundKind']), (0, True, 'proposal'))
-        self.assertGreater(done['consumedBytes'], 0)
-        self.assertEqual(calls, [([str(self.node), '--version'], str(self.src), str(self.download), 60),
-            (['vendor/adevtool/bin/run', 'generate-all', '-d', 'blazer'], str(self.src), str(self.download), 10800)])
-        self.assertEqual((self.download/FACTORY).read_bytes(), PAYLOAD, 'the verified archive is preserved')
-
-    def test_old_node_timeouts_failures_and_bound_overruns_refuse(self):
-        self.archive()
-        runner, calls = self.fake(node='v20.1.0\n')
-        code, done = self.run_vendor(runner)
-        self.assertEqual((code, len(calls)), (1, 1), 'generation never starts with an old Node')
-        self.assertIn('node must be >= 24', done['error'])
-        runner, _ = self.fake(timeout=True)
-        code, done = self.run_vendor(runner, out='r2')
-        self.assertIn('exceeded 10800 s', done['error'])
-        runner, _ = self.fake(returncode=3)
-        code, done = self.run_vendor(runner, out='r3')
-        self.assertEqual((code, done['returncode']), (1, 3))
-        shutil.rmtree(self.src/'vendor/google_devices/blazer')
-        tight = json.loads(json.dumps(self.synthetic))
-        tight['preparation']['vendor']['boundBytes'] = 1
-        runner, _ = self.fake(grow=100000)
-        code, done = self.run_vendor(runner, recipe=tight, out='r4')
-        self.assertEqual(code, 1)
-        self.assertIn('above the 1-byte bound (outputs are kept, not deleted)', done['error'])
-        self.assertTrue((self.src/'vendor/google_devices/blazer/blazer.mk').exists())
-
 class LunchTest(Fixture):
     def test_admission_needs_the_generated_vendor_tree_and_a_fresh_out_dir(self):
         self.assertIn('run the vendor stage first', self.problems('lunch'))
@@ -355,26 +318,237 @@ class LunchTest(Fixture):
         self.assertIn('out-blazer-lunch already exists', self.problems('lunch'))
         self.assertIn('below the reserve', self.problems('lunch', available=RESERVE))
 
-    def run_lunch(self, stdout, returncode=0, out='r'):
-        calls = []
-        def runner(argv, cwd, env, capture_output, text, timeout):
-            calls.append((argv[:2], env.get('OUT_DIR'), capture_output, timeout))
-            return types.SimpleNamespace(returncode=returncode, stdout=stdout)
-        code = bb.run(self.synthetic, 'lunch', self.op(), self.tmp/out, runner=runner, now=lambda: 0,
+
+def alive(pid):
+    """True while PID exists and is not a zombie (the container's init may not reap reparented children promptly)."""
+    try:
+        state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError, IndexError):
+        return False
+    return state != 'Z'
+
+def wait_dead(pid, seconds=5):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and alive(pid):
+        time.sleep(0.05)
+    return not alive(pid)
+
+LIMITS = {'sampleSeconds': 0.05, 'killGraceSeconds': 1, 'boundBytes': 10 ** 9, 'reserveBytes': 0}
+
+class SuperviseTest(Fixture):
+    """Real synthetic child processes under supervise(): what is stopped, what is cleaned up, and what is not reached."""
+    def child(self, body):
+        path = self.tmp/'child'
+        self.script(path, body)
+        return [str(path)]
+
+    def test_timeout_ends_the_whole_process_group(self):
+        pids = self.tmp/'pids'
+        argv = self.child(f'p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n'
+                          f'open({str(pids)!r}, "w").write(str(p.pid))\ntime.sleep(60)')
+        result = bb.supervise(argv, str(self.tmp), {'PATH': '/usr/bin:/bin'}, 0.5, LIMITS, statvfs=fs(10 ** 15))
+        self.assertEqual(result['stopped'], 'exceeded 0.5 s')
+        self.assertEqual(result['enforcement'], 'sampled-stop')
+        self.assertTrue(wait_dead(int(pids.read_text())), 'the grandchild in the group is ended too')
+
+    def test_members_left_after_a_normal_exit_are_ended(self):
+        pids = self.tmp/'pids'
+        argv = self.child(f'p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n'
+                          f'open({str(pids)!r}, "w").write(str(p.pid))')
+        result = bb.supervise(argv, str(self.tmp), {'PATH': '/usr/bin:/bin'}, 30, LIMITS, statvfs=fs(10 ** 15))
+        self.assertEqual((result['returncode'], result['stopped']), (0, None))
+        self.assertEqual(result['leftoverGroupEnded'], 'SIGTERM')
+        self.assertTrue(wait_dead(int(pids.read_text())))
+
+    def test_sigterm_ignoring_members_get_sigkill(self):
+        argv = self.child('import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(60)')
+        started = time.monotonic()
+        result = bb.supervise(argv, str(self.tmp), {'PATH': '/usr/bin:/bin'}, 0.3, LIMITS, statvfs=fs(10 ** 15))
+        self.assertEqual(result['returncode'], -9)
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_a_descendant_that_starts_its_own_session_is_not_reached(self):
+        pids = self.tmp/'pids'
+        argv = self.child(f'p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)\n'
+                          f'open({str(pids)!r}, "w").write(str(p.pid))')
+        bb.supervise(argv, str(self.tmp), {'PATH': '/usr/bin:/bin'}, 30, LIMITS, statvfs=fs(10 ** 15))
+        escaped = int(pids.read_text())
+        try:
+            self.assertTrue(alive(escaped), 'documented gap: setsid descendants need cgroup containment')
+        finally:
+            os.kill(escaped, 9)
+
+    def test_watched_bytes_and_the_reserve_stop_the_group_while_running(self):
+        watched = self.tmp/'watched'
+        argv = self.child(f'os.makedirs({str(watched)!r}, exist_ok=True)\n'
+                          f'for i in range(10000):\n    open(os.path.join({str(watched)!r}, str(i)), "wb").write(b"x" * 65536)\n'
+                          f'    time.sleep(0.01)')
+        result = bb.supervise(argv, str(self.tmp), {'PATH': '/usr/bin:/bin'}, 60, dict(LIMITS, boundBytes=1 << 20),
+                              watch=[str(watched)], statvfs=fs(10 ** 15))
+        self.assertIn('above the 1048576-byte bound', result['stopped'])
+        self.assertGreater(result['consumedBytes'], 1 << 20)
+        self.assertLess(len(list(watched.iterdir())), 10000, 'stopped while running, not after')
+        argv = self.child('time.sleep(60)')
+        result = bb.supervise(argv, str(self.tmp), {'PATH': '/usr/bin:/bin'}, 60, dict(LIMITS, reserveBytes=100),
+                              statvfs=fs(50))
+        self.assertEqual(result['stopped'], 'available 50 fell below the reserve 100')
+
+class VendorRunTest(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.archive()
+        self.seen = self.tmp/'node-seen'
+        self.script(self.src/'vendor/adevtool/bin/run', f"""mode = os.environ.get('FAKE_MODE', 'ok')
+open({str(self.seen)!r}, 'w').write(shutil.which('node') or '')
+vendor = os.path.join('vendor', 'google_devices', 'blazer')
+os.makedirs(vendor)
+open(os.path.join(vendor, 'blazer.mk'), 'w').write('# synthetic')
+if mode == 'grow':
+    for i in range(100000):
+        open(os.path.join(vendor, f'blob{{i}}'), 'wb').write(b'x' * 65536)
+        time.sleep(0.005)
+if mode == 'sleep':
+    time.sleep(60)
+sys.exit(3 if mode == 'fail' else 0)""")
+
+    def run_vendor(self, mode='ok', recipe=None, out='r'):
+        os.environ['FAKE_MODE'] = mode
+        self.addCleanup(os.environ.pop, 'FAKE_MODE', None)
+        code = bb.run(recipe or self.synthetic, 'vendor', self.op(), self.tmp/out, now=lambda: 0,
             statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
-        return code, calls, json.loads((self.tmp/out/'completed.json').read_text())
+        return code, json.loads((self.tmp/out/'completed.json').read_text())
+
+    def test_generation_runs_isolated_with_the_verified_node_on_path(self):
+        code, done = self.run_vendor()
+        self.assertEqual((code, done['ok'], done['enforcement']), (0, True, 'sampled-stop'))
+        self.assertEqual(self.seen.read_text(), str(self.node), 'adevtool resolves exactly the verified node')
+        self.assertEqual(done['node']['inode'], os.stat(self.node).st_ino)
+        self.assertGreater(done['consumedBytes'], 0)
+        self.assertEqual((self.download/FACTORY).read_bytes(), PAYLOAD, 'the verified archive is preserved')
+
+    def test_old_node_failures_timeouts_and_bound_overruns_refuse(self):
+        self.script(self.node, 'print("v20.1.0")')
+        code, done = self.run_vendor()
+        self.assertEqual(code, 1)
+        self.assertIn('node must be >= 24', done['error'])
+        self.assertFalse(self.seen.exists(), 'generation never starts with an old Node')
+        self.script(self.node, 'print("v24.11.0")')
+        code, done = self.run_vendor('fail', out='r2')
+        self.assertEqual((code, done['returncode']), (1, 3))
+        shutil.rmtree(self.src/'vendor/google_devices/blazer')
+        quick = json.loads(json.dumps(self.synthetic))
+        quick['preparation']['vendor']['timeoutSeconds'] = 0.5
+        code, done = self.run_vendor('sleep', recipe=quick, out='r3')
+        self.assertIn('stopped: exceeded 0.5 s', done['error'])
+        shutil.rmtree(self.src/'vendor/google_devices/blazer')
+        tight = json.loads(json.dumps(self.synthetic))
+        tight['preparation']['vendor']['boundBytes'] = 1 << 20
+        code, done = self.run_vendor('grow', recipe=tight, out='r4')
+        self.assertEqual(code, 1)
+        self.assertIn('above the 1048576-byte bound (outputs are kept, not deleted)', done['error'])
+        self.assertTrue((self.src/'vendor/google_devices/blazer/blazer.mk').exists())
+
+    def test_overshoot_between_samples_is_still_refused_after_exit(self):
+        slow = json.loads(json.dumps(self.synthetic))
+        slow['preparation']['limits']['sampleSeconds'] = 30
+        slow['preparation']['vendor']['boundBytes'] = 1 << 20
+        self.script(self.src/'vendor/adevtool/bin/run', """vendor = os.path.join('vendor', 'google_devices', 'blazer')
+os.makedirs(vendor)
+open(os.path.join(vendor, 'blob'), 'wb').write(b'x' * (4 << 20))""")
+        code, done = self.run_vendor(recipe=slow)
+        self.assertEqual((code, done['stopped']), (1, None))
+        self.assertIn('bound between samples (outputs are kept, not deleted)', done['error'])
+
+    def test_node_must_be_named_node_resolve_through_path_and_not_change(self):
+        other = self.tmp/'nodebin/nodejs'
+        self.script(other, 'print("v24.11.0")')
+        self.assertIn('must be named node', self.problems('vendor', node=str(other)))
+        report = self.preflight('vendor')
+        self.assertEqual(report['facts']['node']['inode'], os.stat(self.node).st_ino)
+        self.assertIsNone(bb.node_binding_problem(self.node, f'{self.node.parent}:/usr/bin:/bin'))
+        self.assertIn('not the verified', bb.node_binding_problem(self.node, '/usr/bin:/bin'))
+        # Replaced between preflight and run: refused before anything starts.
+        original = bb.preflight
+        def swapped(*a, **k):
+            report = original(*a, **k)
+            self.node.unlink()
+            self.script(self.node, 'print("v24.11.0")')
+            return report
+        bb.preflight = swapped
+        self.addCleanup(setattr, bb, 'preflight', original)
+        code, done = self.run_vendor(out='r5')
+        self.assertEqual(code, 1)
+        self.assertIn('node changed', done['error'])
+        self.assertFalse(self.seen.exists())
+
+class LunchRunTest(Fixture):
+    def envsetup(self, variant='user'):
+        (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer TARGET_RELEASE=cur TARGET_BUILD_VARIANT={variant}; mkdir -p "$OUT_DIR"; }}
+get_build_var() {{ echo blazer; }}
+""")
+
+    def run_lunch(self, out='r'):
+        code = bb.run(self.synthetic, 'lunch', self.op(), self.tmp/out, now=lambda: 0,
+            statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        return code, json.loads((self.tmp/out/'completed.json').read_text())
 
     def test_lunch_targets_must_match(self):
         self.generated()
-        good = 'TARGET_PRODUCT=blazer\nTARGET_RELEASE=cur\nTARGET_BUILD_VARIANT=user\nTARGET_DEVICE=blazer\n'
-        code, calls, done = self.run_lunch(good)
-        self.assertEqual((code, done['ok']), (0, True))
-        self.assertEqual(calls, [(['bash', '-c'], 'out-blazer-lunch', True, 1800)])
-        code, _, done = self.run_lunch(good.replace('=user', '=userdebug'), out='r2')
+        self.envsetup()
+        code, done = self.run_lunch()
+        self.assertEqual((code, done['ok']), (0, True), done)
+        self.assertEqual(done['targets'], {'TARGET_PRODUCT': 'blazer', 'TARGET_RELEASE': 'cur', 'TARGET_BUILD_VARIANT': 'user',
+            'TARGET_DEVICE': 'blazer'})
+        self.assertTrue((self.src/'out-blazer-lunch').is_dir())
+        shutil.rmtree(self.src/'out-blazer-lunch')
+        self.envsetup('userdebug')
+        code, done = self.run_lunch(out='r2')
         self.assertEqual(code, 1)
         self.assertIn('lunch targets', done['error'])
-        code, _, done = self.run_lunch('', returncode=1, out='r3')
-        self.assertEqual((code, done['returncode']), (1, 1))
+
+class InspectTest(Fixture):
+    def snapshot(self):
+        return sorted((str(p), p.stat().st_mtime_ns if not p.is_symlink() else 0) for p in self.tmp.rglob('*'))
+
+    def test_metadata_only_bounded_and_writes_nothing(self):
+        self.archive()
+        self.generated()
+        before = self.snapshot()
+        original = subprocess.Popen
+        subprocess.Popen = lambda *a, **k: (_ for _ in ()).throw(AssertionError('inspect started a process'))
+        self.addCleanup(setattr, subprocess, 'Popen', original)
+        report = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15))
+        self.assertEqual(self.snapshot(), before, 'inspect writes nothing')
+        self.assertEqual((report['metadataOnly'], report['processesStarted'], report['network'], report['writes']),
+                         (True, 0, False, False))
+        self.assertEqual(report['isolation'], {'sourceRoot': None, 'downloadDir': None})
+        self.assertEqual(report['download']['archive']['size'], len(PAYLOAD))
+        self.assertFalse(report['download']['hashed'])
+        self.assertEqual(report['adevtoolRevision'], ADEVTOOL)
+        self.assertTrue(report['collisions']['vendor/google_devices/blazer']['exists'])
+        self.assertEqual((report['node']['sameFile'], report['node']['nameIsNode']), (True, True))
+        self.assertEqual(report['node']['version'], 'not executed (metadata only)')
+        self.assertEqual(report['filesystems']['sourceRoot']['availableBytes'], 10 ** 15)
+        bounded = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15), max_entries=1)
+        self.assertTrue(bounded['truncated'])
+        walked = sum(c['entries'] for c in bounded['collisions'].values())
+        self.assertLessEqual(walked, 1, 'the entry budget stops the walk')
+        self.assertTrue(any(c['truncated'] for c in bounded['collisions'].values()))
+        with self.assertRaisesRegex(bb.InvalidInput, 'max-seconds'):
+            bb.inspect(self.synthetic, self.op(), root=self.root, max_seconds=1201)
+        production = bb.inspect(self.synthetic, self.op(source_root=str(self.production)), root=self.root, statvfs=fs(10 ** 15))
+        self.assertIn('production source root', production['isolation']['sourceRoot'])
+
+    def test_cli_inspect_needs_no_stage(self):
+        cli = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'inspect', '--host', 'operator-builder-1',
+            '--lock', str(self.lock), '--download-dir', str(self.download), '--source-root', str(self.src), '--node', str(self.node)],
+            capture_output=True, text=True)
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertEqual(json.loads(cli.stdout)['schema'], 'roseos.blazer-preparation-inspection.v1')
+        bad = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'preflight', '--host', 'h', '--lock',
+            str(self.lock)], capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn('needs --stage', bad.stderr)
 
 class CompileTest(Fixture):
     def test_integrated_tree_is_admitted(self):
@@ -421,14 +595,15 @@ class CompileTest(Fixture):
 
 class RunTest(Fixture):
     def test_not_ready_and_existing_receipts_never_run(self):
-        ran = []
-        runner = lambda *a, **k: ran.append(a) or types.SimpleNamespace(returncode=0, stdout='')
-        code = bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', runner=runner, now=lambda: 0,
+        marker = self.tmp/'ran'
+        self.script(self.src/'vendor/adevtool/bin/run', f'open({str(marker)!r}, "w").write("ran")')
+        code = bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', now=lambda: 0,
             statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
-        self.assertEqual((code, ran), (1, []))
+        self.assertEqual(code, 1)
+        self.assertFalse(marker.exists(), 'a not-ready stage starts no process')
         self.assertFalse(json.loads((self.tmp/'r1/preflight.json').read_text())['ready'])
         with self.assertRaisesRegex(bb.InvalidInput, 'already exists'):
-            bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', runner=runner, root=self.root)
+            bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', root=self.root)
 
     def test_compile_still_needs_a_measured_allowance(self):
         self.generated()

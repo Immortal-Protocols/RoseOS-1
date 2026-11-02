@@ -188,29 +188,53 @@ available offline). Synthetic observations are accepted only through the Python 
 
 ## Blazer preparation interface (BLAZER-PREP, for Release integration)
 
-`scripts/blazer-build-only.py {plan|preflight|run} --stage S --host LABEL --lock PATH [...]` (recipe
-`os/build-only/blazer.json`). `plan` and `preflight` read only. `run` needs a new `--receipt-dir` and writes
-`preflight.json`, `started.json` and `completed.json` there, write-once.
+`scripts/blazer-build-only.py {plan|preflight|run} --stage S --host LABEL --lock PATH [...]` and
+`... inspect --host LABEL --lock PATH [--source-root ISO] [--download-dir D] [--node N]` (recipe
+`os/build-only/blazer.json`). `plan`, `preflight` and `inspect` read only. `run` needs a new `--receipt-dir`
+and writes `preflight.json`, `started.json` and `completed.json` there, write-once.
 
 | Stage | Required inputs | Does | Bound (proposal) |
 |---|---|---|---|
-| `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. | 8 GiB, 3600 s |
-| `vendor` | `--download-dir D --source-root ISO --node N` | Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`, and measures what it wrote. | 128 GiB, 10800 s |
-| `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user`, then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
+| `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | 8 GiB (unverified for Pro), 3600 s |
+| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`dirname(N):/usr/bin:/bin`) resolves. Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`. | 128 GiB, 10800 s |
+| `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user` (`PATH=/usr/bin:/bin`), then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
 
+- **Time**: the stage timeouts total 16200 s (4.5 h). That excludes building the isolated source
+  tree, whose byte and time cost is unknown and separately scoped.
+- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes.
+  - The preparation preflight's peak is the 144 GiB sum of the bounds. That sum plus the 300 GiB
+    reserve excludes the isolated source copy.
+  - No prior Blazer measurement is needed.
+- **Byte limits are a sampled stop, not a filesystem quota.**
+  - Every `limits.sampleSeconds` (5 s), the watched outputs are checked against the bound and the
+    filesystem's available bytes against the reserve.
+  - An overrun or the timeout stops the stage's process group: SIGTERM, then SIGKILL after
+    `limits.killGraceSeconds` (30 s). Outputs are kept.
+  - Writes between samples can overshoot.
+- **Descendants**: each stage runs in its own session and process group. Live members left after a
+  normal exit are ended the same way.
+- **Gaps that need host-side authority** (not provided here):
+  - an enforced quota (project quota, loop device or cgroup io);
+  - containment of descendants that start their own session (cgroup or systemd scope).
 - **Isolation**: `ISO` and `D` must not be, contain or sit inside the production source root
-  `/home/pixelbuild/grapheneos-2026100600` (`os/release-pipeline/frankel.json`), and no operator path
-  may be a symlink.
-- **Lock**: the lock (`/home/pixelbuild/frankel-build.lock` by contract) is probed and then held
-  with `LOCK_NB`. A held lock refuses.
+  `/home/pixelbuild/grapheneos-2026100600` (`os/release-pipeline/frankel.json`), nor share its inode,
+  and no operator path may be a symlink.
+- **Lock**: the lock (`/home/pixelbuild/frankel-build.lock` by contract) is probed and then held with
+  `LOCK_NB`. A held lock refuses.
 - **Existing outputs**: these refuse and are never deleted or reused: the archive, a `.part`,
   `vendor/google_devices/blazer`, `vendor/adevtool/dl/unpacked/blazer-CP3A.261005.005` and
   `out-blazer-lunch`. A failed download removes only the `.part` it created.
-- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes.
-  `vendor` and `lunch` also fail when measured consumption exceeds the bound; their outputs are kept.
-- **Bounds**: these are proposals for review, not measurements. The preparation preflight's peak is
-  their sum (144 GiB); no prior Blazer measurement is needed.
 - **Exit status**: 0 ready/success, 1 not ready or failed, 2 invalid input.
+- **`inspect`** (proposed for a later observation of at most 20 minutes; not authorized or run):
+  - It reports `lstat` identities, isolation, `statvfs` available and total bytes, pinned project
+    presence, the 128-byte `adevtool_revision`, bounded collision and download sizes (no hashing),
+    and the `--node` realpath, identity and stage-`PATH` resolution (not executed).
+  - It starts no process, opens no network connection and writes nothing.
+  - It is bounded by `--max-entries` (default 200000) and `--max-seconds` (default 900, at most 1200).
+- **Not yet verified**: the only known source is historical production ext4. Paths such as
+  `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
+  proposal, not verified paths. Building the isolated copy (no writable hardlinks, no assumed
+  reflink, with outputs, signing material and caches excluded) is separately scoped.
 - **Out of scope**: `compile` is outside preparation and still needs a measured
   `compileAllowanceBytes`. Nothing here compiles, signs, publishes or flashes, and no runtime scope
   is approved.
