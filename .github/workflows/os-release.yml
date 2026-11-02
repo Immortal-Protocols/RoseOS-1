@@ -1051,7 +1051,7 @@ jobs:
     # signing, secret, OIDC token or publication; contents: read only. Time: the helper's own stage timeout, the outer
     # timeout (+300 s, +30 s kill) and the job (+10 min), all derived from os/build-only/blazer.json by the hosted guard.
     # inspect (metadata only): the helper's --max-seconds 900, the outer 960 s (+30 s kill) and a 20-minute job; it passes
-    # the bound host facts (none yet) and the proposed --candidate-root of this run (never a binding; refused when no
+    # the bound host facts (receipt 41473133543's, re-checked by the helper) and the proposed --candidate-root of this run (never a binding; refused when no
     # candidates are committed), and its stdout is the write-once inspection.json receipt.
     # source: the helper's 7200 s copy (own-staging cleanup within its 240 s), the outer 7500 s (+30 s kill) and a 136-min
     # job. Exit 0 with complete:true means the byte copy finished, nothing more: provenance stays a production working-tree
