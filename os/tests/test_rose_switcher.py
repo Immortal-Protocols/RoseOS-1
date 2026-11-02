@@ -1124,6 +1124,28 @@ class OxbloodRoseCarouselTest(unittest.TestCase):
         self.assertIn('runningEdge', contract['manager'])
         self.assertIn('authoritatively running only', contract['manager']['runningEdge']['when'])
 
+    def test_the_rose_fan_card_and_pearl_match_homes_switcher_keys(self):
+        """#423: Home added the switcher keys (fan, Rose row card, pearl) to the contract; RoseFan's own copy is
+        compared key for key, so a later contract change is a coordination signal on #410."""
+        import json
+        switcher = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())['switcher']
+        fan = (OVERLAY/'RoseFan.java').read_text()
+        def const(name):
+            return float(re.search(rf'\b{name} = ([0-9.]+)f?\b', fan)[1])
+        self.assertEqual(const('PERSPECTIVE_DP'), switcher['fan']['perspective'])
+        self.assertEqual(const('MAX_OFFSET'), switcher['fan']['clamp'])
+        rose = switcher['fan']['rose']
+        self.assertEqual((const('SHIFT_DP'), const('TURN_DEG'), const('SHRINK')), (rose['shift'], rose['turnDeg'], rose['shrink']))
+        card = switcher['rose']['card']
+        self.assertEqual((const('CARD_WIDTH_DP'), const('CARD_HEIGHT_DP'), const('CARD_RADIUS_DP')),
+            (card['width'], card['height'], card['radius']))
+        self.assertIn('10 - round(|k| * 4)', switcher['fan']['depth'])
+        self.assertIn('return 10 - Math.round(Math.abs(k) * 4);', fan)
+        self.assertEqual(switcher['rose']['initialCard'], 'the second card when there are three or more')
+        self.assertIn('static int initial(int count) { return count >= 3 ? 1 : 0; }', fan)
+        self.assertIn(f"PEARL_DP = {switcher['pearl']['size']}", self.STRIP)
+        self.assertEqual(switcher['snap']['reducedMotion'], 'instant')
+
     def test_oxblood_materials_and_the_pearl_show_no_mic_or_call_state(self):
         self.assertIn('static final int[] PEARL_COLORS = {0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612};',
             self.STRIP)
