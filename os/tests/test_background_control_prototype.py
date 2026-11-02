@@ -91,7 +91,10 @@ class BackgroundControlPrototypeTest(unittest.TestCase):
             consent.index('hasPrototypeControl(agentPackageName,'))
         # Every session-side bypass goes through the signer-bound check; no package name grants it.
         bypasses = re.findall(r'isPrototypeSession\(\)', self.session)
-        self.assertEqual(len(bypasses), 5, 'declaration plus launch, assist, launch-allowed and top-activity')
+        self.assertEqual(len(bypasses), 6,
+            'declaration plus launch, assist, launch-allowed, top-activity and the multi-session admission accessor')
+        # The accessor only reports the owner's status to the processor's admission rule; it lifts no gate.
+        self.assertIn('boolean isPrototypeOwner() {\n        return isPrototypeSession();\n    }', self.session)
         self.assertNotIn('dev.pixel', self.session + self.allowlist + self.processor)
 
     def test_user_and_locked_owner_gates_hold_for_every_prototype_path(self):

@@ -201,17 +201,18 @@ index ce355150..cb620f7d 100644
       * Validates the intent to warn the user about launching an application that is being automated.
       */
 diff --git a/core/java/android/companion/virtual/VirtualDeviceManager.java b/core/java/android/companion/virtual/VirtualDeviceManager.java
-index 5a035b2a..fed9523a 100644
 --- a/core/java/android/companion/virtual/VirtualDeviceManager.java
 +++ b/core/java/android/companion/virtual/VirtualDeviceManager.java
-@@ -447,6 +447,29 @@ public final class VirtualDeviceManager {
+@@ -447,6 +447,31 @@ public final class VirtualDeviceManager {
          }
      }
  
 +    /**
 +     * RoseOS (#156): the calling app's own ComputerControl session devices with their current apps, as one snapshot
 +     * (generation, deviceIds, deviceComplete, appDeviceIds, appPackageNames). Only devices this app owns are ever
-+     * returned. Throws IllegalStateException when the virtual device service is unavailable.
++     * returned. Throws IllegalStateException when the virtual device service is unavailable. RoseOS
++     * (multi-session): also sessionLimit (int, 1 or 2), the most sessions this app can ever hold at once; a
++     * capability, not free slots, an admission promise or part of the snapshot.
 +     *
 +     * @hide
 +     */
@@ -234,7 +235,7 @@ index 5a035b2a..fed9523a 100644
      /**
       * Unregisters a listener previously registered with {@link #registerAutomatedPackageListener}.
       *
-@@ -1761,6 +1784,23 @@ public final class VirtualDeviceManager {
+@@ -1761,6 +1786,23 @@ public final class VirtualDeviceManager {
                      mExecutor.execute(() -> mListener.onAutomatedPackagesChanged(
                              automatingPackage, automatedPackages, user)));
          }
@@ -275,10 +276,9 @@ index 00000000..4b0bc531
 +parcelable AutomatedApps;
 diff --git a/core/java/android/companion/virtual/computercontrol/AutomatedApps.java b/core/java/android/companion/virtual/computercontrol/AutomatedApps.java
 new file mode 100644
-index 00000000..668a11d1
 --- /dev/null
 +++ b/core/java/android/companion/virtual/computercontrol/AutomatedApps.java
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,110 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -304,6 +304,11 @@ index 00000000..668a11d1
 + * packageNames is empty, generation is {@link Long#MAX_VALUE} and every later read is the same, so a closed session
 + * never reports apps again. A replacement session has its own device and its own reads.
 + *
++ * <p>RoseOS (multi-session): deviceId and displayId are the session's own virtual device and display, fixed when the
++ * session was created (the session sets them with {@link #forSession}; {@link #INVALID_ID} before that). Neither id
++ * is reused while the system server runs. After close they are historical, for correlating with the owner's own
++ * device list only: they never authorize capture, input or content, and never show what runs there now.
++ *
 + * @hide
 + */
 +public final class AutomatedApps implements Parcelable {
@@ -312,14 +317,32 @@ index 00000000..668a11d1
 +    private final int mUserId;
 +    private final boolean mComplete;
 +    private final boolean mClosed;
++    private final int mDeviceId;
++    private final int mDisplayId;
++
++    /** RoseOS (multi-session): the device or display id before a session sets it. */
++    public static final int INVALID_ID = -1;
 +
 +    public AutomatedApps(long generation, @NonNull String[] packageNames, int userId, boolean complete,
 +            boolean closed) {
++        this(generation, packageNames, userId, complete, closed, INVALID_ID, INVALID_ID);
++    }
++
++    private AutomatedApps(long generation, @NonNull String[] packageNames, int userId, boolean complete,
++            boolean closed, int deviceId, int displayId) {
 +        mGeneration = generation;
 +        mPackageNames = packageNames.clone();
 +        mUserId = userId;
 +        mComplete = complete;
 +        mClosed = closed;
++        mDeviceId = deviceId;
++        mDisplayId = displayId;
++    }
++
++    /** RoseOS (multi-session): the same apps, with the session's own device and display ids. */
++    @NonNull
++    public AutomatedApps forSession(int deviceId, int displayId) {
++        return new AutomatedApps(mGeneration, mPackageNames, mUserId, mComplete, mClosed, deviceId, displayId);
 +    }
 +
 +    /** The closed, terminal state. */
@@ -333,6 +356,8 @@ index 00000000..668a11d1
 +    public int getUserId() { return mUserId; }
 +    public boolean isComplete() { return mComplete; }
 +    public boolean isClosed() { return mClosed; }
++    public int getDeviceId() { return mDeviceId; }
++    public int getDisplayId() { return mDisplayId; }
 +
 +    private AutomatedApps(Parcel in) {
 +        mGeneration = in.readLong();
@@ -340,6 +365,8 @@ index 00000000..668a11d1
 +        mUserId = in.readInt();
 +        mComplete = in.readBoolean();
 +        mClosed = in.readBoolean();
++        mDeviceId = in.readInt();
++        mDisplayId = in.readInt();
 +    }
 +
 +    @Override
@@ -349,6 +376,8 @@ index 00000000..668a11d1
 +        dest.writeInt(mUserId);
 +        dest.writeBoolean(mComplete);
 +        dest.writeBoolean(mClosed);
++        dest.writeInt(mDeviceId);
++        dest.writeInt(mDisplayId);
 +    }
 +
 +    @Override
@@ -471,7 +500,6 @@ index baed11a1..4346d7e5 100644
 +    AutomatedApps getAutomatedApps();
  }
 diff --git a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java
-index b756433b..78b14836 100644
 --- a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java
 +++ b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java
 @@ -49,9 +49,17 @@ public class ComputerControlExtensions {
@@ -501,7 +529,7 @@ index b756433b..78b14836 100644
      }
  
      /**
-@@ -100,7 +108,28 @@ public class ComputerControlExtensions {
+@@ -100,7 +108,31 @@ public class ComputerControlExtensions {
          if (!isAvailable(context)) {
              return null;
          }
@@ -511,7 +539,10 @@ index b756433b..78b14836 100644
 +
 +    /**
 +     * RoseOS (#156): the calling app's own ComputerControl session devices and their current apps, independent of any
-+     * session, as a public {@link android.os.Bundle}: generation (long, the automated-package listener's generation),
++     * session, as a public {@link android.os.Bundle}: sessionLimit (int, RoseOS multi-session: 2 only for the
++     * signer-pinned prototype owner, else 1; the most sessions this app can ever hold at once, never a count of free
++     * slots, a promise of admission or part of the snapshot), generation (long, the automated-package listener's
++     * generation),
 +     * deviceIds (int[]), deviceComplete (boolean[]: false when another user's activity on that device is omitted),
 +     * appDeviceIds (int[]) and appPackageNames (String[]): appDeviceIds[i] runs appPackageNames[i], a package with a
 +     * non-finishing activity of the owner's user, front or hidden. Only devices whose recorded owner uid is the
@@ -532,10 +563,9 @@ index b756433b..78b14836 100644
  
      /**
 diff --git a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
-index 9cbc59bc..6a2ff073 100644
 --- a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
 +++ b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
-@@ -283,6 +283,34 @@ public final class ComputerControlSession implements AutoCloseable {
+@@ -283,6 +283,39 @@ public final class ComputerControlSession implements AutoCloseable {
          mSession.handOverApplications();
      }
  
@@ -550,6 +580,9 @@ index 9cbc59bc..6a2ff073 100644
 +     *   <li>{@code "userId"} (int): the owner's user.</li>
 +     *   <li>{@code "complete"} (boolean): false when the device also runs another user's activity, never named.</li>
 +     *   <li>{@code "closed"} (boolean): the session is closed, for good.</li>
++     *   <li>{@code "deviceId"} (int) and {@code "displayId"} (int), RoseOS multi-session: this session's own virtual
++     *       device and display, fixed at creation and present even when closed. After close they are historical,
++     *       for correlating with getOwnedAutomatedDevices only; they never authorize capture, input or content.</li>
 +     * </ul>
 +     * Throws SecurityException unless the caller is the session owner, and IllegalStateException when unavailable.
 +     *
@@ -564,6 +597,8 @@ index 9cbc59bc..6a2ff073 100644
 +        result.putInt("userId", apps.getUserId());
 +        result.putBoolean("complete", apps.isComplete());
 +        result.putBoolean("closed", apps.isClosed());
++        result.putInt("deviceId", apps.getDeviceId());
++        result.putInt("displayId", apps.getDisplayId());
 +        return result;
 +    }
 +
@@ -584,7 +619,6 @@ index 35217902..ddb50757 100644
                  mVirtualAudioController.onRunningAppsChanged(runningUids);
              }
 diff --git a/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java b/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java
-index 81eb70ec..40540479 100644
 --- a/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java
 +++ b/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java
 @@ -224,6 +224,8 @@ public class VirtualDeviceManagerService extends SystemService implements Watchd
@@ -630,7 +664,7 @@ index 81eb70ec..40540479 100644
  
          mHandler.post(() -> {
              mVirtualDeviceListeners.broadcast(listener -> {
-@@ -737,7 +750,15 @@ public class VirtualDeviceManagerService extends SystemService implements Watchd
+@@ -737,7 +750,19 @@ public class VirtualDeviceManagerService extends SystemService implements Watchd
          @Override // Binder call
          public void registerAutomatedPackageListener(IAutomatedPackageListener listener) {
              checkCallerIsRecentsOrHomeRoleHolder();
@@ -643,7 +677,11 @@ index 81eb70ec..40540479 100644
 +        @Override // Binder call
 +        public android.os.Bundle getOwnedAutomatedDevices() {
 +            // RoseOS (#156): only the caller's own devices, by its binder uid; no role, permission or other owner.
-+            return mAutomatedPackagesRepository.ownedAutomatedDevices(Binder.getCallingUid());
++            final int callingUid = Binder.getCallingUid();
++            final android.os.Bundle result = mAutomatedPackagesRepository.ownedAutomatedDevices(callingUid);
++            // RoseOS (multi-session): this caller's own session capability, outside the snapshot.
++            result.putInt("sessionLimit", mComputerControlSessionProcessor.getSessionLimit(callingUid));
++            return result;
          }
  
          @Override // Binder call
@@ -979,10 +1017,26 @@ index 6cb9f11f..183cd0c0 100644
                  }
                  case Activity.RESULT_OK -> mCloseVirtualDevice.run();
 diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
-index 8cdf5e0..dc3519c 100644
 --- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
 +++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
-@@ -1176,7 +1176,43 @@ final class ComputerControlSessionImpl extends IComputerControlSession.Stub
+@@ -595,6 +595,16 @@ final class ComputerControlSessionImpl extends IComputerControlSession.Stub
+         return mRequest.ownerPackageName();
+     }
+ 
++    // RoseOS (multi-session): the owner uid and its signer-pinned prototype status, for the processor's
++    // admission rule (ComputerControlSessionAdmission).
++    int getOwnerUid() {
++        return mRequest.ownerUid();
++    }
++
++    boolean isPrototypeOwner() {
++        return isPrototypeSession();
++    }
++
+     boolean isAutomatingPackage(@NonNull String packageName) {
+         synchronized (mAllowlistedPackages) {
+             return mAllowlistedPackages.contains(packageName);
+@@ -1176,7 +1186,48 @@ final class ComputerControlSessionImpl extends IComputerControlSession.Stub
          close(CLOSE_REASON_CALLER_INITIATED);
      }
  
@@ -999,6 +1053,10 @@ index 8cdf5e0..dc3519c 100644
 +    /**
 +     * RoseOS (#156): this session's own device's current apps, for the session owner only. Holding this binder is not
 +     * enough: the calling uid must be the session owner's. No other device, owner or user is ever read.
++     *
++     * <p>RoseOS (multi-session): every reply, closed or not, also carries this session's device and display ids. Both
++     * were fixed when the session was created. Once the session is closed they are historical, for correlation only:
++     * they grant no capture, input or content.
 +     */
 +    @Override
 +    public android.companion.virtual.computercontrol.AutomatedApps getAutomatedApps() {
@@ -1007,7 +1065,8 @@ index 8cdf5e0..dc3519c 100644
 +            throw new SecurityException("Only the session owner can read its automated apps");
 +        }
 +        if (mAutomatedAppsClosed) {
-+            return android.companion.virtual.computercontrol.AutomatedApps.closed(UserHandle.getUserId(ownerUid));
++            return android.companion.virtual.computercontrol.AutomatedApps.closed(UserHandle.getUserId(ownerUid))
++                    .forSession(mVirtualDeviceId, mVirtualDisplayId);
 +        }
 +        final AutomatedPackagesRepository repository = mAutomatedPackagesRepository;
 +        final android.companion.virtual.computercontrol.AutomatedApps apps = repository == null ? null
@@ -1016,9 +1075,9 @@ index 8cdf5e0..dc3519c 100644
 +            throw new IllegalStateException("Automated apps are unavailable for this session");
 +        }
 +        // A close that raced the read wins: never report apps for a closed session.
-+        return mAutomatedAppsClosed
++        return (mAutomatedAppsClosed
 +                ? android.companion.virtual.computercontrol.AutomatedApps.closed(UserHandle.getUserId(ownerUid))
-+                : apps;
++                : apps).forSession(mVirtualDeviceId, mVirtualDisplayId);
 +    }
 +
      void close(@ComputerControlSession.SessionCloseReason int closeReason) {
@@ -1026,14 +1085,127 @@ index 8cdf5e0..dc3519c 100644
          mLifecycle.updateLifecycleState((config) -> {
              if (config.mClosed != null) {
                  return;
+diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java
+new file mode 100644
+--- /dev/null
++++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java
+@@ -0,0 +1,109 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.server.companion.virtual.computercontrol;
++
++import android.annotation.NonNull;
++import android.annotation.Nullable;
++
++import java.util.List;
++import java.util.Objects;
++import java.util.function.BooleanSupplier;
++import java.util.function.Predicate;
++
++/**
++ * RoseOS (multi-session): ComputerControlSessionProcessor's session admission rules, kept free of Android state.
++ *
++ * <p>The pinned limit (MAXIMUM_CONCURRENT_SESSIONS) still counts every owner's sessions. The one exception is the
++ * signer-pinned prototype owner (ComputerControlAllowlistController#hasPrototypeControl): it may hold a second
++ * session, but only when the one session already held is its own, with the same owner uid, and that owner also
++ * passes the check. A session of any other owner never sits next to it, and no owner gets a third session. A
++ * session whose close failed is still held and still counts.
++ */
++final class ComputerControlSessionAdmission {
++    /** The most sessions one signer-pinned prototype owner uid may hold at once. */
++    static final int MAXIMUM_PROTOTYPE_OWNER_SESSIONS = 2;
++
++    private ComputerControlSessionAdmission() {}
++
++    /** One session already counted: its owner and name, and whether its owner passes the prototype check. */
++    static final class Held {
++        final int ownerUid;
++        @NonNull final String ownerPackageName;
++        @Nullable final String name;
++        @NonNull private final BooleanSupplier mPrototypeOwner;
++
++        Held(int ownerUid, @NonNull String ownerPackageName, @Nullable String name,
++                @NonNull BooleanSupplier prototypeOwner) {
++            this.ownerUid = ownerUid;
++            this.ownerPackageName = ownerPackageName;
++            this.name = name;
++            mPrototypeOwner = prototypeOwner;
++        }
++
++        boolean isPrototypeOwner() {
++            return mPrototypeOwner.getAsBoolean();
++        }
++    }
++
++    /**
++     * Whether a new session for requesterUid may be created next to the held sessions of every owner. The
++     * prototype checks run only when a second session is actually being considered.
++     */
++    static boolean admits(int maximumSessions, @NonNull List<Held> held, int requesterUid,
++            @NonNull BooleanSupplier requesterIsPrototypeOwner) {
++        if (held.size() < maximumSessions) {
++            return true;
++        }
++        if (held.size() >= MAXIMUM_PROTOTYPE_OWNER_SESSIONS) {
++            return false;
++        }
++        for (int i = 0; i < held.size(); i++) {
++            if (held.get(i).ownerUid != requesterUid) {
++                return false;
++            }
++        }
++        if (!requesterIsPrototypeOwner.getAsBoolean()) {
++            return false;
++        }
++        for (int i = 0; i < held.size(); i++) {
++            if (!held.get(i).isPrototypeOwner()) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    /**
++     * The same-owner, same-name rule of ComputerControlSessionProcessor#validateRequest (owner package and name),
++     * re-applied at creation so that requests still in flight are covered.
++     */
++    static boolean isNameTaken(@NonNull List<Held> held, @Nullable String ownerPackageName,
++            @Nullable String name) {
++        for (int i = 0; i < held.size(); i++) {
++            if (Objects.equals(ownerPackageName, held.get(i).ownerPackageName)
++                    && Objects.equals(name, held.get(i).name)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    /**
++     * The getOwnedAutomatedDevices "sessionLimit" for one owner uid: the most sessions it can ever hold at once on
++     * this build. MAXIMUM_PROTOTYPE_OWNER_SESSIONS only when the uid is exactly one package and that package passes
++     * the prototype check; a shared or unknown uid gets maximumSessions. It is a capability, never a number of free
++     * slots or a promise of admission: another owner's session, both slots held, a failed close still counted or a
++     * creation in flight still refuse a request.
++     */
++    static int sessionLimit(int maximumSessions, @Nullable String[] ownerPackages,
++            @NonNull Predicate<String> isPrototypeOwner) {
++        if (ownerPackages == null || ownerPackages.length != 1 || ownerPackages[0] == null) {
++            return maximumSessions;
++        }
++        return isPrototypeOwner.test(ownerPackages[0])
++                ? Math.max(maximumSessions, MAXIMUM_PROTOTYPE_OWNER_SESSIONS) : maximumSessions;
++    }
++}
 diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java
-index 82fe674..293ed1e 100644
 --- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java
 +++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java
-@@ -117,6 +117,16 @@ public final class ComputerControlSessionProcessor {
+@@ -115,6 +115,16 @@ public final class ComputerControlSessionProcessor {
+     @GuardedBy("mSessions")
+     private final ArraySet<ComputerControlSessionImpl> mSessions = new ArraySet<>();
  
-     private final Object mHandlerThreadLock = new Object();
-     @GuardedBy("mHandlerThreadLock")
 +    // RoseOS (#156): the automated-package repository, set once by VirtualDeviceManagerService and handed to each
 +    // session before it is returned to its owner (getAutomatedApps).
 +    @Nullable
@@ -1044,10 +1216,29 @@ index 82fe674..293ed1e 100644
 +        mAutomatedPackagesRepository = repository;
 +    }
 +
+     private final Object mHandlerThreadLock = new Object();
+     @GuardedBy("mHandlerThreadLock")
      @Nullable
-     private ServiceThread mHandlerThread;
-     @SuppressWarnings("NullAway") // Session lifecycle makes this @NonNull, though hard to enforce
-@@ -446,6 +456,7 @@ public final class ComputerControlSessionProcessor {
+@@ -430,6 +440,18 @@ public final class ComputerControlSessionProcessor {
+         }
+ 
+         synchronized (mSessions) {
++            // RoseOS (multi-session): validateRequest checks the name on the binder thread, before this creation
++            // was queued, so it cannot see requests still in flight. Every creation runs on this one handler, and
++            // a session is published (mSessions.add below) before the next creation starts, so re-checking the
++            // name and admission here, under mSessions, sees every earlier creation. A same-owner, same-name
++            // request queued behind another fails as the pinned single-session limit already made it fail.
++            if (ComputerControlSessionAdmission.isNameTaken(heldSessionsLocked(),
++                    request.ownerPackageName(), request.name())) {
++                Slog.w(TAG, "Session name taken at creation: " + request.name());
++                dispatchSessionCreationFailed(request,
++                        ComputerControlSession.ERROR_SESSION_LIMIT_REACHED);
++                return;
++            }
+             if (!checkSessionCreationPreconditionsLocked(request)) {
+                 return;
+             }
+@@ -446,6 +468,7 @@ public final class ComputerControlSessionProcessor {
                              mSessions.remove(closedSession);
                          }
                      }, mReferenceDisplayAddress);
@@ -1055,3 +1246,57 @@ index 82fe674..293ed1e 100644
              synchronized (mSessions) {
                  mSessions.add(session);
              }
+@@ -492,10 +515,52 @@ public final class ComputerControlSessionProcessor {
+         return null;
+     }
+ 
++    /** RoseOS (multi-session): every session counted for admission, of every owner. */
++    @GuardedBy("mSessions")
++    @NonNull
++    private List<ComputerControlSessionAdmission.Held> heldSessionsLocked() {
++        final List<ComputerControlSessionAdmission.Held> held = new ArrayList<>(mSessions.size());
++        for (int i = 0; i < mSessions.size(); i++) {
++            final ComputerControlSessionImpl session = mSessions.valueAt(i);
++            held.add(new ComputerControlSessionAdmission.Held(session.getOwnerUid(),
++                    session.getOwnerPackageName(), session.getName(),
++                    () -> Binder.withCleanCallingIdentity(session::isPrototypeOwner)));
++        }
++        return held;
++    }
++
++    /**
++     * RoseOS (multi-session): the most sessions this owner uid can ever hold at once on this build, for
++     * getOwnedAutomatedDevices. It is a capability, not a count of free slots and not a promise that a
++     * request will be admitted. Returns 2 only when the uid is a single package that passes the
++     * signer-pinned prototype check in its own user; otherwise, or on any failure, the pinned limit.
++     */
++    public int getSessionLimit(int ownerUid) {
++        try {
++            return Binder.withCleanCallingIdentity(() -> {
++                final PackageManager packageManager = mContext.createContextAsUser(
++                        UserHandle.getUserHandleForUid(ownerUid), /* flags= */ 0).getPackageManager();
++                return ComputerControlSessionAdmission.sessionLimit(MAXIMUM_CONCURRENT_SESSIONS,
++                        packageManager.getPackagesForUid(ownerUid),
++                        packageName -> mAllowlistController.hasPrototypeControl(packageName,
++                                packageManager));
++            });
++        } catch (RuntimeException e) {
++            Slog.w(TAG, "Session limit unavailable for uid " + ownerUid + ", reporting the pinned limit");
++            return MAXIMUM_CONCURRENT_SESSIONS;
++        }
++    }
++
+     @GuardedBy("mSessions")
+     private boolean checkSessionCreationPreconditionsLocked(
+             @NonNull ComputerControlSessionRequest request) {
+-        if (mSessions.size() >= MAXIMUM_CONCURRENT_SESSIONS) {
++        // RoseOS (multi-session): MAXIMUM_CONCURRENT_SESSIONS still counts every owner's sessions. The only
++        // exception is a second session for the signer-pinned prototype owner, and only next to its own one
++        // (ComputerControlSessionAdmission#admits).
++        if (!ComputerControlSessionAdmission.admits(MAXIMUM_CONCURRENT_SESSIONS, heldSessionsLocked(),
++                request.ownerUid(), () -> Binder.withCleanCallingIdentity(
++                        () -> mAllowlistController.hasPrototypeControl(request.ownerPackageName(),
++                                request.ownerPackageManager())))) {
+             dispatchSessionCreationFailed(request,
+                     ComputerControlSession.ERROR_SESSION_LIMIT_REACHED);
+             return false;
