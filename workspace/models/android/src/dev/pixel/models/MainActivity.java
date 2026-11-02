@@ -22,13 +22,15 @@ import java.util.List;
 /**
  * Rose Models text chat: transcript, input and Send, status, Stop, Continue and the last app
  * action. Conversation and agent state live in Core's local-agent-v1 agent on this phone
- * (NativeAgent); inference goes only to the public Muse Glimmer service (ModelsService) with no
- * settings. Its access token comes from service-auth-v1 (DeviceAuth: an attested Keystore key),
- * stays in memory and is renewed automatically; nothing is typed and no secret ships in the APK.
+ * (NativeAgent); inference goes only to the public Rose Models service (ModelsService): Muse
+ * Glimmer, or Qwen when Settings selects it. Its access token comes from service-auth-v1
+ * (DeviceAuth: an attested Keystore key), stays in memory and is renewed automatically; nothing is typed and no secret ships in the APK.
  */
 public final class MainActivity extends Activity implements TurnView {
     private static final String PREFS = "rose-models";
     private static final String KEY_ALLOWLIST = "allowlist";
+    /** The selected model's exact served id; anything not in ModelsService.Model means the default. */
+    private static final String KEY_MODEL = "model_id";
     /** Settings of builds before 0.2: removed on start; chat and app data are untouched. */
     private static final String[] STALE_KEYS = {"endpoint", "model"};
 
@@ -45,6 +47,7 @@ public final class MainActivity extends Activity implements TurnView {
     private AppAllowlist allowlist = AppAllowlist.empty();
     private String setupProblem;
     private DeviceAuth auth;
+    private ModelsService.Model model = ModelsService.DEFAULT;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -56,13 +59,13 @@ public final class MainActivity extends Activity implements TurnView {
         }
         stale.apply();
         allowlist = AppAllowlist.parse(prefs.getString(KEY_ALLOWLIST, ""));
+        model = ModelsService.Model.fromId(prefs.getString(KEY_MODEL, null));
         buildUi();
         auth = new DeviceAuth(new KeystoreDeviceKey(), store(prefs));
         String inviteProblem = takeInvite(getIntent());
         NativeAgent agent;
         try {
-            agent = new NativeAgent(AgentConfigJson.build(ModelsService.MODEL, AgentConfigJson.DEFAULT_SYSTEM_PROMPT,
-                    allowlist));
+            agent = new NativeAgent(AgentConfigJson.build(model, allowlist));
         } catch (IllegalArgumentException e) {
             setupProblem = "the agent rejected its configuration: " + e.getMessage();
             setStatus(setupProblem);
@@ -209,17 +212,25 @@ public final class MainActivity extends Activity implements TurnView {
     }
 
     /**
-     * Service sign-in. The service and model are fixed; the only action is an explicitly selected
-     * reset, which deletes this install's device key so the next message enrolls a new one.
+     * Service sign-in and model. The service is fixed; the model is one of ModelsService.Model, switched
+     * explicitly (a new conversation; sign-in is per service and unchanged). Reset deletes this install's
+     * device key so the next message enrolls a new one.
      */
     private void editSettings() {
         if (busy()) {
             return;
         }
+        final ModelsService.Model other = model == ModelsService.Model.MUSE ? ModelsService.Model.QWEN
+                : ModelsService.Model.MUSE;
         new AlertDialog.Builder(this)
-                .setTitle("Muse Glimmer service")
-                .setMessage(ModelsService.ORIGIN + "\nModel: " + ModelsService.MODEL + "\nSign-in: " + signInText())
+                .setTitle("Rose Models service")
+                .setMessage(ModelsService.ORIGIN + "\nModel: " + model.label + " (" + model.id + ")\nSign-in: "
+                        + signInText())
                 .setPositiveButton("Close", null)
+                .setNegativeButton("Use " + other.label, (d, w) -> {
+                    prefs().edit().putString(KEY_MODEL, other.id).apply();
+                    recreate();
+                })
                 .setNeutralButton("Reset sign-in", (d, w) -> HttpsInferenceClient.background(() -> {
                     try {
                         auth.reset();
@@ -251,7 +262,7 @@ public final class MainActivity extends Activity implements TurnView {
 
     /** Signs in in the background at start; a problem is shown but never blocks Send or Settings. */
     private void connect() {
-        setStatus("Connecting to Muse Glimmer…");
+        setStatus("Connecting to " + model.label + "…");
         final DeviceAuth current = auth;
         HttpsInferenceClient.background(() -> {
             String problem = null;

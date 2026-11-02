@@ -2,9 +2,12 @@ package dev.pixel.models;
 
 /** Builds the local-agent-v1 config from the user's settings and locally resolved allowlist. */
 final class AgentConfigJson {
-    static final String DEFAULT_SYSTEM_PROMPT = "Reasoning strength: low";
-
     private AgentConfigJson() {
+    }
+
+    /** The selected service model: its exact id and its own operator line (Muse: `Reasoning strength: low`). */
+    static String build(ModelsService.Model model, AppAllowlist allowlist) {
+        return build(model.id, model.systemPrompt, allowlist);
     }
 
     static String build(String model, String systemPrompt, AppAllowlist allowlist) {
