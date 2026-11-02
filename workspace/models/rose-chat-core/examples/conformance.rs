@@ -6,10 +6,16 @@
 //! keeps no prompt or reply text in its summary.
 //!
 //! ```text
-//! conformance fixture --prompts P --replies R
-//! conformance live --prompts P --origin https://HOST --model ID --token-file F
+//! conformance fixture --prompts P --replies R [--profile muse|qwen]
+//! conformance live --prompts P --origin https://HOST --model ID --token-file F [--profile muse|qwen]
 //!                  [--min-interval-ms 11000] [--timeout-s 120]
 //! ```
+//!
+//! `--profile` (MODELS-CONFORMANCE-QWEN-PROFILE-001) selects which of the Rose Models app's models the harness
+//! speaks as: its served id and its system prompt line, exactly as `ModelsService.Model` configures the agent
+//! (`muse`: `muse-glimmer` with "Reasoning strength: low"; `qwen`: `rose-qwen` with none). The prompts, expectations,
+//! allowlist and bar always come from the prompt set. Without `--profile` the set's own model and system prompt are
+//! used, as before. Any other profile is refused. `live` still requires `--model` to equal the selected model.
 //!
 //! `live` is bounded:
 //! - one request per prompt, 20 prompts, `max_tokens` 512;
@@ -30,6 +36,24 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub const PROMPT_COUNT: usize = 20;
+
+/// The Rose Models app's selectable models (android `ModelsService.Model`): profile name, served model id and the
+/// system prompt line the app configures for it. `tests/conformance.rs` checks this against the app's source.
+pub const PROFILES: &[(&str, &str, Option<&str>)] = &[
+    ("muse", "muse-glimmer", Some("Reasoning strength: low")),
+    ("qwen", "rose-qwen", None),
+];
+
+/// Speak as one of the app's models: replaces the set's model and system prompt, nothing else.
+pub fn apply_profile(set: &mut PromptSet, profile: &str) -> Result<(), String> {
+    let (_, model, system_prompt) = PROFILES
+        .iter()
+        .find(|(name, ..)| *name == profile)
+        .ok_or_else(|| format!("unknown --profile {profile:?} (muse or qwen)"))?;
+    set.model = model.to_string();
+    set.system_prompt = system_prompt.map(str::to_string);
+    Ok(())
+}
 const MAX_RESPONSE_BYTES: u64 = 1 << 20;
 
 #[derive(Deserialize)]
@@ -391,16 +415,19 @@ pub fn cli(args: &[String]) -> Result<Value, String> {
         }
         let key = match flag.as_str() {
             "--prompts" | "--replies" | "--origin" | "--model" | "--token-file"
-            | "--min-interval-ms" | "--timeout-s" => flag.as_str(),
+            | "--min-interval-ms" | "--timeout-s" | "--profile" => flag.as_str(),
             other => return Err(format!("unknown option {other}")),
         };
         let value = it.next().ok_or_else(|| format!("{key} needs a value"))?;
         opts.insert(key, value);
     }
     let prompts_path = opts.get("--prompts").ok_or("--prompts is required")?;
-    let set = load_prompts(
+    let mut set = load_prompts(
         &std::fs::read_to_string(prompts_path).map_err(|e| format!("prompts: {}", e.kind()))?,
     )?;
+    if let Some(profile) = opts.get("--profile") {
+        apply_profile(&mut set, profile)?;
+    }
     match mode.as_str() {
         "fixture" => {
             let replies_path = opts.get("--replies").ok_or("--replies is required")?;

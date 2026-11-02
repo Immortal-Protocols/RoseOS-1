@@ -44,6 +44,22 @@ cargo run --locked --example conformance -- live --prompts ../serving/conformanc
   --origin https://models.a-list.com --model muse-glimmer --token-file "$TOKEN_FILE" > conformance-summary.json
 ```
 
+**Profiles** (MODELS-CONFORMANCE-QWEN-PROFILE-001): `--profile muse|qwen` makes the harness speak as one of the Rose
+Models app's models, with its served id and its system prompt line, exactly as `ModelsService.Model` configures the
+agent:
+- `muse`: `muse-glimmer` with "Reasoning strength: low", the prompt set's own and the default;
+- `qwen`: `rose-qwen` with no system prompt.
+
+The 20 prompts, expectations, allowlist and bar never change. Any other profile is refused, and `--model` must still
+equal the selected model.
+
+A Qwen run (not executed; serving Qwen is a separate activation decision):
+
+```bash
+cargo run --locked --example conformance -- live --prompts ../serving/conformance/prompts.json --profile qwen \
+  --origin https://models.a-list.com --model rose-qwen --token-file "$TOKEN_FILE" > conformance-summary.json
+```
+
 **Live limits:**
 - exactly 20 POSTs to `/v1/chat/completions`, 11 s apart (`--min-interval-ms`, ≤ 60000), to fit the edge's 6 requests per minute;
 - `--timeout-s` at most 120 per request, and a 1 MiB response cap;
