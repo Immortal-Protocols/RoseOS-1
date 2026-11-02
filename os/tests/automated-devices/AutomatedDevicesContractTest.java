@@ -99,6 +99,79 @@ public final class AutomatedDevicesContractTest {
         }
     }
 
+    /** The owned-devices snapshot, in the listener's terms, for assertions. */
+    static Map<Integer, List<String>> owned(android.os.Bundle b) {
+        int[] devices = b.getIntArray("deviceIds"), appDevices = b.getIntArray("appDeviceIds");
+        boolean[] complete = b.getBooleanArray("deviceComplete");
+        String[] apps = b.getStringArray("appPackageNames");
+        expect(b.keySet().equals(new java.util.HashSet<>(List.of("generation", "deviceIds", "deviceComplete",
+                "appDeviceIds", "appPackageNames"))), "exactly the agreed keys");
+        expect(devices.length == complete.length && appDevices.length == apps.length, "well-formed owned snapshot");
+        Map<Integer, List<String>> result = new HashMap<>();
+        for (int d : devices) result.put(d, new ArrayList<>());
+        for (int i = 0; i < appDevices.length; i++) {
+            expect(result.containsKey(appDevices[i]), "every owned app's device is listed");
+            result.get(appDevices[i]).add(apps[i]);
+        }
+        return result;
+    }
+
+    /** #156: getOwnedAutomatedDevices, the caller's own devices from the same repository and generation. */
+    static void ownedDevices() {
+        Handler handler = new Handler();
+        AutomatedPackagesRepository repository = new AutomatedPackagesRepository(handler);
+        Recorder home = new Recorder();
+        repository.registerAutomatedPackageListener(home, 0);
+        handler.drain();
+
+        // Zero devices: a real, complete empty snapshot at the listener's generation (never invented on failure).
+        android.os.Bundle none = repository.ownedAutomatedDevices(ROSE_UID);
+        expect(owned(none).isEmpty() && none.getLong("generation") == home.last, "zero: empty at the listener's generation");
+
+        // One device, then another owner's device with the same package: the caller sees only its own.
+        repository.update(3, ROSE, ROSE_UID, running(10500, "com.example.mail", "com.example.maps"));
+        repository.update(4, OTHER, OTHER_UID, running(10500, "com.example.mail"));
+        handler.drain();
+        android.os.Bundle one = repository.ownedAutomatedDevices(ROSE_UID);
+        expect(owned(one).equals(Map.of(3, List.of("com.example.mail", "com.example.maps"))), "one: Rose's device and its apps");
+        expect(one.getLong("generation") == home.last, "the generation is the listener's, atomically with the content");
+        expect(owned(one).get(3).equals(home.apps.get(3)), "identical to the listener's apps for that device");
+        expect(owned(repository.ownedAutomatedDevices(OTHER_UID)).equals(Map.of(4, List.of("com.example.mail"))),
+                "another owner sees only its own device");
+        expect(owned(repository.ownedAutomatedDevices(ROSE_UID_USER10)).isEmpty(), "Rose's package in another user owns nothing here");
+        expect(owned(repository.ownedAutomatedDevices(12345)).isEmpty(), "an unrelated caller gets nothing, not even a count");
+
+        // Multiple: a replacement session device while the first has not closed (a failed close): both stay listed.
+        repository.update(5, ROSE, ROSE_UID, running(10500, "com.example.notes"));
+        handler.drain();
+        expect(owned(repository.ownedAutomatedDevices(ROSE_UID)).equals(Map.of(3, List.of("com.example.mail", "com.example.maps"),
+                5, List.of("com.example.notes"))), "multiple: every attested device, nothing inferred released");
+
+        // Another user's activity on Rose's device: omitted, and that device incomplete.
+        ArraySet<Pair<Integer, String>> mixed = running(10500, "com.example.notes");
+        mixed.add(new Pair<>(1010500, "com.example.private"));
+        repository.update(5, ROSE, ROSE_UID, mixed);
+        handler.drain();
+        android.os.Bundle partial = repository.ownedAutomatedDevices(ROSE_UID);
+        int[] ids = partial.getIntArray("deviceIds");
+        boolean[] complete = partial.getBooleanArray("deviceComplete");
+        for (int i = 0; i < ids.length; i++) expect(complete[i] == (ids[i] != 5), "only the mixed device is incomplete");
+        expect(!Arrays.asList(partial.getStringArray("appPackageNames")).contains("com.example.private"), "never named");
+
+        // Handover: the device runs nothing, so it leaves (as the listener's does); the other stays.
+        repository.update(5, ROSE, ROSE_UID, running(10500));
+        handler.drain();
+        expect(owned(repository.ownedAutomatedDevices(ROSE_UID)).keySet().equals(java.util.Set.of(3)), "handover leaves the device");
+
+        // Close (caller, death, deadline all reach removeVirtualDevice): removed now; a late report never resurrects it.
+        repository.onDeviceClosed(3);
+        repository.update(3, ROSE, ROSE_UID, running(10500, "com.example.mail"));
+        handler.drain();
+        android.os.Bundle after = repository.ownedAutomatedDevices(ROSE_UID);
+        expect(owned(after).isEmpty() && !home.owners.containsKey(3), "closed: gone from both, and stays gone");
+        expect(after.getLong("generation") == home.last, "still the listener's generation");
+    }
+
     /** #156 parity: the listener's per-device apps and a session's own getAutomatedApps come from one repository. */
     static void parity() {
         Handler handler = new Handler();
@@ -280,6 +353,7 @@ public final class AutomatedDevicesContractTest {
                 for (Owner o : content.values())
                     expect(o.pkg.equals(ROSE) || o.pkg.equals(OTHER), "only owner packages are named");
         parity();
+        ownedDevices();
         System.out.println("AutomatedDevicesContractTest: " + checks + " checks passed");
     }
 }
