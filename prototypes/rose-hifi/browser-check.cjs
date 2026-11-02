@@ -432,10 +432,15 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     await page.locator('.home-page[aria-hidden=false] .app').first().click(); await settle(500);
     await page.locator('#h-peek').click(); await settle(300);
     const sb2 = await page.locator('#screen').boundingBox();
+    // A drag in the app content while the edge is up belongs to the app, not the edge.
     await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5); await page.mouse.down();
-    for (let i = 1; i <= 8; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5 + i * 12);
+    for (let i = 1; i <= 12; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5 - i * 25);
     await page.mouse.up(); await settle(400);
-    check('swipe down lowers the edge; app still open', !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    check('drag inside the app leaves the edge up and the app open', (await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 50); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 50 + i * 6);
+    await page.mouse.up(); await settle(400);
+    check('swipe down on the edge lowers it; app still open', !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
     await page.locator('#h-peek').click(); await settle(300);
     await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 30); await page.mouse.down();
     for (let i = 1; i <= 12; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 30 - i * 25);

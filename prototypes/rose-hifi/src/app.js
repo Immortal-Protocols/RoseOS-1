@@ -479,7 +479,9 @@
     if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
     const fromEdge = (r.bottom - e.clientY) / k <= 56;
-    if (peek || (fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
+    // With the edge up, only a drag that starts on the edge itself moves it; the app above scrolls and taps normally.
+    const onRaisedEdge = peek && (r.bottom - e.clientY) / k <= 104;
+    if (onRaisedEdge || (!peek && fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
   });
   window.addEventListener('pointermove', (e) => {
     if (!peekDrag) return;

@@ -639,3 +639,21 @@ span.well{cursor:default}
 #v-rose .tray .well,#v-agents .tray .well{width:94px;height:72px}
 .screen[data-result=true] .rose-caption{left:calc(var(--margin) + 78px)}
 .device.unfolded .screen[data-result=true] .rose-caption{left:calc(50% - 280px + 78px)}
+
+/* ---------- App's own bottom bar (tabs, composer, search) ---------- */
+.detail-frame.human{display:flex;flex-direction:column}
+.app-body{position:relative;flex:1 1 0;min-height:0}
+.app-bar{flex:none;display:flex;align-items:center;gap:8px;min-height:56px;padding:6px 10px;border-top:1px solid #eef1f5;background:#f8fafc}
+.app-bar.tabs{justify-content:space-around;padding:4px 4px}
+.app-bar .ab-tab{display:grid;justify-items:center;gap:3px;min-width:44px;min-height:44px;padding:4px 6px;font-size:11px;color:#8a93a3}
+.app-bar .ab-tab i{width:18px;height:18px;border-radius:6px;background:currentColor;opacity:.5}
+.app-bar .ab-tab[aria-selected=true]{color:#2c3340}
+.app-bar .ab-tab[aria-selected=true] i{opacity:1;background:#3d7df2}
+.app-bar .ab-input{flex:1;min-width:0;height:38px;border:0;border-radius:19px;padding:0 14px;font:inherit;font-size:15px;background:#eef2f7;color:#2c3340;outline-offset:1px}
+.app-bar .ab-plus,.app-bar .ab-send{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-size:20px;line-height:1}
+.app-bar .ab-plus{width:38px;height:38px;background:#eef2f7;color:#445}
+.app-bar .ab-send{width:38px;height:38px;background:#3d7df2;color:#fff;font-weight:600}
+.app-bar .ab-plus::after,.app-bar .ab-send::after{content:'';position:absolute;inset:-3px}
+.app-bar .ab-plus,.app-bar .ab-send{position:relative}
+.c-msg{overflow:auto;scrollbar-width:none}
+.c-msg p{flex:none}

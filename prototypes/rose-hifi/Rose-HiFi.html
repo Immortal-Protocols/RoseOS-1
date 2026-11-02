@@ -645,6 +645,24 @@ span.well{cursor:default}
 .screen[data-result=true] .rose-caption{left:calc(var(--margin) + 78px)}
 .device.unfolded .screen[data-result=true] .rose-caption{left:calc(50% - 280px + 78px)}
 
+/* ---------- App's own bottom bar (tabs, composer, search) ---------- */
+.detail-frame.human{display:flex;flex-direction:column}
+.app-body{position:relative;flex:1 1 0;min-height:0}
+.app-bar{flex:none;display:flex;align-items:center;gap:8px;min-height:56px;padding:6px 10px;border-top:1px solid #eef1f5;background:#f8fafc}
+.app-bar.tabs{justify-content:space-around;padding:4px 4px}
+.app-bar .ab-tab{display:grid;justify-items:center;gap:3px;min-width:44px;min-height:44px;padding:4px 6px;font-size:11px;color:#8a93a3}
+.app-bar .ab-tab i{width:18px;height:18px;border-radius:6px;background:currentColor;opacity:.5}
+.app-bar .ab-tab[aria-selected=true]{color:#2c3340}
+.app-bar .ab-tab[aria-selected=true] i{opacity:1;background:#3d7df2}
+.app-bar .ab-input{flex:1;min-width:0;height:38px;border:0;border-radius:19px;padding:0 14px;font:inherit;font-size:15px;background:#eef2f7;color:#2c3340;outline-offset:1px}
+.app-bar .ab-plus,.app-bar .ab-send{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-size:20px;line-height:1}
+.app-bar .ab-plus{width:38px;height:38px;background:#eef2f7;color:#445}
+.app-bar .ab-send{width:38px;height:38px;background:#3d7df2;color:#fff;font-weight:600}
+.app-bar .ab-plus::after,.app-bar .ab-send::after{content:'';position:absolute;inset:-3px}
+.app-bar .ab-plus,.app-bar .ab-send{position:relative}
+.c-msg{overflow:auto;scrollbar-width:none}
+.c-msg p{flex:none}
+
 /* ---------- Bottom-tray exploration (HIFI-TRAY-OPTIONS, Nathan 2026-10-31 22:06 UTC) ----------
    Ten opt-in tray directions. Active only when #screen has data-tray="1"…"10" (URL ?tray=N or the
    harness selector). Without the attribute nothing here matches, so the working default is unchanged.
@@ -1052,10 +1070,6 @@ span.well{cursor:default}
 #device[data-theme=oxblood] #peek-mic[data-muted=true]{color:#ff8c9a;box-shadow:inset 0 0 0 1.4px rgba(255,90,110,.75),inset 0 2px 3px rgba(0,0,0,.45)}
 #device[data-theme=oxblood] #peek-overview svg{width:64px;height:28px}
 #device[data-theme=oxblood] .peek-pearl{width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%);box-shadow:0 2px 4px rgba(0,0,0,.5)}
-/* The app scrunches up and away from the edge, keeping its own content clear. */
-#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window,#v-rose){transform:translateY(-58px) scale(.88);border-radius:34px;overflow:hidden;
-  box-shadow:0 0 0 1px rgba(236,205,190,.25),0 24px 50px rgba(0,0,0,.6);transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease);cursor:pointer}
-#device[data-theme=oxblood] :is(#v-app,#v-window,#v-rose){transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease)}
 #device[data-theme=oxblood] .screen.peek{background:#0f0406}
 #device[data-theme=oxblood] .screen.peek .home-bar{z-index:46}
 #device[data-theme=oxblood] .peek-tray .well::before,#device[data-theme=oxblood] .peek-tray .well::after{display:none}
@@ -1262,12 +1276,14 @@ span.well{cursor:default}
 #device[data-theme=oxblood] .sw-rose::before{content:'';position:absolute;left:6px;top:6px;width:18px;height:18px}
 
 /* ---------- Edge gesture: live tracking, notices out of the way ---------- */
-#device[data-theme=oxblood] .screen.peek-drag :is(#v-app,#v-window,#v-rose,#v-agents){transition:none;
-  transform:translateY(calc(-58px * var(--pk) - 40px * var(--pk2,0))) scale(calc(1 - .12 * var(--pk) - .26 * var(--pk2,0)));border-radius:calc(34px * var(--pk));overflow:hidden}
-#device[data-theme=oxblood] .screen.peek-drag #peek-tray{display:flex!important;animation:none;transform:translateY(calc((1 - var(--pk)) * 100%))}
-#device[data-theme=oxblood] .screen.peek-drag{background:#0f0406}
-#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window,#v-rose,#v-agents){transform:translateY(-58px) scale(.88);border-radius:34px;overflow:hidden;box-shadow:0 0 0 1px rgba(236,205,190,.25),0 24px 50px rgba(0,0,0,.6)}
-#device[data-theme=oxblood] :is(#v-app,#v-window,#v-rose,#v-agents){transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease)}
+/* The surface does not scale: its window gets shorter. Its bottom lands on the edge's concave top
+   (34px into the 92px edge), so an app's own tab bar or composer simply rides up and the content
+   area loses that height. A drag past the edge (toward Home) adds the leave-for-Home shrink. */
+#device[data-theme=oxblood] :is(#v-app,#v-window,#v-rose,#v-agents){transition:bottom var(--t-med) var(--ease),border-radius var(--t-med) var(--ease),transform var(--t-med) var(--ease)}
+#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window,#v-rose,#v-agents){bottom:58px;border-radius:0 0 34px 34px;overflow:clip}
+#device[data-theme=oxblood] .screen.peek-drag :is(#v-app,#v-window,#v-rose,#v-agents){transition:none;bottom:calc(58px * var(--pk));
+  border-radius:calc(34px * var(--pk2,0)) calc(34px * var(--pk2,0)) calc(34px * var(--pk)) calc(34px * var(--pk));overflow:clip;
+  transform:translateY(calc(-40px * var(--pk2,0))) scale(calc(1 - .26 * var(--pk2,0)))}
 #device[data-theme=oxblood] .screen:is(.peek,.peek-drag) #notices{opacity:0;pointer-events:none;transition:opacity var(--t-fast)}
 
 /* ---------- App content in the dark system (study 13 previews read as dark, photographic) ---------- */
@@ -1321,6 +1337,22 @@ span.well{cursor:default}
 /* Raised edge: the home handle sits under the controls, not across them. */
 #device[data-theme=oxblood] .screen.peek .home-bar{height:8px;bottom:0;align-items:end}
 #device[data-theme=oxblood] .screen.peek .home-bar i{width:110px;height:4px}
+
+/* ---------- App windows fill the height; their own bottom bar sits at the bottom ---------- */
+#device[data-theme=oxblood] :is(#v-app,#v-window) .detail{display:flex;flex-direction:column;padding-bottom:30px}
+#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window) .detail{padding-bottom:12px}
+#device[data-theme=oxblood] :is(#v-app,#v-window) .detail>*{flex:none}
+#device[data-theme=oxblood] :is(#v-app,#v-window) .detail>.detail-frame{flex:1 1 0;height:auto;min-height:96px}
+#device[data-theme=oxblood] :is(#v-app,#v-window) .detail>.observe{margin-bottom:0}
+#device[data-theme=oxblood] .app-bar{border-top-color:rgba(255,240,230,.09);background:#201719}
+#device[data-theme=oxblood] .app-bar .ab-tab{color:#9d8f88}
+#device[data-theme=oxblood] .app-bar .ab-tab[aria-selected=true]{color:#f2e6d9}
+#device[data-theme=oxblood] .app-bar .ab-tab[aria-selected=true] i{background:#e04a62}
+#device[data-theme=oxblood] .app-bar .ab-input{background:rgba(255,240,230,.08);color:#efe4da;box-shadow:inset 0 0 0 1px rgba(255,240,230,.12)}
+#device[data-theme=oxblood] .app-bar .ab-input::placeholder{color:#8f817a}
+#device[data-theme=oxblood] .app-bar .ab-plus{color:#d9cbc0;background:rgba(255,240,230,.08)}
+#device[data-theme=oxblood] .app-bar .ab-send{background:#b8283f;color:#fff}
+#device[data-theme=oxblood] .detail-frame .c-msg .out{background:#8e1f33}
 
 </style></head>
 <body>
@@ -2149,6 +2181,18 @@ void main(){
     $('ag-head-back').addEventListener('click', () => ctx.dispatch({ type: 'back' }));
     $('ag-mid').addEventListener('click', () => { const s = ctx.getState(); ctx.dispatch({ type: s.connection === 'disconnected' ? 'openRose' : 'endCall' }); });
     document.addEventListener('click', onClick);
+    // The app's own bar works like an app's: tabs switch, the composer sends.
+    $('appdetail').addEventListener('click', (e) => {
+      const tab = e.target.closest('.ab-tab'); if (!tab) return;
+      tab.parentElement.querySelectorAll('.ab-tab').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    });
+    $('appdetail').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const f = e.target.closest('[data-composer]'), input = f && f.querySelector('.ab-input'), msg = f && f.parentElement.querySelector('.c-msg');
+      if (!input || !msg || !input.value.trim()) return;
+      const p = document.createElement('p'); p.className = 'out'; p.textContent = input.value.trim(); msg.appendChild(p);
+      input.value = ''; msg.scrollTop = msg.scrollHeight;
+    });
     for (const id of ['sw-human', 'sw-agent']) bindCarousel($(id), id === 'sw-human' ? 'human' : 'agent');
     $('sw-agent').addEventListener('scroll', () => requestAnimationFrame(routeWire), { passive: true });
     $('v-switcher').addEventListener('click', (e) => { if (e.target.classList.contains('sw-veil') || e.target.classList.contains('wall')) ctx.dispatch({ type: 'back' }); });
@@ -2353,7 +2397,26 @@ void main(){
     $('appdetail').innerHTML =
       '<button class="back-btn" data-back aria-label="Back">' + ctx.I.UI.back + '</button>' +
       '<div class="app-head"><span class="tile">' + ctx.I.appArt(s.app) + '</span><h2>' + esc(app.name) + '</h2></div>' +
-      '<div class="detail-frame human">' + content(app.kind, 8) + '</div>';
+      '<div class="detail-frame human"><div class="app-body">' + content(app.kind, 8) + '</div>' + appBar(app.kind) + '</div>';
+  }
+
+  // Each app's own bottom bar (tab bar, composer or search field). When the system edge rises, the
+  // app window gets shorter and this bar rides up with its bottom; the app keeps working normally.
+  const TABS = {
+    browser: ['Home', 'Tabs', 'Saved', 'Menu'], mail: ['Inbox', 'Drafts', 'Sent', 'Search'],
+    photos: ['Library', 'Albums', 'Search'], music: ['Listen', 'Library', 'Search'], media: ['Videos', 'Library', 'Search'],
+    clock: ['Alarm', 'Clock', 'Timer', 'Stopwatch'], phone: ['Favourites', 'Recents', 'Contacts', 'Keypad'],
+    contacts: ['Contacts', 'Groups', 'Search'], calendar: ['Today', 'Calendars', 'Inbox'], files: ['Recent', 'Browse', 'Shared'],
+    notes: ['All notes', 'Folders', 'New'], weather: ['Today', 'Week', 'Map'],
+  };
+  const TAB_ON = { clock: 1, phone: 1 };
+  function appBar(kind) {
+    if (kind === 'messages') return '<form class="app-bar composer" data-composer><button type="button" class="ab-plus" aria-label="Add attachment">+</button><input type="text" class="ab-input" placeholder="Message" aria-label="Message" autocomplete="off"><button type="submit" class="ab-send" aria-label="Send">↑</button></form>';
+    if (kind === 'maps') return '<div class="app-bar composer"><input type="search" class="ab-input" placeholder="Search Maps" aria-label="Search Maps" autocomplete="off"></div>';
+    const tabs = TABS[kind];
+    if (!tabs) return '';
+    const on = TAB_ON[kind] || 0;
+    return '<nav class="app-bar tabs" role="tablist" aria-label="App sections">' + tabs.map((t, i) => '<button type="button" role="tab" class="ab-tab" aria-selected="' + (i === on) + '"><i aria-hidden="true"></i><span>' + esc(t) + '</span></button>').join('') + '</nav>';
   }
 
   function renderSheet(s) {
@@ -2883,7 +2946,9 @@ void main(){
     if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
     const fromEdge = (r.bottom - e.clientY) / k <= 56;
-    if (peek || (fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
+    // With the edge up, only a drag that starts on the edge itself moves it; the app above scrolls and taps normally.
+    const onRaisedEdge = peek && (r.bottom - e.clientY) / k <= 104;
+    if (onRaisedEdge || (!peek && fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
   });
   window.addEventListener('pointermove', (e) => {
     if (!peekDrag) return;

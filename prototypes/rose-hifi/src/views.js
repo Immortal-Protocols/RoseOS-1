@@ -153,6 +153,18 @@
     $('ag-head-back').addEventListener('click', () => ctx.dispatch({ type: 'back' }));
     $('ag-mid').addEventListener('click', () => { const s = ctx.getState(); ctx.dispatch({ type: s.connection === 'disconnected' ? 'openRose' : 'endCall' }); });
     document.addEventListener('click', onClick);
+    // The app's own bar works like an app's: tabs switch, the composer sends.
+    $('appdetail').addEventListener('click', (e) => {
+      const tab = e.target.closest('.ab-tab'); if (!tab) return;
+      tab.parentElement.querySelectorAll('.ab-tab').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    });
+    $('appdetail').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const f = e.target.closest('[data-composer]'), input = f && f.querySelector('.ab-input'), msg = f && f.parentElement.querySelector('.c-msg');
+      if (!input || !msg || !input.value.trim()) return;
+      const p = document.createElement('p'); p.className = 'out'; p.textContent = input.value.trim(); msg.appendChild(p);
+      input.value = ''; msg.scrollTop = msg.scrollHeight;
+    });
     for (const id of ['sw-human', 'sw-agent']) bindCarousel($(id), id === 'sw-human' ? 'human' : 'agent');
     $('sw-agent').addEventListener('scroll', () => requestAnimationFrame(routeWire), { passive: true });
     $('v-switcher').addEventListener('click', (e) => { if (e.target.classList.contains('sw-veil') || e.target.classList.contains('wall')) ctx.dispatch({ type: 'back' }); });
@@ -357,7 +369,26 @@
     $('appdetail').innerHTML =
       '<button class="back-btn" data-back aria-label="Back">' + ctx.I.UI.back + '</button>' +
       '<div class="app-head"><span class="tile">' + ctx.I.appArt(s.app) + '</span><h2>' + esc(app.name) + '</h2></div>' +
-      '<div class="detail-frame human">' + content(app.kind, 8) + '</div>';
+      '<div class="detail-frame human"><div class="app-body">' + content(app.kind, 8) + '</div>' + appBar(app.kind) + '</div>';
+  }
+
+  // Each app's own bottom bar (tab bar, composer or search field). When the system edge rises, the
+  // app window gets shorter and this bar rides up with its bottom; the app keeps working normally.
+  const TABS = {
+    browser: ['Home', 'Tabs', 'Saved', 'Menu'], mail: ['Inbox', 'Drafts', 'Sent', 'Search'],
+    photos: ['Library', 'Albums', 'Search'], music: ['Listen', 'Library', 'Search'], media: ['Videos', 'Library', 'Search'],
+    clock: ['Alarm', 'Clock', 'Timer', 'Stopwatch'], phone: ['Favourites', 'Recents', 'Contacts', 'Keypad'],
+    contacts: ['Contacts', 'Groups', 'Search'], calendar: ['Today', 'Calendars', 'Inbox'], files: ['Recent', 'Browse', 'Shared'],
+    notes: ['All notes', 'Folders', 'New'], weather: ['Today', 'Week', 'Map'],
+  };
+  const TAB_ON = { clock: 1, phone: 1 };
+  function appBar(kind) {
+    if (kind === 'messages') return '<form class="app-bar composer" data-composer><button type="button" class="ab-plus" aria-label="Add attachment">+</button><input type="text" class="ab-input" placeholder="Message" aria-label="Message" autocomplete="off"><button type="submit" class="ab-send" aria-label="Send">↑</button></form>';
+    if (kind === 'maps') return '<div class="app-bar composer"><input type="search" class="ab-input" placeholder="Search Maps" aria-label="Search Maps" autocomplete="off"></div>';
+    const tabs = TABS[kind];
+    if (!tabs) return '';
+    const on = TAB_ON[kind] || 0;
+    return '<nav class="app-bar tabs" role="tablist" aria-label="App sections">' + tabs.map((t, i) => '<button type="button" role="tab" class="ab-tab" aria-selected="' + (i === on) + '"><i aria-hidden="true"></i><span>' + esc(t) + '</span></button>').join('') + '</nav>';
   }
 
   function renderSheet(s) {
