@@ -64,6 +64,8 @@ class FakeHost(B.Host):
         self.adapter_rc, self.adapter_out = 0, ''
         self.warm_container, self.warm_run_rc, self.warm_states, self.warm_runs = False, 0, [], {}
         self.contract_container, self.contract_runs, self.contract_name = False, {}, 'rose-cloud-qwen-contract'
+        self.active_units = set()
+        self.sticky_enabled = set()
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -422,21 +424,29 @@ class FakeHost(B.Host):
     def systemctl(self, args):
         if args[0] == 'is-enabled':
             return (0, 'enabled') if args[1] in self.enabled else (1, 'disabled')
-        if args[0] == 'disable':
-            self.enabled -= set(args[2:])
+        if args[0] == 'disable':  # a unit in sticky_enabled stays enabled (static, linked or re-enabled elsewhere)
+            self.enabled -= {a for a in args[1:] if not a.startswith('--')} - self.sticky_enabled
             return 0, ''
         if args[0] == 'enable':
             self.enabled |= {a for a in args[1:] if not a.startswith('--')}
             if '--now' in args and 'muse-glimmer.service' in args:
                 self.model_active = self.model_container = True
             return 0, ''
+        if args[0] == 'start':
+            self.active_units |= {a for a in args[1:] if not a.startswith('--')}
+            if 'muse-glimmer.service' in args and not self.path(B.MODEL_HOLD).exists():  # ExecCondition: no hold
+                self.model_active = self.model_container = True
+            return 0, ''
         if args[0] == 'stop':
+            self.active_units -= set(args[1:])
             self.events.append(('stop', tuple(args[1:])))
             if 'muse-glimmer.service' in args and not self.model_stuck:
                 self.model_active = self.model_container = False
             return 0, ''
         if args[:2] == ['is-active', 'muse-glimmer.service']:
             return (0, 'active\n') if self.model_active else (3, 'inactive\n')
+        if args[0] == 'is-active':
+            return (0, 'active\n') if args[1] in self.active_units else (3, 'inactive\n')
         if args == ['restart', 'docker']:
             daemon = self.path(B.DAEMON_JSON)
             config = json.loads(daemon.read_text()) if daemon.exists() else {}
@@ -527,6 +537,16 @@ class FakeHost(B.Host):
         self.boot += 1
         self.mounted = self.disk['sig'] is not None  # fstab mounts it on boot
 
+    def power_cycle(self):
+        """A real reset, before this bootstrap runs: /run is empty, systemd starts every enabled unit, and an enabled
+        model unit starts the model (its ExecCondition sees no hold yet)."""
+        self.reboot()
+        self.path(B.MODEL_HOLD).unlink(missing_ok=True)
+        self.model_active = self.model_container = False
+        self.active_units = set(self.enabled)
+        if 'muse-glimmer.service' in self.enabled:
+            self.model_active = self.model_container = True
+
     def count(self, *prefix):
         return sum(1 for c in self.calls if tuple(c[:len(prefix)]) == prefix)
 
@@ -608,7 +628,11 @@ class FirstBootToReady(Fixture):
         self.assertEqual(s['tls'], ('waiting', 'acme_not_authorized'))
         self.assertEqual(s['edge'], ('waiting', 'needs_tls_and_auth'))
         self.assertTrue(s['service'][1].startswith('enabled'))
-        self.assertTrue(set(B.MODEL_UNITS) <= self.host.enabled)
+        # MODELS-HOLD-ONLY-001: started by this bootstrap, never enabled for boot (systemd would start them before
+        # the hold and diagnostic keys are read)
+        self.assertFalse(set(B.MODEL_UNITS) & self.host.enabled)
+        self.assertIn(['systemctl', 'start', *B.MODEL_UNITS], self.host.calls)
+        self.assertTrue(self.host.model_active)
         self.assertNotIn('nginx.service', self.host.enabled)
         self.assertTrue((self.host.path('/etc/rose-models') / 'bin/start-model').stat().st_mode & 0o111)
         self.assertTrue(self.host.path('/etc/systemd/system/muse-glimmer.service').exists())
@@ -684,7 +708,7 @@ class Refusals(Fixture):
             (('apt-get', 'update'), 'packages', 'apt_update_failed'),
             (('nvidia-ctk',), 'container', 'nvidia_ctk_failed'),
             (('docker', 'pull'), 'image', 'image_pull_failed'),
-            (('systemctl', 'enable', '--now', B.MODEL_UNITS[0]), 'service', 'service_enable_failed'),
+            (('systemctl', 'start', B.MODEL_UNITS[0]), 'service', 'service_enable_failed'),
             (('/usr/sbin/nginx', '-p', '/run/rose-acme', '-c', '/etc/rose-models/edge/acme-only.conf'), 'tls',
              'acme_http_config_invalid'))
         self.host.md['attributes/rose-models-acme'] = B.ACME_FLAG
@@ -1179,7 +1203,7 @@ class AcmeHandshake(Fixture):
     def test_the_only_operator_channel_is_existing_instance_metadata_and_reset(self):
         self.host.ack()
         self.boot()
-        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY, B.DIAG_KEY,
+        self.assertTrue(self.host.md_reads <= {'attributes/rose-models-acme', B.ACK_KEY, B.DIAG_KEY, B.HOLD_KEY,
                                                'network-interfaces/0/access-configs/0/external-ip'}, self.host.md_reads)
         readme = (HERE.parent / 'service/README.md').read_text()
         section = readme[readme.index('**Operator (Mac)'):readme.index('**Impact of that one reset')]
@@ -1277,7 +1301,7 @@ class Diagnostic(DiagnosticFixture):
         status, _ = self.boot()
         self.assertEqual(self.states(status)['diagnostic'], ('ok', 'ignored: attempt_already_used'))
         self.assertFalse([e for e in self.host.events if e[0] in ('stop', 'validate')])
-        self.assertIn(['systemctl', 'enable', '--now', *B.MODEL_UNITS], self.host.calls)  # normal service again
+        self.assertIn(['systemctl', 'start', *B.MODEL_UNITS], self.host.calls)  # normal service again
         self.assertFalse(self.host.path(B.MODEL_HOLD).exists())
 
     def test_other_payload_or_malformed_values_never_hold_or_run(self):
@@ -2998,6 +3022,167 @@ class CloudQwenContractNothinkOnce(CloudQwenContractOnce):
         self.assertIsNone(B.QWEN_WARM_VALUE.fullmatch(f'{SHA}:n2:conformance'))  # never the adapter container's
         self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothinking-once:{SHA}:n1'))
         self.assertNoProvisioning()
+
+
+class HoldOnly(DiagnosticFixture):
+    """MODELS-HOLD-ONLY-001: metadata rose-models-hold holds the model on every boot until removed. With the model
+    units never enabled for boot, systemd starts no model before this bootstrap reads the key; a hold boot stops and
+    disables the model and health units and verifies them inactive, disabled and the slot container absent. It never
+    runs or consumes a diagnostic, provisions nothing and leaves certificates, auth, the edge and the data alone."""
+
+    UNITS = ('muse-glimmer.service', 'models-health.timer', 'models-health.service')
+
+    def hold_boot(self, hold=SHA, diagnostic=None):
+        self.host.md[B.HOLD_KEY] = hold
+        if diagnostic is not None:
+            self.host.md[B.DIAG_KEY] = diagnostic
+        self.host.calls.clear()
+        self.host.events.clear()
+        return B.run(self.host, self.payload, SHA)
+
+    def receipt(self):
+        return json.loads(self.host.guest['hold'])
+
+    def model_starts(self):
+        return [c for c in self.host.calls if c[:2] == ['systemctl', 'start'] and 'muse-glimmer.service' in c]
+
+    def assertHeldWithoutSideEffects(self, status, code):
+        self.assertEqual((code, list(status['stages']), status['stages']['hold']['state']), (0, ['hold'], 'ok'))
+        self.assertFalse(self.host.model_active or self.host.model_container)
+        self.assertEqual(self.model_starts(), [])
+        made = [c for c in self.host.calls for p in (('apt-get',), ('apt-mark',), ('docker', 'pull'), ('nvidia-ctk',),
+                                                      ('mkfs.ext4',), ('mount',), ('certbot',), ('systemctl', 'enable'),
+                                                      ('systemctl', 'daemon-reload'), ('systemctl', 'restart'),
+                                                      ('systemctl', '--no-block', 'reboot'), ('nvidia-smi',))
+                if tuple(c[:len(p)]) == p]
+        self.assertEqual(made, [])  # nothing provisioned, no GPU command, nothing (re)started or enabled
+        self.assertFalse([c for c in self.host.calls if 'models-edge.service' in c and c[1] != 'is-active'])
+        self.assertFalse([c for c in self.host.calls if 'models-auth.service' in c and c[1] != 'is-active'])
+        self.assertTrue(self.host.path('/etc/rose-models/tls/current/fullchain.pem').exists())  # certificate kept
+        self.assertFalse(set(self.UNITS) & self.host.enabled)
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['modelHeld'], r['containerAbsent'], r['enabledAfter']),
+                         (True, True, True, {u: 'disabled' for u in self.UNITS}))
+        self.assertTrue(all(v in ('inactive', 'failed') for v in r['active'].values()))
+        self.assertLessEqual(len(json.dumps(r, separators=(',', ':'))), B.CLOUD_RECEIPT)
+
+    def test_after_a_new_payload_boot_no_reset_starts_the_model_while_the_key_is_set(self):
+        # the setUp's normal boot ran this payload's stage_service: the units were started, never enabled
+        self.assertFalse(set(B.MODEL_UNITS) & self.host.enabled)
+        for n in range(3):
+            with self.subTest(reset=n):
+                self.host.power_cycle()
+                self.assertFalse(self.host.model_active)  # systemd started no model before this bootstrap ran
+                status, code = self.hold_boot()
+                self.assertHeldWithoutSideEffects(status, code)
+                r = self.receipt()
+                self.assertEqual((r['key'], r['enabledBefore']), ('this_payload', {u: 'disabled' for u in self.UNITS}))
+                self.assertEqual(self.host.path(B.MODEL_HOLD).read_text(), 'hold\n')
+        # removing the key is the only way back: this bootstrap starts the model again (still never enabled)
+        del self.host.md[B.HOLD_KEY]
+        self.host.power_cycle()
+        self.host.calls.clear()
+        status, code = B.run(self.host, self.payload, SHA)
+        self.assertEqual(status['stages']['service']['state'], 'ok')
+        self.assertIn(['systemctl', 'start', *B.MODEL_UNITS], self.host.calls)
+        self.assertTrue(self.host.model_active)
+        self.assertFalse(set(B.MODEL_UNITS) & self.host.enabled)
+
+    def test_units_enabled_by_an_older_payload_are_reported_then_disabled(self):
+        # Not guaranteed: an older payload enabled the units, so the first reset starts the model before this
+        # bootstrap runs. The hold reports it (enabledBefore), stops and disables it; later resets start nothing.
+        self.host.enabled |= set(B.MODEL_UNITS)
+        self.host.power_cycle()
+        self.assertTrue(self.host.model_active)  # the residual case, visible, never assumed safe
+        status, code = self.hold_boot()
+        self.assertHeldWithoutSideEffects(status, code)
+        self.assertEqual(self.receipt()['enabledBefore'],
+                         {'muse-glimmer.service': 'enabled', 'models-health.timer': 'enabled',
+                          'models-health.service': 'disabled'})
+        self.host.power_cycle()
+        self.assertFalse(self.host.model_active)
+        status, code = self.hold_boot()
+        self.assertHeldWithoutSideEffects(status, code)
+
+    def test_a_hold_never_runs_or_consumes_a_diagnostic(self):
+        for diag in (f'offline-validate:{SHA}:fresh-1', f'cloud-qwen-gpu-once:{SHA}:fresh-1'):
+            with self.subTest(diag):
+                self.host.power_cycle()
+                status, code = self.hold_boot(diagnostic=diag)
+                self.assertHeldWithoutSideEffects(status, code)
+                self.assertTrue(self.receipt()['diagnosticSuppressed'])
+                self.assertNotIn('diagnostic', status['stages'])
+                self.assertFalse([e for e in self.host.events if e[0] in ('validate', 'qwen', 'qwenwarm')])
+                self.assertFalse((self.host.path(B.STATE) / 'diagnostic-fresh-1').exists())  # not consumed
+        # a consumed id with the hold key: still held, never the normal (Muse-starting) path
+        (self.host.path(B.STATE) / 'diagnostic-used-1').write_text(SHA + '\n')
+        self.host.power_cycle()
+        status, code = self.hold_boot(diagnostic=f'offline-validate:{SHA}:used-1')
+        self.assertHeldWithoutSideEffects(status, code)
+        self.assertNotIn('service', status['stages'])
+        # the hold removed, the fresh id was never consumed: it runs now, as a diagnostic
+        del self.host.md[B.HOLD_KEY]
+        self.host.power_cycle()
+        self.host.md[B.DIAG_KEY] = f'offline-validate:{SHA}:fresh-1'
+        status, code = self.boot()
+        self.assertEqual(list(status['stages']), ['diagnostic'])
+        self.assertTrue((self.host.path(B.STATE) / 'diagnostic-fresh-1').exists())
+
+    def test_any_value_holds_and_is_reported(self):
+        for value, key in (('cd' * 32, 'other_payload'), ('yes', 'malformed'), ('HOLD', 'malformed'),
+                           (SHA, 'this_payload')):
+            with self.subTest(value):
+                self.host.power_cycle()
+                status, code = self.hold_boot(hold=value)
+                self.assertHeldWithoutSideEffects(status, code)
+                self.assertEqual(self.receipt()['key'], key)
+        self.host.power_cycle()
+        self.host.md[B.HOLD_KEY] = '   '  # blank is no key: the normal path
+        self.host.calls.clear()
+        status, _ = B.run(self.host, self.payload, SHA)
+        self.assertNotIn('hold', status['stages'])
+        self.assertTrue(self.host.model_active)
+
+    def test_an_unverified_hold_fails_and_starts_nothing(self):
+        self.host.enabled |= set(B.MODEL_UNITS)
+        self.host.power_cycle()
+        self.host.model_stuck = True  # the model will not stop
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['state'], status['stages']['hold']['detail']),
+                         (1, 'failed', 'hold_model_not_stopped'))
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['failure']), (False, 'hold_model_not_stopped'))
+        self.assertEqual(self.model_starts(), [])
+        self.assertNotIn('service', status['stages'])
+        self.host.model_stuck = False
+        self.host.power_cycle()
+        self.host.ps_results = [(1, '')] * 50  # docker does not answer: absence is never assumed
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['detail']), (1, 'hold_container_state_unknown'))
+        self.assertFalse(self.receipt()['verified'])
+        self.host.ps_results = []
+
+    def test_a_unit_that_stays_enabled_fails_the_hold(self):
+        # disable "succeeds" but the timer stays enabled: the next reset would start health (and it the model)
+        self.host.enabled |= {'models-health.timer'}
+        self.host.sticky_enabled = {'models-health.timer'}
+        self.host.power_cycle()
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['detail']), (1, 'hold_units_still_enabled'))
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['enabledAfter']['models-health.timer']), (False, 'enabled'))
+        self.assertEqual(self.model_starts(), [])
+        self.host.sticky_enabled = set()
+
+    def test_receipt_reports_edge_and_auth_without_touching_them(self):
+        self.host.active_units |= {'models-edge.service', 'models-auth.service'}
+        self.host.power_cycle()
+        self.host.active_units |= {'models-edge.service', 'models-auth.service'}
+        status, code = self.hold_boot()
+        self.assertHeldWithoutSideEffects(status, code)
+        r = self.receipt()
+        self.assertEqual((r['edge'], r['auth']), ('active', 'active'))
+        self.assertNotIn('SECRET', self.host.guest['hold'])
 
 
 class HostValidate(unittest.TestCase):

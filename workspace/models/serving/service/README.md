@@ -54,6 +54,46 @@ python3 workspace/models/serving/service/build_bootstrap.py --out /tmp/rose-mode
   `payloadTarSha256` with the value Core reports for that commit; the build is deterministic.
 - **Roots:** omit `--attestation-roots` to defer them. The VM then reports `auth: waiting attestation_roots_missing`.
 
+## 2b. Hold-only rollback (MODELS-HOLD-ONLY-001; source only, never run)
+
+**Model units are never enabled for boot.** `stage_service` disables `muse-glimmer.service`, `models-health.timer`,
+`models-verify-full.timer` and `models-attestation-status.timer` (undoing any older payload's enable), then starts
+them itself on every normal boot. systemd therefore starts no model or health unit at boot. The model runs only after
+this bootstrap has read the hold and diagnostic keys. The edge, auth and renewal units keep their existing boot
+behaviour.
+
+**Hold:** set the metadata key `rose-models-hold`, then reset.
+
+```bash
+gcloud compute instances add-metadata models-glimmer-01 --project protocols-465723 --zone us-central1-f --metadata=rose-models-hold=<payload sha256>
+```
+
+- **Every boot holds while the key exists.** It writes the `/run` hold, then stops and disables the model and health
+  units. It then positively verifies they are inactive and disabled and that no `muse-glimmer` slot container exists.
+  Docker not answering is a failure, never assumed absence.
+- **It never runs or consumes a diagnostic.** A diagnostic id set at the same time is reported as
+  `diagnosticSuppressed` and is still fresh once the key is removed.
+- **Untouched:** provisioning, the GPUs, the data disk, certificates, auth state, the edge and the installed payload.
+- **Any value holds** (fail closed). The receipt's `key` says `this_payload`, `other_payload` or `malformed`.
+- **Receipt:** guest attribute `rose-models/hold`, with `verified`, `enabledBefore`/`enabledAfter`, the unit states,
+  `containerAbsent`, and the edge and auth units' states, reported and not changed. An unverified hold fails the boot
+  (exit 1) and starts nothing.
+- **Resume:** remove the key and reset. The model is started by this bootstrap again.
+
+**What is guaranteed:**
+- **Guaranteed** once the VM has had one normal or hold boot under a payload with this change: its units are then
+  disabled, so no reset starts the model before the hold is read.
+- **Not guaranteed** while an older payload's enable is still in place: that first reset can start the model before
+  this bootstrap runs. The hold then reports it (`enabledBefore`), stops it, verifies it, and disables the units for
+  later boots. Check `enabledBefore` on the first hold receipt.
+- **Why that caveat stays open:** the safe first transition would stop and disable the model and health units
+  (including their timers), verify them inactive and disabled with no pending jobs, and confirm the container gone,
+  all *before* the metadata change and reset. There is no authorized pre-reset guest execution channel today: the
+  operator route is Compute metadata, reset and sanitized guest attributes, and the temporary SSH access was removed.
+  This source cannot enforce that ordering retrospectively, and rollback is not guaranteed from that state.
+  Activation stays blocked on an authorized guest channel or an owner-run equivalent, and separately on the
+  enrolled-phone edge proof.
+
 ## 2a. Model selection: Muse (default) or the staged Qwen (MODELS-QWEN-SERVE-001; source only, never run as the service)
 
 **Default:** Muse Glimmer is the default. The payload built without `--model` is byte-identical to before (tested).
