@@ -250,5 +250,60 @@ class Deadlines(unittest.TestCase):
         self.assertEqual(mods, {'__future__', 'json', 'socket', 'time', 'urllib', 'pathlib'})
 
 
+
+class NoThinking(unittest.TestCase):
+    """MODELS-QWEN-CONTRACT-NOTHINK-001: the no-thinking profile's rule. Every check stays; reasoning in its own field
+    is replaced by no reasoning at all, and a misrouted answer is the client's empty_completion, never a pass."""
+
+    def serve(self, **mode):
+        fake = FakeOpenAI(mode=mode)
+        self.addCleanup(fake.close)
+        return fake
+
+    def test_a_server_with_thinking_off_meets_every_case(self):
+        fake = self.serve(nothink=True)
+        r = C.run(fake.url, 'contract', thinking=False)
+        self.assertEqual((r['allExpected'], r['thinking'], r['noThinking'], r['reasoningSeparated'], r['notRun']),
+                         (True, False, True, False, {}))
+        self.assertEqual([r[k]['verdict'] for k in C.REPLIES], ['final', 'open_app:calculator', 'final', 'final'])
+        self.assertTrue(all(r[k]['reasoningChars'] == 0 and r[k]['reasoningField'] is None
+                            and r[k]['identityExact'] for k in C.REPLIES))
+        self.assertEqual((r['long']['recalled'], r['long']['beyondProven']), (True, True))
+        steps = [s for n in ('chat', 'tool', 'long') for s in C.REQUESTS['cases'][n]]
+        self.assertEqual(fake.bodies, [s['body'].encode() for s in steps])  # the client's bodies, unchanged
+        line = json.dumps(r)
+        for leak in LEAKS:
+            self.assertNotIn(leak, line)
+
+    def test_each_rule_holds_only_for_its_own_profile(self):
+        r = C.run(self.serve().url, 'chat', thinking=False)  # thinking still on: the setting did not take
+        self.assertEqual((r['chat']['verdict'], r['noThinking'], r['allExpected']), ('final', False, False))
+        r = C.run(self.serve(nothink=True).url, 'chat')  # the thinking profile's rule still needs reasoning
+        self.assertEqual((r['thinking'], r['reasoningSeparated'], r['allExpected']), (True, False, False))
+        r = C.run(self.serve().url, 'contract')  # and still passes a thinking server, unchanged
+        self.assertEqual((r['allExpected'], r['reasoningSeparated'], r['noThinking']), (True, True, False))
+
+    def test_misrouted_answers_and_inline_thinking_fail(self):
+        r = C.run(self.serve(misroute=True).url, 'contract', thinking=False)
+        self.assertEqual([r[k]['verdict'] for k in ('chat', 'tool', 'long')], ['failed:empty_completion'] * 3)
+        self.assertEqual((r['notRun'], r['noThinking'], r['allExpected']),
+                         ({'toolAfter': 'no_proposal'}, False, False))
+        r = C.run(self.serve(nothink=True, inline_think=True).url, 'chat', thinking=False)
+        self.assertEqual((r['chat']['verdict'], r['chat']['thinkInContent'], r['noThinking'], r['allExpected']),
+                         ('failed:malformed_action', True, False, False))
+        for mode in ('wrong_id', 'prose', 'forget', 'truncate', 'extra_model'):
+            with self.subTest(mode):
+                r = C.run(self.serve(nothink=True, **{mode: True}).url, 'contract', thinking=False)
+                self.assertFalse(r['allExpected'])
+
+    def test_timeouts_and_budget_unchanged(self):
+        for name, value in (('REQUEST_TIMEOUT_S', 1.0), ('CASE_BUDGET_S', 3.5)):
+            old = getattr(C, name)
+            setattr(C, name, value)
+            self.addCleanup(setattr, C, name, old)
+        r = C.run(self.serve(nothink=True, delay_s={'after': 1.5}).url, 'tool', thinking=False)
+        self.assertEqual((r['toolAfter']['verdict'], r['toolAfter']['timedOut'], r['allExpected']),
+                         ('failed:timeout_response', True, False))
+
 if __name__ == '__main__':
     unittest.main()

@@ -74,7 +74,7 @@ MAX_IMAGE_TOKENS = 256  # (256 / 32) ** 2 = 64 expected; more means the size cap
 STOPS = ('done', 'bad_manifest', 'not_isolated', 'bad_inputs', 'engine_arg_unsupported', 'engine_failed',
          'generate_failed', 'crashed', 'deadline', 'vision_not_applied', 'bad_mode', 'bad_bundle', 'server_failed',
          'session_failed')
-MODES = ('text', 'vision', 'adapter', 'warm', 'contract')
+MODES = ('text', 'vision', 'adapter', 'warm', 'contract', 'contract-nothink')
 # Adapter mode (limits {"mode": "adapter"}, CLOUD-QWEN-ADAPTER-001): the real adapter (rose_cloud.vllm_brain) is an
 # HTTP client of vLLM's OpenAI server, so this mode starts `vllm serve` on the container's own loopback (the container
 # has --network none: nothing is published or reachable from outside) with the vision mode's engine bounds, the
@@ -111,6 +111,17 @@ CONTRACT_SERVER_ARGS = (SERVER_ARGS[:SERVER_ARGS.index('--max-model-len') + 1] +
 # EngineArgs fields the image must have before anything loads (the parser name itself is checked by `vllm serve`)
 CONTRACT_ENGINE = {**VISION_ENGINE, 'max_model_len': CONTRACT_MAX_MODEL_LEN,
                    'reasoning_parser': CONTRACT_REASONING_PARSER}
+# Contract-nothink mode (limits {"mode": "contract-nothink"}, MODELS-QWEN-CONTRACT-NOTHINK-001): exactly the contract
+# profile plus a server default that turns the model's thinking off (the request's own chat_template_kwargs, which the
+# client never sends, would take precedence). At vLLM commit 99a10304d (the version PR349 recorded for the cached
+# image) the flag is FrontendArgs.default_chat_template_kwargs, merged into every request's template kwargs, and the
+# qwen3 parser built with those kwargs returns the whole output as content when thinking is off. That is source for
+# that commit, not image proof: the child refuses before loading if the image's FrontendArgs lacks the field.
+CONTRACT_NOTHINK_KWARGS = {'enable_thinking': False}
+CONTRACT_NOTHINK_SERVER_ARGS = CONTRACT_SERVER_ARGS + ['--default-chat-template-kwargs',
+                                                       json.dumps(CONTRACT_NOTHINK_KWARGS)]
+CONTRACT_NOTHINK_FRONTEND = ('default_chat_template_kwargs',)
+CONTRACT_MODES = ('contract', 'contract-nothink')
 CONTRACT_CASES = ('contract', 'chat', 'tool', 'long')
 CONTRACT_MARKER = 'ROSE-CLOUD-QWEN-CONTRACT '
 CONTRACT_VERDICTS = ('final', 'open_app:calculator', 'failed:model_identity_mismatch', 'failed:truncated_reply',
@@ -214,6 +225,13 @@ try:
     out['step'] = 'engine_args'
     fields = getattr(EngineArgs, '__dataclass_fields__', None) or {}
     out['unsupported'] = sorted(k for k in cfg['engine'] if k not in fields)
+    if cfg.get('frontend'):  # serve-only flags the profile needs (contract-nothink): checked in the image itself
+        try:
+            from vllm.entrypoints.openai.cli_args import FrontendArgs
+            front = getattr(FrontendArgs, '__dataclass_fields__', None) or {}
+        except Exception:
+            front = {}
+        out['unsupported'] += sorted(k for k in cfg['frontend'] if k not in front)
     if out['unsupported']:
         emit(3)
     out['step'] = 'server'
@@ -247,7 +265,8 @@ try:
     if cfg.get('warm'):  # keep the loaded server for RUNNER sessions until the parent's deadline kills the group
         state = os.path.join(cfg['work'], cfg['state'])
         with open(state + '.tmp', 'w') as f:
-            json.dump({'ready': True, 'base': base, 'serverReadyS': out['serverReadyS'], 'vllm': out['vllm']}, f)
+            json.dump({'ready': True, 'base': base, 'serverReadyS': out['serverReadyS'], 'vllm': out['vllm'],
+                       **({'thinking': cfg['thinking']} if 'thinking' in cfg else {})}, f)
         os.replace(state + '.tmp', state)
         while server.poll() is None:
             time.sleep(5)
@@ -325,7 +344,7 @@ try:
     if case not in contract_session.CASES:
         raise KeyError('case')
     out['contract'] = {}
-    contract_session.run(state['base'], case, into=out['contract'])
+    contract_session.run(state['base'], case, into=out['contract'], thinking=state.get('thinking', True))
     out['step'] = 'done'
 except BaseException as e:
     out['error'] = type(e).__name__
@@ -455,6 +474,9 @@ def child_config(mode, limits=None):
         return {'engine': CONTRACT_ENGINE, 'server': CONTRACT_SERVER_ARGS, 'port': ADAPTER_PORT, 'warm': True,
                 'state': WARM_STATE, 'servedName': CONTRACT_SERVED, 'nativeTemplate': True,
                 'serverCommand': (limits or {}).get('serverCommand')}  # a test hook; bootstrap never sets it
+    if mode == 'contract-nothink':
+        return {**child_config('contract', limits), 'server': CONTRACT_NOTHINK_SERVER_ARGS,
+                'frontend': list(CONTRACT_NOTHINK_FRONTEND), 'thinking': False}
     if mode in ('adapter', 'warm'):
         return {'engine': VISION_ENGINE, 'server': SERVER_ARGS, 'port': ADAPTER_PORT, 'warm': mode == 'warm',
                 'state': WARM_STATE,
@@ -543,13 +565,13 @@ def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
     work = os.path.join(env.tmp, 'rose-qwen-gpu')
     os.makedirs(work, exist_ok=True)
     pkg = None
-    if mode in ('adapter', 'warm', 'contract'):
-        pkg = write_bundle(bundle, work, CONTRACT_FILES if mode == 'contract' else ADAPTER_FILES)
+    if mode in ('adapter', 'warm') + CONTRACT_MODES:
+        pkg = write_bundle(bundle, work, CONTRACT_FILES if mode in CONTRACT_MODES else ADAPTER_FILES)
         if pkg is None:
             result['stop'] = 'bad_bundle'
             return result
     config = child_config(mode, limits)
-    if mode in ('warm', 'contract'):
+    if mode in ('warm',) + CONTRACT_MODES:
         config['work'] = work
     status, line = run_child(model_dir, child_env(work), env.extra, deadline - clock(), config, pkg)
     engine = {'run': status}
@@ -568,7 +590,7 @@ def diagnose(manifest, limits, clock=time.monotonic, bundle=None):
         result['stop'] = 'vision_not_applied'  # no image placeholder expanded, or the size cap did not hold
     elif step == 'done' and status == 'ok':
         result['stop'] = 'done'
-    elif mode in ('adapter', 'warm', 'contract') and step == 'server':
+    elif mode in ('adapter', 'warm') + CONTRACT_MODES and step == 'server':
         result['stop'] = 'server_failed'
     elif mode in ('adapter', 'warm') and step in ('tokenizer', 'session'):
         result['stop'] = 'session_failed'
@@ -625,7 +647,7 @@ def sanitize(raw):
             'step': e.get('step') if e.get('step') in STEPS or e.get('step') in ADAPTER_STEPS else None,
             'vllm': version if version is None or (isinstance(version, str) and VERSION.match(version)) else 'other',
             'unsupported': (sorted({u for u in unsupported if u in ENGINE or u in VISION_ENGINE
-                                    or u in CONTRACT_ENGINE})
+                                    or u in CONTRACT_ENGINE or u in CONTRACT_NOTHINK_FRONTEND})
                             if isinstance(unsupported, list) else None),
             'imageTokens': _count(e.get('imageTokens')), 'expectedWordSeen': _flag(e.get('expectedWordSeen')),
             'loadS': _secs(e.get('loadS')), 'generateS': _secs(e.get('generateS')),
@@ -638,7 +660,7 @@ def sanitize(raw):
     if out['mode'] in ('adapter', 'warm') and isinstance(out['engine'], dict):  # text and vision receipts are unchanged
         out['engine'].update(serverReadyS=_secs(e.get('serverReadyS')), serverExit=_exit(e.get('serverExit')),
                              session=_session(e.get('session')))
-    if out['mode'] == 'contract' and isinstance(out['engine'], dict):
+    if out['mode'] in CONTRACT_MODES and isinstance(out['engine'], dict):
         out['engine'].update(serverReadyS=_secs(e.get('serverReadyS')), serverExit=_exit(e.get('serverExit')))
     return out
 
@@ -681,7 +703,7 @@ def sanitize_contract(raw):
                 'notRun': None if not isinstance(c.get('notRun'), dict) else {
                     k: v for k, v in c['notRun'].items() if k in CONTRACT_REPLIES and v in CONTRACT_NOT_RUN},
                 **{k: reply(c.get(k)) for k in CONTRACT_REPLIES if k in c},
-                **{k: _flag(c.get(k)) for k in ('reasoningSeparated', 'allExpected')}}}
+                **{k: _flag(c.get(k)) for k in ('thinking', 'reasoningSeparated', 'noThinking', 'allExpected')}}}
 
 
 def _status(v):
