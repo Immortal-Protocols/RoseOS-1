@@ -205,5 +205,114 @@ class Invocations(unittest.TestCase):
             wiring.new_dir(self.parent/'absent-parent'/'root')
 
 
+
+class Guard(unittest.TestCase):
+    BASE = {'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '', 'APPS': '', 'PROMOTE': 'false',
+            'CHANNEL': 'beta', 'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '', 'RESUME_UNSIGNED_SHA256': '',
+            'RESUME_SIGNED_SHA256': '', 'CAMPAIGN': '', 'APP_PUBLISH': 'false', 'ROSE_RANGO_PUBLISH': 'false',
+            'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '',
+            'REUSE_BINDING': '', 'ALPHA_RECOVER': 'false', 'ROSE_DEVICE': 'frankel', 'BLAZER_PREP_STAGE': 'none',
+            'GITHUB_SHA': 'f' * 40}
+
+    def run_guard(self, **change):
+        guard = 'set -euo pipefail\n' + script(step(jobs()['guard'], 'Candidate is an exact commit on main'))
+        env = {'PATH': os.environ['PATH'], **self.BASE, **change}
+        return subprocess.run(['bash', '-c', guard], env={k: v for k, v in env.items() if v is not None},
+            capture_output=True, cwd=ROOT).returncode
+
+    def test_whole_guard_admits_exactly_the_bare_mode(self):
+        self.assertEqual(self.run_guard(), 0)
+        for change in ({'CANDIDATE_SHA': 'a' * 40}, {'BUILD_NUMBER': '2026103001'}, {'BUILD_TIMESTAMP': '1793500000'},
+                       {'APPS': '[["dev.pixel.voice",1]]'}, {'PROMOTE': 'true'}, {'RESUME_STAGE': 'sign'},
+                       {'RESUME_SOURCE_RUN': '1'}, {'RESUME_UNSIGNED_SHA256': 'a' * 64}, {'RESUME_SIGNED_SHA256': 'a' * 64},
+                       {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'}, {'ROSE_RANGO_PUBLISH': 'true'},
+                       {'ROSE_FIRST_USE_ENROLL': 'true'}, {'ROSE_RECOVER_RUN': '41000000000'},
+                       {'BOOTSTRAP_PROFILE': 'fold-rango-factory-v1'}, {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'},
+                       {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'rango'}, {'BLAZER_PREP_STAGE': 'source'}):
+            with self.subTest(change=change):
+                self.assertNotEqual(self.run_guard(**change), 0)
+
+    def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
+        self.assertIn('signing-bootstrap, rango-factory-package, models-sign,', WORKFLOW)
+        self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]),
+                         ['workflow_dispatch'])
+        guard = jobs()['guard']
+        self.assertIn("      - name: Rango factory package check\n        id: factory-package\n        if: inputs.mode == "
+                      "'rango-factory-package'\n        run: python3 scripts/rango-factory-package-wiring.py check >> "
+                      "\"$GITHUB_OUTPUT\"\n", guard)
+        for key in ('package_seconds', 'observe_seconds', 'classify_seconds', 'job_minutes'):
+            self.assertIn(f'      factory_{key}: ${{{{ steps.factory-package.outputs.{key} }}}}\n', guard)
+        self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
+
+
+class Job(unittest.TestCase):
+    def setUp(self):
+        self.job = jobs()[MODE]
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_read_only_builder_job_with_bounded_steps(self):
+        head = code(self.job.split('    steps:\n', 1)[0])
+        self.assertEqual(head, "    needs: [guard, controller]\n    if: inputs.mode == 'rango-factory-package'\n"
+            '    runs-on: [self-hosted, roseos-frankel-builder]\n'
+            "    timeout-minutes: ${{ fromJSON(needs.guard.outputs.factory_job_minutes || '1') }}\n"
+            '    permissions:\n      contents: read\n    env:\n'
+            '      PACKAGE_SECONDS: ${{ needs.guard.outputs.factory_package_seconds }}\n'
+            '      OBSERVE_SECONDS: ${{ needs.guard.outputs.factory_observe_seconds }}\n'
+            '      CLASSIFY_SECONDS: ${{ needs.guard.outputs.factory_classify_seconds }}')
+        body = code(self.job)
+        for absent in ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_', 'PIXEL_', 'publish', 'host-sign', 'signing-bootstrap',
+                       'ssh-keygen', 'download-artifact', 'release-pipeline.py', 'factory-package.log', '.zip', 'target_files',
+                       'rm -rf'):
+            self.assertNotIn(absent, body)
+        self.assertEqual(sorted(set(re.findall(r'python3 (\S+)', body))), ['scripts/rango-factory-package-wiring.py'])
+        self.assertIn('          persist-credentials: false\n', self.job)
+        for name, var, command in (('Package the install archive (bounded, under the helper\'s shared lock)', 'PACKAGE', 'package'),
+                                   ('Observe the signed target-files (bounded)', 'OBSERVE', 'observe'),
+                                   ('Classify the install archive (bounded)', 'CLASSIFY', 'classify')):
+            self.assertEqual(script(step(self.job, name)), f'timeout --kill-after=30s "${{{var}_SECONDS}}s" python3 '
+                f'scripts/rango-factory-package-wiring.py {command} --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"\n')
+            self.assertNotIn('if:', step(self.job, name))  # each runs only after the previous step succeeded
+        self.assertEqual([n for n, b in jobs().items() if 'rango-factory-package-wiring.py package' in b], [MODE])
+        self.assertNotIn('rango-factory-package', jobs()['rango-factory-observe'])
+
+    def test_recheck_on_the_builder_must_match_the_guard_bounds(self):
+        bin_dir = self.tmp/'bin'
+        bin_dir.mkdir()
+        (bin_dir/'python3').write_text('#!/bin/sh\nprintf "%s\\n" "$CHECK_OUTPUT"\n')
+        (bin_dir/'python3').chmod(0o755)
+        text = script(step(self.job, 'Recheck the pins and bounds on the builder'))
+        good = 'package_seconds=5400\nobserve_seconds=900\nclassify_seconds=7200\njob_minutes=237'
+        def run(**env):
+            base = {'PATH': f'{bin_dir}:/usr/bin:/bin', 'RUNNER_TEMP': str(self.tmp), 'CHECK_OUTPUT': good,
+                    'PACKAGE_SECONDS': '5400', 'OBSERVE_SECONDS': '900', 'CLASSIFY_SECONDS': '7200'}
+            return subprocess.run(['bash', '-c', text], env={**base, **env}, capture_output=True).returncode
+        self.assertEqual(run(), 0)
+        for change in ({'PACKAGE_SECONDS': '3600'}, {'CLASSIFY_SECONDS': ''}, {'OBSERVE_SECONDS': '900s'},
+                       {'CHECK_OUTPUT': good.replace('7200', '3600')}):
+            self.assertNotEqual(run(**change), 0, change)
+
+    def test_report_and_upload_always_run_with_only_the_allowlist_directory(self):
+        report = step(self.job, 'Cleanup report and allowlisted receipts')
+        self.assertIn('        if: always()\n', report)
+        self.assertEqual(script(report), 'python3 scripts/rango-factory-package-wiring.py report --run-id "$GITHUB_RUN_ID" '
+            '--attempt "$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/rango-factory-package-upload-$GITHUB_RUN_ID-'
+            '$GITHUB_RUN_ATTEMPT"\n')
+        artifact = step(self.job, 'Receipts artifact')
+        self.assertIn('        if: always()\n', artifact)
+        self.assertIn('          path: ${{ runner.temp }}/rango-factory-package-upload-${{ github.run_id }}-'
+                      '${{ github.run_attempt }}\n          retention-days: 7\n', artifact)
+
+
+class Ownership(unittest.TestCase):
+    def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
+        controller, cleanup = jobs()['controller'], jobs()['cleanup']
+        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package'"
+        self.assertIn(f'      - if: {own}\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
+        self.assertIn(f'        if: always() && ({own})\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
+        self.assertIn(f'      - if: {own}\n        env:\n          STARTED: ${{{{ needs.controller.outputs.started }}}}\n'
+                      '        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"\n', cleanup)
+        self.assertIn('blazer-prep, rango-factory-package, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+
+
 if __name__ == '__main__':
     unittest.main()
