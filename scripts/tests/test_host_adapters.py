@@ -471,7 +471,9 @@ class SignFactoryTest(SignAdapterTest):
         for factory, error, pattern in (({}, host_sign.AdapterSetupMissing, None),
                                         ({'fastbootSha256': 'abc'}, host_sign.AdapterFailed, 'must be a sha256'),
                                         ({'fastbootSha256': self.fastboot_sha, 'archiveSigning': {'principal': 'x'}},
-                                         host_sign.AdapterFailed, 'factorySigning principal and publicKey in os/flavors/frankel.json')):
+                                         host_sign.AdapterFailed, 'takes only fastbootSha256 and signing'),
+                                        ({'fastbootSha256': self.fastboot_sha, 'signing': {'project': 'p'}},
+                                         host_sign.AdapterFailed, 'factorySigning principal and publicKey are not bound')):
             with self.subTest(factory):
                 self.set_factory(factory)
                 with self.assertRaises(error) as ctx:
@@ -507,6 +509,88 @@ class SignFactoryTest(SignAdapterTest):
         with self.assertRaisesRegex(host_sign.AdapterFailed, 'frankel-install-2026102802.zip.sig exists'):
             host_sign.main(self.config, self.env, self.gcloud)
         self.assertFalse((self.release/'factory').exists())
+
+    # ---- FOLD-FACTORY-IDENTITY: signing only behind a bound pin (mock pin, mock ssh-keygen runner, synthetic secrets)
+    def bind_pin(self):
+        public = 'ssh-ed25519 ' + base64.b64encode(b'\0\0\0\x0bssh-ed25519\0\0\0 ' + bytes(range(32))).decode()
+        pin = {'namespace': 'factory images', 'principal': 'roseos-factory-images-rango-v1', 'publicKey': public, 'status': 'bound'}
+        original = host_sign.factory_contract
+        host_sign.factory_contract = lambda device: ('{device}-install-{build}.zip', pin)
+        self.addCleanup(setattr, host_sign, 'factory_contract', original)
+        self.sshkeygen = self.root/'ssh-keygen-stand-in'
+        self.sshkeygen.write_bytes(b'synthetic stand-in bytes, never executed')
+        (self.secrets/'FACTORY_KEY').write_bytes(b'synthetic factory key bytes')
+        (self.secrets/'FACTORY_PASS').write_text('SYNTHETIC-factory-passphrase\n')
+        self.signing = {'project': 'p', 'keySecret': 'FACTORY_KEY', 'keyVersion': '1', 'passphraseSecret': 'FACTORY_PASS',
+                        'passphraseVersion': '1', 'sshKeygen': str(self.sshkeygen),
+                        'sshKeygenSha256': hashlib.sha256(self.sshkeygen.read_bytes()).hexdigest()}
+        return pin
+
+    def mock_keygen(self, verify='ok'):
+        self.keygen_calls = []
+
+        def runner(argv, env, cwd, seconds, stdin_path=None):
+            self.keygen_calls.append({'argv': argv, 'env': dict(env), 'keyPresent': (Path(cwd)/'id_ed25519').is_file(),
+                                      'helper': Path(env['SSH_ASKPASS']).read_bytes() if 'SSH_ASKPASS' in env else None})
+            if argv[1:3] == ['-Y', 'sign']:
+                Path(argv[-1] + '.sig').write_text('-----BEGIN SSH SIGNATURE-----\nc3lu\n-----END SSH SIGNATURE-----\n')
+                return {'exit': 0, 'category': 'ok', 'outputBytes': 0, 'outputSha256': None}
+            return {'exit': 0 if verify == 'ok' else 255, 'category': verify, 'outputBytes': 0, 'outputSha256': None}
+        original = host_sign.FACTORY_RUNNER[0]
+        host_sign.FACTORY_RUNNER[0] = runner
+        self.addCleanup(host_sign.FACTORY_RUNNER.__setitem__, 0, original)
+
+    def test_bound_pin_signs_and_verifies_the_install_archive_with_the_pinned_key(self):
+        pin = self.bind_pin()
+        self.mock_keygen()
+        self.set_factory({'fastbootSha256': self.fastboot_sha, 'signing': self.signing})
+        self.assertEqual(host_sign.main(self.config, self.env, self.gcloud), 0)
+        sign, verify = self.keygen_calls
+        install = 'frankel-install-2026102802.zip'
+        self.assertEqual(sign['argv'][:6], [str(self.sshkeygen), '-Y', 'sign', '-n', 'factory images', '-f'])
+        self.assertTrue(sign['argv'][-1].endswith(install) and sign['keyPresent'])
+        self.assertEqual(sorted(sign['env']), ['LANG', 'PATH', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'])
+        self.assertRegex(sign['helper'].decode(), r'^#!/bin/sh\nexec cat /\S+/passphrase\n$')
+        self.assertEqual(verify['argv'][verify['argv'].index('-I') + 1], pin['principal'])
+        self.assertEqual(sorted(os.listdir(self.release/'factory')), [install, install + '.sig'])
+        record = json.loads((self.release/'sign-receipt.json').read_text())['factory']
+        self.assertEqual((record['signature']['principal'], record['signature']['namespace'], record['signature']['publicKey']),
+                         (pin['principal'], 'factory images', pin['publicKey']))
+        self.assertEqual(record['signatureBasis'], 'signed and verified against os/flavors/frankel.json factorySigning')
+        fetched = [json.loads(l)[json.loads(l).index('--secret') + 1] for l in self.log.read_text().splitlines()]
+        self.assertEqual(fetched, ['KEYS', 'PASS', 'FACTORY_KEY', 'FACTORY_PASS'])
+        self.assert_secrets_gone()  # the factory key and passphrase copies are removed too
+        everything = b''.join(p.read_bytes() for p in self.release.rglob('*') if p.is_file())
+        self.assertNotIn(b'SYNTHETIC-factory-passphrase', everything)
+        self.assertNotIn('SYNTHETIC-factory-passphrase', json.dumps(self.keygen_calls, default=str))
+        self.assertNotIn('ssh-keygen RAN', self.calls.read_text())  # the generator's own signing step stays removed
+
+    def test_signing_prerequisites_refuse_before_any_secret(self):
+        self.bind_pin()
+        self.mock_keygen()
+        self.set_factory({'fastbootSha256': self.fastboot_sha})
+        with self.assertRaises(host_sign.AdapterSetupMissing) as ctx:
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertIn('host.sign.factory.signing.sshKeygen', ctx.exception.missing)
+        for change, pattern in (({'sshKeygenSha256': '0' * 64}, 'not the pinned regular file'),
+                                ({'keyVersion': 'latest'}, 'pinned numeric versions'), ({'extra': 'x'}, 'pinned numeric versions')):
+            with self.subTest(change):
+                self.set_factory({'fastbootSha256': self.fastboot_sha, 'signing': dict(self.signing, **change)})
+                with self.assertRaisesRegex(host_sign.AdapterFailed, pattern):
+                    host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse(self.log.exists(), 'no secret is read')
+        self.assertEqual(self.keygen_calls, [])
+
+    def test_failed_verification_maps_nothing_and_writes_no_marker(self):
+        self.bind_pin()
+        self.mock_keygen(verify='nonzero_exit')
+        self.set_factory({'fastbootSha256': self.fastboot_sha, 'signing': self.signing})
+        with self.assertRaisesRegex(host_sign.AdapterFailed, 'verify_failed'):
+            host_sign.main(self.config, self.env, self.gcloud)
+        self.assertFalse((self.release/'factory').exists())
+        self.assertFalse((self.src/'releases/2026102802/.rose-actions-signed.json').exists())
+        self.assertFalse(list((self.src/'releases/2026102802').rglob('*.sig')))
+        self.assert_secrets_gone()
 
     def test_factory_anchor_drift_refuses(self):
         args = ('/c/common.sh', '/k', '/p', '/R/rel/keys', '/R/wrap')
