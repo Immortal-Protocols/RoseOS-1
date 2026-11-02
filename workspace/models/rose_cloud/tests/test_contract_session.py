@@ -415,6 +415,21 @@ class Conformance(unittest.TestCase):
                          (False, False, False, {'conformance': 'budget'}))
         self.assertLessEqual(s['parsed'], sent - 1)
 
+    def test_one_prompt_without_budget_fails_all_expected_even_when_the_bar_passes(self):
+        """The real 120 s client wait and 285 s budget with a stepped clock (2.9 s per call): 19 prompts are sent,
+        the last has no full wait left. The bar passes on 19 of 20, but the run is not allExpected."""
+        now = [0.0]
+
+        def clock():
+            now[0] += 2.9
+            return now[0]
+        r = C.run(self.serve().url, 'conformance', clock=clock, thinking=False)
+        s = r['conformance']['summary']
+        self.assertEqual((s['sent'], s['notRun'], s['parsed'], s['conforming'], s['existingBarPass'], s['pass']),
+                         (19, 1, 19, 19, True, True))
+        self.assertEqual(r['conformance']['results'][-1], {'notRun': 'budget'})
+        self.assertEqual((r['notRun'], r['allExpected']), ({'conformance': 'budget'}, False))
+
     def test_thinking_rule_and_identity_still_apply(self):
         r = C.run(self.serve(nothink=False).url, 'conformance', thinking=False)  # reasoning present
         self.assertEqual((r['conformance']['summary']['pass'], r['noThinking'], r['allExpected']), (True, False, False))
