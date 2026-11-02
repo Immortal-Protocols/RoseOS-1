@@ -46,7 +46,7 @@ final class PhoneControl {
    }
    if(!AgentAppTrust.allows(pkg,sameSigner,certificates))return new JSONObject().put("status","unavailable").put("reason","App signing identity does not match");
    // The controller's read-only preview is for Rose Agent's own overview on this phone (#225), never a phone command.
-   if(pkg.equals("dev.pixel.backgroundcontrol")&&"preview".equals(command.optString("operation")))return new JSONObject().put("status","unavailable").put("reason","Preview is local to Rose Agent");
+   if(pkg.equals("dev.pixel.backgroundcontrol")&&("preview".equals(command.optString("operation"))||"current_apps".equals(command.optString("operation"))))return new JSONObject().put("status","unavailable").put("reason","Preview is local to Rose Agent");
    // Background sessions may act while the owner is away from the screen only when the owner
    // armed it and recently authenticated. The physical-screen guards below are unchanged.
    if(pkg.equals("dev.pixel.backgroundcontrol")&&LockedControl.gates(command.getString("operation"))&&LockedControl.ownerAway(context)){JSONObject refusal=LockedControl.refusal(context);if(refusal!=null)return refusal;}

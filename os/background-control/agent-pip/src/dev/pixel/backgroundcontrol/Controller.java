@@ -174,6 +174,30 @@ public final class Controller {
   }catch(Throwable e){return new JSONObject().put("status",PreviewPolicy.NO_FRAME);}
   finally{if(small!=null&&small!=crop)small.recycle();if(crop!=null&&crop!=all)crop.recycle();if(all!=null)all.recycle();image.close();}
  }
+ /** The apps currently running under agent control, for Rose Agent's own overview (CurrentApps; #156/#225): the live
+  * session's application windows on its display, then its target. Membership is the live session only, never task
+  * history: no live session lists nothing, and the generation rises on every change. The windows are read without
+  * touching the agent's observation (node map, snapshot id/time, width/height, operation count, observed app); each
+  * root is released at once. Blocked or locked sessions are not read. Not advertised in capabilities, and refused on
+  * Rose Agent's app_command (Mac) path. */
+ static long appsGeneration;static String appsSignature="";
+ static synchronized JSONObject currentApps(Context c)throws Exception{
+  boolean locked=locked(c),live=session!=null&&CurrentApps.live(status);
+  List<String> front=new ArrayList<>();
+  if(live&&!locked&&!blocked)try{
+   List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);
+   for(AccessibilityWindowInfo w:windows){
+    if(w.getType()==AccessibilityWindowInfo.TYPE_APPLICATION){AccessibilityNodeInfo n=w.getRoot();if(n!=null){CharSequence pkg=n.getPackageName();if(pkg!=null)front.add(pkg.toString());n.recycle();}}
+    w.recycle();
+   }
+  }catch(Throwable e){front.clear();}
+  CurrentApps.Result r=CurrentApps.of(locked,session!=null,status,target,front,c.getPackageName());
+  String signature=CurrentApps.signature(r,id);if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
+  boolean listed=CurrentApps.LIVE.equals(r.status);JSONArray apps=new JSONArray();
+  for(CurrentApps.App a:r.apps)apps.put(new JSONObject().put("packageName",a.packageName).put("front",a.front).put("target",a.target));
+  return new JSONObject().put("status",r.status).put("sessionId",listed?id:JSONObject.NULL).put("taskId",listed?nullable(taskId):JSONObject.NULL)
+   .put("generation",appsGeneration).put("apps",apps);
+ }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");
   Bitmap all=null,crop=null,encoded=null;
