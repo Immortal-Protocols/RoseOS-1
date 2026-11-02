@@ -19,6 +19,8 @@ public final class CurrentAppsParityProbe {
             case "I": return Integer.parseInt(v);
             case "B": return Boolean.parseBoolean(v);
             case "S": return v.isEmpty() ? new String[0] : v.split(",", -1);
+            case "A": { String[] p = v.isEmpty() ? new String[0] : v.split(","); int[] a = new int[p.length]; for (int i = 0; i < p.length; i++) a[i] = Integer.parseInt(p[i]); return a; }
+            case "Z": { String[] p = v.isEmpty() ? new String[0] : v.split(","); boolean[] a = new boolean[p.length]; for (int i = 0; i < p.length; i++) a[i] = Boolean.parseBoolean(p[i]); return a; }
             default: return v;
         }
     }
@@ -37,13 +39,21 @@ public final class CurrentAppsParityProbe {
                 String[] p = f[6].split(";", -1);
                 platform = CurrentApps.platform(value(p[0]), value(p[1]), value(p[2]), value(p[3]), value(p[4]), 0);
             }
-            // As Controller.currentApps: the platform is consulted only for a live, unlocked session.
+            // The owned-device snapshot (PR374), when the line has one; read only when unlocked, whatever the session.
+            CurrentApps.Owned owned = null;
+            if (f.length > 7 && !"-".equals(f[7]) && !locked) {
+                String[] o = f[7].split(";", -1);
+                owned = CurrentApps.owned(value(o[0]), value(o[1]), value(o[2]), value(o[3]), value(o[4]));
+            }
+            // As Controller.currentApps: owned devices first; else the per-session platform answer, consulted only for a
+            // live, unlocked session; else the session windows.
             boolean live = session && CurrentApps.live(status);
-            CurrentApps.Result r = platform != null && live && !locked ? CurrentApps.of(locked, session, status, target, platform, front, controller)
+            CurrentApps.Result r = owned != null ? CurrentApps.of(locked, live ? target : null, owned, front, controller)
+                : platform != null && live && !locked ? CurrentApps.of(locked, session, status, target, platform, front, controller)
                 : CurrentApps.of(locked, session, status, blocked, target, front, controller);
             // As Controller.currentApps' reply: status, complete, incompleteReason, source, sessionStatus (live only), apps.
             StringBuilder b = new StringBuilder(r.status).append('\t').append(r.complete).append('\t').append(r.incompleteReason)
-                .append('\t').append(r.source).append('\t').append(CurrentApps.LIVE.equals(r.status) ? status : "").append('\t');
+                .append('\t').append(r.source).append('\t').append(CurrentApps.LIVE.equals(r.status) && session ? status : "").append('\t');
             for (int i = 0; i < r.apps.size(); i++) {
                 CurrentApps.App a = r.apps.get(i);
                 b.append(i == 0 ? "" : ",").append(a.packageName).append(':').append(a.front).append(':').append(a.target);

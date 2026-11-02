@@ -21,7 +21,9 @@ def render_reply(r):
     if r is None or not isinstance(r, dict): return {'category': 'cannot_confirm', 'apps': []}
     if r.get('complete') is not True: return {'category': 'cannot_confirm', 'apps': []}
     if r.get('status') == 'none': return {'category': 'genuine_empty', 'apps': []}
-    if r.get('status') != 'live' or r.get('sessionStatus') not in LIVE_SESSION: return {'category': 'cannot_confirm', 'apps': []}
+    # owned_devices: membership is the platform's owned-device snapshot, so the session status is only informational.
+    if r.get('status') != 'live' or (r.get('source') != 'owned_devices' and r.get('sessionStatus') not in LIVE_SESSION):
+        return {'category': 'cannot_confirm', 'apps': []}
     apps = sorted({a['packageName'] for a in r.get('apps', [])})
     return {'category': 'cards', 'apps': apps} if apps else {'category': 'genuine_empty', 'apps': []}
 
@@ -41,10 +43,13 @@ def line(c):
         t, x = v
         if t == 'S': return 'S:' + ','.join(x)
         if t == 'B': return 'B:' + ('true' if x else 'false')
+        if t == 'A': return 'A:' + ','.join(str(i) for i in x)
+        if t == 'Z': return 'Z:' + ','.join('true' if b else 'false' for b in x)
         return f'{t}:{x}'
     platform = '-' if c['platform'] is None else ';'.join(typed(c['platform'][k]) for k in ('generation', 'packageNames', 'userId', 'complete', 'closed'))
     front = '-' if c['front'] is None else ','.join(c['front'])
-    return '\t'.join([str(c['locked']).lower(), str(c['session']).lower(), c['status'], str(c['blocked']).lower(), c['target'] or '-', front, platform])
+    owned = '-' if c.get('owned') is None else ';'.join(typed(c['owned'][k]) for k in ('generation', 'deviceIds', 'deviceComplete', 'appDeviceIds', 'appPackageNames'))
+    return '\t'.join([str(c['locked']).lower(), str(c['session']).lower(), c['status'], str(c['blocked']).lower(), c['target'] or '-', front, platform, owned])
 
 
 class ParityTest(unittest.TestCase):
@@ -70,7 +75,7 @@ class ParityTest(unittest.TestCase):
 
     def test_production_controller_produces_each_fixture_reply(self):
         produced = [c for c in FIXTURE['cases'] if 'controllerInputs' in c]
-        self.assertGreaterEqual(len(produced), 13)
+        self.assertGreaterEqual(len(produced), 22)
         for c, got in zip(produced, self.run_controller([c['controllerInputs'] for c in produced])):
             with self.subTest(c['name']):
                 want = c['controllerReply']
@@ -113,6 +118,11 @@ class ParityTest(unittest.TestCase):
                 self.assertNotEqual(g['launcherCategory'], g['homeCategory'])
                 # Fail closed, never empty: neither surface may call genuinely controlled apps genuine_empty.
                 self.assertNotIn('genuine_empty', (g['launcherCategory'], g['homeCategory']))
+                # Closed on builds with the owned-device snapshot: the named case passes on both surfaces.
+                closed = self.cases[g['closedBy']]
+                self.assertEqual(closed['controllerReply']['source'], 'owned_devices')
+                self.assertEqual(render_reply(closed['controllerReply']), closed['expected'])
+                self.assertEqual(render_platform(closed['platform']), closed['expected'])
         contract = FIXTURE['ownerDeviceViewContract']
         for k in ('method', 'caller', 'user', 'keys', 'atomicity', 'lifecycle', 'errors', 'consumerRule'):
             self.assertIn(k, contract)

@@ -40,7 +40,7 @@ class CurrentAppsWiringTest(unittest.TestCase):
         for source in ('stops.', 'stoppedTaskId', 'StopLedger', 'observed', 'labels', 'nodes'):
             self.assertNotIn(source, self.body, source)
         self.assertIn('if(live&&!locked&&!blocked)try{', self.body, 'blocked or locked sessions are not read')
-        self.assertIn('.put("sessionId",listed?id:JSONObject.NULL).put("taskId",listed?nullable(taskId):JSONObject.NULL)', self.body)
+        self.assertIn('.put("sessionId",held?id:JSONObject.NULL).put("taskId",held?nullable(taskId):JSONObject.NULL)', self.body)
 
     def test_window_read_leaves_the_agent_observation_untouched(self):
         for name in OBSERVATION:
@@ -51,13 +51,15 @@ class CurrentAppsWiringTest(unittest.TestCase):
         self.assertIn('w.recycle();', self.body)
         self.assertIn('catch(Throwable e){front=null;}', self.body, 'a failed read lists only the target and says it is incomplete')
         self.assertEqual(sorted(set(re.findall(r'(?<![\w.])(\w+)\s*=(?!=)', self.body)) - {
-            'locked', 'live', 'front', 'read', 'windows', 'n', 'pkg', 'r', 'signature', 'listed', 'apps', 'platform', 'b'}), ['appsSignature'])
+            'locked', 'live', 'front', 'read', 'windows', 'n', 'pkg', 'r', 'signature', 'listed', 'apps', 'platform', 'b',
+            'owned', 'type', 'version', 'ext', 'held'}), ['appsSignature'])
         self.assertTrue(writes(self.body, 'appsGeneration'), 'the generation rises on change')
 
     def test_reply_shape(self):
         self.assertEqual(re.findall(r'\.put\("(\w+)"', self.body),
-                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'sessionStatus', 'generation', 'complete', 'incompleteReason', 'source', 'apps'])
-        self.assertIn('.put("sessionStatus",listed?status:JSONObject.NULL)', self.body, 'the live session\'s ready/blocked/launching status, null otherwise')
+                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'sessionStatus', 'generation', 'complete', 'incompleteReason', 'source', 'snapshotGeneration', 'apps'])
+        self.assertIn('.put("sessionStatus",held?status:JSONObject.NULL)', self.body, 'the held session\'s status (informational with owned_devices), null otherwise')
+        self.assertIn('.put("snapshotGeneration",owned!=null?(Object)owned.generation:JSONObject.NULL)', self.body)
         self.assertIn('String signature=CurrentApps.signature(r,id,status);', self.body)
         self.assertIn('.put("generation",appsGeneration)', self.body, 'the controller\'s rising counter, never the platform\'s generation')
         self.assertNotIn('platform.generation', self.body)
@@ -76,10 +78,23 @@ class CurrentAppsWiringTest(unittest.TestCase):
         self.assertIn('Bundle b=(Bundle)session.getClass().getMethod("getAutomatedApps").invoke(session);', self.body)
         self.assertNotIn('android.companion.virtual.computercontrol', self.body)
         self.assertIn('platform=CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);', self.body)
-        self.assertIn('if(live&&!locked)try{', self.body.split('getAutomatedApps')[0].rsplit('CurrentApps.Platform platform=null;', 1)[1])
+        self.assertIn('if(owned==null&&live&&!locked)try{', self.body.split('getAutomatedApps")')[0].rsplit('CurrentApps.Platform platform=null;', 1)[1])
         self.assertIn('}catch(Throwable e){platform=null;}', self.body, 'SecurityException, IllegalStateException or a missing method: fallback')
-        self.assertIn('CurrentApps.Result r=platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())', self.body)
+        self.assertIn(':platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())', self.body)
         self.assertIn(':CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());', self.body)
+
+
+    def test_owned_devices_first_session_independent_with_fallbacks(self):
+        # PR374's agreed method on the existing extensions entry, reflective like the rest; no session object needed.
+        self.assertIn('Class<?> type=Class.forName(EXT+"ComputerControlExtensions");', self.body)
+        self.assertIn('Object ext=type.getMethod("getInstance",Context.class,int.class).invoke(null,c,version);', self.body)
+        self.assertIn('Bundle b=ext==null?null:(Bundle)type.getMethod("getOwnedAutomatedDevices").invoke(ext);', self.body)
+        self.assertIn('owned=CurrentApps.owned(b.get("generation"),b.get("deviceIds"),b.get("deviceComplete"),b.get("appDeviceIds"),b.get("appPackageNames"));', self.body)
+        owned_read = self.body.split('CurrentApps.Owned owned=null;')[1].split('getOwnedAutomatedDevices')[0]
+        self.assertIn('if(!locked)try{', owned_read, 'never read while locked, and never conditioned on a live session')
+        self.assertNotIn('session', owned_read.split('try{')[0])
+        self.assertEqual(self.body.count('}catch(Throwable e){owned=null;}'), 1, 'unavailable (IllegalStateException), missing method or malformed: fall back')
+        self.assertIn('CurrentApps.Result r=owned!=null?CurrentApps.of(locked,live?target:null,owned,front,c.getPackageName())', self.body)
 
 
 if __name__ == '__main__':
