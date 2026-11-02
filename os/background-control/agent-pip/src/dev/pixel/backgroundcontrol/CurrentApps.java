@@ -20,7 +20,12 @@ import java.util.List;
  * of the owner's user on the session's own device, front or hidden. Its completeness is the platform's (false only when
  * another user's activity was omitted: other_user_omitted); a closed session lists nothing. Front windows still mark
  * which members are visible now. A missing, failed or malformed platform answer falls back to the session windows
- * above, marked incomplete. Pure logic, no Android types. */
+ * above, marked incomplete. A session the controller still holds but could not release (cleanup_failed) is never a
+ * genuine empty (session_unreleased), unless the platform says that session is closed.
+ *
+ * Rendering contract shared with Launcher3 and Home (#156/#225 parity, os/tests/fixtures/current-apps-parity.json):
+ * complete with apps shows exactly those apps; complete and empty is genuine empty; anything not complete shows no app
+ * cards and an explicit cannot-confirm status. Pure logic, no Android types. */
 final class CurrentApps {
  private CurrentApps() {}
 
@@ -45,7 +50,10 @@ final class CurrentApps {
  }
 
  static final String BEHIND_FRONT_UNLISTED = "behind_front_unlisted", WINDOWS_UNREADABLE = "windows_unreadable",
-  BLOCKED = "blocked", OTHER_USER_OMITTED = "other_user_omitted";
+  BLOCKED = "blocked", OTHER_USER_OMITTED = "other_user_omitted",
+  /** The controller still holds a session it could not release (cleanup_failed): its device may still run apps, so
+   * nothing can be confirmed, and certainly not a genuine empty. */
+  SESSION_UNRELEASED = "session_unreleased";
  /** Where the members came from. */
  static final String PLATFORM = "platform", SESSION_WINDOWS = "session_windows";
 
@@ -77,7 +85,9 @@ final class CurrentApps {
   * (sorted) order; the controller never; completeness the platform's; closed lists nothing. */
  static Result of(boolean locked, boolean hasSession, String status, String target, Platform platform, List<String> front, String controller) {
   if (locked) return new Result(LOCKED, new ArrayList<App>(), false, LOCKED, PLATFORM);
-  if (!hasSession || !live(status) || platform.closed) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
+  if (platform.closed) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
+  if (hasSession && !live(status)) return new Result(NONE, new ArrayList<App>(), false, SESSION_UNRELEASED, PLATFORM);
+  if (!hasSession || !live(status)) return new Result(NONE, new ArrayList<App>(), true, "", PLATFORM);
   List<App> apps = new ArrayList<>();
   if (front != null) for (String p : front)
    if (p != null && platform.packages.contains(p) && !p.equals(controller) && !contains(apps, p)) apps.add(new App(p, true, p.equals(target)));
@@ -94,6 +104,7 @@ final class CurrentApps {
  /** front: the packages of the session display's application windows now, top first; null when they were not read. */
  static Result of(boolean locked, boolean hasSession, String status, boolean blocked, String target, List<String> front, String controller) {
   if (locked) return new Result(LOCKED, new ArrayList<App>(), false, LOCKED);
+  if (hasSession && !live(status)) return new Result(NONE, new ArrayList<App>(), false, SESSION_UNRELEASED);
   if (!hasSession || !live(status)) return new Result(NONE, new ArrayList<App>(), true, "");
   List<App> apps = new ArrayList<>();List<String> seen = new ArrayList<>();
   if (front != null) for (String p : front) {
