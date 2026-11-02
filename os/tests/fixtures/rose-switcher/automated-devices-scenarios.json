@@ -37,7 +37,7 @@
    }
   },
   {
-   "name": "1b initial empty snapshot, a session task before its ownership arrives",
+   "name": "1b initial empty snapshot with a session task: the platform lists no controller device, confirmed empty",
    "events": [
     {
      "snapshot": [
@@ -62,13 +62,11 @@
     ]
    ],
    "expect": {
-    "state": "UNAVAILABLE",
+    "state": "EMPTY",
     "cards": [],
-    "unconfirmed": [
-     2
-    ],
-    "reason": "Rose's work can't be confirmed right now",
-    "contract": "cannot_confirm"
+    "unconfirmed": [],
+    "reason": "No background work",
+    "contract": "empty"
    }
   },
   {
@@ -330,14 +328,13 @@
     ]
    ],
    "expect": {
-    "state": "UNAVAILABLE",
-    "cards": [],
-    "unconfirmed": [
-     9,
+    "state": "AVAILABLE",
+    "cards": [
      2
     ],
-    "reason": "Rose's work can't be confirmed right now",
-    "contract": "cannot_confirm"
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -385,7 +382,7 @@
    }
   },
   {
-   "name": "5 released session display still holding a task",
+   "name": "5 a task left on a released display: membership is the snapshot's, which lists no app",
    "events": [
     {
      "snapshot": [
@@ -416,13 +413,11 @@
     ]
    ],
    "expect": {
-    "state": "UNAVAILABLE",
+    "state": "EMPTY",
     "cards": [],
-    "unconfirmed": [
-     2
-    ],
-    "reason": "Rose's work can't be confirmed right now",
-    "contract": "cannot_confirm"
+    "unconfirmed": [],
+    "reason": "No background work",
+    "contract": "empty"
    }
   },
   {
@@ -1010,7 +1005,7 @@
    }
   },
   {
-   "name": "parity: a running task whose app is not yet listed is unconfirmed",
+   "name": "parity: a running task whose app is not yet listed is not a member and holds nothing back",
    "events": [
     {
      "snapshot": [
@@ -1054,14 +1049,13 @@
     ]
    ],
    "expect": {
-    "state": "UNAVAILABLE",
-    "cards": [],
-    "unconfirmed": [
-     9,
+    "state": "AVAILABLE",
+    "cards": [
      2
     ],
-    "reason": "Rose's work can't be confirmed right now",
-    "contract": "cannot_confirm"
+    "unconfirmed": [],
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -1105,7 +1099,7 @@
    }
   },
   {
-   "name": "parity: apps one generation behind the devices",
+   "name": "parity: the apps snapshot alone decides (devices one generation ahead change nothing)",
    "events": [
     {
      "snapshot": [
@@ -1151,11 +1145,13 @@
     ]
    ],
    "expect": {
-    "state": "UNAVAILABLE",
-    "cards": [],
+    "state": "AVAILABLE",
+    "cards": [
+     2
+    ],
     "unconfirmed": [],
-    "reason": "Rose's work can't be confirmed right now",
-    "contract": "cannot_confirm"
+    "reason": null,
+    "contract": "cards"
    }
   },
   {
@@ -1201,9 +1197,7 @@
    "expect": {
     "state": "UNAVAILABLE",
     "cards": [],
-    "unconfirmed": [
-     2
-    ],
+    "unconfirmed": [],
     "reason": "Rose's work can't be confirmed right now",
     "contract": "cannot_confirm"
    }
@@ -1347,10 +1341,7 @@
    "expect": {
     "state": "UNAVAILABLE",
     "cards": [],
-    "unconfirmed": [
-     2,
-     5
-    ],
+    "unconfirmed": [],
     "reason": "Rose's work can't be confirmed right now",
     "contract": "cannot_confirm"
    }

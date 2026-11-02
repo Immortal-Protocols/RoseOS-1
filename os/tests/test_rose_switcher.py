@@ -119,7 +119,7 @@ class RoseSwitcherTest(unittest.TestCase):
         tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'):read.index('RoseAgentWork.of(')]
         self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
         self.assertNotIn('getApplicationLabel', tasks)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, tasks).labelled(', read)
         self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
         for step in ('CONTROLLER', 'OWNERSHIP', 'TASKS', 'DISPLAYS'):
             self.assertIn(f'RoseAgentWork.Step.{step}', read)
@@ -349,7 +349,7 @@ class ControllerReadPermissionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
         self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, tasks).labelled(', read)
         self.assertIn('RoseAgentWork.Owners owners = platform.owners();', read)
         # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
         self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
@@ -476,10 +476,8 @@ class PrivateControllerDisplayTest(unittest.TestCase):
             'a refused or missing registration is named at its own step on every read')
         self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getVirtualDevices()'))
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('if (!owners.received || !owners.appsReceived) return unavailable(NOT_REPORTED);', work,
-            'unreported session work is never shown as "No background work"')
-        self.assertIn('if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);', work,
-            'a read between the two callbacks of one dispatch is unconfirmed')
+        self.assertIn('if (!owners.appsReceived) return unavailable(NOT_REPORTED);', work,
+            'before the platform\'s apps snapshot nothing is shown as "No background work"')
 
 class CrossDisplayAttributionTest(unittest.TestCase):
     """#156 disclosed gap after PR337: a package Rose automates can also run on another app's virtual display (or on
@@ -532,12 +530,14 @@ class CrossDisplayAttributionTest(unittest.TestCase):
         self.assertIn('if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;', read)
         self.assertIn('for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());', read)
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('Owner owner = device == null ? null : owners.byDevice.get(device);', work)
-        self.assertIn('if (!CONTROLLER.equals(owner.packageName) || owner.uid != controllerUid) continue;', work,
+        self.assertIn('for (Map.Entry<Integer, Owner> e : owners.appsOwners.entrySet()) {', work,
+            'the devices of the same atomic apps snapshot')
+        self.assertIn('if (CONTROLLER.equals(o.packageName) && o.uid == controllerUid) rose.add(e.getKey());', work,
             'exact controller package and this user\'s controller uid')
         for heuristic in ('candidate', 'others', 'automation.packages'):
             self.assertNotIn(heuristic, re.sub(r'/\*.*?\*/', '', work, flags=re.S), f'{heuristic}: no package attribution')
-        self.assertIn('for (Task t : fresh.unattributed) if (same(t, card)) return Open.UNATTRIBUTED;', work)
+        self.assertIn('if (fresh.state != State.AVAILABLE) return Open.UNATTRIBUTED;', work,
+            'a card whose fresh read cannot confirm Rose\'s work is refused with that reason')
         show = code[code.index('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {'):code.index('private void select(')]
         self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unconfirmed tasks are never cards')
         self.assertNotIn('unattributed', show)
@@ -588,10 +588,11 @@ class InitialLoadAttributionTest(unittest.TestCase):
         work = (OVERLAY/'RoseAgentWork.java').read_text()
         decide = work[work.index('static RoseAgentWork of(int controllerUid'):work.index('static RoseAgentWork unconfirmed()')]
         self.assertIn('if (owners.malformed || owners.appsMalformed) return failed(Step.OWNERSHIP);', decide)
-        self.assertIn('if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);', decide)
-        self.assertIn('if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);', decide)
-        self.assertIn('if (owner == null) {\n                if (!CONTROLLER.equals(t.packageName)) held.add(t);', decide,
-            'missing ownership is held as unconfirmed, never a card')
+        self.assertIn('if (rose.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);', decide,
+            'no controller device in the snapshot: confirmed empty')
+        self.assertIn('if (rose.size() > 1 || owners.incompleteDevices.contains(rose.get(0))) return unavailable(UNCONFIRMED);',
+            decide, 'more than one, or any incomplete: cannot confirm')
+        self.assertIn('members.remove(CONTROLLER);', decide, 'the controller itself is never a member')
         decision = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
         for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
             self.assertNotIn(timed, decision, f'{timed}: no time in the attribution decision')
@@ -607,8 +608,7 @@ class InitialLoadAttributionTest(unittest.TestCase):
         self.assertLess(read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'), read.index('vdm.getVirtualDevices()'),
             'tasks first, then the devices, so a live session display a task is on is listed')
         self.assertLess(read.index('vdm.getVirtualDevices()'), read.index('if (platform.generation() != generation) return RoseAgentWork.unconfirmed();'))
-        self.assertIn('boolean complete = running.size() < TASK_LIMIT;', read)
-        self.assertIn('List<Integer> released = platform.released(sessionDevices.keySet());', read)
+        self.assertNotIn('released', read, 'tasks and displays never decide membership')
 
 class AutomatedDevicesConsumerTest(unittest.TestCase):
     """#156 consumer of the contract agreed with OS Core (relayed 19:51:27Z): AutomatedPackageListener
@@ -830,9 +830,10 @@ class DeviceAppsParityTest(unittest.TestCase):
         self.assertIn('if (!ownership.acceptApps(snapshotGeneration, deviceIds, ownerPackages, ownerUids, deviceComplete,', strip)
         self.assertIn('if (task.taskId == RoseAgentWork.NO_TASK) continue;', strip)
         work = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
-        self.assertIn('if (apps == null || !apps.contains(t.packageName)) {\n                held.add(t);', work,
-            'a running task whose app is not listed is never a card')
-        self.assertIn('items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));', work)
+        self.assertIn('if (members.contains(t.packageName) && attached.add(t.packageName)) items.add(t);', work,
+            'tasks only attach to members; an unlisted task is never a card and holds nothing back')
+        self.assertIn('if (!attached.contains(pkg)) items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));', work)
+        self.assertIn('if (card.taskId == NO_TASK) return Preview.NONE;', work, 'no visible task claims no preview reason')
         for history in ('completed', 'finished', 'history', 'lastResult', 'result'):
             self.assertNotIn(history, work.split('static RoseAgentWork of(')[1].split('static RoseAgentWork unconfirmed()')[0],
                 f'{history}: membership never reads task history')

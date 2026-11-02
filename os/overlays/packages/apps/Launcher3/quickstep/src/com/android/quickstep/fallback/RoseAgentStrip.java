@@ -37,10 +37,8 @@ import com.android.quickstep.RecentsActivity;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * RoseOS (#156): the agent row of the fallback overview, above Launcher3's own human-task carousel and scrolling
@@ -119,14 +117,12 @@ public final class RoseAgentStrip extends LinearLayout {
      * per registration, then only higher generations; a malformed one is never partly applied. The package reports
      * (onAutomatedPackagesChanged) are not used for attribution. Registered once, as Launcher3's own
      * AutomationRepositoryImpl is, retried on the next read if it failed, with a fresh baseline each time. Any applied
-     * change refreshes the visible rows. Session displays once seen are remembered (ids are never reused), so a task
-     * left on a released one is held as unconfirmed instead of looking like another app's display.
+     * change refreshes the visible rows.
      */
     private static final class Sessions implements AutomatedPackageListener {
         private static Sessions instance;
         private final Context context;
         private final RoseAgentWork.Ownership ownership = new RoseAgentWork.Ownership();
-        private final Set<Integer> seenSessionDisplays = new HashSet<>();
         private final List<WeakReference<RoseAgentStrip>> strips = new ArrayList<>();
         private boolean registered;
         /** Counts every applied change, so a read can tell that one arrived while it was reading the platform. */
@@ -202,14 +198,6 @@ public final class RoseAgentStrip extends LinearLayout {
         }
 
         synchronized RoseAgentWork.Owners owners() { return ownership.snapshot(); }
-
-        /** The session displays seen before and not listed now; remembers the ones listed now. */
-        synchronized List<Integer> released(Set<Integer> current) {
-            List<Integer> gone = new ArrayList<>();
-            for (int id : seenSessionDisplays) if (!current.contains(id)) gone.add(id);
-            seenSessionDisplays.addAll(current);
-            return gone;
-        }
 
         synchronized long generation() { return generation; }
     }
@@ -353,7 +341,7 @@ public final class RoseAgentStrip extends LinearLayout {
         Map<Integer, Bitmap> frames = new HashMap<>();
         if (work.state != RoseAgentWork.State.AVAILABLE) return frames;
         for (RoseAgentWork.Task task : work.items) {
-            if (task.taskId == RoseAgentWork.NO_TASK) continue; // a member without its own task: nothing to capture
+            if (task.taskId == RoseAgentWork.NO_TASK) continue; // a member without a visible task: nothing to capture
             if (RoseAgentWork.preview(task, locked) != RoseAgentWork.Preview.CAPTURE) continue;
             Bitmap frame = frame(task.taskId, framePx);
             if (frame != null) frames.put(task.taskId, frame);
@@ -426,8 +414,8 @@ public final class RoseAgentStrip extends LinearLayout {
             List<Integer> seenDisplays = new ArrayList<>();
             // getTasks lists tasks front to back, so the first task met on a display is its current screen. A full
             // list may be truncated, so the row could not say it shows all of Rose's work.
+            // Tasks attach a member's live view and selection only; membership is the platform's apps snapshot.
             List<ActivityManager.RunningTaskInfo> running = ActivityTaskManager.getInstance().getTasks(TASK_LIMIT);
-            boolean complete = running.size() < TASK_LIMIT;
             for (ActivityManager.RunningTaskInfo t : running) {
                 if (t.topActivity == null) continue;
                 String pkg = t.topActivity.getPackageName();
@@ -446,10 +434,9 @@ public final class RoseAgentStrip extends LinearLayout {
                 if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;
                 for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());
             }
-            List<Integer> released = platform.released(sessionDevices.keySet());
             // A snapshot applied during these reads means they are not one state; that snapshot refreshes the row.
             if (platform.generation() != generation) return RoseAgentWork.unconfirmed();
-            return RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(task ->
+            return RoseAgentWork.of(controllerUid, user, owners, sessionDevices, tasks).labelled(task ->
                     pm.getApplicationLabel(pm.getApplicationInfoAsUser(task.packageName, 0, task.userId)).toString());
         } catch (RuntimeException e) {
             Log.w(TAG, "Agent work unavailable at " + step + " (" + e.getClass().getSimpleName() + ")");

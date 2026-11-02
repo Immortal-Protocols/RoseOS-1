@@ -78,7 +78,7 @@ public final class RoseAgentScenarios {
                         f[4], f[4], Boolean.parseBoolean(f[5])));
                     break;
                 case "E":
-                    RoseAgentWork w = RoseAgentWork.of(controllerUid, user, ownership.snapshot(), devices, released, tasks, true);
+                    RoseAgentWork w = RoseAgentWork.of(controllerUid, user, ownership.snapshot(), devices, tasks);
                     System.out.println(name + "|" + w.state + "|" + join(w.items) + "|" + join(w.unattributed) + "|"
                         + (w.reason == null ? "~" : w.reason));
                     break;
