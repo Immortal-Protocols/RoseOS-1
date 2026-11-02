@@ -183,11 +183,58 @@ index f107647b5..69185fe54 100644
          }
      }
  
+diff --git a/core/java/android/companion/virtual/IVirtualDeviceManager.aidl b/core/java/android/companion/virtual/IVirtualDeviceManager.aidl
+index ce355150..cb620f7d 100644
+--- a/core/java/android/companion/virtual/IVirtualDeviceManager.aidl
++++ b/core/java/android/companion/virtual/IVirtualDeviceManager.aidl
+@@ -99,6 +99,12 @@ interface IVirtualDeviceManager {
+      */
+     void unregisterAutomatedPackageListener(in IAutomatedPackageListener listener);
+ 
++    /**
++     * RoseOS (#156): the caller's own ComputerControl session devices and their current apps: only devices whose
++     * recorded owner uid is the calling uid. See AutomatedPackagesRepository#ownedAutomatedDevices.
++     */
++    android.os.Bundle getOwnedAutomatedDevices();
++
+     /**
+      * Validates the intent to warn the user about launching an application that is being automated.
+      */
 diff --git a/core/java/android/companion/virtual/VirtualDeviceManager.java b/core/java/android/companion/virtual/VirtualDeviceManager.java
-index 5a035b2a..4a6651ee 100644
+index 5a035b2a..fed9523a 100644
 --- a/core/java/android/companion/virtual/VirtualDeviceManager.java
 +++ b/core/java/android/companion/virtual/VirtualDeviceManager.java
-@@ -1761,6 +1761,23 @@ public final class VirtualDeviceManager {
+@@ -447,6 +447,29 @@ public final class VirtualDeviceManager {
+         }
+     }
+ 
++    /**
++     * RoseOS (#156): the calling app's own ComputerControl session devices with their current apps, as one snapshot
++     * (generation, deviceIds, deviceComplete, appDeviceIds, appPackageNames). Only devices this app owns are ever
++     * returned. Throws IllegalStateException when the virtual device service is unavailable.
++     *
++     * @hide
++     */
++    @NonNull
++    public android.os.Bundle getOwnedAutomatedDevices() {
++        if (mService == null) {
++            throw new IllegalStateException("No virtual device manager service");
++        }
++        try {
++            final android.os.Bundle result = mService.getOwnedAutomatedDevices();
++            if (result == null) {
++                throw new IllegalStateException("No owned automated devices snapshot");
++            }
++            return result;
++        } catch (RemoteException e) {
++            throw e.rethrowFromSystemServer();
++        }
++    }
++
+     /**
+      * Unregisters a listener previously registered with {@link #registerAutomatedPackageListener}.
+      *
+@@ -1761,6 +1784,23 @@ public final class VirtualDeviceManager {
                      mExecutor.execute(() -> mListener.onAutomatedPackagesChanged(
                              automatingPackage, automatedPackages, user)));
          }
@@ -423,6 +470,67 @@ index baed11a1..4346d7e5 100644
 +    /** RoseOS (#156): this session's own current apps, for the session owner only (see AutomatedApps). */
 +    AutomatedApps getAutomatedApps();
  }
+diff --git a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java
+index b756433b..78b14836 100644
+--- a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java
++++ b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java
+@@ -49,9 +49,17 @@ public class ComputerControlExtensions {
+             new ArrayMap<>();
+ 
+     private final int mTargetComputerControlVersion;
++    // RoseOS (#156): the context this instance was obtained with, for getOwnedAutomatedDevices().
++    @Nullable
++    private final Context mContext;
+ 
+     private ComputerControlExtensions(int targetComputerControlVersion) {
++        this(targetComputerControlVersion, null);
++    }
++
++    private ComputerControlExtensions(int targetComputerControlVersion, @Nullable Context context) {
+         mTargetComputerControlVersion = targetComputerControlVersion;
++        mContext = context;
+     }
+ 
+     /**
+@@ -81,7 +89,7 @@ public class ComputerControlExtensions {
+             return null;
+         }
+         // Hardcode version 4 to prevent backwards incompatibilities
+-        return new ComputerControlExtensions(4);
++        return new ComputerControlExtensions(4, context);
+     }
+ 
+     /**
+@@ -100,7 +108,28 @@ public class ComputerControlExtensions {
+         if (!isAvailable(context)) {
+             return null;
+         }
+-        return new ComputerControlExtensions(targetComputerControlVersion);
++        return new ComputerControlExtensions(targetComputerControlVersion, context);
++    }
++
++    /**
++     * RoseOS (#156): the calling app's own ComputerControl session devices and their current apps, independent of any
++     * session, as a public {@link android.os.Bundle}: generation (long, the automated-package listener's generation),
++     * deviceIds (int[]), deviceComplete (boolean[]: false when another user's activity on that device is omitted),
++     * appDeviceIds (int[]) and appPackageNames (String[]): appDeviceIds[i] runs appPackageNames[i], a package with a
++     * non-finishing activity of the owner's user, front or hidden. Only devices whose recorded owner uid is the
++     * caller's are returned; nothing about any other owner. Throws IllegalStateException when unavailable, never an
++     * invented empty result.
++     *
++     * @hide
++     */
++    @NonNull
++    public android.os.Bundle getOwnedAutomatedDevices() {
++        final VirtualDeviceManager vdm =
++                mContext == null ? null : mContext.getSystemService(VirtualDeviceManager.class);
++        if (vdm == null) {
++            throw new IllegalStateException("Owned automated devices are unavailable");
++        }
++        return vdm.getOwnedAutomatedDevices();
+     }
+ 
+     /**
 diff --git a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java b/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
 index 9cbc59bc..6a2ff073 100644
 --- a/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java
@@ -476,7 +584,7 @@ index 35217902..ddb50757 100644
                  mVirtualAudioController.onRunningAppsChanged(runningUids);
              }
 diff --git a/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java b/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java
-index 81eb70ec..a87beebe 100644
+index 81eb70ec..40540479 100644
 --- a/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java
 +++ b/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java
 @@ -224,6 +224,8 @@ public class VirtualDeviceManagerService extends SystemService implements Watchd
@@ -522,7 +630,7 @@ index 81eb70ec..a87beebe 100644
  
          mHandler.post(() -> {
              mVirtualDeviceListeners.broadcast(listener -> {
-@@ -737,7 +750,9 @@ public class VirtualDeviceManagerService extends SystemService implements Watchd
+@@ -737,7 +750,15 @@ public class VirtualDeviceManagerService extends SystemService implements Watchd
          @Override // Binder call
          public void registerAutomatedPackageListener(IAutomatedPackageListener listener) {
              checkCallerIsRecentsOrHomeRoleHolder();
@@ -530,14 +638,20 @@ index 81eb70ec..a87beebe 100644
 +            // RoseOS (#156): the device snapshot is limited to the caller's own user.
 +            mAutomatedPackagesRepository.registerAutomatedPackageListener(listener,
 +                    UserHandle.getCallingUserId());
++        }
++
++        @Override // Binder call
++        public android.os.Bundle getOwnedAutomatedDevices() {
++            // RoseOS (#156): only the caller's own devices, by its binder uid; no role, permission or other owner.
++            return mAutomatedPackagesRepository.ownedAutomatedDevices(Binder.getCallingUid());
          }
  
          @Override // Binder call
 diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java
-index 6cb9f11f..e04e16ae 100644
+index 6cb9f11f..183cd0c0 100644
 --- a/services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java
 +++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java
-@@ -84,6 +84,21 @@ public final class AutomatedPackagesRepository {
+@@ -84,6 +84,26 @@ public final class AutomatedPackagesRepository {
      @GuardedBy("mLock")
      private final SparseArray<String> mDeviceOwnerPackageNames = new SparseArray<>();
  
@@ -556,10 +670,15 @@ index 6cb9f11f..e04e16ae 100644
 +    @GuardedBy("mLock")
 +    private final SparseArray<Long> mDeviceViewGenerations = new SparseArray<>();
 +
++    // RoseOS (#156): devices already closed. Device ids are never reused, so a running-apps report that arrives after
++    // the close (a late window-policy callback) is ignored and can never resurrect the device.
++    @GuardedBy("mLock")
++    private final android.util.SparseBooleanArray mClosedDevices = new android.util.SparseBooleanArray();
++
      public AutomatedPackagesRepository(Handler handler) {
          mHandler = handler;
      }
-@@ -95,8 +110,20 @@ public final class AutomatedPackagesRepository {
+@@ -95,8 +115,20 @@ public final class AutomatedPackagesRepository {
  
      /** Register a listener for automated package changes. */
      public void registerAutomatedPackageListener(IAutomatedPackageListener listener) {
@@ -581,7 +700,7 @@ index 6cb9f11f..e04e16ae 100644
  
              // Immediately dispatch the currently automated packages.
              for (int i = 0; i < mAutomatedPackages.size(); ++i) {
-@@ -181,21 +208,46 @@ public final class AutomatedPackagesRepository {
+@@ -181,21 +213,50 @@ public final class AutomatedPackagesRepository {
      /** Update the list of packages running on a device. */
      public void update(int deviceId, String deviceOwnerPackageName,
              ArraySet<Pair<Integer, String>> runningPackageUids) {
@@ -592,20 +711,24 @@ index 6cb9f11f..e04e16ae 100644
 +    /** RoseOS (#156): as above, with the device owner's uid for the device-owner snapshot. */
 +    public void update(int deviceId, String deviceOwnerPackageName, int deviceOwnerUid,
 +            ArraySet<Pair<Integer, String>> runningPackageUids) {
-+        synchronized (mLock) {
+         synchronized (mLock) {
+-            updateLocked(deviceId, deviceOwnerPackageName, runningPackageUids);
++            if (mClosedDevices.get(deviceId)) {
++                return;
++            }
 +            updateLocked(deviceId, deviceOwnerPackageName, deviceOwnerUid, runningPackageUids);
 +        }
 +    }
 +
 +    /** RoseOS (#156): a closed device runs nothing; its entry and its owner's report are cleared now. */
 +    public void onDeviceClosed(int deviceId) {
-         synchronized (mLock) {
--            updateLocked(deviceId, deviceOwnerPackageName, runningPackageUids);
++        synchronized (mLock) {
 +            final String owner = mDeviceOwnerPackageNames.get(deviceId);
 +            if (owner != null) {
 +                updateLocked(deviceId, owner, mDeviceOwnerUids.get(deviceId, -1), new ArraySet<>());
 +            }
 +            mDeviceViewGenerations.remove(deviceId);
++            mClosedDevices.put(deviceId, true);
          }
      }
  
@@ -630,7 +753,7 @@ index 6cb9f11f..e04e16ae 100644
  
          // userId -> automatedPackages for this device owner.
          // This aggregates packages from all virtual devices associated with the current
-@@ -259,6 +311,170 @@ public final class AutomatedPackagesRepository {
+@@ -259,6 +320,214 @@ public final class AutomatedPackagesRepository {
          }
      }
  
@@ -665,6 +788,50 @@ index 6cb9f11f..e04e16ae 100644
 +        @Override
 +        public int hashCode() {
 +            return Objects.hash(listed, complete, java.util.Arrays.hashCode(packages));
++        }
++    }
++
++    /**
++     * RoseOS (#156): every listed ComputerControl session device whose recorded owner uid is {@code callingUid}, with
++     * its current apps, as one snapshot under mLock at the listener's global generation. Keys: generation (long),
++     * deviceIds (int[], ascending), deviceComplete (boolean[]), appDeviceIds (int[]) and appPackageNames (String[]),
++     * as onAutomatedDeviceAppsChanged reports them. A device stays listed exactly as long as the listener lists it
++     * (running apps, until actually removed). No other owner's device, app or count is ever included.
++     */
++    @NonNull
++    public Bundle ownedAutomatedDevices(int callingUid) {
++        synchronized (mLock) {
++            final ArrayList<Integer> owned = new ArrayList<>();
++            for (int i = 0; i < mDeviceOwnerPackageNames.size(); ++i) {
++                final int deviceId = mDeviceOwnerPackageNames.keyAt(i);
++                if (isListedLocked(deviceId) && mDeviceOwnerUids.get(deviceId) == callingUid) {
++                    owned.add(deviceId);
++                }
++            }
++            final int[] deviceIds = new int[owned.size()];
++            final boolean[] deviceComplete = new boolean[owned.size()];
++            final ArrayList<Integer> appDevices = new ArrayList<>();
++            final ArrayList<String> appPackages = new ArrayList<>();
++            for (int i = 0; i < owned.size(); ++i) {
++                deviceIds[i] = owned.get(i);
++                final DeviceView view = deviceViewLocked(deviceIds[i]);
++                deviceComplete[i] = view.complete;
++                for (String app : view.packages) {
++                    appDevices.add(deviceIds[i]);
++                    appPackages.add(app);
++                }
++            }
++            final int[] appDeviceIds = new int[appDevices.size()];
++            for (int i = 0; i < appDeviceIds.length; ++i) {
++                appDeviceIds[i] = appDevices.get(i);
++            }
++            final Bundle result = new Bundle();
++            result.putLong("generation", mDeviceGeneration);
++            result.putIntArray("deviceIds", deviceIds);
++            result.putBooleanArray("deviceComplete", deviceComplete);
++            result.putIntArray("appDeviceIds", appDeviceIds);
++            result.putStringArray("appPackageNames", appPackages.toArray(new String[0]));
++            return result;
 +        }
 +    }
 +
@@ -801,7 +968,7 @@ index 6cb9f11f..e04e16ae 100644
      private SparseArray<ArraySet<String>> mapUserIdToPackages(
              ArraySet<Pair<Integer, String>> uidPackagePairs) {
          final SparseArray<ArraySet<String>> userIdToPackages = new SparseArray<>();
-@@ -319,7 +535,8 @@ public final class AutomatedPackagesRepository {
+@@ -319,7 +588,8 @@ public final class AutomatedPackagesRepository {
                      // interception of the launch intent, we need to clear the automated packages
                      // repository, then launch, then close the device.
                      synchronized (mLock) {

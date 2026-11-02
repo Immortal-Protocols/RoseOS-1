@@ -44,6 +44,7 @@ python3 os/background-control/tests/test_anyapp_wiring.py
 python3 os/background-control/tests/test_notification_wording.py
 python3 os/background-control/tests/test_preview_wiring.py
 python3 os/background-control/tests/test_current_apps_wiring.py
+python3 os/background-control/tests/test_current_apps_parity.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
