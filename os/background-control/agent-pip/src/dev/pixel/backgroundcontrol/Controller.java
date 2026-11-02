@@ -194,23 +194,37 @@ public final class Controller {
    }
    front=read;
   }catch(Throwable e){front=null;}
-  // The platform's own answer for this session's device (#156 parity), when this OS build has it; otherwise, or when it
-  // fails (SecurityException, IllegalStateException) or is malformed, the session windows above, marked incomplete.
+  // First the platform's snapshot of every session device this controller owns (PR374), independent of any session, so a
+  // failed-close or replacement device is seen exactly as Launcher3 sees it; it is not read while locked.
+  CurrentApps.Owned owned=null;
+  if(!locked)try{
+   Class<?> type=Class.forName(EXT+"ComputerControlExtensions");int version=((Number)type.getMethod("getVersion").invoke(null)).intValue();
+   Object ext=type.getMethod("getInstance",Context.class,int.class).invoke(null,c,version);
+   Bundle b=ext==null?null:(Bundle)type.getMethod("getOwnedAutomatedDevices").invoke(ext);
+   if(b!=null)owned=CurrentApps.owned(b.get("generation"),b.get("deviceIds"),b.get("deviceComplete"),b.get("appDeviceIds"),b.get("appPackageNames"));
+  }catch(Throwable e){owned=null;}
+  // Otherwise the platform's own answer for this session's device (#156 parity), when this OS build has it; otherwise, or
+  // when it fails (SecurityException, IllegalStateException) or is malformed, the session windows above, marked incomplete.
   CurrentApps.Platform platform=null;
-  if(live&&!locked)try{
+  if(owned==null&&live&&!locked)try{
    Bundle b=(Bundle)session.getClass().getMethod("getAutomatedApps").invoke(session);
    if(b!=null)platform=CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
   }catch(Throwable e){platform=null;}
-  CurrentApps.Result r=platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())
+  CurrentApps.Result r=owned!=null?CurrentApps.of(locked,live?target:null,owned,front,c.getPackageName())
+   :platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())
    :CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());
   // generation: the controller's own counter, rising on every change and across session replacement; the platform's
   // per-device generation restarts with each device and is never forwarded.
   String signature=CurrentApps.signature(r,id,status);if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
   boolean listed=CurrentApps.LIVE.equals(r.status);JSONArray apps=new JSONArray();
   for(CurrentApps.App a:r.apps)apps.put(new JSONObject().put("packageName",a.packageName).put("front",a.front).put("target",a.target));
-  return new JSONObject().put("status",r.status).put("sessionId",listed?id:JSONObject.NULL).put("taskId",listed?nullable(taskId):JSONObject.NULL)
-   .put("sessionStatus",listed?status:JSONObject.NULL)
-   .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source).put("apps",apps);
+  // sessionStatus: the held session's status (with owned_devices only informational: it may be cleanup_failed, or null with
+  // no session held); snapshotGeneration: the platform's global generation for an owned-device snapshot, else null.
+  boolean held=listed&&session!=null;
+  return new JSONObject().put("status",r.status).put("sessionId",held?id:JSONObject.NULL).put("taskId",held?nullable(taskId):JSONObject.NULL)
+   .put("sessionStatus",held?status:JSONObject.NULL)
+   .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source)
+   .put("snapshotGeneration",owned!=null?(Object)owned.generation:JSONObject.NULL).put("apps",apps);
  }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");

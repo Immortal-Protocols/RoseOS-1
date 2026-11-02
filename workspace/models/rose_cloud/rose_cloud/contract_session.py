@@ -26,6 +26,15 @@ other check is the same, but instead of reasoning arriving in its separate field
 that no reply carries any reasoning and none has thinking in its content (``noThinking``). An answer the parser moved
 into the reasoning field leaves the content empty, which is the client's ``failed:empty_completion``, never a pass.
 
+Conformance (MODELS-QWEN-SERVE-NOTHINK-001): the ``conformance`` case sends the existing 20-prompt envelope set
+(serving/conformance/prompts.json: 10 chat, 8 calculator launches, 2 not-allowed apps), each as the first turn of a
+fresh client agent (bodies built by that agent, pinned in the fixture), one request each, under the same client
+timeout and run budget. Each prompt's result is compact: verdict, whether it meets its expectation, seconds, completion
+tokens, identity, thinking flags, or why it was not sent. The summary is the existing bar (``existingBarPass``: at
+least ``min_parsed`` parsed, no open_app naming another app, no open_app outside launch prompts) AND, so that a parsed
+envelope never stands in for the right answer, at least ``min_parsed`` replies meeting their expectation
+(``conforming``). Any prompt not sent or timed out counts against both. Nothing is executed.
+
 The result holds fixed tokens, booleans, counts and seconds only: never a prompt, a reply, reasoning text or the
 code word. Standard library only; it runs in the serving image.
 """
@@ -55,7 +64,9 @@ FAILED = ('model_identity_mismatch', 'truncated_reply', 'empty_completion', 'rep
           'unknown_action', 'action_not_allowed', 'malformed_response', 'http_status', 'timeout_response')
 VERDICTS = ('final',) + tuple('open_app:' + a for a in REQUESTS['allowlist']) + tuple('failed:' + k for k in FAILED)
 CASE_REQUESTS = {'chat': ('chat',), 'tool': ('tool',), 'long': ('long',), 'contract': ('chat', 'tool', 'long')}
-CASES = tuple(CASE_REQUESTS)
+CONFORMANCE = REQUESTS['cases']['conformance']
+CONFORMANCE_MIN_PARSED = REQUESTS['conformance_bar']['min_parsed']
+CASES = tuple(CASE_REQUESTS) + ('conformance',)
 FIELDS = ('rose_action', 'type', 'text', 'app_id')
 
 
@@ -246,6 +257,9 @@ def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | No
     deadline = clock() + CASE_BUDGET_S
     r['notRun'] = {}
     r['models'] = check_models(opener, base)
+    r['thinking'] = bool(thinking)
+    if case == 'conformance':
+        return _conformance(r, opener, base, deadline, clock, thinking)
     expected = []
     for name in CASE_REQUESTS[case]:
         r['step'] = name
@@ -271,7 +285,6 @@ def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | No
             r[key] = observe(status, body, req['expect'], req.get('recall'))
             r[key]['seconds'] = round(clock() - t, 2)
     replies = [r[k] for k in REPLIES if k in r]
-    r['thinking'] = bool(thinking)
     r['reasoningSeparated'] = any(x['reasoningChars'] for x in replies) and not any(
         x['thinkInContent'] for x in replies)
     r['noThinking'] = bool(replies) and not any(x['reasoningChars'] or x['thinkInContent'] for x in replies)
@@ -281,5 +294,62 @@ def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | No
         and (r['reasoningSeparated'] if thinking else r['noThinking']) and all(k in r for k in expected)
         and all(x['expectMet'] and x['identityExact'] for x in replies)
         and (case not in ('long', 'contract') or (r['long']['recalled'] and r['long']['beyondProven'])))
+    r['step'] = 'done'
+    return r
+
+
+def conforms(expect: str, v: str) -> bool:
+    """examples/conformance.rs ``conforms``: chat and not-allowed prompts must end in a final, launches in the
+    calculator proposal."""
+    return v == 'final' if expect in ('final', 'no_open_app') else v == expect
+
+
+def _conformance(r: dict, opener, base: str, deadline: float, clock, thinking: bool) -> dict:
+    r['step'] = 'conformance'
+    results, replies = [], []
+    for prompt in CONFORMANCE:
+        if deadline - clock() < REQUEST_TIMEOUT_S:
+            results.append({'notRun': 'budget'})  # it could not get the client's full wait inside this run
+            continue
+        t = clock()
+        try:
+            status, body = _http(opener, 'POST', base + '/v1/chat/completions', prompt['body'].encode())
+            x = observe(status, body, prompt['expect'])
+        except Timeout:
+            x = timed_out(0)
+        x['seconds'] = round(clock() - t, 2)
+        replies.append(x)
+        results.append({'v': x['verdict'], 'ok': conforms(prompt['expect'], x['verdict']), 's': x['seconds'],
+                        'ct': x['completionTokens'], 'id': x['identityExact'], 'to': x['timedOut'],
+                        'rs': bool(x['reasoningChars']), 'tc': bool(x['thinkInContent'])})
+    cats = [p['category'] for p in CONFORMANCE]
+    verdicts = [x.get('v') for x in results]
+    parsed = sum(v in ('final', 'open_app:calculator') for v in verdicts)  # the agent accepted the envelope
+    conforming = sum(bool(x.get('ok')) for x in results)
+    wrong_launch = sum(v is not None and v.startswith('open_app:') and v != 'open_app:calculator' for v in verdicts)
+    unwanted_open = sum(c != 'launch' and v is not None and v.startswith('open_app:') for c, v in zip(cats, verdicts))
+    failures: dict = {}
+    for v in verdicts:
+        if v is not None and v.startswith('failed:'):
+            failures[v[7:]] = failures.get(v[7:], 0) + 1
+    existing = parsed >= CONFORMANCE_MIN_PARSED and wrong_launch == 0 and unwanted_open == 0
+    sent = len(replies)
+    s = {'total': len(CONFORMANCE), 'sent': sent, 'notRun': len(CONFORMANCE) - sent, 'parsed': parsed,
+         'conforming': conforming, 'minParsed': CONFORMANCE_MIN_PARSED, 'wrongLaunchTarget': wrong_launch,
+         'openAppOutsideLaunch': unwanted_open, 'timedOut': sum(x['timedOut'] for x in replies),
+         'failures': failures, 'existingBarPass': existing,
+         'pass': existing and conforming >= CONFORMANCE_MIN_PARSED,
+         'secondsMax': max((x['seconds'] for x in replies), default=None),
+         'secondsTotal': round(sum(x['seconds'] for x in replies), 2)}
+    r['conformance'] = {'summary': s, 'results': results}
+    if s['notRun']:
+        r['notRun']['conformance'] = 'budget'
+    r['reasoningSeparated'] = any(x['reasoningChars'] for x in replies) and not any(
+        x['thinkInContent'] for x in replies)
+    r['noThinking'] = bool(replies) and not any(x['reasoningChars'] or x['thinkInContent'] for x in replies)
+    r['allExpected'] = bool(
+        r['models']['idsExact'] and r['models']['maxModelLen'] == MAX_MODEL_LEN and not s['notRun']
+        and (r['reasoningSeparated'] if thinking else r['noThinking'])
+        and all(x['identityExact'] for x in replies) and s['pass'])
     r['step'] = 'done'
     return r

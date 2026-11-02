@@ -204,7 +204,9 @@ class FakeOpenAI:
     inline_think, wrong_id, no_reasoning, prose, forget, short_prompt, truncate, extra_model, max_model_len, and
     delay_s ({kind: seconds}, see ``kind``) holds a reply back. With thinking off (``nothink``, as a server with
     --default-chat-template-kwargs '{"enable_thinking": false}' and the qwen3 parser) no reasoning is returned;
-    ``misroute`` puts the whole answer in the reasoning field (a parser that ignored the setting)."""
+    ``misroute`` puts the whole answer in the reasoning field (a parser that ignored the setting). ``answers`` maps a
+    user text to a scripted reply ('final', 'open_app:<id>', 'prose' or 'malformed'), and ``text_delay_s`` a user text
+    to seconds, for the conformance prompts."""
 
     THINKING = 'SECRET-FAKE-THINKING about the request'
 
@@ -267,8 +269,13 @@ class FakeOpenAI:
         time.sleep((m.get('delay_s') or {}).get(self.kind(body), 0))  # a slow reply: generation still running
         last = json.loads(body['messages'][-1]['content'])
         text = last.get('text', '')
+        time.sleep((m.get('text_delay_s') or {}).get(text, 0))
         everything = json.dumps(body['messages'])
-        if last.get('rose_event') == 'tool_result':
+        scripted = (m.get('answers') or {}).get(text)
+        if scripted is not None:
+            envelope = ({'type': 'final', 'text': 'Scripted reply.'} if scripted in ('final', 'prose', 'malformed')
+                        else {'type': 'open_app', 'app_id': scripted.split(':', 1)[1]})
+        elif last.get('rose_event') == 'tool_result':
             envelope = {'type': 'final', 'text': 'Opening the calculator was requested.'}
         elif 'calculator' in text.lower():
             envelope = {'type': 'open_app', 'app_id': 'calculator'}
@@ -277,6 +284,10 @@ class FakeOpenAI:
         else:
             envelope = {'type': 'final', 'text': 'Hello, I am Rose.'}
         content = json.dumps({'rose_action': 'local-agent-v1', **envelope})
+        if scripted == 'prose':
+            content = 'Sure! ' + content
+        elif scripted == 'malformed':
+            content = content[:-1]
         if m.get('prose'):
             content = 'Sure! ' + content
         message = {'role': 'assistant', 'content': content}
