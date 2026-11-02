@@ -183,11 +183,11 @@
     "images": "IMAGES/{partition}.img: every A/B partition outside dynamic_partition_list that has one must appear byte-equal as {partition}.img",
     "firmware": "RADIO/bootloader.img and RADIO/radio.img must equal the factory bootloader-/radio- images (generator anchors). VENDOR/firmware/dauntless/* must appear byte-equal at the archive top level. An A/B partition without an IMAGES/ entry counts as firmware-carried only when a roseos.factory-firmware-observation.v1 bound to the bootloader/radio digests lists it",
     "dynamic": "dynamic_partition_list partitions: super_1..N.img rebuilt with simg2img and unpacked with lpunpack from the hash-pinned otatools archive (as the historical verify-factory-mustang.py did), the unpacked set and each logical image byte-equal to target-files IMAGES/{partition}.img (flattened with simg2img when sparse); _b outputs must be empty",
-    "layoutStatus": "generator and optimizer pinned; target-files and update-zip content unobserved",
+    "layoutStatus": "generator and optimizer pinned; historical target-files identity recorded; names-only member list and update-zip content unobserved",
     "layoutBasis": "The generator (device_common 1f5ba267) and optimize-factory-image (platform_system_core 322ff512) behaviour is pinned. No Frankel or Rango target-files, img zip or fastboot-info.txt listing is in this repository; a missing entry refuses, it never passes.",
     "observation": "roseos.target-files-observation.v2 from `factory-package.py observe`: target-files sha256 and the names of META/ IMAGES/ RADIO/ OTA/ VENDOR/firmware/ members, delivered by release through its normal receipt path",
     "observed": [],
-    "observedBasis": "No real signed target-files observation has been delivered yet; synthetic test observations are never listed here.",
+    "observedBasis": "No `factory-package.py observe` names-only observation (roseos.target-files-observation.v2) is checked in, so classify still cannot bind a target-files to one. The historical inspection below records identity facts only, not the member list.",
     "generatorFixture": {
       "project": "device/common",
       "revision": "1f5ba2671e4b04e3bd8899b3df2c5e30a894b35c",
@@ -213,7 +213,45 @@
         "fastboot/fastboot_driver.cpp": "13c4828b58c43b2dc8bda096a3be8a7e9b3bb53e476208d2a627e6b47349cd84"
       },
       "excerptSha256": "969ca10af5da76a65eb44a1ec74e75fc0384faa66a4dddd1e5e0ebadd98d4432"
-    }
+    },
+    "historicalObservations": [
+      {
+        "historical": true,
+        "source": "original Infra authorized historical artifact inspection, turn 01a199bb-0783-76a4-ab00-c04459a231da (ZIP hashes and internal checksums verified there; no artifact reread or raw logs in this repository)",
+        "run": 41265984964,
+        "artifact": 13067510533,
+        "artifactZipSha256": "2f51fbc8f86343b46f21603f9bc77306d84bd858a028fffe88ac850b6e194d58",
+        "build": "2026103001",
+        "targetFiles": {
+          "role": "signed target-files",
+          "sha256": "73db76e500bcb71757da6dbc43337067af23395a38eaac940b9ae7d5aca0baf0",
+          "bytes": 4927914252,
+          "realMembers": 2874,
+          "includesMembersFor": [
+            "bootloader",
+            "radio",
+            "firmware"
+          ]
+        },
+        "otatools": {
+          "sha256": "22d62464ff3fa74fe3fa2b4c118bba116bc3a3aa504feddcdcf38fc3f3cbb664",
+          "sha256From": "os/retained-rango/release.json signing.otatoolsProvenance.sha256"
+        },
+        "fastboot": {
+          "sha256": "f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9",
+          "versionExit": 0,
+          "version": "37.0.0-2026103001"
+        },
+        "doesNotEstablish": [
+          "current host, install, boot or phone safety",
+          "a names-only member list for classify (no observe output exists)",
+          "carried-partition mapping (firmware member hashes are not a roseos.factory-firmware-observation.v1)",
+          "an optimized install archive or super validation",
+          "an archive SSH signing identity (factorySigning stays null; the AVB pin is not that key)",
+          "factory or first-install readiness"
+        ]
+      }
+    ]
   },
   "installSemantics": {
     "abUpdate": true,
@@ -261,12 +299,12 @@
     {
       "input": "names-only observation of a signed rango target-files",
       "owner": "release (normal receipt path)",
-      "next": "run `factory-package.py observe` in the next already-needed admitted signed-output operation; list the receipt in inventory.observed"
+      "next": "the 2026103001 signed target-files identity (73db76e5…0baf0, 4,927,914,252 bytes, 2,874 members) is recorded historically; its names-only `factory-package.py observe` output still has to come through release's normal receipt path"
     },
     {
       "input": "firmware observation of bootloader/radio carried partitions",
       "owner": "signing (factory generator output mapping)",
-      "next": "emit roseos.factory-firmware-observation.v1 from the generator's own inputs alongside the install archive"
+      "next": "emit roseos.factory-firmware-observation.v1 from the generator's own inputs alongside the install archive; the historical bootloader/radio/firmware member hashes are not this mapping"
     },
     {
       "input": "physical first-install acceptance on a Pixel 10 Pro Fold",

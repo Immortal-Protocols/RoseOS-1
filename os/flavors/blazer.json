@@ -86,7 +86,41 @@
       ],
       "status": "not in this repository",
       "basis": "os/pinned-manifest.xml device_common; generate-release.sh sources both. The install-archive member names here follow the historical mustang layout until these are reviewed fixtures"
-    }
+    },
+    "historicalObservations": [
+      {
+        "historical": true,
+        "source": "original Infra authorized historical artifact inspection (Pro run diagnostic; no artifact reread or raw logs in this repository)",
+        "run": 41255851279,
+        "artifact": 13063685882,
+        "artifactZipSha256": "8218c2671c8c62d0fb3389f01ed66f0b55efb064e1d40669c3056c707b8b7d5e",
+        "observed": [
+          "build-only configuration",
+          "laguna kernel pin",
+          "adevtool vendor pins"
+        ],
+        "absent": [
+          "blazer-cp3a.261005.005-factory-cd7d12c2.zip (expected sha256 cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3)",
+          "unpacked factory image",
+          "vendor/google_devices/blazer",
+          "product registration",
+          "firmware metadata"
+        ],
+        "notExecuted": [
+          "lunch blazer-cur-user",
+          "make"
+        ],
+        "unknown": [
+          "Node"
+        ],
+        "doesNotEstablish": [
+          "a generated vendor tree or lunch result",
+          "a build, signing or publication",
+          "factory or first-install readiness",
+          "current host capacity"
+        ]
+      }
+    ]
   },
   "installSemantics": {
     "abUpdate": true,
@@ -113,14 +147,19 @@
   },
   "missingForFactory": [
     {
-      "input": "build-only recipe for blazer-cur-user (vendor extraction from the indexed factory image, lunch probe, build)",
-      "owner": "OS Flavors / Infra (build sequencing)",
-      "next": "add a blazer build-only recipe (as scripts/rango-build-only.py is for rango); the lunch probe stays notExecuted until it runs on an admitted builder"
+      "input": "build-only recipe run (os/build-only/blazer.json via scripts/blazer-build-only.py): generate and compile not executed",
+      "owner": "Infra (operator, admitted builder)",
+      "next": "on an admitted builder: download and verify the pinned factory image, generate vendor/google_devices/blazer (product registration, firmware metadata), then lunch and compile; the historical Pro run 41255851279 observed only configuration and pins"
+    },
+    {
+      "input": "operator capacity inputs for the recipe (capacity.generateAllowanceBytes and compileAllowanceBytes, null) and the host Node version",
+      "owner": "Infra (operator)",
+      "next": "measure on the operator's host as the recipe already requires; unresolved, not estimated, and no new gate here"
     },
     {
       "input": "vendor factory image blazer-cp3a.261005.005-factory-cd7d12c2.zip (sha256 cd7d12c2…18e3)",
       "owner": "Infra (builder inputs)",
-      "next": "download and verify against the pinned sha256 on the builder; never in this repository"
+      "next": "download and verify against the pinned sha256 on the builder (absent in historical Pro run 41255851279); never in this repository"
     },
     {
       "input": "blazer signing identity (OTA certificate and AVB key)",
@@ -148,9 +187,9 @@
       "next": "emit roseos.factory-firmware-observation.v1 alongside the install archive"
     },
     {
-      "input": "device/common generator fixtures at 1f5ba267",
-      "owner": "Chief (upstream fixture scope)",
-      "next": "admit generate-factory-images-common.sh and clear-factory-images-variables.sh as reviewed fixtures"
+      "input": "pinned generator and optimizer layout in this contract (artifacts.factory.generatorMembers/optimizeMembers, inventory.generatorFixture/optimizeFixture)",
+      "owner": "OS Flavors",
+      "next": "adopt the device_common 1f5ba267 and platform_system_core 322ff512 fixtures as frankel/rango do; until then classify reports `contract:blazer pinned generator layout` and no blazer archive can complete"
     },
     {
       "input": "physical first-install acceptance on a Pixel 10 Pro",
@@ -166,5 +205,13 @@
     "owner": "signing (Chief approval for any new identity)",
     "basis": "generate-release.sh signs {device}-install-{build}.zip with ssh-keygen -Y sign -n \"factory images\" -f $KEY_DIR/id_ed25519 only when that key exists; os/signing-bootstrap/profiles.json: id_ed25519 is optional and not produced by generate-keys. No RoseOS factory-signing public key exists in approved inventory, so signatureVerified cannot pass. Never generated here and never derived from OTA/AVB keys.",
     "verifier": "ssh-keygen -Y verify -f <allowed_signers from this pin only> -I principal -n \"factory images\" -s ARCHIVE.sig"
+  },
+  "buildRoute": {
+    "recipe": "os/build-only/blazer.json",
+    "tool": "scripts/blazer-build-only.py",
+    "integration": "os/build-only/blazer-reconcile.json",
+    "integrationTool": "scripts/blazer_integration.py",
+    "updaterRoute": "os/build-only/blazer-updater-route.json",
+    "basis": "References only: those files own the build-only recipe, Rose integration admission and the approved Updater route; nothing is duplicated here."
   }
 }

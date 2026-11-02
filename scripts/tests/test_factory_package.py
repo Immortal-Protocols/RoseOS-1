@@ -216,6 +216,7 @@ class Fixture(unittest.TestCase):
         # A repository copy pinned to synthetic AVB keys and (when ssh-keygen exists) a throwaway factory-signing key.
         self.root = self.tmp/'repo'
         for rel in ('os/flavors/frankel.json', 'os/flavors/rango.json', 'os/flavors/blazer.json', 'os/devices/pixel10.json',
+                    'os/retained-rango/release.json',
                     'os/release-pipeline/frankel.json', 'scripts/tests/fixtures/permission-apex/script/generate-release.sh') + tuple(
                     f'scripts/tests/fixtures/factory-package/device_common-1f5ba267/{f}'
                     for f in ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')) + tuple(
@@ -903,6 +904,78 @@ class Optimizer(Fixture):
         ok = self.classify(self.write('a.zip', install('rango', replace={'vendor_boot.img': sparse_image(aligned)})), 'rango', tf)
         self.assertTrue(ok['factoryReady'], ok)
         self.assertEqual(ok['content']['sparseImages']['vendor_boot']['sha256'], hashlib.sha256(aligned).hexdigest())
+
+class Historical(Fixture):
+    """FLAVOR-HIST: historical inspection facts recorded without becoming readiness, layout or safety evidence."""
+    def test_rango_records_the_fold_artifact_identity_only(self):
+        rango = fp.load_flavor('rango')
+        [entry] = rango['inventory']['historicalObservations']
+        self.assertEqual((entry['run'], entry['artifact'], entry['build']), (41265984964, 13067510533, '2026103001'))
+        self.assertEqual(entry['artifactZipSha256'], '2f51fbc8f86343b46f21603f9bc77306d84bd858a028fffe88ac850b6e194d58')
+        self.assertEqual(entry['targetFiles'], {'role': 'signed target-files', 'sha256': '73db76e500bcb71757da6dbc43337067af23395a38eaac940b9ae7d5aca0baf0',
+                         'bytes': 4927914252, 'realMembers': 2874, 'includesMembersFor': ['bootloader', 'radio', 'firmware']})
+        self.assertEqual(entry['fastboot'], {'sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9',
+                                             'versionExit': 0, 'version': '37.0.0-2026103001'})
+        release = json.loads((ROOT/'os/retained-rango/release.json').read_text())
+        self.assertEqual(entry['otatools']['sha256'], release['signing']['otatoolsProvenance']['sha256'])
+        self.assertEqual(entry['build'], release['target']['build'])
+        self.assertLessEqual(entry['targetFiles']['bytes'], release['input']['limits']['targetFilesBytes'])
+        # Not a names-only observation, not an archive signing key, not readiness.
+        self.assertEqual(rango['inventory']['observed'], [])
+        self.assertEqual((rango['factorySigning']['principal'], rango['factorySigning']['publicKey']), (None, None))
+        self.assertNotIn(fp.pinned_avb_key(rango), json.dumps(entry))
+        self.assertEqual([r['factoryReady'] for r in rango['retained']], [False])
+        self.assertTrue(any('archive SSH signing identity' in x for x in entry['doesNotEstablish']))
+        self.assertTrue(any('carried-partition mapping' in x for x in entry['doesNotEstablish']))
+        self.assertIn('No `factory-package.py observe` names-only observation', rango['inventory']['observedBasis'])
+
+    def test_blazer_records_the_pro_run_and_references_the_existing_route(self):
+        blazer = fp.load_flavor('blazer')
+        [entry] = blazer['inventory']['historicalObservations']
+        self.assertEqual((entry['run'], entry['artifact']), (41255851279, 13063685882))
+        self.assertEqual(entry['artifactZipSha256'], '8218c2671c8c62d0fb3389f01ed66f0b55efb064e1d40669c3056c707b8b7d5e')
+        self.assertEqual((entry['notExecuted'], entry['unknown']), (['lunch blazer-cur-user', 'make'], ['Node']))
+        recipe = json.loads((ROOT/blazer['buildRoute']['recipe']).read_text())
+        self.assertIn(f"{recipe['factory']['file']} (expected sha256 {recipe['factory']['sha256']})", entry['absent'])
+        for key in ('recipe', 'tool', 'integration', 'integrationTool', 'updaterRoute'):
+            self.assertTrue((ROOT/blazer['buildRoute'][key]).is_file(), key)
+        self.assertEqual((recipe['capacity']['generateAllowanceBytes'], recipe['capacity']['compileAllowanceBytes']), (None, None))
+        inputs = [m['input'] for m in blazer['missingForFactory']]
+        self.assertTrue(any(i.startswith('operator capacity inputs') for i in inputs))
+        self.assertFalse(any(i.startswith('build-only recipe for blazer-cur-user') for i in inputs), 'the recipe already exists')
+        text = json.dumps(blazer)
+        for absent in ('S007', 'S008', 'peak'):
+            self.assertNotIn(absent, text)
+        self.assertEqual((blazer['readiness']['buildReady'], blazer['readiness']['receipts']), (False, []))
+
+    def test_historical_entries_are_validated(self):
+        original = (self.root/'os/flavors/rango.json').read_text()
+        cases = ((lambda e: e.update(historical=False), 'must be an object with historical: true'),
+                 (lambda e: e.pop('source'), 'must be an object with historical: true and a source'),
+                 (lambda e: e.update(doesNotEstablish=[]), 'doesNotEstablish must list'),
+                 (lambda e: e['targetFiles'].update(sha256='73DB'), r'targetFiles.sha256 is not a sha256'),
+                 (lambda e: e.update(artifactZipSha256=None), 'artifactZipSha256 is not a sha256'),
+                 (lambda e: e['fastboot'].update(factoryReady=False), 'fastboot.factoryReady: a historical observation makes no readiness'),
+                 (lambda e: e.update(safe=True), r'\.safe: a historical observation makes no readiness or safety claim'),
+                 (lambda e: e['otatools'].update(sha256='0' * 64), 'otatools.sha256From .* does not equal its sha256'),
+                 (lambda e: e['otatools'].update(sha256From='os/retained-rango/release.json signing.missing'), 'does not resolve'),
+                 (lambda e: e['otatools'].update(sha256From='prose'), 'does not equal its sha256'),
+                 (lambda e: e['otatools'].update(sha256From=['x']), 'otatools.sha256From is not text'))
+        for change, pattern in cases:
+            (self.root/'os/flavors/rango.json').write_text(original)
+            self.edit_json('os/flavors/rango.json', lambda d: change(d['inventory']['historicalObservations'][0]))
+            with self.assertRaisesRegex(fp.ContractError, r'rango: historicalObservations\[0\].*' + pattern):
+                fp.load_flavor('rango', self.root)
+        (self.root/'os/flavors/rango.json').write_text(original)
+        self.edit_json('os/flavors/rango.json', lambda d: d['inventory'].update(historicalObservations={}))
+        with self.assertRaisesRegex(fp.ContractError, 'historicalObservations must be a list'):
+            fp.load_flavor('rango', self.root)
+        self.assertNotIn('historicalObservations', fp.load_flavor('frankel', self.root)['inventory'])
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_historical_identity_never_stands_in_for_an_observation(self):
+        archive, tf = self.complete('rango')
+        self.refused(self.classify(archive, 'rango', tf, target_files_observation=None), 'target-files-observation (release:')
 
 if __name__ == '__main__':
     unittest.main()
