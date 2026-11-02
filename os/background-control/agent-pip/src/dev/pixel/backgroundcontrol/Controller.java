@@ -194,12 +194,20 @@ public final class Controller {
    }
    front=read;
   }catch(Throwable e){front=null;}
-  CurrentApps.Result r=CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());
+  // The platform's own answer for this session's device (#156 parity), when this OS build has it; otherwise, or when it
+  // fails (SecurityException, IllegalStateException) or is malformed, the session windows above, marked incomplete.
+  CurrentApps.Platform platform=null;
+  if(live&&!locked)try{
+   Bundle b=(Bundle)session.getClass().getMethod("getAutomatedApps").invoke(session);
+   if(b!=null)platform=CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
+  }catch(Throwable e){platform=null;}
+  CurrentApps.Result r=platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())
+   :CurrentApps.of(locked,session!=null,status,blocked,target,front,c.getPackageName());
   String signature=CurrentApps.signature(r,id);if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
   boolean listed=CurrentApps.LIVE.equals(r.status);JSONArray apps=new JSONArray();
   for(CurrentApps.App a:r.apps)apps.put(new JSONObject().put("packageName",a.packageName).put("front",a.front).put("target",a.target));
   return new JSONObject().put("status",r.status).put("sessionId",listed?id:JSONObject.NULL).put("taskId",listed?nullable(taskId):JSONObject.NULL)
-   .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("apps",apps);
+   .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source).put("apps",apps);
  }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");
