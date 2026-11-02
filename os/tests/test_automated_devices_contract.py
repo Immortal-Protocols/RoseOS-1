@@ -19,9 +19,11 @@ sys.path.insert(0, str(ROOT/'scripts'))
 from background_apks import BACKGROUND_FRAMEWORK_PATCHES  # noqa: E402
 
 FIXTURES = ROOT/'os/tests/fixtures/automated-devices'
+SESSION_FIXTURES = ROOT/'os/tests/fixtures/background-control'
 HARNESS = ROOT/'os/tests/automated-devices'
 VIRTUAL = 'services/companion/java/com/android/server/companion/virtual'
 CORE = 'core/java/android/companion/virtual'
+EXTENSIONS = 'libs/computercontrol/src/com/android/extensions/computercontrol'
 FILES = {
     f'{VIRTUAL}/computercontrol/AutomatedPackagesRepository.java': 'f2b05ab0175a387a29ae9c4c3ba1781df1e9b4d7c013eeeab3460365bbdeecc0',
     f'{CORE}/computercontrol/IAutomatedPackageListener.aidl': 'f517dec31a738885227ffb7271be38f14f5acc904e3a164ca624e52ef153a5da',
@@ -29,7 +31,26 @@ FILES = {
     f'{CORE}/VirtualDeviceManager.java': '71fcaaea4eb03c53c6f89b4803c56014fe31218acef5a3d396ffc143e7185e1f',
     f'{VIRTUAL}/VirtualDeviceManagerService.java': '2ce9b1b44835e5ed2ee3e66a1cfe49d5d976e9961f605787ba7bf116850afd2e',
     f'{VIRTUAL}/VirtualDeviceImpl.java': 'c7ad5bcd9dfda3735522c6bf0e737d0c8e7fd36cf3450f37a049962e8b6c40c8',
+    f'{CORE}/computercontrol/IComputerControlSession.aidl': '83aea3fbe508f0b0a03f62f8907998bb0dba362bbbaf421b867e5f4207edeaa4',
+    f'{CORE}/computercontrol/ComputerControlSession.java': '3ab33c355e774bcd00a7f3ee9692438ee5a48a53df464f3da577cce7b601fb59',
+    f'{EXTENSIONS}/ComputerControlSession.java': '8c61474247ec68de7f1e50a4f15d248627a5e38013846743fcd9a74c8b67939b',
+    f'{VIRTUAL}/computercontrol/ComputerControlSessionImpl.java': '66447d84e061d2a0304f51f9e06fa45032db3f2a1e5ac035689cb4522fd0f735',
+    f'{VIRTUAL}/computercontrol/ComputerControlSessionProcessor.java': 'b0ace1a81f4c49dbcfb724d16951ac717684ab4a6ee97f6ea58ae7c850ebbf52',
 }
+# #156 parity: created by the patch (no pinned original).
+CREATED = (f'{CORE}/computercontrol/AutomatedApps.java', f'{CORE}/computercontrol/AutomatedApps.aidl')
+
+def fixture(path):
+    """The pinned original of a frameworks/base path: its own fixture name, or the shared ComputerControl fixtures."""
+    name = Path(path).name
+    if path.startswith(EXTENSIONS):
+        return FIXTURES/('Extensions' + name)
+    if name in ('ComputerControlSessionImpl.java', 'ComputerControlSessionProcessor.java'):
+        return SESSION_FIXTURES/name
+    return FIXTURES/name
+
+def key(path):
+    return ('Extensions' if path.startswith(EXTENSIONS) else '') + Path(path).name
 
 def flat(text):
     return re.sub(r'\s+', ' ', text)
@@ -51,14 +72,14 @@ class AutomatedDevicesContractTest(unittest.TestCase):
         cls.tree = cls.tmp/'frameworks-base'
         for path in FILES:
             (cls.tree/path).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(FIXTURES/Path(path).name, cls.tree/path)
+            shutil.copyfile(fixture(path), cls.tree/path)
         subprocess.run(['git', 'init', '-q', str(cls.tree)], check=True)
         cls.applied = []
         for patch in BACKGROUND_FRAMEWORK_PATCHES:
-            result = subprocess.run(['git', '-C', str(cls.tree), 'apply', *[f'--include={p}' for p in FILES],
+            result = subprocess.run(['git', '-C', str(cls.tree), 'apply', *[f'--include={p}' for p in (*FILES, *CREATED)],
                 str(ROOT/'os/patches'/patch)], capture_output=True, text=True)
             cls.applied.append((patch, result.returncode, result.stderr))
-        cls.source = {Path(p).name: (cls.tree/p).read_text() for p in FILES}
+        cls.source = {key(p): (cls.tree/p).read_text() for p in (*FILES, *CREATED)}
 
     @classmethod
     def tearDownClass(cls):
@@ -66,13 +87,16 @@ class AutomatedDevicesContractTest(unittest.TestCase):
 
     def test_fixtures_are_pinned_and_the_patch_applies_cleanly(self):
         for path, digest in FILES.items():
-            self.assertEqual(hashlib.sha256((FIXTURES/Path(path).name).read_bytes()).hexdigest(), digest, path)
+            self.assertEqual(hashlib.sha256(fixture(path).read_bytes()).hexdigest(), digest, path)
         for patch, code, stderr in self.applied:
             self.assertEqual(code, 0, f'{patch}: {stderr}')
         markers = {'AutomatedPackagesRepository.java': 'notifyAutomatedDevicesChangedLocked',
             'IAutomatedPackageListener.aidl': 'onAutomatedDevicesChanged', 'AutomatedPackageListener.java': 'onAutomatedDevicesChanged',
             'VirtualDeviceManager.java': 'onAutomatedDevicesChanged', 'VirtualDeviceManagerService.java': 'onDeviceClosed',
-            'VirtualDeviceImpl.java': 'mOwnerUid, runningUids'}
+            'VirtualDeviceImpl.java': 'mOwnerUid, runningUids', 'IComputerControlSession.aidl': 'getAutomatedApps',
+            'ComputerControlSession.java': 'getAutomatedApps', 'ExtensionsComputerControlSession.java': 'getAutomatedApps',
+            'ComputerControlSessionImpl.java': 'getAutomatedApps', 'ComputerControlSessionProcessor.java': 'setAutomatedPackagesRepository',
+            'AutomatedApps.java': 'class AutomatedApps implements Parcelable', 'AutomatedApps.aidl': 'parcelable AutomatedApps;'}
         for name, marker in markers.items():
             self.assertTrue(marker in self.source[name], f'{name} lacks {marker}')
 
@@ -83,7 +107,8 @@ class AutomatedDevicesContractTest(unittest.TestCase):
         (generated/'IAutomatedPackageListener.java').write_text(aidl_to_java(self.source['IAutomatedPackageListener.aidl']))
         sources = [str(p) for p in sorted((HARNESS/'stubs').rglob('*.java'))] + [str(generated/'IAutomatedPackageListener.java'),
             str(self.tree/VIRTUAL/'computercontrol/AutomatedPackagesRepository.java'),
-            str(self.tree/CORE/'computercontrol/AutomatedPackageListener.java'), str(HARNESS/'AutomatedDevicesContractTest.java')]
+            str(self.tree/CORE/'computercontrol/AutomatedPackageListener.java'), str(self.tree/CORE/'computercontrol/AutomatedApps.java'),
+            str(HARNESS/'AutomatedDevicesContractTest.java')]
         compiled = subprocess.run([sys.executable and 'java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-nowarn',
             '-d', str(build/'classes'), *sources], capture_output=True, text=True)
         self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -132,6 +157,64 @@ class AutomatedDevicesContractTest(unittest.TestCase):
         for call in re.findall(r'onAutomatedDevicesChanged\(\s*generation,[^;]*;', repository):
             self.assertEqual(flat(call), 'onAutomatedDevicesChanged( generation, snapshot.deviceIds, snapshot.ownerPackages, '
                 'snapshot.ownerUids);')
+
+    def test_listener_apps_callback_is_one_source_with_the_devices(self):
+        listener = flat(self.source['AutomatedPackageListener.java'])
+        self.assertIn('@hide */ default void onAutomatedDeviceAppsChanged(long generation, @NonNull int[] deviceIds, '
+            '@NonNull String[] ownerPackages, @NonNull int[] ownerUids, @NonNull boolean[] deviceComplete, '
+            '@NonNull int[] appDeviceIds, @NonNull String[] appPackageNames) {}', listener)
+        self.assertIn('void onAutomatedDeviceAppsChanged(long generation, in int[] deviceIds, in String[] ownerPackages, '
+            'in int[] ownerUids, in boolean[] deviceComplete, in int[] appDeviceIds, in String[] appPackageNames);',
+            flat(self.source['IAutomatedPackageListener.aidl']))
+        repository = flat(self.source['AutomatedPackagesRepository.java'])
+        dispatch = repository[repository.index('private static void dispatchSnapshot('):]
+        self.assertLess(dispatch.index('listener.onAutomatedDevicesChanged('), dispatch.index('listener.onAutomatedDeviceAppsChanged('),
+            'devices then apps, one generation, one dispatch')
+        self.assertEqual(repository.count('mHandler.post(() -> dispatchSnapshot('), 1, 'registration posts the shared dispatch')
+        self.assertIn('dispatchSnapshot(listeners.get(i), generation, snapshots.get(i));', repository)
+        self.assertIn('mDeviceViewGenerations', repository)
+
+    def test_session_read_is_owner_only_closed_sticky_and_from_the_same_repository(self):
+        session = flat(self.source['ComputerControlSessionImpl.java'])
+        read = session[session.index('public android.companion.virtual.computercontrol.AutomatedApps getAutomatedApps() {'):]
+        read = read[:read.index('void close(@ComputerControlSession.SessionCloseReason int closeReason)')]
+        self.assertTrue(read.index('if (Binder.getCallingUid() != ownerUid) { throw new SecurityException(')
+            < read.index('if (mAutomatedAppsClosed)') < read.index('repository.automatedAppsForDevice(mVirtualDeviceId, ownerUid)'),
+            'owner check, then closed, then only this session\'s device')
+        self.assertIn('return mAutomatedAppsClosed ? android.companion.virtual.computercontrol.AutomatedApps.closed(', read,
+            'a close that raced the read wins')
+        self.assertIn('throw new IllegalStateException("Automated apps are unavailable for this session");', read)
+        close = session[session.index('void close(@ComputerControlSession.SessionCloseReason int closeReason) {'):]
+        self.assertTrue(close.startswith('void close(@ComputerControlSession.SessionCloseReason int closeReason) { '
+            'mAutomatedAppsClosed = true;'), 'every close path marks the session closed first')
+        self.assertNotIn('mAutomatedAppsClosed = false', session, 'closed is never cleared')
+        processor = flat(self.source['ComputerControlSessionProcessor.java'])
+        self.assertLess(processor.index('session.setAutomatedPackagesRepository(mAutomatedPackagesRepository);'),
+            processor.index('mSessions.add(session);'), 'the repository is set before the session is published')
+        service = flat(self.source['VirtualDeviceManagerService.java'])
+        self.assertLess(service.index('mAutomatedPackagesRepository = new AutomatedPackagesRepository(mHandler);'),
+            service.index('mComputerControlSessionProcessor.setAutomatedPackagesRepository(mAutomatedPackagesRepository);'))
+        self.assertIn('AutomatedApps getAutomatedApps();', self.source['IComputerControlSession.aidl'])
+        self.assertIn('@hide */ @NonNull public AutomatedApps getAutomatedApps() { try { return mSession.getAutomatedApps();',
+            flat(self.source['ComputerControlSession.java']))
+        # The agent reaches the session through the extensions library, which cannot hand it the hidden AutomatedApps
+        # class: the wrapper returns a public Bundle with exactly these keys and types (agreed with App Core).
+        extension = flat(self.source['ExtensionsComputerControlSession.java'])
+        self.assertIn('@hide */ @NonNull public android.os.Bundle getAutomatedApps() {', extension)
+        method = extension[extension.index('public android.os.Bundle getAutomatedApps() {'):]
+        method = method[:method.index('return result; }') + len('return result; }')]
+        self.assertEqual(method, 'public android.os.Bundle getAutomatedApps() { '
+            'final android.companion.virtual.computercontrol.AutomatedApps apps = mSession.getAutomatedApps(); '
+            'final android.os.Bundle result = new android.os.Bundle(); '
+            'result.putLong("generation", apps.getGeneration()); '
+            'result.putStringArray("packageNames", apps.getPackageNames()); '
+            'result.putInt("userId", apps.getUserId()); '
+            'result.putBoolean("complete", apps.isComplete()); '
+            'result.putBoolean("closed", apps.isClosed()); '
+            'return result; }')
+        self.assertNotIn('public android.companion.virtual.computercontrol.AutomatedApps getAutomatedApps()', extension)
+        # The extension's public API file is untouched: the method is @hide, as is the platform client's.
+        self.assertNotIn('api_extension', (ROOT/'os/patches/background-control-modern-frameworks-base.patch').read_text())
 
 if __name__ == '__main__':
     unittest.main()
