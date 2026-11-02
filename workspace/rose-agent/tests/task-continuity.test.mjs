@@ -148,32 +148,30 @@ test('W1: the generic phone-command path claims the id before posting and never 
  assert.equal((voice.match(/savePhoneResult\(saved,id,result\);\s*final JSONObject completed=result;/g)||[]).length,1,'the posted action still saves its real result first');
 });
 
-test('Rose\'s apps opens the managed workspace overview: read-only tasks, one workspace, no guessed Watch or Stop (MANAGED-WORKSPACE-OVERVIEW-001)',()=>{
+test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never task history (#225/#156)',()=>{
  const activity=source('RoseConversationActivity.java');
  const block=activity.slice(activity.indexOf('// ---------- Managed workspace overview'),activity.indexOf('/** Confirms Stop for the task shown now.'));
  assert.ok(block.length>500,'the overview section is found');
  assert.match(activity,/agents\.setOnClickListener\(v->openOverview\(\)\)/,'the well opens the overview');
- assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,WorkspaceOverviewPanel\.State\.INSTANCE,ivory\?new ConversationDrawing\.IvoryBackground\(this\):null,statusInset\(\)\)/,'selection and a pending Stop live in the process-wide state');
+ assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,ivory\?new ConversationDrawing\.IvoryBackground\(this\):null,statusInset\(\)\)/);
  assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
- // Tasks only from Core's onLocalTasks feed; never the backend projection or an open session.
- assert.match(block,/public java\.util\.List<WorkspaceOverview\.Task> tasks\(\)\{return WorkspaceOverviewFeed\.tasks\(\);\}/);
- assert.match(block,/public WorkspaceOverview\.Scope scope\(\)\{return WorkspaceOverviewFeed\.scope\(\);\}/);
+ // Membership: the controller's own session read as one complete snapshot, a new registration per screen.
+ assert.match(block,/final String appsRegistration="controller-"\+java\.util\.UUID\.randomUUID\(\);/);
+ assert.match(block,/return CurrentApps\.fromController\(appsRegistration,appsGeneration,failure,r\.status,r\.sessionId,r\.taskId,pkg,m\.watchRow==null\?null:m\.watchRow\.binding\);/,'tasks are consulted only for an explicitly verified binding');
+ assert.match(block,/public CurrentApps\.Snapshot currentApps\(\)\{return RoseConversationActivity\.this\.currentApps\(\);\}/);
  assert.ok(!/taskStateJson/.test(block),'the overview never reads the backend task projection');
- // No Stop transport exists: Stop is unavailable and nothing is sent.
- assert.match(block,/public boolean stopRoute\(\)\{return false;\}/);
- assert.match(block,/public void stop\(WorkspaceOverview\.Identity task\)\{\}/);
- assert.ok(!/task\/stop|sendStop|localRoseStop/.test(block),'the overview sends no Stop');
- // Watch: fresh read after the tap, the binding the row showed, the one bound launch.
+ assert.ok(!/task\/stop|sendStop|localRoseStop|stopRoute/.test(block),'the overview sends no Stop');
+ const panel=source('WorkspaceOverviewPanel.java'),view=source('WorkspaceOverviewView.java');
+ assert.ok(!/taskCard|WorkspaceOverview\.Row|\.rows\b/.test(view+panel),'no task or result cards on the current-app surface');
+ assert.match(panel,/apps\.apply\(source==null\?null:source\.currentApps\(\)\);/,'shown only through CurrentApps\' rules');
+ // Watch: fresh read after the tap; only the app's own handle, still the live session in all three fields.
  const watch=block.slice(block.indexOf('public void watch('));
  const at=s=>{const i=watch.indexOf(s);assert.ok(i>0,s);return i;};
- assert.ok(at('controllerState()')<at('WorkspaceOverview.watchBinding(task,atTap,')&&at('WorkspaceOverview.watchBinding(task,atTap,')<at('launchBoundViewer(b.controllerTaskId,b.sessionId)'),'fresh read, then the captured-binding check, then the bound launch');
- assert.match(watch,/if\(b==null\)\{Toast\.makeText\(RoseConversationActivity\.this,WorkspaceOverview\.WATCH_MOVED_ON/,'a changed binding opens nothing and says so');
- // targetPackage: optional, published with its read's key, never makes the read malformed.
+ assert.ok(at('controllerState()')<at('atTap.sessionId.equals(c.sessionId)&&atTap.controllerTaskId.equals(c.taskId)&&atTap.targetPackage.equals(pkg)')&&at('atTap.targetPackage.equals(pkg)')<at('launchBoundViewer(atTap.controllerTaskId,atTap.sessionId)'),'fresh read, then the app handle check, then the bound launch');
+ assert.match(watch,/if\(!still\)\{Toast\.makeText\(RoseConversationActivity\.this,WorkspaceOverview\.WATCH_MOVED_ON/,'a changed session opens nothing and says so');
  assert.match(activity,/ctlPackage=new String\[\]\{r\.key\(\),pkg instanceof String\?\(String\)pkg:""\};/);
- assert.match(block,/String\[\] p=ctlPackage;String pkg=r\.key\(\)\.equals\(p\[0\]\)\?p\[1\]:"";/);
  assert.ok(!/Log\.[dviwe]\(/.test(block),'no identifiers are logged');
  assert.ok(!/AutoAgentPip|PictureInPicture/.test(activity),'automatic PiP is untouched');
- // HOME-WORKSPACE-FIDELITY-225: the HiFi tray's middle well ends the existing voice conversation; real app icons only.
  assert.match(block,/public void endCall\(\)\{send\("end"\);\}/);
  assert.match(block,/d=getPackageManager\(\)\.getApplicationIcon\(pkg\);/);
 });
@@ -191,7 +189,8 @@ test('#225 live preview: the overview reads only the controller\'s local read-on
  assert.match(activity,/if\(overview!=null\)overview\.resume\(\);/);
  assert.match(activity,/runOnUiThread\(\(\)->\{if\(!isFinishing\(\)&&!isDestroyed\(\)&&overview!=null\)overview\.previewAnswer\(r,a\);\}\)/,'answers land only on a live screen, through the gate');
  const panel=source('WorkspaceOverviewPanel.java');
- assert.match(panel,/WorkspaceOverview\.Binding target=m\.watchRow==null\?null:m\.watchRow\.binding;/,'only the verified binding is previewed');
+ assert.match(panel,/for\(CurrentApps\.App a:apps\.apps\(\)\)if\(handle\(a\)!=null\)\{target=a;break;\}/,'only an app\'s own verified handle is previewed');
+ assert.match(panel,/if\(a==null\|\|a\.preview==null\|\|!a\.preview\.complete\(\)\)return null;/,'no handle, no preview');
  assert.match(panel,/void close\(\)\{setVisibility\(GONE\);preview\.cancel\(\);\}/,'Back cancels');
  assert.ok(!/preview/.test(source('PhoneControl.java').replace(/"preview"\.equals[^;]*;/,'').replace(/\/\/[^\n]*preview[^\n]*/g,'')),'no second preview route through PhoneControl');
 });

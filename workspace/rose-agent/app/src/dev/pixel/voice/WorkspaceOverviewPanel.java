@@ -1,7 +1,6 @@
 package dev.pixel.voice;
 
 import android.content.Context;
-import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.graphics.drawable.Drawable;
@@ -9,59 +8,48 @@ import android.graphics.drawable.GradientDrawable;
 import android.widget.LinearLayout;
 import android.widget.FrameLayout;
 import android.widget.ScrollView;
-import java.util.Collections;
-import java.util.List;
 
-/** The managed workspace overview as an in-screen panel over its host (MANAGED-WORKSPACE-OVERVIEW-001). Its data,
- * the Watch launch and Stop come only through the narrow interfaces below, supplied by the host at App Core's
- * handoff; this class reads no bridge, provider or network itself. Selection and a pending Stop live in a
- * process-wide holder, so closing the panel (Back/Home) and opening it again keeps them, and neither touches the
- * human's foreground app or the work. Missing data stays missing: no binding means no Watch, no Stop route means
- * no Stop. */
+/** Rose's apps as an in-screen panel over its host: exactly the apps currently running under Rose's control
+ * (#225/#156, CurrentApps), in the selected HiFi's cards and tray. Its data, the Watch launch and the live preview come
+ * only through the narrow interfaces below; this class reads no bridge, provider or network itself. Closing it (Back)
+ * or leaving (Home, lock) never touches the work or the human's foreground app; reopening starts from the source's
+ * current report, never from what was shown before. Missing data stays missing: no report means unavailable, no
+ * verified preview handle means no live view. */
 final class WorkspaceOverviewPanel extends FrameLayout {
- /** The normalized inputs, read on the UI thread from state the host already holds. */
+ /** The inputs, read on the UI thread from state the host already holds. */
  interface Source {
+  /** The voice conversation is live (the tray's middle well ends it; otherwise it opens Rose). */
   boolean connected();
-  WorkspaceOverview.Scope scope();
-  List<WorkspaceOverview.Task> tasks();
-  /** The latest controller read (may be CHECKING/UNREADABLE). */
-  WorkspaceOverview.Workspace workspace();
+  /** The latest complete report of the apps running under Rose's control (CurrentApps.Snapshot). */
+  CurrentApps.Snapshot currentApps();
  }
- /** What the host can do. Each call carries the identity captured at the tap. */
+ /** What the host can do. */
  interface Actions {
-  /** An authoritative Stop route with an answer exists; false keeps Stop unavailable. */
-  boolean stopRoute();
-  /** Sends Stop for exactly this identity; the answer comes back through State.ack. */
-  void stop(WorkspaceOverview.Identity task);
-  /** Re-reads the controller off the UI thread and opens the viewer only if watchBinding still verifies and equals
-   * the binding the row showed at the tap. */
-  void watch(WorkspaceOverview.Identity task,WorkspaceOverview.Binding atTap);
+  /** Re-reads the controller off the UI thread and opens its viewer only for exactly this app's session (atTap), if
+   * that is still the live one. */
+  void watch(CurrentApps.App app,WorkspaceOverview.Binding atTap);
   /** The tray's End call well while connected (HiFi ag-mid); the voice conversation's own End. */
   void endCall();
   /** Sends one read-only controller preview request (#225) off the UI thread and hands its answer to
    * previewAnswer on the UI thread. A host without the provider leaves this as is: no preview, the text body stays. */
   default void requestPreview(WorkspaceOverviewPreview.Request request){}
  }
- /** Selection and Stop survive the panel and the activity (one process). */
- static final class State {
-  static final State INSTANCE=new State();
-  WorkspaceOverview.Identity selected;final WorkspaceOverview.Stop stop=new WorkspaceOverview.Stop();
-  /** An answer for a sent Stop; ignored unless it is for the captured identity. */
-  synchronized void ack(WorkspaceOverview.Identity about,WorkspaceOverview.Ack ack){stop.ack(about,ack);}
- }
+ /** Watch can't open for this app from here (no verified handle): said, not silently ignored. */
+ static final String WATCH_APP_UNAVAILABLE="Watching this app from here isn’t available yet.";
 
- private final WorkspaceOverviewView view;private Source source;private Actions actions;private WorkspaceOverview.Model shown;
- final State state;
+ private final WorkspaceOverviewView view;private Source source;private Actions actions;
+ /** What is shown: only the source's complete reports, by CurrentApps' rules (no history, no resurrection). */
+ final CurrentApps.Tracker apps=new CurrentApps.Tracker();
  /** The HiFi observe line: why the last tap opened or stopped nothing. Cleared when the panel opens. */
  private String note="";
- /** The workspace card's live preview (#225): requested only while open and resumed, for the verified binding. */
+ /** The live preview (#225): requested only while open and resumed, for an app's verified handle. */
  final WorkspaceOverviewPreview preview=new WorkspaceOverviewPreview();private boolean resumed=true;
  private final View endWell;private final WorkspaceOverviewView.Glyph endGlyph,roseGlyph;
 
- WorkspaceOverviewPanel(Context c,State state){this(c,state,null,0);}
+ WorkspaceOverviewPanel(Context c){this(c,null,0);}
  /** background: the host's ivory surface (HiFi .ivory-bg), or null for its plain gradient; topInset: the status bar. */
- WorkspaceOverviewPanel(Context c,State state,Drawable background,int topInset){
-  super(c);this.state=state;
+ WorkspaceOverviewPanel(Context c,Drawable background,int topInset){
+  super(c);
   setBackground(background!=null?background:new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xfff7f9fc,0xffeef3f9}));
   setClickable(true);
   // .surface.agents-surface: 64px top, var(--margin) 24px sides, 150px bottom (clears the tray); no visible heading.
@@ -85,29 +73,21 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   LayoutParams tp=new LayoutParams(-1,dp(ConversationPresentation.TRAY_HEIGHT),Gravity.BOTTOM);
   tp.leftMargin=tp.rightMargin=dp(ConversationPresentation.MARGIN);tp.bottomMargin=dp(ConversationPresentation.TRAY_BOTTOM);addView(tray,tp);
   view.setListener(new WorkspaceOverviewView.Listener(){
-   public void select(WorkspaceOverview.Identity t){state.selected=t;
-    WorkspaceOverview.Row r=row(t);note=r==null?"":r.canWatch?"":r.watchReason;
-    if(r!=null&&r.canWatch&&actions!=null){actions.watch(t,r.binding);note="";}refresh();}
-   public void watch(WorkspaceOverview.Identity t){WorkspaceOverview.Row r=row(t);if(actions!=null&&r!=null&&r.canWatch)actions.watch(t,r.binding);}
-   public void workspace(){
-    if(shown==null)return;WorkspaceOverview.Row w=shown.watchRow;
-    if(w!=null&&actions!=null){note="";actions.watch(w.identity,w.binding);}else note=shown.cardReason();
+   public void app(String entryId){
+    CurrentApps.App a=find(entryId);if(a==null)return;
+    WorkspaceOverview.Binding b=handle(a);
+    if(b!=null&&actions!=null){note="";actions.watch(a,b);}else note=WATCH_APP_UNAVAILABLE;
     refresh();
-   }
-   public void stop(WorkspaceOverview.Identity t){
-    if(actions==null||!actions.stopRoute())return;
-    boolean sent;synchronized(state){sent=state.stop.request(t,SystemClock.elapsedRealtime());}
-    if(sent)actions.stop(t);refresh();
    }
    public void stopUnavailable(String reason){note=reason;refresh();}
   });
   setVisibility(GONE);
  }
- private WorkspaceOverview.Row row(WorkspaceOverview.Identity t){
-  // The exact identity the card was drawn for (id and both scope parts), even while its scope is not yet known.
-  if(shown==null||t==null)return null;
-  for(WorkspaceOverview.Row r:shown.rows)if(r.identity.id.equals(t.id)&&r.identity.scope.server.equals(t.scope.server)&&r.identity.scope.pairing.equals(t.scope.pairing))return r;
-  return null;
+ private CurrentApps.App find(String entryId){for(CurrentApps.App a:apps.apps())if(a.entryId.equals(entryId))return a;return null;}
+ /** The app's own preview/Watch handle as reported with it, scoped to the report's registration; null without one. */
+ WorkspaceOverview.Binding handle(CurrentApps.App a){
+  if(a==null||a.preview==null||!a.preview.complete())return null;
+  return new WorkspaceOverview.Binding(a.preview.controllerTaskId,a.preview.sessionId,a.packageName,new WorkspaceOverview.Scope("current-apps",apps.registration()));
  }
  /** One HiFi .well (TrayMaterial.Well, shared with Home and the conversation tray) around a glyph; the selected well
   * gets the HiFi .well.selected blue ring. */
@@ -128,13 +108,15 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  void open(){note="";setVisibility(VISIBLE);refresh();}
  /** Supplies the workspace app's real icon to the window card. */
  void setIcons(WorkspaceOverviewView.Icons icons){view.setIcons(icons);}
- /** Back/Home: only hides the panel. The work, the selection and any pending Stop are unchanged. */
+ /** Supplies the app's visible name to its card. */
+ void setLabels(WorkspaceOverviewView.Labels labels){view.setLabels(labels);}
+ /** Back: only hides the panel; the work is unchanged and any preview is cancelled. */
  void close(){setVisibility(GONE);preview.cancel();}
  /** The host activity resumed / paused (Home, another app, the lock screen): pausing cancels and drops any preview. */
  void resume(){resumed=true;refresh();}
  void pause(){resumed=false;preview.cancel();}
  /** The host is going away: nothing in flight may land, nothing is kept. */
- void teardown(){resumed=false;preview.cancel();}
+ void teardown(){resumed=false;preview.cancel();apps.reset();}
  /** A preview answer for a request this panel made (UI thread). Shown only if WorkspaceOverviewPreview accepts it. */
  void previewAnswer(WorkspaceOverviewPreview.Request r,WorkspaceOverviewPreview.Response a){
   if(preview.answer(r,a,System.currentTimeMillis()))refresh();
@@ -142,22 +124,16 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  /** Redraws from the host's current inputs (no-op when hidden, or when nothing changed). */
  void refresh(){
   if(!isOpen())return;
-  WorkspaceOverview.Model m;
-  synchronized(state){
-   state.stop.tick(SystemClock.elapsedRealtime());
-   boolean connected=source!=null&&source.connected();
-   List<WorkspaceOverview.Task> tasks=source==null?Collections.<WorkspaceOverview.Task>emptyList():source.tasks();
-   m=WorkspaceOverview.of(connected,source==null?WorkspaceOverview.Scope.UNKNOWN:source.scope(),
-    source==null?WorkspaceOverview.Workspace.UNREADABLE:source.workspace(),tasks,state.selected,state.stop,actions!=null&&actions.stopRoute());
-  }
-  shown=m;boolean live=source!=null&&source.connected();
+  apps.apply(source==null?null:source.currentApps());
+  boolean live=source!=null&&source.connected();
   endGlyph.setVisibility(live?VISIBLE:GONE);roseGlyph.setVisibility(live?GONE:VISIBLE);
   endWell.setContentDescription(live?"End call":"Open Rose");
-  // #225: only the verified binding (watchRow) is ever previewed; without one there is no request and no image.
-  WorkspaceOverview.Binding target=m.watchRow==null?null:m.watchRow.binding;long now=System.currentTimeMillis();
-  WorkspaceOverviewPreview.Request r=preview.next(resumed,target,now);
+  // #225: only an app's own verified handle is ever previewed (one at a time); without one there is no request.
+  CurrentApps.App target=null;for(CurrentApps.App a:apps.apps())if(handle(a)!=null){target=a;break;}
+  WorkspaceOverview.Binding b=handle(target);long now=System.currentTimeMillis();
+  WorkspaceOverviewPreview.Request r=preview.next(resumed,b,now);
   if(r!=null&&actions!=null)actions.requestPreview(r);
-  view.show(m,note,preview.frameFor(target,now));
+  view.show(apps.state(),apps.reason(),apps.apps(),note,target==null?null:target.entryId,preview.frameFor(b,now));
  }
  int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
 }
