@@ -221,8 +221,19 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     in time stays, is named (`stagingLeft`) and blocks the next `source` run until it is removed
     deliberately.
   - `completed.json` gives `refused` (nothing written) or `stopped` with `partial` entries/bytes of
-    the selection, `stagingRemoved`, `removedEntries` and `targetExists`. A complete copy records
-    `selectionSha256` (each file's sha256 included).
+    the selection, `stagingRemoved`, `removedEntries`, `targetExists` and `selectionRecordExists`. A
+    complete copy records `selectionSha256` and `selectionRecord` (path, sha256, lines, bytes).
+  - **Selection record:** `<ISO>.selection.tsv` beside the tree, never inside it (e.g.
+    `R/source.selection.tsv`).
+    - One line per copied entry: path, type, octal mode, then size and file sha256, or the link text.
+      Raw filesystem bytes, with `\`, tab, CR and LF escaped, so no name is refused.
+    - Its sha256 is `selectionSha256`. It is created owner-only, made read-only once complete, and
+      never replaced: preflight refuses an existing record.
+    - Its size is bounded in advance (`selectionRecordBoundBytes`) and counted in the projection. A
+      stop removes it together with the staging directory, so a record never exists without its
+      complete tree.
+    - It keeps the original-byte evidence after vendor and lunch change the tree. It verifies no
+      project revision.
   - No process starts. Per-file identity is checked against the plan, and the production lock is held
     for the whole stage (up to 2 h, so production builds wait).
   - Basis, historical, not current: the alpha's copy of the same root with these exclusions allocated
@@ -237,8 +248,9 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     - No manifest or resolved manifest read anywhere else is evidence for these bytes. The admission
       report's manifest rule (`blazer-preparation-preflight.py`) therefore stays BLOCKED for the copy
       by design.
-    - `selectionSha256` identifies only the copied bytes at copy time. Vendor and lunch then change the
-      tree, and nothing re-hashes it. `complete: true` means only that the copy finished.
+    - `selectionSha256` and the selection record identify only the copied bytes at copy time. Vendor
+      and lunch then change the tree, and nothing re-hashes it yet. `complete: true` means only that the
+      copy finished.
     - Verifying project bytes against the pinned revisions would need a separately approved
       comparison against the production `.repo` objects that accounts for the integration. This helper
       does not do it.
