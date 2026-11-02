@@ -11,6 +11,7 @@ import io
 import itertools
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+import warnings
 import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -34,7 +36,9 @@ MISC = (FIXTURES/'misc_info.txt').read_text()
 DYNAMIC = ['system', 'system_ext', 'product', 'vendor']
 BUILD = '2026103101'
 BOOTLOADER = 'deepspace-17.4-16119390'
-BASEBAND = 'g5400i-260604-260807-B-16035863'
+BASEBAND = 'g5400i-260604-260807-B-16035863'  # raw, as android-info.txt and the flavor carry it
+# Firmware member names as the pinned release script writes them (get_radio_image lowercases the version).
+BOOTLOADER_MEMBER, BASEBAND_MEMBER = BOOTLOADER.lower(), BASEBAND.lower()
 PKMD = {'frankel': b'synthetic frankel avb public key metadata', 'rango': b'synthetic rango avb public key metadata'}
 SPARSE = b'\x3a\xff\x26\xed'
 GSC = {'evt.ec.bin': b'synthetic gsc evt', 'prod.ec.bin': b'synthetic gsc prod'}
@@ -150,6 +154,21 @@ def zip_bytes(entries):
             archive.writestr(name, data)
     return buffer.getvalue()
 
+def quiet_zip_bytes(entries):
+    """zip_bytes for deliberately malformed fixtures (a duplicate name warns)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+        return zip_bytes(entries)
+
+def encrypted_first_entry(data):
+    """Set the 'encrypted' general-purpose flag of the first entry (local header and central directory)."""
+    data = bytearray(data)
+    assert data[:4] == b'PK\x03\x04'
+    data[6] |= 0x1
+    central = data.index(b'PK\x01\x02')
+    data[central + 8] |= 0x1
+    return bytes(data)
+
 def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
     entries = {'META/ab_partitions.txt': '\n'.join(ab or AB).encode(), 'META/misc_info.txt': misc.encode(),
                'OTA/android-info.txt': android_info(device), 'SYSTEM/build.prop': f'ro.build.version.incremental={build}\n'.encode(),
@@ -166,11 +185,11 @@ def target_files(device, build=BUILD, ab=None, misc=MISC, drop=(), images=None):
 
 def capture_script(device, images, segments, wipe=True):
     """script.txt in the shape FlashCapturer writes (pinned optimize-factory-image excerpt); synthetic, never run."""
-    bootloader = f'flash bootloader bootloader-{device}-{BOOTLOADER}.img other-slot'
+    bootloader = f'flash bootloader bootloader-{device}-{BOOTLOADER_MEMBER}.img other-slot'
     lines = [f'check-var product {device}', 'check-var slot-count 2', bootloader, 'toggle-active-slot', 'reboot-bootloader',
              bootloader, 'toggle-active-slot', 'reboot-bootloader', '# size of partition splits depends on this value',
              'check-var max-download-size 0x10000000', 'run-cmd set_active:a', 'check-var current-slot a',
-             f'flash radio radio-{device}-{BASEBAND}.img', 'reboot-bootloader', 'erase avb_custom_key',
+             f'flash radio radio-{device}-{BASEBAND_MEMBER}.img', 'reboot-bootloader', 'erase avb_custom_key',
              'flash avb_custom_key avb_pkmd.bin', 'run-cmd oem uart disable', 'erase dpm_a', 'erase dpm_b',
              'check-requirements android-info.txt', 'maybe-cancel-snapshot-update']
     lines += [f'flash {p} {p}.img' for p in images]
@@ -179,7 +198,8 @@ def capture_script(device, images, segments, wipe=True):
     return ('\n'.join(lines) + '\n').encode()
 
 def android_info_zip(info):
-    return zip_bytes([('android-info.txt', info)])
+    """As the pinned fastboot.cpp 322ff512 CheckRequirements writes it: fastboot-info.txt, then android-info.txt."""
+    return zip_bytes([('fastboot-info.txt', b'version 1\n'), ('android-info.txt', info)])
 
 def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), extra=(), segments=None):
     top = top or f'{device}-install-{build}'
@@ -191,8 +211,8 @@ def install(device, build=BUILD, top=None, info=None, replace=None, drop=(), ext
              'flash-all.bat': b':: synthetic stand-in, not a flasher\n',
              'script.txt': capture_script(device, images, len(segments)),
              'avb_pkmd.bin': PKMD[device],
-             f'bootloader-{device}-{BOOTLOADER}.img': b'synthetic bootloader',
-             f'radio-{device}-{BASEBAND}.img': b'synthetic radio', **GSC}
+             f'bootloader-{device}-{BOOTLOADER_MEMBER}.img': b'synthetic bootloader',
+             f'radio-{device}-{BASEBAND_MEMBER}.img': b'synthetic radio', **GSC}
     for index, segment in enumerate(segments, 1):
         files[f'super_{index}.img'] = segment
     for part in images:
@@ -549,14 +569,14 @@ class Negative(Fixture):
         for archive, code in (
                 (install('frankel', info=android_info('frankel', baseband='g5400i-older')), 'mixed-firmware:android-info version-baseband'),
                 (install('frankel', extra=[(f'frankel-install-{BUILD}/radio-frankel-g5400i-older.img', b'r')]), 'mixed-firmware:unexpected radio-'),
-                (install('frankel', replace={f'bootloader-frankel-{BOOTLOADER}.img': b'other bootloader'}), 'differs from target-files RADIO/bootloader.img')):
+                (install('frankel', replace={f'bootloader-frankel-{BOOTLOADER_MEMBER}.img': b'other bootloader'}), 'differs from target-files RADIO/bootloader.img')):
             self.refused(self.classify(self.write('a.zip', archive), 'frankel', tf), code)
 
     def test_missing_boot_chain_or_required_firmware(self):
         _, tf = self.complete('frankel')
         for drop, code in ((('boot.img',), 'factory:boot.img'), (('vbmeta.img',), 'factory:vbmeta.img'),
-                           ((f'bootloader-frankel-{BOOTLOADER}.img',), f'factory:bootloader-frankel-{BOOTLOADER}.img'),
-                           ((f'radio-frankel-{BASEBAND}.img',), 'factory:radio-frankel'),
+                           ((f'bootloader-frankel-{BOOTLOADER_MEMBER}.img',), f'factory:bootloader-frankel-{BOOTLOADER_MEMBER}.img'),
+                           ((f'radio-frankel-{BASEBAND_MEMBER}.img',), f'factory:radio-frankel-{BASEBAND_MEMBER}.img'),
                            (('super_1.img', 'super_2.img'), 'factory:super_1.img'), (('android-info.txt',), 'factory:android-info.txt'),
                            (('avb_pkmd.bin',), 'factory:avb_pkmd.bin')):
             self.refused(self.classify(self.write('a.zip', install('frankel', drop=drop)), 'frankel', tf), code)
@@ -684,7 +704,7 @@ class GscFirmware(Fixture):
     def test_generator_intermediate_is_refused_as_not_the_release_artifact(self):
         top = f'rango-factory-{BUILD}'
         intermediate = zip_bytes([(f'{top}/image-rango-{BUILD}.zip', b'synthetic img zip'), (f'{top}/flash-all.sh', b'# synthetic'),
-                                  (f'{top}/bootloader-rango-{BOOTLOADER}.img', b'synthetic bootloader')])
+                                  (f'{top}/bootloader-rango-{BOOTLOADER_MEMBER}.img', b'synthetic bootloader')])
         result = self.classify(self.write(f'rango-factory-{BUILD}.zip', intermediate), 'rango', self.complete('rango')[1])
         self.refused(result, 'not-factory:factory-intermediate')
         self.assertEqual(result['role'], 'factory-intermediate')
@@ -851,13 +871,103 @@ class Optimizer(Fixture):
             fp.load_flavor('frankel', self.root)
 
     @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_firmware_member_names_follow_the_pinned_release_script(self):
+        """Regression: generate-release.sh lowercases the versions it names the bootloader/radio members with."""
+        script = (ROOT/'scripts/tests/fixtures/permission-apex/script/generate-release.sh').read_text()
+        self.assertEqual(fp.RADIO_IMAGE_FUNCTION.search(script).group(1).strip(),
+                         """grep "require version-$1" OTA/android-info.txt | cut -d '=' -f 2 | tr '[:upper:]' '[:lower:]'""")
+        generator = (ROOT/'scripts/tests/fixtures/factory-package/device_common-1f5ba267/generate-factory-images-common.sh').read_text()
+        for anchor in ('cp tmp/RADIO/$BOOTLOADERSRC tmp/$PRODUCT-$VERSION/bootloader-$DEVICE-$BOOTLOADER.img',
+                       'cp tmp/RADIO/$RADIOSRC tmp/$PRODUCT-$VERSION/radio-$DEVICE-$RADIO.img'):
+            self.assertIn(anchor, generator)
+        flavor = fp.load_flavor('rango', self.root)
+        self.assertEqual(flavor['firmware']['baseband'], BASEBAND, 'the pinned baseband carries an uppercase B')
+        self.assertEqual(fp.member_versions(flavor), {'bootloader': BOOTLOADER_MEMBER, 'baseband': BASEBAND_MEMBER})
+        self.assertEqual(fp.producer_version('Ab-ÄZ9'), 'ab-Äz9', 'tr in the C locale lowers ASCII only')
+        archive, tf = self.complete('rango')
+        self.assertTrue(self.classify(archive, 'rango', tf)['factoryReady'])
+        raw, lowered = f'radio-rango-{BASEBAND}.img', f'radio-rango-{BASEBAND_MEMBER}.img'
+        # The former raw-case expectation is now the foreign name, and the produced name is required.
+        renamed = install('rango', drop=(lowered,), extra=[(f'rango-install-{BUILD}/{raw}', b'synthetic radio')])
+        self.refused(self.classify(self.write('a.zip', renamed), 'rango', tf), f'factory:{lowered}', f'mixed-firmware:unexpected {raw}')
+        # With the produced name found, its digest is compared with target-files RADIO/radio.img (no longer skipped).
+        self.refused(self.classify(self.write('b.zip', install('rango', replace={lowered: b'other radio'})), 'rango', tf),
+                     f'mixed-firmware:{lowered} differs from target-files RADIO/radio.img')
+        # android-info.txt keeps the raw version, case-sensitively.
+        lower_info = android_info('rango', baseband=BASEBAND_MEMBER)
+        self.refused(self.classify(self.write('c.zip', install('rango', info=lower_info)), 'rango', tf),
+                     'mixed-firmware:android-info version-baseband')
+        # script.txt must flash the produced member.
+        good = capture_script('rango', [p for p in AB if p not in DYNAMIC and p != 'abl'], 2)
+        self.refused(self.classify(self.write('d.zip', install('rango', replace={'script.txt': good.replace(lowered.encode(), raw.encode())})),
+                                   'rango', tf), f'install-script:script.txt flashes absent member {raw}')
+
+    def test_loader_requires_the_release_script_to_lowercase_member_versions(self):
+        script = self.root/'scripts/tests/fixtures/permission-apex/script/generate-release.sh'
+        tampered = script.read_text().replace(" | tr '[:upper:]' '[:lower:]'", '', 1)
+        self.assertNotEqual(tampered, script.read_text())
+        script.write_text(tampered)
+        with self.assertRaisesRegex(fp.ContractError, 'releaseScript lowercases firmware member versions'):
+            fp.load_flavor('rango', self.root)
+
+    def test_install_script_bootloader_names_use_the_produced_version(self):
+        """An uppercase bootloader version (none is pinned today) is flashed under its lowercased member name."""
+        flavor = json.loads(json.dumps(fp.load_flavor('rango', self.root)))
+        flavor['firmware']['bootloader'] = 'DeepSpace-17.4-16119390'
+        produced = 'flash bootloader bootloader-rango-deepspace-17.4-16119390.img other-slot'
+        for line, problem in ((produced, False), (produced.replace('deepspace', 'DeepSpace'), True)):
+            text = f'check-var product rango\n{line}\n{line}\n'.encode()
+            with zipfile.ZipFile(io.BytesIO(zip_bytes([('t/script.txt', text)]))) as archive:
+                result = {'problems': []}
+                fp.check_install_scripts(archive, {'script.txt': 't/script.txt'}, flavor, BUILD, [], result)
+            flagged = any('bootloader-rango-' in p and 'expected 2' in p for p in result['problems'])
+            self.assertEqual(flagged, problem, result['problems'])
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_android_info_zip_is_the_pinned_two_entry_capture(self):
+        """Regression: fastboot.cpp 322ff512 CheckRequirements writes fastboot-info.txt, then android-info.txt."""
+        excerpt = json.loads((ROOT/'scripts/tests/fixtures/factory-package/platform_system_core-322ff512/fastboot-excerpt.json')
+                             .read_text())['files']['fastboot/fastboot.cpp']
+        source = '\n'.join(excerpt[str(n)] for n in range(1882, 1901))
+        self.assertEqual(tuple(re.findall(r'aiz\.StartEntry\("([^"]+)"', source)), fp.ANDROID_INFO_ZIP_ENTRIES)
+        literal = re.search(r'const char\* fastboot_info = "(.*)";', source).group(1)
+        self.assertEqual(literal.encode().decode('unicode_escape').encode(), fp.FASTBOOT_INFO)
+        self.assertIn('aiz.WriteBytes(contents.data(), contents.size())', source)
+        self.assertIn('fc->AddFile("android-info.txt", contents.data(), contents.size());', excerpt['1868'])
+        archive, tf = self.complete('rango')
+        self.assertTrue(self.classify(archive, 'rango', tf)['factoryReady'], 'the pinned two-entry shape is accepted')
+        info, version = android_info('rango'), ('fastboot-info.txt', b'version 1\n')
+        not_listed = "not exactly ['fastboot-info.txt', 'android-info.txt']"
+        cases = (
+            (zip_bytes([('android-info.txt', info)]), not_listed),  # the former one-entry assumption
+            (zip_bytes([('android-info.txt', info), version]), not_listed),
+            (zip_bytes([version, ('android-info.txt', info), ('extra.txt', b'x')]), not_listed),
+            (quiet_zip_bytes([version, ('android-info.txt', info), ('android-info.txt', info)]), not_listed),
+            (zip_bytes([version, ('../android-info.txt', info)]), not_listed),
+            (zip_bytes([version, ('sub/android-info.txt', info)]), not_listed),
+            (zip_bytes([version, ('android-info.txt/', b'')]), not_listed),
+            (zip_bytes([('fastboot-info.txt', b'version 2\n'), ('android-info.txt', info)]), "fastboot-info.txt is not exactly b'version 1\\n'"),
+            (zip_bytes([('fastboot-info.txt', b'version 1'), ('android-info.txt', info)]), "fastboot-info.txt is not exactly b'version 1\\n'"),
+            (zip_bytes([version, ('android-info.txt', info + b'\n')]), 'android-info.txt is not exactly the archive android-info.txt'),
+            (zip_bytes([version, ('android-info.txt', b'x' * ((64 << 10) + 1))]), 'entry android-info.txt is larger than 65536 bytes'),
+            (encrypted_first_entry(android_info_zip(info)), 'entry fastboot-info.txt is encrypted'),
+            (b'\0' * (1 << 20) + android_info_zip(info), 'is larger than 1048576 bytes'),
+            (b'not a zip', 'is not a readable zip'))
+        for index, (data, message) in enumerate(cases):
+            with self.subTest(message=message, index=index):
+                result = self.classify(self.write(f'aiz{index}.zip', install('rango', replace={'android-info.zip': data})), 'rango', tf)
+                expected = ('install-script:android-info.zip holds ', message) if message == not_listed else \
+                    (f'install-script:android-info.zip {message}',)
+                self.refused(result, *expected)
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
     def test_android_info_zip_and_flash_all_bat_are_required(self):
         _, tf = self.complete('rango')
         for drop in (('android-info.zip',), ('flash-all.bat',)):
             self.refused(self.classify(self.write('a.zip', install('rango', drop=drop)), 'rango', tf), f'factory:{drop[0]}')
         other = android_info_zip(android_info('rango', baseband='g5400i-older'))
         self.refused(self.classify(self.write('a.zip', install('rango', replace={'android-info.zip': other})), 'rango', tf),
-                     'install-script:android-info.zip is not exactly the archive android-info.txt')
+                     'install-script:android-info.zip android-info.txt is not exactly the archive android-info.txt')
         self.refused(self.classify(self.write('a.zip', install('rango', replace={'android-info.zip': b'not a zip'})), 'rango', tf),
                      'install-script:android-info.zip')
 
@@ -869,7 +979,7 @@ class Optimizer(Fixture):
                            (lambda s: s.replace('0x10000000', '0x20000000'), '`check-var max-download-size 0x10000000`'),
                            (lambda s: s.replace('check-var current-slot a\n', ''), '`check-var current-slot a`'),
                            (lambda s: s.replace('check-requirements android-info.txt\n', ''), '`check-requirements android-info.txt`'),
-                           (lambda s: s.replace(f'flash bootloader bootloader-frankel-{BOOTLOADER}.img other-slot\n', '', 1),
+                           (lambda s: s.replace(f'flash bootloader bootloader-frankel-{BOOTLOADER_MEMBER}.img other-slot\n', '', 1),
                             'has 1 `flash bootloader'),
                            (lambda s: s.replace('flash super super_2.img\n', ''), 'super flashes'),
                            (lambda s: s.replace('flash super super_1.img\nflash super super_2.img', 'flash super super_2.img\nflash super super_1.img'),

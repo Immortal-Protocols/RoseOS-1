@@ -15,7 +15,9 @@ archive {device}-install-{build}.zip that generate-release.sh produces with fast
 last can be factory-ready. Three separate tiers are reported:
 
 structurallyComplete  ZIP members safe, unique, link-free with valid CRCs; android-info.txt and exactly the matching
-                      bootloader-/radio- images and the VENDOR/firmware/dauntless/ GSC files the pinned generator copies
+                      bootloader-/radio- images (named with the ASCII-lowercased version, as the pinned release script
+                      writes them; android-info.txt versions stay case-sensitive) and the VENDOR/firmware/dauntless/
+                      GSC files the pinned generator copies
                       (device_common 1f5ba267 fixture), byte-equal to the target-files, and no other member; every non-dynamic A/B partition either an IMAGES/ image present
                       byte-equal or listed as carried by the bootloader/radio image in a firmware observation bound to
                       those images' sha256 (never inferred from absence); contiguous sparse super_N.img segments for
@@ -47,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release_receipts import sha256_file  # noqa: E402
@@ -61,6 +64,19 @@ MAGIC = {'boot': b'ANDROID!', 'init_boot': b'ANDROID!', 'vendor_boot': b'VNDRBOO
 VBMETA_MAGIC = b'AVB0'
 SPARSE_MAGIC = b'\x3a\xff\x26\xed'
 SUPER = re.compile(r'super_(\d+)\.img')
+# The pinned generate-release.sh (permission-apex fixture, lines 50-52) names the firmware members from
+# `get_radio_image`: `grep "require version-$1" OTA/android-info.txt | cut -d '=' -f 2 | tr '[:upper:]' '[:lower:]'`, and
+# the device_common generator copies them as bootloader-$DEVICE-$BOOTLOADER.img / radio-$DEVICE-$RADIO.img. tr in the C
+# locale lowers ASCII A-Z only. android-info.txt itself keeps the raw, case-sensitive version.
+RADIO_IMAGE_FUNCTION = re.compile(r'get_radio_image\(\) \{\n(.*?)\n\}', re.S)
+PRODUCER_LOWER = "tr '[:upper:]' '[:lower:]'"
+ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
+# android-info.zip as the pinned fastboot.cpp 322ff512 FlashAllTool::CheckRequirements (lines 1882-1900) writes it:
+# exactly fastboot-info.txt ("version 1\n", line 1885) then android-info.txt (the captured android-info.txt bytes).
+ANDROID_INFO_ZIP_ENTRIES = ('fastboot-info.txt', 'android-info.txt')
+FASTBOOT_INFO = b'version 1\n'
+ANDROID_INFO_ZIP_MAX_BYTES = 1 << 20
+ANDROID_INFO_ENTRY_MAX_BYTES = 64 << 10
 HEX64 = re.compile(r'[0-9a-f]{64}')
 OBSERVED_PREFIXES = ('META/', 'IMAGES/', 'RADIO/', 'OTA/', 'VENDOR/firmware/')
 TOOLS = ('bin/simg2img', 'bin/lpunpack')
@@ -71,6 +87,13 @@ TARGET_READ = OBSERVED_PREFIXES + ('SYSTEM/build.prop',)
 LINK_TEXT_BYTES = 4095
 DEFAULT_MAX_WORK = 64 << 30
 TOOL_TIMEOUT = 3600
+
+def producer_version(value):
+    """A firmware version as the pinned release script writes it into member names (ASCII lowercase)."""
+    return value.translate(ASCII_LOWER)
+
+def member_versions(flavor):
+    return {k: producer_version(flavor['firmware'][k]) for k in ('bootloader', 'baseband')}
 
 class ContractError(Exception):
     pass
@@ -124,6 +147,8 @@ def load_flavor(name, root=ROOT):
     signing = flavor['factorySigning']
     checks['factorySigning.namespace'] = (signing['namespace'], NAMESPACE)
     checks['releaseScript namespace'] = (f'ssh-keygen -Y sign -n "{NAMESPACE}"'.encode() in script_bytes, True)
+    radio = RADIO_IMAGE_FUNCTION.search(script_bytes.decode(errors='replace'))
+    checks['releaseScript lowercases firmware member versions'] = (bool(radio) and PRODUCER_LOWER in radio.group(1), True)
     factory = flavor['artifacts']['factory']
     if pinned_layout(flavor):
         check_generator_layout(name, flavor, script_bytes, root, checks)
@@ -542,7 +567,7 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
     if not pinned_layout(flavor):
         result['missing'].append(f'contract:{flavor["flavor"]} pinned generator layout (artifacts.factory.generatorMembers '
                                  'anchored in the device_common 1f5ba267 fixture)')
-    expand = lambda s: s.format(device=device, build=build, **{k: flavor['firmware'][k] for k in ('bootloader', 'baseband')})
+    expand = lambda s: s.format(device=device, build=build, **member_versions(flavor))  # member names, as produced
     required = [expand(m) for m in factory['requiredMembers']]
     result['missing'] += [f'factory:{m}' for m in required if m not in files]
     if 'android-info.txt' in files:
@@ -632,23 +657,42 @@ def check_factory(archive, names, flavor, build, inventory, avb_key, fw, result,
         'virtualAb': inventory['virtualAb'], 'withoutImage': inventory['withoutImage'], 'notFlashedByFastboot': not_flashed,
         'images': sorted(expected), 'sparseImages': sorted(sparse_members), 'gscFirmware': sorted(gsc), 'superSegments': len(supers)})
 
+def android_info_zip_problem(archive, files):
+    """Why android-info.zip is not the pinned capture, or None: exactly fastboot-info.txt then android-info.txt, plain
+    unencrypted entries within the size caps, fastboot-info.txt exactly FASTBOOT_INFO and android-info.txt byte-equal to
+    the archive's android-info.txt. Sizes are checked from the headers before any entry is read."""
+    if archive.getinfo(files['android-info.zip']).file_size > ANDROID_INFO_ZIP_MAX_BYTES:
+        return f'is larger than {ANDROID_INFO_ZIP_MAX_BYTES} bytes'
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive.read(files['android-info.zip']))) as inner:
+            entries = inner.infolist()
+            if tuple(e.filename for e in entries) != ANDROID_INFO_ZIP_ENTRIES:
+                return f'holds {[e.filename for e in entries]}, not exactly {list(ANDROID_INFO_ZIP_ENTRIES)}'
+            for entry in entries:
+                if entry.flag_bits & 0x1:
+                    return f'entry {entry.filename} is encrypted'
+                if entry.file_size > ANDROID_INFO_ENTRY_MAX_BYTES:
+                    return f'entry {entry.filename} is larger than {ANDROID_INFO_ENTRY_MAX_BYTES} bytes'
+            if inner.read('fastboot-info.txt') != FASTBOOT_INFO:
+                return f'fastboot-info.txt is not exactly {FASTBOOT_INFO!r}'
+            if inner.read('android-info.txt') != archive.read(files['android-info.txt']):
+                return 'android-info.txt is not exactly the archive android-info.txt'
+    except (zipfile.BadZipFile, zlib.error, OSError, KeyError, RuntimeError, NotImplementedError, EOFError):
+        return 'is not a readable zip'
+    return None
+
 def check_install_scripts(archive, files, flavor, build, supers, result):
-    """The FlashCapturer output (pinned optimize-factory-image excerpt): android-info.zip holds exactly the
-    android-info.txt, and script.txt carries the product/slot/max-download-size checks, the two other-slot bootloader
-    flashes, check-requirements and one `flash super super_N.img` per segment, and names only archive members."""
+    """The FlashCapturer output (pinned optimize-factory-image excerpt): android-info.zip is the pinned capture
+    (fastboot-info.txt then android-info.txt, android_info_zip_problem), and script.txt carries the
+    product/slot/max-download-size checks, the two other-slot bootloader flashes, check-requirements and one
+    `flash super super_N.img` per segment, and names only archive members."""
     factory, device = flavor['artifacts']['factory'], flavor['device']['codename']
     checks = factory['scriptChecks']
-    fields = dict(device=device, build=build, maxDownloadSize=checks['maxDownloadSize'],
-                  **{k: flavor['firmware'][k] for k in ('bootloader', 'baseband')})
+    fields = dict(device=device, build=build, maxDownloadSize=checks['maxDownloadSize'], **member_versions(flavor))
     if 'android-info.zip' in files and 'android-info.txt' in files:
-        try:
-            with zipfile.ZipFile(io.BytesIO(archive.read(files['android-info.zip']))) as inner:
-                same = inner.namelist() == ['android-info.txt'] and \
-                    inner.read('android-info.txt') == archive.read(files['android-info.txt'])
-        except (zipfile.BadZipFile, OSError, KeyError):
-            same = False
-        if not same:
-            result['problems'].append('install-script:android-info.zip is not exactly the archive android-info.txt')
+        problem = android_info_zip_problem(archive, files)
+        if problem:
+            result['problems'].append(f'install-script:android-info.zip {problem}')
     if 'script.txt' not in files:
         return
     lines = [line.strip() for line in archive.read(files['script.txt']).decode(errors='replace').splitlines()]
