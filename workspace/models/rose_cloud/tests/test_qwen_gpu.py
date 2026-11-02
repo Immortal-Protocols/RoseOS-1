@@ -830,7 +830,9 @@ class ContractNothink(Contract):
         right = {json.loads(json.loads(p['body'])['messages'][-1]['content'])['text']:
                  ('final' if p['expect'] in ('final', 'no_open_app') else p['expect']) for p in C.CONFORMANCE}
         launch = json.loads(json.loads(C.CONFORMANCE[10]['body'])['messages'][-1]['content'])['text']
-        self.serve_mode({'answers': {**right, launch: 'malformed'}})
+        first = json.loads(json.loads(C.CONFORMANCE[0]['body'])['messages'][-1]['content'])['text']
+        # a reply slow enough that its seconds (0.01 s in the driver) differ from the receipt's 0.1 s rounding
+        self.serve_mode({'answers': {**right, launch: 'malformed'}, 'text_delay_s': {first: 0.06}})
         t, box, state = self.start(deadline=12)
         raw = self.runner('conformance')
         run = G.sanitize_contract(raw)
@@ -841,7 +843,16 @@ class ContractNothink(Contract):
         self.assertEqual((s['total'], s['sent'], s['parsed'], s['conforming'], s['failures'], s['existingBarPass'],
                           s['pass']), (20, 20, 19, 19, {'malformed_action': 1}, True, True))
         self.assertEqual(c['conformance']['results'][10]['v'], 'failed:malformed_action')
-        self.assertEqual(raw['contract']['conformance'], c['conformance'])  # nothing dropped by the sanitizer
+        # nothing dropped by the sanitizer; seconds are kept at the receipt's 0.1 s (qwen_gpu._secs), not the driver's
+        # 0.01 s, so the raw block is compared with its timings rounded the same way
+        expected = json.loads(json.dumps(raw['contract']['conformance']))
+        for x in expected['results']:
+            x['s'] = round(x['s'], 1)
+        for k in ('secondsMax', 'secondsTotal'):
+            expected['summary'][k] = round(expected['summary'][k], 1)
+        self.assertNotEqual(raw['contract']['conformance'], c['conformance'])  # the slow reply's 0.06 s is 0.1
+        self.assertEqual(expected, c['conformance'])
+        self.assertGreaterEqual(c['conformance']['results'][0]['s'], 0.1)
         t.join(60)
         worst = G.sanitize_contract({'case': 'conformance', 'step': 'done', 'error': 'E' * 64, 'module': 'm' * 64,
                                      'contract': {'step': 'done', 'models': {'status': 599, 'ids': (1 << 50) - 1,
