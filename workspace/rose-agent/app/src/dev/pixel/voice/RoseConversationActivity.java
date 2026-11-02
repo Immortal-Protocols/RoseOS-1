@@ -47,11 +47,12 @@ public final class RoseConversationActivity extends Activity {
   float density=getResources().getDisplayMetrics().density;
   FrameLayout root=new FrameLayout(this);
   root.setBackground(new OxbloodField(OxbloodField.ROSE));
+  root.setClipChildren(false); // the pearl's breath and the work entry's glow may draw past their small views
   headTop=Math.max(dp(49),statusInset()+dp(8));
   // Header (oxblood.css:391-398,504): the 16dp pearl and "Rose" at 23sp, 30dp in; the pearl draws the listening ring
   // and speaking breath from the real visual state; the title is the screen's heading.
-  LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);
-  pearl=new RosePearl(density,16);pearlView=new View(this);pearlView.setBackground(pearl);pearlView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);head.setClipChildren(false);
+  pearl=new RosePearl(density,16);pearlView=new View(this);pearlView.setBackground(pearl);pearlView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
   head.addView(pearlView,new LinearLayout.LayoutParams(dp(28),dp(28)));
   TextView title=presentedText(23,ink(),"sans-serif");title.setText("Rose");title.setAccessibilityHeading(true);title.setIncludeFontPadding(false);
   LinearLayout.LayoutParams tlp=new LinearLayout.LayoutParams(-2,-2);tlp.leftMargin=dp(7);head.addView(title,tlp);
@@ -61,12 +62,14 @@ public final class RoseConversationActivity extends Activity {
   work=new FrameLayout(this);workGlyph=new OxbloodRose.WorkButton(density);work.setBackground(workGlyph);
   work.setClickable(true);work.setFocusable(true);work.setContentDescription("Open Rose’s background work");work.setOnClickListener(v->openOverview());
   work.setStateListAnimator(HomeAppTile.pressAnimator(this,View.TRANSLATION_Y,0,dp(1),0));work.setForeground(HomeAppTile.focusRing(density,12));
-  FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.TOP|Gravity.END);wp.topMargin=headTop;wp.rightMargin=dp(18);root.addView(work,wp);
+  // 48dp targets around the reference's 44dp control (its square is drawn 3dp in from the 44, centred).
+  work.setPadding(dp(2),dp(2),dp(2),dp(2));
+  FrameLayout.LayoutParams wp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);wp.topMargin=headTop-dp(2);wp.rightMargin=dp(16);root.addView(work,wp);
   // App Core's More menu (Update Rose Agent, Settings) keeps its own place, just left of the work entry.
   TextView more=new TextView(this);more.setText("⋯");more.setTextSize(24);more.setTextColor(ink());more.setGravity(Gravity.CENTER);more.setContentDescription("More options");
   more.setOnClickListener(v->{PopupMenu m=new PopupMenu(this,v);m.getMenu().add("Update Rose Agent").setOnMenuItemClickListener(i->{checkForUpdate();return true;});
    m.getMenu().add("Settings").setOnMenuItemClickListener(i->{startActivity(new Intent(MainActivity.ACTION_SETTINGS).setClass(this,MainActivity.class));return true;});m.show();});
-  FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.TOP|Gravity.END);mp.topMargin=headTop;mp.rightMargin=dp(18+44+4);root.addView(more,mp);
+  FrameLayout.LayoutParams mp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);mp.topMargin=headTop-dp(2);mp.rightMargin=dp(16+48);root.addView(more,mp);
   // Caption (app.js:350): 15sp white, 88dp under the header's top; it is the visible state, the controls speak it.
   caption=presentedText(15,ink(),"sans-serif");caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
   FrameLayout.LayoutParams capp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);capp.topMargin=headTop+dp(88);capp.leftMargin=dp(30);root.addView(caption,capp);
@@ -115,14 +118,21 @@ public final class RoseConversationActivity extends Activity {
   connect.addView(connectRow,new FrameLayout.LayoutParams(-2,-1,Gravity.CENTER));
   connect.setOnClickListener(v->connectTapped());
   connect.setStateListAnimator(HomeAppTile.pressAnimator(this,View.TRANSLATION_Y,0,dp(1),320));connect.setForeground(HomeAppTile.focusRing(density,10));
-  FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,dp(44),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);pp.bottomMargin=dp(42);root.addView(connect,pp);
+  // Centred, and never under Rose's mic control at the left: equal side margins that clear it, one-line label.
+  connectLabel.setSingleLine(true);connectLabel.setEllipsize(android.text.TextUtils.TruncateAt.END);
+  FrameLayout.LayoutParams pp=new FrameLayout.LayoutParams(-2,dp(48),Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);pp.bottomMargin=dp(40);pp.leftMargin=pp.rightMargin=dp(30+48+8);root.addView(connect,pp);
   // Rose's own call microphone (not an OS-wide control, #410): shown only while the call is live, named as Rose's.
   mic=new FrameLayout(this);mic.setBackground(new OxbloodEdge.Well(density));mic.setClickable(true);mic.setFocusable(true);
   TextView micGlyph=presentedText(18,ink(),"sans-serif");micGlyph.setGravity(Gravity.CENTER);micGlyph.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);micGlyph.setTag("mic-glyph");
   mic.addView(micGlyph,new FrameLayout.LayoutParams(-1,-1));mic.setOnClickListener(v->{if(state!=null&&state.active())send(state.muted?"tray_unmute":"tray_mute");});
-  FrameLayout.LayoutParams mcp=new FrameLayout.LayoutParams(dp(44),dp(44),Gravity.BOTTOM|Gravity.START);mcp.bottomMargin=dp(42);mcp.leftMargin=dp(30);root.addView(mic,mcp);
+  mic.setForeground(HomeAppTile.focusRing(density,OxbloodEdge.Well.RADIUS_DP));
+  FrameLayout.LayoutParams mcp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.BOTTOM|Gravity.START);mcp.bottomMargin=dp(40);mcp.leftMargin=dp(30);root.addView(mic,mcp);
   root.setOnApplyWindowInsetsListener((v,i)->{int nav=i.getSystemWindowInsetBottom();
-   for(View c:new View[]{connect,mic,failure}){FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)c.getLayoutParams();int base=c==failure?dp(42+44+6):dp(42);if(l.bottomMargin!=base+nav){l.bottomMargin=base+nav;c.setLayoutParams(l);}}
+   // Side insets (a landscape navigation bar, a cutout): every control lays out inside them; the field stays full-bleed.
+   int left=i.getSystemWindowInsetLeft(),right=i.getSystemWindowInsetRight();
+   if(i.getDisplayCutout()!=null){left=Math.max(left,i.getDisplayCutout().getSafeInsetLeft());right=Math.max(right,i.getDisplayCutout().getSafeInsetRight());}
+   if(v.getPaddingLeft()!=left||v.getPaddingRight()!=right)v.setPadding(left,0,right,0);
+   for(View c:new View[]{connect,mic,failure}){FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)c.getLayoutParams();int base=c==failure?dp(42+44+6):dp(40);if(l.bottomMargin!=base+nav){l.bottomMargin=base+nav;c.setLayoutParams(l);}}
    FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)content.getLayoutParams();if(l.bottomMargin!=dp(110)+nav){l.bottomMargin=dp(110)+nav;content.setLayoutParams(l);}
    return i;});
   overview=new WorkspaceOverviewPanel(this,new OxbloodField(OxbloodField.ROSE),statusInset());
@@ -162,7 +172,8 @@ public final class RoseConversationActivity extends Activity {
    s==null?Float.NaN:RoseVisualState.fresh(s.trayOutputLevel,seen,now),reducedMotion(),resumed);
   showPearl(visual);
   String cap=OxbloodRose.caption(state,visual);if(!cap.contentEquals(caption.getText()))caption.setText(cap);
-  pearlView.setContentDescription(RosePresenceModel.describe(visual));
+  // The pearl is the screen's spoken state (the caption is its visible twin, hidden so it isn't read twice).
+  String said=RosePresenceModel.describe(visual);if(!said.contentEquals(pearlView.getContentDescription()==null?"":pearlView.getContentDescription()))pearlView.setContentDescription(said);
   workGlyph.set(ctl.failure==TaskControl.ReadFailure.NONE&&("ready".equals(ctl.status)||"launching".equals(ctl.status)),reducedMotion());
   renderTask(s);
   if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
@@ -401,6 +412,7 @@ public final class RoseConversationActivity extends Activity {
   return new WorkspaceOverviewPanel.Source(){
    public boolean connected(){return localLive();}
    public CurrentApps.Snapshot currentApps(){return RoseConversationActivity.this.currentApps();}
+   public boolean muted(){return state!=null&&state.active()&&state.muted;}
   };
  }
  /** Watch re-reads the controller after the tap and opens the existing viewer, bound by its extras, only while the
