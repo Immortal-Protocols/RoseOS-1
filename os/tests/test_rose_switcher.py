@@ -119,7 +119,7 @@ class RoseSwitcherTest(unittest.TestCase):
         tasks = read[read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'):read.index('RoseAgentWork.of(')]
         self.assertNotIn('getApplicationInfoAsUser', tasks, 'no label lookup for every running task')
         self.assertNotIn('getApplicationLabel', tasks)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, tasks).labelled(', read)
         self.assertLess(read.index('RoseAgentWork.of('), read.index('getApplicationInfoAsUser'))
         for step in ('CONTROLLER', 'OWNERSHIP', 'TASKS', 'DISPLAYS'):
             self.assertIn(f'RoseAgentWork.Step.{step}', read)
@@ -349,7 +349,7 @@ class ControllerReadPermissionTest(unittest.TestCase):
         read = code[code.index('private static RoseAgentWork read('):code.index('private void show(')]
         self.assertIn('int user = Process.myUserHandle().getIdentifier();', read)
         self.assertIn('pm.getPackageUidAsUser(RoseAgentWork.CONTROLLER, user)', read)
-        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, released, tasks, complete).labelled(', read)
+        self.assertIn('RoseAgentWork.of(controllerUid, user, owners, sessionDevices, tasks).labelled(', read)
         self.assertIn('RoseAgentWork.Owners owners = platform.owners();', read)
         # Labels and the viewer only for kept tasks, which of() restricts to that user (RoseAgentWorkTest).
         self.assertIn('getApplicationInfoAsUser(task.packageName, 0, task.userId)', read)
@@ -476,10 +476,8 @@ class PrivateControllerDisplayTest(unittest.TestCase):
             'a refused or missing registration is named at its own step on every read')
         self.assertLess(read.index('step = RoseAgentWork.Step.DISPLAYS;'), read.index('vdm.getVirtualDevices()'))
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('if (!owners.received || !owners.appsReceived) return unavailable(NOT_REPORTED);', work,
-            'unreported session work is never shown as "No background work"')
-        self.assertIn('if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);', work,
-            'a read between the two callbacks of one dispatch is unconfirmed')
+        self.assertIn('if (!owners.appsReceived) return unavailable(NOT_REPORTED);', work,
+            'before the platform\'s apps snapshot nothing is shown as "No background work"')
 
 class CrossDisplayAttributionTest(unittest.TestCase):
     """#156 disclosed gap after PR337: a package Rose automates can also run on another app's virtual display (or on
@@ -532,12 +530,14 @@ class CrossDisplayAttributionTest(unittest.TestCase):
         self.assertIn('if (device.getDeviceProfile() != VirtualDevice.DEVICE_PROFILE_COMPUTER_CONTROL) continue;', read)
         self.assertIn('for (int id : device.getDisplayIds()) if (id > 0) sessionDevices.put(id, device.getDeviceId());', read)
         work = (OVERLAY/'RoseAgentWork.java').read_text()
-        self.assertIn('Owner owner = device == null ? null : owners.byDevice.get(device);', work)
-        self.assertIn('if (!CONTROLLER.equals(owner.packageName) || owner.uid != controllerUid) continue;', work,
+        self.assertIn('for (Map.Entry<Integer, Owner> e : owners.appsOwners.entrySet()) {', work,
+            'the devices of the same atomic apps snapshot')
+        self.assertIn('if (CONTROLLER.equals(o.packageName) && o.uid == controllerUid) rose.add(e.getKey());', work,
             'exact controller package and this user\'s controller uid')
         for heuristic in ('candidate', 'others', 'automation.packages'):
             self.assertNotIn(heuristic, re.sub(r'/\*.*?\*/', '', work, flags=re.S), f'{heuristic}: no package attribution')
-        self.assertIn('for (Task t : fresh.unattributed) if (same(t, card)) return Open.UNATTRIBUTED;', work)
+        self.assertIn('if (fresh.state != State.AVAILABLE) return Open.UNATTRIBUTED;', work,
+            'a card whose fresh read cannot confirm Rose\'s work is refused with that reason')
         show = code[code.index('private void show(RoseAgentWork next, Map<Integer, Bitmap> frames, boolean locked) {'):code.index('private void select(')]
         self.assertIn('for (RoseAgentWork.Task task : next.items) {', show, 'unconfirmed tasks are never cards')
         self.assertNotIn('unattributed', show)
@@ -588,10 +588,11 @@ class InitialLoadAttributionTest(unittest.TestCase):
         work = (OVERLAY/'RoseAgentWork.java').read_text()
         decide = work[work.index('static RoseAgentWork of(int controllerUid'):work.index('static RoseAgentWork unconfirmed()')]
         self.assertIn('if (owners.malformed || owners.appsMalformed) return failed(Step.OWNERSHIP);', decide)
-        self.assertIn('if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);', decide)
-        self.assertIn('if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);', decide)
-        self.assertIn('if (owner == null) {\n                if (!CONTROLLER.equals(t.packageName)) held.add(t);', decide,
-            'missing ownership is held as unconfirmed, never a card')
+        self.assertIn('if (rose.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);', decide,
+            'no controller device in the snapshot: confirmed empty')
+        self.assertIn('if (rose.size() > 1 || owners.incompleteDevices.contains(rose.get(0))) return unavailable(UNCONFIRMED);',
+            decide, 'more than one, or any incomplete: cannot confirm')
+        self.assertIn('members.remove(CONTROLLER);', decide, 'the controller itself is never a member')
         decision = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
         for timed in ('postDelayed', 'Thread.sleep', 'SystemClock', 'currentTimeMillis', 'nanoTime', 'Handler('):
             self.assertNotIn(timed, decision, f'{timed}: no time in the attribution decision')
@@ -607,8 +608,7 @@ class InitialLoadAttributionTest(unittest.TestCase):
         self.assertLess(read.index('ActivityTaskManager.getInstance().getTasks(TASK_LIMIT)'), read.index('vdm.getVirtualDevices()'),
             'tasks first, then the devices, so a live session display a task is on is listed')
         self.assertLess(read.index('vdm.getVirtualDevices()'), read.index('if (platform.generation() != generation) return RoseAgentWork.unconfirmed();'))
-        self.assertIn('boolean complete = running.size() < TASK_LIMIT;', read)
-        self.assertIn('List<Integer> released = platform.released(sessionDevices.keySet());', read)
+        self.assertNotIn('released', read, 'tasks and displays never decide membership')
 
 class AutomatedDevicesConsumerTest(unittest.TestCase):
     """#156 consumer of the contract agreed with OS Core (relayed 19:51:27Z): AutomatedPackageListener
@@ -670,7 +670,7 @@ class AutomatedDevicesConsumerTest(unittest.TestCase):
         got = [l for l in result.stdout.splitlines() if '|' in l]
         self.assertEqual(len(got), len(data['scenarios']))
         for sc, line in zip(data['scenarios'], got):
-            name, state, cards, held, reason = line.split('|')
+            name, state, cards, held, reason, _members = line.split('|')
             want = sc['expect']
             with self.subTest(scenario=sc['name']):
                 self.assertEqual(name, sc['name'])
@@ -830,12 +830,133 @@ class DeviceAppsParityTest(unittest.TestCase):
         self.assertIn('if (!ownership.acceptApps(snapshotGeneration, deviceIds, ownerPackages, ownerUids, deviceComplete,', strip)
         self.assertIn('if (task.taskId == RoseAgentWork.NO_TASK) continue;', strip)
         work = re.sub(r'/\*.*?\*/', '', (OVERLAY/'RoseAgentWork.java').read_text(), flags=re.S)
-        self.assertIn('if (apps == null || !apps.contains(t.packageName)) {\n                held.add(t);', work,
-            'a running task whose app is not listed is never a card')
-        self.assertIn('items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));', work)
+        self.assertIn('if (members.contains(t.packageName) && attached.add(t.packageName)) items.add(t);', work,
+            'tasks only attach to members; an unlisted task is never a card and holds nothing back')
+        self.assertIn('if (!attached.contains(pkg)) items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));', work)
+        self.assertIn('if (card.taskId == NO_TASK) return Preview.NONE;', work, 'no visible task claims no preview reason')
         for history in ('completed', 'finished', 'history', 'lastResult', 'result'):
             self.assertNotIn(history, work.split('static RoseAgentWork of(')[1].split('static RoseAgentWork unconfirmed()')[0],
                 f'{history}: membership never reads task history')
+
+class CommonParityReplayTest(unittest.TestCase):
+    """#156/#225: Launcher3's consumer replay of App Core's common parity fixture (qa/parity/current-apps-parity.json,
+    owned by App Core; read here, never edited). Each case's platform input becomes the exact listener callbacks
+    (onAutomatedDevicesChanged then onAutomatedDeviceAppsChanged, one generation) and runs through the production
+    RoseAgentWork; the row's class (cards with their packages, genuine_empty, or cannot_confirm) must equal the case's
+    expected. A case Launcher3 cannot replay (platform null) is never counted as a parity pass, and each of the fixture's
+    knownGaps is replayed for Launcher3's own side and stays parity not_claimed."""
+    FIXTURE = ROOT/'qa/parity/current-apps-parity.json'
+    UID, OTHER_UID, CONTROLLER = 10123, 10456, 'dev.pixel.backgroundcontrol'
+    enc = staticmethod(AutomatedDevicesConsumerTest.encode)
+
+    def lines(self, name, platform, gen, reset=False):
+        """The listener callbacks and platform reads Launcher3 would get for one platform input."""
+        out = [f'S\t{name}'] if name else []
+        if reset:
+            out.append('R')
+        if platform.get('locked'):
+            return out + ['K']
+        if platform.get('unavailable'):
+            # A live session exists (its display is listed) but no ownership snapshot reached Launcher3.
+            return out + ['D\t101\t1', 'T\t1\t101\t0\tcom.example.app\ttrue', 'E']
+        if platform.get('malformed'):
+            out.append('\t'.join(['G', str(gen), self.enc([1]), self.enc([self.CONTROLLER]), self.enc([self.UID])]))
+            out.append('\t'.join(['A', str(gen), self.enc([1]), self.enc([self.CONTROLLER]), self.enc([self.UID]),
+                self.enc(['true']), self.enc([1, 1]), self.enc(['com.example.app'])]))
+            return out + ['D\t101\t1', 'E']
+        devices = platform['devices']
+        ids = list(range(1, len(devices) + 1))
+        owners = [self.CONTROLLER if d['owner'] == 'controller' else 'com.other.agent' for d in devices]
+        uids = [self.UID if d['owner'] == 'controller' else self.OTHER_UID for d in devices]
+        complete = [str(bool(d['complete'])).lower() for d in devices]
+        app_ids = [i for i, d in zip(ids, devices) for _ in d['apps']]
+        app_pkgs = [a for d in devices for a in d['apps']]
+        out.append('\t'.join(['G', str(gen), self.enc(ids), self.enc(owners), self.enc(uids)]))
+        out.append('\t'.join(['A', str(gen), self.enc(ids), self.enc(owners), self.enc(uids), self.enc(complete),
+            self.enc(app_ids), self.enc(app_pkgs)]))
+        for i in ids:
+            out.append(f'D\t{100 + i}\t{i}')
+        return out + ['E']
+
+    def run_lines(self, lines):
+        out = Path(tempfile.mkdtemp(prefix='rose-parity-'))
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseAgentWork.java'), str(ROOT/'os/tests/RoseAgentScenarios.java')],
+            check=True, capture_output=True)
+        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseAgentScenarios',
+            str(self.UID), '0'], input='\n'.join(lines) + '\n', capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [l.split('|') for l in result.stdout.splitlines() if '|' in l]
+
+    @staticmethod
+    def category(state, members):
+        if state == 'AVAILABLE':
+            return 'cards', sorted(members.split(',')) if members else []
+        if state == 'EMPTY':
+            return 'genuine_empty', []
+        return 'cannot_confirm', []
+
+    def load(self):
+        import json
+        self.assertTrue(self.FIXTURE.is_file(), 'App Core\'s common fixture is on this base (PR370)')
+        return json.loads(self.FIXTURE.read_text())
+
+    def test_every_replayable_case_matches_and_the_rest_are_named_differences(self):
+        data = self.load()
+        self.assertEqual(set(data['categories']), {'cards', 'genuine_empty', 'cannot_confirm'})
+        cases = [c for c in data['cases'] if c['platform'] is not None]
+        not_replayable = [c['name'] for c in data['cases'] if c['platform'] is None]
+        lines = []
+        for c in cases:
+            lines += self.lines(c['name'], c['platform'], 1)
+        got = self.run_lines(lines)
+        self.assertEqual([g[0] for g in got], [c['name'] for c in cases])
+        for c, g in zip(cases, got):
+            with self.subTest(case=c['name']):
+                self.assertEqual(self.category(g[1], g[5]), (c['expected']['category'], sorted(c['expected']['apps'])))
+        self.assertEqual(not_replayable, ['session_unreleased_cleanup_failed'],
+            'only the controller-only case is not replayable here; any new one must be added to the fixture and resolved')
+        gaps = ' '.join(g['description'] for g in data['knownGaps'])
+        self.assertIn('cleanup_failed', gaps, 'the controller-only case is a named known gap, not a parity pass')
+
+    def test_sequences_replay_through_one_ledger(self):
+        data = self.load()
+        by_name = {c['name']: c for c in data['cases']}
+        for seq in data['sequences']:
+            lines, expected = [f'S\t{seq["name"]}'], []
+            gen = 0
+            for step in seq['steps']:
+                lines.append('C')  # each step is a fresh read of the platform; the ledger is the same registration
+                if step.get('reconnect'):
+                    # A new registration: nothing reported yet while Rose's session display is still listed.
+                    lines += ['R', 'D\t101\t1', 'T\t1\t101\t0\tcom.example.app\ttrue', 'E']
+                else:
+                    gen += 1
+                    lines += self.lines(None, by_name[step['case']]['platform'], gen)
+                expected.append((step['expected']['category'], sorted(step['expected']['apps'])))
+            got = self.run_lines(lines)
+            with self.subTest(sequence=seq['name']):
+                self.assertEqual([self.category(g[1], g[5]) for g in got], expected)
+
+    def test_each_known_gap_replays_to_launcher3s_stated_side_and_stays_not_claimed(self):
+        """knownGaps (lingering_unreleased_device, replacement_old_and_new_devices): Launcher3's own side is replayed
+        from the gap's platform input and must equal its launcherCategory; the gap is parity not_claimed, with the two
+        surfaces in different categories. Encoded as an open difference until App Core's current_apps reads the owner
+        device view (PR374) and the fixture moves these into cases."""
+        data = self.load()
+        gaps = data['knownGaps']
+        self.assertEqual({g['name'] for g in gaps}, {'lingering_unreleased_device', 'replacement_old_and_new_devices'})
+        lines = []
+        for g in gaps:
+            lines += self.lines(g['name'], g['platform'], 1)
+        got = self.run_lines(lines)
+        for g, row in zip(gaps, got):
+            with self.subTest(gap=g['name']):
+                self.assertEqual(row[0], g['name'])
+                self.assertEqual(self.category(row[1], row[5])[0], g['launcherCategory'])
+                self.assertEqual(g['parity'], 'not_claimed')
+                self.assertNotEqual(g['launcherCategory'], g['homeCategory'], 'NOT parity: a named, open difference')
 
 if __name__ == '__main__':
     unittest.main()

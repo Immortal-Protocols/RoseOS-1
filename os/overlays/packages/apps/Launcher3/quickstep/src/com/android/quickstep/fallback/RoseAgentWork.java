@@ -2,7 +2,6 @@
 package com.android.quickstep.fallback;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -71,14 +70,17 @@ final class RoseAgentWork {
         final boolean appsReceived, appsMalformed;
         final long appsGeneration;
         final Map<Integer, Set<String>> appsByDevice;
+        /** The owners of the devices in the same apps snapshot (it carries its own device list, atomically). */
+        final Map<Integer, Owner> appsOwners;
         /** Devices that also run another user's activity, which the platform never reports to this user. */
         final Set<Integer> incompleteDevices;
         Owners(boolean received, boolean malformed, Map<Integer, Owner> byDevice) {
-            this(received, malformed, byDevice, 0, false, false, 0, Collections.emptyMap(), Collections.emptySet());
+            this(received, malformed, byDevice, 0, false, false, 0, Collections.emptyMap(), Collections.emptySet(),
+                Collections.emptyMap());
         }
         Owners(boolean received, boolean malformed, Map<Integer, Owner> byDevice, long generation, boolean appsReceived,
                 boolean appsMalformed, long appsGeneration, Map<Integer, Set<String>> appsByDevice,
-                Set<Integer> incompleteDevices) {
+                Set<Integer> incompleteDevices, Map<Integer, Owner> appsOwners) {
             this.received = received; this.malformed = malformed;
             this.byDevice = Collections.unmodifiableMap(new HashMap<>(byDevice));
             this.generation = generation; this.appsReceived = appsReceived; this.appsMalformed = appsMalformed;
@@ -89,6 +91,7 @@ final class RoseAgentWork {
             }
             this.appsByDevice = Collections.unmodifiableMap(apps);
             this.incompleteDevices = Collections.unmodifiableSet(new HashSet<>(incompleteDevices));
+            this.appsOwners = Collections.unmodifiableMap(new HashMap<>(appsOwners));
         }
     }
 
@@ -107,12 +110,13 @@ final class RoseAgentWork {
         private long appsGeneration;
         private Map<Integer, Set<String>> apps = new HashMap<>();
         private Set<Integer> incomplete = new HashSet<>();
+        private Map<Integer, Owner> appsOwners = new HashMap<>();
 
         /** A new registration: nothing is known until its first valid snapshots. */
         void reset() {
             baseline = false; malformed = false; generation = 0; owners = new HashMap<>();
             appsBaseline = false; appsMalformed = false; appsGeneration = 0; apps = new HashMap<>();
-            incomplete = new HashSet<>();
+            incomplete = new HashSet<>(); appsOwners = new HashMap<>();
         }
 
         /**
@@ -146,10 +150,12 @@ final class RoseAgentWork {
                 appsMalformed = true;
                 apps = new HashMap<>();
                 incomplete = new HashSet<>();
+                appsOwners = new HashMap<>();
                 return changed;
             }
             if (appsBaseline && gen <= appsGeneration) return false;
             appsBaseline = true; appsMalformed = false; appsGeneration = gen; apps = next; incomplete = partial;
+            appsOwners = devices;
             return true;
         }
 
@@ -169,7 +175,7 @@ final class RoseAgentWork {
 
         Owners snapshot() {
             return new Owners(baseline && !malformed, malformed, owners, generation, appsBaseline && !appsMalformed,
-                    appsMalformed, appsGeneration, apps, incomplete);
+                    appsMalformed, appsGeneration, apps, incomplete, appsOwners);
         }
 
         private static Map<Integer, Owner> parse(long gen, int[] deviceIds, String[] packages, int[] uids) {
@@ -187,7 +193,7 @@ final class RoseAgentWork {
 
     final State state;
     final List<Task> items;
-    /** Session tasks whose ownership the platform has not confirmed: never cards, and selecting one is refused. */
+    /** Always empty under the common contract (tasks never hold a member back); kept in the result's shape. */
     final List<Task> unattributed;
     final String reason;
 
@@ -269,105 +275,54 @@ final class RoseAgentWork {
     }
 
     /**
+     * The common #156/#225 contract, agreed with App Core and Home: membership and its completeness come only from the
+     * platform's atomic apps snapshot (onAutomatedDeviceAppsChanged, the same repository, lock and global generation
+     * as App Core's getOwnedAutomatedDevices), for the devices owned by exactly CONTROLLER with this user's controller
+     * uid. No such device: confirmed empty. Exactly one, complete: its apps, the controller itself excluded (none left:
+     * empty). More than one, or any incomplete (another user's activity omitted): cannot confirm, no app cards. Before
+     * the first valid snapshot: not reported; a malformed one: could not be read. Running tasks never add, remove or
+     * hold back a member; they only attach a member's live view and selection (its front-most task on that device's
+     * display). A member with no visible task has no preview, which says so and claims no reason.
+     *
      * controllerUid: the uid of CONTROLLER for the current user, or -1 when it is not installed for that user.
-     * currentUser: only that user's agent work is shown (user/profile boundary).
-     * owners: the applied ownership snapshot.
-     * sessionDevices: display id to device id, for the virtual devices whose platform-set profile is
-     * DEVICE_PROFILE_COMPUTER_CONTROL, as read now.
-     * releasedDisplays: session displays seen in an earlier read and no longer listed (ids are never reused).
-     * complete: false when the task list may be truncated.
+     * currentUser: only that user's tasks are attached.
+     * sessionDevices: display id to device id, for the devices whose platform-set profile is COMPUTER_CONTROL.
      */
     static RoseAgentWork of(int controllerUid, int currentUser, Owners owners, Map<Integer, Integer> sessionDevices,
-            Collection<Integer> releasedDisplays, List<Task> tasks, boolean complete) {
+            List<Task> tasks) {
         if (controllerUid < 0) return unavailable("Rose agent control is not installed for this user");
-        if (owners == null || sessionDevices == null || releasedDisplays == null || tasks == null) {
+        if (owners == null || sessionDevices == null || tasks == null) {
             return unavailable("Running work could not be read");
         }
         if (owners.malformed || owners.appsMalformed) return failed(Step.OWNERSHIP);
-        List<Task> session = new ArrayList<>();
-        for (Task t : tasks) {
-            if (t.userId != currentUser || t.displayId <= 0) continue;
-            if (sessionDevices.containsKey(t.displayId) || releasedDisplays.contains(t.displayId)) session.add(t);
-        }
-        // Rose's session devices: owned by exactly CONTROLLER with this user's controller uid.
+        if (!owners.appsReceived) return unavailable(NOT_REPORTED);
         List<Integer> rose = new ArrayList<>();
-        for (Map.Entry<Integer, Owner> e : owners.byDevice.entrySet()) {
+        for (Map.Entry<Integer, Owner> e : owners.appsOwners.entrySet()) {
             Owner o = e.getValue();
             if (CONTROLLER.equals(o.packageName) && o.uid == controllerUid) rose.add(e.getKey());
         }
-        Collections.sort(rose);
-        boolean roseApps = false, partial = false;
-        for (int device : rose) {
-            Set<String> apps = owners.appsByDevice.get(device);
-            if (apps != null) for (String pkg : apps) roseApps |= !CONTROLLER.equals(pkg);
-            partial |= owners.incompleteDevices.contains(device);
+        if (rose.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
+        if (rose.size() > 1 || owners.incompleteDevices.contains(rose.get(0))) return unavailable(UNCONFIRMED);
+        int device = rose.get(0);
+        Set<String> members = new TreeSet<>(owners.appsByDevice.getOrDefault(device, Collections.emptySet()));
+        members.remove(CONTROLLER);
+        if (members.isEmpty()) return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
+        // Attach each member's front-most task on this device's displays (getTasks is front to back).
+        List<Task> items = new ArrayList<>();
+        Set<String> attached = new HashSet<>();
+        for (Task t : tasks) {
+            Integer on = t.displayId > 0 ? sessionDevices.get(t.displayId) : null;
+            if (on == null || on != device || t.userId != currentUser) continue;
+            if (members.contains(t.packageName) && attached.add(t.packageName)) items.add(t);
         }
-        boolean consistent = owners.received && owners.appsReceived && owners.appsGeneration == owners.generation;
-        if (session.isEmpty() && !roseApps) {
-            // "No background work" only when none is confirmed: the platform lists no session display at all, or the
-            // complete task list and one consistent ownership snapshot agree there is none. A possibly truncated task
-            // list, or session displays before any ownership report, is not proof of none.
-            if (!complete) return unavailable(UNCONFIRMED);
-            if (sessionDevices.isEmpty() && releasedDisplays.isEmpty() && rose.isEmpty()) {
-                return new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
-            }
-            if (consistent) {
-                return partial ? unavailable(UNCONFIRMED) : new RoseAgentWork(State.EMPTY, new ArrayList<>(), EMPTY);
-            }
+        int display = 0;
+        for (Map.Entry<Integer, Integer> e : sessionDevices.entrySet()) {
+            if (e.getValue() == device && (display == 0 || e.getKey() < display)) display = e.getKey();
         }
-        if (!owners.received || !owners.appsReceived) return unavailable(NOT_REPORTED);
-        // The two callbacks of one dispatch carry one generation; a read between them is not one state.
-        if (owners.appsGeneration != owners.generation || !complete) return unavailable(UNCONFIRMED);
-        List<Task> items = new ArrayList<>(), held = new ArrayList<>();
-        Set<String> carded = new HashSet<>();
-        for (Task t : session) {
-            Integer device = sessionDevices.get(t.displayId);
-            Owner owner = device == null ? null : owners.byDevice.get(device);
-            if (owner == null) {
-                if (!CONTROLLER.equals(t.packageName)) held.add(t);
-                continue;
-            }
-            if (!CONTROLLER.equals(owner.packageName) || owner.uid != controllerUid) continue;
-            if (CONTROLLER.equals(t.packageName)) continue;
-            Set<String> apps = owners.appsByDevice.get(device);
-            if (apps == null || !apps.contains(t.packageName)) {
-                held.add(t); // running on Rose's device but not yet in the platform's list: in flight
-                continue;
-            }
-            // One card per app on a device: its front-most task (getTasks is front to back).
-            if (carded.add(device + "/" + t.packageName)) items.add(t);
+        for (String pkg : members) {
+            if (!attached.contains(pkg)) items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));
         }
-        for (int device : rose) {
-            Set<String> apps = owners.appsByDevice.get(device);
-            if (apps == null) continue;
-            int display = Integer.MAX_VALUE;
-            for (Map.Entry<Integer, Integer> e : sessionDevices.entrySet()) {
-                if (e.getValue() == device) display = Math.min(display, e.getKey());
-            }
-            for (String pkg : apps) {
-                if (CONTROLLER.equals(pkg) || carded.contains(device + "/" + pkg)) continue;
-                // A member app whose activity sits inside another app's task: a card with no task of its own, never
-                // captured, never opened. Without a known display of its device it cannot be placed: unconfirmed.
-                if (display == Integer.MAX_VALUE) {
-                    held.add(new Task(NO_TASK, 0, currentUser, pkg, pkg, false));
-                    continue;
-                }
-                carded.add(device + "/" + pkg);
-                items.add(new Task(NO_TASK, display, currentUser, pkg, pkg, false));
-            }
-        }
-        // The common #156/#225 rendering contract (agreed with Home and App Core): a membership shown is the whole
-        // membership. Any part of Rose's scope that is not attested complete (an unconfirmed or in-flight task, a device
-        // that also runs another user's activity, or more than one Rose session device, which App Core's single-session
-        // transport cannot describe) shows no app cards and says Rose's work can't be confirmed; selecting a held task
-        // is refused. Complete and empty is genuinely empty; complete is shown.
-        if (!held.isEmpty() || partial || rose.size() > 1) {
-            List<Task> refused = new ArrayList<>(held);
-            refused.addAll(items);
-            return new RoseAgentWork(State.UNAVAILABLE, new ArrayList<>(), refused, UNCONFIRMED);
-        }
-        if (!items.isEmpty()) return new RoseAgentWork(State.AVAILABLE, items, held, null);
-        return new RoseAgentWork(State.EMPTY, items, EMPTY);
+        return new RoseAgentWork(State.AVAILABLE, items, null);
     }
 
     /** A report arrived while the platform was being read: the read is not one consistent state. */
@@ -393,10 +348,9 @@ final class RoseAgentWork {
      * own live session or refuses. Any other outcome says why and never shows a different task.
      */
     static Open decide(Task card, RoseAgentWork fresh) {
-        if (fresh != null) {
-            for (Task t : fresh.unattributed) if (same(t, card)) return Open.UNATTRIBUTED;
-        }
-        if (fresh == null || fresh.state != State.AVAILABLE) return Open.GONE;
+        if (fresh == null || fresh.state == State.EMPTY) return Open.GONE;
+        // Not confirmed now (cannot confirm, not reported, unreadable or locked): the card is never opened.
+        if (fresh.state != State.AVAILABLE) return Open.UNATTRIBUTED;
         if (card.taskId == NO_TASK) {
             // A member without a task of its own: still a member on the same display, but never Rose's current screen.
             for (Task t : fresh.items) {
@@ -414,12 +368,6 @@ final class RoseAgentWork {
             return t.topOfDisplay ? Open.WATCH : Open.NOT_CURRENT;
         }
         return Open.GONE;
-    }
-
-    /** The same entry: by task id, or for a member without a task of its own, by display, user and package. */
-    private static boolean same(Task a, Task b) {
-        if (a.taskId != NO_TASK || b.taskId != NO_TASK) return a.taskId == b.taskId;
-        return a.displayId == b.displayId && a.userId == b.userId && a.packageName.equals(b.packageName);
     }
 
     static String describe(Open result, String label) {
@@ -440,7 +388,7 @@ final class RoseAgentWork {
      * to capture. LOCKED: nothing of Rose's screens is shown while the phone is locked. Only Rose's own cards (items)
      * are ever captured; unconfirmed tasks, other agents' and the human's never are.
      */
-    enum Preview { CAPTURE, BEHIND, LOCKED }
+    enum Preview { CAPTURE, BEHIND, LOCKED, NONE }
 
     static final String PREVIEW_BEHIND = "Behind another app";
     static final String PREVIEW_LOCKED = "Hidden while locked";
@@ -448,6 +396,8 @@ final class RoseAgentWork {
 
     static Preview preview(Task card, boolean locked) {
         if (locked) return Preview.LOCKED;
+        // No visible task of its own: nothing proves why, so no reason is claimed (not "behind another app").
+        if (card.taskId == NO_TASK) return Preview.NONE;
         return card.topOfDisplay ? Preview.CAPTURE : Preview.BEHIND;
     }
 
@@ -456,6 +406,7 @@ final class RoseAgentWork {
         switch (preview) {
             case LOCKED: return PREVIEW_LOCKED;
             case BEHIND: return PREVIEW_BEHIND;
+            case NONE: return PREVIEW_NONE;
             default: return captured ? null : PREVIEW_NONE;
         }
     }
