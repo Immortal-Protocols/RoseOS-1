@@ -128,6 +128,45 @@ only. It is not physical-device acceptance:
   The app itself makes no readPixels calls.
 - Physical-device rendering, touch feel and GPU performance remain unverified.
 
+## Visual direction: Oxblood (selected for this prototype)
+
+Nathan selected the Oxblood direction for this high-fidelity prototype on 2026-11-02, for the prototype only. Production reference `ce126f56` is unchanged. Oxblood is now the default (`Rose-HiFi.html`). The previous look and its ten tray options stay available through `?theme=classic` or `?tray=N`, unchanged from `c76d0a2`, and the controls panel has a **Visual direction** selector.
+
+The direction comes from Notion's "Rose — Sunlit Instruments | Visual Study". The reference images are `Rose-01-Home-and-Agent.png` (SHA-256 `9743db7a…`), `Rose-02-Work-and-Switcher.png` (`10216bf9…`) and `Rose-03-Oxblood-Conversation.png` (`1ac16dff…`), viewed through Notion's file tools. They are generated concept boards, not app screenshots. This prototype does not embed them. The fields in `src/assets/oxblood-*.svg` are original procedural SVG.
+
+What changes in `src/oxblood.css` and the markup:
+
+- **Material:** deep oxblood and graphite with platinum and warm sunlit edges, oblique glass planes, no grain and no blue.
+- **Trays:** small skewed instrument trays.
+  - Home keeps three controls: Rose, Rose's voice (output) mute and Overview.
+  - Rose's tray holds only the microphone and end call.
+  - Rose's apps keeps back, end and the manager.
+- **Navigation:** Background Work opens from a separate upper-right glass button. It is highlighted only while a task is running.
+- **Previews:** app previews in Rose's apps and the switcher are desaturated and tinted to sit in the field, and the detail views show them clear. This is an aesthetic treatment, not a privacy guarantee.
+- **Switcher:** it keeps the large human carousel, the smaller agent carousel and no persistent tray.
+
+Behaviour is unchanged:
+
+- Mic mute, Rose's voice mute, ending the call and Stop stay independent.
+- Ending a call or muting never stops background work.
+- Accessible names and the 44 px minimum targets are kept.
+
+To run the walkthrough in each mode:
+
+```sh
+node prototypes/rose-hifi/browser-check.cjs
+```
+
+```sh
+ROSE_THEME=classic node prototypes/rose-hifi/browser-check.cjs
+```
+
+```sh
+ROSE_TRAY=N node prototypes/rose-hifi/browser-check.cjs
+```
+
+These run Oxblood (the default), Classic, and Classic with tray option N.
+
 ## Bottom-tray options (exploration)
 
 `src/tray-variants.css` holds ten opt-in bottom-tray directions, requested by

@@ -315,6 +315,8 @@
     $('rose-end').innerHTML = '<span class="end">' + I.UI.end + '</span>';
     $('rose-end').disabled = !callLive;
     $('rose-agents').innerHTML = I.UI.grid;
+    // Background-work entry (Oxblood: upper right). Highlight only while a task is actually running.
+    $('rose-work').dataset.working = String(M.taskActivity(state).length > 0);
     const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? (state.voiceMuted ? 'Rose speaking · voice muted' : 'Rose speaking') : state.muted ? 'Microphone muted' : 'Listening') : '';
     $('rose-caption').textContent = caption;
     renderResult();
@@ -408,6 +410,7 @@
   $('rose-mic').addEventListener('click', () => dispatch({ type: 'mute' }));
   $('rose-end').addEventListener('click', () => { dispatch({ type: 'endCall' }); if (state.view === 'home') $('tray-rose').focus({ preventScroll: true }); });
   $('rose-agents').addEventListener('click', () => dispatch({ type: 'agents' }));
+  $('rose-work').addEventListener('click', () => dispatch({ type: 'agents' }));
   $('home-bar').addEventListener('click', () => dispatch({ type: 'home' }));
   $('unlock').addEventListener('click', () => dispatch({ type: 'unlock' }));
   document.addEventListener('keydown', (e) => {
@@ -427,14 +430,28 @@
   $('h-attn').onclick = () => dispatch({ type: 'taskEvent', id: 'reply', value: 'attention' });
   $('h-done').onclick = () => { const id = Object.keys(state.tasks).find((k) => M.STOPPABLE.includes(state.tasks[k].state)); if (id) dispatch({ type: 'taskEvent', id, value: 'done' }); };
   // Bottom-tray exploration: opt-in via ?tray=1…10 or the harness selector; default unchanged.
+  // Visual direction: Oxblood (Nathan, 2026-11-02) is the prototype default; ?theme=classic keeps the
+  // previous HiFi look, where the ten tray options (?tray=N) remain available unchanged.
+  const params = new URLSearchParams(location.search);
+  function setTheme(v) {
+    const t = v === 'classic' ? 'classic' : 'oxblood';
+    device.dataset.theme = t;
+    $('h-theme').value = t;
+    $('h-tray').disabled = t === 'oxblood';
+    if (t === 'oxblood') setTray('');
+    renderer.refresh();
+  }
   function setTray(v) {
-    const n = /^(10|[1-9])$/.test(String(v)) ? String(v) : '';
+    let n = /^(10|[1-9])$/.test(String(v)) ? String(v) : '';
+    if (device.dataset.theme === 'oxblood') n = '';
     if (n) screen.dataset.tray = n; else delete screen.dataset.tray;
     $('h-tray').value = n;
     renderer.refresh();
   }
   $('h-tray').onchange = (e) => setTray(e.target.value);
-  setTray(new URLSearchParams(location.search).get('tray'));
+  $('h-theme').onchange = (e) => setTheme(e.target.value);
+  setTheme(params.get('theme') || (params.get('tray') ? 'classic' : 'oxblood'));
+  setTray(params.get('tray'));
   $('h-reduced').checked = media.matches;
   $('h-reduced').onchange = (e) => { reducedOverride = e.target.checked; render(); };
   media.addEventListener('change', () => { $('h-reduced').checked = media.matches || reducedOverride; render(); });

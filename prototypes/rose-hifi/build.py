@@ -26,10 +26,12 @@ def build():
     js = {k: (SRC / f).read_text() for k, f in {'MODEL': 'model.js', 'RENDERER': 'renderer.js', 'APP': 'icons.js'}.items()}
     js['APP'] = js['APP'] + '\n' + (SRC / 'views.js').read_text() + '\n' + (SRC / 'app.js').read_text()
     # Tray options are opt-in (data-tray on #screen) and appended after the default styles.
-    html = html.replace('/*%%CSS%%*/', (SRC / 'style.css').read_text() + '\n' + (SRC / 'tray-variants.css').read_text())
+    html = html.replace('/*%%CSS%%*/', (SRC / 'style.css').read_text() + '\n' + (SRC / 'tray-variants.css').read_text() + '\n' + (SRC / 'oxblood.css').read_text())
     for key, code in js.items():
         html = html.replace('/*%%' + key + '%%*/', code)
     html = html.replace('%%WALLPAPER%%', data_uri('wallpaper.jpg', 'image/jpeg'))
+    html = html.replace('%%OX_HOME%%', data_uri('oxblood-home.svg', 'image/svg+xml'))
+    html = html.replace('%%OX_ROSE%%', data_uri('oxblood-rose.svg', 'image/svg+xml'))
     html = html.replace('%%BRUSH%%', '"data:image/svg+xml,' + urllib.parse.quote(BRUSH_SVG, safe="/:=' ") + '"')
     for name in ('firefox', 'thunderbird', 'vlc'):
         html = html.replace('%%ICON_' + name.upper() + '%%', data_uri(name + '.png', 'image/png'))

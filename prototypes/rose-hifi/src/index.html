@@ -2,14 +2,14 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rose HiFi Prototype</title>
 <style>
-:root{--wallpaper:url(%%WALLPAPER%%);--brush:url(%%BRUSH%%)}
+:root{--wallpaper:url(%%WALLPAPER%%);--brush:url(%%BRUSH%%);--ox-home:url(%%OX_HOME%%);--ox-rose:url(%%OX_ROSE%%)}
 /*%%CSS%%*/
 </style></head>
 <body>
 <div class="page">
 <main class="stage" id="stage" aria-label="Rose HiFi prototype">
  <div class="fit" id="fit">
-  <section class="device" id="device" aria-label="Simulated RoseOS phone">
+  <section class="device" id="device" data-theme="oxblood" aria-label="Simulated RoseOS phone">
    <div class="screen" id="screen" data-view="home" data-result="false">
     <div class="punch" aria-hidden="true"></div>
 
@@ -30,7 +30,7 @@
     <!-- Rose voice + results -->
     <section class="view" id="v-rose" data-active="false" aria-label="Rose">
      <div class="ivory-bg" aria-hidden="true"></div>
-     <header class="rose-head"><h2>Rose</h2></header>
+     <header class="rose-head"><h2>Rose</h2><button class="work-btn" id="rose-work" aria-label="Open Rose's background work"><span class="work-glyph" aria-hidden="true"><i></i><i></i><i></i><i></i></span></button></header>
      <div class="rose-stage" id="rose-stage"><div class="rose-slot" id="slot-stage"></div></div>
      <p class="rose-caption" id="rose-caption" aria-hidden="true"></p>
      <article class="rose-output" id="rose-output" aria-live="polite" aria-label="Rose results"></article>
@@ -70,6 +70,12 @@
  <fieldset><legend>Tasks</legend>
   <div class="row"><button class="hbtn" id="h-tasks">Start 3 tasks</button><button class="hbtn" id="h-attn">Needs choice</button><button class="hbtn" id="h-done">Finish one</button></div>
   <div class="tasklist hstatus" id="h-tasklist"></div>
+ </fieldset>
+ <fieldset><legend>Visual direction</legend>
+  <select id="h-theme" class="hbtn" aria-label="Visual direction">
+   <option value="oxblood">Oxblood (selected for the prototype)</option>
+   <option value="classic">Classic HiFi (previous look, tray options)</option>
+  </select>
  </fieldset>
  <fieldset><legend>Tray option</legend>
   <label class="hcheck" for="h-tray">Explore</label>

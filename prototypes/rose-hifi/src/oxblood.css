@@ -1,0 +1,176 @@
+/* ---------- Oxblood direction (Nathan, 2026-11-02 ~17:19 UTC; prototype only) ----------
+   Interprets "Rose — Sunlit Instruments | Visual Study" (Notion 40c7c646…, 04 Oxblood and the
+   03 Oxblood conversation render): deep oxblood + graphite, platinum and warm sunlit edges,
+   straight architectural lines and oblique joins, no grain, no blue, smaller skewed trays.
+   Scoped to #device[data-theme=oxblood]; ?theme=classic keeps the previous look untouched.
+   Navigation is separated from state: Rose's tray holds only mic + end; Background Work opens
+   from an upper-right glass button. */
+#device[data-theme=oxblood]{
+  --wallpaper:var(--ox-home);
+  --ox-ink:#f2e6d9;--ox-ink-2:#d2b9ab;--ox-ink-3:#a88f84;
+  --ox-plat:#ecd5c6;--ox-edge:rgba(236,213,198,.5);--ox-edge-dim:rgba(236,213,198,.22);
+  --ox-glass:rgba(48,14,21,.62);--ox-glass-2:rgba(30,9,13,.78);
+  --ox-red:#ff4b55;--ox-crimson:#c8364c;--focus:#f2c9b6;
+  background:linear-gradient(145deg,#c9a28e,#5b4038 14%,#211617 40%,#1a1213 70%,#b38a77);
+  box-shadow:0 0 0 1px #7d5e53 inset,0 0 0 2px #0e0a0a inset,inset 2px 2px 1px rgba(255,230,215,.32),0 40px 80px rgba(30,10,12,.45),0 12px 24px rgba(30,10,12,.3)}
+#device[data-theme=oxblood] .screen{background:#170609;color:var(--ox-ink)}
+#device[data-theme=oxblood] .punch{background:radial-gradient(circle at 40% 35%,#3a2a2c 0 20%,#070405 45%);box-shadow:0 0 0 2px #120a0b}
+
+/* Fields */
+#device[data-theme=oxblood] .wall{background-position:center top}
+#device[data-theme=oxblood] .ivory-bg{background:var(--ox-rose) center top/cover}
+#device[data-theme=oxblood] .ivory-bg::after{display:none}
+#device[data-theme=oxblood] #v-switcher .wall{filter:blur(18px) brightness(.8) saturate(1.05)}
+#device[data-theme=oxblood] .sw-veil{background:linear-gradient(180deg,rgba(20,5,8,.45),rgba(14,4,6,.72))}
+
+/* Glass sheen: keep the slow warm sweep; drop the cool lens-flare ghosts (no blue). */
+#device[data-theme=oxblood] .glass{opacity:.55}
+#device[data-theme=oxblood] .glass::after{display:none}
+
+/* ---------- Home ---------- */
+#device[data-theme=oxblood] .home-date{top:66px;left:28px;right:auto;text-align:left;font-size:17px;font-weight:400;color:var(--ox-ink);letter-spacing:.01em;text-shadow:0 1px 8px rgba(0,0,0,.45)}
+#device[data-theme=oxblood] .home-page.sparse .app-grid{--cols:4;bottom:128px;left:22px;right:22px;row-gap:16px}
+#device[data-theme=oxblood] .home-page.full .app-grid{bottom:128px;left:16px;right:16px;row-gap:12px}
+#device[data-theme=oxblood] .home-page.few .app-grid{bottom:128px;left:22px;right:22px}
+#device[data-theme=oxblood] .app{width:82px;gap:5px}
+#device[data-theme=oxblood] .tile{width:60px;height:60px;border-radius:15px;
+  background:linear-gradient(160deg,rgba(84,28,38,.55),rgba(34,10,15,.62));
+  -webkit-backdrop-filter:blur(10px) saturate(1.1);backdrop-filter:blur(10px) saturate(1.1);
+  box-shadow:inset 0 1px 0 rgba(255,232,220,.28),inset 0 0 0 1px rgba(236,213,198,.16),0 6px 14px rgba(8,2,4,.45)}
+#device[data-theme=oxblood] .tile::before{background:linear-gradient(140deg,rgba(255,236,224,.55),rgba(255,236,224,.06) 40%,rgba(255,236,224,0) 70%,rgba(255,236,224,.22))}
+#device[data-theme=oxblood] .tile::after{display:none}
+#device[data-theme=oxblood] .tile img,#device[data-theme=oxblood] .tile svg{width:38px;height:38px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+#device[data-theme=oxblood] .app .label{font-size:11.5px;color:var(--ox-ink-2);text-shadow:0 1px 4px rgba(0,0,0,.7)}
+#device[data-theme=oxblood] .page-dots{bottom:92px}
+#device[data-theme=oxblood] .page-dots button i{background:rgba(242,230,217,.35);box-shadow:none}
+#device[data-theme=oxblood] .page-dots button[aria-current=true] i{background:var(--ox-ink);box-shadow:0 0 6px rgba(255,220,205,.6)}
+#device[data-theme=oxblood] .home-bar i{background:rgba(242,230,217,.72)}
+
+/* ---------- Trays: small skewed instrument bars (parallelogram plate, upright controls) ---------- */
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray){
+  height:56px;border-radius:0;padding:0 26px;background:none;box-shadow:none;justify-content:center;gap:14px;
+  left:50%;right:auto;margin-left:0;transform:translateX(-50%);bottom:22px}
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray)::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:7px;
+  transform:skewX(-34deg);
+  background:linear-gradient(180deg,rgba(116,96,90,.92) 0%,rgba(58,44,44,.94) 42%,rgba(30,22,23,.96) 58%,rgba(70,55,52,.94) 100%);
+  box-shadow:inset 0 1.2px 0 rgba(255,238,226,.75),inset 0 -1px 0 rgba(0,0,0,.55),inset 1px 0 0 rgba(255,230,215,.25),0 0 0 .8px rgba(236,205,190,.55),0 10px 22px rgba(8,2,4,.55)}
+#device[data-theme=oxblood] #home-tray{width:248px}
+#device[data-theme=oxblood] #v-rose .tray{width:206px;bottom:40px}
+#device[data-theme=oxblood] #v-agents .tray{width:266px;bottom:40px}
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:56px;height:44px;border-radius:12px;
+  background:linear-gradient(180deg,rgba(0,0,0,.28),rgba(0,0,0,.14));-webkit-backdrop-filter:none;backdrop-filter:none;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.5),inset 0 -1px 0 rgba(255,230,215,.12);color:var(--ox-ink)}
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well::before,
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well::after{display:none}
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well:active{transform:translateY(1px);background:rgba(0,0,0,.36)}
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well svg{width:24px;height:24px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.5))}
+#device[data-theme=oxblood] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well svg.solid{width:26px;height:26px}
+#device[data-theme=oxblood] .well .end svg{color:var(--ox-red)}
+#device[data-theme=oxblood] .well[data-muted=true]{color:#c9b9b2;background:rgba(236,213,198,.14)}
+#device[data-theme=oxblood] .well.selected{box-shadow:inset 0 1px 2px rgba(0,0,0,.4),0 0 0 1.2px rgba(242,201,182,.8),0 0 12px rgba(255,140,150,.35)}
+/* Rose's tray: microphone and end call only; navigation moved to the header. */
+#device[data-theme=oxblood] #rose-agents{display:none}
+/* Home: Rose pearl, Rose's voice (output) mute, overview. */
+#device[data-theme=oxblood] #home-tray .rose-slot canvas,#device[data-theme=oxblood] #home-tray .rose-slot .rose-fallback{width:58px;height:58px}
+#device[data-theme=oxblood] #tray-voice{display:grid}
+#device[data-theme=oxblood] #tray-voice svg{width:24px;height:24px}
+#device[data-theme=oxblood] #home-tray #tray-voice[data-voice-muted=true]{color:#ffb9c0;background:rgba(200,54,76,.32);box-shadow:inset 0 0 0 1.4px rgba(255,150,165,.6)}
+#device[data-theme=oxblood] #home-tray #tray-voice[data-voice-muted=true]::after{display:block;content:'';position:absolute;right:6px;top:5px;left:auto;width:7px;height:7px;border-radius:50%;background:var(--ox-red);box-shadow:0 0 0 1.5px rgba(30,8,12,.9)}
+#device[data-theme=oxblood] .overview-glyph{transform:scale(.62);gap:5px}
+#device[data-theme=oxblood] .overview-glyph i{background:linear-gradient(90deg,#cdbab1,#fff3ea 45%,#e8d6cc 60%,#a8968f);box-shadow:inset 0 1px 0 #fff,0 0 0 .8px rgba(60,40,40,.6),1px 3px 3px rgba(0,0,0,.45)}
+#device[data-theme=oxblood] .overview-glyph i:last-child{background:linear-gradient(90deg,#8e1d30,#e2475d 45%,#c8364c 62%,#7a1626);box-shadow:inset 0 1px 0 rgba(255,210,210,.6),0 0 0 .8px rgba(60,10,20,.7),1px 3px 3px rgba(0,0,0,.45)}
+
+/* ---------- Rose ---------- */
+#device[data-theme=oxblood] .rose-head{top:56px}
+#device[data-theme=oxblood] .rose-head h2{color:var(--ox-ink);font-weight:400;font-size:27px;letter-spacing:-.01em}
+#device[data-theme=oxblood] .screen[data-result=true] .rose-head h2,
+#device[data-theme=oxblood] .screen[data-result=true] .rose-head{padding-left:0}
+.work-btn{display:none}
+#device[data-theme=oxblood] .work-btn{display:grid;place-items:center;width:48px;height:48px;border-radius:12px;position:relative;
+  background:linear-gradient(160deg,rgba(96,34,44,.85),rgba(40,12,17,.92));
+  box-shadow:inset 0 1px 0 rgba(255,236,224,.55),inset 0 0 0 1px rgba(236,213,198,.32),0 0 0 .6px rgba(0,0,0,.6),0 8px 16px rgba(5,1,2,.5)}
+#device[data-theme=oxblood] .work-btn:active{transform:translateY(1px)}
+#device[data-theme=oxblood] .work-glyph{display:grid;grid-template-columns:9px 9px;gap:4px}
+#device[data-theme=oxblood] .work-glyph i{display:block;width:9px;height:9px;border-radius:2px;box-shadow:inset 0 0 0 1.7px var(--ox-ink)}
+/* Running work: one restrained rose glow on the button, nothing perpetual when idle. */
+#device[data-theme=oxblood] .work-btn[data-working=true]{box-shadow:inset 0 1px 0 rgba(255,236,224,.55),inset 0 0 0 1px rgba(255,170,180,.55),0 0 14px rgba(230,70,95,.45),0 8px 16px rgba(5,1,2,.5)}
+#device[data-theme=oxblood] .work-btn[data-working=true]::after{content:'';position:absolute;right:-3px;top:-3px;width:9px;height:9px;border-radius:50%;background:#ff5a68;box-shadow:0 0 0 2px #2a0a10,0 0 8px rgba(255,90,104,.8)}
+#device[data-theme=oxblood] .rose-caption{color:var(--ox-ink-2)}
+#device[data-theme=oxblood] .rose-output h3{color:var(--ox-ink);font-weight:300;letter-spacing:-.03em}
+#device[data-theme=oxblood] .rose-output p{color:var(--ox-ink-2);font-weight:300}
+#device[data-theme=oxblood] .rose-output .facts li{background:var(--ox-glass);color:var(--ox-ink-2);box-shadow:inset 0 1px 0 rgba(255,232,220,.16),inset 0 0 0 1px rgba(236,213,198,.14)}
+#device[data-theme=oxblood] .rose-output .facts b{color:var(--ox-ink)}
+/* Compact pearl beside the title once a result is shown. */
+#device[data-theme=oxblood] .screen[data-result=true] .rose-stage{transform:translate(-140px,-176px) scale(.3)}
+
+/* ---------- Rose's apps (Background Work Manager) ---------- */
+#device[data-theme=oxblood] .agents-surface{padding-top:68px}
+#device[data-theme=oxblood] .wcard{background:var(--ox-glass-2);box-shadow:inset 0 1px 0 rgba(255,232,220,.2),inset 0 0 0 1px rgba(236,213,198,.18),0 10px 22px rgba(5,1,2,.45)}
+#device[data-theme=oxblood] .wcard header{color:var(--ox-ink)}
+#device[data-theme=oxblood] .wcard footer{color:var(--ox-ink-2)}
+#device[data-theme=oxblood] .wbody{background:#2a0e13}
+/* Previews sit inside the dark environment: lowered saturation and highlights, oxblood wash. */
+#device[data-theme=oxblood] .wbody>*{filter:saturate(.72) brightness(.82) contrast(1.05)}
+#device[data-theme=oxblood] .wbody::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(160deg,rgba(120,24,40,.22),rgba(40,8,14,.18))}
+#device[data-theme=oxblood] .stop-btn{border-radius:12px;color:var(--ox-red);background:rgba(0,0,0,.32);box-shadow:inset 0 0 0 1px rgba(255,120,130,.45)}
+#device[data-theme=oxblood] .stop-btn:disabled{color:#6f5a57;background:rgba(0,0,0,.2);box-shadow:inset 0 0 0 1px rgba(236,213,198,.12)}
+#device[data-theme=oxblood] .sdot[data-state=running]{background:#ff7a86;box-shadow:0 0 0 3px rgba(255,122,134,.18)}
+#device[data-theme=oxblood] .sdot[data-state=done]{background:#e8c5b6}
+#device[data-theme=oxblood] .a-empty{color:var(--ox-ink-2)}
+
+/* ---------- System switcher (no persistent tray) ---------- */
+#device[data-theme=oxblood] .hcard{background:#1e0a0e;box-shadow:inset 0 0 0 1px rgba(236,213,198,.2),0 18px 36px rgba(4,1,2,.6)}
+#device[data-theme=oxblood] .hcard header{color:var(--ox-ink)}
+#device[data-theme=oxblood] .sw-link-label{color:var(--ox-ink-2)}
+#device[data-theme=oxblood] #link-grad stop:nth-child(1){stop-color:#ff8d9b}
+#device[data-theme=oxblood] #link-grad stop:nth-child(2){stop-color:#f1cdbd}
+#device[data-theme=oxblood] #link-grad stop:nth-child(3){stop-color:#ff5a68}
+#device[data-theme=oxblood] .links .land,#device[data-theme=oxblood] .links .land-ring{fill:#ff5a68;stroke:#ffe9e2}
+#device[data-theme=oxblood] .links .land-ring{fill:none;stroke:#ff5a68}
+#device[data-theme=oxblood] .links .comet{filter:drop-shadow(0 0 3px #ff9aa6)}
+#device[data-theme=oxblood] .links .track{stroke:rgba(236,213,198,.25)}
+#device[data-theme=oxblood] .sw-halo{background:radial-gradient(circle,rgba(255,120,140,.4),rgba(200,54,76,.18) 45%,transparent 70%)}
+#device[data-theme=oxblood] .sw-agent .wcard[data-state=running]::after{box-shadow:inset 0 0 0 1.5px rgba(255,120,135,.55),0 0 14px rgba(255,90,110,.3)}
+#device[data-theme=oxblood] .sw-empty{color:var(--ox-ink-2)}
+
+/* ---------- App / window detail ---------- */
+#device[data-theme=oxblood] .app-head h2,#device[data-theme=oxblood] .surface h2{color:var(--ox-ink)}
+#device[data-theme=oxblood] .app-head .sub,#device[data-theme=oxblood] .observe{color:var(--ox-ink-2)}
+#device[data-theme=oxblood] .back-btn{color:var(--ox-ink);background:var(--ox-glass);box-shadow:inset 0 1px 0 rgba(255,232,220,.4),inset 0 0 0 1px rgba(236,213,198,.25)}
+#device[data-theme=oxblood] .detail-frame{box-shadow:0 0 0 1px rgba(236,213,198,.2),0 16px 34px rgba(4,1,2,.55)}
+#device[data-theme=oxblood] .task-strip{background:var(--ox-glass);box-shadow:inset 0 0 0 1px rgba(236,213,198,.16)}
+#device[data-theme=oxblood] .task-strip b{color:var(--ox-ink)}
+#device[data-theme=oxblood] .task-strip span:not(.sdot){color:var(--ox-ink-2)}
+#device[data-theme=oxblood] .choice{background:rgba(70,30,22,.7);box-shadow:inset 0 0 0 1px rgba(240,180,120,.4)}
+#device[data-theme=oxblood] .choice p{color:var(--ox-ink)}
+#device[data-theme=oxblood] .choice .sbtn{background:rgba(0,0,0,.3);color:var(--ox-ink);box-shadow:inset 0 0 0 1px rgba(236,213,198,.3)}
+
+/* ---------- Notices, stop sheet, lock ---------- */
+#device[data-theme=oxblood] .notice{background:linear-gradient(180deg,rgba(58,20,27,.94),rgba(34,11,15,.94));color:var(--ox-ink);
+  box-shadow:inset 0 1px 0 rgba(255,232,220,.3),0 0 0 1px rgba(236,213,198,.22),0 12px 28px rgba(4,1,2,.5)}
+#device[data-theme=oxblood] .notice small{color:var(--ox-ink-2)}
+#device[data-theme=oxblood] .notice .ni{background:rgba(0,0,0,.3);color:var(--ox-ink);box-shadow:inset 0 0 0 1px rgba(236,213,198,.25)}
+#device[data-theme=oxblood] .notice .ni.end{color:var(--ox-red)}
+#device[data-theme=oxblood] .sheet{background:linear-gradient(180deg,#3a1219,#24090e);color:var(--ox-ink);box-shadow:inset 0 1px 0 rgba(255,232,220,.3),0 -10px 40px rgba(0,0,0,.55)}
+#device[data-theme=oxblood] .sheet p{color:var(--ox-ink-2)}
+#device[data-theme=oxblood] .sbtn{background:rgba(0,0,0,.28);color:var(--ox-ink);box-shadow:inset 0 0 0 1px rgba(236,213,198,.28)}
+#device[data-theme=oxblood] .sbtn.danger{background:#c42a3a;color:#fff;box-shadow:0 4px 12px rgba(196,42,58,.45)}
+#device[data-theme=oxblood] .scrim{background:rgba(8,2,3,.5)}
+#device[data-theme=oxblood] .lock .unlock{background:rgba(60,18,26,.55);box-shadow:inset 0 0 0 1px rgba(236,213,198,.4)}
+
+@media (prefers-reduced-motion: reduce){#device[data-theme=oxblood] .work-btn[data-working=true]::after{box-shadow:0 0 0 2px #2a0a10}}
+/* Pearl beside the title once a result exists (03 Oxblood conversation); state caption under the title. */
+#device[data-theme=oxblood] .screen[data-result=true] .rose-head h2{padding-left:30px}
+#device[data-theme=oxblood] .screen[data-result=true] .rose-stage{transform:translate(-159px,-264px) scale(.17)}
+#device[data-theme=oxblood] .screen[data-result=true] .rose-caption{left:calc(var(--margin) + 30px);top:96px;font-size:13px;letter-spacing:.02em}
+#device[data-theme=oxblood] .screen[data-result=true] .rose-output{top:200px}
+/* Review fixes: previews tinted into the field (thumbnail scale only; detail views stay clear),
+   and the folded manager grid clears and fades under the small tray. */
+#device[data-theme=oxblood] :is(.wbody,.hbody)>*{filter:saturate(.72) brightness(.7) contrast(1.08)}
+#device[data-theme=oxblood] :is(.wbody,.hbody){position:relative}
+#device[data-theme=oxblood] :is(.wbody,.hbody)::after{content:'';position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(160deg,rgba(140,26,46,.26),rgba(50,10,18,.24))}
+#device[data-theme=oxblood] .hbody{background:#2a0e13}
+#device[data-theme=oxblood] .agents-surface{padding-bottom:132px;
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 132px),transparent calc(100% - 84px));mask-image:linear-gradient(#000 calc(100% - 132px),transparent calc(100% - 84px))}
+#device[data-theme=oxblood] .detail-frame>*{filter:none}
