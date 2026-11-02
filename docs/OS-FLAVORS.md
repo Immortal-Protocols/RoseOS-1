@@ -225,9 +225,19 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     120.16 GiB (1,696,997 files) on 2026-10-28, and reflink is unsupported on that ext4. The Pro
     inspect's truncated 1.13 TB reference walk counts outputs and repo metadata. It is never an
     estimate: it already shows a full copy cannot fit (above 1,254,214,725,632 − reserve).
-  - Provenance limit: the copy is the production working tree as it is (its Frankel integration
-    included) without `.git` or `.repo`, so project revisions are not re-verified, and the admission
-    report's `.repo/manifest.xml` rule needs its resolved-manifest route.
+  - **Provenance** (`completed.json` `provenance`, verbatim `SOURCE_PROVENANCE`): a
+    `production-working-tree-byte-snapshot` with `projectRevisionsVerified: false`,
+    `pinnedManifestVerified: false` and `resolvedManifest: null`.
+    - The copy holds the production working tree as found, its Frankel integration included, without
+      `.git` or `.repo`. Revisions cannot be re-derived from it.
+    - No manifest or resolved manifest read anywhere else is evidence for these bytes. The admission
+      report's manifest rule (`blazer-preparation-preflight.py`) therefore stays BLOCKED for the copy
+      by design.
+    - `selectionSha256` identifies only the copied bytes at copy time. Vendor and lunch then change the
+      tree, and nothing re-hashes it. `complete: true` means only that the copy finished.
+    - Verifying project bytes against the pinned revisions would need a separately approved
+      comparison against the production `.repo` objects that accounts for the integration. This helper
+      does not do it.
 - **Byte limits are a sampled stop, not a filesystem quota.**
   - Every `limits.sampleSeconds` (5 s), the watched outputs are checked against the bound and the
     filesystem's available bytes against the reserve.

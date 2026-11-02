@@ -610,11 +610,30 @@ class SourceRunTest(Fixture):
         return bb.construct(recipe or self.synthetic, op, self.production, self.root,
             statvfs=available if callable(available) else fs(available), **inject)
 
+    def unverified(self, done):
+        """The copy is never presented as verified: exact provenance, and no truthy *verified* or resolved manifest."""
+        self.assertEqual(done['provenance'], bb.SOURCE_PROVENANCE)
+        self.assertEqual((done['provenance']['kind'], done['provenance']['projectRevisionsVerified'],
+                          done['provenance']['pinnedManifestVerified'], done['provenance']['resolvedManifest']),
+                         ('production-working-tree-byte-snapshot', False, False, None))
+        self.assertNotIn('usable', done)
+        def walk(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if 'verified' in key.lower() or 'manifest' in key.lower():
+                        self.assertIn(item, (False, None), key)
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+        walk(done)
+
     def test_copy_is_ordinary_bounded_and_leaves_production_untouched(self):
         before = self.snapshot(self.production)
         self.guard()
         code, done = self.run_source()
-        self.assertEqual((code, done['ok'], done['usable'], done['processesStarted']), (0, True, True, 0), done)
+        self.assertEqual((code, done['ok'], done['complete'], done['processesStarted']), (0, True, True, 0), done)
+        self.unverified(done)
         self.assertEqual(self.snapshot(self.production), before, 'the production root is only read')
         t = self.target
         for rel in self.left:
@@ -683,6 +702,8 @@ class SourceRunTest(Fixture):
         code, done = self.run_source(recipe=tight, out='tight')
         self.assertEqual((code, done['written']), (1, False))
         self.assertIn('above the 64-byte bound', done['refused'])
+        self.unverified(done)
+        self.assertIsNone(done['selectionSha256'])
         # Space shrank between preflight and the copy: the measured projection is checked again before writing.
         calls = []
         def shrinking(path):
@@ -730,7 +751,9 @@ class SourceRunTest(Fixture):
                                         (fast, {'available': dropping}, 'fell below the reserve')):
             with self.subTest(pattern):
                 ok, done = self.construct(recipe, **inject)
-                self.assertEqual((ok, done['usable'], done['written'], done['stagingRemoved']), (False, False, True, True), done)
+                self.assertEqual((ok, done['complete'], done['written'], done['stagingRemoved']), (False, False, True, True), done)
+                self.unverified(done)
+                self.assertIsNone(done['selectionSha256'], 'an incomplete copy has no selection identity')
                 self.assertIn(pattern, done['stopped'])
                 self.assertLess(done['partial']['entries'], done['partial']['of'])
                 self.assertEqual(done['partial']['of'], done['selection']['entries'])
