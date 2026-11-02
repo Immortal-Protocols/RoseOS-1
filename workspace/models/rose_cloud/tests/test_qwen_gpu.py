@@ -612,7 +612,9 @@ class Contract(Adapter):
         self.assertEqual((full['case'], full['step'], full['error']), ('contract', 'done', None))
         c = full['contract']
         self.assertEqual((c['step'], c['allExpected'], c['reasoningSeparated']), ('done', True, True))
-        self.assertEqual(c['models'], {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192})
+        self.assertEqual(c['models'], {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192,
+                                       'timedOut': False})
+        self.assertEqual(c['notRun'], {})
         self.assertEqual([c[k]['verdict'] for k in G.CONTRACT_REPLIES],
                          ['final', 'open_app:calculator', 'final', 'final'])
         self.assertEqual((c['long']['recalled'], c['long']['beyondProven']), (True, True))
@@ -640,6 +642,27 @@ class Contract(Adapter):
         run = G.sanitize_contract(self.runner('chat'))
         self.assertEqual((run['step'], run['contract']['allExpected'], run['contract']['chat']['verdict'],
                           run['contract']['chat']['thinkInContent']), ('done', False, 'failed:malformed_action', True))
+        t.join(60)
+
+    def test_client_timeout_through_the_real_runner(self):
+        """MODELS-QWEN-CONTRACT-002 end to end: the payload's runner and driver against a stand-in whose reply after the
+        tool result is late. The bundle's fixture carries a scaled client timeout (120 s -> 1 s), as the generated
+        fixture carries the real one; the old driver's TimeoutError left the receipt without allExpected."""
+        requests = json.loads(self.bundle['qwen_contract_requests.json'])
+        requests['client']['inference_timeout_ms'] = 1000
+        self.bundle['qwen_contract_requests.json'] = json.dumps(requests)
+        self.serve_mode({'delay_s': {'after': 1.5}})
+        t, box, state = self.start(deadline=15)
+        raw = self.runner('tool')
+        self.assertEqual((raw['step'], raw['error']), ('done', None))
+        run = G.sanitize_contract(raw)
+        c = run['contract']
+        self.assertEqual((c['step'], c['allExpected'], c['notRun'], c['tool']['verdict']),
+                         ('done', False, {}, 'open_app:calculator'))
+        self.assertEqual((c['toolAfter']['verdict'], c['toolAfter']['timedOut'], c['toolAfter']['expectMet']),
+                         ('failed:timeout_response', True, False))
+        self.assertGreaterEqual(c['toolAfter']['seconds'], 1.0)
+        self.assertNotIn('SECRET', json.dumps(run))
         t.join(60)
 
     def test_refusals_before_any_server(self):
@@ -679,16 +702,20 @@ class Contract(Adapter):
         self.assertEqual(sorted(contract_session.CASES), sorted(G.CONTRACT_CASES))
         self.assertEqual(set(contract_session.VERDICTS), set(G.CONTRACT_VERDICTS))
         self.assertEqual(G.CONTRACT_ENGINE, {**G.VISION_ENGINE, 'max_model_len': 8192, 'reasoning_parser': 'qwen3'})
-        self.assertLess(5 * contract_session.REQUEST_TIMEOUT_S, 300)  # models + 4 replies inside bootstrap's 300 s
+        # MODELS-QWEN-CONTRACT-002: the client's own wait per request, and a case budget inside bootstrap's 300 s
+        self.assertEqual(contract_session.REQUEST_TIMEOUT_S, 120)
+        self.assertLess(contract_session.CASE_BUDGET_S, 300)
         worst_reply = {'status': 599, 'verdict': 'failed:model_identity_mismatch', 'expectMet': False,
-                       'identityExact': False, 'thinkInContent': False, 'recalled': False, 'beyondProven': False,
+                       'timedOut': False, 'identityExact': False, 'thinkInContent': False, 'recalled': False, 'beyondProven': False,
                        'finish': 'length', 'reasoningField': 'reasoning_content', 'reasoningChars': (1 << 50) - 1,
                        'contentChars': (1 << 50) - 1, 'promptTokens': (1 << 50) - 1,
                        'completionTokens': (1 << 50) - 1, 'seconds': 999999.9}
         worst = G.sanitize_contract({'case': 'contract', 'step': 'done', 'error': 'E' * 64, 'module': 'm' * 64,
                                      'contract': {'step': 'toolAfter', 'models': {'status': 599, 'ids': (1 << 50) - 1,
                                                                                   'idsExact': False,
-                                                                                  'maxModelLen': (1 << 50) - 1},
+                                                                                  'maxModelLen': (1 << 50) - 1,
+                                                                                  'timedOut': True},
+                                                  'notRun': {k: 'no_proposal' for k in G.CONTRACT_REPLIES},
                                                   **{k: dict(worst_reply) for k in G.CONTRACT_REPLIES},
                                                   'reasoningSeparated': False, 'allExpected': False}})
         self.assertEqual(worst['contract']['long'], worst_reply)  # every field kept when valid

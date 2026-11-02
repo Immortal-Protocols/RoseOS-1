@@ -248,6 +248,13 @@ fn contract_requests() -> Value {
     ROSE_WRITE_QWEN_CONTRACT=1 cargo test --test qwen_contract",
         "model": QWEN,
         "allowlist": ["calculator"],
+        // The client's own limits (Limits::default(), what the app runs with: it sends no limits): the driver waits
+        // inference_timeout_ms per request, exactly as the phone does, and checks replies against max_reply_chars.
+        "client": {
+            "inference_timeout_ms": Limits::default().inference_timeout_ms,
+            "max_tokens": Limits::default().max_tokens,
+            "max_reply_chars": Limits::default().max_reply_chars,
+        },
         "cases": {
             "chat": [{"body": body_text(&chat), "expect": "final"}],
             "tool": [{"body": body_text(&tool), "expect": "open_app:calculator"},
@@ -279,7 +286,22 @@ fn contract_requests_are_this_clients_exact_bodies() {
         .sum();
     // inside the client's own budget (20,000 characters), far past what 2,048 tokens hold
     assert!((12_000..=20_000).contains(&chars), "{chars}");
-    assert_eq!(long["max_tokens"], 512);
+    // every pinned body carries the client's own max_tokens, and the pinned limits are the client's defaults
+    for steps in generated["cases"].as_object().unwrap().values() {
+        for step in steps.as_array().unwrap() {
+            let body: Value = serde_json::from_str(step["body"].as_str().unwrap()).unwrap();
+            assert_eq!(body["max_tokens"], generated["client"]["max_tokens"]);
+        }
+    }
+    let defaults = Limits::default();
+    assert_eq!(
+        (
+            defaults.inference_timeout_ms,
+            defaults.max_tokens,
+            defaults.max_reply_chars
+        ),
+        (120_000, 512, 8_000)
+    );
     assert_eq!(long["model"], QWEN);
 }
 

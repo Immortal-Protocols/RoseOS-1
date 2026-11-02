@@ -248,7 +248,8 @@ class FakeHost(B.Host):
                 case = argv[-1]
                 self.events.append(('contractexec', case, list(argv), timeout))
                 default = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': case, 'step': 'done', 'contract': {
-                    'step': 'done', 'models': {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192},
+                    'step': 'done', 'models': {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192,
+                                               'timedOut': False}, 'notRun': {},
                     'chat': {'status': 200, 'verdict': 'final', 'expectMet': True, 'identityExact': True,
                              'reasoningField': 'reasoning', 'reasoningChars': 200, 'thinkInContent': False},
                     'reasoningSeparated': True, 'allExpected': True}})
@@ -2809,7 +2810,8 @@ class CloudQwenContractOnce(CloudQwenWarmOnce):
                          [('first', 'contract', None), ('c-1', 'long', None), (None, None, 'malformed'),
                           (None, None, 'id_already_used'), (None, None, 'other_payload'), ('c-4', 'tool', None)])
         self.assertEqual(recs[0]['run']['contract']['models'], {'status': 200, 'ids': 1, 'idsExact': True,
-                                                                'maxModelLen': 8192})
+                                                                'maxModelLen': 8192, 'timedOut': False})
+        self.assertEqual(recs[0]['run']['contract']['notRun'], {})
         self.assertTrue(all(len(json.dumps(x, separators=(',', ':'))) <= B.CLOUD_RECEIPT for x in recs))
         # one detached container: exactly the warm container's controls and bounds, its own name, the contract
         # helper mode and the contract bundle; no adapter sources, no published port, no network
@@ -2868,6 +2870,30 @@ class CloudQwenContractOnce(CloudQwenWarmOnce):
         self.host.model_active = self.host.model_container = True
         status, code = self.warm('c-rmfail', rm_fails=True)
         self.assertEqual((self.states(status)['diagnostic'], code), (('failed', 'diagnostic_cleanup_failed'), 1))
+
+    def test_timeouts_and_not_run_reach_the_receipt(self):
+        """MODELS-QWEN-CONTRACT-002: a request that hit the client's timeout and requests that were not sent arrive in
+        rose-models/qwen-session as such, and the payload's case budget fits this bootstrap's per-run bound."""
+        timed = {'status': None, 'verdict': 'failed:timeout_response', 'expectMet': False, 'timedOut': True,
+                 'identityExact': False, 'seconds': 120.0}
+        line = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({'case': 'contract', 'step': 'done', 'contract': {
+            'step': 'done', 'models': {'status': 200, 'ids': 1, 'idsExact': True, 'maxModelLen': 8192,
+                                       'timedOut': False},
+            'chat': {'status': 200, 'verdict': 'final', 'expectMet': True, 'timedOut': False, 'identityExact': True},
+            'tool': timed, 'notRun': {'toolAfter': 'no_proposal', 'long': 'budget', 'evil': 'budget',
+                                      'chat': 'SECRET'},
+            'reasoningSeparated': True, 'allExpected': False}})
+        self.warm('c-timed', contract_runs={'contract': (0, line + '\n')})
+        c = self.sessions()[0]['run']['contract']
+        self.assertEqual((c['tool']['verdict'], c['tool']['timedOut'], c['tool']['seconds'], c['allExpected']),
+                         ('failed:timeout_response', True, 120.0, False))
+        self.assertEqual(c['notRun'], {'toolAfter': 'no_proposal', 'long': 'budget'})
+        self.assertEqual(self.published()['first'], {'exitCode': 0, 'step': 'done', 'allExpected': False})
+        spec = __import__('importlib.util').util.spec_from_file_location('cs', self.lib / 'contract_session.py')
+        cs = __import__('importlib.util').util.module_from_spec(spec)
+        spec.loader.exec_module(cs)
+        self.assertLess(cs.CASE_BUDGET_S + 5, B.QWEN_WARM_SESSION_S)  # the whole case, with the runner's start
+        self.assertEqual(cs.REQUEST_TIMEOUT_S, 120)  # the client's own wait, from the payload's generated fixture
 
     def test_hostile_output_bad_requests_and_missing_sources(self):
         hostile = 'ROSE-CLOUD-QWEN-CONTRACT ' + json.dumps({

@@ -116,7 +116,8 @@ CONTRACT_MARKER = 'ROSE-CLOUD-QWEN-CONTRACT '
 CONTRACT_VERDICTS = ('final', 'open_app:calculator', 'failed:model_identity_mismatch', 'failed:truncated_reply',
                      'failed:empty_completion', 'failed:reply_too_long', 'failed:malformed_action',
                      'failed:unknown_action', 'failed:action_not_allowed', 'failed:malformed_response',
-                     'failed:http_status')
+                     'failed:http_status', 'failed:timeout_response')
+CONTRACT_NOT_RUN = ('budget', 'no_proposal')  # MODELS-QWEN-CONTRACT-002: why a request was not sent
 CONTRACT_REPLIES = ('chat', 'tool', 'toolAfter', 'long')
 STEPS = ('import', 'engine_args', 'load', 'generate', 'done')
 FINISH = ('length', 'stop', 'abort')
@@ -660,8 +661,8 @@ def sanitize_contract(raw):
     reply = lambda x: None if not isinstance(x, dict) else {  # noqa: E731
         'status': _status(x.get('status')),
         'verdict': x.get('verdict') if x.get('verdict') in CONTRACT_VERDICTS else None,
-        **{k: _flag(x.get(k)) for k in ('expectMet', 'identityExact', 'thinkInContent', 'recalled', 'beyondProven')
-           if k in x},
+        **{k: _flag(x.get(k)) for k in ('expectMet', 'timedOut', 'identityExact', 'thinkInContent', 'recalled',
+                                        'beyondProven') if k in x},
         'finish': x.get('finish') if x.get('finish') in ('stop', 'length', 'other') else None,
         'reasoningField': x.get('reasoningField') if x.get('reasoningField') in ('reasoning', 'reasoning_content',
                                                                                   'both') else None,
@@ -676,7 +677,9 @@ def sanitize_contract(raw):
                 'models': None if not isinstance(m, dict) else {
                     'status': _status(m.get('status')),
                     'ids': _count(m.get('ids')), 'idsExact': _flag(m.get('idsExact')),
-                    'maxModelLen': _count(m.get('maxModelLen'))},
+                    'maxModelLen': _count(m.get('maxModelLen')), 'timedOut': _flag(m.get('timedOut'))},
+                'notRun': None if not isinstance(c.get('notRun'), dict) else {
+                    k: v for k, v in c['notRun'].items() if k in CONTRACT_REPLIES and v in CONTRACT_NOT_RUN},
                 **{k: reply(c.get(k)) for k in CONTRACT_REPLIES if k in c},
                 **{k: _flag(c.get(k)) for k in ('reasoningSeparated', 'allExpected')}}}
 

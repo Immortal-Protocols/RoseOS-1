@@ -13,6 +13,14 @@ profile of serving/qwen-fp8.json (served id ``rose-qwen``, the model's own chat 
   closed local-agent-v1 envelope), checked against the agent itself on the shared fixture
   tests/fixtures/qwen_contract_verdicts.json, plus the exact response identity and where the reasoning went.
 
+Deadlines (MODELS-QWEN-CONTRACT-002): each request waits exactly as long as the phone does, the client's own
+``inference_timeout_ms`` (rose_chat_core Limits::default(), generated into the fixture's ``client``: 120 s). A request
+still unanswered then is a reply with the client's own verdict ``failed:timeout_response``, ``timedOut`` and its
+elapsed seconds; the case goes on. A case stays inside bootstrap's 300 s per run (CASE_BUDGET_S): a request that could
+not get a full client timeout in what is left is not sent and is listed in ``notRun`` (``budget``), as is a tool
+follow-up whose proposal did not come (``no_proposal``). ``allExpected`` is false whenever anything timed out or did
+not run; nothing is dropped from the result.
+
 The result holds fixed tokens, booleans, counts and seconds only: never a prompt, a reply, reasoning text or the
 code word. Standard library only; it runs in the serving image.
 """
@@ -20,6 +28,7 @@ code word. Standard library only; it runs in the serving image.
 from __future__ import annotations
 
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -30,11 +39,15 @@ SERVED = 'rose-qwen'
 MAX_MODEL_LEN = 8192
 PROVEN_MAX_MODEL_LEN = 2048
 CONTRACT = 'local-agent-v1'
-MAX_REPLY_CHARS = 8000  # rose_chat_core Limits::default().max_reply_chars
-REQUEST_TIMEOUT_S = 55  # each of at most 5 requests (the client allows 120): a case stays inside bootstrap's 300 s
+CLIENT = REQUESTS['client']  # rose_chat_core Limits::default(), generated with the bodies: the app sends no limits
+MAX_REPLY_CHARS = CLIENT['max_reply_chars']
+REQUEST_TIMEOUT_S = CLIENT['inference_timeout_ms'] / 1000  # the phone's own wait for one reply (120 s)
+MODELS_TIMEOUT_S = 10  # the /v1/models check (not a client request)
+CASE_BUDGET_S = 285  # one case, inside bootstrap's QWEN_WARM_SESSION_S (300 s) with room for the runner's start
+REPLIES = ('chat', 'tool', 'toolAfter', 'long')
 READ_MAX = 1 << 20  # the client's response cap
 FAILED = ('model_identity_mismatch', 'truncated_reply', 'empty_completion', 'reply_too_long', 'malformed_action',
-          'unknown_action', 'action_not_allowed', 'malformed_response', 'http_status')
+          'unknown_action', 'action_not_allowed', 'malformed_response', 'http_status', 'timeout_response')
 VERDICTS = ('final',) + tuple('open_app:' + a for a in REQUESTS['allowlist']) + tuple('failed:' + k for k in FAILED)
 CASE_REQUESTS = {'chat': ('chat',), 'tool': ('tool',), 'long': ('long',), 'contract': ('chat', 'tool', 'long')}
 CASES = tuple(CASE_REQUESTS)
@@ -136,7 +149,8 @@ def verdict(status: int, body: bytes, model: str = SERVED, allowlist=tuple(REQUE
 def observe(status: int, body: bytes, expect: str, recall: str | None = None) -> dict:
     """What one reply showed: fixed tokens, flags and counts only."""
     v = verdict(status, body)
-    out = {'status': status, 'verdict': v, 'expectMet': v == expect, 'identityExact': False, 'finish': None,
+    out = {'status': status, 'verdict': v, 'expectMet': v == expect, 'timedOut': False, 'identityExact': False,
+           'finish': None,
            'reasoningField': None, 'reasoningChars': None, 'contentChars': None, 'thinkInContent': None,
            'promptTokens': None, 'completionTokens': None}
     decoded = decode(body) if 200 <= status <= 299 else None
@@ -163,19 +177,46 @@ def observe(status: int, body: bytes, expect: str, recall: str | None = None) ->
     return out
 
 
-def _http(opener, method, url, body=None):
+def timed_out(seconds: float, recall: str | None = None) -> dict:
+    """A request the client would have given up on: its own verdict, never a pass, with the time it was given."""
+    out = {'status': None, 'verdict': 'failed:timeout_response', 'expectMet': False, 'timedOut': True,
+           'identityExact': False, 'finish': None, 'reasoningField': None, 'reasoningChars': None, 'contentChars': None,
+           'thinkInContent': None, 'promptTokens': None, 'completionTokens': None, 'seconds': round(seconds, 2)}
+    if recall is not None:
+        out.update(recalled=False, beyondProven=None)
+    return out
+
+
+class Timeout(Exception):
+    pass
+
+
+def _http(opener, method, url, body=None, timeout=None):
+    """(status, body); raises Timeout when nothing completes within ``timeout`` (urllib raises TimeoutError while
+    waiting for the response, or a URLError around one while sending)."""
     request = urllib.request.Request(url, data=body, method=method,
                                      headers={'Content-Type': 'application/json'} if body is not None else {})
     try:
-        with opener.open(request, timeout=REQUEST_TIMEOUT_S) as r:
+        with opener.open(request, timeout=REQUEST_TIMEOUT_S if timeout is None else timeout) as r:
             return r.status, r.read(READ_MAX)
     except urllib.error.HTTPError as e:
         return e.code, b''
+    except (TimeoutError, socket.timeout) as e:
+        raise Timeout() from e
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            raise Timeout() from e
+        raise
 
 
 def check_models(opener, base) -> dict:
-    status, body = _http(opener, 'GET', base + '/v1/models')
-    out = {'status': status, 'ids': None, 'idsExact': False, 'maxModelLen': None}
+    out = {'status': None, 'ids': None, 'idsExact': False, 'maxModelLen': None, 'timedOut': False}
+    try:
+        status, body = _http(opener, 'GET', base + '/v1/models', timeout=MODELS_TIMEOUT_S)
+    except Timeout:
+        out['timedOut'] = True
+        return out
+    out['status'] = status
     try:
         data = json.loads(body)['data']
         ids = [m['id'] for m in data]
@@ -196,26 +237,41 @@ def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | No
     if case not in CASES:
         r['step'] = 'bad_case'
         return r
+    deadline = clock() + CASE_BUDGET_S
+    r['notRun'] = {}
     r['models'] = check_models(opener, base)
+    expected = []
     for name in CASE_REQUESTS[case]:
         r['step'] = name
         steps = REQUESTS['cases'][name]
         for i, req in enumerate(steps):
             key = name if i == 0 else name + 'After'
+            expected.append(key)
+            if i and name in r['notRun']:
+                r['notRun'][key] = r['notRun'][name]  # its first request was not sent either, for the same reason
+                continue
             if i and r[name]['verdict'] != steps[0]['expect']:
-                r[key] = None  # the follow-up body only exists after the expected first reply
+                r['notRun'][key] = 'no_proposal'  # the follow-up body only exists after the expected first reply
+                continue
+            if deadline - clock() < REQUEST_TIMEOUT_S:
+                r['notRun'][key] = 'budget'  # it could not get the client's full wait inside this run
                 continue
             t = clock()
-            status, body = _http(opener, 'POST', base + '/v1/chat/completions', req['body'].encode())
+            try:
+                status, body = _http(opener, 'POST', base + '/v1/chat/completions', req['body'].encode())
+            except Timeout:
+                r[key] = timed_out(clock() - t, req.get('recall'))
+                continue
             r[key] = observe(status, body, req['expect'], req.get('recall'))
             r[key]['seconds'] = round(clock() - t, 2)
-    replies = [r[k] for k in ('chat', 'tool', 'toolAfter', 'long') if r.get(k)]
+    replies = [r[k] for k in REPLIES if k in r]
     r['reasoningSeparated'] = any(x['reasoningChars'] for x in replies) and not any(
         x['thinkInContent'] for x in replies)
-    r['allExpected'] = (r['models']['idsExact'] and r['models']['maxModelLen'] == MAX_MODEL_LEN
-                        and r['reasoningSeparated'] and all(x['expectMet'] and x['identityExact'] for x in replies)
-                        and all(r.get(k) is not None for n in CASE_REQUESTS[case]
-                                for k in ([n] + ([n + 'After'] if len(REQUESTS['cases'][n]) > 1 else [])))
-                        and (case not in ('long', 'contract') or (r['long']['recalled'] and r['long']['beyondProven'])))
+    # a request in notRun has no reply, so it fails the first all(); a timed-out reply never meets its expectation
+    r['allExpected'] = bool(
+        r['models']['idsExact'] and r['models']['maxModelLen'] == MAX_MODEL_LEN
+        and r['reasoningSeparated'] and all(k in r for k in expected)
+        and all(x['expectMet'] and x['identityExact'] for x in replies)
+        and (case not in ('long', 'contract') or (r['long']['recalled'] and r['long']['beyondProven'])))
     r['step'] = 'done'
     return r

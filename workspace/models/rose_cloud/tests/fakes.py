@@ -201,7 +201,8 @@ class FakeOpenAI:
 
     The default policy behaves as the contract expects (a reasoning parser returning thinking apart, local-agent-v1
     envelopes, the code word recalled from the start of a long history). ``mode`` breaks one thing at a time:
-    inline_think, wrong_id, no_reasoning, prose, forget, short_prompt, truncate, extra_model, max_model_len."""
+    inline_think, wrong_id, no_reasoning, prose, forget, short_prompt, truncate, extra_model, max_model_len, and
+    delay_s ({kind: seconds}, see ``kind``) holds a reply back."""
 
     THINKING = 'SECRET-FAKE-THINKING about the request'
 
@@ -251,8 +252,17 @@ class FakeOpenAI:
         self.server.shutdown()
         self.server.server_close()
 
+    def kind(self, body):
+        """Which pinned request this is: 'after' (a tool result), 'tool', 'long' or 'chat'."""
+        last = json.loads(body['messages'][-1]['content'])
+        if last.get('rose_event') == 'tool_result':
+            return 'after'
+        text = last.get('text', '')
+        return 'tool' if 'calculator' in text.lower() else 'long' if 'code word' in text else 'chat'
+
     def answer(self, body):
         m = self.mode
+        time.sleep((m.get('delay_s') or {}).get(self.kind(body), 0))  # a slow reply: generation still running
         last = json.loads(body['messages'][-1]['content'])
         text = last.get('text', '')
         everything = json.dumps(body['messages'])
