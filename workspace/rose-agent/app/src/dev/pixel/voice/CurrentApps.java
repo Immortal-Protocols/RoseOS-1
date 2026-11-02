@@ -29,6 +29,8 @@ final class CurrentApps {
 
  /** Fixed reasons (never exception text or identifiers). */
  static final String NOT_REPORTED="not_reported",UNREADABLE="unreadable",LOCKED="locked",NOT_INSTALLED="not_installed",MALFORMED="malformed";
+ /** The source could not attest that its list is every app under control: nothing is shown as if it were. */
+ static final String INCOMPLETE="incomplete";
  static final String STATE_RUNNING="running",STATE_STARTING="starting",STATE_WAITING="waiting";
 
  /** How the overview may ask for this app's live content (PR340 preview params): the app's OWN controller session and
@@ -102,30 +104,22 @@ final class CurrentApps {
   return null;
  }
 
- /** The interim source (until App Core's contract): the controller's own get_state session, which the controller
-  * starts, owns and closes. status/sessionId/taskId/targetPackage as read; failure: the read failed (fixed word).
-  * One app while a session is live with a known package; none when idle/stopped/closed/failed. preview is set only
-  * from an explicitly verified binding for exactly this session (never from whichever workspace is open). */
+ /** The interim source (until App Core's attested contract): the controller's own get_state session, which the
+  * controller starts, owns and closes. With no live session there is no session display, so nothing is under
+  * control (authoritatively empty). A live session reports only its target, never the apps behind it on its display,
+  * so its membership is not attested complete: INCOMPLETE (the explicit unavailable/loading state), never a partial
+  * list presented as every app. Read failures keep their fixed word. verified is no longer used for membership: live
+  * view comes with the attested contract's own handle. */
  static Snapshot fromController(String registration,long generation,String failure,String status,String sessionId,String controllerTaskId,
    String targetPackage,WorkspaceOverview.Binding verified){
   if(failure!=null&&!failure.isEmpty())return Snapshot.unavailable(registration,generation,failure);
-  String st=nz(status);
-  if(st.isEmpty())return Snapshot.unavailable(registration,generation,UNREADABLE);
-  String state;
-  switch(st){
-   case "ready":state=STATE_RUNNING;break;
-   case "launching":case "starting":case "scheduled":state=STATE_STARTING;break;
-   case "blocked":state=STATE_WAITING;break;
+  switch(nz(status)){
    case "idle":case "stopped":case "closed":case "user_stopped":case "cleanup_failed":case "failed":case "rejected":case "target_not_allowed":case "consent_required":
     return new Snapshot(registration,generation,true,"",Collections.<App>emptyList());
+   case "ready":case "launching":case "starting":case "scheduled":case "blocked":
+    return Snapshot.unavailable(registration,generation,INCOMPLETE);
    default:return Snapshot.unavailable(registration,generation,UNREADABLE);
   }
-  if(nz(sessionId).isEmpty()||nz(targetPackage).isEmpty())return Snapshot.unavailable(registration,generation,UNREADABLE);
-  Preview preview=null;
-  if(verified!=null&&verified.sessionId.equals(sessionId)&&verified.controllerTaskId.equals(nz(controllerTaskId))&&verified.targetPackage.equals(targetPackage))
-   preview=new Preview(sessionId,controllerTaskId);
-  List<App> one=new ArrayList<>();one.add(new App(sessionId+"/"+targetPackage,targetPackage,state,preview));
-  return new Snapshot(registration,generation,true,"",one);
  }
  /** The overview's words for an unavailable state (fixed; never identifiers). */
  static String text(String reason){
@@ -134,8 +128,53 @@ final class CurrentApps {
    case NOT_INSTALLED:return "Rose’s background control isn’t on this phone.";
    case MALFORMED:return "Rose’s apps couldn’t be read.";
    case NOT_REPORTED:return "Rose is checking which apps it’s using.";
+   case INCOMPLETE:return "Rose can’t confirm every app it’s using yet.";
    default:return "Rose couldn’t check which apps it’s using.";
   }
+ }
+ /** One reply of the controller's phone-local call("current_apps") (App Core PR355): status live|none|locked,
+  * sessionId, taskId, generation, apps[{packageName, front, target}], read as fields (null when absent). Proposed
+  * additions this also reads, absent in PR355: instance (the controller process's epoch, so a restart is a new
+  * registration even though its generation starts again), sessionStatus (ready|blocked|launching, for each card's
+  * state) and complete (true only when the list is attested to be every app on the session's device). Without
+  * complete:true neither a list nor an empty "none" is shown as authoritative (INCOMPLETE, the loading/unavailable
+  * state); App Core's incompleteReason enum is not settled, so its value is not read. Without sessionStatus the read is
+  * malformed (no state is
+  * guessed). The preview handle goes only to the topmost front app: PR340 frames the session display, so the apps
+  * behind it say live view isn't available. registrationFallback names this reader when instance is absent. */
+ static final class ReplyApp { final String packageName;final boolean front,target;
+  ReplyApp(String packageName,boolean front,boolean target){this.packageName=packageName;this.front=front;this.target=target;} }
+ static Snapshot fromReply(String registrationFallback,String status,String sessionId,String taskId,Long generation,List<ReplyApp> apps,
+   String instance,String sessionStatus,Boolean complete){
+  String reg=nz(instance).isEmpty()?registrationFallback:"controller:"+instance;long gen=generation==null?Long.MIN_VALUE:generation;
+  if(status==null||generation==null)return Snapshot.unavailable(reg,gen,UNREADABLE);
+  switch(status){
+   case "locked":return Snapshot.unavailable(reg,gen,LOCKED);
+   // An empty list is authoritative only when attested complete (App Core's correction: the reply could not tell
+   // incomplete from genuinely empty); anything else is unavailable, never "none running".
+   case "none":if(apps!=null&&!apps.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+    return Boolean.TRUE.equals(complete)?new Snapshot(reg,gen,true,"",Collections.<App>emptyList()):Snapshot.unavailable(reg,gen,INCOMPLETE);
+   case "live":break;
+   default:return Snapshot.unavailable(reg,gen,UNREADABLE);
+  }
+  if(apps==null||nz(sessionId).isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+  // PR355 (41140ec): a live session is never attested complete (behind_front_unlisted, windows_unreadable or
+  // blocked), so it is the explicit unavailable state before anything else is read from it.
+  if(!Boolean.TRUE.equals(complete))return Snapshot.unavailable(reg,gen,INCOMPLETE);
+  String state;
+  switch(nz(sessionStatus)){
+   case "ready":state=STATE_RUNNING;break;case "blocked":state=STATE_WAITING;break;case "launching":state=STATE_STARTING;break;
+   default:return Snapshot.unavailable(reg,gen,MALFORMED);
+  }
+  List<App> out=new ArrayList<>();boolean previewed=false;
+  for(ReplyApp a:apps){
+   if(a==null)return Snapshot.unavailable(reg,gen,MALFORMED);
+   Preview p=null;
+   if(a.front&&!previewed&&!nz(taskId).isEmpty()){p=new Preview(sessionId,taskId);previewed=true;}
+   out.add(new App(sessionId+"/"+nz(a.packageName),a.packageName,state,p));
+  }
+  for(App a:out)if(a.packageName.isEmpty())return Snapshot.unavailable(reg,gen,MALFORMED);
+  return new Snapshot(reg,gen,true,"",out);
  }
  static String nz(String s){return s==null?"":s;}
 }
