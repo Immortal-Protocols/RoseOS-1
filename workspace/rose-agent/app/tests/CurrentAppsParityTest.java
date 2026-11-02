@@ -29,8 +29,30 @@ public final class CurrentAppsParityTest {
         if (a instanceof List) { apps = new ArrayList<>(); for (Object x : (List<?>) a) { Map<?, ?> m = (Map<?, ?>) x;
             apps.add(new ReplyApp(str(m, "packageName"), Boolean.TRUE.equals(m.get("front")), Boolean.TRUE.equals(m.get("target")))); } }
         Object g = r.get("generation"), c = r.get("complete");
+        // The agreed two-app shape (owned_devices with sessions[] bindings) takes the same path as the activity.
+        List<Binding> bindings = bindings(r.get("sessions"));
+        if ("owned_devices".equals(str(r, "source")) && bindings != null) {
+            List<ReplyApp> withSessions = null;
+            if (a instanceof List) { withSessions = new ArrayList<>(); for (Object x : (List<?>) a) { Map<?, ?> m = (Map<?, ?>) x;
+                withSessions.add(new ReplyApp(str(m, "packageName"), Boolean.TRUE.equals(m.get("front")), Boolean.TRUE.equals(m.get("target")), str(m, "sessionId"))); } }
+            return CurrentApps.fromBindings(registration, str(r, "status"), g instanceof Number ? ((Number) g).longValue() : null, withSessions, bindings,
+                str(r, "controllerEpoch"), c instanceof Boolean ? (Boolean) c : null);
+        }
         return CurrentApps.fromReply(registration, str(r, "status"), str(r, "sessionId"), str(r, "taskId"), g instanceof Number ? ((Number) g).longValue() : null,
             apps, str(r, "instance"), str(r, "sessionStatus"), c instanceof Boolean ? (Boolean) c : null, str(r, "source"));
+    }
+    /** sessions[] as bindings (slot/bound present), or null when the reply has none in that shape. */
+    static List<Binding> bindings(Object v) {
+        if (!(v instanceof List)) return null;
+        List<Binding> out = new ArrayList<>();
+        for (Object x : (List<?>) v) {
+            if (!(x instanceof Map)) return null; Map<?, ?> m = (Map<?, ?>) x;
+            if (!m.containsKey("bound") || !m.containsKey("slot")) return null;
+            Object slot = m.get("slot");
+            out.add(new Binding(slot instanceof Number ? ((Number) slot).intValue() : -1, str(m, "sessionId"), str(m, "taskId"), str(m, "targetPackage"), str(m, "sessionStatus"),
+                Boolean.TRUE.equals(m.get("bound")), Boolean.TRUE.equals(m.get("frontKnown"))));
+        }
+        return out;
     }
     @SuppressWarnings("unchecked")
     static void check(Tracker t, Map<?, ?> expected, String what) {
