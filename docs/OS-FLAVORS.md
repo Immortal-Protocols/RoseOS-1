@@ -186,6 +186,35 @@ where the runner has it (otherwise a double that decodes the real sparse format)
 available offline). Synthetic observations are accepted only through the Python API flag
 `allow_synthetic`; the CLI refuses them.
 
+## Blazer preparation interface (BLAZER-PREP, for Release integration)
+
+`scripts/blazer-build-only.py {plan|preflight|run} --stage S --host LABEL --lock PATH [...]` (recipe
+`os/build-only/blazer.json`). `plan` and `preflight` read only. `run` needs a new `--receipt-dir` and writes
+`preflight.json`, `started.json` and `completed.json` there, write-once.
+
+| Stage | Required inputs | Does | Bound (proposal) |
+|---|---|---|---|
+| `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. | 8 GiB, 3600 s |
+| `vendor` | `--download-dir D --source-root ISO --node N` | Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`, and measures what it wrote. | 128 GiB, 10800 s |
+| `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user`, then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
+
+- **Isolation**: `ISO` and `D` must not be, contain or sit inside the production source root
+  `/home/pixelbuild/grapheneos-2026100600` (`os/release-pipeline/frankel.json`), and no operator path
+  may be a symlink.
+- **Lock**: the lock (`/home/pixelbuild/frankel-build.lock` by contract) is probed and then held
+  with `LOCK_NB`. A held lock refuses.
+- **Existing outputs**: these refuse and are never deleted or reused: the archive, a `.part`,
+  `vendor/google_devices/blazer`, `vendor/adevtool/dl/unpacked/blazer-CP3A.261005.005` and
+  `out-blazer-lunch`. A failed download removes only the `.part` it created.
+- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes.
+  `vendor` and `lunch` also fail when measured consumption exceeds the bound; their outputs are kept.
+- **Bounds**: these are proposals for review, not measurements. The preparation preflight's peak is
+  their sum (144 GiB); no prior Blazer measurement is needed.
+- **Exit status**: 0 ready/success, 1 not ready or failed, 2 invalid input.
+- **Out of scope**: `compile` is outside preparation and still needs a measured
+  `compileAllowanceBytes`. Nothing here compiles, signs, publishes or flashes, and no runtime scope
+  is approved.
+
 ## Callable contract
 
 ```bash

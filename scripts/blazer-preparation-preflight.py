@@ -26,9 +26,12 @@ Rules (all must pass):
 - the raw .repo/manifest.xml bytes match the pinned manifest, or a separate resolved-manifest observation shows the
   wrapper with exactly one include whose bytes equal the pinned manifest and the required project revisions. This is
   a byte-level comparison, never a claim of host semantic equivalence; repo and its hooks are never run;
-- space uses availableBytes on the filesystem holding the source root (never freeBytes or total size); a complete,
-  bounded, Blazer-specific transient plus collision estimate must leave at least 322122547200 bytes. Frankel physical
-  usage is proxy evidence only, and a provider disk size is not filesystem or free-space evidence.
+- the observed source root is an isolated work tree: never the production source root
+  (os/release-pipeline/frankel.json host.sourceRoot), inside it or containing it, and the operation names the same root;
+- space uses availableBytes on the filesystem holding that isolated root (never freeBytes or total size); the peak is
+  the sum of the recipe's proposal stage bounds (os/build-only/blazer.json preparation download+vendor+lunch boundBytes)
+  and must leave at least 322122547200 bytes. No prior Blazer measurement is required; a supplied estimate is reported
+  as a note only, and a provider disk size is not filesystem or free-space evidence.
 
 The full-build allocation is reported separately as unknown and is not part of this admission.
 """
@@ -45,6 +48,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = 'os/devices/pixel10.json'
 MANIFEST_PATH = 'os/pinned-manifest.xml'
 PIPELINE_PATH = 'os/release-pipeline/frankel.json'
+RECIPE_PATH = 'os/build-only/blazer.json'
+BOUND_STAGES = ('download', 'vendor', 'lunch')
 SCHEMA = 'roseos.blazer-preparation-observations.v1'
 REPORT_SCHEMA = 'roseos.blazer-preparation-report.v1'
 DEVICE = 'blazer'
@@ -71,8 +76,18 @@ def load_inputs(root=ROOT):
     contract = (root/CONTRACT_PATH).read_bytes()
     manifest = (root/MANIFEST_PATH).read_bytes()
     pipeline = json.loads((root/PIPELINE_PATH).read_text())
+    prep = json.loads((root/RECIPE_PATH).read_text())['preparation']
     return {'contract': json.loads(contract), 'contractSha256': hashlib.sha256(contract).hexdigest(),
-        'manifestBytes': manifest, 'sourceRoot': pipeline['host']['sourceRoot']}
+        'manifestBytes': manifest, 'productionSourceRoot': pipeline['host']['sourceRoot'],
+        'stageBounds': {stage: prep[stage]['boundBytes'] for stage in BOUND_STAGES}, 'boundsKind': prep['boundsKind']}
+
+
+def isolated(path, production):
+    """True when PATH is an absolute path that is not, inside or containing the production source root."""
+    if not isinstance(path, str) or not path.startswith('/') or '..' in path.split('/'):
+        return False
+    path, production = path.rstrip('/') or '/', production.rstrip('/')
+    return not (path == production or path.startswith(production + '/') or production.startswith(path + '/') or path == '/')
 
 
 def manifest_projects(data):
@@ -146,8 +161,13 @@ def assess(obs, inputs, now):
         block('binding-recipe', 'observed recipe revision is missing or not a full commit id', True)
     elif source['recipeSha'] != op.get('recipeSha'):
         block('binding-recipe', f'observations come from recipe {source["recipeSha"]}, operation names {op.get("recipeSha")!r}')
-    if source.get('sourceRoot') != inputs['sourceRoot'] or op.get('sourceRoot') != inputs['sourceRoot']:
-        block('binding-source-root', f'source root must be {inputs["sourceRoot"]} for both observations and operation')
+    work_root = source.get('sourceRoot')
+    if op.get('sourceRoot') != work_root:
+        block('binding-source-root', f'the operation must name the observed source root {work_root!r}; it names '
+            f'{op.get("sourceRoot")!r}')
+    if not isolated(work_root, inputs['productionSourceRoot']):
+        block('source-root-production', f'source root {work_root!r} must be an isolated work tree, never the production '
+            f'source root {inputs["productionSourceRoot"]}, inside it or containing it')
     hashes = source.get('hashes') if isinstance(source.get('hashes'), dict) else {}
     if hashes.get('contractSha256') != inputs['contractSha256']:
         block('binding-contract', f'observations name contract {hashes.get("contractSha256")!r}, checked-in '
@@ -258,34 +278,26 @@ def assess(obs, inputs, now):
     if 'apiDiskSizeBytes' in space or 'apiDiskSizeGiB' in space:
         notes.append('provider disk size ignored: it is not filesystem or free-space evidence')
     available = fs.get('availableBytes')
-    space_result = {'availableBytes': available, 'reserveFloorBytes': RESERVE_FLOOR_BYTES,
-        'estimateKind': estimate.get('kind'), 'peakBytes': None, 'marginBytes': None,
+    peak = sum(inputs['stageBounds'].values())
+    space_result = {'availableBytes': available, 'reserveFloorBytes': RESERVE_FLOOR_BYTES, 'peakBytes': peak,
+        'peakKind': inputs['boundsKind'], 'stageBounds': inputs['stageBounds'], 'marginBytes': None,
         'fullBuildAllocation': 'unknown'}
+    if estimate:
+        notes.append(f'estimate kind {estimate.get("kind")!r} reported only: admission uses the recipe proposal bounds, '
+            'not a prior measurement')
     if not is_int(available):
         if 'freeBytes' in fs:
             block('space-free-not-available', 'freeBytes is not admission evidence; availableBytes is required', True)
         else:
             block('space-available-unknown', 'availableBytes not observed', True)
-    if fs.get('queriedPath') != inputs['sourceRoot']:
-        block('space-filesystem', f'filesystem must be queried at the source root {inputs["sourceRoot"]}; observed '
+    if fs.get('queriedPath') != work_root:
+        block('space-filesystem', f'filesystem must be queried at the isolated source root {work_root!r}; observed '
             f'{fs.get("queriedPath")!r}')
-    peak = None
-    if estimate.get('kind') != 'blazer':
-        block('space-estimate-proxy' if estimate.get('kind') else 'space-estimate-unknown',
-            f'estimate kind {estimate.get("kind")!r}: Frankel physical usage is proxy evidence only; a Blazer estimate is '
-            'required', True)
-    elif estimate.get('complete') is not True or estimate.get('bounded') is not True:
-        block('space-estimate-incomplete', 'Blazer estimate is not complete and bounded', True)
-    elif not (is_int(estimate.get('transientBytes')) and is_int(estimate.get('collisionBytes'))):
-        block('space-estimate-incomplete', 'transientBytes and collisionBytes must both be observed', True)
-    else:
-        peak = estimate['transientBytes'] + estimate['collisionBytes']
-        space_result['peakBytes'] = peak
-    if peak is not None and is_int(available):
+    if is_int(available):
         margin = available - peak
         space_result['marginBytes'] = margin
         if margin < RESERVE_FLOOR_BYTES:
-            block('space-reserve', f'availableBytes {available} minus peak {peak} leaves {margin}, below the reserve '
+            block('space-reserve', f'availableBytes {available} minus the proposal peak {peak} leaves {margin}, below the reserve '
                 f'{RESERVE_FLOOR_BYTES}; no reserve is lowered and nothing is deleted')
 
     if reasons:

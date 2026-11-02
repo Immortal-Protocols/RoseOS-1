@@ -147,14 +147,14 @@
   },
   "missingForFactory": [
     {
-      "input": "build-only recipe run (os/build-only/blazer.json via scripts/blazer-build-only.py): generate and compile not executed",
+      "input": "build-only recipe preparation stages (os/build-only/blazer.json via scripts/blazer-build-only.py download, vendor, lunch): not executed",
       "owner": "Infra (operator, admitted builder)",
-      "next": "on an admitted builder: download and verify the pinned factory image, generate vendor/google_devices/blazer (product registration, firmware metadata), then lunch and compile; the historical Pro run 41255851279 observed only configuration and pins"
+      "next": "on an admitted builder, in an isolated work tree (never the production source root): download and verify the pinned factory image, generate vendor/google_devices/blazer (product registration, firmware metadata), then the lunch target check; the historical Pro run 41255851279 observed only configuration and pins"
     },
     {
-      "input": "operator capacity inputs for the recipe (capacity.generateAllowanceBytes and compileAllowanceBytes, null) and the host Node version",
+      "input": "operator review of the recipe's proposal preparation bounds (preparation.download/vendor/lunch boundBytes and timeoutSeconds) and the host Node version; compile's measured compileAllowanceBytes is still null",
       "owner": "Infra (operator)",
-      "next": "measure on the operator's host as the recipe already requires; unresolved, not estimated, and no new gate here"
+      "next": "Infra/operator accepts or replaces the proposal bounds before any runtime approval; the stages measure and record what they consume. No new gate here"
     },
     {
       "input": "vendor factory image blazer-cp3a.261005.005-factory-cd7d12c2.zip (sha256 cd7d12c2…18e3)",
