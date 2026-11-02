@@ -18,8 +18,15 @@ scripts/factory-package.py to literal historical expected pins, one manual run p
                                 own one-line JSON result (its refusal category and detail), never its stderr or log.
   observe  --run-id --attempt   factory-package.py observe of the pinned signed target-files into
                                 R/inspection/target-files-observation.json.
+  firmware-observe --run-id --attempt
+                                scripts/rango-firmware-observe.py (Signing) of the pinned signed target-files into the
+                                new R/inspection/firmware-observation.json. Its exit and one-line JSON result are kept
+                                write-once in R/inspection/firmware-attempt.json. Exit 0 (with a regular, new output)
+                                and 3 (a refusal, with no output) are reported results; anything else fails.
   classify --run-id --attempt   factory-package.py classify of R/package/rango-install-2026103001.zip, its stdout kept
-                                write-once as R/inspection/classify.json, with --work-dir R/classify-work. Exit 0
+                                write-once as R/inspection/classify.json, with --work-dir R/classify-work, and with
+                                --firmware-observation only when firmware-observe exited 0 with its output; otherwise
+                                classify keeps reporting the missing coverage truthfully. Exit 0
                                 (factoryReady) and 3 (incomplete, still JSON; expected: no archive signature and no
                                 firmware observation) are reported results; anything else fails.
   stage-installer --run-id --attempt
@@ -52,6 +59,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT/'scripts/host-factory-package.py'
 INSPECTOR = ROOT/'scripts/factory-package.py'
+FIRMWARE = ROOT/'scripts/rango-firmware-observe.py'
 DEVICE, BUILD = 'rango', '2026103001'
 PRODUCTION = '/home/pixelbuild/grapheneos-2026100600'
 PINS = {
@@ -70,9 +78,12 @@ TASK_PARENT = '/home/pixelbuild/rose-actions'
 TASK_NAME = 'rango-factory-package-{run_id}-{attempt}'
 INSTALL = f'{DEVICE}-install-{BUILD}.zip'
 # Wrapper ceilings (seconds), not measurements. package: the helper's 60-min generation plus its unbounded hashing,
-# otatools unzip and target-files copy; observe: names-only target-files walk; classify: each tool call is bounded at
-# 3600 s by the helper, two expected (simg2img, lpunpack).
-BOUNDS = {'packageSeconds': 5400, 'observeSeconds': 900, 'classifySeconds': 7200, 'stageSeconds': 900}
+# otatools unzip and target-files copy; observe: names-only target-files walk; firmware: the target-files hash plus
+# at most two 1 GiB containers and their RADIO/ images (the helper has no time bound of its own); classify: each tool
+# call is bounded at 3600 s by the helper, two expected (simg2img, lpunpack). The firmware step's 600 s came out of
+# package (5400 -> 5100) and observe (900 -> 600), so the job total stays at the approved 297 minutes.
+BOUNDS = {'packageSeconds': 5100, 'observeSeconds': 600, 'firmwareSeconds': 570, 'classifySeconds': 7200,
+          'stageSeconds': 900}
 # The private installer artifact (actions/upload-artifact): proposed source bounds, not a measured size or duration.
 # Staging (900 s + 30 s kill) and the 45-min upload keep the approved job total at 297 minutes.
 INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45}
@@ -84,6 +95,8 @@ RESULT_BYTES = 1 << 16  # the helper prints one short JSON line; anything longer
 CATEGORY = re.compile(r'[a-z][a-z_]{0,39}')
 UPLOAD = {'package/factory-package-receipt.json': 'factory-package-receipt.json',
           'inspection/target-files-observation.json': 'target-files-observation.json',
+          'inspection/firmware-observation.json': 'firmware-observation.json',
+          'inspection/firmware-attempt.json': 'firmware-attempt.json',
           'inspection/classify.json': 'classify.json', 'cleanup.json': 'cleanup.json'}
 
 
@@ -155,12 +168,64 @@ def observe_argv(root_dir, run_id, attempt, pins=PINS):
             '--out', str(root_dir/'inspection/target-files-observation.json')]
 
 
-def classify_argv(root_dir, pins=PINS):
+def firmware_argv(root_dir, run_id, attempt, pins=PINS):
+    return [sys.executable, str(FIRMWARE), '--target-files', pins['targetFiles']['path'],
+            '--target-files-sha256', pins['targetFiles']['sha256'], '--device', DEVICE, '--build', BUILD,
+            '--source', f'os-release rango-factory-package run {run_id} attempt {attempt}',
+            '--out', str(root_dir/'inspection/firmware-observation.json')]
+
+
+def classify_argv(root_dir, pins=PINS, firmware=False):
     return [sys.executable, str(INSPECTOR), 'classify', str(root_dir/'package'/INSTALL), '--flavor', DEVICE,
             '--target-files', pins['targetFiles']['path'],
             '--target-files-observation', str(root_dir/'inspection/target-files-observation.json'),
+            *(['--firmware-observation', str(root_dir/'inspection/firmware-observation.json')] if firmware else []),
             '--otatools', pins['otatools']['path'], '--otatools-sha256', pins['otatools']['sha256'],
             '--work-dir', str(root_dir/'classify-work'), '--build', BUILD]
+
+
+def firmware_observe(root_dir, run_id, attempt, runner=subprocess.run):
+    """Run the firmware observer once; keep its exit and sanitized one-line result write-once. Returns the step status:
+    0 for an observation (exit 0 with a new regular output) or a refusal (exit 3 with none), otherwise failure."""
+    packaged(root_dir)
+    inspection, output = root_dir/'inspection', root_dir/'inspection/firmware-observation.json'
+    if inspection.is_symlink() or not inspection.is_dir():
+        raise Invalid('the target-files observation step did not run: nothing to observe into')
+    if os.path.lexists(output):
+        raise Invalid('a firmware observation already exists here; it is never reused')
+    record = {'schema': 'roseos.rango-firmware-observe-attempt.v1', 'step': 'firmware-observe'}
+    fd = os.open(inspection/'firmware-attempt.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, 'w') as f:
+        try:
+            result = runner(firmware_argv(root_dir, run_id, attempt), stdout=subprocess.PIPE, text=True)
+        except OSError as error:
+            record.update(exit=1, category='spawn_failed', detail=type(error).__name__)
+        else:
+            record.update(exit=result.returncode, **sanitized_result(result.stdout))
+            produced = output.is_file() and not output.is_symlink()
+            if result.returncode == 0 and not produced:
+                record.update(category='no_output', detail='exit 0 without a regular observation file')
+            elif result.returncode != 0 and os.path.lexists(output):
+                record.update(category='unexpected_output', detail='an output file exists after a non-zero exit')
+            elif result.returncode == 0:
+                record['category'] = 'observed'
+                record.pop('detail', None)
+        finally:
+            record.setdefault('exit', 1)
+            record.setdefault('category', 'wiring_interrupted')
+            f.write(json.dumps(record, indent=2, sort_keys=True) + '\n')
+    ok = (record['exit'], record['category']) == (0, 'observed') or (record['exit'] == 3 and record['category'] not in
+                                                                      ('unexpected_output', 'no_result'))
+    return 0 if ok else (record['exit'] or 1)
+
+
+def firmware_observed(root_dir):
+    """True only when the firmware step recorded an observation and the file is still the regular file it wrote."""
+    attempt, output = root_dir/'inspection/firmware-attempt.json', root_dir/'inspection/firmware-observation.json'
+    if attempt.is_symlink() or not attempt.is_file():
+        return False
+    record = json.loads(attempt.read_text())
+    return (record.get('exit'), record.get('category')) == (0, 'observed') and output.is_file() and not output.is_symlink()
 
 
 def new_dir(path):
@@ -182,10 +247,11 @@ def packaged(root_dir):
 
 def classify(root_dir, runner=subprocess.run):
     packaged(root_dir)
+    firmware = firmware_observed(root_dir)
     new_dir(root_dir/'classify-work')
     out = os.open(root_dir/'inspection/classify.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(out, 'w') as f:
-        code = runner(classify_argv(root_dir), stdout=f).returncode
+        code = runner(classify_argv(root_dir, firmware=firmware), stdout=f).returncode
     return 0 if code in (0, 3) else (code or 1)
 
 
@@ -322,7 +388,8 @@ def report(root_dir, upload_dir, installer_upload=None, record_path=None):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('check', 'package', 'observe', 'classify', 'stage-installer', 'report'))
+    p.add_argument('command', choices=('check', 'package', 'observe', 'firmware-observe', 'classify', 'stage-installer',
+                                       'report'))
     p.add_argument('--run-id')
     p.add_argument('--attempt')
     p.add_argument('--upload-dir')
@@ -335,7 +402,8 @@ def main(argv=None):
             if a.run_id or a.attempt or a.upload_dir:
                 raise Invalid('check takes no other option')
             print('\n'.join(f'{k}={v}' for k, v in (('package_seconds', bounds['packageSeconds']),
-                ('observe_seconds', bounds['observeSeconds']), ('classify_seconds', bounds['classifySeconds']),
+                ('observe_seconds', bounds['observeSeconds']), ('firmware_seconds', bounds['firmwareSeconds']),
+                ('classify_seconds', bounds['classifySeconds']),
                 ('stage_seconds', bounds['stageSeconds']), ('job_minutes', minutes))))
             return 0
         root_dir = task_root(a.run_id, a.attempt)
@@ -350,6 +418,8 @@ def main(argv=None):
             packaged(root_dir)
             new_dir(root_dir/'inspection')
             return subprocess.run(observe_argv(root_dir, a.run_id, a.attempt)).returncode
+        if a.command == 'firmware-observe':
+            return firmware_observe(root_dir, a.run_id, a.attempt)
         if a.command == 'classify':
             return classify(root_dir)
         if a.command == 'stage-installer':
