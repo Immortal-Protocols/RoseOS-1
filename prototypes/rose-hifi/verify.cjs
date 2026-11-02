@@ -159,4 +159,21 @@ test("locked phone ignores the voice control; reset clears it", () => {
   assert.ok(!run(fresh(), { type: 'lock' }, { type: 'voiceMute' }).voiceMuted);
   assert.ok(!run(run(fresh(), { type: 'voiceMute' }), { type: 'reset' }).voiceMuted);
 });
+// Universal microphone mute (study 09 Home control).
+test('universal mic mute works without a call and carries into the next call', () => {
+  let s = run(fresh(), { type: 'micMute' });
+  assert.ok(s.muted); assert.strictEqual(s.connection, 'disconnected');
+  s = run(s, { type: 'openRose' }, { type: 'connected' });
+  assert.ok(s.muted, 'call starts muted');
+  s = run(s, { type: 'endCall' });
+  assert.ok(s.muted, 'still muted after the call');
+});
+test('universal mic mute never touches speech, voice output, the call or work', () => {
+  const before = run(working(), { type: 'speak' });
+  const r = M.transition(before, { type: 'micMute' });
+  assert.ok(r.state.muted);
+  for (const k of ['speaking', 'voiceMuted', 'connection', 'result', 'view', 'pendingStop']) assert.deepStrictEqual(r.state[k], before[k], k);
+  assert.deepStrictEqual(r.state.tasks, before.tasks);
+  assert.deepStrictEqual(r.effects.map((e) => e.text), ['Muted']);
+});
 console.log('\n' + passed + ' model checks passed');

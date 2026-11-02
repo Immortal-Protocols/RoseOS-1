@@ -315,7 +315,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.locator('#h-folded').click();
   await page.locator('#h-reset').click(); await settle(500);
-  if (process.env.ROSE_TRAY || OX) {
+  if (process.env.ROSE_TRAY) {
     const vbox = await page.evaluate(() => { const b = document.getElementById('tray-voice'); const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const r = b.getBoundingClientRect(); return { w: r.width / k, h: r.height / k, pressed: b.getAttribute('aria-pressed'), name: b.getAttribute('aria-label') }; });
     check('voice control on Home tray, ≥44 px, unpressed, named', vbox.w >= 43.5 && vbox.h >= 43.5 && vbox.pressed === 'false' && /Rose's voice/.test(vbox.name), JSON.stringify(vbox));
     await page.locator('#h-tasks').click();
@@ -346,6 +346,9 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     await page.evaluate(() => window.__rose.dispatch({ type: 'voiceMute' }));
     check('locked phone ignores the voice control', !(await st()).voiceMuted);
     await page.locator('#unlock').click(); await settle(200);
+  } else if (OX) {
+    const ids = await page.evaluate(() => [...document.querySelectorAll('#home-tray .well')].filter((w) => w.getBoundingClientRect().width).map((w) => w.id));
+    check('Oxblood Home edge: Rose · universal mic · switcher (study 09)', JSON.stringify(ids) === JSON.stringify(['tray-rose', 'tray-mic', 'tray-overview']), JSON.stringify(ids));
   } else {
     const hidden = await page.evaluate(() => getComputedStyle(document.getElementById('tray-voice')).display === 'none' && [...document.querySelectorAll('#home-tray .well')].filter((w) => w.getBoundingClientRect().width).length === 2);
     check('default tray unchanged: two controls, voice control hidden', hidden);
@@ -383,11 +386,36 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
     check('back returns to Rose', (await st()).view === 'rose');
     await page.locator('#rose-end').click(); await settle(700);
     ox = await st();
-    check('end call returns Home; work continues; mic mute cleared', ox.view === 'home' && ox.connection === 'disconnected' && Object.values(ox.tasks).every((t) => t.state === 'running'));
-    await page.locator('#tray-voice').click(); await settle(200);
+    check('end call returns Home; work continues; universal mic mute persists', ox.view === 'home' && ox.connection === 'disconnected' && ox.muted && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    const micBox = await page.evaluate(() => { const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const b = document.getElementById('tray-mic'); const r = b.getBoundingClientRect(); return { w: r.width / k, h: r.height / k, pressed: b.getAttribute('aria-pressed'), name: b.getAttribute('aria-label') }; });
+    check('Home mic: ≥44 px, named, shows muted', micBox.w >= 44 && micBox.h >= 44 && micBox.pressed === 'true' && /microphone/i.test(micBox.name), JSON.stringify(micBox));
+    await page.locator('#tray-mic').click(); await settle(200);
     ox = await st();
-    check('Home voice-output mute is independent of the mic', ox.voiceMuted && !ox.muted);
-    await page.locator('#tray-voice').click(); await settle(200);
+    check('Home mic unmutes without a call; work untouched', !ox.muted && ox.connection === 'disconnected' && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    await page.locator('#tray-mic').click(); await settle(200);
+    await page.locator('#tray-rose').click(); await page.waitForFunction(() => window.__rose.getState().connection === 'connected'); await settle(300);
+    ox = await st();
+    check('a call starts in the universal mute state', ox.muted && ox.connection === 'connected');
+    await page.locator('#rose-mic').click(); await settle(200);
+    await page.locator('#rose-end').click(); await settle(700);
+    // Swipe up inside an ordinary app: scrunch + Home's control edge; tap the app to return.
+    await page.locator('#tray-overview').click(); await settle(500);
+    await page.locator('#home-bar').click(); await settle(400);
+    await page.locator('.app[data-app=camera]').click(); await settle(500);
+    const sb = await page.locator('#screen').boundingBox();
+    await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height - 12); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height - 12 - i * 12);
+    await page.mouse.up(); await settle(500);
+    const pk = await page.evaluate(() => ({ peek: document.getElementById('screen').classList.contains('peek'), tray: !document.getElementById('peek-tray').hidden, view: window.__rose.getState().view }));
+    check('swipe up in an app scrunches it and shows the system edge', pk.peek && pk.tray && pk.view === 'app', JSON.stringify(pk));
+    await shot('52-oxblood-app-swipe-up');
+    await page.locator('#v-app').click({ position: { x: 120, y: 260 } }); await settle(400);
+    check('tapping the app restores it', !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    await page.locator('#h-peek').click(); await settle(300);
+    await page.locator('#peek-overview').click(); await settle(600);
+    check('switcher from the raised edge', (await st()).view === 'switcher' && !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))));
+    await page.locator('#home-bar').click(); await settle(400);
+    check('home bar works right after a swipe gesture', (await st()).view === 'home');
     await page.locator('#tray-overview').click(); await settle(700);
     check('switcher has no persistent tray', await page.evaluate(() => !document.querySelector('#v-switcher .tray')));
     await shot('51-oxblood-switcher');
@@ -409,4 +437,4 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   console.log('browser', browser.version(), '| renderer', r.renderer, '| frames', JSON.stringify(summary.frames));
   await browser.close();
   process.exit(results.every((x) => x.ok) ? 0 : 1);
-})().catch((e) => { console.error(e); process.exit(2); });
+})().catch((e) => { for (const x of results) console.log((x.ok ? 'PASS ' : 'FAIL ') + x.name); console.error(e); process.exit(2); });

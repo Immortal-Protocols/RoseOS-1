@@ -183,3 +183,77 @@
    (1/24 runs in headless Chromium 153), leaving mic/end untappable. */
 #device[data-theme=oxblood] .view[data-active=true] .tray{visibility:visible}
 #device[data-theme=oxblood] .view[data-active=false] .tray{visibility:hidden}
+
+/* ---------- Study 09: Contour Home edge + design-07 icons (Nathan, 2026-11-02) ----------
+   Home's bottom is a shallow, continuous brushed-burgundy aluminium edge with controls formed in it
+   (no nested tray): Rose (left), universal microphone mute (centre), twin-stacks switcher (right).
+   Rose/agents trays keep the skewed bar until the study covers them. */
+#tray-mic,.stacks-glyph{display:none}
+#device[data-theme=oxblood] .screen #home-tray{left:0;right:0;bottom:0;width:auto;height:96px;margin:0;transform:none;padding:0 26px 22px;gap:12px;justify-content:center;align-items:center}
+#device[data-theme=oxblood] .screen #home-tray::before{inset:0;transform:none;border-radius:38px 38px 0 0;
+  background:linear-gradient(180deg,rgba(255,150,165,.10),rgba(255,150,165,0) 18%),var(--brush),linear-gradient(180deg,#561520 0%,#3f0f18 45%,#2c0910 100%);
+  background-size:100% 100%,640px 160px,100% 100%;background-blend-mode:normal,soft-light,normal;
+  box-shadow:inset 0 1.5px 0 rgba(255,128,145,.6),inset 0 3px 6px -2px rgba(255,190,200,.18),0 -10px 24px rgba(0,0,0,.45)}
+#device[data-theme=oxblood] .screen #home-tray .well{height:44px;border-radius:11px;color:#efe1d2;
+  background:linear-gradient(180deg,rgba(24,5,9,.5),rgba(70,18,28,.3));
+  box-shadow:inset 0 0 0 1px rgba(236,205,190,.42),inset 0 2px 3px rgba(0,0,0,.45),0 1px 0 rgba(255,150,160,.14)}
+#device[data-theme=oxblood] .screen #tray-rose,#device[data-theme=oxblood] .screen #tray-overview{width:116px}
+#device[data-theme=oxblood] .screen #tray-voice{display:none}
+#device[data-theme=oxblood] .screen #tray-mic{display:grid;width:48px}
+#device[data-theme=oxblood] .screen #tray-mic svg{width:24px;height:24px}
+#device[data-theme=oxblood] .screen #tray-mic[data-muted=true]{color:#ff8c9a;box-shadow:inset 0 0 0 1.4px rgba(255,90,110,.75),inset 0 2px 3px rgba(0,0,0,.45),0 0 10px rgba(255,70,95,.3)}
+#device[data-theme=oxblood] .screen #home-tray .rose-slot canvas,#device[data-theme=oxblood] .screen #home-tray .rose-slot .rose-fallback{width:52px;height:52px}
+#device[data-theme=oxblood] .screen #tray-overview .overview-glyph{display:none}
+#device[data-theme=oxblood] .screen #tray-overview .stacks-glyph{display:block;width:56px;height:25px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.5))}
+/* Home layout around the shallow edge (positions measured from the 09 render). */
+#device[data-theme=oxblood] .home-date{top:78px;left:34px;font-size:20px}
+#device[data-theme=oxblood] .page-dots{bottom:112px}
+#device[data-theme=oxblood] .home-page .app-grid{bottom:160px;left:40px;right:40px;--cols:4;row-gap:20px}
+#device[data-theme=oxblood] .home-page.full .app-grid{left:24px;right:24px;row-gap:14px}
+/* Design-07 system-app icons: subdued ivory monoline on translucent tiles, no labels. Store apps
+   (page 2) keep their own icons and names. */
+#device[data-theme=oxblood] .mono-app .tile{background:rgba(255,232,222,.055);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  box-shadow:inset 0 0 0 1px rgba(255,232,222,.07),inset 0 1px 0 rgba(255,232,222,.1)}
+#device[data-theme=oxblood] .mono-app .tile::before{display:none}
+#device[data-theme=oxblood] .mono-app .tile svg{width:36px;height:36px;color:#ecdccb;filter:none}
+#device[data-theme=oxblood] .mono-app .label{visibility:hidden}
+#device[data-theme=oxblood] .screen #home-tray .well#tray-rose,#device[data-theme=oxblood] .screen #home-tray .well#tray-overview{width:116px}
+#device[data-theme=oxblood] .screen #home-tray .well#tray-mic{width:48px}
+#device[data-theme=oxblood] .screen #home-tray{height:84px;padding-bottom:16px}
+#device[data-theme=oxblood] .screen #home-tray::before{border-radius:30px 30px 0 0;
+  background:linear-gradient(180deg,rgba(255,140,155,.08),rgba(255,140,155,0) 22%),var(--brush),linear-gradient(180deg,#45101a 0%,#330b13 50%,#22060b 100%);
+  background-size:100% 100%,640px 160px,100% 100%;background-blend-mode:normal,overlay,normal}
+#device[data-theme=oxblood] .page-dots{bottom:100px}
+#device[data-theme=oxblood] .home-page .app-grid{bottom:150px}
+#device[data-theme=oxblood] .mono-app .label{display:none}
+#device[data-theme=oxblood] .mono-app .tile svg{width:42px;height:42px}
+#device[data-theme=oxblood] .screen #home-tray .well#tray-overview svg.stacks-glyph{width:64px;height:28px}
+#device[data-theme=oxblood] .screen #home-tray::before{background-size:100% 100%,900px 160px,100% 100%;background-blend-mode:normal,soft-light,normal}
+
+/* ---------- Swipe up inside an app: scrunch + Home's control edge (exploration) ---------- */
+.peek-tray{display:none}
+#device[data-theme=oxblood] .peek-tray{position:absolute;left:0;right:0;bottom:0;height:84px;z-index:44;display:flex;gap:12px;justify-content:center;align-items:center;padding:0 26px 16px;
+  transform:translateY(0);animation:peek-up var(--t-med) var(--ease) both}
+#device[data-theme=oxblood] .peek-tray[hidden]{display:none}
+#device[data-theme=oxblood] .peek-tray::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:30px 30px 0 0;
+  background:linear-gradient(180deg,rgba(255,140,155,.08),rgba(255,140,155,0) 22%),var(--brush),linear-gradient(180deg,#45101a 0%,#330b13 50%,#22060b 100%);
+  background-size:100% 100%,900px 160px,100% 100%;background-blend-mode:normal,soft-light,normal;
+  box-shadow:inset 0 1.5px 0 rgba(255,128,145,.6),0 -10px 24px rgba(0,0,0,.45)}
+@keyframes peek-up{from{transform:translateY(100%)}}
+#device[data-theme=oxblood] .peek-tray .well{display:grid;place-items:center;position:relative;height:44px;border-radius:11px;color:#efe1d2;
+  background:linear-gradient(180deg,rgba(24,5,9,.5),rgba(70,18,28,.3));
+  box-shadow:inset 0 0 0 1px rgba(236,205,190,.42),inset 0 2px 3px rgba(0,0,0,.45),0 1px 0 rgba(255,150,160,.14)}
+#device[data-theme=oxblood] #peek-rose,#device[data-theme=oxblood] #peek-overview{width:116px}
+#device[data-theme=oxblood] #peek-mic{width:48px}
+#device[data-theme=oxblood] #peek-mic svg{width:24px;height:24px}
+#device[data-theme=oxblood] #peek-mic[data-muted=true]{color:#ff8c9a;box-shadow:inset 0 0 0 1.4px rgba(255,90,110,.75),inset 0 2px 3px rgba(0,0,0,.45)}
+#device[data-theme=oxblood] #peek-overview svg{width:64px;height:28px}
+#device[data-theme=oxblood] .peek-pearl{width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%);box-shadow:0 2px 4px rgba(0,0,0,.5)}
+/* The app scrunches up and away from the edge, keeping its own content clear. */
+#device[data-theme=oxblood] .screen.peek :is(#v-app,#v-window){transform:translateY(-58px) scale(.88);border-radius:34px;overflow:hidden;
+  box-shadow:0 0 0 1px rgba(236,205,190,.25),0 24px 50px rgba(0,0,0,.6);transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease);cursor:pointer}
+#device[data-theme=oxblood] :is(#v-app,#v-window){transition:transform var(--t-med) var(--ease),border-radius var(--t-med) var(--ease)}
+#device[data-theme=oxblood] .screen.peek{background:#0f0406}
+#device[data-theme=oxblood] .screen.peek .home-bar{z-index:46}
+#device[data-theme=oxblood] .peek-tray .well::before,#device[data-theme=oxblood] .peek-tray .well::after{display:none}
+#device[data-theme=oxblood] .peek-tray .stacks-glyph{display:block}

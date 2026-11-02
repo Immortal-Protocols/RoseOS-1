@@ -23,7 +23,8 @@
      <div class="tray two" id="home-tray" role="toolbar" aria-label="Persistent tray">
       <button class="well" id="tray-rose" aria-label="Open Rose"><div class="rose-slot" id="slot-tray"></div></button>
       <button class="well" id="tray-voice" aria-pressed="false" aria-label="Mute Rose's voice"></button>
-      <button class="well" id="tray-overview" aria-label="Open system switcher"><span class="overview-glyph" aria-hidden="true"><i></i><i></i><i></i></span></button>
+      <button class="well" id="tray-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+      <button class="well" id="tray-overview" aria-label="Open system switcher"><span class="overview-glyph" aria-hidden="true"><i></i><i></i><i></i></span><svg class="stacks-glyph" viewBox="0 0 64 28" aria-hidden="true"><defs><linearGradient id="ruby-edge" x1="34" y1="0" x2="62" y2="0" gradientUnits="userSpaceOnUse"><stop offset=".5" stop-color="#eadbcd"/><stop offset=".8" stop-color="#ff4a5e"/></linearGradient></defs><g stroke-width="2" stroke-linejoin="round"><path d="M10 11h18l-6 10H4z" fill="none" stroke="#eadbcd"/><path d="M10 5h18l-6 10H4z" fill="#331019" stroke="#eadbcd"/><path d="M42 11h18l-6 10H36z" fill="none" stroke="url(#ruby-edge)"/><path d="M42 5h18l-6 10H36z" fill="#331019" stroke="#eadbcd"/></g></svg></button>
      </div>
     </section>
 
@@ -48,6 +49,11 @@
 
     <div class="lock" id="lock" hidden><div class="wall" aria-hidden="true"></div><div class="time">9:41</div><div class="date">Thursday, October 29</div><button class="unlock" id="unlock">Unlock</button></div>
     <div class="notices" id="notices"></div>
+    <div class="peek-tray" id="peek-tray" role="toolbar" aria-label="System tray" hidden>
+     <button class="well" id="peek-rose" aria-label="Open Rose"><span class="peek-pearl" aria-hidden="true"></span></button>
+     <button class="well" id="peek-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+     <button class="well" id="peek-overview" aria-label="Open system switcher"></button>
+    </div>
     <div id="sheet-host"></div>
     <button class="home-bar" id="home-bar" aria-label="Go home"><i></i></button>
     <div class="glass" aria-hidden="true"></div>
@@ -63,6 +69,7 @@
  <fieldset><legend>Device</legend>
   <div class="row"><button class="hbtn" id="h-folded" aria-pressed="true">Folded</button><button class="hbtn" id="h-unfolded" aria-pressed="false">Unfolded</button></div>
   <div class="row"><button class="hbtn" id="h-lock">Lock</button><button class="hbtn" id="h-reset">Reset</button></div>
+  <div class="row"><button class="hbtn" id="h-peek">Swipe up in app</button></div>
  </fieldset>
  <fieldset><legend>Voice</legend>
   <div class="row"><button class="hbtn" id="h-speak">Rose speaks</button><button class="hbtn" id="h-result">Next result</button></div>

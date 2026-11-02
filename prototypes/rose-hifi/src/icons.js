@@ -40,10 +40,27 @@
     editor: art('<rect x="6" y="8" width="36" height="32" rx="7" fill="#22293a"/><path d="M15 19l-4 5 4 5M33 19l4 5-4 5M27 16l-6 17" stroke="#8fc0ff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'),
     phone: art('<rect x="7" y="7" width="34" height="34" rx="10" fill="#3fb25f"/><path d="M17 13c1-.6 2.4-.3 3 .8l2 3.6c.5 1 .2 2.2-.7 2.8l-1.5 1c1 2.6 3.4 5 6 6l1-1.5c.6-.9 1.8-1.2 2.8-.7l3.6 2c1.1.6 1.4 2 .8 3l-1.2 1.8c-.9 1.3-2.6 2-4.1 1.5C21 31.8 16.2 27 14.6 19.4c-.4-1.5.2-3.2 1.5-4.1z" fill="#fff"/>'),
   };
+  // Oxblood system-app glyphs (study design 07): one ivory stroke weight, no fills except accents.
+  const mono = (body) => '<svg viewBox="0 0 48 48" aria-hidden="true" class="mono" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
+  const MONO = {
+    phone: mono('<path d="M14.5 9.5c1.6-.9 3.4-.4 4.2 1.1l2.6 4.7c.7 1.3.3 2.9-.9 3.7l-2 1.3c1.4 3.5 4.3 6.7 7.9 8.3l1.4-2c.8-1.2 2.4-1.6 3.7-.9l4.7 2.6c1.5.8 2 2.6 1.1 4.2l-1.5 2.4c-1.2 1.8-3.4 2.7-5.5 2-9.3-3.1-15.6-9.6-18.6-18.6-.7-2.1.2-4.3 2-5.5z"/>'),
+    messages: mono('<path d="M24 11c-8.8 0-15 5.1-15 11.5 0 3.6 1.9 6.7 5 8.8L12.5 37l6.3-3.4c1.6.4 3.4.6 5.2.6 8.8 0 15-5.1 15-11.7S32.8 11 24 11z"/>'),
+    maps: '<svg viewBox="0 0 48 48" aria-hidden="true" class="mono"><path d="M37 11 12.5 22.6l10.3 2.6 2.6 10.3z" fill="currentColor"/></svg>',
+    camera: mono('<rect x="8.5" y="15" width="31" height="22" rx="3.5"/><path d="M18 15l2.2-4h7.6L30 15"/><circle cx="24" cy="26" r="5.6"/><circle cx="13" cy="19.5" r=".6" fill="currentColor"/><circle cx="35" cy="19.5" r=".6" fill="currentColor"/>'),
+    mail: mono('<rect x="8.5" y="13.5" width="31" height="21" rx="2.5"/><path d="M9.5 15l14.5 11 14.5-11"/>'),
+    calendar: mono('<rect x="9.5" y="12" width="29" height="26" rx="3.5"/><path d="M16.5 8.5v6M31.5 8.5v6M9.5 19h29"/>' + [0, 1, 2].map((r) => [0, 1, 2, 3].map((c) => '<circle cx="' + (17 + c * 4.7) + '" cy="' + (24.5 + r * 4.5) + '" r=".45" fill="currentColor"/>').join('')).join('')),
+    notes: mono('<path d="M12 16.5h2M19 16.5h17M12 24h24M15 31.5h18"/>'),
+    system: '<svg viewBox="0 0 48 48" aria-hidden="true" class="mono" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="17" cy="17" r="6" fill="currentColor"/><circle cx="31" cy="17" r="5.8"/><circle cx="17" cy="31" r="5.8"/><circle cx="31" cy="31" r="6" fill="currentColor"/><circle cx="24" cy="24" r="1.1" fill="currentColor" stroke="none"/></svg>',
+    clock: mono('<circle cx="24" cy="24" r="14"/><path d="M24 16v8.5l5.5 3.5"/>'),
+    calculator: mono('<rect x="13" y="8.5" width="22" height="31" rx="3.5"/><path d="M17.5 14.5h13M18.5 22h.01M24 22h.01M29.5 22h.01M18.5 27.5h.01M24 27.5h.01M29.5 27.5h.01M18.5 33h.01M24 33h.01M29.5 33h.01" stroke-width="3.2"/>'),
+    contacts: mono('<circle cx="24" cy="19" r="6"/><path d="M13 37c1.5-6.2 5.5-9 11-9s9.5 2.8 11 9"/>'),
+    settings: mono('<circle cx="24" cy="24" r="5"/><path d="M24 9v4.5M24 34.5V39M9 24h4.5M34.5 24H39M13.4 13.4l3.2 3.2M31.4 31.4l3.2 3.2M13.4 34.6l3.2-3.2M31.4 16.6l3.2-3.2"/>'),
+  };
   const RASTER = { firefox: '%%ICON_FIREFOX%%', thunderbird: '%%ICON_THUNDERBIRD%%', vlc: '%%ICON_VLC%%' };
 
   let uid = 0;
-  function appArt(id) {
+  function appArt(id, style) {
+    if (style === 'mono' && MONO[id]) return MONO[id];
     if (RASTER[id]) return '<img alt="" draggable="false" src="' + RASTER[id] + '">';
     const a = ART[id] || ART.files;
     return typeof a === 'function' ? a(++uid) : a;   // unique gradient ids per instance
