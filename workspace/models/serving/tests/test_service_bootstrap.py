@@ -65,6 +65,7 @@ class FakeHost(B.Host):
         self.warm_container, self.warm_run_rc, self.warm_states, self.warm_runs = False, 0, [], {}
         self.contract_container, self.contract_runs, self.contract_name = False, {}, 'rose-cloud-qwen-contract'
         self.active_units = set()
+        self.sticky_enabled = set()
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -423,8 +424,8 @@ class FakeHost(B.Host):
     def systemctl(self, args):
         if args[0] == 'is-enabled':
             return (0, 'enabled') if args[1] in self.enabled else (1, 'disabled')
-        if args[0] == 'disable':
-            self.enabled -= {a for a in args[1:] if not a.startswith('--')}
+        if args[0] == 'disable':  # a unit in sticky_enabled stays enabled (static, linked or re-enabled elsewhere)
+            self.enabled -= {a for a in args[1:] if not a.startswith('--')} - self.sticky_enabled
             return 0, ''
         if args[0] == 'enable':
             self.enabled |= {a for a in args[1:] if not a.startswith('--')}
@@ -3160,6 +3161,18 @@ class HoldOnly(DiagnosticFixture):
         self.assertEqual((code, status['stages']['hold']['detail']), (1, 'hold_container_state_unknown'))
         self.assertFalse(self.receipt()['verified'])
         self.host.ps_results = []
+
+    def test_a_unit_that_stays_enabled_fails_the_hold(self):
+        # disable "succeeds" but the timer stays enabled: the next reset would start health (and it the model)
+        self.host.enabled |= {'models-health.timer'}
+        self.host.sticky_enabled = {'models-health.timer'}
+        self.host.power_cycle()
+        status, code = self.hold_boot()
+        self.assertEqual((code, status['stages']['hold']['detail']), (1, 'hold_units_still_enabled'))
+        r = self.receipt()
+        self.assertEqual((r['verified'], r['enabledAfter']['models-health.timer']), (False, 'enabled'))
+        self.assertEqual(self.model_starts(), [])
+        self.host.sticky_enabled = set()
 
     def test_receipt_reports_edge_and_auth_without_touching_them(self):
         self.host.active_units |= {'models-edge.service', 'models-auth.service'}
