@@ -86,8 +86,16 @@ public final class Controller {
  static JSONObject refusal(Map<String,Object> fields,JSONObject current)throws Exception{JSONObject r=new JSONObject();for(Map.Entry<String,Object> f:fields.entrySet())r.put(f.getKey(),f.getValue());return r.put("current",current);}
  static String taskParam(JSONObject p)throws Exception{return StopLedger.taskId(p.has("taskId")&&!p.isNull("taskId")?p.getString("taskId"):null);}
  // An agent stop tagged for another task (for example a late turn-end cleanup) leaves this workspace alone.
- /** #156: resolves an overview selection against this live session only. Its own display comes from its accessibility windows. */
- @SuppressWarnings("unchecked") static synchronized WatchBinding resolveSelection(int display,String pkg){int own=-1;if(session!=null)try{List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);for(AccessibilityWindowInfo w:windows){int d=w.getDisplayId();own=own==-1?d:(own==d?own:-2);w.recycle();}}catch(Throwable e){own=-1;}return WatchBinding.fromSelection(display,pkg,session!=null,status,own<0?-1:own,target,id,taskId);}
+ /** #156: resolves an overview selection against every slot, each by its own live session only (resolveSelectionOne): a
+  * slot binds only while its session is held and ready, its own display (read live from its accessibility windows) is the
+  * requested one and its target is the requested package. Never cleanup_failed, a closed session's historical ids, an
+  * unbound device or the attested display id. One display per session, so at most one slot matches. */
+ static synchronized WatchBinding resolveSelection(int display,String pkg){
+  for(Slot s:slots){Slot was=enter(s);try{WatchBinding b=resolveSelectionOne(display,pkg);if(b.mode==WatchBinding.Mode.BOUND)return b;}finally{leave(was);}}
+  return WatchBinding.INVALID;
+ }
+ /** One slot: its own live session only. Its own display comes from its accessibility windows. */
+ @SuppressWarnings("unchecked") static synchronized WatchBinding resolveSelectionOne(int display,String pkg){int own=-1;if(session!=null)try{List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);for(AccessibilityWindowInfo w:windows){int d=w.getDisplayId();own=own==-1?d:(own==d?own:-2);w.recycle();}}catch(Throwable e){own=-1;}return WatchBinding.fromSelection(display,pkg,session!=null,status,own<0?-1:own,target,id,taskId);}
  static synchronized JSONObject agentStop(Context c,JSONObject p)throws Exception{String task=taskParam(p);Map<String,Object> stale=stops.taskMismatch(task,taskId);if(stale!=null)return refusal(stale,state(c));stop(c,StopLedger.AGENT);return state(c);}
  static synchronized JSONObject start(Context context,JSONObject p)throws Exception{
   Context c=context.getApplicationContext();String pkg=p.getString("packageName");String task=taskParam(p);anyApp=anyAppControl(c);
@@ -390,6 +398,19 @@ public final class Controller {
    }
    default:throw new IllegalArgumentException("Unknown background operation");
   }
+ }
+ /** The viewer's slot (MultiSession.viewer), read under the lock with every slot's fields current; null: unavailable. */
+ static Slot viewed(WatchBinding b){int i=MultiSession.viewer(view(false),b.mode==WatchBinding.Mode.BOUND,b.session);return i<0?null:slots[i];}
+ /** The owner's Stop on the controller's own screen (MainActivity): every occupied slot, each as the owner's Stop, so
+  * nothing keeps running unseen; with none occupied it is slot 0's stop, as before. The outcome is cleanup_failed (with
+  * the first error) while any slot still holds a session it could not close. */
+ static synchronized JSONObject stopAll(Context c,String why)throws Exception{
+  MultiSession.Slot[] v=view(false);String outcome="stopped",firstError="";
+  for(int i=0;i<slots.length;i++){
+   if(!v[i].occupied&&!(i==0&&MultiSession.live(v)==0))continue;
+   Slot was=enter(slots[i]);try{stop(c,why);if("cleanup_failed".equals(status)&&"stopped".equals(outcome)){outcome="cleanup_failed";firstError=error;}}finally{leave(was);}
+  }
+  return new JSONObject().put("status",outcome).put("error",firstError).put("sessions",summary());
  }
  /** The owner's Stop from one session's notification: that session only (MultiSession.ownerStop). */
  static synchronized void ownerStop(Context c,String sessionId){int i=MultiSession.ownerStop(view(false),sessionId);if(i<0)return;Slot was=enter(slots[i]);try{stop(c,StopLedger.USER);}finally{leave(was);}}

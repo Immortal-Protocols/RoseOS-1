@@ -133,6 +133,20 @@ class MultiSessionWiringTest(unittest.TestCase):
         self.assertIn('||"owner_stop".equals(command.optString("operation"))))return new JSONObject().put("status","unavailable")', PHONE,
                       'refused on the Mac app_command path')
 
+    def test_viewer_selection_and_main_stop_are_per_slot(self):
+        self.assertIn('static Slot viewed(WatchBinding b){int i=MultiSession.viewer(view(false),b.mode==WatchBinding.Mode.BOUND,b.session);return i<0?null:slots[i];}', CONTROLLER)
+        viewer = (SRC/'AgentPipActivity.java').read_text()
+        self.assertNotRegex(viewer, r'Controller\.(session|id|taskId|width|height)\b', 'the viewer reads only its own slot')
+        select = span('static synchronized WatchBinding resolveSelection(int display,String pkg){', '\n /** One slot')
+        self.assertIn('for(Slot s:slots){Slot was=enter(s);try{WatchBinding b=resolveSelectionOne(display,pkg);if(b.mode==WatchBinding.Mode.BOUND)return b;}finally{leave(was);}}', select)
+        one = span('static synchronized WatchBinding resolveSelectionOne(int display,String pkg){', '\n')
+        self.assertIn('WatchBinding.fromSelection(display,pkg,session!=null,status,own<0?-1:own,target,id,taskId)', one, 'each slot by its own live display; ready only')
+        stop_all = span('static synchronized JSONObject stopAll(Context c,String why)throws Exception{', '\n /** The owner')
+        self.assertIn('if(!v[i].occupied&&!(i==0&&MultiSession.live(v)==0))continue;', stop_all)
+        self.assertIn('stop(c,why);', stop_all)
+        main = (SRC/'MainActivity.java').read_text()
+        self.assertIn('Controller.route(MainActivity.this,"get_state",new org.json.JSONObject())', main, 'the owner sees every slot')
+
     def test_one_request_at_a_time_across_slots(self):
         self.assertIn('if(!replacement.clear()||posting||othersUnanswered())return;', CONTROLLER)
         self.assertIn('static void dispatch(){dispatchOne();for(Slot s:slots)if(s!=active){Slot was=enter(s);try{dispatchOne();}finally{leave(was);}}}', CONTROLLER)

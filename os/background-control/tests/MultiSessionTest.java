@@ -63,6 +63,12 @@ public final class MultiSessionTest {
         expect(MultiSession.ownerStop(both, null) == 0, "an older notification without an id is slot 0");
         expect(MultiSession.ownerStop(both, "s-gone") == -1, "an ended session's notification stops nothing");
 
+        // Viewer: bound shows only its own session; unbound never guesses between two.
+        expect(MultiSession.viewer(both, true, "s-clock") == 1 && MultiSession.viewer(both, true, "s-gone") == -1, "bound viewer");
+        expect(MultiSession.viewer(both, false, null) == -1, "unbound with two live shows nothing");
+        expect(MultiSession.viewer(calc, false, null) == 0 && MultiSession.viewer(none, false, null) == 0, "unbound with at most slot 0 is slot 0 (legacy)");
+        expect(MultiSession.viewer(clockOnly, true, "s-calc") == 0, "a bound viewer of a stopped session still finds its slot (then finishes)");
+
         // Capability fallback and invalid modes.
         MultiSession.Route unavailable = MultiSession.start(calc, CLOCK, "alongside", 1);
         expect(MultiSession.MULTI_SESSION_UNAVAILABLE.equals(unavailable.refusal) && unavailable.ownLive == 1, "limit 1: alongside refused, Calculator untouched");

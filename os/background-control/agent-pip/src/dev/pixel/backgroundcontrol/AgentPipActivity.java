@@ -49,11 +49,14 @@ public final class AgentPipActivity extends Activity {
             return;
         }
         synchronized (Controller.class) {
-            if (Controller.session == null) {
+            // The bound session's own slot, or slot 0 for an unbound entry while no other session is live (never a guess).
+            Controller.Slot viewed = Controller.viewed(binding);
+            if (viewed == null) { unavailable(); return; }
+            if (viewed.session == null) {
                 fail("Start an agent task first, then tap its notification to watch", null);
                 return;
             }
-            if (!binding.allows(Controller.id, Controller.taskId)) { unavailable(); return; }
+            if (!binding.allows(viewed.id, viewed.taskId)) { unavailable(); return; }
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         getWindow().setDecorFitsSystemWindows(false);
@@ -82,7 +85,7 @@ public final class AgentPipActivity extends Activity {
 
     private PictureInPictureParams parameters() {
         int width, height;
-        synchronized (Controller.class) { width = Controller.width; height = Controller.height; }
+        synchronized (Controller.class) { Controller.Slot viewed = Controller.viewed(binding); width = viewed == null ? 0 : viewed.width; height = viewed == null ? 0 : viewed.height; }
         if (width <= 0 || height <= 0) { width = 9; height = 20; }
         // Android's standard PiP window permits ratios from 1:2.39 to 2.39:1.
         double ratio = Math.max(100.0 / 239, Math.min(239.0 / 100, (double) width / height));
@@ -161,10 +164,14 @@ public final class AgentPipActivity extends Activity {
             if (!visible || isFinishing() || setSession == null) return;
             Object current;
             boolean allowed;
+            boolean ambiguous;
             synchronized (Controller.class) {
-                current = Controller.session;
-                allowed = binding.allows(Controller.id, Controller.taskId);
+                Controller.Slot viewed = Controller.viewed(binding);
+                ambiguous = viewed == null;
+                current = viewed == null ? null : viewed.session;
+                allowed = viewed != null && binding.allows(viewed.id, viewed.taskId);
             }
+            if (ambiguous) { unavailable(); return; }
             if (current == null) { finishAndRemoveTask(); return; }
             // Same session re-tagged to another task, or a different session: never follow it.
             if (!allowed) { unavailable(); return; }
@@ -176,10 +183,11 @@ public final class AgentPipActivity extends Activity {
                 } catch (Throwable error) { fail("The agent view could not attach", error); return; }
                 // The controller may have moved on while attaching; re-check before showing a frame.
                 synchronized (Controller.class) {
-                    allowed = Controller.session == current && binding.allows(Controller.id, Controller.taskId);
+                    Controller.Slot viewed = Controller.viewed(binding);
+                    allowed = viewed != null && viewed.session == current && binding.allows(viewed.id, viewed.taskId);
                 }
                 if (!allowed) { unavailable(); return; }
-                android.util.Log.i("PixelAgentPip", "attached session=" + Controller.id);
+                android.util.Log.i("PixelAgentPip", "attached " + (binding.mode == WatchBinding.Mode.BOUND ? "bound" : "unbound") + " session");
             }
             handler.postDelayed(this, 500);
         }
