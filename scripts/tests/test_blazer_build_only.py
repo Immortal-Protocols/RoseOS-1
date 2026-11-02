@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import signal
 import tempfile
 import time
 import types
@@ -60,6 +61,8 @@ class Fixture(unittest.TestCase):
         self.production.mkdir()
         (self.root/'os/release-pipeline/frankel.json').write_text(json.dumps(
             {'host': {'sourceRoot': str(self.production), 'lockPath': str(self.tmp/'frankel-build.lock')}}))
+        # The source stage's exclusion policy is the real checked-in alpha policy.
+        shutil.copy(ROOT/'os/release-pipeline/cuttlefish-alpha.json', self.root/'os/release-pipeline/cuttlefish-alpha.json')
         self.src = self.tmp/'src'
         for needed in bb.TREE_NEEDS:
             path = self.src/needed
@@ -80,6 +83,24 @@ class Fixture(unittest.TestCase):
         (self.tmp/'nodebin').mkdir()
         self.node = self.tmp/'nodebin/node'
         self.script(self.node, 'print("v24.11.0")')
+
+    def snapshot(self, *roots):
+        state = []
+        for root in roots:
+            for path in sorted([root, *root.rglob('*')]) if root.exists() else []:
+                st = os.lstat(path)
+                content = path.read_bytes() if path.is_file() and not path.is_symlink() else None
+                state.append((str(path), st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns, content))
+        return state
+
+    def guard(self):
+        """Any process start or network connection fails the test."""
+        boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError('a process was started or opened a connection'))
+        for owner, name in ((subprocess, 'Popen'), (os, 'fork'), (os, 'posix_spawn'), (os, 'system'),
+                            (bb.urllib.request, 'urlopen'), (socket, 'create_connection')):
+            original = getattr(owner, name)
+            setattr(owner, name, boom)
+            self.addCleanup(setattr, owner, name, original)
 
     def op(self, **change):
         values = dict(host='operator-builder-1', source_root=str(self.src), jobs=16, lock=str(self.lock),
@@ -137,9 +158,16 @@ class RecipeTest(Fixture):
             'device/google/laguna-kernels/6.6': '275dad3c1f144f6bdd6d2c1ec22eccbfbd467da9'})
         self.assertEqual(recipe['generate']['argv'], ['vendor/adevtool/bin/run', 'generate-all', '-d', 'blazer'])
         prep = recipe['preparation']
-        self.assertEqual((prep['stages'], prep['boundsKind']), (['download', 'vendor', 'lunch'], 'proposal'))
+        self.assertEqual((prep['stages'], prep['boundsKind']), (['source', 'download', 'vendor', 'lunch'], 'proposal'))
         self.assertEqual({s: (prep[s]['boundBytes'], prep[s]['timeoutSeconds']) for s in prep['stages']},
-            {'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+            {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+        self.assertEqual(prep['totalTimeoutSeconds'], 23400)
+        self.assertEqual((prep['source']['includeRoots'], prep['source']['exclusionsFrom']),
+            (['out_adevtool_deps'], 'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions'))
+        policy = bb.pointer(ROOT, prep['source']['exclusionsFrom'])
+        self.assertEqual((policy['rootNames'], policy['rootPrefixes'], policy['anywhereNames']),
+            (['.repo', 'keys', 'releases', 'out'], ['out-', 'out_'], ['.git', '.repo']))
+        self.assertIn('never used as an estimate', prep['source']['boundBasis'])
         self.assertEqual(bb.pointer(ROOT, prep['productionSourceRootFrom']), '/home/pixelbuild/grapheneos-2026100600')
         self.assertEqual(bb.pointer(ROOT, prep['lockFrom']), '/home/pixelbuild/frankel-build.lock')
         preflight = importlib.util.spec_from_file_location('bpp', ROOT/'scripts/blazer-preparation-preflight.py')
@@ -158,7 +186,11 @@ class RecipeTest(Fixture):
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
             'maxBytes': 8 << 30, 'timeoutSeconds': 3600})
         self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
-            'PATH': f'{self.node.parent}:/usr/bin:/bin'})
+            'PATH': '<receipt-dir>/node-path:/usr/bin:/bin'})
+        self.assertEqual(rendered['source'], {'base': '/home/pixelbuild/grapheneos-2026100600', 'target': str(self.src),
+            'staging': str(self.tmp/'.source-staging-<nonce>'), 'includeRoots': ['out_adevtool_deps'],
+            'exclusionsFrom': 'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions', 'maxBytes': 150 << 30,
+            'timeoutSeconds': 7200, 'processes': 0, 'method': self.recipe['preparation']['source']['method']})
         self.assertEqual(rendered['vendor'], {'cwd': str(self.src), 'env': {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download)},
             'argv': ['vendor/adevtool/bin/run', 'generate-all', '-d', 'blazer'], 'timeoutSeconds': 10800,
             'nodeVersion': [str(self.node), '--version']} | {'env': rendered['vendor']['env']})
@@ -191,6 +223,13 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation'].update(productionSourceRootFrom='os/release-pipeline/frankel.json host.missing'), 'must resolve'),
             (lambda r: r['preparation']['candidateLayout']['children'].update(sourceRoot='src'), 'candidateLayout.children'),
             (lambda r: r['preparation']['candidateLayout'].update(ancestorBoundary='/'), 'ancestorBoundary must be the parent'),
+            (lambda r: r['preparation'].update(stages=['download', 'vendor', 'lunch']), 'preparation.stages'),
+            (lambda r: r['preparation']['source'].update(boundBytes=None), 'preparation.source needs a positive boundBytes'),
+            (lambda r: r['preparation']['source'].update(includeRoots=['out_adevtool_deps', 'out']), 'include exactly out_adevtool_deps'),
+            (lambda r: r['preparation']['source'].update(stagingPrefix='.tmp-'), 'stage under .source-staging-'),
+            (lambda r: r['preparation']['source'].update(exclusionsFrom='os/release-pipeline/frankel.json host'),
+             'must exclude repo metadata, keys'),
+            (lambda r: r['preparation']['source'].update(exclusionsFrom='os/release-pipeline/missing.json x'), 'alpha exclusion policy'),
             (lambda r: r['generate'].update(note='os/fold-port'), 'os/fold-port')):
             recipe = json.loads(json.dumps(self.recipe))
             change(recipe)
@@ -405,6 +444,7 @@ class VendorRunTest(Fixture):
         self.seen = self.tmp/'node-seen'
         self.script(self.src/'vendor/adevtool/bin/run', f"""mode = os.environ.get('FAKE_MODE', 'ok')
 open({str(self.seen)!r}, 'w').write(shutil.which('node') or '')
+open({str(self.seen) + '.neighbour'!r}, 'w').write(shutil.which('neighbour') or '')
 vendor = os.path.join('vendor', 'google_devices', 'blazer')
 os.makedirs(vendor)
 open(os.path.join(vendor, 'blazer.mk'), 'w').write('# synthetic')
@@ -424,9 +464,17 @@ sys.exit(3 if mode == 'fail' else 0)""")
         return code, json.loads((self.tmp/out/'completed.json').read_text())
 
     def test_generation_runs_isolated_with_the_verified_node_on_path(self):
+        # Like /usr/local/bin/node: another tool beside the bound node must not become visible to adevtool.
+        self.script(self.node.parent/'neighbour', 'print("shadow")')
         code, done = self.run_vendor()
+        started = json.loads((self.tmp/'r/started.json').read_text())
+        self.assertEqual(started['command']['env']['PATH'], f'{self.tmp}/r/node-path:/usr/bin:/bin')
+        self.assertEqual(os.listdir(self.tmp/'r/node-path'), ['node'])
+        self.assertEqual(Path(str(self.seen) + '.neighbour').read_text(), '', 'nothing beside node is on PATH')
         self.assertEqual((code, done['ok'], done['enforcement']), (0, True, 'sampled-stop'))
-        self.assertEqual(self.seen.read_text(), str(self.node), 'adevtool resolves exactly the verified node')
+        private = self.tmp/'r/node-path/node'
+        self.assertEqual(self.seen.read_text(), str(private), 'adevtool resolves the private entry')
+        self.assertEqual(os.path.realpath(private), str(self.node), 'which is exactly the verified node')
         self.assertEqual(done['node']['inode'], os.stat(self.node).st_ino)
         self.assertGreater(done['consumedBytes'], 0)
         self.assertEqual((self.download/FACTORY).read_bytes(), PAYLOAD, 'the verified archive is preserved')
@@ -511,26 +559,222 @@ get_build_var() {{ echo blazer; }}
         self.assertEqual(code, 1)
         self.assertIn('lunch targets', done['error'])
 
+class SourceRunTest(Fixture):
+    """The source stage: an ordinary, bounded byte copy of the production root (only read) into a new isolated tree.
+    The production root here is synthetic; the exclusion policy is the real checked-in alpha policy."""
+    def setUp(self):
+        super().setUp()
+        self.build_production()
+        (self.tmp/'rose-actions').mkdir(mode=0o700)
+        self.target = self.tmp/'rose-actions/blazer-prep-1-1/source'
+
+    def build_production(self):
+        p = self.production
+        if p.exists():
+            bb.alpha_source.make_removable(p)
+            shutil.rmtree(p)
+        shutil.copytree(self.src, p, symlinks=True)
+        (p/'build/make').mkdir()
+        (p/'build/make/envsetup.sh').write_text('# envsetup\n')
+        (p/'build/envsetup.sh').unlink()
+        os.symlink('make/envsetup.sh', p/'build/envsetup.sh')  # a repo linkfile: relative, kept as is
+        os.symlink(str(p/'build/make/envsetup.sh'), p/'build/absolute')  # absolute into the tree: rebased
+        os.symlink(str(p/'out_adevtool_deps/adevtool_revision'), p/'out_adevtool_deps/revision-link')  # in an include root
+        (p/'vendor/adevtool/dl/unpacked/frankel-CP3A/system').mkdir(parents=True)
+        (p/'vendor/adevtool/dl/.find-ignore').write_text('')
+        os.symlink('/system/bin', p/'vendor/adevtool/dl/unpacked/frankel-CP3A/system/bin')  # the excluded cache boundary
+        self.left = ('.repo/manifest.xml', 'keys/blazer/releasekey.pk8', 'releases/2026110201/ota.zip', 'out/soong/huge.bin',
+                     'out-blazer-lunch/x', 'out_other/y', 'device/google/blazer/.git/config', 'out_adevtool_deps/.git/HEAD',
+                     'vendor/adevtool/dl/unpacked')
+        for rel in self.left[:-1]:
+            (p/rel).parent.mkdir(parents=True, exist_ok=True)
+            (p/rel).write_bytes(b'never copied ' + rel.encode())
+        (p/'device/google/blazer/device.mk').write_text('PRODUCT_NAME := blazer\n')
+        os.utime(p/'device/google/blazer/device.mk', ns=(1_600_000_000_000_000_000,) * 2)
+        readonly = p/'prebuilts/readonly'
+        readonly.mkdir()
+        (readonly/'tool').write_bytes(b'\x7fELF')
+        os.chmod(readonly/'tool', 0o555)
+        os.chmod(readonly, 0o555)
+        self.addCleanup(bb.alpha_source.make_removable, self.tmp)
+
+    def run_source(self, recipe=None, out='r', available=10 ** 15, target=None):
+        code = bb.run(recipe or self.synthetic, 'source', self.op(source_root=str(target or self.target)), self.tmp/out,
+            now=lambda: 0, statvfs=available if callable(available) else fs(available), lock_probe=lambda path: True,
+            root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, json.loads(done.read_text()) if done.exists() else None
+
+    def construct(self, recipe=None, available=10 ** 15, **inject):
+        op = self.op(source_root=str(self.target))
+        return bb.construct(recipe or self.synthetic, op, self.production, self.root,
+            statvfs=available if callable(available) else fs(available), **inject)
+
+    def test_copy_is_ordinary_bounded_and_leaves_production_untouched(self):
+        before = self.snapshot(self.production)
+        self.guard()
+        code, done = self.run_source()
+        self.assertEqual((code, done['ok'], done['usable'], done['processesStarted']), (0, True, True, 0), done)
+        self.assertEqual(self.snapshot(self.production), before, 'the production root is only read')
+        t = self.target
+        for rel in self.left:
+            self.assertFalse(os.path.lexists(t/rel), rel)
+        self.assertEqual((t/'out_adevtool_deps/adevtool_revision').read_text(), ADEVTOOL + '\n', 'adevtool deps are included')
+        self.assertTrue(os.access(t/'out_adevtool_deps/host/linux-x86/bin/aapt2', os.X_OK))
+        self.assertEqual(os.readlink(t/'build/envsetup.sh'), 'make/envsetup.sh')
+        self.assertEqual(os.readlink(t/'build/absolute'), str(t/'build/make/envsetup.sh'), 'absolute links are rebased')
+        self.assertEqual(os.readlink(t/'out_adevtool_deps/revision-link'), str(t/'out_adevtool_deps/adevtool_revision'))
+        self.assertEqual(oct(os.lstat(t/'prebuilts/readonly').st_mode & 0o777), '0o555')
+        self.assertEqual(os.lstat(t/'device/google/blazer/device.mk').st_mtime_ns, 1_600_000_000_000_000_000)
+        copied, original = os.lstat(t/'device/google/blazer/device.mk'), os.lstat(self.production/'device/google/blazer/device.mk')
+        self.assertNotEqual((copied.st_dev, copied.st_ino), (original.st_dev, original.st_ino), 'new inodes, never hardlinks')
+        self.assertEqual((oct(t.parent.stat().st_mode & 0o777), done['createdParent']), ('0o700', True))
+        self.assertEqual([n.name for n in t.parent.iterdir()], ['source'], 'no staging is left')
+        self.assertEqual(done['partial'] if 'partial' in done else None, None)
+        self.assertEqual(done['copied']['entries'], done['selection']['entries'])
+        self.assertRegex(done['selectionSha256'], '^[0-9a-f]{64}$')
+        self.assertLessEqual(done['selection']['projectedBytes'], done['boundBytes'])
+        self.assertTrue(done['availableBytesBefore'] - done['selection']['projectedBytes'] >= RESERVE)
+        # The constructed tree satisfies the vendor stage's tree checks (archive and node supplied as usual).
+        self.archive()
+        report = self.preflight('vendor', source_root=str(t))
+        self.assertEqual((report['ready'], report['problems']), (True, []))
+        # It is never replaced: a second run refuses before writing.
+        self.assertIn('already exists', self.problems('source', source_root=str(t)))
+
+    def test_projection_is_dense_and_block_rounded(self):
+        entries = [{'type': 'file', 'size': 1}, {'type': 'file', 'size': 4096}, {'type': 'file', 'size': 0},
+                   {'type': 'dir'}, {'type': 'link'}]
+        self.assertEqual(bb.projected_bytes(entries, 4096), 4096 * (1 + 1 + 1 + 0 + 1 + 1))
+        self.assertEqual(bb.projected_bytes(entries, 1), 1 + 1 + 4096 + 0 + 1 + 1)
+
+    def test_refusals_before_anything_is_written(self):
+        self.assertIn('production source root', self.problems('source', source_root=str(self.production/'nested')))
+        self.assertIn('ancestor boundary', self.problems('source', source_root='/var/tmp/blazer/source'))
+        self.assertIn('is not the one level', self.problems('source', source_root=str(self.tmp/'a/b/source')))
+        (self.tmp/'rose-actions/blazer-prep-1-1').mkdir()
+        (self.tmp/'rose-actions/blazer-prep-1-1/.source-staging-0123456789ab').mkdir()
+        self.assertIn('interrupted construction left .source-staging-0123456789ab', self.problems('source', source_root=str(self.target)))
+        shutil.rmtree(self.tmp/'rose-actions/blazer-prep-1-1')
+        self.assertIn('below the reserve', self.problems('source', source_root=str(self.target), available=RESERVE + 10))
+        moved = self.tmp/'production-real'
+        self.production.rename(moved)
+        os.symlink(moved, self.production)
+        self.assertIn('is not an existing, link-free directory', self.problems('source', source_root=str(self.target)))
+        self.production.unlink()
+        moved.rename(self.production)
+        cases = (
+            (lambda: os.symlink('/etc/hostname', self.production/'escape'), 'leaves the source tree'),
+            (lambda: os.symlink('../../../../out/host/aapt2', self.production/'out_adevtool_deps/host/linux-x86/bin/extra'),
+             'out_adevtool_deps: host/linux-x86/bin/extra -> ../../../../out/host/aapt2 leaves the source tree'),
+            (lambda: shutil.rmtree(self.production/'out_adevtool_deps'), 'out_adevtool_deps is not a real directory'),
+            (lambda: (self.production/'vendor/adevtool/dl/.find-ignore').write_text('x'), 'prune marker'))
+        for index, (change, pattern) in enumerate(cases):
+            with self.subTest(pattern):
+                change()
+                code, done = self.run_source(out=f'r{index}')
+                self.assertEqual((code, done['ok'], done['written'], done['stagingRemoved']), (1, False, False, None))
+                self.assertIn('unsupported source dependencies', done['refused'])
+                self.assertIn(pattern, ' '.join(done['selection']['problems']))
+                self.assertFalse(os.path.lexists(self.target.parent), 'nothing is created, not even the parent')
+                self.build_production()
+        tight = json.loads(json.dumps(self.synthetic))
+        tight['preparation']['source']['boundBytes'] = 64
+        code, done = self.run_source(recipe=tight, out='tight')
+        self.assertEqual((code, done['written']), (1, False))
+        self.assertIn('above the 64-byte bound', done['refused'])
+        # Space shrank between preflight and the copy: the measured projection is checked again before writing.
+        calls = []
+        def shrinking(path):
+            calls.append(path)
+            return fs(10 ** 15 if len(calls) == 1 else RESERVE + 10)(path)
+        code, done = self.run_source(out='shrunk', available=shrinking)
+        self.assertEqual((code, done['written']), (1, False))
+        self.assertIn('is below the reserve', done['refused'])
+        self.assertFalse(os.path.lexists(self.target.parent))
+
+    def test_stops_remove_only_this_runs_staging_and_report_the_partial_copy(self):
+        parent = self.target.parent
+        parent.mkdir()
+        (parent/'downloads').mkdir()
+        (parent/'downloads/keep').write_text('kept')
+        before = self.snapshot(self.production)
+        quick = json.loads(json.dumps(self.synthetic))
+        quick['preparation']['source']['timeoutSeconds'] = 0.3
+        def slow(source, destination, entry):
+            time.sleep(0.1)
+            return bb.alpha_source.copy_file(source, destination, entry)
+        def term(source, destination, entry, seen=[]):
+            seen.append(entry)
+            if len(seen) == 3:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return bb.alpha_source.copy_file(source, destination, entry)
+        def full(source, destination, entry):
+            raise OSError(28, 'No space left on device')
+        def changed(source, destination, entry):
+            os.utime(source, ns=(1, 1))
+            return bb.alpha_source.copy_file(source, destination, entry)
+        def appear(source, destination, entry):
+            self.target.mkdir(exist_ok=True)
+            return bb.alpha_source.copy_file(source, destination, entry)
+        samples = []
+        def dropping(path):
+            samples.append(path)
+            return fs(10 ** 15 if len(samples) == 1 else RESERVE - 1)(path)
+        fast = json.loads(json.dumps(self.synthetic))
+        fast['preparation']['limits']['sampleSeconds'] = 0
+        previous = signal.getsignal(signal.SIGTERM)
+        for recipe, inject, pattern in ((quick, {'copier': slow}, 'exceeded 0.3 s'), (None, {'copier': term}, 'SIGTERM'),
+                                        (None, {'copier': full}, 'OSError: [Errno 28]'),
+                                        (None, {'copier': changed}, 'changed in the base during the copy'),
+                                        (fast, {'available': dropping}, 'fell below the reserve')):
+            with self.subTest(pattern):
+                ok, done = self.construct(recipe, **inject)
+                self.assertEqual((ok, done['usable'], done['written'], done['stagingRemoved']), (False, False, True, True), done)
+                self.assertIn(pattern, done['stopped'])
+                self.assertLess(done['partial']['entries'], done['partial']['of'])
+                self.assertEqual(done['partial']['of'], done['selection']['entries'])
+                self.assertEqual(sorted(n.name for n in parent.iterdir()), ['downloads'], 'only this run\'s staging is removed')
+                self.assertEqual((parent/'downloads/keep').read_text(), 'kept')
+                self.assertFalse(done['targetExists'])
+                self.assertIs(signal.getsignal(signal.SIGTERM), previous)
+                if pattern != 'changed in the base during the copy':
+                    self.assertEqual(self.snapshot(self.production), before)
+                before = self.snapshot(self.production)
+        ok, done = self.construct(copier=appear)
+        self.assertEqual((ok, done['stagingRemoved'], done['targetExists']), (False, True, True))
+        self.assertIn('appeared during the copy', done['stopped'])
+        self.target.rmdir()
+        # A timeout while the selection is still being planned stops before anything is written.
+        def stalled(base, policy):
+            time.sleep(2)
+        ok, done = self.construct(quick, planner=stalled)
+        self.assertEqual((ok, done['stopped'], done['written'], done['stagingRemoved']), (False, 'exceeded 0.3 s', False, None))
+        self.assertNotIn('partial', done)
+        # A stop in a parent this run created removes that parent too; an unexpected error still cleans up, then raises.
+        shutil.rmtree(parent)
+        ok, done = self.construct(quick, copier=slow)
+        self.assertEqual((ok, done['createdParentLeft'], os.path.lexists(parent)), (False, False, False))
+        # A SIGTERM during cleanup (e.g. the outer timeout) does not interrupt removing this run's own staging.
+        original = bb.alpha_source.make_removable
+        def interrupted(path):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return original(path)
+        bb.alpha_source.make_removable = interrupted
+        try:
+            ok, done = self.construct(quick, copier=slow)
+        finally:
+            bb.alpha_source.make_removable = original
+        self.assertEqual((ok, done['stagingRemoved'], os.path.lexists(parent)), (False, True, False))
+        def broken(source, destination, entry):
+            raise KeyError('unexpected')
+        with self.assertRaises(KeyError):
+            self.construct(copier=broken)
+        self.assertFalse(os.path.lexists(parent))
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
 class InspectTest(Fixture):
     """inspect is metadata-only: candidates are proposals that never enable preparation, and nothing it scans changes."""
-    def snapshot(self, *roots):
-        state = []
-        for root in roots:
-            for path in sorted([root, *root.rglob('*')]) if root.exists() else []:
-                st = os.lstat(path)
-                content = path.read_bytes() if path.is_file() and not path.is_symlink() else None
-                state.append((str(path), st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns, content))
-        return state
-
-    def guard(self):
-        """Any process start or network connection fails the test."""
-        boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError('inspect started a process or opened a connection'))
-        for owner, name in ((subprocess, 'Popen'), (os, 'fork'), (os, 'posix_spawn'), (os, 'system'),
-                            (bb.urllib.request, 'urlopen'), (socket, 'create_connection')):
-            original = getattr(owner, name)
-            setattr(owner, name, boom)
-            self.addCleanup(setattr, owner, name, original)
-
     def reference(self):
         """A synthetic stand-in for the historical production tree (never the real one)."""
         ref = self.production
@@ -588,7 +832,8 @@ class InspectTest(Fixture):
         self.assertEqual(n['pathMeta']['type'], 'link')
         self.assertEqual(n['realpathMeta']['inode'], os.stat(self.node).st_ino)
         self.assertEqual(n['version'], 'not executed (metadata only)')
-        for unknown in ('reflink support (never assumed)', 'isolated source copy byte and time cost (separately scoped)',
+        for unknown in ('reflink support (never assumed)',
+                        'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
                         'Pro factory archive size (8 GiB cap unverified)'):
             self.assertIn(unknown, report['unknowns'])
 

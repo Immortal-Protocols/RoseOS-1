@@ -195,16 +195,39 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 
 | Stage | Required inputs | Does | Bound (proposal) |
 |---|---|---|---|
+| `source` | `--source-root ISO` | Copies the production source root (only read) into a new `ISO` in-process, byte by byte into new inodes, with the reviewed emulator-alpha code and exclusions, plus `out_adevtool_deps`. Details below. | 150 GiB, 7200 s |
 | `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | 8 GiB (unverified for Pro), 3600 s |
-| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`dirname(N):/usr/bin:/bin`) resolves. Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`. | 128 GiB, 10800 s |
+| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`<receipt-dir>/node-path:/usr/bin:/bin`, a private directory holding only a `node` link to `N`) resolves; nothing else beside `N` (e.g. the rest of `/usr/local/bin`) is visible. Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`. | 128 GiB, 10800 s |
 | `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user` (`PATH=/usr/bin:/bin`), then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
 
-- **Time**: the stage timeouts total 16200 s (4.5 h). That excludes building the isolated source
-  tree, whose byte and time cost is unknown and separately scoped.
-- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes.
-  - The preparation preflight's peak is the 144 GiB sum of the bounds. That sum plus the 300 GiB
-    reserve excludes the isolated source copy.
-  - No prior Blazer measurement is needed.
+- **Time**: the stage timeouts total 23400 s (6.5 h), including the source copy.
+- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes, checked
+  when that stage starts. No prior Blazer measurement is needed. (The separate admission report
+  `blazer-preparation-preflight.py` still sums only download, vendor and lunch.)
+- **Source construction** (`source`):
+  - Exclusions are `os/release-pipeline/cuttlefish-alpha.json` `preparation.exclusions`: root
+    `.repo`, `keys`, `releases`, `out`, `out-*`, `out_*`; `.git`/`.repo` anywhere; the adevtool unpack
+    cache. `out_adevtool_deps` (the vendor stage's host tools) is copied as its own selection, and a
+    link that leaves it refuses.
+  - Before writing, the full selection is walked (no entry cap). It refuses on any link escape,
+    unsupported file type or unproven cache boundary, when the dense, block-rounded projection exceeds
+    the bound, or when available − projection < reserve.
+  - It refuses an existing `ISO` or a leftover `.source-staging-*` beside it. It creates at most one
+    missing parent (mode 0700) under `/home/pixelbuild`.
+  - The copy is staged as `.source-staging-<nonce>` beside `ISO` and renamed only when complete.
+  - A wall-clock timer, SIGTERM or the sampled reserve stops planning or copying. Only this run's
+    staging (and a parent it created, if empty) is removed. `completed.json` gives `refused` (nothing
+    written) or `stopped` with `partial` entries/bytes of the selection, `stagingRemoved` and
+    `targetExists`. A complete copy records `selectionSha256` (each file's sha256 included).
+  - No process starts. Per-file identity is checked against the plan, and the production lock is held
+    for the whole stage (up to 2 h, so production builds wait).
+  - Basis, historical, not current: the alpha's copy of the same root with these exclusions allocated
+    120.16 GiB (1,696,997 files) on 2026-10-28, and reflink is unsupported on that ext4. The Pro
+    inspect's truncated 1.13 TB reference walk counts outputs and repo metadata. It is never an
+    estimate: it already shows a full copy cannot fit (above 1,254,214,725,632 − reserve).
+  - Provenance limit: the copy is the production working tree as it is (its Frankel integration
+    included) without `.git` or `.repo`, so project revisions are not re-verified, and the admission
+    report's `.repo/manifest.xml` rule needs its resolved-manifest route.
 - **Byte limits are a sampled stop, not a filesystem quota.**
   - Every `limits.sampleSeconds` (5 s), the watched outputs are checked against the bound and the
     filesystem's available bytes against the reserve.
@@ -257,8 +280,7 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     still update directory access times (relatime); contents, mtime and ctime are unchanged.
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
-  proposal, not verified paths. Building the isolated copy (no writable hardlinks, no assumed
-  reflink, with outputs, signing material and caches excluded) is separately scoped.
+  proposal, not verified paths. No `source` copy has run, and none is authorized.
 - **Out of scope**: `compile` is outside preparation and still needs a measured
   `compileAllowanceBytes`. Nothing here compiles, signs, publishes or flashes, and no runtime scope
   is approved.

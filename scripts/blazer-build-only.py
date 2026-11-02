@@ -10,6 +10,13 @@ generation with an explicit -d blazer, and the proposal bounds of each preparati
   blazer-build-only.py run       --stage S ... --receipt-dir NEW   preflight, then the stage under the lock
 
 Preparation stages (never compile, sign, publish or flash; never in the production source tree):
+  source    --host --lock --source-root ISOLATED
+            an ordinary in-process byte copy of the production source root (only read) into ISOLATED, which must not
+            exist (one missing parent under the ancestor boundary is created owner-only): the emulator alpha's exclusion
+            policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly adevtool's
+            host-tool deps; the full selection is measured before anything is written and refused above its bound, the
+            copy is staged beside ISOLATED and renamed into place only when complete, and a stop (timeout, SIGTERM,
+            reserve) removes only this run's staging directory; no subprocess, reflink, hardlink or mount
   download  --host --lock --download-dir
             stream the pinned official URL to DIR/<file>.part (byte and time bound), rename to DIR/<file> only when its
             sha256 equals the pin; an existing archive is never replaced; a failed attempt removes only its own .part
@@ -26,10 +33,11 @@ Build stage (outside preparation, unchanged): compile --host --jobs --lock --sou
 Every stage refuses on a symlink in an operator path, a held lock (probed non-blocking, held with LOCK_NB while
 running), an existing output (nothing is deleted, reused or overwritten except the stage's own .part) or available
 bytes minus the stage bound below capacity.reserveBytes. Bounds are labelled proposals, not measurements; the stage
-timeouts total 4.5 h, excluding construction of the isolated tree.
+timeouts total 6.5 h.
 
-vendor and lunch run in their own session and process group with PATH limited to /usr/bin:/bin (vendor: the verified
-node's directory first, so adevtool resolves exactly that file; its identity is re-checked just before the run). The
+vendor and lunch run in their own session and process group with PATH limited to /usr/bin:/bin (vendor: first a private
+directory in the receipt directory holding only a `node` link to the verified file, so adevtool resolves exactly that
+file and no other tool beside it, e.g. the rest of /usr/local/bin; its identity is re-checked just before the run). The
 byte limit is a sampled stop, not a filesystem quota: every preparation.limits.sampleSeconds the watched outputs are
 compared with the bound and the filesystem's available bytes with the reserve, and an overrun or the timeout ends the
 group (SIGTERM, then SIGKILL after killGraceSeconds); live members left after a normal exit are ended the same way.
@@ -52,6 +60,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -62,11 +71,12 @@ from xml.etree import ElementTree
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
 import blazer_integration  # noqa: E402
+import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy; only imported, never changed)
 
 ROOT = Path(__file__).resolve().parents[1]
 RECIPE = ROOT/'os/build-only/blazer.json'
 DEVICE = 'blazer'
-PREPARATION = ('download', 'vendor', 'lunch')
+PREPARATION = ('source', 'download', 'vendor', 'lunch')
 STAGES = PREPARATION + ('compile',)
 BUILD_INDEX = 'os/tests/fixtures/adevtool-17df3b79/adevtool/config/build-index/build-index-main.yml.excerpt.json'
 FACTORY_URL = 'https://dl.google.com/dl/android/aosp/'
@@ -76,6 +86,7 @@ HOST_LABEL = re.compile(r'[a-z0-9][a-z0-9.-]{0,62}')
 CHUNK = 1 << 20
 LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_DEVICE')
 SAFE_PATH = '/usr/bin:/bin'
+NODE_PATH_DIR = 'node-path'  # inside the vendor stage's own receipt directory
 
 class InvalidInput(Exception):
     pass
@@ -182,6 +193,16 @@ def preparation_problems(recipe, root, contract):
     unpacked = f'vendor/adevtool/dl/unpacked/{DEVICE}-{contract["shared"]["vendorBuildId"]}'
     if vendor.get('collisionPaths') != [f'vendor/google_devices/{DEVICE}', unpacked]:
         problems.append(f'preparation.vendor.collisionPaths must be the generated vendor tree and {unpacked}')
+    source = prep.get('source') or {}
+    if source.get('includeRoots') != [recipe['adevtool']['depsDir']] or source.get('stagingPrefix') != '.source-staging-':
+        problems.append(f'preparation.source must include exactly {recipe["adevtool"]["depsDir"]} and stage under .source-staging-')
+    try:
+        policy = pointer(root, source['exclusionsFrom'])
+        if not ({'.repo', 'keys', 'releases', 'out'} <= set(policy.get('rootNames', ())) and {'out-', 'out_'} <= set(
+                policy.get('rootPrefixes', ())) and {'.git', '.repo'} <= set(policy.get('anywhereNames', ()))):
+            problems.append('preparation.source.exclusionsFrom must exclude repo metadata, keys, releases, outputs and .git')
+    except (KeyError, OSError, ValueError, TypeError, AttributeError):
+        problems.append('preparation.source.exclusionsFrom must resolve to the checked-in alpha exclusion policy')
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -227,7 +248,7 @@ def symlink_in(path):
             return None
     return None
 
-def commands(recipe, op):
+def commands(recipe, op, root=ROOT):
     """The exact argv, cwd and extra environment of each stage, rendered from the recipe and the operator's inputs."""
     rendered = {}
     prep = recipe['preparation']
@@ -238,10 +259,14 @@ def commands(recipe, op):
             'maxBytes': prep['download']['boundBytes'], 'timeoutSeconds': prep['download']['timeoutSeconds']}
     if op['sourceRoot'] is not None:
         src = str(op['sourceRoot'])
+        spec = prep['source']
+        rendered['source'] = {'base': pointer(root, prep['productionSourceRootFrom']), 'target': src,
+            'staging': str(op['sourceRoot'].parent/(spec['stagingPrefix'] + '<nonce>')),
+            'exclusionsFrom': spec['exclusionsFrom'], 'includeRoots': list(spec['includeRoots']),
+            'maxBytes': spec['boundBytes'], 'timeoutSeconds': spec['timeoutSeconds'], 'processes': 0, 'method': spec['method']}
         if op['downloadDir'] is not None:
-            node_dir = str(op['node'].parent) if op['node'] else None
             rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir']),
-                    'PATH': f'{node_dir}:{SAFE_PATH}' if node_dir else SAFE_PATH},
+                    'PATH': f'<receipt-dir>/{NODE_PATH_DIR}:{SAFE_PATH}' if op['node'] else SAFE_PATH},
                 'argv': list(recipe['generate']['argv']), 'timeoutSeconds': prep['vendor']['timeoutSeconds'],
                 'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version']}
         checks = ' && '.join(f'echo {v}=${v}' for v in LUNCH_VARS[:3]) + ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)'
@@ -360,6 +385,29 @@ def vendor_tree_problems(recipe, src):
         problems.append('the generated vendor tree is not from the pinned adevtool revision (foreign provenance)')
     return problems
 
+def source_preflight(recipe, src, production, problems, facts):
+    """Admission of the source stage: the target is new and under the ancestor boundary, its parent exists or is the one
+    level the stage may create, no interrupted staging is left beside it and the production root is a real directory.
+    Returns where the stage writes (its nearest existing ancestor) for the space check."""
+    prep = recipe['preparation']
+    boundary, parent = Path(prep['candidateLayout']['ancestorBoundary']), src.parent
+    if os.path.lexists(src):
+        problems.append(f'{src} already exists; an isolated source tree is never replaced or reused')
+    if boundary not in src.parents:
+        problems.append(f'{src} must sit under the ancestor boundary {boundary}')
+    facts['createsParent'] = not os.path.lexists(parent)
+    if not facts['createsParent']:
+        if parent.is_symlink() or not parent.is_dir():
+            problems.append(f'{parent} is not a directory')
+    elif not (parent.parent.is_dir() and boundary in parent.parents):
+        problems.append(f'{parent} does not exist and is not the one level the stage may create under {boundary}')
+    leftovers = sorted(p.name for p in parent.glob(prep['source']['stagingPrefix'] + '*')) if parent.is_dir() else []
+    if leftovers:
+        problems.append(f'an interrupted construction left {", ".join(leftovers)} in {parent}; inspect and remove it deliberately')
+    if symlink_in(production) or not production.is_dir():
+        problems.append(f'the production source root {production} is not an existing, link-free directory')
+    return nearest_existing(src)
+
 def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=ROOT):
     """{'ready': bool, 'problems': [...], 'facts': {...}} for one stage. Reads only; writes and runs nothing."""
     if stage not in STAGES:
@@ -372,8 +420,8 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
     for name in ('sourceRoot', 'lock', 'downloadDir', 'integrationDir', 'inputsReceipt', 'node'):
         if op[name] is not None and symlink_in(op[name]):
             problems.append(f'{name} passes through a symlink ({symlink_in(op[name])})')
-    needs = {'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',),
-             'compile': ('sourceRoot',)}[stage]
+    needs = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'),
+             'lunch': ('sourceRoot',), 'compile': ('sourceRoot',)}[stage]
     absent = [n for n in needs if op[n] is None]
     if stage == 'compile' and op['jobs'] is None:
         absent.append('jobs')
@@ -396,6 +444,8 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
             if os.path.lexists(path):
                 problems.append(f'{path} already exists; an existing archive or partial download is never replaced')
         where = download if download.exists() else download.parent
+    elif stage == 'source':
+        where = source_preflight(recipe, src, Path(production), problems, facts)
     else:
         if not src.is_dir():
             problems.append(f'source root {src} is not an existing directory')
@@ -552,6 +602,142 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
         result['stdout'] = out.read().decode(errors='replace')
         out.close()
     return result
+
+class StageStopped(Exception):
+    """The source stage stopped after it started writing (timeout, SIGTERM, reserve or a base change)."""
+
+class Refused(Exception):
+    """The source stage refused before writing anything."""
+
+def source_selection(recipe, base, root, planner=alpha_source.plan_copy):
+    """The full copy selection of BASE (a metadata walk with no entry cap, plus alpha's reads of build-definition files
+    for cache references): the alpha exclusion policy, and each include root as its own selection with only .git/.repo
+    excluded, so none of its links may leave it."""
+    spec = recipe['preparation']['source']
+    policy = pointer(root, spec['exclusionsFrom'])
+    plan = planner(base, policy)
+    entries, problems = list(plan['entries']), list(plan['problems'])
+    excluded = len(plan['excluded'])
+    inner = {'rootNames': [], 'rootPrefixes': [], 'anywhereNames': list(policy['anywhereNames']), 'externalLinks': [],
+             'cacheBoundaries': []}
+    for name in spec['includeRoots']:
+        sub = base/name
+        if sub.is_symlink() or not sub.is_dir():
+            problems.append(f'{name} is not a real directory in the production source root')
+            continue
+        part = planner(sub, inner)
+        entries.append({'path': name, 'type': 'dir', 'mode': stat.S_IMODE(os.lstat(sub).st_mode)})
+        for entry in part['entries']:
+            entry = dict(entry, path=f'{name}/{entry["path"]}')
+            if entry['type'] == 'link':
+                entry['target'] = os.path.normpath(f'{name}/{entry["target"]}')
+            entries.append(entry)
+        problems += [f'{name}: {problem}' for problem in part['problems']]
+        excluded += len(part['excluded'])
+    return {'entries': entries, 'problems': problems, 'excluded': excluded}
+
+def projected_bytes(entries, block):
+    """Bytes the copy allocates at most block-rounded: every file is written densely (a sparse base file grows to its
+    apparent size), and the root, each directory and each link take one block."""
+    return block + sum(-(-e['size'] // block) * block if e['type'] == 'file' else block for e in entries)
+
+def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.monotonic, planner=alpha_source.plan_copy,
+              copier=alpha_source.copy_file):
+    """The source stage after admission, under the lock: (ok, outcome). The production root is only read. The whole
+    selection is planned before anything is written; the copy is staged beside the source root and renamed into place
+    only when complete. A wall-clock timer (timeoutSeconds) and SIGTERM stop planning or copying at any point, and
+    available bytes are sampled against the reserve every sampleSeconds; a stop removes only this run's staging
+    directory (and the parent it created, when empty). No process is started."""
+    prep, src = recipe['preparation'], op['sourceRoot']
+    spec, reserve = prep['source'], recipe['capacity']['reserveBytes']
+    outcome = {'base': str(production), 'target': str(src), 'boundBytes': spec['boundBytes'], 'boundKind': prep['boundsKind'],
+               'timeoutSeconds': spec['timeoutSeconds'], 'processesStarted': 0, 'written': False, 'usable': False}
+    staging, created_parent, done = None, False, {'entries': 0, 'fileBytes': 0}
+    def stop(signum, frame):
+        raise StageStopped('SIGTERM' if signum == signal.SIGTERM else f'exceeded {spec["timeoutSeconds"]} s')
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGALRM, signal.SIGTERM)}
+    signal.setitimer(signal.ITIMER_REAL, spec['timeoutSeconds'])
+    try:
+        selection = source_selection(recipe, production, root, planner)
+        fs = statvfs(nearest_existing(src))
+        projected = projected_bytes(selection['entries'], fs.f_frsize)
+        files = [e for e in selection['entries'] if e['type'] == 'file']
+        outcome['selection'] = {'entries': len(selection['entries']), 'files': len(files), 'projectedBytes': projected,
+            'apparentBytes': sum(e['size'] for e in files), 'excluded': selection['excluded'],
+            'problems': selection['problems'][:50]}
+        outcome['availableBytesBefore'] = available = fs.f_bavail * fs.f_frsize
+        if selection['problems']:
+            raise Refused(f'{len(selection["problems"])} unsupported source dependencies, first: {selection["problems"][0]}')
+        if projected > spec['boundBytes']:
+            raise Refused(f'the selection projects {projected} bytes, above the {spec["boundBytes"]}-byte bound')
+        if available - projected < reserve:
+            raise Refused(f'available {available} minus the projected {projected} is below the reserve {reserve}')
+        if not os.path.lexists(src.parent):
+            src.parent.mkdir(mode=0o700)
+            created_parent = True
+        staging = src.parent/(spec['stagingPrefix'] + os.urandom(6).hex())
+        staging.mkdir(mode=0o700)
+        outcome['written'] = True
+        digest, directories, sample = hashlib.sha256(), [], clock() + prep['limits']['sampleSeconds']
+        for entry in selection['entries']:
+            if clock() >= sample:
+                fs = statvfs(staging)
+                if fs.f_bavail * fs.f_frsize < reserve:
+                    raise StageStopped(f'available {fs.f_bavail * fs.f_frsize} fell below the reserve {reserve}')
+                sample = clock() + prep['limits']['sampleSeconds']
+            destination = staging/entry['path']
+            if entry['type'] == 'dir':
+                destination.mkdir(mode=0o700)
+                directories.append(entry)
+                line = f'{entry["path"]}\tdir\t{entry["mode"]:o}'
+            elif entry['type'] == 'file':
+                line = f'{entry["path"]}\tfile\t{entry["mode"]:o}\t{entry["size"]}\t{copier(production/entry["path"], destination, entry)}'
+                done['fileBytes'] += entry['size']
+            else:
+                text = entry['text'] if entry['kind'] == 'relative' else str(src/entry['target'])
+                os.symlink(text, destination)
+                line = f'{entry["path"]}\tlink\t{text}'
+            digest.update(line.encode() + b'\n')
+            done['entries'] += 1
+        for entry in reversed(directories):  # copied modes last, deepest first
+            os.chmod(staging/entry['path'], entry['mode'])
+        if os.path.lexists(src):
+            raise StageStopped(f'{src} appeared during the copy')
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        os.rename(staging, src)
+        staging = None
+        outcome.update(usable=True, sourceRoot=str(src), selectionSha256=digest.hexdigest(), copied=done,
+                       createdParent=created_parent)
+        return True, outcome
+    except BaseException as error:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)  # cleanup of this run's own staging is not interrupted
+        outcome['stagingRemoved'] = None
+        if staging is not None and os.path.lexists(staging):
+            try:
+                alpha_source.make_removable(staging)
+                shutil.rmtree(staging)
+                outcome['stagingRemoved'] = True
+            except OSError as cleanup:
+                outcome.update(stagingRemoved=False, stagingLeft=str(staging), cleanupError=type(cleanup).__name__)
+        if created_parent:
+            try:
+                src.parent.rmdir()
+            except OSError:
+                pass
+        outcome['createdParentLeft'] = created_parent and os.path.lexists(src.parent)
+        outcome['targetExists'] = os.path.lexists(src)
+        if not isinstance(error, (StageStopped, Refused, OSError, alpha_source.PreparationFailed)):
+            raise
+        kind = 'refused' if isinstance(error, Refused) else 'stopped'
+        outcome[kind] = f'{type(error).__name__}: {error}' if isinstance(error, OSError) else str(error)
+        if 'selection' in outcome:
+            outcome['partial'] = dict(done, of=outcome['selection']['entries'])
+        return False, outcome
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 INSPECTION = 'roseos.blazer-preparation-inspection.v2'
 INSPECT_MAX_SECONDS = 1200
@@ -729,7 +915,8 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
     if not resolved:
         unknowns.append('no node on the runner PATH')
     unknowns += ['Node version (metadata only: never executed)', 'reflink support (never assumed)',
-                 'isolated source copy byte and time cost (separately scoped)', 'Pro factory archive size (8 GiB cap unverified)']
+                 'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
+                 'Pro factory archive size (8 GiB cap unverified)']
     report['elapsedSeconds'] = round(clock() - started, 3)
     report['truncated'] = budget['entries'] <= 0 or clock() > budget['deadline']
     if report['truncated']:
@@ -786,7 +973,7 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
     release_receipts.write_once(receipt_dir/'preflight.json', {**report, 'at': stamp(now)})
     if not report['ready']:
         return 1
-    command = commands(recipe, op)[stage]
+    command = commands(recipe, op, probes.get('root', ROOT))[stage]
     base = {'stage': stage, 'device': DEVICE, 'signed': False, 'releaseReady': False}
     with open(op['lock'], 'a') as lock:
         try:
@@ -794,7 +981,17 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         except BlockingIOError:
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'started': False, 'error': 'lock taken after preflight'})
             return 1
+        if stage == 'vendor':  # a private PATH entry holding only the verified node, never the rest of its directory
+            node_dir = receipt_dir/NODE_PATH_DIR
+            node_dir.mkdir(mode=0o700)
+            os.symlink(op['node'], node_dir/'node')
+            command['env']['PATH'] = f'{node_dir}:{SAFE_PATH}'
         release_receipts.write_once(receipt_dir/'started.json', {**base, 'host': op['host'], 'command': command, 'at': stamp(now)})
+        if stage == 'source':
+            ok, outcome = construct(recipe, op, Path(report['facts']['productionSourceRoot']), probes.get('root', ROOT),
+                                    statvfs=statvfs, clock=clock)
+            release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
+            return 0 if ok else 1
         if stage == 'download':
             ok, outcome = download(recipe, command, fetcher, clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
