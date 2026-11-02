@@ -89,6 +89,20 @@
     "pageSettleMs": 560,
     "reducedMotion": "system animator scale 0 (or prefers-reduced-motion): every transition is instant, loops stop at their static frame (running edge at 40deg, pearl breath at its 'from' ring); state stays visible."
   },
+  "switcher": {
+    "source": "views.js:224-249 (fan, snap), oxblood.css:423,442-455 (rows, cards, pearl). Added at OS Product's request (#410); the values were already pinned in Launcher3's RoseFanTest",
+    "field": { "kind": "rose", "placement": "as fields.rose: cover, centred across, top-aligned", "blur": 0 },
+    "fan": { "offset": "k = (card centre - row centre) / card width, clamped to [-1.4, 1.4]", "transform": "perspective(760) translateX(-k * shift) rotateY(-k * turnDeg) scale(1 - min(1, |k|) * shrink)",
+      "perspective": 760, "clamp": 1.4, "human": { "shift": 62, "turnDeg": 44, "shrink": 0.16 }, "rose": { "shift": 40, "turnDeg": 40, "shrink": 0.20 },
+      "depth": "zIndex = 10 - round(|k| * 4)", "reducedMotion": "static geometry, kept" },
+    "human": { "rowTop": 70, "rowHeight": 420, "padding": "30, centred: calc(50% - 98)",
+      "card": { "width": 196, "height": 344, "radius": 13, "unfolded": [230, 380], "fill": "#FF1A0A0D", "ring": { "width": 1, "color": "#8CD6C8AA" }, "shadow": { "dy": 18, "blur": 36, "color": "#8C000000" } } },
+    "rose": { "rowBottom": 96, "rowHeight": 170, "padding": "12, centred: calc(50% - 62)", "card": { "width": 124, "height": 146, "radius": 12, "footer": "none: no Stop in the switcher's Rose row" },
+      "initialCard": "the second card when there are three or more" },
+    "pearl": { "size": 18, "link": { "left": 22, "bottom": 170, "width": 30, "height": 30 }, "inLink": [6, 6] },
+    "snap": { "behaviour": "scroll to the nearest card centre", "durationMs": null, "reducedMotion": "instant",
+      "note": "the reference uses the browser's smooth scroll (650ms instant fallback); native uses the platform's smooth scroll, a declared deviation" }
+  },
   "notShipped": [
     "Global/OS-wide microphone control and its silver-pearl meaning beyond Rose's own call mute (no platform API)",
     "Glass sheen overlay and backdrop blurs",

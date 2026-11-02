@@ -85,22 +85,23 @@ public class WorkspaceOverviewRenderTest {
     }
     static ImageView preview(View root) { View v = tagged(root, "preview"); return v instanceof ImageView ? (ImageView) v : null; }
 
-    /** Selected HiFi structure, current apps only: no heading, no push buttons, the three-well tray, 250dp cards in two columns. */
+    /** #410 Oxblood structure, current apps only: no heading, no push buttons, the pearl and Back to Rose at the top,
+     * 276dp cards in two columns 18dp apart, starting 100dp down, 24dp in. */
     @Test public void currentAppsInTheSelectedHiFi() throws Exception {
         Host h = new Host(); h.report("r1", 2, app("s1/calc", CALC), app("s2/maps", MAPS));
         WorkspaceOverviewPanel p = panel(h);
         assertFalse(texts(p).contains(WorkspaceOverview.TITLE));
         for (View v : all(p)) assertFalse("no Android push buttons", v instanceof Button);
-        View back = described(p, "Back"), mid = described(p, "End call"), self = described(p, "Rose’s apps, current screen");
-        assertNotNull(back); assertNotNull(mid); assertNotNull(self);
-        int[] b = at(back), m = at(mid), s = at(self);
-        assertTrue("three wells in one tray", b[1] == m[1] && m[1] == s[1] && b[0] < m[0] && m[0] < s[0]);
+        View back = described(p, "Back to Rose");
+        assertNotNull(back);
+        int[] b = at(back);
+        assertEquals("Back to Rose: 44dp, in the header row", dp(44), back.getHeight()); assertEquals(dp(40), b[1], 1);
         View calc = tagged(p, "app:s1/calc"), maps = tagged(p, "app:s2/maps");
         assertNotNull(calc); assertNotNull(maps);
-        assertEquals(dp(250), calc.getHeight()); assertEquals(calc.getWidth(), maps.getWidth(), 1);
+        assertEquals(dp(276), calc.getHeight()); assertEquals(calc.getWidth(), maps.getWidth(), 1);
         int[] a = at(calc), c = at(maps);
-        assertEquals("same row", a[1], c[1]); assertEquals("12dp gap", dp(12), c[0] - (a[0] + calc.getWidth()), 1);
-        assertEquals("24dp margin", dp(24), a[0], 1); assertEquals("64dp top", dp(64), a[1], 1);
+        assertEquals("same row", a[1], c[1]); assertEquals("18dp gap", dp(18), c[0] - (a[0] + calc.getWidth()), 1);
+        assertEquals("24dp margin", dp(24), a[0], 1); assertEquals("100dp top", dp(100), a[1], 1);
         List<String> t = texts(p);
         assertTrue("real app names", t.contains("Calculator") && t.contains("Maps"));
         assertEquals("no live view: said plainly on each card", 2, Collections.frequency(t, WorkspaceOverviewView.LIVE_UNAVAILABLE));
@@ -131,7 +132,7 @@ public class WorkspaceOverviewRenderTest {
         assertTrue("reconnect: unavailable until the new source reports", texts(p).contains(CurrentApps.text(CurrentApps.NOT_REPORTED)));
         h.report("r1", 7, app("s2/maps", MAPS)); p.refresh(); layout(p);
         assertTrue("a late report from the replaced source is ignored", taggedPrefix(p, "app:").isEmpty());
-        described(p, "Back").performClick(); p.open(); layout(p);
+        described(p, "Back to Rose").performClick(); p.open(); layout(p);
         assertTrue("re-entry shows the current report only", taggedPrefix(p, "app:").isEmpty());
         Host fresh = new Host(); fresh.report("r9", 1);
         WorkspaceOverviewPanel recreated = panel(fresh);
@@ -170,7 +171,7 @@ public class WorkspaceOverviewRenderTest {
         assertNull("stale frame", preview(ps));
         Host b = new Host(); b.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
         WorkspaceOverviewPanel pb = panel(b);
-        described(pb, "Back").performClick();
+        described(pb, "Back to Rose").performClick();
         pb.previewAnswer(b.previews.get(0), ok("s-1", "rose-ws-1", CALC, synthetic(320, 693)));
         for (int i = 0; i < 4; i++) pb.refresh();
         assertEquals("closed: no further requests", 1, b.previews.size());
@@ -196,10 +197,13 @@ public class WorkspaceOverviewRenderTest {
         assertEquals(Arrays.asList("watch:s1/calc:s-1"), h.calls);
         tagged(tagged(p, "app:s2/maps"), "stop-unavailable").performClick(); layout(p);
         assertTrue(texts(p).contains(WorkspaceOverviewView.STOP_APP_UNAVAILABLE));
-        described(p, "End call").performClick();
-        assertEquals("end", h.calls.get(h.calls.size() - 1));
-        h.live = false; p.refresh(); layout(p);
-        assertNotNull("not connected: the middle well opens Rose", described(p, "Open Rose"));
+        // Back to Rose only closes the panel; nothing is sent and the work is unchanged.
+        int before = h.calls.size();
+        View back = described(p, "Back to Rose"); assertNotNull(back); back.performClick();
+        assertFalse(p.isOpen()); assertEquals("Back sends nothing", before, h.calls.size());
+        Bitmap shot = draw(panel(h));
+        java.io.File out = new java.io.File(System.getProperty("render.out", "target/render")); out.mkdirs();
+        try (java.io.FileOutputStream o = new java.io.FileOutputStream(new java.io.File(out, "oxblood-background-work.png"))) { shot.compress(Bitmap.CompressFormat.PNG, 100, o); }
     }
 
     // ---------- Agreed two-app contract: snapshot membership, per-session bindings, Stop and live view ----------
@@ -289,7 +293,7 @@ public class WorkspaceOverviewRenderTest {
         WorkspaceOverviewPanel p = panel(h);
         tagged(tagged(p, "app:s-0/" + CALC), "stop").performClick();
         tagged(tagged(p, "stop-sheet"), "sheet-stop").performClick(); layout(p);
-        described(p, "Back").performClick(); p.open(); layout(p);
+        described(p, "Back to Rose").performClick(); p.open(); layout(p);
         assertTrue("a pending Stop survives Back and re-entry", texts(tagged(p, "app:s-0/" + CALC)).contains(WorkspaceOverview.STOP_STOPPING));
         synchronized (WorkspaceOverviewPanel.STOPS) { for (CurrentApps.SessionStop st : WorkspaceOverviewPanel.STOPS.values()) st.tick(System.currentTimeMillis() + CurrentApps.SessionStop.TIMEOUT_MS); }
         p.refresh(); layout(p);

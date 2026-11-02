@@ -137,14 +137,34 @@ class Wiring(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
 
-    def test_committed_binding_is_unbound_so_every_stage_refuses_before_the_controller(self):
+    def test_committed_binding_is_receipt_41473133543_and_every_stage_resolves_exactly(self):
         self.assertEqual(BINDING['host'], 'immortal-os-builder')
-        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
-        for stage, missing in (('source', 'sourceRoot'), ('download', 'downloadDir'), ('vendor', 'downloadDir, sourceRoot, node'), ('lunch', 'sourceRoot')):
-            result = wire('check', '--stage', stage)
-            self.assertEqual(result.returncode, 4, stage)
-            self.assertEqual(result.stdout, '')
-            self.assertIn(f'SETUP_MISSING', result.stderr)
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1'
+        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')],
+                         [f'{root}/source', f'{root}/downloads', '/usr/local/bin/node'])
+        for phrase in ('run 41473133543 attempt 1', 'not current host proof', 'version was never run',
+                       'project revisions and the pinned manifest unverified', 'source stage needs only sourceRoot'):
+            self.assertIn(phrase, BINDING['basis'])
+        expected = {'source': ['--source-root', f'{root}/source'], 'download': ['--download-dir', f'{root}/downloads'],
+                    'vendor': ['--download-dir', f'{root}/downloads', '--source-root', f'{root}/source',
+                               '--node', '/usr/local/bin/node'],
+                    'lunch': ['--source-root', f'{root}/source']}
+        for stage, inputs in expected.items():
+            tail, _, _ = wiring.resolve(stage)
+            self.assertEqual(tail, ['--stage', stage, '--host', 'immortal-os-builder', '--lock', LOCK, *inputs], stage)
+        # the source stage depends on sourceRoot alone: it still resolves with the other two unbound
+        alone = Path(self.tmp)/'source-only.json'
+        alone.write_text(json.dumps({**BINDING, 'downloadDir': None, 'node': None}))
+        self.assertEqual(wire('check', '--stage', 'source', '--binding', str(alone)).returncode, 0)
+        for stage in ('download', 'vendor'):
+            self.assertEqual(wire('check', '--stage', stage, '--binding', str(alone)).returncode, 4, stage)
+        unbound = Path(self.tmp)/'unbound.json'
+        unbound.write_text(json.dumps({**BINDING, 'sourceRoot': None, 'downloadDir': None, 'node': None}))
+        for stage, missing in (('source', 'sourceRoot'), ('download', 'downloadDir'), ('vendor', 'downloadDir, sourceRoot, node'),
+                               ('lunch', 'sourceRoot')):
+            result = wire('check', '--stage', stage, '--binding', str(unbound))
+            self.assertEqual((result.returncode, result.stdout), (4, ''), stage)
+            self.assertIn('SETUP_MISSING', result.stderr)
             self.assertIn(missing, result.stderr)
 
     def test_bounds_are_derived_from_the_recipe_seconds(self):
@@ -211,23 +231,26 @@ class Inspect(unittest.TestCase):
         path.write_text(json.dumps({**BINDING, 'inspectCandidates': record}))
         return path
 
-    def test_committed_candidates_are_a_proposal_only_and_prep_stays_unbound(self):
+    def test_committed_candidates_are_a_proposal_only_and_never_satisfy_a_stage(self):
         record = BINDING['inspectCandidates']
         self.assertEqual((record['rootTemplate'], record['verified'], record['binding']), (self.ROOT_TEMPLATE, False, False))
-        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
+        unbound = self.tmp/'unbound.json'
+        unbound.write_text(json.dumps({**BINDING, 'sourceRoot': None, 'downloadDir': None, 'node': None}))
         for stage in ('source', 'download', 'vendor', 'lunch'):  # candidates never satisfy a preparation stage
-            self.assertEqual(wire('check', '--stage', stage).returncode, 4, stage)
+            self.assertEqual(wire('check', '--stage', stage, '--binding', str(unbound)).returncode, 4, stage)
 
     def test_inspect_passes_host_lock_and_this_runs_candidate_root_with_its_own_bounds(self):
         result = wire('check', '--stage', 'inspect')
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=960\njob_minutes=20\n'))
         tail, outer, minutes = wiring.resolve('inspect', run_id='41400000000', attempt='2')
-        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--candidate-root',
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1'  # the bound facts are inspected too
+        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--source-root', f'{root}/source',
+            '--download-dir', f'{root}/downloads', '--node', '/usr/local/bin/node', '--candidate-root',
             '/home/pixelbuild/rose-actions/blazer-prep-41400000000-2', '--max-entries', '200000', '--max-seconds', '900'])
         self.assertLessEqual(900, wiring.helper().INSPECT_MAX_SECONDS)
         self.assertLessEqual(outer + 30, minutes * 60 - 180)  # kill grace and checkout fit inside the 20-minute job
-        self.assertFalse({'--stage', '--receipt-dir', '--source-root', '--download-dir', '--node', '--candidate-node',
-                          '--candidate-node-from-path', '--reference-source-root'} & set(tail))
+        self.assertFalse({'--stage', '--receipt-dir', '--candidate-node', '--candidate-node-from-path',
+                          '--reference-source-root'} & set(tail))
 
     def test_no_lock_only_inspection_and_malformed_candidates_refuse(self):
         result = wire('check', '--stage', 'inspect', '--binding', str(self.binding(absent=True)))
@@ -267,7 +290,10 @@ class Inspect(unittest.TestCase):
         self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'],
                           report['writes'], report['enablesPreparation']),
                          ('roseos.blazer-preparation-inspection.v2', True, 0, False, False, False))
-        self.assertEqual(report['bound'], {'sourceRoot': None, 'downloadDir': None, 'node': None})
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1'
+        self.assertEqual(report['bound'], {'sourceRoot': f'{root}/source', 'downloadDir': f'{root}/downloads',
+                                           'node': '/usr/local/bin/node'})
+        self.assertFalse(report['enablesPreparation'])
         candidates = report['candidates']
         self.assertEqual((candidates['proposed'], candidates['verified'], candidates['binding']), (True, False, False))
         root = '/home/pixelbuild/rose-actions/blazer-prep-41400000000-1'

@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- #410 OS Product: opt-in host-rendered native output and framework behaviour of the switcher's production Rose
+     carousel (Launcher3 overlay RoseFan/RoseAgentFan), the same Robolectric NATIVE-graphics seam Home uses
+     (workspace/rose-agent/app/tests/native-render). Not part of any build, CI or release: run explicitly with
+     `mvn -q -B test` from this directory. It compiles the listed production sources unchanged. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.android.quickstep.fallback</groupId>
+  <artifactId>rose-switcher-native-render</artifactId>
+  <version>0</version>
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>17</maven.compiler.release>
+    <!-- The existing compile SDK (scripts/setup-android-sdk.sh); android.jar is compile-only, Robolectric supplies
+         the runtime framework for SDK 35. -->
+    <android.jar>${env.ANDROID_SDK_ROOT}/platforms/android-35/android.jar</android.jar>
+  </properties>
+  <repositories>
+    <!-- Google's official Maven, for the AAR-only androidx test runtime Robolectric loads (monitor, idling). -->
+    <repository><id>google</id><url>https://maven.google.com</url></repository>
+  </repositories>
+  <dependencies>
+    <dependency>
+      <groupId>org.robolectric</groupId>
+      <artifactId>robolectric</artifactId>
+      <version>4.17</version>
+      <scope>test</scope>
+      <exclusions>
+        <!-- AAR-only androidx test runtime: unpacked below and put on the test classpath as plain jars. -->
+        <exclusion><groupId>androidx.test</groupId><artifactId>monitor</artifactId></exclusion>
+        <exclusion><groupId>androidx.test.espresso</groupId><artifactId>espresso-idling-resource</artifactId></exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.google.android</groupId>
+      <artifactId>android-sdk-platform</artifactId>
+      <version>35</version>
+      <scope>system</scope>
+      <systemPath>${android.jar}</systemPath>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <id>production-sources</id>
+            <phase>generate-test-sources</phase>
+            <goals><goal>add-test-source</goal></goals>
+            <configuration><sources><source>${project.basedir}/../../overlays/packages/apps/Launcher3/quickstep/src</source></sources></configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <!-- Only the production classes of the Rose carousel, unchanged; RoseAgentStrip needs Launcher3 and is not compiled. -->
+          <testIncludes>
+            <testInclude>com/android/quickstep/fallback/RoseFan.java</testInclude>
+            <testInclude>com/android/quickstep/fallback/RoseAgentFan.java</testInclude>
+            <testInclude>com/android/quickstep/fallback/*NativeTest.java</testInclude>
+          </testIncludes>
+        </configuration>
+      </plugin>
+      <plugin>
+        <!-- Robolectric's SDK 35 runtime jar, fetched by Maven from Maven Central like every other dependency and
+             handed to Robolectric's documented offline mode (robolectric.offline / robolectric.dependency.dir). -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>androidx-test-aars</id>
+            <phase>process-test-classes</phase>
+            <goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem><groupId>androidx.test</groupId><artifactId>monitor</artifactId><version>1.8.0</version><type>aar</type></artifactItem>
+                <artifactItem><groupId>androidx.test.espresso</groupId><artifactId>espresso-idling-resource</artifactId><version>3.7.0</version><type>aar</type></artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.directory}/aar</outputDirectory>
+            </configuration>
+          </execution>
+          <execution>
+            <id>android-all</id>
+            <phase>process-test-classes</phase>
+            <goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>org.robolectric</groupId>
+                  <artifactId>android-all-instrumented</artifactId>
+                  <version>15-robolectric-13954326-i7</version>
+                </artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.directory}/robolectric-deps</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <!-- An AAR is a zip; its classes.jar is the plain jar the test classpath needs. -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>aar-classes</id>
+            <phase>process-test-classes</phase>
+            <goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <unzip src="${project.build.directory}/aar/monitor-1.8.0.aar" dest="${project.build.directory}/aar/monitor"><patternset><include name="classes.jar"/></patternset></unzip>
+                <unzip src="${project.build.directory}/aar/espresso-idling-resource-3.7.0.aar" dest="${project.build.directory}/aar/idling"><patternset><include name="classes.jar"/></patternset></unzip>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <additionalClasspathElements>
+            <additionalClasspathElement>${project.build.directory}/aar/monitor/classes.jar</additionalClasspathElement>
+            <additionalClasspathElement>${project.build.directory}/aar/idling/classes.jar</additionalClasspathElement>
+          </additionalClasspathElements>
+          <systemPropertyVariables>
+            <render.out>${project.build.directory}/render</render.out>
+            <robolectric.offline>true</robolectric.offline>
+            <robolectric.dependency.dir>${project.build.directory}/robolectric-deps</robolectric.dependency.dir>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -41,6 +41,9 @@ final class HomeAppGroups {
   return MAIN;
  }
 
+ /** Rose's own apps that follow the default roles on Home (the reference's Mail, Calendar and Notes), where installed. */
+ static final String[] HOME_SUITE = {"dev.pixel.mail", "org.fossify.calendar.pixel", "dev.pixel.notes.agent"};
+
  /** The folder's accessible name; its visible label is FOLDER_LABEL. */
  static String folderDescription(int count) {
   return FOLDER_LABEL + " folder, " + count + (count == 1 ? " app" : " apps");

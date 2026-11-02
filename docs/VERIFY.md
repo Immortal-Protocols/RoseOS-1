@@ -8,7 +8,7 @@ Each step yields one kind of evidence; one kind never stands in for another.
 | `artifact-inspection` | Signed/published bytes: checksums, signatures, candidate, image contents, APK identity | Boot, rendering, behavior |
 | `runtime-readonly` | A booted guest's properties, installed bytes/versions, HOME resolution | What the screen shows |
 | `runtime-interactive` | Launch paths, screenshots, UI dumps, transitions on that guest | A physical phone or another OS product |
-| `screenshot-comparison` | Heuristic wallpaper match plus a side-by-side image | Visual acceptance (a person reviews it) |
+| `screenshot-comparison` | Heuristic match with the candidate's Home reference (wallpaper or Oxblood field raster) plus a side-by-side image | Visual acceptance (a person reviews it) |
 | Physical acceptance | Owner-run checks on the actual phone | Anything beyond that phone and build |
 
 Tool: `scripts/rose-verify.py` (offline except `runtime`; JSON out; exit 0 ok,
@@ -37,7 +37,11 @@ another build's pins and never a loosened pin. `runtime` and
 - **Schema** (docstring of `rose-verify.py`): `label`, `channel`, `candidate`
   (full SHA), `target`, `apps` (`package`, `version`, `sha256`, `imagePath` for
   extraction), `appSignerSha256`, `basis`; optional `build`,
-  `avbPublicKeySha256`.
+  `avbPublicKeySha256`, `home` (`hifi-wallpaper` or `oxblood`: the reference
+  the candidate's Home implements; an expectation without it is compared with
+  the wallpaper, as every build before #410 draws it). With `home`, `apk`
+  also checks that `OxbloodField` is compiled in exactly when `home` is
+  `oxblood`.
 - **Fail-closed:** unknown keys, nulls, short hashes, non-integer versions,
   repeated packages and empty app lists exit 2. An unlisted package, a missing
   `imagePath`, a device other than `target.device`, or a differing candidate or
@@ -80,6 +84,33 @@ APP-OS-VISUAL-1030).
   renderer label (SwiftShader is not device GPU evidence), and write down what
   matches and differs side by side. That written interpretation is the visual
   evidence.
+
+## Reference: Oxblood (#410 builds)
+
+A build whose Home draws `OxbloodField.HOME` (MainActivity's pager background;
+`source` reports `homeSurface`, `apk` reports `homeSurfaceFromDex`) implements
+the frozen Oxblood reference instead of the wallpaper above. The wallpaper
+stays the reference for every build whose Home draws it.
+
+- **Prototype:** `prototypes/rose-hifi/Rose-HiFi.html` at
+  `f6503a0d00db674d9f5c38dc79758ff61cc26c82`, Git blob `5b9c6c89…62ef`;
+  shared values in `qa/oxblood/oxblood-contract.json` (#414).
+- **Field:** `src/assets/oxblood-home.svg` (blob `e07c4586…6ea5`, SHA-256
+  `7ba8d8bc…d3f1`), pinned by `rose-verify.py` (`OXBLOOD`). It is vector
+  artwork with no raster in the product, and `rose-verify` does not render SVG.
+- **`compare --home oxblood --reference RASTER`:** cover-crops the given
+  raster of that field centred across and top-aligned (`OxbloodField`'s
+  placement, recorded as `referenceCrop`). Verdicts: `black-screen`,
+  `field-consistent`, `differs-from-reference`. The raster is caller-supplied:
+  record how it was made (for example the pre-installed headless Chromium
+  drawing the frozen SVG with `background-size: cover;
+  background-position: center top` at the screenshot's size, and its renderer
+  label). Without `--reference`, and in `runtime` with an expectation `home`
+  of `oxblood`, only black-screen detection runs (`not-compared`); the
+  screenshot is kept for a later `compare`.
+- **Status:** implementation reference; a match means "consistent with the
+  frozen field", not visual acceptance. Home content (date, tiles, edge)
+  lowers coverage; always look at the side-by-side.
 
 **Historical Fold reference** (Agent 302–308, 2804, alpha, and
 `qa/verification/rose-agent-304-infra-runtime-100.md`; before main `6d9c724`):
@@ -213,7 +244,9 @@ manual OTA publication; first install and phone acceptance are not shown.
 
 Mark each item observed, failed or unavailable, with its evidence kind. Values
 are 2804/alpha; for Agent builds from `6d9c724`, item 5 expects `67e39754…63c5`
-and item 11 the HiFi reference.
+and item 11 the HiFi reference; for Oxblood builds (#410) item 11 is the Oxblood
+reference, item 7's comparison needs a field raster, and the expectation names
+`home: oxblood`.
 
 | # | Item | Kind | Expected |
 | --- | --- | --- | --- |
