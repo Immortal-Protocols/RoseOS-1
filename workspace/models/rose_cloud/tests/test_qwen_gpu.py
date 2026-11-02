@@ -601,7 +601,7 @@ class Contract(Adapter):
         return json.loads(line[len(G.CONTRACT_MARKER):])
 
     def test_one_load_runs_the_contract_cases_with_the_proposed_profile(self):
-        t, box, state = self.start(deadline=30)
+        t, box, state = self.start(deadline=12)
         self.assertTrue(state.exists())
         argv = json.loads((self.extra / 'serve.argv').read_text())
         self.assertEqual(argv, ['serve', str(self.model), '--served-model-name', 'rose-qwen', '--host', '127.0.0.1',
@@ -641,7 +641,7 @@ class Contract(Adapter):
 
     def test_a_contract_break_is_a_receipt_not_a_pass(self):
         self.serve_mode({'inline_think': True})
-        t, box, state = self.start(deadline=15)
+        t, box, state = self.start(deadline=8)
         run = G.sanitize_contract(self.runner('chat'))
         self.assertEqual((run['step'], run['contract']['allExpected'], run['contract']['chat']['verdict'],
                           run['contract']['chat']['thinkInContent']), ('done', False, 'failed:malformed_action', True))
@@ -655,7 +655,7 @@ class Contract(Adapter):
         requests['client']['inference_timeout_ms'] = 1000
         self.bundle['qwen_contract_requests.json'] = json.dumps(requests)
         self.serve_mode({'delay_s': {'after': 1.5}})
-        t, box, state = self.start(deadline=15)
+        t, box, state = self.start(deadline=8)
         raw = self.runner('tool')
         self.assertEqual((raw['step'], raw['error']), ('done', None))
         run = G.sanitize_contract(raw)
@@ -772,7 +772,7 @@ class ContractNothink(Contract):
     test_refusals_before_any_server = test_profile_is_the_proposed_serving_profile_and_proven_modes_are_unchanged = None
 
     def test_one_load_runs_the_cases_with_thinking_off(self):
-        t, box, state = self.start(deadline=30)
+        t, box, state = self.start(deadline=12)
         self.assertEqual(json.loads(state.read_text())['thinking'], False)
         argv = json.loads((self.extra / 'serve.argv').read_text())
         self.assertEqual(argv, ['serve', str(self.model), '--served-model-name', 'rose-qwen', '--host', '127.0.0.1',
@@ -793,7 +793,7 @@ class ContractNothink(Contract):
 
     def test_a_misrouting_parser_fails_through_the_real_runner(self):
         self.serve_mode({'misroute': True})
-        t, box, state = self.start(deadline=15)
+        t, box, state = self.start(deadline=8)
         c = G.sanitize_contract(self.runner('chat'))['contract']
         self.assertEqual((c['chat']['verdict'], c['noThinking'], c['allExpected']),
                          ('failed:empty_completion', False, False))
