@@ -69,8 +69,8 @@ class Pins(unittest.TestCase):
             'sha256': '22d62464ff3fa74fe3fa2b4c118bba116bc3a3aa504feddcdcf38fc3f3cbb664'})  # size not established
         self.assertEqual(pins['releaseScript'], {'path': f'{PRODUCTION}/script/generate-release.sh',
             'sha256': '01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311'})
-        self.assertEqual(pins['avbPkmd'], {'path': f'{PRODUCTION}/releases/2026103001/public/avb_pkmd.bin',
-            'sha256': 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27'})
+        # No external AVB key path: the helper derives it from the pinned target-files; only its expected sha256 stays.
+        self.assertEqual(pins['avbPkmd'], {'sha256': 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27'})
         self.assertEqual(pins['fastbootSha256'], 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9')
         result = wire('check')
         self.assertEqual((result.returncode, result.stdout),
@@ -120,9 +120,37 @@ class Invocations(unittest.TestCase):
             '--otatools', OTA, '--otatools-sha256', '22d62464ff3fa74fe3fa2b4c118bba116bc3a3aa504feddcdcf38fc3f3cbb664',
             '--release-script', f'{PRODUCTION}/script/generate-release.sh',
             '--release-script-sha256', '01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311',
-            '--avb-pkmd', f'{PRODUCTION}/releases/2026103001/public/avb_pkmd.bin',
             '--fastboot-sha256', 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9',
             '--lock', LOCK, '--out', str(self.root/'package')])
+
+    def test_wiring_argv_is_exactly_the_helpers_declared_interface(self):
+        """Static compatibility with the merged helper: every flag the wiring passes is declared, and every required
+        flag is passed (no packaging is run; argparse only)."""
+        import argparse
+        declared, original = {}, argparse.ArgumentParser.add_argument
+
+        def record(parser, *flags, **kwargs):
+            declared[flags[0]] = kwargs.get('required', False)
+            return original(parser, *flags, **kwargs)
+        spec = importlib.util.spec_from_file_location('host_factory_package', ROOT/'scripts/host-factory-package.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        argparse.ArgumentParser.add_argument = record
+        try:
+            with open(os.devnull, 'w') as null:
+                stderr, sys.stderr = sys.stderr, null
+                try:
+                    with self.assertRaises(SystemExit):
+                        helper.main([])
+                finally:
+                    sys.stderr = stderr
+        finally:
+            argparse.ArgumentParser.add_argument = original
+        passed = [a for a in wiring.package_argv(self.root)[2:] if a.startswith('--')]
+        self.assertEqual(set(passed) - set(declared), set(), 'the wiring passes a flag the helper does not declare')
+        self.assertEqual({f for f, required in declared.items() if required} - set(passed), set(),
+                         'the helper requires a flag the wiring does not pass')
+        self.assertNotIn('--avb-pkmd', passed)
 
     def test_exact_inspection_calls(self):
         self.assertEqual(wiring.observe_argv(self.root, '41500000000', '1')[1:], [str(ROOT/'scripts/factory-package.py'),
