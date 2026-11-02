@@ -276,4 +276,39 @@ final class RoseAgentWork {
             default: return label + " is no longer running";
         }
     }
+
+    /**
+     * A card's live view (#156): what the platform currently draws for that task, never an icon, a cached recents
+     * thumbnail or the last frame. CAPTURE: take a fresh capture now (TaskSnapshotManager.takeTaskSnapshot with
+     * updateCache false: real content, not stored in the recents cache, secure windows redacted by the platform, and
+     * only for a visible task). BEHIND: the task is behind another on Rose's screen, so the platform has nothing visible
+     * to capture. LOCKED: nothing of Rose's screens is shown while the phone is locked. Only Rose's own cards (items)
+     * are ever captured; unconfirmed tasks, other agents' and the human's never are.
+     */
+    enum Preview { CAPTURE, BEHIND, LOCKED }
+
+    static final String PREVIEW_BEHIND = "Behind another app";
+    static final String PREVIEW_LOCKED = "Hidden while locked";
+    static final String PREVIEW_NONE = "Preview unavailable";
+
+    static Preview preview(Task card, boolean locked) {
+        if (locked) return Preview.LOCKED;
+        return card.topOfDisplay ? Preview.CAPTURE : Preview.BEHIND;
+    }
+
+    /** The text a card shows instead of a frame; null when it shows the frame it was captured with in this read. */
+    static String previewText(Preview preview, boolean captured) {
+        switch (preview) {
+            case LOCKED: return PREVIEW_LOCKED;
+            case BEHIND: return PREVIEW_BEHIND;
+            default: return captured ? null : PREVIEW_NONE;
+        }
+    }
+
+    /** Whether this work has a card whose view should be captured again while the row is visible. */
+    boolean hasLiveView(boolean locked) {
+        if (state != State.AVAILABLE) return false;
+        for (Task t : items) if (preview(t, locked) == Preview.CAPTURE) return true;
+        return false;
+    }
 }

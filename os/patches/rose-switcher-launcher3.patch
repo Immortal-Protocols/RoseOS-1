@@ -28,7 +28,7 @@ index 0000000..bbd6949
 +<!-- RoseOS (#156): the agent row's fixed height in the fallback overview. FallbackActivityInterface claims it below
 +     the task cards and OverviewActionsView keeps it free above the action buttons; the layout uses the same value. -->
 +<resources>
-+    <dimen name="rose_agent_strip_height">136dp</dimen>
++    <dimen name="rose_agent_strip_height">160dp</dimen>
 +</resources>
 diff --git a/quickstep/src/com/android/quickstep/BaseContainerInterface.java b/quickstep/src/com/android/quickstep/BaseContainerInterface.java
 index 37eac47..fbcab76 100644
