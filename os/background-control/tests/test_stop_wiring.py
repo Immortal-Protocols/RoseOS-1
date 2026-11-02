@@ -17,7 +17,8 @@ class StopWiringTest(unittest.TestCase):
         # The owner's Stop on a notification stops that notification's session only (MultiSession.ownerStop).
         self.assertIn('Controller.ownerStop(c,i.getStringExtra("sessionId"));', (SOURCE/'StopReceiver.java').read_text())
         self.assertIn('if(i<0)return;Slot was=enter(slots[i]);try{stop(c,StopLedger.USER);}finally{leave(was);}', (SOURCE/'Controller.java').read_text())
-        self.assertEqual(self.reasons('MainActivity.java'), ['USER'])
+        # The controller's own Stop button is the owner's Stop of every occupied slot (Controller.stopAll).
+        self.assertIn('org.json.JSONObject s=Controller.stopAll(this,StopLedger.USER);', (SOURCE/'MainActivity.java').read_text())
 
     def test_agent_and_deadline_paths(self):
         # The provider's stop goes through Controller.agentStop (generation-checked).

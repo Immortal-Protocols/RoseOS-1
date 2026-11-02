@@ -111,6 +111,13 @@ final class MultiSession {
   if(sessionId==null)return 0;
   return bySession(slots,sessionId);
  }
+ /** The viewer: a bound viewer shows only its own session; an unbound one (legacy entry) shows slot 0 only while no other
+  * slot is occupied, never a guess between two. -1: nothing to show (unavailable). */
+ static int viewer(Slot[] slots,boolean bound,String boundSession){
+  if(bound)return bySession(slots,boundSession);
+  for(int i=1;i<slots.length;i++)if(slots[i].occupied)return -1;
+  return 0;
+ }
  /** open_app: confined to the slot's own target, and refused while that app is held by another slot. */
  static String openApp(Slot[] slots,int slot,String requested){
   String own=slots[slot].target;
