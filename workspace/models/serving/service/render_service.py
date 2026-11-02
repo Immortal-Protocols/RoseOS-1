@@ -58,7 +58,7 @@ LIB_FILES = {'lib/muse-glimmer-30b.json': SERVING / 'muse-glimmer-30b.json',
              'lib/startup_guard.py': SERVING / 'startup_guard.py',
              **{f'lib/rose_cloud/{n}': SERVING.parent / 'rose_cloud' / 'rose_cloud' / n
                 for n in ('preflight.py', 'manifest.json', 'stage.py', 'validate.py', 'qwen_gpu.py', 'vllm_brain.py', 'coop.py',
-                          'pump.py', 'adapter_session.py')}}
+                          'pump.py', 'adapter_session.py', 'contract_session.py', 'qwen_contract_requests.json')}}
 PY = '/usr/bin/python3'
 NGINX = '/usr/sbin/nginx'
 QWEN_CONFIG = SERVING / 'qwen-fp8.json'

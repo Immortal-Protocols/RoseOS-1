@@ -193,3 +193,89 @@ def chat_prompt_ids(tok):
                 out += [vs] + [pad] * ((w // 32) * (h // 32)) + [ve]
         return out
     return ids
+
+
+class FakeOpenAI:
+    """A stand-in for `vllm serve` with the proposed contract profile on 127.0.0.1 (MODELS-QWEN-CONTRACT-001): GET
+    /health and /v1/models, and non-streaming POST /v1/chat/completions answered by a scripted policy, never a model.
+
+    The default policy behaves as the contract expects (a reasoning parser returning thinking apart, local-agent-v1
+    envelopes, the code word recalled from the start of a long history). ``mode`` breaks one thing at a time:
+    inline_think, wrong_id, no_reasoning, prose, forget, short_prompt, truncate, extra_model, max_model_len."""
+
+    THINKING = 'SECRET-FAKE-THINKING about the request'
+
+    def __init__(self, served='rose-qwen', mode=None, port=0):
+        self.served, self.mode = served, dict(mode or {})
+        self.bodies: list[bytes] = []
+        self.paths: list[str] = []
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+
+            def log_message(self, *_):
+                pass
+
+            def reply(self, status, data=b''):
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                fake.paths.append(self.path)
+                if self.path == '/health':
+                    return self.reply(200)
+                if self.path == '/v1/models':
+                    ids = [fake.served] + (['muse-glimmer'] if fake.mode.get('extra_model') else [])
+                    mml = fake.mode.get('max_model_len', 8192)
+                    return self.reply(200, json.dumps({'object': 'list', 'data': [
+                        {'id': i, 'object': 'model', 'owned_by': 'vllm', 'max_model_len': mml} for i in ids]}).encode())
+                return self.reply(404)
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers['Content-Length']))
+                fake.paths.append(self.path)
+                fake.bodies.append(body)
+                if self.path != '/v1/chat/completions':
+                    return self.reply(404)
+                self.reply(200, json.dumps(fake.answer(json.loads(body))).encode())
+
+        self.server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def answer(self, body):
+        m = self.mode
+        last = json.loads(body['messages'][-1]['content'])
+        text = last.get('text', '')
+        everything = json.dumps(body['messages'])
+        if last.get('rose_event') == 'tool_result':
+            envelope = {'type': 'final', 'text': 'Opening the calculator was requested.'}
+        elif 'calculator' in text.lower():
+            envelope = {'type': 'open_app', 'app_id': 'calculator'}
+        elif 'code word' in text and 'AMBERFALCON' in everything and not m.get('forget'):
+            envelope = {'type': 'final', 'text': 'AMBERFALCON'}
+        else:
+            envelope = {'type': 'final', 'text': 'Hello, I am Rose.'}
+        content = json.dumps({'rose_action': 'local-agent-v1', **envelope})
+        if m.get('prose'):
+            content = 'Sure! ' + content
+        message = {'role': 'assistant', 'content': content}
+        if m.get('inline_think'):
+            message['content'] = '<think>\n' + self.THINKING + '\n</think>\n\n' + content
+        elif not m.get('no_reasoning'):
+            message['reasoning_content'] = self.THINKING
+        finish = 'stop'
+        if m.get('truncate'):
+            message['content'], finish = None, 'length'
+        prompt = 900 if m.get('short_prompt') else len(everything) // 4
+        return {'id': 'chatcmpl-fake', 'object': 'chat.completion', 'model': 'muse-glimmer' if m.get('wrong_id')
+                else self.served, 'choices': [{'index': 0, 'message': message, 'finish_reason': finish}],
+                'usage': {'prompt_tokens': prompt, 'completion_tokens': 60, 'total_tokens': prompt + 60}}
