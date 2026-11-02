@@ -1120,6 +1120,51 @@ a run with this driver, not a longer deadline.
 5. The window ends by itself, and the final receipt shows `endedBy` and `cleanup`. The next reset without a new
    diagnostic id starts Muse.
 
+## cloud-qwen-contract-nothink-once (MODELS-QWEN-CONTRACT-NOTHINK-001; source only, has not run): thinking off
+
+**Why** (from the PR360 receipt, original Mac):
+- The one full pass of `cloud-qwen-contract-once` took 29.5–40.1 s per reply for 224–301 completion tokens, about
+  7.5 tokens/s.
+- Per reply, `reasoningChars`/`contentChars` were: chat 751/107, tool proposal 1144/74, tool follow-up 878/106,
+  long 1056/70.
+- Those are measured character shares, not measured token or time attribution.
+- PR288's own Qwen3.6 path runs with thinking off (`demo/brain.py` `NO_THINK`, `rose/brain.py` `GEN_FAST`).
+
+**Profile** (`qwen_gpu.CONTRACT_NOTHINK_SERVER_ARGS`): exactly the contract profile, plus
+`--default-chat-template-kwargs '{"enable_thinking": false}'`. A server-wide default; the client and its request
+bodies are unchanged.
+
+**Source support, at vLLM commit `99a10304d`** (the version PR349 recorded for the cached image, `0.26.1rc1.dev608`):
+- `FrontendArgs.default_chat_template_kwargs` exists (`vllm/entrypoints/openai/cli_args.py`).
+- The chat server merges it into each request's template kwargs
+  (`chat_completion/serving.py` `_effective_chat_template_kwargs`).
+- The `qwen3` parser is built with those merged kwargs. With `enable_thinking` false, `extract_reasoning` returns the
+  whole output as content (`vllm/parser/qwen3.py`).
+
+This is source for that commit, not proof about the image. So, inside the image:
+- before loading, the helper refuses (`engine_arg_unsupported: default_chat_template_kwargs`) if `FrontendArgs` lacks
+  the field;
+- `vllm serve` rejects a flag it does not know (`server_failed`).
+
+Nothing falls back silently.
+
+**Rule** (`contract_session.run(..., thinking=False)`, from the `thinking` flag the helper writes into `state.json`):
+- **Unchanged:** every other check (exact identity, `/v1/models`, envelope verdicts, the tool loop, long recall
+  beyond 2048 tokens, the client's 120 s and 512 tokens, timeouts, `notRun`, the 300 s run budget).
+- **Replaced:** instead of reasoning in its own field (`reasoningSeparated`), `noThinking` requires that no reply
+  carries any reasoning and none has thinking in its content.
+- **Never a pass:** an answer a parser moved into the reasoning field leaves the content empty, which is
+  `failed:empty_completion`.
+
+**Running it:** same machinery, bounds, cases and request key as `cloud-qwen-contract-once`, in its own container
+`rose-cloud-qwen-contract-nothink`. The thinking profile and its mode are unchanged.
+
+**Operator packet** (original Mac only, after merge):
+1. Build the payload at the merge commit.
+2. Set `rose-models-diagnostic=cloud-qwen-contract-nothink-once:<P>:<fresh id>` and do one reset.
+3. Read `rose-models/qwen-session` for the contract receipt.
+4. Compare per-reply `seconds`/`completionTokens` with the PR360 thinking run. Latency stays unproven until then.
+
 ## Later, separately approved (not part of this packet)
 
 1. **Staging.** Download the four groups (37.6 GB) to the staging root and verify every size and hash, through

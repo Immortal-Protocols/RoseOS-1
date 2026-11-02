@@ -21,6 +21,11 @@ not get a full client timeout in what is left is not sent and is listed in ``not
 follow-up whose proposal did not come (``no_proposal``). ``allExpected`` is false whenever anything timed out or did
 not run; nothing is dropped from the result.
 
+Thinking (MODELS-QWEN-CONTRACT-NOTHINK-001): ``run(..., thinking=False)`` is the no-thinking profile's rule. Every
+other check is the same, but instead of reasoning arriving in its separate field (``reasoningSeparated``) it requires
+that no reply carries any reasoning and none has thinking in its content (``noThinking``). An answer the parser moved
+into the reasoning field leaves the content empty, which is the client's ``failed:empty_completion``, never a pass.
+
 The result holds fixed tokens, booleans, counts and seconds only: never a prompt, a reply, reasoning text or the
 code word. Standard library only; it runs in the serving image.
 """
@@ -228,7 +233,8 @@ def check_models(opener, base) -> dict:
     return out
 
 
-def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | None = None) -> dict:
+def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | None = None,
+        thinking: bool = True) -> dict:
     """One fixed case against the loaded server. Fills and returns ``into`` (so a caller keeps what was measured if a
     later request raises)."""
     opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))  # loopback only, never a proxy
@@ -265,12 +271,14 @@ def run(base: str, case: str, clock=time.monotonic, opener=None, into: dict | No
             r[key] = observe(status, body, req['expect'], req.get('recall'))
             r[key]['seconds'] = round(clock() - t, 2)
     replies = [r[k] for k in REPLIES if k in r]
+    r['thinking'] = bool(thinking)
     r['reasoningSeparated'] = any(x['reasoningChars'] for x in replies) and not any(
         x['thinkInContent'] for x in replies)
+    r['noThinking'] = bool(replies) and not any(x['reasoningChars'] or x['thinkInContent'] for x in replies)
     # a request in notRun has no reply, so it fails the first all(); a timed-out reply never meets its expectation
     r['allExpected'] = bool(
         r['models']['idsExact'] and r['models']['maxModelLen'] == MAX_MODEL_LEN
-        and r['reasoningSeparated'] and all(k in r for k in expected)
+        and (r['reasoningSeparated'] if thinking else r['noThinking']) and all(k in r for k in expected)
         and all(x['expectMet'] and x['identityExact'] for x in replies)
         and (case not in ('long', 'contract') or (r['long']['recalled'] and r['long']['beyondProven'])))
     r['step'] = 'done'

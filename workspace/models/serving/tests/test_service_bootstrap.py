@@ -63,7 +63,7 @@ class FakeHost(B.Host):
         self.adapter_container = self.adapter_timeout = False
         self.adapter_rc, self.adapter_out = 0, ''
         self.warm_container, self.warm_run_rc, self.warm_states, self.warm_runs = False, 0, [], {}
-        self.contract_container, self.contract_runs = False, {}
+        self.contract_container, self.contract_runs, self.contract_name = False, {}, 'rose-cloud-qwen-contract'
         self.deploy_results = []
         self.acme_cmdline = self.acme_exe = self.acme_start = None
         self.acme_listens = True
@@ -190,7 +190,7 @@ class FakeHost(B.Host):
                                             ('rose-cloud-qwen-vision', self.vision_container),
                                             ('rose-cloud-qwen-adapter', self.adapter_container),
                                             ('rose-cloud-qwen-warm', self.warm_container),
-                                            ('rose-cloud-qwen-contract', self.contract_container)) if alive]
+                                            (self.contract_name, self.contract_container)) if alive]
                 wanted = argv[argv.index('--filter') + 1].split('=', 1)[1]
                 return 0, ''.join(n + '\n' for n in names if wanted in n)  # docker's name filter is a substring match
             if argv[1:3] == ['rm', '-f']:
@@ -217,7 +217,7 @@ class FakeHost(B.Host):
                     self.adapter_container = False
                 if argv[3] == 'rose-cloud-qwen-warm' and not self.rm_fails:
                     self.warm_container = False
-                if argv[3] == 'rose-cloud-qwen-contract' and not self.rm_fails:
+                if argv[3] == self.contract_name and not self.rm_fails:
                     self.contract_container = False
                 return (1, '') if self.rm_fails else (0, '')
             if argv[1] == 'run' and 'rose-cloud-qwen-warm' in argv:
@@ -235,12 +235,14 @@ class FakeHost(B.Host):
                 default = 'ROSE-CLOUD-QWEN-SESSION ' + json.dumps({'case': case, 'step': 'done', 'session': {
                     'step': 'done', 'cancel': {'semantics': 'inflight_abort'}}})
                 return self.warm_runs.get(case, (0, default + '\n'))
-            if argv[1] == 'run' and 'rose-cloud-qwen-contract' in argv:
+            if argv[1] == 'run' and ('rose-cloud-qwen-contract' in argv or 'rose-cloud-qwen-contract-nothink' in argv):
+                self.contract_name = next(n for n in ('rose-cloud-qwen-contract', 'rose-cloud-qwen-contract-nothink')
+                                          if n in argv)
                 self.events.append(('qwencontract', list(argv), self.model_active, self.model_container,
                                     self.path(B.MODEL_HOLD).exists(), timeout))
                 self.contract_container = self.warm_run_rc == 0
                 return self.warm_run_rc, 'f00dfeed\n'
-            if argv[1] == 'exec' and argv[2] == 'rose-cloud-qwen-contract':
+            if argv[1] == 'exec' and argv[2] == self.contract_name:
                 if not self.contract_container:
                     return 1, ''
                 if argv[3] == 'cat':
@@ -2919,6 +2921,62 @@ class CloudQwenContractOnce(CloudQwenWarmOnce):
         self.warm('c-nosrc')
         self.assertEqual(self.published()['prerequisite'], 'contract_sources_missing')
         self.assertNotIn('qwencontract', [e[0] for e in self.host.events])
+
+
+class CloudQwenContractNothinkOnce(CloudQwenContractOnce):
+    """cloud-qwen-contract-nothink-once (MODELS-QWEN-CONTRACT-NOTHINK-001): the contract machinery, controls, bounds,
+    cases and cleanup unchanged, in its own container, with the helper's no-thinking profile."""
+
+    def warm(self, attempt='nothink1', requests=(), **flags):
+        for k, v in flags.items():
+            setattr(self.host, k, v)
+        self.host.events.clear()
+        plan, polls = dict(requests), {'n': 0}
+
+        def operator(host):
+            polls['n'] += 1
+            if polls['n'] in plan:
+                host.md[B.QWEN_WARM_KEY] = plan[polls['n']]
+        self.host.on_sleep = operator
+        return self.boot(f'cloud-qwen-contract-nothink-once:{SHA}:{attempt}')
+
+    # the contract tests that pin the thinking container's exact argv and name are re-stated below
+    test_one_load_then_contract_cases_until_idle = None
+
+    def test_own_container_and_profile_same_controls(self):
+        status, code = self.warm(requests=((2, f'{SHA}:n-1:tool'),))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(status)['diagnostic'],
+                         ('ok', 'inference held; Qwen contract (no thinking) container ended by idle after 1 '
+                                'request(s)'))
+        r = self.published()
+        self.assertEqual((r['check'], r['cleanup'], r['modelHeld'], r['first']['allExpected']),
+                         ('cloud-qwen-contract-nothink-once', 'removed', True, True))
+        (start,) = [e for e in self.host.events if e[0] == 'qwencontract']
+        _, argv, active, container, held, timeout = start
+        bundle = json.dumps({n: (self.lib / n).read_text() for n in B.QWEN_CONTRACT_FILES}, sort_keys=True)
+        source, manifest = (self.lib / 'qwen_gpu.py').read_text(), (self.lib / 'manifest.json').read_text()
+        self.assertEqual(argv, B.qwen_argv('rose-cloud-qwen-contract-nothink', RUNTIME['image_id'], self.QWEN_DIR,
+                                           source, manifest, B.qwen_gpu_limits(contract=True, nothink=True), bundle,
+                                           detach=True))
+        thinking = B.qwen_argv('rose-cloud-qwen-contract', RUNTIME['image_id'], self.QWEN_DIR, source, manifest,
+                               B.qwen_gpu_limits(contract=True), bundle, detach=True)
+        swap = {'rose-cloud-qwen-contract-nothink': 'rose-cloud-qwen-contract',
+                B.qwen_gpu_limits(contract=True, nothink=True): B.qwen_gpu_limits(contract=True)}
+        self.assertEqual([swap.get(a, a) for a in argv], thinking)  # only the name and the helper mode differ
+        self.assertEqual(json.loads(B.qwen_gpu_limits(contract=True, nothink=True)),
+                         {'deadlineS': 870 + 7200, 'tmpMaxBytes': 8 << 30, 'shmMaxBytes': 4 << 30,
+                          'mode': 'contract-nothink'})
+        self.assertEqual(json.loads(B.qwen_gpu_limits(contract=True))['mode'], 'contract')  # the thinking one: as is
+        execs = [e for e in self.host.events if e[0] == 'contractexec']
+        self.assertEqual([(e[1], e[2][2], e[3]) for e in execs],
+                         [('contract', 'rose-cloud-qwen-contract-nothink', 300),
+                          ('tool', 'rose-cloud-qwen-contract-nothink', 300)])
+        self.assertEqual([e[1] for e in self.host.events if e[0] == 'rm'][-1:], ['rose-cloud-qwen-contract-nothink'])
+        self.assertEqual((active, container, held, timeout), (False, False, True, 120))
+        self.assertIsNotNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothink-once:{SHA}:n1'))
+        self.assertIsNone(B.DIAG_VALUE.fullmatch(f'cloud-qwen-contract-nothinking-once:{SHA}:n1'))
+        self.assertNoProvisioning()
 
 
 class HostValidate(unittest.TestCase):
