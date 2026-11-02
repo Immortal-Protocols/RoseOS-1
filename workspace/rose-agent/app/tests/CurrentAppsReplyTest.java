@@ -66,6 +66,13 @@ public final class CurrentAppsReplyTest {
         expect(prNone.available && prNone.apps.isEmpty(), "PR355 none, complete: genuinely nothing under control");
         Snapshot prLocked = CurrentApps.fromReply("reader", "locked", null, null, 9L, Collections.<ReplyApp>emptyList(), null, null, false);
         expect(!prLocked.available && prLocked.reason.equals(CurrentApps.LOCKED), "PR355 locked");
+        // PR361 platform semantics through the controller: an open session whose apps all left (handover) is attested
+        // empty without any state; a complete platform list includes hidden apps, still one preview handle (front).
+        Snapshot handover = CurrentApps.fromReply("reader", "live", "s-1", "rose-ws-1", 10L, Collections.<ReplyApp>emptyList(), null, null, true);
+        expect(handover.available && handover.apps.isEmpty(), "open session, no apps, complete: nothing under control");
+        Snapshot hidden = CurrentApps.fromReply("reader", "live", "s-1", "rose-ws-1", 11L, apps(new ReplyApp(PERM, true, false), new ReplyApp(CALC, false, true)), null, "ready", true);
+        expect(hidden.available && hidden.apps.size() == 2 && hidden.apps.get(0).preview != null && hidden.apps.get(1).preview == null, "complete list with a hidden app: listed, live view unavailable");
+        expect(CurrentApps.fromReply("reader", "live", "s-1", "rose-ws-1", 11L, apps(new ReplyApp(CALC, true, true)), null, null, true).reason.equals(CurrentApps.MALFORMED), "complete members without sessionStatus: no guessed state");
         // Controller restart: a new instance is a new registration even though its generation starts again.
         Tracker r = new Tracker();
         r.apply(live(40, "ready", true, new ReplyApp(CALC, true, true)));
