@@ -136,7 +136,7 @@ def speakable(text: str) -> str:
     t = re.sub(r"\b(\d{1,2}):(\d{2})(?:\s*([AaPp]\.?[Mm])\b)?", _time, t)
     t = re.sub(r"\b(\d{1,2})\s*([AaPp])\.?[Mm]\b",
                lambda m: number_words(int(m.group(1))) + (" A M" if m.group(2).lower() == "a" else " P M"), t)
-    t = re.sub(r"\$(\d[\d,]*)(?:\.(\d{1,2}))?\s*([kKmMbB])?\b", _money, t)
+    t = re.sub(r"\$(\d[\d,]*)(?:\.(\d{1,2}))?(?:\s*([kKmMbB])\b)?", _money, t)
     t = re.sub(r"\b(\d+)\s+(\d+/\d+)\b", _mixed, t)
     t = re.sub(r"\b(\d+)/(\d+)\b", _fraction, t)
     t = re.sub(r"\b(\d[\d,]*)\.(\d+)\b", _decimal, t)

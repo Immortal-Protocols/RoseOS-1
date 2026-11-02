@@ -96,8 +96,8 @@ THINK_SAMPLING = Sampling(temperature=0.6, top_p=0.95, top_k=20, max_tokens=1200
 ANSWER_SAMPLING = dataclasses.replace(GREEDY, max_tokens=120)
 CALL_PREFIX = "<tool_call>\n<function"  # tokenizes canonically; the model writes "=name>"
 
-# Background prefill chunk: small enough that a reply waiting behind it is
-# delayed by ~60 ms at most (256-token chunks took 95-130 ms).
+# Background prefill chunk when the brain has not timed its own
+# (brain.bg_chunk): 128 tokens take ~100 ms on the 35B-A3B.
 BG_CHUNK = 128
 
 PHONE_SYSTEM = """You control the user's phone to complete one goal for Rose, their voice assistant. Be fast and exact.
@@ -307,6 +307,7 @@ class TaskManager:
     def __init__(self, runtime: Runtime, brain: Brain, phone: Phone, bus: Bus,
                  on_done: Callable[[Task], None]):
         self.runtime, self.brain, self.phone, self.bus = runtime, brain, phone, bus
+        self.chunk = getattr(brain, "bg_chunk", BG_CHUNK)
         self.on_done = on_done
         self.tasks: dict[int, Task] = {}
         self.think_budget = THINK_SAMPLING.max_tokens
@@ -570,7 +571,7 @@ class TaskManager:
         image = None
         for piece in segment:
             if isinstance(piece, str):
-                yield from seq.append_text(piece, chunk=BG_CHUNK)
+                yield from seq.append_text(piece, chunk=self.chunk)
             else:  # the screenshot: vision encode + image prefill, in small units
                 yield from seq.append_image(piece)
                 image = seq.last_image
@@ -605,12 +606,14 @@ class TaskManager:
                 why = self._defer_finish(task, status, turn.actions)
                 if not why and status == "done":
                     why, end = self._wrong_app(run, session)
+                    stop = "wrong app"
                     if not why and end is None:
                         why, end = _unseen_number(task.goal, summary, session, run)
+                        stop = "unseen number"
                     if end is not None:
                         turn.actions.append({"name": "finish", "args": call.arguments, "ok": False,
                                              "result": why, "changed": False})
-                        turn.end, turn.stop = end, "wrong app"
+                        turn.end, turn.stop = end, stop
                         break
                 turn.actions.append({"name": "finish", "args": call.arguments, "ok": not why,
                                      "result": why or summary, "changed": False})
@@ -726,7 +729,7 @@ class TaskManager:
 
         if getattr(session, "background", False):
             try:
-                app = self.phone.workspace_app()
+                app = self.phone.workspace_app(session.name)
             except Exception:
                 app = None
             return app or "nothing (Rose's workspace is closed)"
@@ -850,7 +853,7 @@ class TaskManager:
         ws = getattr(self.phone, "workspace_session_id", None)
         return {"text": run.typed, "where": run.typed_where or self._current_app(session) or "the app",
                 "background": bool(task.background), "on_screen": bool(task.on_screen),
-                "session": ws() if callable(ws) and task.background else None}
+                "session": ws(session.name) if callable(ws) and task.background else None}
 
     def _not_approved(self, task: Task, run: _Run, session: PhoneSession) -> str:
         """Why the confirmed Send may not be tapped ("" to allow): the draft the user said yes to
@@ -866,7 +869,7 @@ class TaskManager:
             return gone
         if task.background and d.get("session"):
             ws = getattr(self.phone, "workspace_session_id", None)
-            if not callable(ws) or ws() != d["session"]:
+            if not callable(ws) or ws(session.name) != d["session"]:
                 return gone
         if run.typed and _norm_text(run.typed) != text:
             return ("Not sent: the text typed is not the message they approved. Finish with success false "
@@ -894,7 +897,7 @@ class TaskManager:
         seq = self._thinker.fork(_view(task))
         prompt = (f"{context.strip()}\n\n" if context.strip() else "") + f"Question: {question.strip()}"
         t0 = time.monotonic()
-        yield from seq.append_text(user_segment(prompt) + GEN_THINK, chunk=BG_CHUNK)
+        yield from seq.append_text(user_segment(prompt) + GEN_THINK, chunk=self.chunk)
         budget = dataclasses.replace(THINK_SAMPLING, max_tokens=self.think_budget)
         thought: list[int] = []
         end: int | None = None
@@ -916,7 +919,7 @@ class TaskManager:
         else:
             text = self.brain.decode(thought)
             close = ("" if text.endswith("\n") else "\n") + "</think>\n\n" + IM_END + "\n"
-        yield from seq.append_text(close + user_segment(THINK_ANSWER) + GEN_FAST, chunk=BG_CHUNK)
+        yield from seq.append_text(close + user_segment(THINK_ANSWER) + GEN_FAST, chunk=self.chunk)
         t1 = time.monotonic()
         task.steps.append({"n": 1, "ms": round((t1 - t0) * 1000), "tokens": len(thought),
                            "what": f"thought for {len(thought)} tokens"
@@ -1331,14 +1334,28 @@ def _press_keys(session, keys: str) -> ActionResult:
     return ActionResult(True, f"Pressed {pressed}. Read the result on the screen.", changed=False)
 
 
-_CALC_GOAL = re.compile(r"\b(?:calculat\w*|calculator|add|sum|plus|minus|times|multipl\w*|divid\w*|"
-                        r"percent|total)\b|\d\s*[-+*/x×÷]\s*\d", re.I)
+# A calculation: the goal names the calculator or holds arithmetic. Words like "add" or
+# "total" alone are not enough ("Don't add anything to the cart" on Amazon).
+_CALC_GOAL = re.compile(r"\bcalculat\w*|\d\s*[-+*/x×÷]\s*\d", re.I)
 _NUMBER = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
 
 
+def _rounds_to(n: str, shown: set[str]) -> bool:
+    """``n`` is on the screen, or is a shown number rounded ("33.98" for 33.984, "1,275" for 1275)."""
+
+    if n in shown:
+        return True
+    places = len(n.split(".")[1]) if "." in n else 0
+    try:
+        value = float(n)
+        return any(abs(round(float(s), places) - value) < 1e-9 for s in shown if s)
+    except ValueError:
+        return False
+
+
 def _unseen_number(goal: str, summary: str, session, run: _Run) -> tuple[str, tuple[str, str] | None]:
-    """A calculation's success must show its answer: every number the summary claims that the
-    goal does not already hold must be on the screen now (a model once "calculated" 1+...+50 by
+    """A calculation's success must show its answer: a number the summary claims that the goal
+    does not already hold must be on the screen now (a model once "calculated" 1+...+50 by
     typing 1225 into nothing and reported it). ("", None) accepts; a second refusal fails."""
 
     if not _CALC_GOAL.search(goal):
@@ -1347,9 +1364,11 @@ def _unseen_number(goal: str, summary: str, session, run: _Run) -> tuple[str, tu
     given = {norm(n) for n in _NUMBER.findall(goal)}
     shown = {norm(n) for n in _NUMBER.findall(session.ui_tree())}
     claimed = [n for n in (norm(n) for n in _NUMBER.findall(summary)) if n not in given]
-    missing = next((n for n in claimed if n not in shown), None)
-    if missing is None:
+    # The answer (the summary's last number) must be on the screen; the inputs it repeats may be
+    # written differently there ("18%" and "$86.40" against 86.4×0.18÷3).
+    if not claimed or _rounds_to(claimed[-1], shown):
         return "", None
+    missing = claimed[-1]
     run.bad_numbers += 1
     if run.bad_numbers >= 2:
         return f"The screen does not show {missing}.", ("failed", "I couldn't get the calculator to show the answer.")

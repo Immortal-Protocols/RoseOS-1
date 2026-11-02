@@ -812,7 +812,7 @@ class Server:
         self.ready = False
         self.state: dict = {"state": "loading", "detail": "Starting"}
         self.load_s: dict[str, float] = {}
-        self.runtime = self.brain = self.listener = self.speaker = self.tasks = None
+        self.runtime = self.brain = self.task_brain = self.listener = self.speaker = self.tasks = None
         self.conductor: Any = None
         self.keepalive: GpuKeepalive | None = None
         self.transport: Any = None
@@ -884,7 +884,7 @@ class Server:
             if cloud:
                 from .cloud_audio import prepare
                 prepare()
-            from .brain import Brain
+            from .brain import REPO as BRAIN_REPO, Brain
             from .conductor import Conductor
             from .listener import Listener
             from .runtime import Runtime
@@ -894,8 +894,15 @@ class Server:
             self.transport = self._make_transport()
             self.runtime = rt = Runtime()
             if not codex:
-                self.brain = self._step("brain", "Loading the brain (Qwen3.6-35B-A3B)",
-                                        lambda: rt.run(Brain, name="brain-load", timeout=900))
+                brain_repo = BRAIN_REPO if self.args.brain in (None, "local") else self.args.brain
+                task_repo = self.args.task_brain or os.environ.get("ROSE_TASK_BRAIN") or brain_repo
+                self.brain = self._step("brain", f"Loading the brain ({brain_repo.split('/')[-1]})",
+                                        lambda: rt.run(lambda: Brain(brain_repo), name="brain-load", timeout=900))
+                self.task_brain = self.brain
+                if task_repo != brain_repo:  # a second model for the phone agent and thinker
+                    self.task_brain = self._step(
+                        "task-brain", f"Loading the task brain ({task_repo.split('/')[-1]})",
+                        lambda: rt.run(lambda: Brain(task_repo), name="task-brain-load", timeout=900))
             self.listener = Listener(rt, self.bus, on_event=self._on_listen)
             if not cloud:
                 self._step("listener", "Loading ears (VAD, streaming ASR, Parakeet, smart-turn)",
@@ -912,7 +919,7 @@ class Server:
                 self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts)
                 self.tasks = self.conductor
             else:
-                self.tasks = TaskManager(rt, self.brain, self.phone, self.bus, on_done=self._on_task_done)
+                self.tasks = TaskManager(rt, self.task_brain, self.phone, self.bus, on_done=self._on_task_done)
                 self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
                 self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
                                            self.phone, self.bus)
@@ -1368,8 +1375,9 @@ async def serve_all(servers: list[tuple[uvicorn.Server, list | None]]) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python -m rose.app", description="Rose v3 voice assistant server.")
-    p.add_argument("--brain", choices=("local", "codex"), default="local",
-                   help="codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
+    p.add_argument("--brain", default="local",
+                   help="local (default: $ROSE_BRAIN or brain.REPO), an MLX model for Rose's conversation, "
+                        "or codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
     p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
     p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
     p.add_argument("--pair-host", action="append", default=[], help="advertised DNS/IPv4 host for the shared QR; repeatable")
@@ -1390,6 +1398,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="TLS listener on 0.0.0.0 for phones paired by QR code (Wi-Fi/Tailscale)")
     p.add_argument("--no-remote", dest="remote", action="store_false",
                    help="no remote listener: the phone can only use USB (adb reverse)")
+    p.add_argument("--task-brain", default=None,
+                   help="MLX model for the phone agent and thinker (default $ROSE_TASK_BRAIN, else --brain)")
     p.add_argument("--log-level", default="warning")
     args = p.parse_args(argv)
     if args.cloud_audio and args.brain != 'codex':
