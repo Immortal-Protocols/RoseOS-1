@@ -52,22 +52,28 @@ class CurrentAppsWiringTest(unittest.TestCase):
         self.assertIn('catch(Throwable e){front=null;}', self.body, 'a failed read lists only the target and says it is incomplete')
         self.assertEqual(sorted(set(re.findall(r'(?<![\w.])(\w+)\s*=(?!=)', self.body)) - {
             'locked', 'live', 'front', 'read', 'windows', 'n', 'pkg', 'r', 'signature', 'listed', 'apps', 'platform', 'b',
-            'owned', 'type', 'version', 'ext', 'held'}), ['appsSignature'])
+            'owned', 'type', 'version', 'ext', 'held', 'bound', 'i', 'reply', 's', 'sessions'}), ['appsSignature'])
         self.assertTrue(writes(self.body, 'appsGeneration'), 'the generation rises on change')
 
     def test_reply_shape(self):
         self.assertEqual(re.findall(r'\.put\("(\w+)"', self.body),
-                         ['packageName', 'front', 'target', 'status', 'sessionId', 'taskId', 'sessionStatus', 'generation', 'complete', 'incompleteReason', 'source', 'snapshotGeneration', 'apps'])
+                         ['packageName', 'front', 'target', 'sessionId',
+                          'slot', 'sessionId', 'taskId', 'targetPackage', 'sessionStatus', 'bound', 'frontKnown',
+                          'status', 'sessionId', 'taskId', 'sessionStatus', 'complete', 'incompleteReason', 'source', 'snapshotGeneration', 'apps', 'sessions',
+                          'generation', 'controllerEpoch'])
         self.assertIn('.put("sessionStatus",held?status:JSONObject.NULL)', self.body, 'the held session\'s status (informational with owned_devices), null otherwise')
         self.assertIn('.put("snapshotGeneration",owned!=null?(Object)owned.generation:JSONObject.NULL)', self.body)
-        self.assertIn('String signature=CurrentApps.signature(r,id,status);', self.body)
+        # The generation covers the whole reply (membership, bindings, front, status, lock); controllerEpoch names the process.
+        self.assertIn('String signature=reply.toString();if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}', self.body)
+        self.assertIn('return reply.put("generation",appsGeneration).put("controllerEpoch",EPOCH);', self.body)
+        self.assertIn('static final String EPOCH=UUID.randomUUID().toString();', CONTROLLER)
         self.assertIn('.put("generation",appsGeneration)', self.body, 'the controller\'s rising counter, never the platform\'s generation')
         self.assertNotIn('platform.generation', self.body)
 
     def test_same_signer_only_not_advertised_never_a_phone_command(self):
         signer = PROVIDER.index('checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH')
         self.assertLess(signer, PROVIDER.index('case "current_apps":result=Controller.route(getContext(),"current_apps",p);break;'))
-        self.assertIn('case "current_apps":return currentApps(c).put("sessions",membership(c));', CONTROLLER, 'the route reaches the same overview read')
+        self.assertIn('case "current_apps":return currentApps(c);', CONTROLLER, 'the route reaches the same overview read')
         caps = re.search(r'case "capabilities":.*?new String\[\]\{([^}]*)\}', PROVIDER).group(1)
         self.assertEqual(caps, '"list_apps","start","get_state","command","stop"')
         guard = PHONE.index('"current_apps".equals(command.optString("operation"))')
@@ -95,7 +101,9 @@ class CurrentAppsWiringTest(unittest.TestCase):
         self.assertIn('if(!locked)try{', owned_read, 'never read while locked, and never conditioned on a live session')
         self.assertNotIn('session', owned_read.split('try{')[0])
         self.assertEqual(self.body.count('}catch(Throwable e){owned=null;}'), 1, 'unavailable (IllegalStateException), missing method or malformed: fall back')
-        self.assertIn('CurrentApps.Result r=owned!=null?CurrentApps.of(locked,live?target:null,owned,front,c.getPackageName())', self.body)
+        # Snapshot-only membership over every device; bindings (front, target) only flag members (MultiSession.bind).
+        self.assertIn('MultiSession.Bound bound=bindings(locked,owned,front);', self.body)
+        self.assertIn('CurrentApps.Result r=owned!=null?CurrentApps.ofDevices(locked,bound.targets,owned,bound.fronts,c.getPackageName())', self.body)
 
 
 if __name__ == '__main__':

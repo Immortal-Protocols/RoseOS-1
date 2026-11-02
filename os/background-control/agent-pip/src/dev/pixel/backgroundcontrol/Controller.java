@@ -258,21 +258,60 @@ public final class Controller {
    Bundle b=(Bundle)session.getClass().getMethod("getAutomatedApps").invoke(session);
    if(b!=null)platform=CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
   }catch(Throwable e){platform=null;}
-  CurrentApps.Result r=owned!=null?CurrentApps.of(locked,live?target:null,owned,front,c.getPackageName())
+  // Bindings only (MultiSession.bind): which occupied slot's session each listed device belongs to, with that session's
+  // target and one front app; they never decide membership or completeness (snapshot-only rule).
+  MultiSession.Bound bound=bindings(locked,owned,front);
+  CurrentApps.Result r=owned!=null?CurrentApps.ofDevices(locked,bound.targets,owned,bound.fronts,c.getPackageName())
    :platform!=null?CurrentApps.of(locked,session!=null,status,target,platform,front,c.getPackageName())
    :CurrentApps.of(locked,session!=null||replacement.releasing(),status,blocked,target,front,c.getPackageName());
-  // generation: the controller's own counter, rising on every change and across session replacement; the platform's
-  // per-device generation restarts with each device and is never forwarded.
-  String signature=CurrentApps.signature(r,id,status);if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
   boolean listed=CurrentApps.LIVE.equals(r.status);JSONArray apps=new JSONArray();
-  for(CurrentApps.App a:r.apps)apps.put(new JSONObject().put("packageName",a.packageName).put("front",a.front).put("target",a.target));
   // sessionStatus: the held session's status (with owned_devices only informational: it may be cleanup_failed, or null with
   // no session held); snapshotGeneration: the platform's global generation for an owned-device snapshot, else null.
   boolean held=listed&&session!=null;
-  return new JSONObject().put("status",r.status).put("sessionId",held?id:JSONObject.NULL).put("taskId",held?nullable(taskId):JSONObject.NULL)
+  // apps[].sessionId: with the snapshot, the bound slot whose device lists the app (null for an unbound device: shown, but no
+  // preview, Stop or Watch); without it, the one held session.
+  for(CurrentApps.App a:r.apps)apps.put(new JSONObject().put("packageName",a.packageName).put("front",a.front).put("target",a.target)
+   .put("sessionId",owned!=null?nullable(bound.sessionOf(a.packageName)):held?id:JSONObject.NULL));
+  JSONArray sessions=new JSONArray();
+  for(int i=0;i<bound.slots.size();i++){MultiSession.Bind s=bound.slots.get(i);sessions.put(new JSONObject().put("slot",s.slot).put("sessionId",nullable(s.sessionId))
+   .put("taskId",nullable(s.taskId)).put("targetPackage",nullable(s.target)).put("sessionStatus",s.status).put("bound",bound.bound.get(i)).put("frontKnown",s.frontKnown));}
+  JSONObject reply=new JSONObject().put("status",r.status).put("sessionId",held?id:JSONObject.NULL).put("taskId",held?nullable(taskId):JSONObject.NULL)
    .put("sessionStatus",held?status:JSONObject.NULL)
-   .put("generation",appsGeneration).put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source)
-   .put("snapshotGeneration",owned!=null?(Object)owned.generation:JSONObject.NULL).put("apps",apps);
+   .put("complete",r.complete).put("incompleteReason",r.incompleteReason).put("source",r.source)
+   .put("snapshotGeneration",owned!=null?(Object)owned.generation:JSONObject.NULL).put("apps",apps).put("sessions",sessions);
+  // generation: the controller's own counter over the whole reply (membership, bindings, front, status, lock), rising on every
+  // change and never falling within one controllerEpoch (new for each controller process). The platform's per-device
+  // generation restarts with each device and is never forwarded. No timestamps.
+  String signature=reply.toString();if(!signature.equals(appsSignature)){appsSignature=signature;appsGeneration++;}
+  return reply.put("generation",appsGeneration).put("controllerEpoch",EPOCH);
+ }
+ static final String EPOCH=UUID.randomUUID().toString();
+ /** current_apps bindings (MultiSession.bind): each occupied slot's attested deviceId (a closed answer's ids are historical
+  * only), and its one front app, the topmost application window, only when ready, unblocked and unlocked. front0: the
+  * active slot's window read above. Nothing is read while locked. */
+ static MultiSession.Bound bindings(boolean locked,CurrentApps.Owned owned,List<String> front0){
+  save(active);List<MultiSession.Bind> occupied=new ArrayList<>();
+  for(Slot s:slots){
+   if(!MultiSession.occupied(s.session!=null,s.status))continue;
+   Integer device=null;boolean closed=false;
+   if(!locked&&s.session!=null)try{
+    Bundle b=(Bundle)s.session.getClass().getMethod("getAutomatedApps").invoke(s.session);
+    CurrentApps.Platform pl=b==null?null:CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
+    if(pl!=null){closed=pl.closed;device=MultiSession.deviceId(b.get("deviceId"));}
+   }catch(Throwable e){device=null;}
+   List<String> w=!locked&&s.session!=null&&"ready".equals(s.status)&&!s.blocked?(s==active?front0:windows(s.session)):null;
+   occupied.add(new MultiSession.Bind(s.index,s.id,s.taskId,s.target,s.status,device,closed,w!=null,w==null||w.isEmpty()?null:w.get(0)));
+  }
+  return MultiSession.bind(occupied,owned);
+ }
+ /** A session display's application window packages, top first, or null when unreadable; every root is released at once.
+  * Read-only: never the agent's observation. */
+ @SuppressWarnings("unchecked") static List<String> windows(Object s){
+  try{List<String> read=new ArrayList<>();
+   for(AccessibilityWindowInfo w:(List<AccessibilityWindowInfo>)s.getClass().getMethod("getAccessibilityWindows").invoke(s)){
+    if(w.getType()==AccessibilityWindowInfo.TYPE_APPLICATION){AccessibilityNodeInfo n=w.getRoot();if(n!=null){CharSequence pkg=n.getPackageName();if(pkg!=null)read.add(pkg.toString());n.recycle();}}
+    w.recycle();
+   }return read;}catch(Throwable e){return null;}
  }
  // ---- Two-app routing (MultiSession). Every provider operation enters the slot its request names, runs the unchanged
  // single-session operation there and leaves; replies add "sessions" (each slot's summary). Legacy requests (no mode,
@@ -337,35 +376,23 @@ public final class Controller {
     if(r.refused())return refused(r,c);
     return in(r.slot,()->agentStop(c,p)).put("sessions",summary());
    }
-   case "current_apps":return currentApps(c).put("sessions",membership(c));
+   case "current_apps":return currentApps(c);
+   case "owner_stop":{
+    // The owner's Stop of one whole session from Rose Agent's own UI (refused on the Mac path by PhoneControl): it names
+    // the session and its exact task; confirmed by exactly the bindingsContract rule, never by acceptance.
+    String task=taskParam(p);
+    MultiSession.Route r=sid==null||sid.isEmpty()?MultiSession.Route.refuse(MultiSession.STALE_SESSION,MultiSession.live(view(false))):MultiSession.state(view(false),sid);
+    if(r.refused())return new JSONObject().put("status",r.refusal).put("actionExecuted",false).put("confirmed",false).put("sessionId",nullable(sid)).put("sessions",summary());
+    if(!Objects.equals(task,slots[r.slot].taskId))return new JSONObject().put("status","stale_task").put("actionExecuted",false).put("confirmed",false)
+     .put("sessionId",sid).put("rejectedTaskId",nullable(task)).put("sessions",summary());
+    return in(r.slot,()->{stop(c,StopLedger.USER);return state(c).put("confirmed","stopped".equals(status)&&StopLedger.USER.equals(stops.reason())
+     &&sid.equals(stops.sessionId())&&Objects.equals(task,stops.taskId()));}).put("sessions",summary());
+   }
    default:throw new IllegalArgumentException("Unknown background operation");
   }
  }
  /** The owner's Stop from one session's notification: that session only (MultiSession.ownerStop). */
  static synchronized void ownerStop(Context c,String sessionId){int i=MultiSession.ownerStop(view(false),sessionId);if(i<0)return;Slot was=enter(slots[i]);try{stop(c,StopLedger.USER);}finally{leave(was);}}
- /** current_apps.sessions: each occupied slot's attested membership (MultiSession.sessions), not read while locked. */
- static JSONArray membership(Context c)throws Exception{
-  MultiSession.Slot[] v=view(false);JSONArray out=new JSONArray();
-  List<MultiSession.Entry> entries;
-  if(locked(c)){entries=new ArrayList<>();for(int i=0;i<v.length;i++)if(v[i].occupied)entries.add(new MultiSession.Entry(i,Collections.<String>emptyList(),false,CurrentApps.LOCKED));}
-  else{
-   Bundle ob=owned(c);CurrentApps.Owned o=ob==null?null:CurrentApps.owned(ob.get("generation"),ob.get("deviceIds"),ob.get("deviceComplete"),ob.get("appDeviceIds"),ob.get("appPackageNames"));
-   Set<Integer> devices=null;if(o!=null){devices=new HashSet<>();for(int d:o.deviceIds)devices.add(d);}
-   MultiSession.Membership[] m=new MultiSession.Membership[slots.length];for(int i=0;i<slots.length;i++)m[i]=member(slots[i].session);
-   entries=MultiSession.sessions(v,m,devices,c.getPackageName());
-  }
-  for(MultiSession.Entry e:entries){Slot s=slots[e.slot];out.put(new JSONObject().put("sessionId",nullable(s.id)).put("taskId",nullable(s.taskId)).put("targetPackage",nullable(s.target))
-   .put("complete",e.complete).put("incompleteReason",e.incompleteReason).put("apps",new JSONArray(e.apps)));}
-  return out;
- }
- /** One session's attested membership with its fixed deviceId; anything unreadable or malformed is UNKNOWN. */
- static MultiSession.Membership member(Object s){
-  if(s==null)return MultiSession.Membership.UNKNOWN;
-  try{Bundle b=(Bundle)s.getClass().getMethod("getAutomatedApps").invoke(s);if(b==null)return MultiSession.Membership.UNKNOWN;
-   CurrentApps.Platform pl=CurrentApps.platform(b.get("generation"),b.get("packageNames"),b.get("userId"),b.get("complete"),b.get("closed"),android.os.Process.myUid()/100000);
-   return pl==null?MultiSession.Membership.UNKNOWN:new MultiSession.Membership(true,pl.closed,pl.complete,MultiSession.deviceId(b.get("deviceId")),pl.packages);
-  }catch(Throwable e){return MultiSession.Membership.UNKNOWN;}
- }
  static JSONObject capture()throws Exception{
   Image image=(Image)session.getClass().getMethod("getScreenshot").invoke(session);if(image==null)throw new IllegalStateException("No allowed target frame available");
   Bitmap all=null,crop=null,encoded=null;

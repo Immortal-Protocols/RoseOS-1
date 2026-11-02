@@ -2,7 +2,9 @@ package dev.pixel.backgroundcontrol;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** The apps currently running under agent control (#156/#225 membership rule): the packages on the controller's live
  * ComputerControl session display, never task history or results. A session that is not ready, blocked or launching
@@ -25,10 +27,12 @@ import java.util.List;
  *
  * Preferred source, independent of any session (ComputerControlExtensions.getOwnedAutomatedDevices, PR374): the platform's
  * snapshot of every session device the controller owns in its user, the same repository and generation Launcher3's
- * listener reads. One rule on that snapshot, shared with Launcher3: no device is genuine empty; exactly one device lists
- * its apps (complete only when the device is: other_user_omitted otherwise); more than one is multiple_devices, never
- * complete and with no members. A failed-close or replacement device stays listed until the platform removes it, so
- * attested apps are shown whatever the session's state; the session status is only informational then.
+ * listener reads. One snapshot-only rule shared with Launcher3 (qa/parity bindingsContract, agreed by Home, OS Product
+ * and App Core): no device is genuine empty; otherwise the members are the union of every device's apps without the
+ * controller package (removed before the duplicate check); complete only when every device is complete
+ * (other_user_omitted otherwise); a package on more than one device is duplicate_package, never complete and with no
+ * members (no guessed owner). A failed-close, replacement or lingering device stays listed until the platform removes it,
+ * so its attested apps are shown whatever the controller's sessions; sessions are only bindings (front, target).
  *
  * Rendering contract shared with Launcher3 and Home (#156/#225 parity, qa/parity/current-apps-parity.json):
  * complete with apps shows exactly those apps; complete and empty is genuine empty; anything not complete shows no app
@@ -63,7 +67,7 @@ final class CurrentApps {
   SESSION_UNRELEASED = "session_unreleased";
  /** Where the members came from. */
  static final String PLATFORM = "platform", SESSION_WINDOWS = "session_windows", OWNED_DEVICES = "owned_devices";
- static final String MULTIPLE_DEVICES = "multiple_devices";
+ static final String DUPLICATE_PACKAGE = "duplicate_package";
 
  /** The platform's owned-device snapshot (the agreed PR374 Bundle keys), validated. */
  static final class Owned {
@@ -96,17 +100,29 @@ final class CurrentApps {
  }
 
  /** Membership from the owned-device snapshot, whatever the session's state (see the class comment). front: the live
-  * session display's application windows, null when not read; target: the live session's target, for the flag. */
+  * session display's front application window, null when not read; target: the live session's target, for the flag. */
  static Result of(boolean locked, String target, Owned owned, List<String> front, String controller) {
+  return ofDevices(locked, target == null ? Collections.<String>emptyList() : Collections.singletonList(target), owned, front, controller);
+ }
+ /** The snapshot-only rule over every listed device. fronts: each bound session's one front package (the controller keeps
+  * only fronts listed on that session's own device); targets: each bound live session's target. Neither changes
+  * membership or completeness: they only flag members. */
+ static Result ofDevices(boolean locked, List<String> targets, Owned owned, List<String> fronts, String controller) {
   if (locked) return new Result(LOCKED, new ArrayList<App>(), false, LOCKED, OWNED_DEVICES);
   if (owned.deviceIds.length == 0) return new Result(NONE, new ArrayList<App>(), true, "", OWNED_DEVICES);
-  if (owned.deviceIds.length > 1) return new Result(LIVE, new ArrayList<App>(), false, MULTIPLE_DEVICES, OWNED_DEVICES);
-  List<String> members = owned.apps.get(0);List<App> apps = new ArrayList<>();
-  if (front != null) for (String p : front)
-   if (p != null && members.contains(p) && !p.equals(controller) && !contains(apps, p)) apps.add(new App(p, true, p.equals(target)));
-  List<String> rest = new ArrayList<>(members);Collections.sort(rest);
-  for (String p : rest) if (!p.equals(controller) && !contains(apps, p)) apps.add(new App(p, false, p.equals(target)));
-  boolean complete = owned.deviceComplete[0];
+  Set<String> union = new HashSet<>();boolean complete = true;
+  for (int i = 0; i < owned.deviceIds.length; i++) {
+   complete &= owned.deviceComplete[i];
+   for (String p : owned.apps.get(i)) {
+    if (p.equals(controller)) continue;
+    if (!union.add(p)) return new Result(LIVE, new ArrayList<App>(), false, DUPLICATE_PACKAGE, OWNED_DEVICES);
+   }
+  }
+  List<App> apps = new ArrayList<>();
+  if (fronts != null) for (String p : fronts)
+   if (p != null && union.contains(p) && !contains(apps, p)) apps.add(new App(p, true, targets.contains(p)));
+  List<String> rest = new ArrayList<>(union);Collections.sort(rest);
+  for (String p : rest) if (!contains(apps, p)) apps.add(new App(p, false, targets.contains(p)));
   return new Result(LIVE, apps, complete, complete ? "" : OTHER_USER_OMITTED, OWNED_DEVICES);
  }
 

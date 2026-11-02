@@ -32,7 +32,10 @@ public final class CurrentAppsParityProbe {
             if (line.isEmpty()) continue;
             String[] f = line.split("\t", -1);
             boolean locked = Boolean.parseBoolean(f[0]), session = Boolean.parseBoolean(f[1]), blocked = Boolean.parseBoolean(f[3]);
-            String status = f[2], target = nul(f[4]);
+            String status = f[2];
+            // target: one package, or every bound live slot's target (comma separated) for a multi-session case.
+            List<String> targets = "-".equals(f[4]) ? new ArrayList<String>() : Arrays.asList(f[4].split(","));
+            String target = targets.isEmpty() ? null : targets.get(0);
             List<String> front = "-".equals(f[5]) ? null : f[5].isEmpty() ? new ArrayList<String>() : Arrays.asList(f[5].split(","));
             CurrentApps.Platform platform = null;
             if (!"-".equals(f[6])) {
@@ -48,7 +51,12 @@ public final class CurrentAppsParityProbe {
             // As Controller.currentApps: owned devices first; else the per-session platform answer, consulted only for a
             // live, unlocked session; else the session windows.
             boolean live = session && CurrentApps.live(status);
-            CurrentApps.Result r = owned != null ? CurrentApps.of(locked, live ? target : null, owned, front, controller)
+            // As Controller.bindings: targets only for a live session; one front app per session (its topmost application
+            // window) only when ready and unblocked. A multi-session line lists each bound slot's one front.
+            List<String> fronts = new ArrayList<>();
+            if (session && "ready".equals(status) && !blocked && front != null)
+                fronts = targets.size() > 1 ? front : front.isEmpty() ? fronts : front.subList(0, 1);
+            CurrentApps.Result r = owned != null ? CurrentApps.ofDevices(locked, live ? targets : new ArrayList<String>(), owned, fronts, controller)
                 : platform != null && live && !locked ? CurrentApps.of(locked, session, status, target, platform, front, controller)
                 : CurrentApps.of(locked, session, status, blocked, target, front, controller);
             // As Controller.currentApps' reply: status, complete, incompleteReason, source, sessionStatus (live only), apps.

@@ -29,12 +29,19 @@ def render_reply(r):
 
 
 def render_platform(p):
-    """The reference rule over the per-device platform view (what Launcher3 renders)."""
+    """The snapshot-only reference rule over the per-device platform view (what Launcher3 renders): the union of every
+    controller-owned device's apps without the controller (removed before the duplicate check); cards only when every
+    device is complete and no package is on two devices."""
     if p.get('unavailable') or p.get('locked') or p.get('malformed'): return {'category': 'cannot_confirm', 'apps': []}
     mine = [d for d in p['devices'] if d['owner'] == 'controller']
     if not mine: return {'category': 'genuine_empty', 'apps': []}
-    if len(mine) > 1 or not mine[0]['complete']: return {'category': 'cannot_confirm', 'apps': []}
-    apps = sorted(set(mine[0]['apps']) - {CONTROLLER})
+    if not all(d['complete'] for d in mine): return {'category': 'cannot_confirm', 'apps': []}
+    seen = set()
+    for d in mine:
+        for a in set(d['apps']) - {CONTROLLER}:
+            if a in seen: return {'category': 'cannot_confirm', 'apps': []}
+            seen.add(a)
+    apps = sorted(seen)
     return {'category': 'cards', 'apps': apps} if apps else {'category': 'genuine_empty', 'apps': []}
 
 
@@ -49,7 +56,8 @@ def line(c):
     platform = '-' if c['platform'] is None else ';'.join(typed(c['platform'][k]) for k in ('generation', 'packageNames', 'userId', 'complete', 'closed'))
     front = '-' if c['front'] is None else ','.join(c['front'])
     owned = '-' if c.get('owned') is None else ';'.join(typed(c['owned'][k]) for k in ('generation', 'deviceIds', 'deviceComplete', 'appDeviceIds', 'appPackageNames'))
-    return '\t'.join([str(c['locked']).lower(), str(c['session']).lower(), c['status'], str(c['blocked']).lower(), c['target'] or '-', front, platform, owned])
+    target = ','.join(c['target']) if isinstance(c['target'], list) else c['target'] or '-'
+    return '\t'.join([str(c['locked']).lower(), str(c['session']).lower(), c['status'], str(c['blocked']).lower(), target, front, platform, owned])
 
 
 class ParityTest(unittest.TestCase):
@@ -79,8 +87,10 @@ class ParityTest(unittest.TestCase):
         for c, got in zip(produced, self.run_controller([c['controllerInputs'] for c in produced])):
             with self.subTest(c['name']):
                 want = c['controllerReply']
-                for k in ('status', 'complete', 'incompleteReason', 'source', 'sessionStatus', 'apps'):
+                for k in ('status', 'complete', 'incompleteReason', 'source', 'sessionStatus'):
                     self.assertEqual(got[k], want[k], f"{c['name']}: {k}")
+                # apps[].sessionId is an illustrative binding (bindingsContract), tested by MultiSessionTest, not replayed here.
+                self.assertEqual(got['apps'], [{k: a[k] for k in ('packageName', 'front', 'target')} for a in want['apps']], f"{c['name']}: apps")
 
     def test_both_surfaces_reach_the_one_expected_category(self):
         for c in FIXTURE['cases']:
@@ -110,12 +120,18 @@ class ParityTest(unittest.TestCase):
         for g, got in zip(gaps, self.run_controller([g['controllerInputs'] for g in gaps])):
             with self.subTest(g['name']):
                 self.assertEqual(g['parity'], 'not_claimed')
-                for k in ('status', 'complete', 'incompleteReason', 'source', 'sessionStatus', 'apps'):
+                for k in ('status', 'complete', 'incompleteReason', 'source', 'sessionStatus'):
                     self.assertEqual(got[k], g['controllerReply'][k], k)
+                self.assertEqual(got['apps'], [{k: a[k] for k in ('packageName', 'front', 'target')} for a in g['controllerReply']['apps']], 'apps')
                 self.assertEqual(render_platform(g['platform'])['category'], g['launcherCategory'])
                 self.assertEqual(render_reply(g['controllerReply'])['category'], g['homeCategory'])
-                # Still a real gap: if both surfaces ever agree here, it must move to cases with one expected category.
-                self.assertNotEqual(g['launcherCategory'], g['homeCategory'])
+                # Still a real gap: a different category, or the same category with a different set (not parity).
+                launcher, home = render_platform(g['platform']), render_reply(g['controllerReply'])
+                self.assertTrue(launcher != home, 'if both surfaces ever agree here, it must move to cases')
+                if g['launcherCategory'] == g['homeCategory']:
+                    self.assertEqual(launcher['apps'], sorted(g['launcherApps']))
+                    self.assertEqual(home['apps'], sorted(g['homeApps']))
+                    self.assertNotEqual(launcher['apps'], home['apps'])
                 # Fail closed, never empty: neither surface may call genuinely controlled apps genuine_empty.
                 self.assertNotIn('genuine_empty', (g['launcherCategory'], g['homeCategory']))
                 # Closed on builds with the owned-device snapshot: the named case passes on both surfaces.

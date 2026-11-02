@@ -24,7 +24,8 @@ class StopWiringTest(unittest.TestCase):
         self.assertEqual(self.reasons('AgentProvider.java'), [])
         # agentStop, close before a new start, the 600 s deadline, and the agent's home command.
         # ... and the owner's notification Stop routed to its own slot (ownerStop).
-        self.assertEqual(self.reasons('Controller.java'), ['AGENT', 'AGENT', 'DEADLINE', 'AGENT', 'USER'])
+        # ... and Rose Agent's own native owner_stop of one named session (route).
+        self.assertEqual(self.reasons('Controller.java'), ['AGENT', 'AGENT', 'DEADLINE', 'AGENT', 'USER', 'USER'])
 
     def test_no_untyped_stop_remains(self):
         for path in SOURCE.glob('*.java'):
