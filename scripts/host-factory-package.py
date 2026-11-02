@@ -4,7 +4,7 @@
   python3 scripts/host-factory-package.py --device rango --build 2026103001 \
       --target-files TF --target-files-sha256 H --otatools OTA --otatools-sha256 H \
       --release-script script/generate-release.sh --release-script-sha256 H \
-      --avb-pkmd AVB_PKMD_BIN --fastboot-sha256 H --lock SHARED_BUILDER_LOCK --out NEW_ROOT
+      --fastboot-sha256 H --lock SHARED_BUILDER_LOCK --out NEW_ROOT
 
 No key, secret, decrypt, signing, OTA or archive signature is involved. host-sign.py correctly refuses a build whose
 release already holds a successful signature; this entrypoint never touches that release. It only reads the inputs,
@@ -12,7 +12,11 @@ each a plain regular file matching its pin:
   - the signed target-files and the otatools package (sha256 given by the operator from existing receipts);
   - the pinned generate-release.sh (sha256 os/retained-rango/release.json releaseScriptProvenance), from which
     host-sign.derive_factory_only_script keeps exactly the factory variables and the factory tail;
-  - the PUBLIC avb_pkmd.bin, which must hash to os/flavors/<device>.json identity.avbPublicKeySha256;
+  - the PUBLIC AVB key, never an external file: after the target-files hash is verified, exactly its
+    IMAGES/vbmeta.img member is read (one regular entry, size-capped, CRC-checked, in an archive with only safe
+    names) and the embedded public key extracted with the vbmeta layout signing-job.py / rango-retained.py use, plus
+    bounds checks; it must hash to os/flavors/<device>.json identity.avbPublicKeySha256 and only those public bytes
+    are written, to NEW_ROOT/avb_pkmd.bin, for the factory script;
   - the otatools' device/common generator scripts, which must equal the flavor's pinned generatorFixture files, and
     its bin/fastboot, checked against --fastboot-sha256 inside the script immediately before optimize-factory-image.
 Everything is written below NEW_ROOT (absent beforehand; never inside an input's directory): work/ (the otatools
@@ -51,7 +55,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = 'roseos.factory-package-run.v1'
 HEX64 = re.compile(r'[0-9a-f]{64}')
 LIMITS = {'seconds': 60 * 60, 'killGraceSeconds': 10, 'logBytes': 64 << 20, 'freeBytes': 128 << 30,
-          'otatoolsMembers': 50000}
+          'otatoolsMembers': 50000, 'vbmetaBytes': 1 << 20}
+VBMETA = 'IMAGES/vbmeta.img'
 
 
 class Refused(Exception):
@@ -97,6 +102,55 @@ def flavor_pins(device, root=ROOT):
                 'generator': dict(flavor['inventory']['generatorFixture']['files'])}
     except (fp.ContractError, KeyError, TypeError) as error:
         raise Refused(f'contract_missing: no factory contract for {device} ({error})') from None
+
+
+def avb_public_key(vbmeta):
+    """The AVB public key embedded in a vbmeta image (what avbtool extract_public_key writes as avb_pkmd.bin): the
+    same header arithmetic as signing-job.py and rango-retained.py avb_public_key, with every offset bounds-checked
+    against the authentication and auxiliary blocks instead of silently truncating."""
+    import struct
+    if len(vbmeta) < 256 or vbmeta[:4] != b'AVB0':
+        raise Refused('vbmeta_invalid: not an AVB vbmeta image')
+    auth_size, aux_size = struct.unpack('>QQ', vbmeta[12:28])
+    pk_offset, pk_size = struct.unpack('>QQ', vbmeta[64:80])
+    if auth_size % 64 or aux_size % 64 or 256 + auth_size + aux_size > len(vbmeta):
+        raise Refused('vbmeta_invalid: header block sizes exceed the image')
+    if pk_size == 0 or pk_offset + pk_size > aux_size:
+        raise Refused('vbmeta_invalid: the public key lies outside the auxiliary block')
+    start = 256 + auth_size + pk_offset
+    return vbmeta[start:start + pk_size]
+
+
+def derive_avb_pkmd(target_files, expected):
+    """Read exactly IMAGES/vbmeta.img from the (already hash-verified) signed target-files and return the public key
+    bytes and their provenance; the key must hash to the flavor pin."""
+    try:
+        archive = zipfile.ZipFile(target_files)
+    except (OSError, zipfile.BadZipFile):
+        raise Refused('target_files_invalid: not a readable zip') from None
+    with archive:
+        names = archive.namelist()
+        if any(n.startswith('/') or '\\' in n or '..' in n.split('/') or '\0' in n for n in names):
+            raise Refused('target_files_unsafe: a member name is absolute or escapes')
+        infos = [i for i in archive.infolist() if i.filename == VBMETA]
+        if len(infos) != 1:
+            raise Refused(f'vbmeta_missing: the target-files has {len(infos)} {VBMETA} entries, expected exactly one')
+        info = infos[0]
+        if info.is_dir() or stat.S_ISLNK(info.external_attr >> 16):
+            raise Refused(f'vbmeta_invalid: {VBMETA} is not a regular member')
+        if info.file_size > LIMITS['vbmetaBytes']:
+            raise Refused(f'vbmeta_invalid: {VBMETA} exceeds {LIMITS["vbmetaBytes"]} bytes')
+        try:
+            with archive.open(info) as member:
+                vbmeta = member.read(LIMITS['vbmetaBytes'] + 1)
+        except (zipfile.BadZipFile, OSError):
+            raise Refused(f'vbmeta_invalid: {VBMETA} fails its CRC or cannot be read') from None
+    if len(vbmeta) != info.file_size or len(vbmeta) > LIMITS['vbmetaBytes']:
+        raise Refused(f'vbmeta_invalid: {VBMETA} size differs from its header')
+    public = avb_public_key(vbmeta)
+    if hashlib.sha256(public).hexdigest() != expected:
+        raise Refused('avb_mismatch: the public key in IMAGES/vbmeta.img is not the flavor identity.avbPublicKeySha256')
+    return public, {'member': VBMETA, 'memberSha256': hashlib.sha256(vbmeta).hexdigest(), 'memberSize': len(vbmeta)}
 
 
 def check_output(out, inputs):
@@ -215,13 +269,14 @@ def _package(args, root, runner, free, clock):
     target_files = pinned_input(args.target_files, args.target_files_sha256, 'target-files')
     otatools = pinned_input(args.otatools, args.otatools_sha256, 'otatools')
     release_script = pinned_input(args.release_script, args.release_script_sha256, 'release script')
-    avb_pkmd = pinned_input(args.avb_pkmd, pins['avb'], 'avb_pkmd.bin (flavor identity.avbPublicKeySha256)')
     if not HEX64.fullmatch(str(args.fastboot_sha256)):
         raise Refused('usage_refused: --fastboot-sha256 must be a sha256')
-    out = check_output(args.out, [target_files, otatools, release_script, avb_pkmd])
+    out = check_output(args.out, [target_files, otatools, release_script])
     if free(out.parent) < LIMITS['freeBytes']:
         raise Refused(f'capacity_unavailable: less than {LIMITS["freeBytes"]} bytes free under {out.parent}')
     try:
+        public, provenance = derive_avb_pkmd(target_files, pins['avb'])
+        avb_pkmd = out/'avb_pkmd.bin'
         derived = hs.derive_factory_only_script(release_script.read_text(), args.device, args.build, avb_pkmd,
                                                 args.fastboot_sha256)
     except hs.AdapterFailed as error:
@@ -229,12 +284,16 @@ def _package(args, root, runner, free, clock):
     install_name = pins['install'].format(device=args.device, build=args.build)
     timings = {'verifySeconds': round(time.monotonic() - begun, 3)}
     out.mkdir(mode=0o700)
+    fd = os.open(avb_pkmd, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(public)  # public key bytes only, derived above from the hash-pinned target-files
     work = out/'work'
     receipt = {'schema': SCHEMA, 'device': args.device, 'build': args.build, 'status': 'failed', 'started': int(clock()),
                'inputs': {'targetFiles': {'path': str(target_files), 'sha256': args.target_files_sha256},
                           'otatools': {'path': str(otatools), 'sha256': args.otatools_sha256},
                           'releaseScript': {'path': str(release_script), 'sha256': args.release_script_sha256},
-                          'avbPkmd': {'path': str(avb_pkmd), 'sha256': pins['avb']},
+                          'avbPkmd': {'path': str(avb_pkmd), 'sha256': pins['avb'],
+                                      'derivedFrom': dict(provenance, targetFiles=args.target_files_sha256)},
                           'fastbootSha256': args.fastboot_sha256},
                'derivedScriptSha256': hashlib.sha256(derived.encode()).hexdigest(), 'limits': LIMITS, 'timings': timings,
                'signature': None, 'signatureBasis': 'packaging only: no archive signature (identity not a generation gate)',
@@ -289,7 +348,7 @@ def _package(args, root, runner, free, clock):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     for flag in ('--device', '--build', '--target-files', '--target-files-sha256', '--otatools', '--otatools-sha256',
-                 '--release-script', '--release-script-sha256', '--avb-pkmd', '--fastboot-sha256', '--lock', '--out'):
+                 '--release-script', '--release-script-sha256', '--fastboot-sha256', '--lock', '--out'):
         p.add_argument(flag, required=True)
     args = p.parse_args(argv)
     try:
