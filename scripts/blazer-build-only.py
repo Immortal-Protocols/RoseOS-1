@@ -19,7 +19,9 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
             reserve) removes only this run's staging directory within cleanupSeconds (a remainder is left, named and
             blocks the next run); no subprocess, reflink, hardlink or mount. The result is a
             byte snapshot of the production working tree, Frankel integration included: its project revisions are
-            not verified (see SOURCE_PROVENANCE)
+            not verified (see SOURCE_PROVENANCE). The per-entry selection record (path, type, mode, size and file
+            sha256 or link text) is kept write-once beside the tree as ISOLATED.selection.tsv; its sha256 is
+            selectionSha256, so later stages' changes to the tree never erase the original-byte evidence
   download  --host --lock --download-dir
             stream the pinned official URL to DIR/<file>.part (byte and time bound), rename to DIR/<file> only when its
             sha256 equals the pin; an existing archive is never replaced; a failed attempt removes only its own .part
@@ -399,6 +401,8 @@ def source_preflight(recipe, src, production, problems, facts):
     boundary, parent = Path(prep['candidateLayout']['ancestorBoundary']), src.parent
     if os.path.lexists(src):
         problems.append(f'{src} already exists; an isolated source tree is never replaced or reused')
+    if os.path.lexists(record_path(src)):
+        problems.append(f'{record_path(src)} already exists; a selection record is never replaced')
     if boundary not in src.parents:
         problems.append(f'{src} must sit under the ancestor boundary {boundary}')
     facts['createsParent'] = not os.path.lexists(parent)
@@ -661,6 +665,36 @@ def projected_bytes(entries, block):
     apparent size), and the root, each directory and each link take one block."""
     return block + sum(-(-e['size'] // block) * block if e['type'] == 'file' else block for e in entries)
 
+RECORD_SUFFIX = '.selection.tsv'
+RECORD_ESCAPES = {ord('\\'): b'\\\\', ord('\t'): b'\\t', ord('\n'): b'\\n', ord('\r'): b'\\r'}
+
+def record_field(text):
+    """A path or link text as its raw filesystem bytes (non-UTF-8 names included), with backslash, tab, CR and LF
+    escaped so that every selection-record line is unambiguous. Nothing is refused for its name."""
+    return b''.join(RECORD_ESCAPES.get(byte, bytes((byte,))) for byte in os.fsencode(text))
+
+def record_line(entry, digest_or_text):
+    """One selection-record line for a copied entry: path, type, octal mode, then size and file sha256, or the link text written. Directories carry
+    path, type and mode only."""
+    head = record_field(entry['path']) + b'\t' + entry['type'].encode()
+    if entry['type'] == 'dir':
+        return head + f'\t{entry["mode"]:o}\n'.encode()
+    if entry['type'] == 'file':
+        return head + f'\t{entry["mode"]:o}\t{entry["size"]}\t{digest_or_text}\n'.encode()
+    return head + b'\t' + record_field(digest_or_text) + b'\n'
+
+def record_bound(entries, src, block):
+    """Upper bound of the retained selection record's bytes, block-rounded: every path and link text fully escaped (twice its
+    bytes), a rebased link prefix, and 100 bytes per line for type, mode, size, sha256 and separators."""
+    prefix = len(os.fsencode(str(src))) + 1
+    total = sum(2 * len(os.fsencode(e['path'])) + 100 + (2 * (len(os.fsencode(e['text'])) + prefix) if e['type'] == 'link' else 0)
+                for e in entries)
+    return -(-total // block) * block
+
+def record_path(src):
+    """Where the source stage keeps its selection record: beside the tree (never inside it), e.g. R/source.selection.tsv."""
+    return src.parent/(src.name + RECORD_SUFFIX)
+
 def remove_own(path, seconds, clock=time.monotonic):
     """Remove this run's own staging tree bottom-up within SECONDS: (removed, entries removed). Links are unlinked,
     never followed; each directory gets owner write first (copied modes may be read-only). When the budget runs out
@@ -686,14 +720,17 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
     selection is planned before anything is written; the copy is staged beside the source root and renamed into place
     only when complete. A wall-clock timer (timeoutSeconds) and SIGTERM stop planning or copying at any point, and
     available bytes are sampled against the reserve every sampleSeconds; a stop removes only this run's staging
-    directory (and the parent it created, when empty) within cleanupSeconds, leaving and naming any remainder. No
-    process is started."""
+    directory and staged selection record (and the parent it created, when empty) within cleanupSeconds, leaving and naming any
+    remainder. The per-entry selection record is kept write-once beside the tree (record_path); its sha256 is
+    selectionSha256.
+    It identifies the copied bytes at copy time only and verifies no project revision. No process is started."""
     prep, src = recipe['preparation'], op['sourceRoot']
     spec, reserve = prep['source'], recipe['capacity']['reserveBytes']
     outcome = {'base': str(production), 'target': str(src), 'boundBytes': spec['boundBytes'], 'boundKind': prep['boundsKind'],
                'timeoutSeconds': spec['timeoutSeconds'], 'processesStarted': 0, 'written': False, 'complete': False,
                'selectionSha256': None, 'provenance': dict(SOURCE_PROVENANCE)}
-    staging, created_parent, done = None, False, {'entries': 0, 'fileBytes': 0}
+    staging, staged_record, kept_record, record = None, None, None, None
+    created_parent, done, final_record = False, {'entries': 0, 'fileBytes': 0}, record_path(src)
     def stop(signum, frame):
         raise StageStopped('SIGTERM' if signum == signal.SIGTERM else f'exceeded {spec["timeoutSeconds"]} s')
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGALRM, signal.SIGTERM)}
@@ -701,9 +738,11 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
     try:
         selection = source_selection(recipe, production, root, planner)
         fs = statvfs(nearest_existing(src))
-        projected = projected_bytes(selection['entries'], fs.f_frsize)
+        bound = record_bound(selection['entries'], src, fs.f_frsize)
+        projected = projected_bytes(selection['entries'], fs.f_frsize) + bound
         files = [e for e in selection['entries'] if e['type'] == 'file']
         outcome['selection'] = {'entries': len(selection['entries']), 'files': len(files), 'projectedBytes': projected,
+            'selectionRecordBoundBytes': bound,
             'apparentBytes': sum(e['size'] for e in files), 'excluded': selection['excluded'],
             'problems': selection['problems'][:50]}
         outcome['availableBytesBefore'] = available = fs.f_bavail * fs.f_frsize
@@ -719,6 +758,8 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
         staging = src.parent/(spec['stagingPrefix'] + os.urandom(6).hex())
         staging.mkdir(mode=0o700)
         outcome['written'] = True
+        staged_record = staging.with_name(staging.name + RECORD_SUFFIX)
+        record = os.fdopen(os.open(staged_record, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb')
         digest, directories, sample = hashlib.sha256(), [], clock() + prep['limits']['sampleSeconds']
         for entry in selection['entries']:
             if clock() >= sample:
@@ -730,30 +771,48 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
             if entry['type'] == 'dir':
                 destination.mkdir(mode=0o700)
                 directories.append(entry)
-                line = f'{entry["path"]}\tdir\t{entry["mode"]:o}'
+                line = record_line(entry, None)
             elif entry['type'] == 'file':
-                line = f'{entry["path"]}\tfile\t{entry["mode"]:o}\t{entry["size"]}\t{copier(production/entry["path"], destination, entry)}'
+                line = record_line(entry, copier(production/entry['path'], destination, entry))
                 done['fileBytes'] += entry['size']
             else:
                 text = entry['text'] if entry['kind'] == 'relative' else str(src/entry['target'])
                 os.symlink(text, destination)
-                line = f'{entry["path"]}\tlink\t{text}'
-            digest.update(line.encode() + b'\n')
+                line = record_line(entry, text)
+            digest.update(line)
+            record.write(line)
             done['entries'] += 1
         for entry in reversed(directories):  # copied modes last, deepest first
             os.chmod(staging/entry['path'], entry['mode'])
-        if os.path.lexists(src):
-            raise StageStopped(f'{src} appeared during the copy')
+        record.close()
+        record_bytes = staged_record.stat().st_size
+        if os.path.lexists(src) or os.path.lexists(final_record):
+            raise StageStopped(f'{src} or {final_record} appeared during the copy')
         signal.setitimer(signal.ITIMER_REAL, 0)
+        os.chmod(staged_record, 0o400)  # write-once: read-only once complete
+        os.rename(staged_record, final_record)
+        staged_record, kept_record = None, final_record
         os.rename(staging, src)
         staging = None
         outcome.update(complete=True, sourceRoot=str(src), selectionSha256=digest.hexdigest(), copied=done,
-                       createdParent=created_parent)
+                       createdParent=created_parent,
+                       selectionRecord={'path': str(final_record), 'sha256': digest.hexdigest(), 'lines': done['entries'],
+                                 'bytes': record_bytes,
+                                 'format': 'path TAB type TAB octal mode [TAB size TAB sha256 | TAB link text]; raw '
+                                           'filesystem bytes with backslash, tab, CR and LF escaped',
+                                 'claims': 'the copied bytes at copy time only; no project revision is verified'})
         return True, outcome
     except BaseException as error:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)  # cleanup of this run's own staging is not interrupted
         outcome['stagingRemoved'] = None
+        if record is not None and not record.closed:
+            record.close()
+        if staged_record is not None and os.path.lexists(staged_record):
+            os.unlink(staged_record)
+        # The kept record goes only while its tree is not in place: neither is ever left without the other.
+        if kept_record is not None and os.path.lexists(kept_record) and not os.path.lexists(src):
+            os.unlink(kept_record)
         if staging is not None and os.path.lexists(staging):
             outcome['cleanupSeconds'] = spec['cleanupSeconds']
             try:
@@ -769,6 +828,7 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
                 pass
         outcome['createdParentLeft'] = created_parent and os.path.lexists(src.parent)
         outcome['targetExists'] = os.path.lexists(src)
+        outcome['selectionRecordExists'] = os.path.lexists(final_record)
         if not isinstance(error, (StageStopped, Refused, OSError, alpha_source.PreparationFailed)):
             raise
         kind = 'refused' if isinstance(error, Refused) else 'stopped'
