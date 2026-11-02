@@ -9,7 +9,8 @@
 //! instead of being accepted.
 
 use rose_chat_core::agent::{
-    Agent, AgentConfig, AllowedApp, Input, Limits, Outcome, Output, RenderEvent, ToolStatus,
+    Agent, AgentConfig, AllowedApp, Input, Limits, OPEN_APP_POLICY, Outcome, Output, RenderEvent,
+    ToolStatus,
 };
 use serde_json::{Value, json};
 
@@ -363,4 +364,56 @@ fn shared_envelope_verdicts_match_this_agent() {
             case["name"]
         );
     }
+}
+
+// MODELS-AGENT-OPENAPP-POLICY-001: every request the client builds states when open_app may be used.
+#[test]
+fn every_built_request_carries_the_open_app_policy() {
+    assert!(
+        OPEN_APP_POLICY.contains("only when the user explicitly asks you to open or launch an app")
+    );
+    let pinned: Value = serde_json::from_str(&std::fs::read_to_string(REQUESTS).unwrap()).unwrap();
+    let mut bodies = 0;
+    for steps in pinned["cases"].as_object().unwrap().values() {
+        for step in steps.as_array().unwrap() {
+            let body: Value = serde_json::from_str(step["body"].as_str().unwrap()).unwrap();
+            assert_eq!(body["messages"][0]["role"], "system");
+            let system = body["messages"][0]["content"].as_str().unwrap();
+            assert!(system.contains(OPEN_APP_POLICY), "{system}");
+            assert!(system.contains("Allowed app ids: calculator (Calculator). Use open_app only"));
+            bodies += 1;
+        }
+    }
+    assert_eq!(bodies, 1 + 2 + 1 + 20); // chat, tool and its follow-up, long, the 20 conformance prompts
+    // the golden traces (contracts/local-agent-v1.examples.json) carry it in every request they show
+    let traces: Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../contracts/local-agent-v1.examples.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let text = traces.to_string();
+    let requests = text.matches("need_inference").count();
+    assert!(requests > 0);
+    assert_eq!(
+        text.matches(
+            "Use open_app only when the user explicitly asks you to open or launch an app"
+        )
+        .count(),
+        requests
+    );
+}
+
+#[test]
+fn the_policy_does_not_change_what_the_agent_accepts() {
+    // The rule is guidance to the model, not a parser change: the agent still accepts an allowlisted open_app on any
+    // turn (as before), so an unrequested proposal is caught by the conformance bar, not hidden by the client.
+    let mut a = agent(QWEN);
+    let (g, _) = need_inference(&a.step(start("t1", "What is 17 times 23?"))).unwrap();
+    let open = json!({"model": QWEN, "choices": [{"finish_reason": "stop",
+        "message": {"role": "assistant", "content": OPEN}}]})
+    .to_string();
+    assert!(need_tool(&a.step(respond("t1", g, open))).is_some());
 }

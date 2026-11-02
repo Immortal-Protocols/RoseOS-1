@@ -68,6 +68,7 @@ Build the Android library with `--no-default-features`, which drops the desktop 
 - **Model answer:** the whole content must be exactly one JSON object.
   - Final text: `{"rose_action":"local-agent-v1","type":"final","text":"..."}`
   - Open an app: `{"rose_action":"local-agent-v1","type":"open_app","app_id":"..."}`
+  - **When:** `open_app` only when the user explicitly asks to open or launch an app. Anything else, including a question the model can answer itself, is `final`. The instructions state this (`OPEN_APP_POLICY` in `rose-chat-core/src/agent.rs`). The agent still accepts an allowlisted `open_app` on any turn, so an unrequested one is caught by conformance (`open_app_outside_launch_prompts`), not hidden.
   - Prose, code fences, arrays, concatenated objects, duplicate or unknown fields fail the turn with `malformed_action`. An unknown `type` fails it with `unknown_action`. An id not on the allowlist fails it with `action_not_allowed`.
   - A truncated reply fails the turn with `truncated_reply`.
   - In every failure case nothing is executed.
