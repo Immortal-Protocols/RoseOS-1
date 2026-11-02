@@ -125,6 +125,33 @@ class Verify(Base):
                 self.assertRegex(self.record('retained.json')['refused'], '^retained_(mismatch|missing):')
                 self.assertEqual(self.record('inspect.json')['status'], 'refused')
 
+    def test_the_verify_bound_is_enforced_in_process(self):
+        ticks = iter(range(0, 10_000, 200))  # each block read advances a fake clock by 200 s
+        path = self.parent/'big'
+        path.write_bytes(b'x' * (3 * 1024))
+        with self.assertRaisesRegex(inspect_wiring.Refused, '^verify_timeout:'):
+            inspect_wiring.bounded_sha256(path, 300, clock=lambda: next(ticks), block=1024)
+        self.assertEqual(inspect_wiring.bounded_sha256(path, 300, block=1024), hashlib.sha256(b'x' * 3072).hexdigest())
+        tools = Tools(self)
+
+        def slow(archive):
+            raise inspect_wiring.Refused('verify_timeout: hashing the retained archive exceeded 300 s')
+        with open(os.devnull, 'w') as null, contextlib.redirect_stdout(null):
+            status = inspect_wiring.inspect(self.root, '41600000000', '1', self.retained, source=self.source, lock=no_lock,
+                                            popen=tools.popen, hasher=slow)
+        self.assertEqual(status, 3)
+        self.assertEqual(tools.calls, [])  # a verify timeout fails the run before any inspection
+        self.assertTrue(self.record('retained.json')['refused'].startswith('verify_timeout'))
+        self.assertEqual(self.record('inspect.json')['status'], 'refused')
+
+    def test_cleanup_reports_leftovers_and_never_deletes_them(self):
+        (self.root/'inspection').mkdir(parents=True)
+        (self.root/'classify-work/factory-package-x').mkdir(parents=True)
+        (self.root/'classify-work/factory-package-x/partial').write_bytes(b'interrupted')
+        state = inspect_wiring.report(self.root, self.parent/'upload-left')
+        self.assertEqual((state['classifyWorkLeft'], state['classifyWorkRemoved']), (['factory-package-x'], False))
+        self.assertTrue((self.root/'classify-work/factory-package-x/partial').exists())
+
     def test_a_symlinked_retained_archive_refuses(self):
         real = self.parent/'elsewhere.zip'
         real.write_bytes(ZIP)

@@ -9,8 +9,9 @@ installer ZIP that an earlier rango-factory-package run already generated and re
                                waits), into this run's new task root R (/home/pixelbuild/rose-actions/rango-factory-
                                inspect-<run>-<attempt>; the retained root is only read):
                                1. the retained ZIP must be a regular file reached without symlinks, of the pinned size
-                                  and sha256, and the retained package receipt must be status packaged with that same
-                                  output; any mismatch refuses before any inspection (R/inspection/retained.json says why);
+                                  and sha256 (hashed in-process within verifySeconds; verify_timeout refuses), and the
+                                  retained package receipt must be status packaged with that same output; any mismatch
+                                  refuses before any inspection (R/inspection/retained.json says why);
                                2. factory-package.py observe of the pinned target-files (its own sha256 is recorded);
                                3. Signing's rango-firmware-observe.py, recorded as in the package mode (exit 0 with a new
                                   output is an observation, 3 a refusal, anything else fails);
@@ -21,7 +22,10 @@ installer ZIP that an earlier rango-factory-package run already generated and re
   report --run-id --attempt --upload-dir NEW
                                copies only the inspection JSON files (retained.json, target-files-observation.json,
                                firmware-observation.json, firmware-attempt.json, classify.json, inspect.json) and an
-                               observed cleanup.json into NEW. Never the ZIP, the target-files or any log.
+                               observed cleanup.json into NEW. Never the ZIP, the target-files or any log. Cleanup is a
+                               report, not a guarantee: classify removes its own job directory when it finishes; report
+                               removes R/classify-work only when it is empty and otherwise lists what an interrupted run
+                               left (classifyWorkLeft) without deleting it. The task root itself is kept.
 
 Nothing is generated, signed, downloaded, installed or published. Bounds are wrapper ceilings, not measurements.
 Exit status: 0 inspected, 2 invalid, 3 refused or failed, 4 unbound.
@@ -37,6 +41,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('rango_factory_package_wiring', ROOT/'scripts/rango-factory-package-wiring.py')
@@ -107,7 +112,22 @@ def no_symlink(path):
     return True
 
 
-def verify_retained(source, retained, hasher=pkg.sha256_file):
+def bounded_sha256(path, seconds, clock=time.monotonic, block=8 << 20):
+    """sha256 of PATH within SECONDS: the deadline is checked before every block read, so the verify bound is enforced
+    in-process (Refused verify_timeout) rather than left to the outer timeout."""
+    import hashlib
+    digest, deadline = hashlib.sha256(), clock() + seconds
+    with open(path, 'rb') as f:
+        while True:
+            if clock() > deadline:
+                raise Refused(f'verify_timeout: hashing the retained archive exceeded {seconds} s')
+            chunk = f.read(block)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+
+
+def verify_retained(source, retained, hasher=None):
     """The retained ZIP and its package receipt, exactly as pinned; returns the verification facts or raises Refused."""
     archive, receipt = source/'package'/pkg.INSTALL, source/'package/factory-package-receipt.json'
     facts = {'archive': str(archive), 'expected': {'bytes': retained['bytes'], 'sha256': retained['sha256']}}
@@ -123,7 +143,7 @@ def verify_retained(source, retained, hasher=pkg.sha256_file):
     if record.get('status') != 'packaged' or output.get('file') != pkg.INSTALL or output.get('sha256') != retained['sha256'] \
             or output.get('size') != retained['bytes']:
         raise Refused('retained_mismatch: the retained package receipt does not record the pinned archive')
-    facts['sha256'] = digest = hasher(archive)
+    facts['sha256'] = digest = (hasher or (lambda path: bounded_sha256(path, BOUNDS['verifySeconds'])))(archive)
     if digest != retained['sha256']:
         raise Refused('retained_mismatch: the retained archive sha256 is not the pinned sha256')
     return facts
@@ -171,7 +191,7 @@ def classify_argv(root_dir, archive, firmware):
     return argv
 
 
-def inspect(root_dir, run_id, attempt, retained, source=None, lock=None, popen=subprocess.Popen, hasher=pkg.sha256_file):
+def inspect(root_dir, run_id, attempt, retained, source=None, lock=None, popen=subprocess.Popen, hasher=None):
     """The inspect-only run of the retained installer identified by `retained` (RETAINED in production); returns its
     exit status and leaves R/inspection/inspect.json naming each step's outcome."""
     source = retained_root(retained) if source is None else source

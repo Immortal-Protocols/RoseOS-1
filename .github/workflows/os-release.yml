@@ -1191,9 +1191,11 @@ jobs:
     # the nonblocking shared builder lock for its whole run, verifies the installer ZIP an earlier rango-factory-package
     # run retained (regular file without symlinks, the committed size and sha256, and its package receipt recording that
     # same output; any mismatch refuses before any inspection), then runs observe, Signing's firmware observer and
-    # classify of that ZIP, each tool call in its own process group with its own time bound. Everything is written to a
-    # new task directory; the retained one is only read. Only the inspection JSON reports and an observed cleanup report
-    # are uploaded (7 days); never the ZIP, the target-files or a log. contents: read only: no OIDC token, signer login,
+    # classify of that ZIP, each tool call in its own process group with its own time bound and the retained-ZIP hash
+    # within its own in-process bound. Everything is written to a new task directory; the retained one is only read.
+    # Only the inspection JSON reports and an observed cleanup report are uploaded (7 days); never the ZIP, the
+    # target-files or a log. Cleanup reports, it does not guarantee: an empty classify-work is removed, anything an
+    # interrupted run left is listed (classifyWorkLeft) and kept. contents: read only: no OIDC token, signer login,
     # secret, signing, download, install, phone action or publication. Time: verify 300 s, observe 600 s, firmware 570 s,
     # classify 2700 s (about ten times the work's estimate), each +30 s kill, +120 s margin = outer 4410 s; job 84 min;
     # ceilings, not measurements; a stop is a recorded failure, never a pass. Cleanup
