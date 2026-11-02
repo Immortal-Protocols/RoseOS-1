@@ -629,6 +629,36 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def synthetic_vbmeta(public, auth=64, aux=128, pk_offset=0, magic=b'AVB0', pk_size=None):
+    """An AVB vbmeta layout around PUBLIC (random bytes standing in for a public key; no key pair exists)."""
+    header = bytearray(256)
+    header[:4] = magic
+    header[12:28] = auth.to_bytes(8, 'big') + aux.to_bytes(8, 'big')
+    header[64:80] = pk_offset.to_bytes(8, 'big') + (len(public) if pk_size is None else pk_size).to_bytes(8, 'big')
+    aux_block = bytearray(aux)
+    aux_block[pk_offset:pk_offset + len(public)] = public[:max(0, aux - pk_offset)]
+    return bytes(header) + bytes(auth) + bytes(aux_block)
+
+
+def target_files_zip(members):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as z:
+        for name, data in members:
+            if isinstance(data, zipfile.ZipInfo):
+                z.writestr(data, b'x')
+            else:
+                z.writestr(name, data)
+    return buffer.getvalue()
+
+
+@contextlib.contextmanager
+def warnings_ignored():
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        yield
+
+
 class FactoryPackageTest(unittest.TestCase):
     """No bash, img_from_target_files, generator or fastboot runs: the runner is a mock that checks the derived script
     and the work directory, then writes a stand-in install archive."""
@@ -640,20 +670,19 @@ class FactoryPackageTest(unittest.TestCase):
         self.retained = self.root/'releases/2026103001'
         (self.retained/'release-rango-2026103001').mkdir(parents=True)
         self.tf = self.retained/'release-rango-2026103001/rango-target_files.zip'
-        self.tf.write_bytes(b'synthetic SIGNED target-files bytes')
+        self.public = os.urandom(64)
+        self.vbmeta = synthetic_vbmeta(self.public)
+        self.tf.write_bytes(target_files_zip([('META/misc_info.txt', b'ab_update=true\n'), ('IMAGES/vbmeta.img', self.vbmeta)]))
         self.generator = {n: (GENERATOR_FIXTURE/n).read_bytes() for n in
                           ('clear-factory-images-variables.sh', 'generate-factory-images-common.sh')}
         self.otatools = self.retained/'rango-otatools.zip'
         self.write_otatools()
-        self.avb = self.root/'public/avb_pkmd.bin'
-        self.avb.parent.mkdir()
-        self.avb.write_bytes(b'synthetic public avb key metadata')
         self.out = self.root/'package-run-1'
         self.before = {p: p.read_bytes() for p in (self.tf, self.otatools)}
         self.listing = sorted(str(p) for p in self.retained.rglob('*'))
         original = hfp.flavor_pins
         hfp.flavor_pins = lambda device, root=hfp.ROOT: {'install': '{device}-install-{build}.zip',
-            'avb': sha(self.avb.read_bytes()), 'generator': {n: sha(b) for n, b in self.generator.items()}}
+            'avb': sha(self.public), 'generator': {n: sha(b) for n, b in self.generator.items()}}
         self.addCleanup(setattr, hfp, 'flavor_pins', original)
         self.calls = []
 
@@ -673,7 +702,7 @@ class FactoryPackageTest(unittest.TestCase):
         values = {'device': 'rango', 'build': '2026103001', 'target_files': str(self.tf),
                   'target_files_sha256': sha(self.tf.read_bytes()), 'otatools': str(self.otatools),
                   'otatools_sha256': sha(self.otatools.read_bytes()), 'release_script': str(RELEASE_FIXTURE),
-                  'release_script_sha256': sha(RELEASE_FIXTURE.read_bytes()), 'avb_pkmd': str(self.avb),
+                  'release_script_sha256': sha(RELEASE_FIXTURE.read_bytes()),
                   'fastboot_sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9', 'out': str(self.out),
                   'lock': str(self.root/'builder.lock')}
         values.update(change)
@@ -702,10 +731,15 @@ class FactoryPackageTest(unittest.TestCase):
     def test_packages_into_a_fresh_root_and_never_touches_the_retained_release(self):
         receipt = self.package()
         self.assertRetained()
-        self.assertEqual(sorted(os.listdir(self.out)), ['factory-package-receipt.json', 'rango-install-2026103001.zip'])
+        self.assertEqual(sorted(os.listdir(self.out)), ['avb_pkmd.bin', 'factory-package-receipt.json',
+                                                        'rango-install-2026103001.zip'])
+        self.assertEqual((self.out/'avb_pkmd.bin').read_bytes(), self.public)  # only the derived public bytes
         call = self.calls[0]
         self.assertEqual(call['script'], hfp._module('hs', SCRIPTS/'host-sign.py').derive_factory_only_script(
-            RELEASE_FIXTURE.read_text(), 'rango', '2026103001', self.avb, self.args().fastboot_sha256))
+            RELEASE_FIXTURE.read_text(), 'rango', '2026103001', self.out/'avb_pkmd.bin', self.args().fastboot_sha256))
+        self.assertEqual(receipt['inputs']['avbPkmd'], {'path': str(self.out/'avb_pkmd.bin'), 'sha256': sha(self.public),
+            'derivedFrom': {'member': 'IMAGES/vbmeta.img', 'memberSha256': sha(self.vbmeta), 'memberSize': len(self.vbmeta),
+                            'targetFiles': sha(self.tf.read_bytes())}})
         self.assertIn('rango-target_files.zip', call['files'])  # a copy inside work/, not the retained path
         self.assertIn('device/common/generate-factory-images-common.sh', call['files'])
         self.assertEqual(call['cwd'], self.out/'work')
@@ -717,7 +751,6 @@ class FactoryPackageTest(unittest.TestCase):
         for change, pattern in (({'target_files_sha256': '0' * 64}, 'hash_mismatch: target-files'),
                                 ({'otatools_sha256': '0' * 64}, 'hash_mismatch: otatools'),
                                 ({'release_script_sha256': '0' * 64}, 'hash_mismatch: release script'),
-                                ({'avb_pkmd': str(self.tf)}, 'hash_mismatch: avb_pkmd.bin'),
                                 ({'fastboot_sha256': 'x'}, 'usage_refused'),
                                 ({'target_files': 'relative.zip'}, 'input_refused'),
                                 ({'target_files': str(self.root/'missing.zip')}, 'input_missing')):
@@ -749,6 +782,47 @@ class FactoryPackageTest(unittest.TestCase):
         self.assertEqual(sorted(timings), ['generateSeconds', 'recheckSeconds', 'stageSeconds', 'verifySeconds'])
         self.assertTrue(all(isinstance(v, float) and v >= 0 for v in timings.values()))
 
+    def tf_with(self, members):
+        self.tf.write_bytes(target_files_zip(members))
+        return self.args(target_files_sha256=sha(self.tf.read_bytes()))
+
+    def test_public_avb_key_comes_only_from_the_pinned_target_files_vbmeta(self):
+        link = zipfile.ZipInfo('IMAGES/vbmeta.img')
+        link.external_attr = 0o120777 << 16
+        cases = (
+            ('wrong public key', [('IMAGES/vbmeta.img', synthetic_vbmeta(os.urandom(64)))], 'avb_mismatch'),
+            ('missing member', [('META/misc_info.txt', b'x')], 'vbmeta_missing'),
+            ('duplicate member', [('IMAGES/vbmeta.img', self.vbmeta), ('IMAGES/vbmeta.img', self.vbmeta)], 'vbmeta_missing'),
+            ('link member', [('IMAGES/vbmeta.img', link)], 'is not a regular member'),
+            ('oversized member', [('IMAGES/vbmeta.img', self.vbmeta + bytes(1 << 20))], 'exceeds'),
+            ('not AVB', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, magic=b'XXXX'))], 'not an AVB vbmeta'),
+            ('short image', [('IMAGES/vbmeta.img', self.vbmeta[:200])], 'not an AVB vbmeta'),
+            ('blocks beyond image', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public)[:300])], 'block sizes exceed'),
+            ('key outside aux', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, pk_offset=96))], 'outside the auxiliary'),
+            ('zero-size key', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, pk_size=0))], 'outside the auxiliary'),
+            ('unsafe name', [('IMAGES/vbmeta.img', self.vbmeta), ('../escape', b'x')], 'target_files_unsafe'),
+            ('absolute name', [('IMAGES/vbmeta.img', self.vbmeta), ('/abs', b'x')], 'target_files_unsafe'),
+        )
+        for name, members, pattern in cases:
+            with self.subTest(name), warnings_ignored():
+                args = self.tf_with(members)
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(args)
+                self.assertFalse(self.out.exists(), 'refused before NEW_ROOT exists')
+        self.tf.write_bytes(b'not a zip')
+        with self.assertRaisesRegex(hfp.Refused, 'target_files_invalid'):
+            self.package(self.args(target_files_sha256=sha(b'not a zip')))
+        with self.assertRaisesRegex(hfp.Refused, 'hash_mismatch: target-files'):
+            self.package(self.args(target_files_sha256='0' * 64))  # the vbmeta is never read from an unpinned file
+        self.assertEqual(self.calls, [])
+
+    def test_extraction_matches_the_existing_signing_layout(self):
+        spec = importlib.util.spec_from_file_location('signing_job_for_layout', SCRIPTS/'signing-job.py')
+        job = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(job)
+        for vbmeta in (self.vbmeta, synthetic_vbmeta(os.urandom(520), auth=576, aux=1088, pk_offset=64)):
+            self.assertEqual(hfp.avb_public_key(vbmeta), job.avb_public_key(vbmeta))
+
     def test_output_collisions_and_capacity_refuse(self):
         self.out.mkdir()
         (self.out/'keep').write_text('mine')
@@ -775,7 +849,7 @@ class FactoryPackageTest(unittest.TestCase):
                     self.package(self.args(otatools_sha256=sha(self.otatools.read_bytes()), out=str(out)))
                 receipt = json.loads((out/'factory-package-receipt.json').read_text())
                 self.assertEqual((receipt['status'], receipt['workRemoved']), ('failed', True))
-                self.assertEqual(sorted(os.listdir(out)), ['factory-package-receipt.json'])
+                self.assertEqual(sorted(os.listdir(out)), ['avb_pkmd.bin', 'factory-package-receipt.json'])
         self.assertEqual(self.calls, [])
 
     def test_failed_generation_maps_nothing_and_cleans_up(self):
@@ -789,7 +863,7 @@ class FactoryPackageTest(unittest.TestCase):
                 out = self.root/f'fail-{n}'
                 with self.assertRaisesRegex(hfp.Refused, pattern):
                     self.package(self.args(out=str(out)), runner=runner)
-                self.assertEqual(sorted(os.listdir(out)), ['factory-package-receipt.json'])
+                self.assertEqual(sorted(os.listdir(out)), ['avb_pkmd.bin', 'factory-package-receipt.json'])
                 self.assertEqual(json.loads((out/'factory-package-receipt.json').read_text())['status'], 'failed')
                 if pattern != 'input_changed':
                     self.assertRetained()
