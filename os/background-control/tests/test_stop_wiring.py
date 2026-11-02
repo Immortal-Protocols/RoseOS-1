@@ -14,14 +14,17 @@ class StopWiringTest(unittest.TestCase):
         return [a or b for a, b in calls(name)]
 
     def test_owner_controls_report_user(self):
-        self.assertEqual(self.reasons('StopReceiver.java'), ['USER'])
+        # The owner's Stop on a notification stops that notification's session only (MultiSession.ownerStop).
+        self.assertIn('Controller.ownerStop(c,i.getStringExtra("sessionId"));', (SOURCE/'StopReceiver.java').read_text())
+        self.assertIn('if(i<0)return;Slot was=enter(slots[i]);try{stop(c,StopLedger.USER);}finally{leave(was);}', (SOURCE/'Controller.java').read_text())
         self.assertEqual(self.reasons('MainActivity.java'), ['USER'])
 
     def test_agent_and_deadline_paths(self):
         # The provider's stop goes through Controller.agentStop (generation-checked).
         self.assertEqual(self.reasons('AgentProvider.java'), [])
         # agentStop, close before a new start, the 600 s deadline, and the agent's home command.
-        self.assertEqual(self.reasons('Controller.java'), ['AGENT', 'AGENT', 'DEADLINE', 'AGENT'])
+        # ... and the owner's notification Stop routed to its own slot (ownerStop).
+        self.assertEqual(self.reasons('Controller.java'), ['AGENT', 'AGENT', 'DEADLINE', 'AGENT', 'USER'])
 
     def test_no_untyped_stop_remains(self):
         for path in SOURCE.glob('*.java'):
@@ -49,12 +52,13 @@ class StopWiringTest(unittest.TestCase):
         command = text[text.index('static synchronized JSONObject command('):text.index('static AccessibilityNodeInfo node(')]
         self.assertLess(command.index('stops.taskMismatch(taskParam(p),taskId)'), command.index('require(p)'))
         provider = (SOURCE/'AgentProvider.java').read_text()
-        self.assertIn('case "stop":result=Controller.agentStop(getContext(),p);break;', provider)
+        self.assertIn('case "stop":result=Controller.route(getContext(),"stop",p);break;', provider)
+        self.assertIn('return in(r.slot,()->agentStop(c,p)).put("sessions",summary());', text)
         stop = text[text.index('static synchronized JSONObject agentStop('):]
         self.assertLess(stop.index('stops.taskMismatch(task,taskId)'), stop.index('stop(c,StopLedger.AGENT)'))
 
     def test_schema_advertised(self):
-        self.assertIn('.put("schemaVersion",3)', (SOURCE/'AgentProvider.java').read_text())
+        self.assertIn('.put("schemaVersion",4)', (SOURCE/'AgentProvider.java').read_text())
 
 class ActionFeedbackTest(unittest.TestCase):
     """#225: button outcomes are shown apart from the refreshed status, and survive recreation."""

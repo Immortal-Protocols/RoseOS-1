@@ -46,6 +46,7 @@ python3 os/background-control/tests/test_preview_wiring.py
 python3 os/background-control/tests/test_current_apps_wiring.py
 python3 os/background-control/tests/test_current_apps_parity.py
 python3 os/background-control/tests/test_replacement_wiring.py
+python3 os/background-control/tests/test_multi_session_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_integration_copy.py
@@ -157,6 +158,11 @@ for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-
   "os/background-control/tests/${name}Test.java"
  java -cp "$JAVA_TESTS/$name" "dev.pixel.backgroundcontrol.${name}Test"
 done
+# MultiSession (two-app routing) uses CurrentApps' validated per-session answer.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MultiSession" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MultiSession.java \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java os/background-control/tests/MultiSessionTest.java
+java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \

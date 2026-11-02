@@ -85,7 +85,8 @@ class PreviewWiringTest(unittest.TestCase):
 
     def test_same_signer_only_and_not_advertised(self):
         signer = PROVIDER.index('checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH')
-        self.assertLess(signer, PROVIDER.index('case "preview":result=Controller.preview(getContext(),p);break;'))
+        self.assertLess(signer, PROVIDER.index('case "preview":result=Controller.route(getContext(),"preview",p);break;'))
+        self.assertIn('case "preview":return in(MultiSession.target(view(false),sid).slot,()->preview(c,p));', CONTROLLER, 'the route reaches this preview in the named slot')
         caps = re.search(r'case "capabilities":.*?new String\[\]\{([^}]*)\}', PROVIDER).group(1)
         self.assertEqual(caps, '"list_apps","start","get_state","command","stop"', 'capabilities are unchanged: the Mac is never offered preview')
 

@@ -20,7 +20,7 @@ class NotificationWordingTest(unittest.TestCase):
             self.assertNotIn(word, text.lower())
 
     def test_tap_still_opens_the_viewer_and_stop_stays_the_only_action(self):
-        self.assertIn('PendingIntent view=PendingIntent.getActivity(c,1,new Intent(c,AgentPipActivity.class)', CONTROLLER)
+        self.assertIn('PendingIntent view=PendingIntent.getActivity(c,1+10*slot.index,watch(new Intent(c,AgentPipActivity.class)', CONTROLLER)
         live = self.live()
         self.assertEqual(re.findall(r'new Notification\.Action\.Builder\(null,"(\w+)",(\w+)\)', live), [('Stop', 'stop')])
         self.assertIn('.setOngoing(true)', live)
