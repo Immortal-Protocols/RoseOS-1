@@ -951,6 +951,12 @@ class KeygenMock:
         return {'exit': 0 if self.category == 'ok' else None, 'category': self.category, 'outputBytes': 0, 'outputSha256': None}
 
 
+def bootstrap_options():
+    """The os-release.yml bootstrap_profile choice list itself (not the first `options: [none` line in the file)."""
+    block = re.search(r'\n      bootstrap_profile:\n(?:        (?!options:)[^\n]*\n)*        options: \[([^\]]*)\]\n', WORKFLOW)
+    return block[1].split(', ')
+
+
 def owner_dir(test):
     path = Path(tempfile.mkdtemp(prefix='fs-'))
     os.chmod(path, 0o700)
@@ -1357,7 +1363,9 @@ class BlazerProfiles(unittest.TestCase):
                 profile = PROFILES['profiles'][name]
                 self.assertEqual((profile['status'], profile['device']), ('unbound', 'blazer'))
                 self.assertTrue(profile['missing'])
-                self.assertNotIn(name, re.search(r'options: \[none[^\]]*\]', WORKFLOW)[0])  # not a workflow option
+                # pro-blazer-v1 is a dispatch choice (Release's handoff; the guard still refuses it while unbound);
+                # pro-blazer-factory-v1 is not yet one.
+                self.assertEqual(name in bootstrap_options(), name == 'pro-blazer-v1')
 
     def test_blazer_secrets_are_new_and_distinct(self):
         profiles = PROFILES['profiles']
