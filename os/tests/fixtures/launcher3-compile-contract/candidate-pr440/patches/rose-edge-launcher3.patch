@@ -1,0 +1,210 @@
+diff --git a/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java b/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java
+index afa87a5..b337029 100644
+--- a/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java
++++ b/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java
+@@ -1590,6 +1590,26 @@ public abstract class AbsSwipeUpHandler<
+         mCanSlowSwipeGoHome = canSlowSwipeGoHome;
+     }
+ 
++    /**
++     * RoseOS (#410): lets a subclass replace the end target calculated for a release (FallbackSwipeHandler: the
++     * raised edge). Stock Launcher3 keeps its own result.
++     */
++    protected GestureEndTarget refineEndTarget(
++            GestureEndTarget endTarget, boolean isCancel, boolean isMotionPaused) {
++        return endTarget;
++    }
++
++    /** RoseOS (#410): applies one remote target's transform for the current shift; a subclass may draw its own. */
++    protected void applyTargetTransform(
++            TaskViewSimulator taskViewSimulator, TransformParams transformParams) {
++        taskViewSimulator.apply(transformParams);
++    }
++
++    /** RoseOS (#410): whether this gesture has attached the app to recents (a pause, or a likely quick switch). */
++    protected boolean hasAttachedToRecents() {
++        return mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;
++    }
++
+     @UiThread
+     private void handleNormalGestureEnd(
+             float endVelocityPxPerMs,
+@@ -1599,8 +1619,9 @@ public abstract class AbsSwipeUpHandler<
+             boolean horizontalTouchSlopPassed) {
+         long duration = MAX_SWIPE_DURATION;
+         float currentShift = getCurrentShiftValue();
+-        final GestureEndTarget endTarget = calculateEndTarget(
+-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);
++        final GestureEndTarget endTarget = refineEndTarget(calculateEndTarget(
++                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed),
++                isCancel, mIsMotionPaused);
+         // Set the state, but don't notify until the animation completes
+         mGestureState.setEndTarget(endTarget, false /* isAtomic */);
+         mAnimationFactory.setEndTarget(endTarget);
+@@ -3126,7 +3147,7 @@ public abstract class AbsSwipeUpHandler<
+                         transformParams, taskViewSimulator, progress)) {
+                     continue;
+                 }
+-                taskViewSimulator.apply(transformParams);
++                applyTargetTransform(taskViewSimulator, transformParams);
+             }
+         }
+     }
+diff --git a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
+index 8c46fbd..82865d9 100644
+--- a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
++++ b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
+@@ -16,6 +16,7 @@
+ package com.android.quickstep;
+ 
+ import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
++import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
+ import static android.content.Intent.EXTRA_COMPONENT_NAME;
+ import static android.content.Intent.EXTRA_USER;
+ 
+@@ -69,11 +70,15 @@ import com.android.launcher3.states.StateAnimationConfig;
+ import com.android.launcher3.util.MSDLPlayerWrapper;
+ import com.android.launcher3.util.ObjectWrapper;
+ import com.android.launcher3.util.StableViewInfo;
++import com.android.quickstep.GestureState.GestureEndTarget;
+ import com.android.quickstep.fallback.FallbackActivityRecentsView;
+ import com.android.quickstep.fallback.RecentsState;
++import com.android.quickstep.fallback.RoseEdgeGesture;
++import com.android.quickstep.fallback.RoseEdgeSwipe;
+ import com.android.quickstep.util.ActiveGestureLog;
+ import com.android.quickstep.util.RectFSpringAnim;
+ import com.android.quickstep.util.SurfaceTransaction.SurfaceProperties;
++import com.android.quickstep.util.TaskViewSimulator;
+ import com.android.quickstep.util.TransformParams;
+ import com.android.quickstep.util.TransformParams.BuilderProxy;
+ import com.android.quickstep.views.TaskView;
+@@ -112,6 +117,15 @@ public class FallbackSwipeHandler extends
+ 
+     private boolean mAppCanEnterPip;
+ 
++    // RoseOS (#410): the raised edge's release rules and live preview, off unless persist.wm.debug.rose_edge.
++    private final RoseEdgeSwipe mRoseEdge;
++    private final Matrix mRoseMatrix = new Matrix();
++    private final Rect mRoseCrop = new Rect();
++    private final float[] mRoseRadius = new float[1];
++    private boolean mRoseAttached;
++    private final BuilderProxy mRosePreview = (builder, app, params) -> builder.setMatrix(mRoseMatrix)
++            .setWindowCrop(mRoseCrop).setCornerRadius(mRoseRadius[0]);
++
+     public FallbackSwipeHandler(Context context,
+             TaskAnimationManager taskAnimationManager,
+             RecentsAnimationDeviceState deviceState,
+@@ -133,6 +147,10 @@ public class FallbackSwipeHandler extends
+ 
+         mRunningOverHome = mGestureState.getRunningTask() != null
+                 && mGestureState.getRunningTask().isHomeTask();
++        mRoseEdge = new RoseEdgeSwipe(context, displayId, mGestureState.getTopRunningTaskId(),
++                mGestureState.getSwipeUpStartTimeMs(), mDeviceState.getTouchSlop(),
++                mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture
++                        || !isRoseFullscreenTask());
+         if (mRunningOverHome) {
+             runActionOnRemoteHandles(remoteTargetHandle ->
+                     remoteTargetHandle.getTransformParams().setHomeBuilderProxy(
+@@ -140,6 +158,74 @@ public class FallbackSwipeHandler extends
+         }
+     }
+ 
++    /** RoseOS (#410): a short swipe Home over an app raises the edge instead (RoseEdgeGesture). */
++    @Override
++    protected GestureEndTarget refineEndTarget(
++            GestureEndTarget endTarget, boolean isCancel, boolean isMotionPaused) {
++        if (!mRoseEdge.enabled()) {
++            return endTarget;
++        }
++        if (mGestureState.isHandlingAtomicEvent()) {
++            mRoseEdge.settled(endTarget == GestureEndTarget.LAST_TASK);
++            return endTarget;
++        }
++        GestureEndTarget refined = endTarget;
++        switch (mRoseEdge.release(isRoseGestureNavigation(), isRoseNaturalRotation(), isCancel,
++                isMotionPaused, endTarget == GestureEndTarget.HOME, mCurrentDisplacement)) {
++            case RoseEdgeGesture.RAISE:
++            case RoseEdgeGesture.STAY:
++                refined = GestureEndTarget.LAST_TASK;
++                break;
++            case RoseEdgeGesture.HOME:
++                refined = GestureEndTarget.HOME;
++                break;
++            default:
++                break;
++        }
++        mRoseEdge.settled(refined == GestureEndTarget.LAST_TASK);
++        return refined;
++    }
++
++    /**
++     * RoseOS (#410): while the edge applies and the app has not attached to recents, the app's own leash is cropped at
++     * full width (RoseEdgeSwipe.preview); otherwise Launcher3's transform as before.
++     */
++    @Override
++    protected void applyTargetTransform(
++            TaskViewSimulator taskViewSimulator, TransformParams transformParams) {
++        if (!mRoseEdge.enabled()) {
++            super.applyTargetTransform(taskViewSimulator, transformParams);
++            return;
++        }
++        GestureEndTarget endTarget = mGestureState.getEndTarget();
++        // Once the app attaches to recents it stays on Launcher3's transform for the rest of the gesture.
++        mRoseAttached |= hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS
++                || endTarget == GestureEndTarget.NEW_TASK;
++        if (mDp == null || !mRoseEdge.preview(isRoseGestureNavigation(), isRoseNaturalRotation(), mRoseAttached,
++                mCurrentShift.value * mTransitionDragLength, mDp.getDeviceProperties().getWidthPx(),
++                mDp.getDeviceProperties().getHeightPx(), mRoseMatrix, mRoseCrop, mRoseRadius)) {
++            super.applyTargetTransform(taskViewSimulator, transformParams);
++            return;
++        }
++        transformParams.applySurfaceParams(transformParams.createSurfaceParams(mRosePreview));
++    }
++
++    private boolean isRoseGestureNavigation() {
++        return mDp != null && mDp.getDeviceProperties().getDeviceConfiguration().isGestureMode();
++    }
++
++    private boolean isRoseFullscreenTask() {
++        TaskInfo task = mGestureState.getRunningTask() != null
++                ? mGestureState.getRunningTask().getLegacyBaseTask() : null;
++        return task != null && task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN;
++    }
++
++    private boolean isRoseNaturalRotation() {
++        return mRemoteTargetHandles != null && mRemoteTargetHandles.length == 1
++                && mRemoteTargetHandles[0].getTaskViewSimulator().getOrientationState()
++                        .getDisplayRotation() == Surface.ROTATION_0;
++    }
++
+     private void updateHomeActivityTransformDuringSwipeUp(
+             SurfaceProperties builder, RemoteAnimationTarget app, TransformParams params) {
+         if (mActiveAnimationFactory != null) {
+@@ -219,7 +305,10 @@ public class FallbackSwipeHandler extends
+             @Nullable TaskView targetTaskView,
+             @Nullable IBinder launchCookie,
+             @NonNull String reason) {
+-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);
++        // RoseOS (#410): share Launcher3's identity with the home app, so it can verify that a gesture_nav_contract_v1
++        // request really comes from the system recents component before it replies.
++        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)
++                .setShareIdentityEnabled(true);
+         Intent intent = new Intent(mGestureState.getHomeIntent());
+         if (gestureContractAnimationFactory != null) {
+             TaskKey taskKey = null;
+diff --git a/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java b/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java
+index 8148e08..7dbbada 100644
+--- a/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java
++++ b/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java
+@@ -272,7 +272,10 @@ public class RecentsWindowSwipeHandler extends AbsSwipeUpHandler<RecentsWindowMa
+             @Nullable TaskView targetTaskView,
+             @Nullable IBinder launchCookie,
+             @NonNull String reason) {
+-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);
++        // RoseOS (#410): share Launcher3's identity with the home app, so it can verify that a gesture_nav_contract_v1
++        // request really comes from the system recents component before it replies.
++        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)
++                .setShareIdentityEnabled(true);
+         Intent intent = new Intent(mGestureState.getHomeIntent());
+         if (gestureContractAnimationFactory != null) {
+             TaskKey taskKey = null;
