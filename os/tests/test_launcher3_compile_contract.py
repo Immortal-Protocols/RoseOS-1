@@ -28,7 +28,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '5ec780af2fcdf8e00786401a76a55d1a21a64a9276072c615c0581d551c1bc79'
+    AGREED_SHA256 = '69d7ccd59174c9a85aad1e0c9dc6da77a287f9276d5dc3f3cdc68ae0f6801a71'
 
     def contract(self):
         import importlib.util
@@ -202,6 +202,185 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertEqual(set(content['notAnInputOverlays']),
             {o['target'] for o in manifest['base']['overlays'] if o['role'] == 'notAnInput'})
         self.assertNotIn('commit', ' '.join(manifest['base']['match'].split()[:3]), 'bound by content, not a commit')
+
+    HASH_OBJECT = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
+
+    def git_isolated(self, argv, data=b'', cwd=None):
+        """Run git without the caller's environment, config or HOME; with no cwd, no repository is in reach."""
+        import os
+        with tempfile.TemporaryDirectory() as empty:
+            env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+            env.update(GIT_CEILING_DIRECTORIES=str(Path(empty).parent), GIT_CONFIG_NOSYSTEM='1', HOME=empty)
+            result = subprocess.run(argv, input=data, capture_output=True, cwd=cwd or empty, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            return result.stdout.decode()
+
+    def test_the_tree_pins_state_their_object_format_serialization_and_exact_exclusions(self):
+        """M1, M2, M3, M5: sha1 object format; records <mode> SP <oid> TAB <path> LF sorted by raw path bytes; listing
+        bound by both its decompressed and its compressed sha256; exclusions an exact per-project path list; no gitlink;
+        the commit and root tree are pinned values reconstructed offline, never host facts."""
+        import gzip
+        contract = self.contract()
+        manifest = self.manifest()
+        revisions = contract.pins()
+        for project in manifest['projects'] + manifest['base']['projects']:
+            path, pin = project['path'], project['treePin']
+            self.assertEqual(pin['objectFormat'], 'sha1')
+            self.assertEqual(pin['revision'], project['revision'])
+            self.assertEqual(pin['revision'], revisions[path], f'{path}: the commit is the pinned manifest\'s')
+            self.assertIn('neither is a host fact', pin['source'])
+            compressed = (ROOT/pin['listing']['path']).read_bytes()
+            self.assertEqual(hashlib.sha256(compressed).hexdigest(), pin['listing']['compressedSha256'])
+            self.assertEqual(gzip.decompress(compressed)[-1:], b'\n')
+            listing = contract.read_listing(path)
+            self.assertEqual(len(listing), pin['listing']['paths'])
+            self.assertEqual(pin['modes'], sorted({mode for mode, _, _, _ in listing}))
+            self.assertNotIn('160000', pin['modes'])
+            self.assertEqual({kind for _, kind, _, _ in listing}, {'blob'})
+            listed = sorted({r['path'] for r in project['files']} | {o['target'][len(path) + 1:]
+                for o in manifest['overlays'] + manifest['base']['overlays'] if o['target'].startswith(path + '/')})
+            self.assertEqual(pin['unlisted']['excludedPaths'], listed, f'{path}: exactly the listed paths')
+            for excluded in listed:
+                self.assertFalse(set('*?[') & set(excluded), f'{excluded}: an exact path, not a glob')
+            entries = {p: (mode, blob) for mode, _, blob, p in listing}
+            records = [f'{entries[p][0]} {entries[p][1]}\t{p}\n'.encode()
+                for p in sorted((p for p in entries if p not in listed), key=str.encode)]
+            self.assertEqual(hashlib.sha256(b''.join(records)).hexdigest(), pin['unlisted']['digest'])
+            self.assertEqual(len(records), pin['unlisted']['count'])
+            self.assertEqual(pin['unlisted']['count'], len(entries) - len(set(listed) & set(entries)))
+            self.assertEqual(pin['gitlinks'], 'none: generation refuses any mode 160000 entry')
+
+    def test_a_gitlink_is_refused_at_generation_and_check(self):
+        contract = self.contract()
+        listing = b'100644 blob ' + b'1' * 40 + b'\tREADME\n160000 commit ' + b'2' * 40 + b'\tsub\n'
+
+        class Fake:
+            def run(self, *a, **k):
+                return subprocess.CompletedProcess(a, 0)
+
+            def check_output(self, argv, **k):
+                return ('3' * 40 + '\n') if 'rev-parse' in argv else listing
+        real = contract.subprocess
+        contract.subprocess = Fake()
+        try:
+            with self.assertRaises(SystemExit) as refused:
+                contract.fetch_tree('platform_build_release', '0' * 40)
+        finally:
+            contract.subprocess = real
+        self.assertIn('gitlink', str(refused.exception))
+        project = dict(self.manifest()['projects'][2])
+        with tempfile.TemporaryDirectory() as scratch:
+            import gzip
+            fixture = Path(scratch)/contract.tree_fixture(project['path']).name
+            fixture.write_bytes(gzip.compress(gzip.decompress(contract.tree_fixture(project['path']).read_bytes())
+                + b'160000 commit ' + b'2' * 40 + b'\tsub\n', 9, mtime=0))
+            contract.TREES = Path(scratch)
+            errors = contract.check_tree_pin(project)
+        self.assertEqual(errors, ['build/release/sub: a gitlink (mode 160000), which the pin does not support'])
+
+    def test_blob_ids_come_from_the_exact_hash_object_invocation(self):
+        """M1: git hash-object -t blob --no-filters --stdin (collision-detecting, no attribute filters, no object write),
+        run outside any repository, gives every pinned pre-image's gitBlob; a symlink hashes its readlink bytes."""
+        import os
+        contract = self.contract()
+        manifest = self.manifest()
+        for project in manifest['projects']:
+            blob = project['treePin']['blobHash']
+            self.assertEqual(blob['argv'], self.HASH_OBJECT)
+            self.assertEqual(blob['never'], ['-w (no object writes)', '--literally', '--path (no attribute filters)',
+                'a plain SHA-1'])
+            for flag in ('-w', '--literally', '--path'):
+                self.assertNotIn(flag, blob['argv'])
+            for row in project['files']:
+                if row['pre'] is None:
+                    continue
+                data = contract.fixture_path(project['path'], row['path']).read_bytes()
+                self.assertEqual(self.git_isolated(blob['argv'], data).strip(), row['pre']['gitBlob'])
+                self.assertEqual(contract.git_blob(data), row['pre']['gitBlob'])
+        with tempfile.TemporaryDirectory() as repo:
+            subprocess.run(['git', 'init', '-q', repo], check=True)
+            # Attribute filters would change these bytes; --no-filters must not apply them, and nothing is written.
+            Path(repo, '.gitattributes').write_text('* text=auto eol=crlf\n')
+            Path(repo, 'target.txt').write_bytes(b'a\nb\n')
+            os.symlink('target.txt', Path(repo, 'link'))
+            before = sorted(str(p) for p in Path(repo, '.git/objects').rglob('*') if p.is_file())
+            self.assertEqual(self.git_isolated(self.HASH_OBJECT, b'a\nb\n', cwd=repo).strip(),
+                contract.git_blob(b'a\nb\n'))
+            linked = self.git_isolated(self.HASH_OBJECT, os.readlink(Path(repo, 'link')).encode(),
+                cwd=repo).strip()
+            self.assertEqual(sorted(str(p) for p in Path(repo, '.git/objects').rglob('*') if p.is_file()), before,
+                'hash-object wrote no object')
+            subprocess.run(['git', '-C', repo, 'add', 'link'], check=True)
+            staged = subprocess.check_output(['git', '-C', repo, 'ls-files', '-s', 'link'], text=True).split()
+            self.assertEqual(staged[:2], ['120000', linked], 'a symlink is its readlink bytes, mode 120000')
+
+    def test_each_root_tree_is_reconstructed_offline_and_confirmed_by_git(self):
+        """M5: every tree object of each pinned listing is rebuilt offline; git hash-object -t tree (its own SHA-1 and
+        tree checks, no write) confirms each one, and the root is the manifest's rootTree."""
+        contract = self.contract()
+        manifest = self.manifest()
+        for project in manifest['projects']:
+            root, bodies = {}, []
+            for mode, _, blob, path in contract.read_listing(project['path']):
+                node = root
+                for part in path.split('/')[:-1]:
+                    node = node.setdefault(part, {})
+                node[path.split('/')[-1]] = (mode, blob)
+
+            def write(node):
+                entries = []
+                for name, value in node.items():
+                    if isinstance(value, dict):
+                        entries.append((name + '/', b'40000 ' + name.encode() + b'\0' + bytes.fromhex(write(value))))
+                    else:
+                        entries.append((name, value[0].encode() + b' ' + name.encode() + b'\0' + bytes.fromhex(value[1])))
+                body = b''.join(e for _, e in sorted(entries, key=lambda e: e[0].encode()))
+                bodies.append((body, hashlib.sha1(b'tree %d\0' % len(body) + body).hexdigest()))
+                return bodies[-1][1]
+            self.assertEqual(write(root), project['treePin']['rootTree'])
+            self.assertEqual(contract.git_tree_hash(contract.read_listing(project['path'])), project['treePin']['rootTree'])
+            with tempfile.TemporaryDirectory() as scratch:
+                names = []
+                for i, (body, _) in enumerate(bodies):
+                    Path(scratch, str(i)).write_bytes(body)
+                    names.append(str(Path(scratch, str(i))))
+                ids = self.git_isolated(['git', 'hash-object', '-t', 'tree', '--no-filters', '--stdin-paths'],
+                    ('\n'.join(names) + '\n').encode()).split()
+            self.assertEqual(ids, [i for _, i in bodies], f'{project["path"]}: every tree object as git hashes it')
+
+    def test_not_an_input_overlays_are_exact_excluded_and_unused(self):
+        """M4: the seven notAnInput overlays keep exact targets, are excluded from frameworks/base's treePin by exact
+        path, and none is a compile goal, a flagEvidence input or inside Launcher3 or build/release. Required overlays
+        stay pinned by sha256."""
+        manifest = self.manifest()
+        roles = manifest['overlayRoles']
+        not_input = roles['notAnInput']['targets']
+        self.assertEqual(len(not_input), 7)
+        self.assertEqual(not_input, [o['target'] for o in manifest['overlays'] if o['role'] == 'notAnInput'])
+        self.assertEqual(not_input, [o['target'] for o in manifest['base']['overlays'] if o['role'] == 'notAnInput'])
+        self.assertEqual(not_input, manifest['base']['bundleContent']['notAnInputOverlays'])
+        self.assertEqual(roles['required']['targets'], [o['target'] for o in manifest['overlays']
+            if o['role'] == 'required'])
+        for o in manifest['overlays']:
+            self.assertEqual(set(o), {'target', 'sha256', 'role'} if o['role'] == 'required' else {'target', 'role'})
+        excluded = set(manifest['projects'][0]['treePin']['unlisted']['excludedPaths'])
+        evidence = json.dumps(manifest['flagEvidence'])
+        self.assertEqual(roles['compileGoals'], ['Launcher3QuickStepLib'] + [row['expectedOutputDir'] +
+            '/aconfig-flags.txt' for row in manifest['flagEvidence']['flags']])
+        for target in not_input:
+            self.assertTrue(target.startswith('frameworks/base/'), target)
+            self.assertIn(target[len('frameworks/base/'):], excluded)
+            self.assertNotIn(target, roles['compileGoals'])
+            self.assertNotIn(target[len('frameworks/base/'):], evidence)
+            self.assertNotIn(target.rsplit('/', 1)[1], json.dumps(manifest['candidateDelta']))
+            self.assertFalse(set('*?[') & set(target))
+        self.assertEqual(subprocess.run(['python3', str(self.SCRIPT)], capture_output=True).returncode, 0)
+        import copy
+        contract = self.contract()
+        changed = copy.deepcopy(manifest)
+        changed['overlayRoles']['notAnInput']['targets'].pop()
+        self.assertIn('overlayRoles differ from the overlays, treePins and flagEvidence; regenerate with --write',
+            contract.check(changed))
 
     def test_the_delta_application_and_branch_conditions_are_exact(self):
         manifest = self.manifest()

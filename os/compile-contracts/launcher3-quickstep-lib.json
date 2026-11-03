@@ -776,19 +776,86 @@
     }
    ],
    "treePin": {
+    "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
     "rootTree": "ee02f0be7fb9f96722f897c64f642cb056c522e1",
+    "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+    "objectFormat": "sha1",
     "listing": {
      "path": "os/tests/fixtures/launcher3-compile-contract/trees/frameworks__base.ls-tree.txt.gz",
      "sha256": "ea86d70867c9c82e52505c6efaaaf41e9bc4a53e5078c28f71c7c92ca16a2ee6",
-     "paths": 65227
+     "compressedSha256": "d743dde2eaa6793465f6a73c20ee1dd425100398a486a8024eb8885144d418f8",
+     "paths": 65227,
+     "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
     },
     "unlisted": {
-     "excludes": "this project's listed affected files and overlay targets",
+     "excludedPaths": [
+      "core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+      "core/java/android/companion/virtual/VirtualDeviceManager.java",
+      "core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+      "core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+      "core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+      "core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+      "core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+      "core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+      "core/res/res/values/config.xml",
+      "core/res/res/values/symbols.xml",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+      "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+      "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+      "packages/SystemUI/AndroidManifest.xml",
+      "packages/SystemUI/assets/fonts/Nunito.ttf",
+      "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+      "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+      "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+      "packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+      "services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+      "services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+      "services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+      "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+      "services/core/java/com/android/server/pm/PackageInstallerSession.java"
+     ],
+     "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
      "count": 65203,
-     "lineFormat": "{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path",
-     "digest": "db4d6ce25d92c6f0b715872bc3d5868bdbf1d437d7822b398fc656fcdc41e994"
+     "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+     "order": "the raw bytes of path",
+     "digest": "db4d6ce25d92c6f0b715872bc3d5868bdbf1d437d7822b398fc656fcdc41e994",
+     "digestOf": "the concatenated records, sha256"
     },
-    "gitBlob": "git hash-object: SHA-1 of \"blob <size>\\0\" + content; a symlink (mode 120000) hashes its target; these trees hold no submodules",
+    "modes": [
+     "100644",
+     "100755",
+     "120000"
+    ],
+    "gitlinks": "none: generation refuses any mode 160000 entry",
+    "blobHash": {
+     "argv": [
+      "git",
+      "hash-object",
+      "-t",
+      "blob",
+      "--no-filters",
+      "--stdin"
+     ],
+     "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+     "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+     "never": [
+      "-w (no object writes)",
+      "--literally",
+      "--path (no attribute filters)",
+      "a plain SHA-1"
+     ],
+     "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+    },
     "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
     "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
    }
@@ -1120,19 +1187,74 @@
     }
    ],
    "treePin": {
+    "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
     "rootTree": "31263ca2e7dfa16a8ce3fd06a5740517b43303ad",
+    "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+    "objectFormat": "sha1",
     "listing": {
      "path": "os/tests/fixtures/launcher3-compile-contract/trees/packages__apps__Launcher3.ls-tree.txt.gz",
      "sha256": "b9ad6d98d76bdf191dfab53540ca45338f15e010805e26cb32e3a2a2aa2462c8",
-     "paths": 3450
+     "compressedSha256": "e1e3829c95f413b5169996367a7da8c19ef285408a0ed08c72af5b4ab06b2f7b",
+     "paths": 3450,
+     "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
     },
     "unlisted": {
-     "excludes": "this project's listed affected files and overlay targets",
+     "excludedPaths": [
+      "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+      "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
+      "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
+      "quickstep/res/layout/fallback_recents_activity.xml",
+      "quickstep/res/layout/icon_app_chip_view.xml",
+      "quickstep/res/layout/task.xml",
+      "quickstep/res/values/rose_agent_strip.xml",
+      "quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
+      "quickstep/src/com/android/quickstep/BaseContainerInterface.java",
+      "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
+      "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
+      "quickstep/src/com/android/quickstep/RecentsActivity.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+      "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
+      "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
+     ],
+     "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
      "count": 3440,
-     "lineFormat": "{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path",
-     "digest": "e580c13c7b98dc23a888be1dba472421fd6467226b3578fc4beb8f4d31552b52"
+     "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+     "order": "the raw bytes of path",
+     "digest": "e580c13c7b98dc23a888be1dba472421fd6467226b3578fc4beb8f4d31552b52",
+     "digestOf": "the concatenated records, sha256"
     },
-    "gitBlob": "git hash-object: SHA-1 of \"blob <size>\\0\" + content; a symlink (mode 120000) hashes its target; these trees hold no submodules",
+    "modes": [
+     "100644",
+     "100755",
+     "120000"
+    ],
+    "gitlinks": "none: generation refuses any mode 160000 entry",
+    "blobHash": {
+     "argv": [
+      "git",
+      "hash-object",
+      "-t",
+      "blob",
+      "--no-filters",
+      "--stdin"
+     ],
+     "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+     "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+     "never": [
+      "-w (no object writes)",
+      "--literally",
+      "--path (no attribute filters)",
+      "a plain SHA-1"
+     ],
+     "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+    },
     "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
     "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
    }
@@ -1170,19 +1292,55 @@
     }
    ],
    "treePin": {
+    "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
     "rootTree": "8db73ecd6007deb2a277847d73add8b0dffbc458",
+    "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+    "objectFormat": "sha1",
     "listing": {
      "path": "os/tests/fixtures/launcher3-compile-contract/trees/build__release.ls-tree.txt.gz",
      "sha256": "7ad32dc8b842d12175871386ee8c698abf9e319c3ee70ab7a1bc9b32432fd04a",
-     "paths": 18290
+     "compressedSha256": "92917f7791d5c8cac880828c78b250201e25a805130aa7393e28c255da18e5b3",
+     "paths": 18290,
+     "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
     },
     "unlisted": {
-     "excludes": "this project's listed affected files and overlay targets",
+     "excludedPaths": [
+      "aconfig/pixel_background_control/Android.bp",
+      "aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+      "aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+      "release_configs/cur.textproto",
+      "release_configs/pixel_background_control.textproto"
+     ],
+     "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
      "count": 18289,
-     "lineFormat": "{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path",
-     "digest": "e713cc1a3b190b8525b7d7c3543d60c1d854848c1132bcbc2735873c74a249f7"
+     "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+     "order": "the raw bytes of path",
+     "digest": "e713cc1a3b190b8525b7d7c3543d60c1d854848c1132bcbc2735873c74a249f7",
+     "digestOf": "the concatenated records, sha256"
     },
-    "gitBlob": "git hash-object: SHA-1 of \"blob <size>\\0\" + content; a symlink (mode 120000) hashes its target; these trees hold no submodules",
+    "modes": [
+     "100644"
+    ],
+    "gitlinks": "none: generation refuses any mode 160000 entry",
+    "blobHash": {
+     "argv": [
+      "git",
+      "hash-object",
+      "-t",
+      "blob",
+      "--no-filters",
+      "--stdin"
+     ],
+     "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+     "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+     "never": [
+      "-w (no object writes)",
+      "--literally",
+      "--path (no attribute filters)",
+      "a plain SHA-1"
+     ],
+     "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+    },
     "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
     "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
    }
@@ -2135,19 +2293,86 @@
      }
     ],
     "treePin": {
+     "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
      "rootTree": "ee02f0be7fb9f96722f897c64f642cb056c522e1",
+     "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+     "objectFormat": "sha1",
      "listing": {
       "path": "os/tests/fixtures/launcher3-compile-contract/trees/frameworks__base.ls-tree.txt.gz",
       "sha256": "ea86d70867c9c82e52505c6efaaaf41e9bc4a53e5078c28f71c7c92ca16a2ee6",
-      "paths": 65227
+      "compressedSha256": "d743dde2eaa6793465f6a73c20ee1dd425100398a486a8024eb8885144d418f8",
+      "paths": 65227,
+      "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
      },
      "unlisted": {
-      "excludes": "this project's listed affected files and overlay targets",
+      "excludedPaths": [
+       "core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+       "core/java/android/companion/virtual/VirtualDeviceManager.java",
+       "core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+       "core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+       "core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+       "core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+       "core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+       "core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+       "core/res/res/values/config.xml",
+       "core/res/res/values/symbols.xml",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+       "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+       "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+       "packages/SystemUI/AndroidManifest.xml",
+       "packages/SystemUI/assets/fonts/Nunito.ttf",
+       "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+       "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+       "packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+       "services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+       "services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+       "services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+       "services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+       "services/core/java/com/android/server/pm/PackageInstallerSession.java"
+      ],
+      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
       "count": 65203,
-      "lineFormat": "{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path",
-      "digest": "db4d6ce25d92c6f0b715872bc3d5868bdbf1d437d7822b398fc656fcdc41e994"
+      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+      "order": "the raw bytes of path",
+      "digest": "db4d6ce25d92c6f0b715872bc3d5868bdbf1d437d7822b398fc656fcdc41e994",
+      "digestOf": "the concatenated records, sha256"
      },
-     "gitBlob": "git hash-object: SHA-1 of \"blob <size>\\0\" + content; a symlink (mode 120000) hashes its target; these trees hold no submodules",
+     "modes": [
+      "100644",
+      "100755",
+      "120000"
+     ],
+     "gitlinks": "none: generation refuses any mode 160000 entry",
+     "blobHash": {
+      "argv": [
+       "git",
+       "hash-object",
+       "-t",
+       "blob",
+       "--no-filters",
+       "--stdin"
+      ],
+      "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+      "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+      "never": [
+       "-w (no object writes)",
+       "--literally",
+       "--path (no attribute filters)",
+       "a plain SHA-1"
+      ],
+      "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+     },
      "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
      "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
     }
@@ -2442,19 +2667,74 @@
      }
     ],
     "treePin": {
+     "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
      "rootTree": "31263ca2e7dfa16a8ce3fd06a5740517b43303ad",
+     "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+     "objectFormat": "sha1",
      "listing": {
       "path": "os/tests/fixtures/launcher3-compile-contract/trees/packages__apps__Launcher3.ls-tree.txt.gz",
       "sha256": "b9ad6d98d76bdf191dfab53540ca45338f15e010805e26cb32e3a2a2aa2462c8",
-      "paths": 3450
+      "compressedSha256": "e1e3829c95f413b5169996367a7da8c19ef285408a0ed08c72af5b4ab06b2f7b",
+      "paths": 3450,
+      "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
      },
      "unlisted": {
-      "excludes": "this project's listed affected files and overlay targets",
+      "excludedPaths": [
+       "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+       "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
+       "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
+       "quickstep/res/layout/fallback_recents_activity.xml",
+       "quickstep/res/layout/icon_app_chip_view.xml",
+       "quickstep/res/layout/task.xml",
+       "quickstep/res/values/rose_agent_strip.xml",
+       "quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
+       "quickstep/src/com/android/quickstep/BaseContainerInterface.java",
+       "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
+       "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
+       "quickstep/src/com/android/quickstep/RecentsActivity.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+       "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
+       "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
+      ],
+      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
       "count": 3440,
-      "lineFormat": "{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path",
-      "digest": "e580c13c7b98dc23a888be1dba472421fd6467226b3578fc4beb8f4d31552b52"
+      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+      "order": "the raw bytes of path",
+      "digest": "e580c13c7b98dc23a888be1dba472421fd6467226b3578fc4beb8f4d31552b52",
+      "digestOf": "the concatenated records, sha256"
      },
-     "gitBlob": "git hash-object: SHA-1 of \"blob <size>\\0\" + content; a symlink (mode 120000) hashes its target; these trees hold no submodules",
+     "modes": [
+      "100644",
+      "100755",
+      "120000"
+     ],
+     "gitlinks": "none: generation refuses any mode 160000 entry",
+     "blobHash": {
+      "argv": [
+       "git",
+       "hash-object",
+       "-t",
+       "blob",
+       "--no-filters",
+       "--stdin"
+      ],
+      "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+      "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+      "never": [
+       "-w (no object writes)",
+       "--literally",
+       "--path (no attribute filters)",
+       "a plain SHA-1"
+      ],
+      "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+     },
      "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
      "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
     }
@@ -2492,19 +2772,55 @@
      }
     ],
     "treePin": {
+     "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22",
      "rootTree": "8db73ecd6007deb2a277847d73add8b0dffbc458",
+     "source": "revision is the pinned commit; rootTree is that commit's tree, recomputed offline from the listing (every tree object rebuilt and hashed); neither is a host fact",
+     "objectFormat": "sha1",
      "listing": {
       "path": "os/tests/fixtures/launcher3-compile-contract/trees/build__release.ls-tree.txt.gz",
       "sha256": "7ad32dc8b842d12175871386ee8c698abf9e319c3ee70ab7a1bc9b32432fd04a",
-      "paths": 18290
+      "compressedSha256": "92917f7791d5c8cac880828c78b250201e25a805130aa7393e28c255da18e5b3",
+      "paths": 18290,
+      "format": "<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, gzip-compressed with mtime 0"
      },
      "unlisted": {
-      "excludes": "this project's listed affected files and overlay targets",
+      "excludedPaths": [
+       "aconfig/pixel_background_control/Android.bp",
+       "aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+       "aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+       "release_configs/cur.textproto",
+       "release_configs/pixel_background_control.textproto"
+      ],
+      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
       "count": 18289,
-      "lineFormat": "{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path",
-      "digest": "e713cc1a3b190b8525b7d7c3543d60c1d854848c1132bcbc2735873c74a249f7"
+      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
+      "order": "the raw bytes of path",
+      "digest": "e713cc1a3b190b8525b7d7c3543d60c1d854848c1132bcbc2735873c74a249f7",
+      "digestOf": "the concatenated records, sha256"
      },
-     "gitBlob": "git hash-object: SHA-1 of \"blob <size>\\0\" + content; a symlink (mode 120000) hashes its target; these trees hold no submodules",
+     "modes": [
+      "100644"
+     ],
+     "gitlinks": "none: generation refuses any mode 160000 entry",
+     "blobHash": {
+      "argv": [
+       "git",
+       "hash-object",
+       "-t",
+       "blob",
+       "--no-filters",
+       "--stdin"
+      ],
+      "regularFile": "git hash-object -t blob --no-filters --stdin, given the file's bytes",
+      "symlink": "git hash-object -t blob --no-filters --stdin, given readlink's bytes (no trailing newline); mode 120000",
+      "never": [
+       "-w (no object writes)",
+       "--literally",
+       "--path (no attribute filters)",
+       "a plain SHA-1"
+      ],
+      "implementation": "git's own collision-detecting SHA-1, through that invocation; the offline generator's blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py"
+     },
      "extraPaths": "any file present in the source project that is neither in this tree, a listed affected file nor an overlay target is refused",
      "limitation": "per-path sha256 would need every file's contents, which the bounded pinned fixtures do not hold; the pin is mode and git blob id per path from the pinned commit's own tree objects, with this sha256 digest over them"
     }
@@ -2766,6 +3082,42 @@
     "path": "aconfig/aconfig_declarations.go",
     "sha256": "aecefd9fe939cc7819320b32de0ddfaf8864f8a1b617cb3dbeef25c20464086b"
    }
+  ]
+ },
+ "overlayRoles": {
+  "required": {
+   "targets": [
+    "build/release/aconfig/pixel_background_control/Android.bp",
+    "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+    "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+    "build/release/release_configs/pixel_background_control.textproto",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java"
+   ],
+   "rule": "present with exactly its sha256 in overlays"
+  },
+  "notAnInput": {
+   "targets": [
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+    "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+    "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
+   ],
+   "rule": "exact target only: present with any bytes, or absent; excluded from its project's treePin by exact path (treePin.unlisted.excludedPaths); never a source of Launcher3QuickStepLib, a compileGoals entry or a flagEvidence input. Adding or removing one changes the contract"
+  },
+  "compileGoals": [
+   "Launcher3QuickStepLib",
+   "out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt",
+   "out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt"
   ]
  },
  "identitySharing": {

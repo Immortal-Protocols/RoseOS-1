@@ -240,6 +240,34 @@ def overlays():
         else {'target': t, 'role': 'notAnInput'} for t, data in overlay_targets().items()]
 
 
+def overlay_roles(projects, evidence):
+    """Required and notAnInput overlays by exact target, and the proof that no notAnInput target is an input: each is
+    outside Launcher3 and build/release, excluded from its own project's treePin by exact path, and neither a compile goal
+    nor a flagEvidence definition, declaration or output."""
+    rows = overlays()
+    required = [o['target'] for o in rows if o['role'] == 'required']
+    not_input = [o['target'] for o in rows if o['role'] == 'notAnInput']
+    goals = ['Launcher3QuickStepLib'] + [row['expectedOutputDir'] + '/aconfig-flags.txt' for row in evidence]
+    evidence_paths = {f'{row[k]["project"]}/{row[k]["path"]}' for row in evidence for k in ('definedIn', 'declaredIn')}
+    pinned = {p['path']: set(p['treePin']['unlisted']['excludedPaths']) for p in projects}
+    for target in not_input:
+        project = next((p for p in pinned if target.startswith(p + '/')), None)
+        if project in ('packages/apps/Launcher3', 'build/release') or project is None:
+            raise ValueError(f'{target}: a notAnInput overlay inside a compiled or unpinned project')
+        if target[len(project) + 1:] not in pinned[project]:
+            raise ValueError(f'{target}: not excluded from {project} treePin by exact path')
+        if target in evidence_paths or target in goals:
+            raise ValueError(f'{target}: used by a compile goal or flagEvidence')
+    return {
+        'required': {'targets': required, 'rule': 'present with exactly its sha256 in overlays'},
+        'notAnInput': {'targets': not_input, 'rule': 'exact target only: present with any bytes, or absent; excluded '
+            'from its project\'s treePin by exact path (treePin.unlisted.excludedPaths); never a source of '
+            'Launcher3QuickStepLib, a compileGoals entry or a flagEvidence input. Adding or removing one changes the '
+            'contract'},
+        'compileGoals': goals,
+    }
+
+
 def apply_in_scratch(pre, patches):
     """({path: bytes}, {path: chain}) after applying the patches in order with git apply to {path: bytes or None}."""
     tree = Path(tempfile.mkdtemp(prefix='l3-contract-'))
@@ -446,6 +474,10 @@ def git_tree_hash(listing):
     return write(root)
 
 
+# The exact blob-hash invocation (M1): git's collision-detecting SHA-1, no attribute filters, no object write.
+HASH_OBJECT = ('git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin')
+
+
 def tree_pin(project, revision, root_tree, excluded):
     """The machine-readable pin of every path in the pinned tree that the contract does not list itself."""
     listing = read_listing(project)
@@ -453,16 +485,36 @@ def tree_pin(project, revision, root_tree, excluded):
     lines = sorted((path.encode(), f'{mode} {blob}\t{path}\n'.encode()) for mode, _, blob, path in listing
         if path not in excluded)
     return {
+        'revision': revision,
         'rootTree': root_tree,
-        'listing': {'path': str(tree_fixture(project).relative_to(ROOT)), 'sha256': sha256(raw), 'paths': len(listing)},
+        'source': 'revision is the pinned commit; rootTree is that commit\'s tree, recomputed offline from the listing '
+            '(every tree object rebuilt and hashed); neither is a host fact',
+        'objectFormat': 'sha1',
+        'listing': {'path': str(tree_fixture(project).relative_to(ROOT)), 'sha256': sha256(raw),
+            'compressedSha256': sha256(tree_fixture(project).read_bytes()), 'paths': len(listing),
+            'format': '<mode> SP <type> SP <oid> TAB <path> LF, as git ls-tree -r --full-tree <revision> prints it, '
+                'gzip-compressed with mtime 0'},
         'unlisted': {
-            'excludes': 'this project\'s listed affected files and overlay targets',
+            'excludedPaths': sorted(excluded),
+            'excludedAre': 'exactly this project\'s files paths and overlay targets, relative to it; no globs. A path the '
+                'pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing',
             'count': len(lines),
-            'lineFormat': '{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path',
+            'recordFormat': '<mode> SP <oid> TAB <path> LF, with path relative to the project',
+            'order': 'the raw bytes of path',
             'digest': sha256(b''.join(line for _, line in lines)),
+            'digestOf': 'the concatenated records, sha256',
         },
-        'gitBlob': 'git hash-object: SHA-1 of "blob <size>\\0" + content; a symlink (mode 120000) hashes its target; '
-            'these trees hold no submodules',
+        'modes': sorted({mode for mode, _, _, _ in listing}),
+        'gitlinks': 'none: generation refuses any mode 160000 entry',
+        'blobHash': {
+            'argv': list(HASH_OBJECT),
+            'regularFile': 'git hash-object -t blob --no-filters --stdin, given the file\'s bytes',
+            'symlink': 'git hash-object -t blob --no-filters --stdin, given readlink\'s bytes (no trailing newline); '
+                'mode 120000',
+            'never': ['-w (no object writes)', '--literally', '--path (no attribute filters)', 'a plain SHA-1'],
+            'implementation': 'git\'s own collision-detecting SHA-1, through that invocation; the offline generator\'s '
+                'blob and tree ids are confirmed against git hash-object by os/tests/test_launcher3_compile_contract.py',
+        },
         'extraPaths': 'any file present in the source project that is neither in this tree, a listed affected file nor '
             'an overlay target is refused',
         'limitation': 'per-path sha256 would need every file\'s contents, which the bounded pinned fixtures do not hold; '
@@ -586,6 +638,8 @@ def fetch_tree(repo, revision):
             f'https://github.com/GrapheneOS/{repo}', revision], check=True)
         root = subprocess.check_output(['git', '-C', str(work), 'rev-parse', revision + '^{tree}'], text=True).strip()
         listing = subprocess.check_output(['git', '-C', str(work), 'ls-tree', '-r', '--full-tree', revision])
+        if any(line.startswith(b'160000 ') for line in listing.splitlines()):
+            raise SystemExit(f'{repo} {revision}: a submodule (gitlink) entry; the pin does not support one')
         return root, gzip.compress(listing, 9, mtime=0)
     finally:
         shutil.rmtree(work, True)
@@ -687,6 +741,7 @@ def build():
         'base': base,
         'candidateDelta': delta,
         'flagEvidence': {'flags': evidence, 'producingRules': rules},
+        'overlayRoles': overlay_roles(projects, evidence),
         'identitySharing': {
             'sites': ['quickstep/src/com/android/quickstep/FallbackSwipeHandler.java startHomeIntent',
                 'quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)'],
@@ -747,6 +802,11 @@ def check(manifest):
         errors += check_tree_pin(project)
     if manifest['overlays'] != overlays():
         errors.append('overlays changed; regenerate with --write')
+    try:
+        if manifest.get('overlayRoles') != overlay_roles(manifest['projects'], manifest['flagEvidence']['flags']):
+            errors.append('overlayRoles differ from the overlays, treePins and flagEvidence; regenerate with --write')
+    except (KeyError, ValueError) as error:
+        errors.append(f'overlayRoles: {error}')
     errors += check_evidence(manifest, revisions)
     if not errors:
         errors += check_candidate(manifest)
@@ -760,7 +820,10 @@ def check_tree_pin(project):
     if not tree_fixture(path).exists():
         return [f'{path}: no pinned tree listing fixture']
     listing = read_listing(path)
-    errors = []
+    errors = [f'{path}/{p}: a gitlink (mode 160000), which the pin does not support' for m, _, _, p in listing
+        if m == '160000']
+    if errors:
+        return errors
     if git_tree_hash(listing) != pin.get('rootTree'):
         errors.append(f'{path}: the listing is not the pinned root tree {pin.get("rootTree")}')
     if pin != tree_pin(path, project['revision'], pin.get('rootTree'), excluded(project)):
