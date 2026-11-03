@@ -58,6 +58,10 @@ final class WorkspaceOverviewView extends LinearLayout {
  /** Each previewed card's live image view (by entry) while a verified frame is shown, and the frame it holds. */
  private final java.util.Map<String,ImageView> previewViews=new java.util.HashMap<>();
  private final java.util.Map<String,android.graphics.Bitmap> shownFrames=new java.util.HashMap<>();
+ /** Each previewed card's overlay blur source (FrameBlur), by entry; cleared on every rebuild. */
+ private final java.util.Map<String,FrameBlur> frameBlurs=new java.util.HashMap<>();
+ /** Host-test switch only: false draws the overlays without backdrop blur (the frosted-fill fallback), for before/after. */
+ static boolean overlayBlur=true;
  /** Stop state per bound session (sessionId to SENDING/STOPPING/STOPPED/UNKNOWN), and whether Home has a Stop route. */
  private java.util.Map<String,CurrentApps.SessionStop.Phase> stops=java.util.Collections.emptyMap();private boolean stopRoute;
 
@@ -89,10 +93,11 @@ final class WorkspaceOverviewView extends LinearLayout {
   String key=k.toString();
   if(key.equals(lastKey)){
    for(java.util.Map.Entry<String,android.graphics.Bitmap> e:images.entrySet()){ImageView v=previewViews.get(e.getKey());
-    if(v!=null&&shownFrames.get(e.getKey())!=e.getValue()){v.setImageBitmap(e.getValue());shownFrames.put(e.getKey(),e.getValue());fitTop(v);}}
+    if(v!=null&&shownFrames.get(e.getKey())!=e.getValue()){v.setImageBitmap(e.getValue());shownFrames.put(e.getKey(),e.getValue());fitTop(v);
+     FrameBlur fb=frameBlurs.get(e.getKey());if(fb!=null)fb.set(e.getValue());}}
    return;
   }
-  lastKey=key;previewViews.clear();shownFrames.clear();this.stops=stops;this.stopRoute=stopRoute;
+  lastKey=key;previewViews.clear();shownFrames.clear();frameBlurs.clear();this.stops=stops;this.stopRoute=stopRoute;
   removeAllViews();
   if(state!=CurrentApps.State.AVAILABLE){
    // HiFi .a-empty: nothing running under control, or why it can't be known; never stale cards.
@@ -149,6 +154,11 @@ final class WorkspaceOverviewView extends LinearLayout {
   img.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->fitTop(img));
   img.setContentDescription("Live view of Rose’s workspace in "+app);img.setTag("preview");
   card.removeViewAt(0);card.addView(img,0,new FrameLayout.LayoutParams(-1,-1));previewViews.put(entryId,img);shownFrames.put(entryId,preview);
+  // The overlays' backdrop blur samples exactly this verified frame (BlurUnder, made in card()).
+  FrameBlur fb=new FrameBlur(img,preview);frameBlurs.put(entryId,fb);
+  for(int i=1;i<card.getChildCount();i++){View o=card.getChildAt(i);
+   if(o.getBackground() instanceof android.graphics.drawable.LayerDrawable){android.graphics.drawable.Drawable under=((android.graphics.drawable.LayerDrawable)o.getBackground()).getDrawable(0);
+    if(under instanceof BlurUnder){((BlurUnder)under).blur=fb;fb.overlays.add(o);o.invalidate();}}}
  }
  /** Scales the frame to the card's width and pins its top (the app's top bar), cropping only the bottom. */
  static void fitTop(ImageView img){
@@ -170,13 +180,15 @@ final class WorkspaceOverviewView extends LinearLayout {
   // Identity chip (oxblood.css:424-425): 9dp in, 7dp padding, radius 10, frosted, the app's real 24dp icon.
   if(icon!=null){
    FrameLayout chip=new FrameLayout(getContext());chip.setPadding(dp(7),dp(7),dp(7),dp(7));
-   GradientDrawable cg=new GradientDrawable();cg.setColor(0x61281e1a);cg.setCornerRadius(dp(10));cg.setStroke(Math.max(1,dp(1)),0x8cecded6);chip.setBackground(cg);
+   GradientDrawable cg=new GradientDrawable();cg.setColor(0x61281e1a);cg.setCornerRadius(dp(10));cg.setStroke(Math.max(1,dp(1)),0x8cecded6);
+   chip.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{new BlurUnder(chip,14,0,dp(10),1.3f,density()),cg}));chip.setTag("identity-chip");
    ImageView iv=new ImageView(getContext());iv.setImageDrawable(icon);iv.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);chip.addView(iv,new FrameLayout.LayoutParams(dp(24),dp(24)));
    FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);clp.leftMargin=clp.topMargin=dp(9);card.addView(chip,clp);
   }
   // State chip (oxblood.css:302-306): bottom left, frosted; hidden while the app is simply running.
   TextView chip=text(state,11.5f,OX_INK,false);chip.setSingleLine(true);chip.setEllipsize(TextUtils.TruncateAt.END);chip.setPadding(dp(9),dp(4),dp(9),dp(4));
-  GradientDrawable sg=new GradientDrawable();sg.setColor(0x8c1e0e10);sg.setCornerRadius(dp(9));sg.setStroke(Math.max(1,dp(1)),0x38ffece0);chip.setBackground(sg);
+  GradientDrawable sg=new GradientDrawable();sg.setColor(0x8c1e0e10);sg.setCornerRadius(dp(9));sg.setStroke(Math.max(1,dp(1)),0x38ffece0);
+  chip.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{new BlurUnder(chip,10,0,dp(9),1f,density()),sg}));chip.setTag("state-chip");
   if(running)chip.setVisibility(INVISIBLE);
   FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.START);sp.leftMargin=dp(8);sp.bottomMargin=dp(8)+dp(11);sp.rightMargin=dp(8+44);card.addView(chip,sp);
   // Stop (oxblood.css:429-433): a 44dp target whose 34dp frosted plate sits 8dp in from the bottom right.
@@ -190,7 +202,9 @@ final class WorkspaceOverviewView extends LinearLayout {
   * it); otherwise greyed, and a tap says why instead of doing nothing (never a Stop that can't be confirmed). */
  View stopButton(final CurrentApps.App a,String label,boolean inFlight){
   final boolean can=a!=null&&a.stop!=null&&stopRoute&&!inFlight;
-  View g=new View(getContext());g.setBackground(new FrostedStop(getResources().getDisplayMetrics().density,can));
+  View g=new View(getContext());
+  // The 34dp plate sits 5dp inside the 44dp target; its backdrop blur is clipped to the plate (oxblood.css:430).
+  g.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{new BlurUnder(g,12,dp(5),dp(8),1f,density()),new FrostedStop(density(),can)}));
   g.setClickable(true);g.setFocusable(true);
   final String why=inFlight?WorkspaceOverview.STOP_STOPPING:STOP_APP_UNAVAILABLE;
   g.setContentDescription(can?"Stop Rose’s session for "+label:"Stop "+label+", unavailable. "+why);
@@ -198,6 +212,69 @@ final class WorkspaceOverviewView extends LinearLayout {
   g.setStateListAnimator(HomeAppTile.pressAnimator(getContext(),View.SCALE_X,1f,.95f,0,View.SCALE_Y));
   g.setTag(can?"stop":"stop-unavailable");
   return g;
+ }
+ float density(){return getResources().getDisplayMetrics().density;}
+
+ /** The verified frame a previewed card shows, as the source of its overlays' backdrop blur (#410 gap closure;
+  * oxblood.css:305,424,430 backdrop-filter blur 10-14px): reduced copies blurred at quarter scale with
+  * OxbloodField.boxBlur, built lazily per sigma and dropped when the frame changes. live() is true only while the card's
+  * ImageView still shows exactly this bitmap, so no overlay ever samples a stale frame or another session's. */
+ static final class FrameBlur {
+  final ImageView img;android.graphics.Bitmap frame;final java.util.Map<Integer,android.graphics.Bitmap> blurred=new java.util.HashMap<>();
+  final java.util.List<View> overlays=new java.util.ArrayList<>();
+  FrameBlur(ImageView img,android.graphics.Bitmap frame){this.img=img;this.frame=frame;}
+  /** A new verified frame for the same card: the old copies are dropped (left to the GC, never recycled while a frame
+   * that drew them may still be on screen) and the overlays redraw from the new one. */
+  void set(android.graphics.Bitmap next){if(next==frame)return;frame=next;blurred.clear();for(View o:overlays)o.invalidate();}
+  boolean live(){
+   android.graphics.drawable.Drawable d=img.getDrawable();
+   return frame!=null&&!frame.isRecycled()&&d instanceof android.graphics.drawable.BitmapDrawable&&((android.graphics.drawable.BitmapDrawable)d).getBitmap()==frame;
+  }
+  /** The frame at quarter scale blurred by sigma quarter-pixels (rounded, at least 1), or null (memory short, an
+   * unreadable bitmap): the overlay then shows its frosted fill alone. */
+  android.graphics.Bitmap blurred(int sigma){
+   android.graphics.Bitmap b=blurred.get(sigma);if(b!=null)return b;
+   try{
+    int w=Math.max(1,frame.getWidth()/OxbloodField.BLUR_SCALE),h=Math.max(1,frame.getHeight()/OxbloodField.BLUR_SCALE);
+    android.graphics.Bitmap small=android.graphics.Bitmap.createScaledBitmap(frame,w,h,true);
+    if(small==frame)small=frame.copy(android.graphics.Bitmap.Config.ARGB_8888,true);
+    else if(!small.isMutable())small=small.copy(android.graphics.Bitmap.Config.ARGB_8888,true);
+    int[] px=new int[w*h];small.getPixels(px,0,w,0,0,w,h);OxbloodField.boxBlur(px,w,h,sigma);small.setPixels(px,0,w,0,0,w,h);
+    blurred.put(sigma,small);return small;
+   }catch(RuntimeException|OutOfMemoryError unavailable){return null;}
+  }
+ }
+ /** An overlay's backdrop: the part of its card's verified frame that lies under it, blurred, clipped to its rounded
+  * plate (inset from the view's bounds), optionally saturated; drawn under the overlay's own frosted fill. Nothing at
+  * all without a live FrameBlur (no preview: the card body is flat, so the frosted fill is already what a blur of it
+  * would show). */
+ static final class BlurUnder extends Drawable {
+  final View overlay;final float sigmaDp,inset,radius,saturation,density;FrameBlur blur;
+  final android.graphics.Paint paint=new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG|android.graphics.Paint.ANTI_ALIAS_FLAG);
+  final android.graphics.Matrix inverse=new android.graphics.Matrix();final RectF area=new RectF(),src=new RectF();final android.graphics.Path clip=new android.graphics.Path();
+  BlurUnder(View overlay,float sigmaDp,float inset,float radius,float saturation,float density){
+   this.overlay=overlay;this.sigmaDp=sigmaDp;this.inset=inset;this.radius=radius;this.saturation=saturation;this.density=density;
+   if(saturation!=1f){android.graphics.ColorMatrix m=new android.graphics.ColorMatrix();m.setSaturation(saturation);paint.setColorFilter(new android.graphics.ColorMatrixColorFilter(m));}
+  }
+  @Override public void draw(Canvas c){
+   FrameBlur fb=blur;if(!overlayBlur||fb==null||!fb.live())return;
+   android.graphics.Rect b=getBounds();if(b.isEmpty())return;
+   RectF plate=new RectF(b.left+inset,b.top+inset,b.right-inset,b.bottom-inset);
+   // The plate in the card (the ImageView fills the card from its origin), then back through the image matrix to frame pixels.
+   area.set(plate);area.offset(overlay.getLeft(),overlay.getTop());
+   if(!fb.img.getImageMatrix().invert(inverse))return;
+   inverse.mapRect(src,area);
+   float frameScale=area.width()/Math.max(1e-3f,src.width());
+   int sigma=Math.max(1,Math.round(sigmaDp*density/Math.max(1e-3f,frameScale)/OxbloodField.BLUR_SCALE));
+   android.graphics.Bitmap bl=fb.blurred(sigma);if(bl==null)return;
+   float q=bl.getWidth()/(float)fb.frame.getWidth();
+   android.graphics.Rect from=new android.graphics.Rect(Math.round(src.left*q),Math.round(src.top*q),Math.round(src.right*q),Math.round(src.bottom*q));
+   int save=c.save();clip.reset();clip.addRoundRect(plate,radius,radius,android.graphics.Path.Direction.CW);c.clipPath(clip);
+   c.drawBitmap(bl,from,plate,paint);c.restoreToCount(save);
+  }
+  @Override public void setAlpha(int alpha){}
+  @Override public void setColorFilter(android.graphics.ColorFilter f){}
+  @Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
  }
  /** The frosted Stop plate: 34dp, radius 8, rgba(52,34,28,.62), ring 1.25dp rgba(236,222,214,.78); the red square
   * (#f9304a, about 12.8dp, radius 1.2), grey (#8a7a76) when unavailable. */

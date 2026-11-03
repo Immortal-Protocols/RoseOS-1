@@ -1,22 +1,27 @@
 package dev.pixel.voice;
 
-/** How the Home pages fit the real inventory into the inset viewport (OS-PAGING-158-M001), after the committed
- * Oxblood Rose HiFi (#410; main f6503a0, oxblood.css:354-363; qa/oxblood/oxblood-contract.json "homeGrid"). App pages:
- * four 72dp cells 6dp apart (a 59dp tile, 5dp gap and the name), rows 14dp apart. Home: four 60dp unlabelled cells
- * 17.5dp apart. Both grids sit in one band above the dots and the edge: the band's bottom is the pages' inset bottom,
- * and a grid's top is max(170dp, its height) above it, so the reference's two rows start at the same line on every
- * page and a taller grid (large text) grows upward rather than into the dots. At most two rows a page, as in the
- * reference. Columns follow the available width only, never a label. Every launchable app gets a cell and the page
- * count follows from the inventory; an empty inventory is still one page. Sizes are in one unit (px or dp) chosen by
- * the caller. Pure logic, no Android types. */
+/** How the Home pages fit the real inventory into the inset viewport (OS-PAGING-158-M001), in the Oxblood materials
+ * of the committed Rose HiFi (#410; main f6503a0, oxblood.css:354-363; qa/oxblood/oxblood-contract.json "homeGrid").
+ * Density follows the owner's phone-test correction (#410 comment 6592423187), which supersedes the reference's two
+ * bottom rows: every page is filled with as many rows as the measured safe area holds, from its top down to the
+ * reserve above the dots and the edge, and only then does the inventory spill onto the next page; the last page is
+ * naturally partial. App pages: 72dp cells 6dp apart (a 59dp tile, 5dp gap and the name), rows at least 14dp apart
+ * with any spare height shared between them (up to MAX_EXTRA_GAP_DP each) so a full page reaches its bottom. Home:
+ * the same rule for its 60dp unlabelled cells below the date. Columns follow the available width only, never a label;
+ * cells keep their measured height, so large text means fewer rows, never overlap. Every launchable app gets one cell
+ * and the page count follows from the inventory; an empty inventory is still one page. Sizes are in one unit (px or
+ * dp) chosen by the caller. Pure logic, no Android types. */
 final class HomeAppLayout {
  private HomeAppLayout() {}
 
  static final int CELL_DP = 72, HOME_CELL_DP = 60, TILE_DP = 59, ICON_DP = 40, GLYPH_DP = 46, LABEL_GAP_DP = 5,
-   COL_GAP_DP = 6, ROW_GAP_DP = 14, BAND_DP = 170, MAX_ROWS = 2, MARGIN_DP = 24, TOP_DP = 24, LABEL_LINES = 2;
+   COL_GAP_DP = 6, ROW_GAP_DP = 14, MAX_EXTRA_GAP_DP = 32, MARGIN_DP = 24, TOP_DP = 24, LABEL_LINES = 2;
  static final float HOME_COL_GAP_DP = 17.5f;
- /** From the edge's top up to the band's bottom (reference: the edge at 740, the app grid's bottom at 645). */
- static final int BAND_BOTTOM_DP = 95;
+ /** From the edge's top up to the bottom of the pages' area: clear of the dots' 44dp row (centred 30dp above the edge,
+  * so its top is 52dp up) by 12dp. The reference's 95dp band left a blank strip under two rows; filled pages use it. */
+ static final int BAND_BOTTOM_DP = 64;
+ /** Home's grid starts this far below the date's line. */
+ static final int BELOW_DATE_DP = 24;
  /** Home's edge (OxbloodEdge.HEIGHT_DP; kept here so this class stays free of Android types). */
  static final int EDGE_DP = 92;
  /** The dots' row (44dp tall) is centred this far above the edge's top (reference: dots at 710, edge at 740). */
@@ -32,9 +37,14 @@ final class HomeAppLayout {
   return widthDp < 720 ? 5 : 6;
  }
 
- /** Columns of Home's unlabelled grid: four, as in the reference, three only where four 60dp cells cannot fit. */
+ /** Columns of Home's unlabelled grid: four on a phone, as in the reference, three only where four 60dp cells cannot
+  * fit; on a wide (landscape or unfolded) screen every 60dp column that fits, up to MAX_HOME_COLUMNS, so a short
+  * landscape Home still holds its curated apps and the System folder (#410 owner density correction). */
+ static final int MAX_HOME_COLUMNS = 8;
  static int homeColumns(float widthDp) {
-  return widthDp < 4 * HOME_CELL_DP + 3 * HOME_COL_GAP_DP ? 3 : 4;
+  if (widthDp < 4 * HOME_CELL_DP + 3 * HOME_COL_GAP_DP) return 3;
+  if (widthDp < 600 - 2 * MARGIN_DP) return 4;
+  return Math.max(4, Math.min(MAX_HOME_COLUMNS, (int) Math.floor((widthDp + HOME_COL_GAP_DP) / (HOME_CELL_DP + HOME_COL_GAP_DP))));
  }
 
  /** An app-page cell: the tile, the gap and two label lines of the measured line height. */
@@ -42,15 +52,25 @@ final class HomeAppLayout {
   return (TILE_DP + LABEL_GAP_DP) * density + LABEL_LINES * labelLineHeight;
  }
 
- /** Rows of cellHeight that fit height with the row gap between them: at least one, at most MAX_ROWS. */
+ /** Rows of cellHeight that fit height with at least the row gap between them: at least one, never capped. */
  static int rows(float height, float cellHeight, float density) {
   if (cellHeight <= 0 || height <= 0) return 1;
   int fit = (int) Math.floor((height + ROW_GAP_DP * density) / (cellHeight + ROW_GAP_DP * density));
-  return Math.max(1, Math.min(MAX_ROWS, fit));
+  return Math.max(1, fit);
  }
 
- /** The gap between rows (fixed, as in the reference). */
+ /** The minimum gap between rows. */
  static float rowGap(float density) { return ROW_GAP_DP * density; }
+
+ /** Distance from one row's top to the next on a page of height planned for rows rows: the cell, the gap and an equal
+  * share of the spare height (at most MAX_EXTRA_GAP_DP), so a full page reaches down to its bottom. Every page of a
+  * grid uses the same pitch, so a partial last page keeps the same rows from the top. */
+ static float rowPitch(float height, int rows, float cellHeight, float density) {
+  float base = cellHeight + rowGap(density);
+  if (rows <= 1) return base;
+  float spare = height - gridHeight(rows, cellHeight, density);
+  return base + Math.max(0, Math.min(MAX_EXTRA_GAP_DP * density, spare / (rows - 1)));
+ }
 
  static float gridHeight(int usedRows, float cellHeight, float density) {
   return usedRows * cellHeight + Math.max(0, usedRows - 1) * rowGap(density);
@@ -77,9 +97,14 @@ final class HomeAppLayout {
  }
 
  /** The estimate used before any page has been measured: the configured screen less the status bar, the page top,
-  * the edge and the space between the edge and the band (dp). The first measured page corrects it. */
+  * the edge and the reserve above it (dp). The first measured page corrects it. */
  static float estimatedHeightDp(float screenHeightDp) {
   return screenHeightDp - TOP_DP - 24 - EDGE_DP - BAND_BOTTOM_DP;
+ }
+
+ /** The same estimate for Home's grid, which starts below the date's line (dateLineDp tall) instead of the page top. */
+ static float estimatedHomeHeightDp(float screenHeightDp, float dateLineDp) {
+  return screenHeightDp - Math.max(DATE_TOP_DP, 24 + 21) - dateLineDp - BELOW_DATE_DP - EDGE_DP - BAND_BOTTOM_DP;
  }
 
  /** Whether a page measured at this size holds a different number of apps than the plan it was built with. */
@@ -87,10 +112,26 @@ final class HomeAppLayout {
   return plannedColumns != columns(width / density) || plannedPerPage != perPage(width, height, cellHeight, density);
  }
 
- /** Where a grid of gridHeight starts inside a page area of height: max(BAND, gridHeight) above its bottom, never
-  * above the area's top. */
- static float gridTop(float height, float gridHeight, float density) {
-  return Math.max(0, height - Math.max(BAND_DP * density, gridHeight));
+ /** Cells on Home for an inset area below the date and its measured (unlabelled) cell height. */
+ static int homeCapacity(float width, float height, float cellHeight, float density) {
+  return homeColumns(width / density) * rows(height, cellHeight, density);
+ }
+
+ /** How Home's capacity is shared: {curated apps kept, inventory apps that fill the rest}. The System folder, when
+  * there is one, always keeps the last cell; the curated apps (the owner's defaults and the suite) come first and are
+  * cut only when Home cannot hold them all; the remaining cells take the start of the normal app inventory, which the
+  * app pages then continue (no app is placed twice to fill space). */
+ static int[] homeShare(int curated, boolean folder, int inventory, int capacity) {
+  int cells = Math.max(1, capacity) - (folder ? 1 : 0);
+  int kept = Math.max(0, Math.min(curated, cells));
+  int fill = Math.max(0, Math.min(inventory, cells - kept));
+  return new int[]{kept, fill};
+ }
+
+ /** Where Home's grid starts: below the date, whose line starts at dateTop (already clear of the status bar) and is
+  * dateLine tall. */
+ static float homeTop(float dateTop, float dateLine, float density) {
+  return dateTop + dateLine + BELOW_DATE_DP * density;
  }
 
  /** Where a row of columns cells of cellWidth with gap starts inside width: centred. */

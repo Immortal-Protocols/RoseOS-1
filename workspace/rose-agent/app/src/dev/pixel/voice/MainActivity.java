@@ -10,7 +10,7 @@ public class MainActivity extends Activity {
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
  boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
- LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,appAreaWidth=-1,appAreaHeight=-1;float appCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
+ LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,homeCapacity,appAreaWidth=-1,appAreaHeight=-1,homeAreaWidth=-1,homeAreaHeight=-1;float appCellHeight=-1,homeCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;boolean voiceControls;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
@@ -375,9 +375,23 @@ public class MainActivity extends Activity {
   ArrayList<ResolveInfo> launchable=new ArrayList<>();for(ArrayList<ResolveInfo> group:Arrays.asList(ourApps,storeApps,otherApps))launchable.addAll(group);
   ArrayList<ResolveInfo> entries=new ArrayList<>(launchable);
   folderApps=systemApps;launchable.addAll(systemApps); // Home's default apps may be system apps
-  planAppPages();int appPages=HomeAppLayout.pages(entries.size(),appPerPage);
-  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(entries.size(),appPerPage,i);pages.add(new ArrayList<>(entries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
-  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;
+  planAppPages();
+  // Home fills first (#410 owner density correction): its curated apps, then the start of the inventory, then the
+  // System folder as its last cell (HomeAppLayout.homeShare). The app pages continue the inventory after it: an app
+  // placed on Home is left out of them, never repeated to fill space.
+  List<ResolveInfo> curated=RoseHomeView.homeApps(getPackageManager(),getPackageName(),launchable,false);
+  HashSet<String> curatedKeys=new HashSet<>();for(ResolveInfo app:curated)curatedKeys.add(componentKey(app));
+  ArrayList<ResolveInfo> rest=new ArrayList<>();for(ResolveInfo app:entries)if(!curatedKeys.contains(componentKey(app)))rest.add(app);
+  int[] share=HomeAppLayout.homeShare(curated.size(),!folderApps.isEmpty(),rest.size(),homeCapacity);
+  ArrayList<ResolveInfo> homeEntries=new ArrayList<>(curated.subList(0,share[0]));homeEntries.addAll(rest.subList(0,share[1]));
+  HashSet<String> onHome=new HashSet<>();for(ResolveInfo app:homeEntries)onHome.add(componentKey(app));
+  if(!folderApps.isEmpty())homeEntries.add(null);
+  ArrayList<ResolveInfo> appEntries=new ArrayList<>();for(ResolveInfo app:entries)if(!onHome.contains(componentKey(app)))appEntries.add(app);
+  // App pages only for what Home could not hold: when Home holds every app there is no empty overflow page (with no
+  // apps at all, one page still says so).
+  int appPages=appEntries.isEmpty()&&!entries.isEmpty()?0:HomeAppLayout.pages(appEntries.size(),appPerPage);
+  for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(appEntries.size(),appPerPage,i);pages.add(new ArrayList<>(appEntries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
+  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=count>HomePages.FIRST_APPS?HomePages.FIRST_APPS:HomePages.HOME;
   selected=HomePages.restore(selected,count);
   // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));
@@ -388,9 +402,9 @@ public class MainActivity extends Activity {
   if(homePageDots!=null&&homePageDots.getParent() instanceof ViewGroup)((ViewGroup)homePageDots.getParent()).removeView(homePageDots);
   // The one row of page dots is fixed in the HomeFrame.
   homePageDots=null;LinearLayout fixedDots=makePageDots(titles);
-  launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.homeApps(getPackageManager(),getPackageName(),launchable,!folderApps.isEmpty()),homeColumns));
+  launcherPager.addView(roseHome=new RoseHomeView(this,homeEntries,homeColumns,this::homeMeasured));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
-  for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),entries.isEmpty()));
+  for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
   if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
   setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
@@ -417,8 +431,23 @@ public class MainActivity extends Activity {
   float width=appAreaWidth>0?appAreaWidth:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
   float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp)*density;
   float cell=appCellHeight>0?appCellHeight:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
-  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);homeColumns=HomeAppLayout.homeColumns(width/density);
+  appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);
+  // Home's grid has the same side margins but starts below the date and has unlabelled cells: its own measurement.
+  float homeWidth=homeAreaWidth>0?homeAreaWidth:width;
+  float homeHeight=homeAreaHeight>0?homeAreaHeight:HomeAppLayout.estimatedHomeHeightDp(c.screenHeightDp,HomeAppLayout.DATE_SP*c.fontScale*1.17f)*density;
+  float homeCell=homeCellHeight>0?homeCellHeight:HomeAppLayout.TILE_DP*density;
+  homeColumns=HomeAppLayout.homeColumns(homeWidth/density);homeCapacity=HomeAppLayout.homeCapacity(homeWidth,homeHeight,homeCell,density);
  }
+ /** Home measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
+ void homeMeasured(int width,int height,float cell){
+  float density=getResources().getDisplayMetrics().density;
+  if(homeColumns==HomeAppLayout.homeColumns(width/density)&&homeCapacity==HomeAppLayout.homeCapacity(width,height,cell,density))return;
+  if(width==homeAreaWidth&&height==homeAreaHeight&&cell==homeCellHeight)return;
+  homeAreaWidth=width;homeAreaHeight=height;homeCellHeight=cell;
+  handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
+ }
+ /** The identity of a launchable entry (package and activity), for placing each app exactly once. */
+ static String componentKey(ResolveInfo app){return app.activityInfo.packageName+"/"+app.activityInfo.name;}
  /** A page measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
  void appPageMeasured(int width,int height,float cell){
   if(!HomeAppLayout.replan(appColumns,appPerPage,width,height,cell,getResources().getDisplayMetrics().density))return;

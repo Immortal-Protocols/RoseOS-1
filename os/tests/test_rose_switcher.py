@@ -233,7 +233,8 @@ class RoseSwitcherTest(unittest.TestCase):
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
             '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
             str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java'), str(OVERLAY/'RoseAgentFan.java'),
-            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java')], capture_output=True, text=True)
+            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java'), str(OVERLAY/'RoseEdgeGesture.java')],
+            capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_view_uses_only_existing_authority_and_opens_only_the_current_work(self):
@@ -1315,6 +1316,38 @@ class OxbloodHumanCardTest(unittest.TestCase):
         self.assertIn('android:clipToOutline="true"', chip)
         self.assertIn('<com.android.quickstep.views.IconAppChipView', chip)
         self.assertNotIn('setTextColor', source, 'nor its name\'s colour, so the layout attribute holds')
+
+class RoseEdgeGestureTest(unittest.TestCase):
+    """#410: the bottom-edge swipe-up's release rules and live preview geometry (RoseEdgeGesture), against values
+    copied from the frozen reference's app.js/oxblood.css (as RoseFanTest does) and Home's homeEdge keys. Pure source and JVM checks: not wired into Launcher3's
+    swipe handler yet, so no navigation changes; touch, timing and the real relayout need the builder and a device."""
+    EDGE = (OVERLAY/'RoseEdgeGesture.java').read_text()
+
+    def test_the_release_rules_and_preview_match_the_reference_values(self):
+        out = Path(tempfile.mkdtemp(prefix='rose-edge-'))
+        self.addCleanup(shutil.rmtree, out, True)
+        subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
+            '-Xlint:-options', '-d', str(out), str(OVERLAY/'RoseEdgeGesture.java'),
+            str(ROOT/'os/tests/RoseEdgeGestureTest.java')], check=True)
+        result = subprocess.run(['java', '-cp', str(out), 'com.android.quickstep.fallback.RoseEdgeGestureTest'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_the_edge_geometry_is_homes_home_edge(self):
+        import json
+        edge = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())['homeEdge']
+        self.assertIn(f'EDGE_HEIGHT_DP = {edge["height"]}, EDGE_FLAT_TOP_DP = {edge["flatTop"]}', self.EDGE)
+        self.assertIn(f'CORNER_DP = {edge["concaveFilletRadius"]}', self.EDGE)
+
+    def test_nothing_calls_it_yet_and_it_has_no_android_or_platform_reach(self):
+        quickstep = ROOT/'os/overlays/packages/apps/Launcher3'
+        callers = [p for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
+            and 'RoseEdgeGesture' in p.read_text()]
+        self.assertEqual(callers, [], 'wired only with OS Core\'s half, behind a builder compile')
+        self.assertNotIn('RoseEdgeGesture', PATCH.read_text())
+        self.assertNotIn('import ', self.EDGE, 'pure: no Android, IPC, permission or sensor types')
+        for reach in ('SensorPrivacy', 'AudioManager', 'Binder', 'Intent', 'Settings', 'System.', 'Thread'):
+            self.assertNotIn(reach, self.EDGE)
 
 if __name__ == '__main__':
     unittest.main()

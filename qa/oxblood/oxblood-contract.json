@@ -52,7 +52,7 @@
   "homeGrid": {
     "homePage": { "columns": 4, "cell": [60, 59], "columnGap": 17.5, "rowGap": 14, "labels": "hidden (accessible name only)" },
     "appPages": { "columns": 4, "cell": [72, 78], "columnGap": 6, "rowGap": 14, "tile": 59, "icon": 40, "labelGap": 5 },
-    "verticalBand": "grid top = band bottom - max(170, grid height); band bottom is 95dp above the edge top (reference grid top 475 of 832)",
+    "verticalBand": "superseded by the owner's density correction (#410 comment 6592423187): every page fills its safe area with rows, top-anchored (app pages at the page top, Home 24dp below the date's line), down to 64dp above the edge top (clear of the dots); rows at least rowGap apart, spare height shared up to 32dp per gap; no row cap; Home is four across on phones and up to eight 60dp columns on wide screens; the app pages continue the inventory after Home with no app repeated",
     "tile": { "size": 59, "radius": 14, "fill": "#0EFFE8DE", "innerRing": { "width": 1, "color": "#12FFE8DE" }, "innerTopEdge": { "width": 1, "color": "#1AFFE8DE" }, "backdropBlur": "reference 6-10; not implemented natively", "pressed": { "scale": 0.94, "durationMs": 160 } },
     "systemGlyph": { "grid": 48, "box": 46, "stroke": 2.6, "caps": "round", "joins": "round", "color": "#FFECDCCB" },
     "storeIcon": { "box": 40, "artwork": "the app's own icon, unrestyled", "dropShadow": { "dy": 2, "blur": 3, "color": "#73000000" } },

@@ -303,6 +303,121 @@ public class WorkspaceOverviewRenderTest {
         assertNotNull(tagged(p, "stop"));
     }
 
+    // ---------- #410 gap closure: backdrop blur under the frosted overlays (identity chip, state chip, Stop plate) ----------
+    /** High-contrast vertical stripes, so a blur is measurable. */
+    static Bitmap stripes(int w, int h) {
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); Canvas c = new Canvas(b);
+        android.graphics.Paint p = new android.graphics.Paint();
+        for (int x = 0; x < w; x += 8) { p.setColor((x / 8) % 2 == 0 ? 0xff101010 : 0xfff0f0f0); c.drawRect(x, 0, x + 8, h, p); }
+        return b;
+    }
+    @org.junit.After public void restoreMotionAndBlur() throws Exception { HomeOxbloodRenderTest.durationScale(1f); WorkspaceOverviewView.overlayBlur = true; }
+    static WorkspaceOverviewView.BlurUnder under(View overlay) {
+        return (WorkspaceOverviewView.BlurUnder) ((android.graphics.drawable.LayerDrawable) overlay.getBackground()).getDrawable(0);
+    }
+    static WorkspaceOverviewPanel livePanel(Bitmap frame) {
+        Host h = new Host(); h.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"), app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        p.previewAnswer(h.previews.get(0), ok("s-1", "rose-ws-1", CALC, frame)); layout(p);
+        return p;
+    }
+    /** Luminance variance over a rect (screen px) of a bitmap, skipping a centred hole (the overlay's own mark). */
+    static double variance(Bitmap b, int l, int t, int r, int bt, int hole) {
+        double sum = 0, sq = 0; int n = 0; int cx = (l + r) / 2, cy = (t + bt) / 2;
+        for (int y = t; y < bt; y++) for (int x = l; x < r; x++) {
+            if (Math.abs(x - cx) < hole && Math.abs(y - cy) < hole) continue;
+            int c = b.getPixel(x, y); double v = .3 * ((c >> 16) & 255) + .59 * ((c >> 8) & 255) + .11 * (c & 255);
+            sum += v; sq += v * v; n++;
+        }
+        return n == 0 ? 0 : sq / n - (sum / n) * (sum / n);
+    }
+
+    @Test public void backdropBlurUnderTheOverlaysOnly() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        HomeOxbloodRenderTest.durationScale(0f); // the running edge and sheen rest at their static frame, so draws compare
+        WorkspaceOverviewPanel p = livePanel(stripes(320, 693));
+        View card = tagged(p, "app:s1/calc"), chip = tagged(card, "identity-chip"), stop = tagged(card, "stop-unavailable");
+        assertNotNull(chip); assertNotNull(stop);
+        assertNotNull("the chip's backdrop samples the card's own frame", under(chip).blur);
+        assertTrue(under(chip).blur.live() && under(stop).blur == under(chip).blur);
+        WorkspaceOverviewView.overlayBlur = false;
+        Bitmap before = draw(p);
+        WorkspaceOverviewView.overlayBlur = true;
+        Bitmap after = draw(p);
+        RosePresenceRenderTest.save(before, "background-work-overlays-before-blur");
+        RosePresenceRenderTest.save(after, "background-work-overlays-blur");
+        int[] c0 = at(chip), s0 = at(stop);
+        int d = Math.round(p.getResources().getDisplayMetrics().density);
+        android.graphics.Rect chipRect = new android.graphics.Rect(c0[0], c0[1], c0[0] + chip.getWidth(), c0[1] + chip.getHeight());
+        int in = 5 * d;
+        android.graphics.Rect plate = new android.graphics.Rect(s0[0] + in, s0[1] + in, s0[0] + stop.getWidth() - in, s0[1] + stop.getHeight() - in);
+        double chipBefore = variance(before, chipRect.left + 2, chipRect.top + 2, chipRect.right - 2, chipRect.bottom - 2, 13 * d);
+        double chipAfter = variance(after, chipRect.left + 2, chipRect.top + 2, chipRect.right - 2, chipRect.bottom - 2, 13 * d);
+        int ring = 3 * d; // inside the plate's 1.25dp ring and its rounded corners
+        double plateBefore = variance(before, plate.left + ring, plate.top + ring, plate.right - ring, plate.bottom - ring, 8 * d);
+        double plateAfter = variance(after, plate.left + ring, plate.top + ring, plate.right - ring, plate.bottom - ring, 8 * d);
+        assertTrue("the stripes are blurred under the identity chip: " + chipBefore + " -> " + chipAfter, chipAfter < chipBefore / 3);
+        assertTrue("and under the Stop plate: " + plateBefore + " -> " + plateAfter, plateAfter < plateBefore / 3);
+        int changedOutside = 0;
+        for (int y = 0; y < after.getHeight(); y++) for (int x = 0; x < after.getWidth(); x++) {
+            if (chipRect.contains(x, y) || plate.contains(x, y)) continue;
+            if (before.getPixel(x, y) != after.getPixel(x, y)) changedOutside++;
+        }
+        assertEquals("nothing outside the overlays' plates changes", 0, changedOutside);
+        // The Stop's red square and ring still draw on top of the blur.
+        int cx = s0[0] + stop.getWidth() / 2, cy = s0[1] + stop.getHeight() / 2;
+        assertEquals("the Stop's square draws over the blur, unchanged", before.getPixel(cx, cy), after.getPixel(cx, cy));
+    }
+
+    @Test public void noPreviewCardIsUnchangedByTheBlur() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        HomeOxbloodRenderTest.durationScale(0f); // the running edge and sheen rest at their static frame, so draws compare
+        Host h = new Host(); h.report("r1", 2, app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        View chip = tagged(tagged(p, "app:s2/maps"), "identity-chip");
+        assertNull("no preview: no blur source", under(chip).blur);
+        WorkspaceOverviewView.overlayBlur = false; Bitmap off = draw(p);
+        WorkspaceOverviewView.overlayBlur = true; Bitmap on = draw(p);
+        int minX = 99999, minY = 99999, maxX = -1, maxY = -1, n = 0;
+        for (int y = 0; y < on.getHeight(); y++) for (int x = 0; x < on.getWidth(); x++) if (off.getPixel(x, y) != on.getPixel(x, y)) { n++; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+        int[] c0 = at(chip);
+        assertTrue("a card without a live frame is byte-identical (its flat body needs no blur): " + n + " px differ in [" + minX + "," + minY + "-" + maxX + "," + maxY + "], chip at " + c0[0] + "," + c0[1], off.sameAs(on));
+    }
+
+    @Test public void aNewFrameRebuildsTheBlurAndAMismatchFallsBack() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        HomeOxbloodRenderTest.durationScale(0f); // the running edge and sheen rest at their static frame, so draws compare
+        Host h = new Host(); h.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
+        WorkspaceOverviewPanel p = panel(h);
+        Bitmap first = stripes(320, 693);
+        p.previewAnswer(h.previews.get(0), ok("s-1", "rose-ws-1", CALC, first)); layout(p);
+        View chip = tagged(tagged(p, "app:s1/calc"), "identity-chip");
+        WorkspaceOverviewView.FrameBlur fb = under(chip).blur;
+        draw(p);
+        assertTrue("blurred copies built for the first frame", !fb.blurred.isEmpty());
+        // A newer verified frame for the same card: same FrameBlur, new source, old copies dropped, nothing recycled.
+        Bitmap second = synthetic(320, 693);
+        p.previewAnswer(nextRequest(p, h), ok("s-1", "rose-ws-1", CALC, second)); layout(p);
+        assertTrue("the blur follows the shown frame", under(tagged(tagged(p, "app:s1/calc"), "identity-chip")).blur.frame == second);
+        assertTrue("the frames themselves are never recycled", !first.isRecycled() && !second.isRecycled());
+        // A mismatch (the ImageView showing anything but the blur's source): no blur, the plain frosted fill.
+        WorkspaceOverviewView.FrameBlur now = under(tagged(tagged(p, "app:s1/calc"), "identity-chip")).blur;
+        now.img.setImageBitmap(stripes(320, 693));
+        assertTrue("not live", !now.live());
+        WorkspaceOverviewView.overlayBlur = true; Bitmap mismatch = draw(p);
+        WorkspaceOverviewView.overlayBlur = false; Bitmap plain = draw(p);
+        WorkspaceOverviewView.overlayBlur = true;
+        assertTrue("a mismatched frame draws exactly the fallback", mismatch.sameAs(plain));
+    }
+    /** The next preview request the panel makes for its live card (the gate asks again after its interval). */
+    static WorkspaceOverviewPreview.Request nextRequest(WorkspaceOverviewPanel p, Host h) {
+        int before = h.previews.size();
+        // The gate paces by the wall clock (WorkspaceOverviewPreview.INTERVAL_MS), so wait it out for real.
+        for (int i = 0; i < 30 && h.previews.size() == before; i++) { try { Thread.sleep(100); } catch (InterruptedException e) { throw new AssertionError(e); } p.refresh(); }
+        assertTrue("the gate asked again", h.previews.size() > before);
+        return h.previews.get(h.previews.size() - 1);
+    }
+
     @Test public void lingeringAppsStayWithoutControls() throws Exception {
         WorkspaceOverviewPanel.STOPS.clear();
         Host h = new Host();

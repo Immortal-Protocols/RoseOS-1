@@ -354,14 +354,37 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
       add their escaped text (at most 1024 bytes), whether it is absolute, and whether it lexically
       leaves the tree. Nothing below that level is listed.
     - **HEAD:** the only content read, and only as a regular unlinked file: `O_NOFOLLOW|O_NONBLOCK`,
-      re-checked as regular after opening, at most 64 bytes. It is reported only as `detached` with a
-      40-hex revision or as a `refs/` name; anything else, or more than 64 bytes, is `unrecognised`
-      with its length and no content.
+      re-checked as regular after opening. **At most 65 bytes are read and at most 64 accepted**: the
+      65th byte only detects an oversize HEAD and is never reported. It is reported only as `detached`
+      with a 40-hex revision or as a `refs/` name; anything else, or more than 64 bytes, is
+      `unrecognised` with its length and no content.
     - **Never touched:** objects, refs contents, config, the index or hooks. No git process runs, and
       nothing is written. Names and link texts are raw bytes with every non-printable byte and `\`
       escaped.
     - It is for a separately approved observation of the production layout. Original Infra owns that
       execution; nothing here copies or selects git metadata.
+- **`inspect-git`** (git-only; for Release's selector wiring):
+  `python3 scripts/blazer-build-only.py inspect-git --host H`
+  - It takes no other argument: no lock, receipt directory, path or bound flag. Exit 0 means
+    inspected (an absent target included); 2 means invalid input. One JSON document goes to stdout.
+  - **Targets are fixed** in `preparation.gitInspection.targets` and validated on load and at call
+    time:
+    - `production`: `/home/pixelbuild/grapheneos-2026100600/vendor/adevtool/.git` (the production root
+      plus `vendor.adevtoolGit.metadataPath`);
+    - `candidate`: `/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git`
+      (under `/home/pixelbuild`, isolated from production; a fixed path, not a binding, not known to
+      exist).
+  - **Output** `roseos.blazer-git-inspection.v1`:
+    - constants `metadataOnly: true`, `processesStarted: 0`, `network: false`, `writes: false`,
+      `gitProcess: false`, `enablesPreparation: false`;
+    - `bounds` = `{scanEntries 256, listedEntries 64, linkTextBytes 1024, headAcceptedBytes 64,
+      headReadBytes 65, maxSeconds 60}`;
+    - `targets.production` and `targets.candidate`, each `git_facts` (as above) plus `absolutePath`;
+    - `truncated` and `elapsedSeconds`.
+  - **Touches only** each target's own metadata, one level inside it, its HEAD, and the `lstat` of
+    its ancestors (to refuse a link component). There is no tree, size, collision, Node, download or
+    candidate-path scan, no write, no git process and no gitfile content. The other modes are
+    unchanged.
   - `node.runner` is `node` as the runner's own `PATH` resolves it, and `node.candidate` is
     `--candidate-node`: path and realpath `lstat` identity, name and executable bit. Neither is ever
     executed.
