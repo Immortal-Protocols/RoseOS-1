@@ -55,10 +55,13 @@ group (SIGTERM, then SIGKILL after killGraceSeconds); live members left after a 
 Writes between samples can overshoot, and descendants that start their own session are not reached: an enforced quota
 and full containment need host-side cgroup/quota configuration that this tool does not have.
 
+  blazer-build-only.py inspect-git --host H
+            git-only: one level of each fixed preparation.gitInspection target (production and candidate
+            vendor/adevtool/.git) and at most 65 bytes of its HEAD (64 accepted), nothing else; no other argument
   blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
             metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
             pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes, one level of
-            vendor/adevtool/.git with at most 64 bytes of its HEAD (git_facts), and the node file identity and PATH
+            vendor/adevtool/.git with at most 65 bytes of its HEAD read, 64 accepted (git_facts), and the node file identity and PATH
             resolution; starts no process, opens no connection and writes nothing
 Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. Source tests use synthetic trees, a fake
 fetcher and a fake runner only.
@@ -222,6 +225,7 @@ def preparation_problems(recipe, root, contract):
             or git.get('skipDepBuildEnv') != {'ADEVTOOL_SKIP_DEP_BUILD': '1'} or not positive(git.get('timeoutSeconds'))):
         problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
                         'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
+    problems += git_inspection_problems(recipe, root)
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -957,7 +961,8 @@ def filesystem(path, statvfs):
     return {'queried': str(probe), 'usable': True, 'availableBytes': fs.f_bavail * fs.f_frsize,
             'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.lstat(probe).st_dev}
 
-GIT_INSPECT = {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024, 'headBytes': 64}
+# HEAD: at most headReadBytes are read so that more than headAcceptedBytes is detected; the extra byte is never reported.
+GIT_INSPECT = {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024, 'headAcceptedBytes': 64, 'headReadBytes': 65}
 HEAD_DETACHED = re.compile(rb'([0-9a-f]{40})\n')
 HEAD_REF = re.compile(rb'ref: (refs/[A-Za-z0-9._/-]{1,200})\n')
 
@@ -973,11 +978,11 @@ def git_facts(src, rel, budget, clock):
     never followed (a link reports its text only). A regular file (a gitfile): lstat only, its content is not read. A
     real directory: at most GIT_INSPECT['scanEntries'] entries scanned and the first listedEntries (sorted) reported
     with type, mode and size, links with their escaped text and whether it lexically leaves the tree; HEAD alone is
-    read, only as a regular unlinked file, O_NOFOLLOW, at most headBytes, and reported only as a detached 40-hex
-    revision or a refs/ name. Objects, refs contents, config, the index and hooks are never opened; no git process runs."""
+    read, only as a regular unlinked file, O_NOFOLLOW|O_NONBLOCK, at most headReadBytes (65) so that more than
+    headAcceptedBytes (64) is detected, and reported only as a detached 40-hex revision or a refs/ name. Objects, refs contents, config, the index and hooks are never opened; no git process runs."""
     path = src/rel
     facts = {'path': rel, 'meta': meta(path), 'symlinkComponent': str(symlink_in(path.parent) or '') or None,
-             'contentRead': 'HEAD only (at most 64 bytes)', 'gitProcess': False}
+             'contentRead': 'HEAD only (at most 65 bytes read, 64 accepted)', 'gitProcess': False}
     if facts['symlinkComponent'] or not facts['meta'].get('exists'):
         return facts
     kind = facts['meta']['type']
@@ -1023,15 +1028,15 @@ def git_facts(src, rel, budget, clock):
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     facts['head']['error'] = 'not a regular file when opened'
                     return facts
-                data = os.read(fd, GIT_INSPECT['headBytes'] + 1)
+                data = os.read(fd, GIT_INSPECT['headReadBytes'])
             finally:
                 os.close(fd)
         except OSError as error:
             facts['head']['error'] = type(error).__name__
             return facts
         detached, ref = HEAD_DETACHED.fullmatch(data), HEAD_REF.fullmatch(data)
-        if len(data) > GIT_INSPECT['headBytes']:
-            facts['head'].update(form='unrecognised', bytes=f'more than {GIT_INSPECT["headBytes"]}')
+        if len(data) > GIT_INSPECT['headAcceptedBytes']:
+            facts['head'].update(form='unrecognised', bytes=f'more than {GIT_INSPECT["headAcceptedBytes"]}')
         elif detached:
             facts['head'].update(form='detached', revision=detached.group(1).decode())
         elif ref:
@@ -1041,6 +1046,56 @@ def git_facts(src, rel, budget, clock):
     elif head_meta.get('type') == 'link':
         facts['head']['linkText'], facts['head']['linkTextTruncated'] = sanitized(os.readlink(head), GIT_INSPECT['linkTextBytes'])
     return facts
+
+GIT_INSPECTION = 'roseos.blazer-git-inspection.v1'
+GIT_INSPECT_MAX_SECONDS = 60
+
+def git_inspection_problems(recipe, root=ROOT):
+    """preparation.gitInspection: exactly the fixed production and candidate targets, each a source root plus
+    vendor.adevtoolGit.metadataPath, the candidate under the ancestor boundary and isolated from production."""
+    prep = recipe.get('preparation') or {}
+    spec, rel = prep.get('gitInspection') or {}, ((prep.get('vendor') or {}).get('adevtoolGit') or {}).get('metadataPath')
+    targets = spec.get('targets') or {}
+    try:
+        production = pointer(root, prep['productionSourceRootFrom'])
+        boundary = Path(prep['candidateLayout']['ancestorBoundary'])
+    except (KeyError, OSError, ValueError, TypeError):
+        return ['preparation.gitInspection needs the production source root and the ancestor boundary']
+    if set(targets) != {'production', 'candidate'} or spec.get('maxSeconds') != GIT_INSPECT_MAX_SECONDS or not rel:
+        return [f'preparation.gitInspection must name exactly production and candidate targets and maxSeconds '
+                f'{GIT_INSPECT_MAX_SECONDS}']
+    problems = []
+    if targets['production'] != f'{production}/{rel}':
+        problems.append(f'preparation.gitInspection production target must be {production}/{rel}')
+    candidate = str(targets['candidate'])
+    cand_root = candidate[:-len('/' + rel)] if candidate.endswith('/' + rel) else None
+    if (cand_root is None or not candidate.startswith('/') or os.path.normpath(candidate) != candidate
+            or boundary not in Path(candidate).parents or isolation_problem(Path(cand_root), Path(production))):
+        problems.append(f'preparation.gitInspection candidate target must be a normalized source root under {boundary}, '
+                        f'isolated from the production root, plus {rel}')
+    return problems
+
+def inspect_git(recipe, host, root=ROOT, clock=time.monotonic):
+    """The git-only inspection: git_facts of exactly the two fixed targets and nothing else (no tree, size, collision,
+    Node, download or candidate-path scan). Starts no process, opens no connection, writes nothing."""
+    if not HOST_LABEL.fullmatch(str(host or '')):
+        raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
+    problems = git_inspection_problems(recipe, root)
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec, rel = recipe['preparation']['gitInspection'], recipe['preparation']['vendor']['adevtoolGit']['metadataPath']
+    started = clock()
+    budget = {'entries': 2 * GIT_INSPECT['scanEntries'], 'deadline': started + spec['maxSeconds']}
+    targets = {}
+    for name in ('production', 'candidate'):
+        path = spec['targets'][name]
+        facts = git_facts(Path(path[:-len('/' + rel)]), rel, budget, clock)
+        targets[name] = dict(facts, absolutePath=path)
+    return {'schema': GIT_INSPECTION, 'device': DEVICE, 'host': host, 'metadataOnly': True, 'processesStarted': 0,
+            'network': False, 'writes': False, 'gitProcess': False, 'enablesPreparation': False,
+            'bounds': {**GIT_INSPECT, 'maxSeconds': spec['maxSeconds']}, 'targets': targets,
+            'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
+            'elapsedSeconds': round(clock() - started, 3)}
 
 def tree_facts(recipe, src, budget, clock):
     """Project presence, the adevtool revision marker (128 bytes) and bounded collision sizes of one tree."""
@@ -1307,7 +1362,23 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
     return 0 if ok else 1
 
+def main_git(argv):
+    """`inspect-git --host H`: no lock, receipt directory, path or other argument."""
+    parser = argparse.ArgumentParser(prog='blazer-build-only.py inspect-git',
+                                     description='git-only metadata inspection of the two fixed targets')
+    parser.add_argument('--host', required=True)
+    a = parser.parse_args(argv)
+    try:
+        print(json.dumps(inspect_git(load(RECIPE), a.host), indent=2))
+        return 0
+    except InvalidInput as error:
+        print(f'invalid input: {error}', file=sys.stderr)
+        return 2
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ['inspect-git']:
+        return main_git(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('action', choices=('plan', 'preflight', 'run', 'inspect'))
     parser.add_argument('--stage', choices=STAGES)
