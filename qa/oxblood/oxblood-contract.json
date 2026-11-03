@@ -63,7 +63,7 @@
   "rose": {
     "header": { "top": 49, "left": 30, "title": { "size": 23, "weight": 400, "color": "#FFFFFFFF", "pearlGap": 13 } },
     "workButton": { "hit": [44, 44], "square": 38, "radius": 10, "idleRing": { "width": 1.5, "color": "#9EC8B6AE" }, "glyph": "2x2 panes of 8dp, gap 4, radius 2, 1.5dp white outline",
-      "working": { "when": "at least one authoritatively running Rose session", "ring": { "width": 1.5, "color": "#B3FF96A5" }, "glow": { "blur": 12, "color": "#59E6465F" }, "badge": { "size": 9, "color": "#FFFF5A68", "ring": { "width": 2, "color": "#FF2A0A10" }, "glow": { "blur": 8, "color": "#CCFF5A68" } } } },
+      "working": { "when": "at least one authoritatively running Rose session (controller session status exactly \"ready\"; never launching, starting, scheduled, blocked, consent_required, cleanup_failed, an unknown status)", "ring": { "width": 1.5, "color": "#B3FF96A5" }, "glow": { "blur": 12, "color": "#59E6465F" }, "badge": { "size": 9, "color": "#FFFF5A68", "ring": { "width": 2, "color": "#FF2A0A10" }, "glow": { "blur": 8, "color": "#CCFF5A68" } } } },
     "caption": { "top": 137, "left": 30, "size": 15, "color": "#FFFFFFFF", "text": { "connecting": "Connecting…", "speaking": "Rose speaking", "muted": "Microphone muted", "listening": "Listening", "disconnected": "Disconnected" } },
     "connectButton": { "hit": [154, 44], "bottom": 42, "plate": { "height": 36, "radius": 10, "fill": "#D1220C0E", "ring": { "width": 1, "color": "#C7F1E9E1" } }, "label": { "size": 15, "color": "#FFFFFFFF" },
       "live": { "label": "Disconnect", "glyph": "x 15dp, stroke 1.6/24, #FFD93A55" }, "idle": { "label": "Connect", "glyph": "12dp ruby dot (not muted-silver)" }, "pressed": { "translateY": 1, "durationMs": 320 } }
@@ -73,7 +73,7 @@
     "identityChip": { "inset": 9, "padding": 7, "radius": 10, "icon": 24, "fill": "#61281E1A", "ring": { "width": 1, "color": "#8CECDED6" } },
     "stateChip": { "inset": 8, "padding": [9, 4], "radius": 9, "fill": "#8C1E0E10", "ring": { "width": 1, "color": "#38FFECE0" }, "text": { "size": 11.5, "color": "#FFF2E6D9" }, "hiddenWhileRunning": true },
     "stop": { "hit": 44, "plate": 34, "radius": 8, "inset": 8, "fill": "#9E34221C", "ring": { "width": 1.25, "color": "#C7ECDED6" }, "glyph": { "size": 12.8, "radius": 1.2, "color": "#FFF9304A", "disabled": "#FF8A7A76" }, "pressedScale": 0.95 },
-    "runningEdge": { "when": "authoritatively running only", "width": 2, "base": [[0, "#FFF1CFC8"], [0.14, "#FFC44A5E"], [0.55, "#FF9A3848"], [1.0, "#FFC4574E"]],
+    "runningEdge": { "when": "authoritatively running only: the app's controller session status exactly \"ready\"; never launching, starting, scheduled, blocked, consent_required, cleanup_failed, an unknown status, an unbound or lingering app, or a Stop in flight", "width": 2, "base": [[0, "#FFF1CFC8"], [0.14, "#FFC44A5E"], [0.55, "#FF9A3848"], [1.0, "#FFC4574E"]],
       "travellingHighlight": { "sweepDeg": 60, "stops": [[300, "#00FFFFFF"], [330, "#E6FFECE4"], [348, "#FFFF6A80"], [360, "#00FFFFFF"]], "periodMs": 6000, "easing": "linear", "reducedMotion": "static at 40deg" },
       "glow": [{ "spread": 0.5, "color": "#59FF96A0" }, { "dy": -3, "blur": 12, "spread": -2, "color": "#59FF788C" }, { "blur": 18, "color": "#38C82846" }] },
     "dimmed": { "stopping": { "saturation": 0.6, "brightness": 0.7 }, "stoppedOrDone": { "saturation": 0.35, "brightness": 0.55 } }

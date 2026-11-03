@@ -24,8 +24,9 @@ import android.widget.TextView;
  * grid of 276dp cards, 18dp apart across and 20dp down. Each card is a dark 13dp-radius window: its body fills the card
  * (the app's verified live frame, or its name and the plain statement that live view isn't available), a frosted
  * identity chip with the app's real icon at the top left, a frosted state chip at the bottom left (hidden while it
- * runs), and the compact frosted Stop at the bottom right. A card whose app is running under Rose gets the lit ruby
- * edge (static under reduced motion); a Stop in flight dims it.
+ * runs), and the compact frosted Stop at the bottom right. A card whose app's session is authoritatively running
+ * (CurrentApps.App.authoritativelyRunning: reported exactly ready) gets the lit ruby edge (static under reduced motion);
+ * every other card keeps its truthful state chip; a Stop in flight dims it.
  *
  * #225/#156 (Nathan's phone acceptance): exactly the apps CURRENTLY running under Rose's control (CurrentApps), one
  * window card each, and nothing else: no task history or result cards. A card's body is that app's verified live
@@ -84,7 +85,7 @@ final class WorkspaceOverviewView extends LinearLayout {
   java.util.Map<String,android.graphics.Bitmap> images=new java.util.HashMap<>();
   for(java.util.Map.Entry<String,WorkspaceOverviewPreview.Frame> e:frames.entrySet())if(e.getValue()!=null&&e.getValue().image instanceof android.graphics.Bitmap)images.put(e.getKey(),(android.graphics.Bitmap)e.getValue().image);
   StringBuilder k=new StringBuilder().append(state).append('|').append(reason).append('|').append(note).append('|').append(new java.util.TreeSet<>(images.keySet())).append('|').append(new java.util.TreeMap<>(stops)).append('|').append(stopRoute);
-  for(CurrentApps.App a:apps)k.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state).append(':').append(a.sessionId).append(':').append(a.stop!=null);
+  for(CurrentApps.App a:apps)k.append('|').append(a.entryId).append(':').append(a.packageName).append(':').append(a.state).append(':').append(a.sessionId).append(':').append(a.stop!=null).append(':').append(a.sessionStatus);
   String key=k.toString();
   if(key.equals(lastKey)){
    for(java.util.Map.Entry<String,android.graphics.Bitmap> e:images.entrySet()){ImageView v=previewViews.get(e.getKey());
@@ -123,10 +124,10 @@ final class WorkspaceOverviewView extends LinearLayout {
   boolean inFlight=stopping==CurrentApps.SessionStop.Phase.SENDING||stopping==CurrentApps.SessionStop.Phase.STOPPING;
   Drawable icon=icons==null?null:icons.icon(a.packageName);
   String label=labels==null?"":labels.label(a.packageName);if(label==null||label.isEmpty())label=WorkspaceOverview.WORKSPACE;
-  boolean waiting=CurrentApps.STATE_WAITING.equals(a.state),starting=CurrentApps.STATE_STARTING.equals(a.state);
-  String st=inFlight?WorkspaceOverview.STOP_STOPPING:waiting?"Waiting":starting?"Starting":"Running";
-  // The lit edge only while the app is actually running under Rose (not waiting, starting or stopping).
-  boolean running=!inFlight&&!waiting&&!starting;
+  String st=inFlight?WorkspaceOverview.STOP_STOPPING:CurrentApps.cardState(a);
+  // The lit edge only while the app's session is authoritatively running (reported exactly ready) and no Stop is in
+  // flight: never for starting, scheduled, waiting, consent-pending, cleanup-failed, unbound or lingering apps.
+  boolean running=!inFlight&&a.authoritativelyRunning();
   FrameLayout card=card(icon,label,st,running,stopButton(a,label,inFlight));
   if(inFlight)dim(card,.6f,.7f);
   if(live)showPreview(card,label,a.entryId,frame);
