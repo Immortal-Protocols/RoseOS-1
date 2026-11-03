@@ -62,7 +62,8 @@
    "path": "vendor-skels/google_devices/frankel/frankel.mk",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
-   "kind": "gzip"
+   "kind": "gzip",
+   "compressedSha256": "6bca6fb882edd084655bbcf430771fcd9cbfc53f21552700b090ecc880792070"
   },
   {
    "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
@@ -102,7 +103,8 @@
    "path": "vendor-specs/google_devices/frankel.yml",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
-   "kind": "gzip"
+   "kind": "gzip",
+   "compressedSha256": "fcd3fc6092776810b2631755336c2584c025d51b9d4ebc2976661380a96f9659"
   },
   {
    "fixture": "vendor/adevtool/config/mk/google_devices/device/frankel/device.mk",

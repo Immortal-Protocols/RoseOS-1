@@ -147,22 +147,31 @@ laguna-kernels `275dad3c`. The one exception is `gitRequirement.genuineSource`, 
 - Each fixture's git blob, and each tree listing's root, is checked against its pin.
 - No value is a host fact, and none may be copied into a receipt, a bundle report or a binding.
 
-- **`environment`.** Lunch and `m` run with these unset: `GIT_*`, `BUILD_ID_frankel`,
-  `PLATFORM_SECURITY_PATCH_frankel`, `TARGET_KERNEL_DIR` and `USE_STOCK_KERNEL`. `GIT_CEILING_DIRECTORIES` is set to the
-  copy root. If inherited, these variables would change what lunch reads, and lunch would still pass.
+- **`environment`.** These are unset before envsetup and lunch: `GIT_*`, `BUILD_ID_frankel`, `TARGET_KERNEL_DIR` and
+  `USE_STOCK_KERNEL`. `GIT_CEILING_DIRECTORIES` is set to the copy root. If inherited, these variables would change what
+  lunch reads, and lunch would still pass.
+  - Lunch then exports `BUILD_ID_frankel` itself for the shell that runs `m`, which needs it.
+  - `PLATFORM_SECURITY_PATCH_frankel` is not listed, because the sourced script unsets it.
 - **`versionCheck`.** The generated `vendor/google_devices/frankel/frankel.mk` includes
   `adevtool-version-check.mk` at line 4. That file runs `$(shell git -C vendor/adevtool rev-parse HEAD)` in lunch and
   again in `m`. Its exact expected bytes for revision `17df3b79` are given.
   - The warning form (`--noVerify`) is refused.
-  - The error form is necessary, not sufficient. It is also written when no FileTreeSpec comparison ran:
-    `--updateSpec`, a working-tree change to `vendor-specs/` or `vendor-skels/`, and `collect-state`. So the
-    observables must still be compared.
+  - The error form is necessary, not sufficient. It is also written in three cases where the reference spec was not
+    checked:
+    - `--updateSpec`, where no comparison runs;
+    - `collect-state`'s temporary module, where no comparison runs;
+    - a working-tree change to `vendor-specs/`, where the comparison runs against the edited spec on disk.
+
+    So the observables must still be compared.
   - No variable skips the check.
 - **`gitRequirement`.** git accepts a HEAD plus empty `objects/` and `refs/` as a repository, so a passing lunch proves
   nothing. The acceptance checks are:
   - the HEAD, the commit, and the root tree `f0863541`;
-  - nothing redirects outside the copy: no gitfile, alternates, `commondir` or outside link, and the git directories
-    resolve inside the copy root.
+  - nothing redirects outside the copy:
+    - `.git` resolves to a directory inside the copy;
+    - no gitfile, alternates, `commondir` or outside link;
+    - no other filesystem or mount point, and no hard-linked file;
+    - the git directories resolve inside the copy root.
 
   No check can tell a fabricated store from a genuine one; only an approved byte-for-byte copy establishes it. A genuine
   copy is allowed only under a separate approval. Redirect, fabrication and relaxation (`--noVerify`, `--updateSpec`,
@@ -184,8 +193,9 @@ temporary directories only:
 - a copy without `.git` fails;
 - the warning form passes;
 - a parent repository answers when no ceiling is set;
-- a fabricated gitdir passes lunch but not the acceptance checks;
-- alternates, gitfile and outside-link redirects pass the basic checks but not the structural ones;
+- a fabricated, objectless gitdir passes lunch but not the acceptance checks;
+- alternates, gitfile, link-to-gitfile, outside-link and hard-link redirects pass the basic checks but not the
+  structural ones;
 - an inherited `BUILD_ID_frankel` hides a missing script.
 
 `--write` refetches the fixtures from GrapheneOS's public sources, without credentials.

@@ -40,7 +40,7 @@ def blob(data):
 
 class FrankelLunchInputsTest(unittest.TestCase):
     # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
-    PROPOSED_SHA256 = '80c3af821533ac5a3900b2b00c595503e84940cb0c5b4cec97ce19267d626043'
+    PROPOSED_SHA256 = 'fabb9292186800a8d41974491d2d320d790c7a22e9200941464b235b3c4218df'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
@@ -116,6 +116,7 @@ class FrankelLunchInputsTest(unittest.TestCase):
                 'bytes': len(text)})
         self.assertEqual(check['expected']['form'], 'error')
         self.assertIn('the error form is necessary, not sufficient', check['formRule'])
+        self.assertNotIn('vendor-skels', check['formRule'])
         self.assertIn('generatedVendor.observable must still be compared', check['formRule'])
         self.assertEqual([c['text'] for c in check['formSources']], [
             'await writeVersionCheckFile(config, vendorDirs, flags.noVerify)', 'if (flags.updateSpec) {',
@@ -180,6 +181,7 @@ class FrankelLunchInputsTest(unittest.TestCase):
         self.assertEqual(len(git['acceptance']), 4)
         self.assertIn('rootTree', git['acceptance'][1])
         self.assertIn('nothing redirects outside the copy', git['acceptance'][2])
+        self.assertIn('none is a mount point; no regular file in it has more than one hard link', git['acceptance'][2])
         self.assertIn('none of these checks can tell a fabricated store', git['acceptance'][3])
         self.assertEqual(git['genuineSource']['kind'], 'historical')
         self.assertIn('except gitRequirement.genuineSource', self.manifest()['provenance'])
@@ -225,8 +227,11 @@ class FrankelLunchInputsTest(unittest.TestCase):
             self.assertIn('stops lunch' if guards[name] else 'no guard', row['rule'])
         self.assertEqual(guards, {'vendor_kernel_boot.modules.load': True, 'vendor_dlkm.modules.load': True,
             'system_dlkm.modules.load': False})
-        self.assertEqual(manifest['environment']['unset'], ['GIT_*', 'BUILD_ID_frankel', 'PLATFORM_SECURITY_PATCH_frankel',
-            'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL'])
+        self.assertEqual(manifest['environment']['unset'], ['GIT_*', 'BUILD_ID_frankel', 'TARGET_KERNEL_DIR',
+            'USE_STOCK_KERNEL'])
+        self.assertIn('before envsetup and lunch', manifest['environment']['when'])
+        envsetup = (FIXTURES/'vendor/adevtool/vendor-skels/google_devices/frankel/cmds-for-envsetup.sh').read_text()
+        self.assertIn('unset PLATFORM_SECURITY_PATCH_frankel', envsetup, 'the sourced script clears it itself')
         self.assertEqual(kernel['switchedBy']['text'], 'USE_STOCK_KERNEL ?= false')
         module = load()
         tree = module.listing('vendor/adevtool')
@@ -245,17 +250,26 @@ class FrankelLunchInputsTest(unittest.TestCase):
         work, root = copy/'vendor/adevtool', copy.resolve()
         dot = work/'.git'
         inside = lambda p: Path(os.path.realpath(p)) == root or root in Path(os.path.realpath(p)).parents
-        if dot.is_file() and not dot.is_symlink():
-            return 'gitfile'
+        if not os.path.lexists(dot):
+            return 'no gitdir'
         if dot.is_symlink() and not inside(dot):
             return 'link outside the copy'
         gitdir = Path(os.path.realpath(dot))
+        if gitdir.is_file():
+            return 'gitfile'
+        if not gitdir.is_dir():
+            return 'no gitdir'
         for name in ('objects/info/alternates', 'commondir', 'gitdir'):
             if (gitdir/name).exists():
                 return name
+        device = os.stat(root).st_dev
         for path in [gitdir, *gitdir.rglob('*')]:
             if path.is_symlink() and not inside(path):
                 return 'link outside the copy'
+            if os.path.ismount(path) or os.stat(path).st_dev != device:
+                return 'another filesystem'
+            if path.is_file() and not path.is_symlink() and os.stat(path).st_nlink > 1:
+                return 'hard link'
         if (gitdir/'HEAD').read_text() != self.head + '\n':
             return 'HEAD'
         for argv in (['--absolute-git-dir'], ['--git-common-dir']):
@@ -293,6 +307,21 @@ class FrankelLunchInputsTest(unittest.TestCase):
             (linked/'vendor/adevtool').mkdir(parents=True)
             os.symlink(gitdir, linked/'vendor/adevtool/.git')
             redirects['link outside the copy'] = linked
+            to_gitfile = scratch/'to-gitfile'
+            (to_gitfile/'vendor/adevtool').mkdir(parents=True)
+            (to_gitfile/'gl').write_text(f'gitdir: {gitdir}\n')
+            os.symlink(to_gitfile/'gl', to_gitfile/'vendor/adevtool/.git')
+            redirects['gitfile'] = gitfile
+            hardlinked = scratch/'hardlinked'
+            (hardlinked/'vendor/adevtool').mkdir(parents=True)
+            shutil.copytree(gitdir, hardlinked/'vendor/adevtool/.git', symlinks=True, copy_function=os.link)
+            redirects['hard link'] = hardlinked
+            # A link to a gitfile inside the copy is a gitfile redirect too, and a copy without .git has no gitdir.
+            self.assertEqual(self.git(to_gitfile, '-C', 'vendor/adevtool', 'rev-parse', 'HEAD').stdout.strip(), self.head)
+            self.assertEqual(self.accepted(to_gitfile), 'gitfile')
+            missing = scratch/'missing'
+            (missing/'vendor/adevtool').mkdir(parents=True)
+            self.assertEqual(self.accepted(missing), 'no gitdir')
             for reason, copy in redirects.items():
                 # Every redirect passes the basic checks (acceptance items 1 and 2)...
                 self.assertEqual(self.git(copy, '-C', 'vendor/adevtool', 'rev-parse', 'HEAD').stdout.strip(), self.head)
@@ -328,14 +357,30 @@ class FrankelLunchInputsTest(unittest.TestCase):
             changed = copy.deepcopy(manifest)
             edit(changed)
             self.assertTrue(module.check(changed))
-        with tempfile.TemporaryDirectory() as scratch:
-            fixtures = Path(scratch)/'fixtures'
-            shutil.copytree(FIXTURES, fixtures)
-            target = fixtures/'vendor/adevtool/vendor-skels/google_devices/frankel/cmds-for-envsetup.sh'
-            target.write_text(target.read_text().replace('CP3A', 'CP9A'))
-            module.FIXTURES, module.TREES, module.PROVENANCE = fixtures, fixtures/'trees', fixtures/'PROVENANCE.json'
-            errors = module.check(manifest)
-        self.assertTrue(any('bytes differ from the pinned blob' in e for e in errors), errors)
+        def tampered(change):
+            with tempfile.TemporaryDirectory() as scratch:
+                fixtures = Path(scratch)/'fixtures'
+                shutil.copytree(FIXTURES, fixtures)
+                change(fixtures)
+                module = load()
+                module.FIXTURES, module.TREES, module.PROVENANCE = fixtures, fixtures/'trees', fixtures/'PROVENANCE.json'
+                return module.check(manifest)
+        skel = 'vendor/adevtool/vendor-skels/google_devices/frankel'
+
+        def edit(path, change):
+            return lambda root: (root/path).write_bytes(change((root/path).read_bytes()))
+        cases = {
+            'bytes differ from the pinned blob': edit(f'{skel}/cmds-for-envsetup.sh', lambda b: b.replace(b'CP3A', b'CP9A')),
+            'the compressed bytes are not the recorded ones': edit(f'{skel}/frankel.mk.gz', lambda b: b[:4] + b'\x01' + b[5:]),
+            'fixtures: ': edit('trees/vendor__adevtool.ls-tree.txt.gz', lambda b: b[:len(b) // 2]),
+            'holds files other than its listed fixtures': lambda root: (root/'vendor/adevtool/extra.mk').write_text('x'),
+            'canonical': edit('PROVENANCE.json', lambda b: b + b'\n'),
+        }
+        for expected, change in cases.items():
+            errors = tampered(change)
+            self.assertTrue(any(expected in e for e in errors), (expected, errors))
+        corrupt = edit('vendor/adevtool/vendor-specs/google_devices/frankel.yml.gz', lambda b: b[:40] + b'\xff' * 20 + b[60:])
+        self.assertTrue(tampered(corrupt), 'corrupt deflate data is reported, not raised')
 
 
 if __name__ == '__main__':

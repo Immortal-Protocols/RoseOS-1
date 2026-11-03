@@ -110,7 +110,8 @@
    "path": "vendor-skels/google_devices/frankel/frankel.mk",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
-   "kind": "gzip"
+   "kind": "gzip",
+   "compressedSha256": "6bca6fb882edd084655bbcf430771fcd9cbfc53f21552700b090ecc880792070"
   },
   {
    "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
@@ -150,7 +151,8 @@
    "path": "vendor-specs/google_devices/frankel.yml",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
-   "kind": "gzip"
+   "kind": "gzip",
+   "compressedSha256": "fcd3fc6092776810b2631755336c2584c025d51b9d4ebc2976661380a96f9659"
   },
   {
    "fixture": "vendor/adevtool/config/mk/google_devices/device/frankel/device.mk",
@@ -237,10 +239,10 @@
   "unset": [
    "GIT_*",
    "BUILD_ID_frankel",
-   "PLATFORM_SECURITY_PATCH_frankel",
    "TARGET_KERNEL_DIR",
    "USE_STOCK_KERNEL"
   ],
+  "when": "before envsetup and lunch; lunch then exports BUILD_ID_frankel from cmds-for-envsetup.sh into the shell that runs m, which needs it",
   "setByLunchOnly": "BUILD_ID_frankel comes only from vendor/google_devices/frankel/cmds-for-envsetup.sh during lunch",
   "why": "git reads GIT_* and stops at GIT_CEILING_DIRECTORIES (the copy root); BUILD_ID_frankel inherited from the caller hides a missing cmds-for-envsetup.sh; TARGET_KERNEL_DIR or USE_STOCK_KERNEL=true switches the kernel directory away from kernelModuleLists.dir and lunch still passes",
   "sources": [
@@ -296,7 +298,7 @@
     "bytes": 201
    }
   },
-  "formRule": "the error form is necessary, not sufficient. generate-all writes the warning form only with --noVerify, which skips the FileTreeSpec comparison, so a warning-form module is refused. The error form is also written when no comparison ran: generate-all --updateSpec, a working-tree change to vendor-specs/ or vendor-skels/ (the comparison reads the spec on disk), and collect-state's temporary module. So the error form shows only the version, and generatedVendor.observable must still be compared",
+  "formRule": "the error form is necessary, not sufficient. generate-all writes the warning form only with --noVerify, which skips the FileTreeSpec comparison, so a warning-form module is refused. The error form is also written when no comparison ran (generate-all --updateSpec, and collect-state's temporary module) and when the comparison ran against an edited spec (a working-tree change to vendor-specs/, since it reads the spec on disk). So the error form shows only the version, and generatedVendor.observable must still be compared",
   "formSources": [
    {
     "project": "vendor/adevtool",
@@ -386,7 +388,7 @@
   "acceptance": [
    "HEAD is exactly revision plus one newline",
    "in the copy, with GIT_* unset and GIT_CEILING_DIRECTORIES at the copy root, git -C vendor/adevtool rev-parse HEAD prints exactly revision, cat-file -t revision is commit and revision^{tree} is rootTree",
-   "nothing redirects outside the copy: rev-parse --absolute-git-dir and --git-common-dir resolve inside the copy root; vendor/adevtool/.git is a directory or a link whose target is inside the copy, never a gitfile; no objects/info/alternates, commondir or gitdir file exists; every link in the gitdir resolves inside the copy root",
+   "nothing redirects outside the copy: vendor/adevtool/.git resolves to a directory inside the copy (a gitfile, or a link to one, is refused); rev-parse --absolute-git-dir and --git-common-dir resolve inside the copy root; no objects/info/alternates, commondir or gitdir file exists; every link in the gitdir resolves inside the copy root; every path in the gitdir is on the copy root's filesystem and none is a mount point; no regular file in it has more than one hard link",
    "none of these checks can tell a fabricated store that holds the commit and its tree from a genuine one: only an approved byte-for-byte copy from the genuine source, under exact paths and bounds, establishes it"
   ],
   "options": [
@@ -618,7 +620,7 @@
    "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
    "kind": "FileTreeSpec: sha256 of every regular file of the module, \"dir\" for each directory"
   },
-  "verification": "generate-all compares the generated module with the spec file on disk only without --noVerify and without --updateSpec, and fails on any difference; the version check is written after that step and is not in the spec. Whether a comparison ran, and against which spec bytes, is not recorded in the module, so the observer compares observable itself",
+  "verification": "generate-all compares the generated module with the spec file on disk only without --noVerify and without --updateSpec, and fails on any difference; the version check is written after that step and is not in the spec. The warning form records --noVerify, but the error form does not record whether a comparison ran or against which spec bytes, so the observer compares observable itself",
   "verificationSource": {
    "project": "vendor/adevtool",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",

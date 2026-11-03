@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -247,8 +248,7 @@ def build():
     skels_with_products = sorted(p for p in trees[ADEVTOOL] if p.startswith('vendor-skels/')
         and p.endswith('/AndroidProducts.mk'))
     error, warning = version_check_bytes(adev, False), version_check_bytes(adev, True)
-    inherited = sorted({f'BUILD_ID_{DEVICE}', f'PLATFORM_SECURITY_PATCH_{DEVICE}', 'TARGET_KERNEL_DIR',
-        'USE_STOCK_KERNEL'})
+    inherited = sorted({f'BUILD_ID_{DEVICE}', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL'})
     return {
         'schemaVersion': 1,
         'kind': 'rose-frankel-lunch-inputs',
@@ -261,6 +261,8 @@ def build():
         'fixtures': provenance['files'],
         'environment': {
             'unset': ['GIT_*'] + inherited,
+            'when': 'before envsetup and lunch; lunch then exports BUILD_ID_frankel from cmds-for-envsetup.sh into the '
+                'shell that runs m, which needs it',
             'setByLunchOnly': f'BUILD_ID_{DEVICE} comes only from {VENDOR}/cmds-for-envsetup.sh during lunch',
             'why': 'git reads GIT_* and stops at GIT_CEILING_DIRECTORIES (the copy root); BUILD_ID_frankel inherited '
                 'from the caller hides a missing cmds-for-envsetup.sh; TARGET_KERNEL_DIR or USE_STOCK_KERNEL=true '
@@ -275,10 +277,10 @@ def build():
             'expected': {'revision': adev, 'form': 'error', 'error': image(error), 'warning': image(warning)},
             'formRule': 'the error form is necessary, not sufficient. generate-all writes the warning form only with '
                 '--noVerify, which skips the FileTreeSpec comparison, so a warning-form module is refused. The error '
-                'form is also written when no comparison ran: generate-all --updateSpec, a working-tree change to '
-                'vendor-specs/ or vendor-skels/ (the comparison reads the spec on disk), and collect-state\'s '
-                'temporary module. So the error form shows only the version, and generatedVendor.observable must '
-                'still be compared',
+                'form is also written when no comparison ran (generate-all --updateSpec, and collect-state\'s '
+                'temporary module) and when the comparison ran against an edited spec (a working-tree change to '
+                'vendor-specs/, since it reads the spec on disk). So the error form shows only the version, and '
+                'generatedVendor.observable must still be compared',
             'formSources': [cite(ADEVTOOL, 'src/commands/generate-all.ts', 'writeVersionCheckFile(', adev),
                 cite(ADEVTOOL, 'src/commands/generate-all.ts', 'if (flags.updateSpec) {', adev),
                 cite(ADEVTOOL, 'src/commands/generate-all.ts', 'path.join(VENDOR_MODULE_SPECS_DIR', adev),
@@ -314,10 +316,11 @@ def build():
                 'in the copy, with GIT_* unset and GIT_CEILING_DIRECTORIES at the copy root, git -C vendor/adevtool '
                     'rev-parse HEAD prints exactly revision, cat-file -t revision is commit and revision^{tree} is '
                     'rootTree',
-                'nothing redirects outside the copy: rev-parse --absolute-git-dir and --git-common-dir resolve inside '
-                    'the copy root; vendor/adevtool/.git is a directory or a link whose target is inside the copy, '
-                    'never a gitfile; no objects/info/alternates, commondir or gitdir file exists; every link in the '
-                    'gitdir resolves inside the copy root',
+                'nothing redirects outside the copy: vendor/adevtool/.git resolves to a directory inside the copy (a '
+                    'gitfile, or a link to one, is refused); rev-parse --absolute-git-dir and --git-common-dir resolve '
+                    'inside the copy root; no objects/info/alternates, commondir or gitdir file exists; every link in '
+                    'the gitdir resolves inside the copy root; every path in the gitdir is on the copy root\'s '
+                    'filesystem and none is a mount point; no regular file in it has more than one hard link',
                 'none of these checks can tell a fabricated store that holds the commit and its tree from a genuine '
                     'one: only an approved byte-for-byte copy from the genuine source, under exact paths and bounds, '
                     'establishes it',
@@ -373,8 +376,9 @@ def build():
                 'kind': 'FileTreeSpec: sha256 of every regular file of the module, "dir" for each directory'},
             'verification': 'generate-all compares the generated module with the spec file on disk only without '
                 '--noVerify and without --updateSpec, and fails on any difference; the version check is written after '
-                'that step and is not in the spec. Whether a comparison ran, and against which spec bytes, is not '
-                'recorded in the module, so the observer compares observable itself',
+                'that step and is not in the spec. The warning form records --noVerify, but the error form does not '
+                'record whether a comparison ran or against which spec bytes, so the observer compares observable '
+                'itself',
             'verificationSource': cite(ADEVTOOL, 'src/commands/generate-all.ts', 'compareToReferenceFileTreeSpec(', adev),
             'observable': observable,
             'observableScope': 'these five build definitions only; the rest of the module (proprietary files, '
@@ -398,10 +402,23 @@ def check(manifest):
             if not tree_fixture(path).exists():
                 return [f'{path}: no pinned tree listing']
             trees[path] = listing(path)
-        rows = json.loads(PROVENANCE.read_text())['files']
+        document = json.loads(PROVENANCE.read_text())
+        rows = document['files']
+        if PROVENANCE.read_text() != json.dumps(document, indent=1) + '\n' or set(document) != {'files'}:
+            errors.append('PROVENANCE.json is not exactly its canonical {"files": [...]} form')
         expected = [(p, f) for p, _, files in SOURCES for f in files]
         if [(r['project'], r['path']) for r in rows] != expected:
             errors.append('PROVENANCE.json does not list exactly the SOURCES files')
+        present = sorted(str(f.relative_to(FIXTURES)) for f in FIXTURES.rglob('*') if f.is_file() or f.is_symlink())
+        wanted = sorted([r['fixture'] for r in rows] + ['PROVENANCE.json'] +
+            [str(tree_fixture(p).relative_to(FIXTURES)) for p, _, _ in SOURCES])
+        if present != wanted:
+            errors.append('the fixture directory holds files other than its listed fixtures: '
+                + ', '.join(sorted(set(present) ^ set(wanted))))
+        for row in rows:
+            if row['kind'] == 'gzip' and sha256(fixture(row['project'], row['path']).read_bytes()) != row.get(
+                    'compressedSha256'):
+                errors.append(f'{row["fixture"]}: the compressed bytes are not the recorded ones')
         for row in rows:
             if trees[row['project']].get(row['path'], (None, None))[1] != row['gitBlob']:
                 errors.append(f'{row["project"]}/{row["path"]}: not the pinned tree\'s blob')
@@ -409,7 +426,7 @@ def check(manifest):
                 errors.append(f'{row["fixture"]}: bytes differ from the pinned blob')
         if manifest != build():
             errors.append('the manifest differs from what the fixtures give; regenerate with --write')
-    except (KeyError, ValueError, TypeError, AttributeError, OSError, json.JSONDecodeError) as error:
+    except (KeyError, ValueError, TypeError, AttributeError, OSError, EOFError, zlib.error) as error:
         errors.append(f'fixtures: {type(error).__name__}: {error}')
     return errors
 
@@ -447,9 +464,12 @@ def write():
             target = fixture(project, path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(gzip.compress(data, 9, mtime=0) if (project, path) in GZIPPED else data)
-            files.append({'fixture': str(target.relative_to(FIXTURES)), 'project': project, 'path': path,
+            row = {'fixture': str(target.relative_to(FIXTURES)), 'project': project, 'path': path,
                 'revision': revisions[project], 'gitBlob': tree[path][1],
-                'kind': 'gzip' if (project, path) in GZIPPED else 'full'})
+                'kind': 'gzip' if (project, path) in GZIPPED else 'full'}
+            if (project, path) in GZIPPED:
+                row['compressedSha256'] = sha256(target.read_bytes())
+            files.append(row)
     PROVENANCE.write_text(json.dumps({'files': files}, indent=1) + '\n')
     MANIFEST.write_text(json.dumps(build(), indent=1) + '\n')
 
