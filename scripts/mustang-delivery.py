@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import urllib.request
+import mustang_collection
 
 ROOT=Path(__file__).resolve().parents[1]
 REPOSITORY='Immortal-Protocols/RoseOS-1'
@@ -27,11 +28,14 @@ def number(value):
     return str(value)
 
 
-def pin_run(run_id,path,artifact,title_prefix):
+def pin_run(run_id,path,artifact,title_prefix,allow_collection_recovery=False):
     run=request('/actions/runs/'+number(run_id))
     if run.get('path')!=path or run.get('head_branch')!='main' or run.get('event')!='workflow_dispatch' \
-            or run.get('status')!='completed' or run.get('conclusion')!='success' or run.get('run_attempt')!=1 or not run.get('display_title','').startswith(title_prefix):
+            or run.get('status')!='completed' or run.get('run_attempt')!=1 or not run.get('display_title','').startswith(title_prefix):
         raise ValueError('source run is not the completed single-attempt main workflow')
+    recovery = run.get('conclusion') != 'success'
+    if recovery and not (allow_collection_recovery and mustang_collection.recovery_run(run)):
+        raise ValueError('producer did not succeed and is not the exact admitted make=0 collection fault')
     sha=run.get('head_sha','')
     if not re.fullmatch(r'[0-9a-f]{40}',sha):raise ValueError('source SHA absent')
     subprocess.run(['git','-C',str(ROOT),'merge-base','--is-ancestor',sha,'origin/main'],check=True)
@@ -40,8 +44,13 @@ def pin_run(run_id,path,artifact,title_prefix):
     matching=[x for x in artifacts['artifacts'] if x['name']==artifact and not x['expired']]
     if len(matching)!=1:raise ValueError('one expected unexpired artifact required')
     row=matching[0]
+    if recovery:
+        admitted=mustang_collection.recovery_record()
+        if row['id']!=admitted['artifactId'] or row.get('digest')!=admitted['artifactDigest']:
+            raise ValueError('collection-fault artifact identity differs')
     return {'runId':number(run_id),'source':sha,'artifactId':row['id'],'artifactName':artifact,
-            'artifactDigest':row.get('digest'),'expiresAt':row['expires_at']}
+            'artifactDigest':row.get('digest'),'expiresAt':row['expires_at'],
+            'originalConclusion':run['conclusion'],'collectionRecovery':recovery}
 
 
 def guard(mode,compile_run,bootstrap_run,out):
@@ -56,13 +65,14 @@ def guard(mode,compile_run,bootstrap_run,out):
     if mode=='bootstrap':
         if compile_run or bootstrap_run:raise ValueError('bootstrap accepts no prior-run pins')
     else:
-        binding['compile']=pin_run(compile_run,'.github/workflows/os-release.yml',f'mustang-receipts-{number(compile_run)}-1','mustang-build ')
+        binding['compile']=pin_run(compile_run,'.github/workflows/os-release.yml',f'mustang-receipts-{number(compile_run)}-1','mustang-build ',allow_collection_recovery=True)
         binding['bootstrap']=pin_run(bootstrap_run,'.github/workflows/os-release.yml',f'mustang-bootstrap-{number(bootstrap_run)}-1','mustang-bootstrap ')
     with Path(out).open('x') as f:json.dump(binding,f,indent=2)
     if mode=='sign-package' and os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'],'a') as f:
             f.write(f'compile_source={binding["compile"]["source"]}\n')
             f.write(f'bootstrap_source={binding["bootstrap"]["source"]}\n')
+            f.write(f'compile_recovery={str(binding["compile"]["collectionRecovery"]).lower()}\n')
     print(json.dumps(binding))
 
 
@@ -87,6 +97,9 @@ def verify_download(directory,artifact_id,out):
         'privateUrl':f'https://github.com/{REPOSITORY}/actions/runs/{metadata["workflow_run"]["id"]}/artifacts/{metadata["id"]}',
         'expiresAt':metadata['expires_at'],'artifactSizeBytes':metadata['size_in_bytes'],
         'downloadChecksumsVerified':True,'files':checked,'omittedChecks':receipt['omittedChecks'],'phoneValidated':False}
+    result.update(compileCollectionRecovery=receipt.get('compileCollectionRecovery',False),
+                  compileProducerConclusion=receipt.get('compileProducerConclusion'),
+                  compileCollectionReceiptSha256=receipt.get('compileCollectionReceiptSha256'))
     with Path(out).open('x') as f:json.dump(result,f,indent=2)
     print(json.dumps(result))
 

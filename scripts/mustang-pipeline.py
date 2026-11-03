@@ -4,7 +4,9 @@
 No signing or credential path is selected by this unsigned route. Reuses the
 shared lock, allocator, production-copy mechanism, host-reconcile and compiler
 without consuming Blazer/Rango artifacts.
-A failed stage is never retried, resumed, reset or adopted automatically.
+A failed command is never retried or reset by this unsigned route. The delivery
+route separately admits one recorded make=0 output-lookup correction, preserving
+the original failed receipts and requiring fresh complete output collection.
 """
 import argparse
 import datetime

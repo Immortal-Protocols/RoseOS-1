@@ -100,7 +100,7 @@ on:
         options: [none, source, download, vendor, lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe, ssh-keygen-observe]
         default: none
       mustang_compile_run:
-        description: mustang-delivery only - completed Mustang build workflow run
+        description: mustang-delivery only - Mustang build run (the exact recorded make=0 collection fault is supported)
         default: ''
       mustang_bootstrap_run:
         description: mustang-delivery only - completed pro-mustang-v1 bootstrap run
@@ -155,6 +155,7 @@ jobs:
       actions: read  # emulator-alpha-export and models-sign only: fixed original artifacts are read from their own runs
     outputs:
       mustang_compile_source: ${{ steps.mustang-binding.outputs.compile_source }}
+      mustang_compile_recovery: ${{ steps.mustang-binding.outputs.compile_recovery }}
       mustang_bootstrap_source: ${{ steps.mustang-binding.outputs.bootstrap_source }}
       blazer_prep_outer_seconds: ${{ steps.blazer-prep.outputs.outer_seconds }}
       blazer_prep_job_minutes: ${{ steps.blazer-prep.outputs.job_minutes }}
@@ -1821,6 +1822,7 @@ jobs:
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
       EXPECTED_COMPILE_RUN: ${{ inputs.mustang_compile_run }}
       EXPECTED_COMPILE_SOURCE: ${{ needs.guard.outputs.mustang_compile_source }}
+      EXPECTED_COMPILE_RECOVERY: ${{ needs.guard.outputs.mustang_compile_recovery }}
       EXPECTED_BOOTSTRAP_SOURCE: ${{ needs.guard.outputs.mustang_bootstrap_source }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -1838,10 +1840,20 @@ jobs:
           run-id: ${{ inputs.mustang_bootstrap_run }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/mustang-bootstrap
+      - name: Collect actual Mustang outputs before signer login
+        run: python3 scripts/mustang-sign-package.py collect --compile-receipt "$RUNNER_TEMP/mustang-compile/candidate-receipt.json" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - run: python3 scripts/mustang-sign-package.py sign --compile-receipt "$RUNNER_TEMP/mustang-compile/candidate-receipt.json" --bootstrap-receipt "$RUNNER_TEMP/mustang-bootstrap/signing-bootstrap-receipt.json" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
+      - name: Public output-collection receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mustang-collection-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /home/pixelbuild/rose-actions/mustang-collect-${{ github.run_id }}-${{ github.run_attempt }}/compile-collection.json
+          retention-days: 7
+          if-no-files-found: warn
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
