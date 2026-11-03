@@ -418,6 +418,36 @@ class GitInspect(unittest.TestCase):
                           {'projectsGitdir'}))
         self.assertEqual(wire(*argv).returncode, 2)
 
+    def touched(self, stage):
+        """Host paths (/home/pixelbuild/...) the wiring's resolve touches, recorded at the os layer."""
+        import builtins
+        seen, saved = [], {}
+
+        def recording(name, original):
+            def call(path, *args, **kwargs):
+                text = os.fsdecode(path) if isinstance(path, (str, bytes, os.PathLike)) else ''
+                if text.startswith('/home/pixelbuild'):
+                    seen.append((name, text))
+                return original(path, *args, **kwargs)
+            return call
+        for name in ('stat', 'lstat', 'scandir', 'listdir', 'access', 'readlink', 'open'):
+            saved[name] = getattr(os, name)
+            setattr(os, name, recording(name, saved[name]))
+        saved_open = builtins.open
+        builtins.open = recording('builtins.open', saved_open)
+        try:
+            wiring.resolve(stage)
+        finally:
+            for name, original in saved.items():
+                setattr(os, name, original)
+            builtins.open = saved_open
+        return seen
+
+    def test_git_inspect_set_resolution_touches_no_host_path(self):
+        self.assertEqual(self.touched('git-inspect-set'), [])
+        # the recorder does see host probes: the other routes keep the probing recipe load
+        self.assertTrue(self.touched('git-inspect'))
+
     def test_existing_routes_are_unchanged(self):
         self.assertEqual(wiring.resolve('inspect', run_id='5', attempt='1')[1:], (960, 20))
         for stage, bounds in (('source', (7500, 136)), ('download', (3900, 76)), ('vendor', (11100, 196)), ('lunch', (2100, 46))):
