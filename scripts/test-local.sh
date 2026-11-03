@@ -97,6 +97,7 @@ python3 scripts/tests/test_blazer_preparation_preflight.py
 python3 os/tests/test_blazer_flavor.py
 python3 scripts/tests/test_blazer_build_only.py
 python3 scripts/tests/test_blazer_integration.py
+python3 scripts/tests/test_blazer_candidate_bundle.py
 # Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
 python3 scripts/tests/test_factory_package.py
 # Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
