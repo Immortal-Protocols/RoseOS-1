@@ -226,13 +226,23 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     These checks run only once the include paths are known to be plain. The vendor stage's other tree
     needs (adevtool's run script, envsetup, prebuilts) and the kernel directory are its own admission,
     never a gate on the snapshot.
-  - **Consumer trace.** The only one is the earlier pinned read recorded in
-    `scripts/device-readiness.py`: adevtool `17df3b79` `src/config/paths.ts` `getHostBinPath`, which
-    uses `host/linux-x86/bin` and compares `adevtool_revision` with raw `git rev-parse HEAD` stdout.
-    The adevtool sources themselves are not in this repository, so this is not a dependency closure.
-  - **Finite unknown.** The snapshot excludes `.git`, so that `git rev-parse HEAD` has no repository
-    there, and how adevtool then behaves is not established. Resolving it needs a read of the pinned
-    `getHostBinPath`, which is not authorized here.
+  - **Consumer trace.** Read from the public GrapheneOS adevtool source at `17df3b79`
+    (`src/config/paths.ts`, sha256 `418823cc…`, `getHostBinPath`):
+    - `adevtool_revision` is compared exactly with `git -C vendor/adevtool rev-parse HEAD` stdout;
+    - each program is `out_adevtool_deps/host/linux-x86/bin/<program>`, and the call sites name only
+      the 14 `depsTools`;
+    - nothing else under `out_adevtool_deps` is read. The tools' own runtime needs are not adevtool
+      code: `lib64/` and `framework/` are copied with `host/linux-x86`; whether the JAR-backed tools
+      (`apksigner`, `arsclib`) also need a Java runtime from outside it is not established here.
+  - **Later vendor gap (not a copy gate).** The snapshot has no `vendor/adevtool` `.git`, so in it
+    `git -C vendor/adevtool rev-parse HEAD` fails:
+    - `getHostBinPath` swallows that error, treats the deps as unbuilt and rebuilds them
+      (`scripts/run-build.sh`: `lunch sdk_phone64_x86_64` and `m` of the 14 tools into
+      `out_adevtool_deps`) unless `ADEVTOOL_SKIP_DEP_BUILD=1`, then fails writing the marker;
+    - `generate-all` then calls `writeVersionCheckFile` (`src/blobs/build.ts`), which needs the same
+      `rev-parse` and fails; the `.mk` it writes repeats that check at lunch.
+    - The vendor stage therefore cannot yet run on the snapshot. The correction is proposed
+      separately; nothing here fabricates git metadata.
   - Before writing, the full selection is walked (no entry cap). It refuses on any link escape,
     unsupported file type or unproven cache boundary, when the dense, block-rounded projection exceeds
     the bound, or when available − projection < reserve.

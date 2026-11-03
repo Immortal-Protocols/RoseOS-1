@@ -637,11 +637,12 @@ class Refused(Exception):
     """The source stage refused before writing anything."""
 
 def deps_problems(recipe, base):
-    """Only what the selected deps themselves must provide, as their pinned consumer reads them (adevtool 17df3b79
-    src/config/paths.ts getHostBinPath, recorded in scripts/device-readiness.py): adevtool_revision exactly the pinned
-    hash plus one newline (it is compared with raw `git rev-parse HEAD` stdout; read no-follow, at most 128 bytes) and
-    each depsTool a regular executable file in host/linux-x86/bin. The vendor stage's other tree needs (adevtool's
-    run script, envsetup, prebuilts) and the kernel directory are its own admission, never a gate on the copy."""
+    """Only what the selected deps themselves must provide, as their pinned consumer reads them (GrapheneOS adevtool
+    17df3b79 src/config/paths.ts getHostBinPath, sha256 418823cc..., read at that revision): adevtool_revision exactly
+    the pinned hash plus one newline (paths.ts compares the file with `git -C vendor/adevtool rev-parse HEAD` stdout;
+    read no-follow, at most 128 bytes) and each depsTool, the 14 programs every getHostBinPath call site names, a
+    regular, unlinked, executable file in host/linux-x86/bin. The vendor stage's other tree needs (adevtool's run
+    script, envsetup, prebuilts) and the kernel directory are its own admission, never a gate on the copy."""
     deps, problems = base/recipe['adevtool']['depsDir'], []
     want = (recipe['pins']['vendor/adevtool'] + '\n').encode()
     try:
