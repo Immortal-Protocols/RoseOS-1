@@ -186,6 +186,23 @@ public class HomeFillRenderTest {
         inside((HomeAppPage) root.getChildAt(0), root, H, nav, "three-button navigation");
     }
 
+    @Test @Config(qualifiers = "w832dp-h384dp-mdpi") public void landscapeHomeKeepsTheCuratedAppsAndTheFolder() throws Exception {
+        int w = 832, h = 384, columns = HomeAppLayout.homeColumns(w - 2f * HomeAppLayout.MARGIN_DP);
+        assertEquals("eight Home columns across a landscape phone", 8, columns);
+        String[] curated = {"phone", "messages", "camera", "compass", "mail", "calendar", "notes"};
+        View[] cells = new View[curated.length + 1];
+        for (int i = 0; i < curated.length; i++) cells[i] = HomeAppTile.tile(context(), new HomeGlyph(curated[i]), curated[i], true, false);
+        cells[curated.length] = HomeAppTile.tile(context(), new HomeGlyph("system"), "System", true, false);
+        FrameLayout root = HomeOxbloodRenderTest.home(cells, 0, 0, columns);
+        Bitmap b = draw(root, w, h);
+        HomeOxbloodRenderTest.save(b, "home-fill-home-landscape-832x384");
+        HomeAppPage grid = (HomeAppPage) root.getChildAt(0);
+        int[] share = HomeAppLayout.homeShare(curated.length, true, 20, capacity(grid));
+        assertEquals("every curated app stays on landscape Home", curated.length, share[0]);
+        inside(grid, root, h, 0, "landscape Home");
+        assertEquals("System", grid.getChildAt(grid.getChildCount() - 1).getContentDescription());
+    }
+
     @Test @Config(qualifiers = "w832dp-h384dp-mdpi") public void landscapeUsesMoreColumnsAndFewerRows() throws Exception {
         int w = 832, h = 384;
         FrameLayout probe = appPage(1, 0, w, h);

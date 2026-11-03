@@ -387,9 +387,11 @@ public class MainActivity extends Activity {
   HashSet<String> onHome=new HashSet<>();for(ResolveInfo app:homeEntries)onHome.add(componentKey(app));
   if(!folderApps.isEmpty())homeEntries.add(null);
   ArrayList<ResolveInfo> appEntries=new ArrayList<>();for(ResolveInfo app:entries)if(!onHome.contains(componentKey(app)))appEntries.add(app);
-  int appPages=HomeAppLayout.pages(appEntries.size(),appPerPage);
+  // App pages only for what Home could not hold: when Home holds every app there is no empty overflow page (with no
+  // apps at all, one page still says so).
+  int appPages=appEntries.isEmpty()&&!entries.isEmpty()?0:HomeAppLayout.pages(appEntries.size(),appPerPage);
   for(int i=0;i<appPages;i++){int[] range=HomeAppLayout.slice(appEntries.size(),appPerPage,i);pages.add(new ArrayList<>(appEntries.subList(range[0],range[1])));titles.add(HomeAppLayout.title(i,appPages));}
-  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=HomePages.FIRST_APPS;
+  int count=pages.size();homePage=HomePages.HOME;ourAppsPage=count>HomePages.FIRST_APPS?HomePages.FIRST_APPS:HomePages.HOME;
   selected=HomePages.restore(selected,count);
   // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));

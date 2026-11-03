@@ -49,7 +49,9 @@ public class HomeOxbloodRenderTest {
 
     /** Home as RoseHomeView builds it (#410 owner density correction): the date, then the unlabelled grid from 24dp
      * below the date's line down to the pages' inset bottom (the edge, any tappable navigation inset, and the reserve). */
-    static FrameLayout home(View[] cells, int dotsSelected, int navInset) {
+    static FrameLayout home(View[] cells, int dotsSelected, int navInset) { return home(cells, dotsSelected, navInset, 4); }
+
+    static FrameLayout home(View[] cells, int dotsSelected, int navInset, int columns) {
         Context c = context();
         FrameLayout root = new FrameLayout(c);
         root.setBackground(new OxbloodField(OxbloodField.HOME));
@@ -58,7 +60,7 @@ public class HomeOxbloodRenderTest {
         date.setTextSize(HomeAppLayout.DATE_SP);
         date.setTextColor(HomeAppLayout.DATE_INK);
         date.setIncludeFontPadding(false);
-        HomeAppPage grid = new HomeAppPage(c, 4, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, null);
+        HomeAppPage grid = new HomeAppPage(c, columns, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, null);
         for (View cell : cells) grid.addView(cell);
         grid.setPadding(HomeAppLayout.MARGIN_DP, Math.round(HomeAppLayout.homeTop(HomeAppLayout.DATE_TOP_DP, date.getLineHeight(), 1f)),
             HomeAppLayout.MARGIN_DP, HomeAppLayout.EDGE_DP + navInset + HomeAppLayout.BAND_BOTTOM_DP);

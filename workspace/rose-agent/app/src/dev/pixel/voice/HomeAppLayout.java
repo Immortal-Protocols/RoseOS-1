@@ -37,9 +37,14 @@ final class HomeAppLayout {
   return widthDp < 720 ? 5 : 6;
  }
 
- /** Columns of Home's unlabelled grid: four, as in the reference, three only where four 60dp cells cannot fit. */
+ /** Columns of Home's unlabelled grid: four on a phone, as in the reference, three only where four 60dp cells cannot
+  * fit; on a wide (landscape or unfolded) screen every 60dp column that fits, up to MAX_HOME_COLUMNS, so a short
+  * landscape Home still holds its curated apps and the System folder (#410 owner density correction). */
+ static final int MAX_HOME_COLUMNS = 8;
  static int homeColumns(float widthDp) {
-  return widthDp < 4 * HOME_CELL_DP + 3 * HOME_COL_GAP_DP ? 3 : 4;
+  if (widthDp < 4 * HOME_CELL_DP + 3 * HOME_COL_GAP_DP) return 3;
+  if (widthDp < 600 - 2 * MARGIN_DP) return 4;
+  return Math.max(4, Math.min(MAX_HOME_COLUMNS, (int) Math.floor((widthDp + HOME_COL_GAP_DP) / (HOME_CELL_DP + HOME_COL_GAP_DP))));
  }
 
  /** An app-page cell: the tile, the gap and two label lines of the measured line height. */

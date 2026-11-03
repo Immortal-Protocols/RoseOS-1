@@ -34,7 +34,16 @@ public final class HomeAppLayoutTest {
         expect(HomeAppLayout.columns(360 - 48) == 4, "A 360dp phone keeps four (4 x 72 + 3 x 6 = 306)");
         expect(HomeAppLayout.columns(280 - 48) == 3, "Only a very narrow screen drops to three");
         expect(HomeAppLayout.columns(673 - 48) == 5 && HomeAppLayout.columns(900) == 6, "Wide screens add columns, at most six");
-        expect(HomeAppLayout.homeColumns(384 - 48) == 4 && HomeAppLayout.homeColumns(884 - 48) == 4, "Home is four across (#410), unfolded too");
+        expect(HomeAppLayout.homeColumns(384 - 48) == 4 && HomeAppLayout.homeColumns(412 - 48) == 4 && HomeAppLayout.homeColumns(448 - 48) == 4, "Home is four across on phones (#410)");
+        expect(HomeAppLayout.homeColumns(832 - 48) == 8 && HomeAppLayout.homeColumns(884 - 48) == 8, "wide (landscape or unfolded): up to eight 60dp columns");
+        expect(HomeAppLayout.homeColumns(673 - 48) == 8 && HomeAppLayout.homeColumns(600 - 48) == 7, "every 60dp column that fits on a wide screen: " + HomeAppLayout.homeColumns(600 - 48));
+        // A short landscape Home (832x384 and 640x360): one row below the date still holds the seven curated apps and the folder.
+        float landscapeHome = 384 - HomeAppLayout.homeTop(HomeAppLayout.DATE_TOP_DP, 26, 1f) - HomeAppLayout.EDGE_DP - HomeAppLayout.BAND_BOTTOM_DP;
+        int landscapeCap = HomeAppLayout.homeCapacity(832 - 48, landscapeHome, HomeAppLayout.TILE_DP, 1f);
+        expect(java.util.Arrays.equals(HomeAppLayout.homeShare(7, true, 20, landscapeCap), new int[]{7, 0}), "landscape Home keeps every curated app and the folder: capacity " + landscapeCap);
+        int small = HomeAppLayout.homeCapacity(640 - 48, 360 - HomeAppLayout.homeTop(HomeAppLayout.DATE_TOP_DP, 26, 1f) - 156, HomeAppLayout.TILE_DP, 1f);
+        expect(small == 7 && java.util.Arrays.equals(HomeAppLayout.homeShare(7, true, 20, small), new int[]{6, 0}),
+            "a 640x360 landscape Home: one row of seven, six curated apps and the folder (the seventh is on the app pages): " + small);
         expect(HomeAppLayout.homeColumns(280 - 48) == 3, "a very narrow Home drops to three (4 x 60 + 3 x 17.5 = 292.5)");
         expect(cell(1f) == (HomeAppLayout.TILE_DP + HomeAppLayout.LABEL_GAP_DP) * D + 2 * line(11.5f, 1f), "The cell is two label lines, whatever the label's length");
 
