@@ -58,6 +58,28 @@ PROJECTS = [
     ('build/release', 'platform_build_release', ['background-control-build-release.patch']),
 ]
 REQUIRED_OVERLAYS = ('packages/apps/Launcher3/', 'build/release/')
+# The two flags the adapter must show from the build's own decoded aconfig output. Each comes from one
+# aconfig_declarations module; Soong writes aconfig-cache.pb and its decoded aconfig-flags.txt (aconfigTextRule:
+# dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}') to that module's output directory.
+# No RoseOS patch touches these definition files; they are pinned here, read from public sources.
+FLAG_EVIDENCE = [
+    {'flag': 'android.security.content_uri_permission_apis', 'expectedLine': 'android.security.content_uri_permission_apis:READ_ONLY=true',
+     'module': 'android.security.flags-aconfig', 'package': 'android.security', 'container': 'system',
+     'definedIn': ('frameworks/base', 'platform_frameworks_base', 'AconfigFlags.bp'),
+     'declaredIn': ('frameworks/base', 'platform_frameworks_base', 'core/java/android/security/responsible_apis_flags.aconfig'),
+     'expectedOutputDir': 'out/soong/.intermediates/frameworks/base/android.security.flags-aconfig',
+     'readBy': 'android.security.flags-aconfig-java (framework), which ActivityThread and ActivityRecord read'},
+    {'flag': 'com.android.launcher3.enable_fallback_overview_in_window',
+     'expectedLine': 'com.android.launcher3.enable_fallback_overview_in_window:READ_ONLY=false',
+     'module': 'com_android_launcher3_flags', 'package': 'com.android.launcher3', 'container': 'system_ext',
+     'definedIn': ('packages/apps/Launcher3', 'platform_packages_apps_Launcher3', 'aconfig/Android.bp'),
+     'declaredIn': ('packages/apps/Launcher3', 'platform_packages_apps_Launcher3', 'aconfig/launcher.aconfig'),
+     'expectedOutputDir': 'out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags',
+     'readBy': 'com_android_launcher3_flags_lib (Launcher3QuickStepLib), which OverviewComponentObserver reads'},
+]
+SOONG_RULES = [('build/soong', 'platform_build_soong', 'aconfig/init.go'),
+    ('build/soong', 'platform_build_soong', 'aconfig/aconfig_declarations.go')]
+EVIDENCE_PROJECTS = ('frameworks/base', 'packages/apps/Launcher3', 'build/soong')
 
 # apply-os-changes.py rewrites exactly these five elements of frameworks/base config.xml after patching, from the
 # background policy receipt and two flags. Each is either its marker (left alone) or the exact text written below.
@@ -148,7 +170,7 @@ def git_blob(data):
 def pins():
     xml = PINNED.read_text()
     out = {}
-    for path, _, _ in PROJECTS:
+    for path in [p for p, _, _ in PROJECTS] + ['build/soong']:
         m = re.search(r'<project name="[^"]+" path="%s" [^>]*revision="([0-9a-f]{40})"' % re.escape(path), xml)
         if not m:
             raise SystemExit(f'{path}: no pinned revision in {PINNED}')
@@ -245,6 +267,78 @@ def fetch(repo, revision, path):
         return response.read()
 
 
+def evidence_fixture(project, path):
+    return FIXTURES/'flag-evidence'/project/path
+
+
+def flag_evidence(revisions, fetch_missing):
+    files = {}
+    for entry in FLAG_EVIDENCE:
+        for project, repo, path in (entry['definedIn'], entry['declaredIn']):
+            files[(project, repo, path)] = None
+    for project, repo, path in SOONG_RULES:
+        files[(project, repo, path)] = None
+    out = {}
+    for project, repo, path in files:
+        target = evidence_fixture(project, path)
+        if fetch_missing:
+            data = fetch(repo, revisions[project], path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        out[(project, path)] = target.read_bytes() if target.exists() else None
+    return out
+
+
+def evidence_rows(revisions, data):
+    rows = []
+    for entry in FLAG_EVIDENCE:
+        row = {k: v for k, v in entry.items() if k not in ('definedIn', 'declaredIn')}
+        for key in ('definedIn', 'declaredIn'):
+            project, _, path = entry[key]
+            row[key] = {'project': project, 'revision': revisions[project], 'path': path,
+                'sha256': sha256(data[(project, path)])}
+        row['outputs'] = ['aconfig-cache.pb', 'aconfig-flags.txt']
+        row['produce'] = ('build ' + entry['expectedOutputDir'] + '/aconfig-flags.txt as an explicit goal with '
+            'Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree\'s host aconfig using the identical '
+            "dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'")
+        row['accept'] = ('exactly one line for the flag, equal to expectedLine, in the module\'s own output; '
+            'absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)')
+        rows.append(row)
+    rules = [{'project': p, 'revision': revisions[p], 'path': path, 'sha256': sha256(data[(p, path)])}
+        for p, _, path in SOONG_RULES]
+    return rows, rules
+
+
+def check_evidence(manifest, revisions):
+    errors = []
+    data = flag_evidence(revisions, False)
+    if any(v is None for v in data.values()):
+        return ['flag evidence: a pinned definition fixture is missing; regenerate with --write']
+    rows, rules = evidence_rows(revisions, data)
+    if manifest.get('flagEvidence') != {'flags': rows, 'producingRules': rules}:
+        errors.append('flagEvidence differs from the pinned definitions; regenerate with --write')
+    for entry in FLAG_EVIDENCE:
+        bp = data[(entry['definedIn'][0], entry['definedIn'][2])].decode()
+        stanza = re.search(r'aconfig_declarations \{\s*name: "%s",(.*?)\n\}' % re.escape(entry['module']), bp, re.S)
+        if not stanza or f'package: "{entry["package"]}"' not in stanza.group(1) or \
+                f'container: "{entry["container"]}"' not in stanza.group(1):
+            errors.append(f'{entry["module"]}: not declared with package {entry["package"]} and container {entry["container"]}')
+        declaration = entry['declaredIn'][2]
+        if stanza and declaration.split('/')[-1] not in stanza.group(1) and '**/*.aconfig' not in stanza.group(1):
+            errors.append(f'{entry["module"]}: does not take {declaration}')
+        decl = data[(entry['declaredIn'][0], declaration)].decode()
+        name = entry['flag'].rsplit('.', 1)[1]
+        if not re.search(r'^package: "%s"' % re.escape(entry['package']), decl, re.M) or \
+                not re.search(r'flag \{\s*name: "%s"' % name, decl):
+            errors.append(f'{entry["flag"]}: not declared in {declaration}')
+    rule = data[('build/soong', 'aconfig/init.go')].decode()
+    if "dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'" not in rule:
+        errors.append('build/soong aconfigTextRule format changed')
+    if 'assembleFileName(config, "aconfig-flags.txt")' not in data[('build/soong', 'aconfig/aconfig_declarations.go')].decode():
+        errors.append('build/soong aconfig_declarations no longer writes aconfig-flags.txt')
+    return errors
+
+
 def build():
     revisions = pins()
     projects = []
@@ -284,6 +378,7 @@ def build():
         projects.append({'path': path, 'repo': f'GrapheneOS/{repo}', 'revision': revisions[path],
             'patches': [{'name': p, 'sha256': sha256((ROOT/'os/patches'/p).read_bytes())} for p in patches],
             'files': rows})
+    evidence, rules = evidence_rows(revisions, flag_evidence(revisions, True))
     return {
         'schemaVersion': 1,
         'kind': 'rose-launcher3-compile-inputs',
@@ -321,10 +416,10 @@ def build():
             'its javac/kotlinc classpath contains the patched framework (AutomatedPackageListener declares '
                 'onAutomatedDevicesChanged)',
             'm Launcher3QuickStepLib succeeds',
-            'aconfig cache: com.android.launcher3.enable_fallback_overview_in_window DISABLED/READ_ONLY',
-            'aconfig cache: android.security.content_uri_permission_apis ENABLED/READ_ONLY',
+            'flagEvidence: each flag\'s expectedLine from its own aconfig_declarations module output',
             'lunch product, variant, BUILD_ID and release-config maps in effect',
         ],
+        'flagEvidence': {'flags': evidence, 'producingRules': rules},
         'identitySharing': {
             'sites': ['quickstep/src/com/android/quickstep/FallbackSwipeHandler.java startHomeIntent',
                 'quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)'],
@@ -384,6 +479,7 @@ def check(manifest):
                 errors.append('config.xml: the rewritten elements are not exactly the five')
     if manifest['overlays'] != overlays():
         errors.append('overlays changed; regenerate with --write')
+    errors += check_evidence(manifest, revisions)
     check.bound = tuple(bound)
     return errors
 
