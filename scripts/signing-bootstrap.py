@@ -6,8 +6,11 @@ the Fold key files) or models-v0 (OCT30-INFRA-S012: one PKCS12 store, alias rose
 keytool through its password-file options, its reloaded public listing and certificate checked before import, and the
 two secrets rechecked empty immediately before the first add). Both are resource-bound and both refuse until their
 installed tool identities are measured. FOLD-FACTORY-IDENTITY adds archive.format "openssh-ed25519" (one
-passphrase-encrypted factory-archive SSH key made through scripts/factory_signing.py's pinned askpass route; its
-profile fold-rango-factory-v1 is unbound and refuses until its containers, access, tool identity and approval exist). A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
+passphrase-encrypted factory-archive SSH key made through scripts/factory_signing.py's pinned askpass route): its
+profile fold-rango-factory-v1 is resource-bound, and pro-blazer-factory-v1 stays unbound until its approvals,
+containers, access and run exist. A profile that opts in with access.liveCheck needs no recorded expiries: the run's
+credentialed metadata calls check its access (readiness; the profile's access.policy states what a later failure
+costs). A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
 
 guard      on the hosted guard job, before the controller starts: the mode, profile and options must be exactly a
            bootstrap of a ready profile, bound to this workflow commit on main from a manual dispatch.
@@ -19,7 +22,9 @@ run        on the builder, under the shared host lock, with the job's short-live
 plan       prints the exact later command, metadata operations and the permissions they need. Nothing is executed.
 
 Fail-closed rules. A profile that is unbound, has an incomplete key inventory, an unapproved tool identity or
-expiring access stops before any side effect. An existing version, unavailable or uncertain metadata, an unsafe archive,
+expiring recorded access stops before any side effect, and so does a failed first metadata check (secret missing,
+occupied or unavailable). Access that fails after that check, at the pre-import recheck or as a denied add (which
+cannot be tested beforehand), uses up the run. An existing version, unavailable or uncertain metadata, an unsafe archive,
 an unexpected output, a public identity equal to Frankel's, or any previous attempt journal stops without adding.
 The two-secret import is not atomic: each committed version id is journaled, and an uncertain add or a failure after
 the first add leaves recovery-needed, never complete, never retried, rolled back or deleted. The receipt holds only
@@ -160,7 +165,7 @@ def readiness(name, profiles, now):
     live = access.get('liveCheck') is True  # opted in: access is checked live by the run (owner decision 2026-11-03)
     for key in ('addVersionExpires', 'accessorExpires'):
         if live and access.get(key) is None:
-            continue  # checked live: the run's credentialed metadata calls stop it before any key (see openssh_problems)
+            continue  # checked live by the run's first credentialed metadata calls, before any key (access.policy)
         try:
             if parse_time(access[key]) - margin <= now:
                 reasons.append(('access-expired', f'{key} {access[key]} is within {margin} of {now:%Y-%m-%dT%H:%M:%SZ}'))
@@ -751,14 +756,16 @@ def pkcs12_identity(cert_pem, listing, generation):
 
 
 # Approved-proposal ceilings for the factory-archive identity's recorded IAM expiries. They are checked only against
-# expiries the profile records from an IAM readback; a null expiry is never treated as either duration (access-unknown).
+# expiries the profile records from an IAM readback; a null expiry is never treated as either duration. It is
+# access-unknown unless the profile opts in with access.liveCheck, where the run's credentialed calls check access.
 OPENSSH_BOOTSTRAP_MAX = timedelta(hours=4)
 OPENSSH_ACCESSOR_MAX = timedelta(days=30)
 
 
 def openssh_problems(profile, now):
-    """Closed shape of an openssh-ed25519 profile, plus the recorded-expiry ceilings. Nothing is invented: a missing
-    tool identity, public identity or expiry stays a refusal."""
+    """Closed shape of an openssh-ed25519 profile, plus the ceilings on any recorded expiry. Nothing is invented: a
+    missing tool identity or public identity stays a refusal, and so does a missing expiry unless the profile opts in
+    with access.liveCheck (readiness)."""
     problems = []
     if not factory_signing.PRINCIPAL.fullmatch(str(profile.get('principal'))):
         problems.append(('profile-invalid', 'an openssh-ed25519 profile needs a plain principal'))
@@ -771,13 +778,14 @@ def openssh_problems(profile, now):
         problems.append(('profile-invalid', 'recheckEmptyBeforeImport must be true'))
     if profile.get('localProof') or (profile.get('generation') or {}).get('recipe') is not None:
         problems.append(('profile-invalid', 'no local proof or recipe: generation is the fixed generate_openssh'))
-    # Access is checked live, not from a recorded timestamp (owner decision, 2026-11-03): after the signer login and under
-    # the lock, the run's metadata calls on both secrets use the same credentials and stop it (metadata-unavailable)
-    # before any key is generated or journaled, whatever ended the access (expiry, revocation, a missing grant). They are
-    # repeated before the import, where a failure, like a denied versions.add (which cannot be tested beforehand), uses up
-    # the run (failed-before-commit or recovery-needed). Without recorded expiries the 4 h / 30 d ceilings are the IAM
-    # conditions' alone. Expiries are optional here; any that are recorded are still held to the approved ceilings, need
-    # a basis, and must leave the 30-minute margin (readiness).
+    # With access.liveCheck (owner decision, 2026-11-03), access is checked live, not from a recorded timestamp: after the
+    # signer login and under the lock, the run's metadata calls on both secrets use the same credentials and stop it
+    # (metadata-unavailable, secret-missing or secret-occupied) before any key is generated or journaled, whatever ended
+    # the access (expiry, revocation, a missing get or list grant). They are repeated before the import, where a failure,
+    # like a denied versions.add (which cannot be tested beforehand), uses up the run (failed-before-commit or
+    # recovery-needed). Without recorded expiries the 4 h / 30 d ceilings are the IAM conditions' alone. Expiries are then
+    # optional; any that are recorded are still held to the approved ceilings here, need a basis, and must leave the
+    # 30-minute margin (readiness).
     access = profile.get('access') or {}
     recorded = {}
     for key in ('addVersionExpires', 'accessorExpires'):
@@ -1251,15 +1259,18 @@ class GcloudExecutor:
 def plan(name, profiles):
     profile = profiles['profiles'].get(name, {})
     secrets = profile.get('secrets', {})
+    live = (profile.get('access') or {}).get('liveCheck') is True
+    # A live-check profile is granted one binding per secret (grant), never the split predefined roles of the rows.
+    one = {'grantedBy': 'the one bootstrap binding on this secret (grant)'} if live else {}
     return {'profile': name, 'status': profile.get('status'), 'missing': profile.get('missing'),
         'command': f'workflow os-release.yml mode={MODE} bootstrap_profile={name} candidate_sha=<that workflow commit on main>',
-        'metadata': [dict(op, operation=op['operation'].format(secret=s, project=profile.get('project')))
+        'metadata': [dict(op, operation=op['operation'].format(secret=s, project=profile.get('project')), **one)
             for s in secrets.values() for op in METADATA_OPERATIONS],
         'grant': ('one binding per secret, holding secretmanager.secrets.get, versions.list and versions.add with a single '
                   'expiry (a custom role); versions.add cannot be checked before the add, so split or partial grants can use up '
-                  'the run' if (profile.get('access') or {}).get('liveCheck') is True else None),
+                  'the run' if live else None),
         'add': [dict(ADD_OPERATION, operation=ADD_OPERATION['operation'].format(secret=s, project=profile.get('project'),
-            file='<workspace file>')) for s in secrets.values()],
+            file='<workspace file>'), **one) for s in secrets.values()],
         'readiness': [{'code': c, 'detail': d} for c, d in readiness(name, profiles, datetime.now(timezone.utc))],
         # Installed identities are host facts: source identity is not an installed executable hash.
         'laterHostPreflight': [{'tool': t, 'kind': i.get('kind'), 'source': i.get('source'), 'observe': i.get('requiredObservation')}

@@ -1285,13 +1285,14 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertTrue(any(f.startswith('profile-unbound') for f in sb.guard(env, unbound, NOW)))
         self.assertTrue(sb.guard(dict(env, ROSE_DEVICE='rango'), unbound, NOW))  # the dispatch shape is unchanged
 
-    def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
+    def test_checked_in_profile_is_ready_and_an_unbound_copy_refuses_before_anything(self):
         unbound = copy.deepcopy(PROFILES)
         unbound['profiles']['fold-rango-factory-v1']['status'] = 'unbound'
         self.assertEqual(sb.readiness('fold-rango-factory-v1', unbound, NOW)[0][0], 'profile-unbound')
-        if PROFILES['profiles']['fold-rango-factory-v1']['status'] != 'resource-bound':
-            self.assertEqual(sb.readiness('fold-rango-factory-v1', PROFILES, NOW)[0][0], 'profile-unbound')
         profile = PROFILES['profiles']['fold-rango-factory-v1']
+        # Committed: resource-bound, nothing missing, access checked live (no recorded expiry, so NOW does not matter).
+        self.assertEqual((profile['status'], profile['missing']), ('resource-bound', []))
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', PROFILES, NOW), [])
         self.assertEqual((profile['principal'], profile['archive']['format']), ('roseos-factory-images-rango-v1', 'openssh-ed25519'))
         self.assertEqual(profile['secrets'], {'keys': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1',
                                               'passphrase': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1'})
@@ -1514,6 +1515,11 @@ class FactoryProfileValidation(unittest.TestCase):
                          {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1'})
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
+        # Each opted-in policy text claims the recorded-expiry ceilings only where they are enforced (openssh_problems).
+        for name, profile in PROFILES['profiles'].items():
+            if (profile.get('access') or {}).get('liveCheck') is True:
+                openssh = profile['archive']['format'] == 'openssh-ed25519'
+                self.assertEqual('held to those ceilings' in profile['access']['policy'], openssh, name)
 
     def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
         profiles = factory_ready_profiles()
@@ -1554,10 +1560,17 @@ class FactoryProfileValidation(unittest.TestCase):
                 self.assertEqual(codes(retry), ['previous-attempt'])  # never retried or regenerated
 
     def test_plan_tells_the_admin_to_grant_one_binding_per_secret(self):
-        grant = sb.plan('fold-rango-factory-v1', PROFILES)['grant']
-        self.assertIn('one binding per secret', grant)
-        self.assertIn('versions.add', grant)
-        self.assertIsNone(sb.plan('fold-rango-v1', PROFILES)['grant'])
+        plan = sb.plan('fold-rango-factory-v1', PROFILES)
+        self.assertIn('one binding per secret', plan['grant'])
+        self.assertIn('versions.add', plan['grant'])
+        rows = plan['metadata'] + plan['add']  # no row may suggest the split predefined-role grant
+        self.assertEqual({r['grantedBy'] for r in rows}, {'the one bootstrap binding on this secret (grant)'})
+        self.assertEqual(sorted({r['permission'] for r in rows}),
+                         ['secretmanager.secrets.get', 'secretmanager.versions.add', 'secretmanager.versions.list'])
+        fold = sb.plan('fold-rango-v1', PROFILES)  # a recorded-expiry profile keeps the predefined roles
+        self.assertIsNone(fold['grant'])
+        self.assertEqual({r['grantedBy'] for r in fold['metadata'] + fold['add']},
+                         {'roles/secretmanager.viewer', 'roles/secretmanager.secretVersionAdder'})
 
     def test_a_failed_live_access_call_stops_before_any_key_or_journal_and_can_be_retried(self):
         profiles = factory_ready_profiles()
