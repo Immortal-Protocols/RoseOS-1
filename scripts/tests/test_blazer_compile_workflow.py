@@ -73,7 +73,9 @@ class Wiring(unittest.TestCase):
             reconcile.mkdir()
             (reconcile/'0001-2026103101.json').write_text('{}')
             (reconcile/f'0002-blazer-{build}.json').write_text('{}')
-        return str(reconcile), str(work/'inputs/local-inputs.json')
+        # 2026-11-03T15:00:00Z as epoch seconds: the BUILD_DATETIME of this reservation
+        return {'integrationDir': str(reconcile), 'inputsReceipt': str(work/'inputs/local-inputs.json'),
+                'buildNumber': build, 'buildDatetime': '1793718000'}
 
     def test_run_selects_exactly_one_completed_integration_of_this_commit(self):
         home = Path(tempfile.mkdtemp())
@@ -89,7 +91,7 @@ class Wiring(unittest.TestCase):
         with self.assertRaises(wiring.Refused):
             wiring.integration(RECIPE, source, home)  # two completed: ambiguous
         home = Path(tempfile.mkdtemp())
-        reconcile, _ = self.reserve(home, '2026110301')
+        reconcile = self.reserve(home, '2026110301')['integrationDir']
         os.rename(reconcile, reconcile + '-real')
         os.symlink(reconcile + '-real', reconcile)
         with self.assertRaises(wiring.Refused):
@@ -100,6 +102,19 @@ class Wiring(unittest.TestCase):
         with self.assertRaises(wiring.Refused):
             wiring.integration(RECIPE, source, home)  # an unrecognised reservation refuses
 
+    def test_the_selected_reservation_gives_the_build_identity(self):
+        import calendar, time
+        self.assertEqual(int(wiring.build_datetime('2026-11-03T15:00:00Z')),
+                         calendar.timegm(time.strptime('2026-11-03T15:00:00Z', '%Y-%m-%dT%H:%M:%SZ')))
+        self.assertEqual(wiring.build_datetime('2026-11-03T15:00:00Z'), '1793718000')
+        for bad in ('2026-11-03 15:00:00', '', None, '2026-11-03T15:00:00+01:00'):
+            with self.subTest(bad=bad), self.assertRaises(wiring.Refused):
+                wiring.build_datetime(bad)
+        home = Path(tempfile.mkdtemp())
+        chosen = self.reserve(home, '2026110303')
+        self.assertEqual(wiring.integration(RECIPE, Path(SOURCE), home), chosen)
+        self.assertEqual((chosen['buildNumber'], chosen['buildDatetime']), ('2026110303', '1793718000'))
+
     def test_a_bound_binding_resolves_the_accepted_argv_and_recipe_bounds(self):
         tail, outer, minutes = wiring.resolve(binding())
         self.assertEqual(tail, ['--stage', 'compile', '--host', 'immortal-os-builder', '--lock', '/home/pixelbuild/frankel-build.lock',
@@ -108,7 +123,8 @@ class Wiring(unittest.TestCase):
         self.assertEqual((outer, minutes), (recipe['compile']['timeoutSeconds'] + 300, -(-(recipe['compile']['timeoutSeconds'] + 330) // 60) + 10))
         self.assertEqual((outer, minutes), (29100, 496))
         helper = (ROOT/'scripts/blazer-build-only.py').read_text()
-        for flag in ('--stage', '--host', '--lock', '--source-root', '--jobs', '--integration-dir', '--inputs-receipt', '--receipt-dir'):
+        for flag in ('--stage', '--host', '--lock', '--source-root', '--jobs', '--integration-dir', '--inputs-receipt',
+                     '--build-number', '--build-datetime', '--receipt-dir'):
             self.assertIn(f"parser.add_argument('{flag}'", helper)
 
     def test_invalid_bindings_refuse(self):

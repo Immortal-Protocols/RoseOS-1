@@ -15,13 +15,17 @@ blazer target-files on the original builder, in the isolated blazer-prep work tr
       both regular files with no link in the path. None or more than one refuses (exit 1) before the helper. Then exec
       of exactly `blazer-build-only.py run --stage compile --host H --lock L --source-root S --jobs J
       --integration-dir blazer-reconcile-<build> --inputs-receipt R --receipt-dir NEW`. Integrate and compile are
-      therefore dispatched on the same commit: the helper's compile_problems also requires HEAD to be the admitted recipe. The helper does every host check (isolation,
+      therefore dispatched on the same commit: the helper's compile_problems also requires HEAD to be the admitted recipe.
+      The same reservation gives the build identity: --build-number <build> --build-datetime <reservedAt as epoch>, which
+      Flavors' helper exports as BUILD_NUMBER and BUILD_DATETIME, so the target-files carry the allocated build
+      (ro.build.version.incremental) that signing, packaging and the Updater check. The helper does every host check (isolation,
       the integration binding, lock, space, its own timeout) and writes preflight.json, started.json and completed.json
       (the collected target-files, otatools and boot image paths and hashes) write-once.
 
 Compile neither signs nor packages. Exit status: 0 ok, 1 refused, 2 invalid, 4 unbound.
 """
 import argparse
+import calendar
 import importlib.util
 import json
 import math
@@ -30,6 +34,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = ROOT/'os/build-only/blazer-compile-host.json'
@@ -114,8 +119,17 @@ def plain(path):
     return not any(p.is_symlink() for p in (path, *path.parents)) and (path.is_file() or path.is_dir())
 
 
+def build_datetime(reserved_at):
+    """The reservation's reservedAt (UTC, %Y-%m-%dT%H:%M:%SZ) as epoch seconds: the build's BUILD_DATETIME."""
+    try:
+        return str(calendar.timegm(time.strptime(str(reserved_at), '%Y-%m-%dT%H:%M:%SZ')))
+    except ValueError:
+        raise Refused(f'the reservation time {str(reserved_at)[:32]!r} is not a UTC timestamp') from None
+
+
 def integration(recipe, source, home=HOME, root=ROOT):
-    """(--integration-dir, --inputs-receipt) of the one completed integration reserved for this recipe, or Refused."""
+    """{integrationDir, inputsReceipt, buildNumber, buildDatetime} of the one completed integration reserved for this
+    recipe: its directories and the build identity its reservation allocated (build and reservedAt), or Refused."""
     allocate = allocator(root)
     base = Path(home)/'rose-actions'
     directory = base/allocate.RESERVATIONS
@@ -141,10 +155,11 @@ def integration(recipe, source, home=HOME, root=ROOT):
         applied = plain(reconcile) and reconcile.is_dir() and any(
             plain(r) and r.is_file() for r in reconcile.glob(f'[0-9][0-9][0-9][0-9]-blazer-{build}.json'))
         if plain(inputs) and inputs.is_file() and applied:
-            found.append((build, str(reconcile), str(inputs)))
+            found.append({'integrationDir': str(reconcile), 'inputsReceipt': str(inputs), 'buildNumber': build,
+                          'buildDatetime': build_datetime(record['reservedAt'])})
     if len(found) != 1:
         raise Refused(f'{len(found)} completed blazer integrations of this commit {recipe[:12]}; exactly one is required')
-    return found[0][1], found[0][2]
+    return found[0]
 
 
 def head(root=ROOT):
@@ -170,9 +185,10 @@ def main(argv=None):
             return 0
         if not a.receipt_dir or not a.receipt_dir.startswith('/'):
             raise Invalid('run needs an absolute --receipt-dir')
-        integration_dir, inputs = integration(head(), Path(tail[tail.index('--source-root') + 1]))
-        command = [sys.executable, str(HELPER), 'run', *tail, '--integration-dir', integration_dir,
-                   '--inputs-receipt', inputs, '--receipt-dir', a.receipt_dir]
+        chosen = integration(head(), Path(tail[tail.index('--source-root') + 1]))
+        command = [sys.executable, str(HELPER), 'run', *tail, '--integration-dir', chosen['integrationDir'],
+                   '--inputs-receipt', chosen['inputsReceipt'], '--build-number', chosen['buildNumber'],
+                   '--build-datetime', chosen['buildDatetime'], '--receipt-dir', a.receipt_dir]
         print(json.dumps({'helper': command[1:]}), flush=True)
         os.execv(sys.executable, command)
     except Refused as error:
