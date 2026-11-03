@@ -467,9 +467,10 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
   proposal, not verified paths. No `source` copy has run, and none is authorized.
 - **Compile** (outside preparation; for Release's separate wiring):
   `python3 scripts/blazer-build-only.py run --stage compile --host H --lock L --source-root S --jobs J
-  --integration-dir I --inputs-receipt R --receipt-dir NEW`
+  --integration-dir I --inputs-receipt R --build-number B --build-datetime T --receipt-dir NEW`
   - Runs `source build/envsetup.sh && lunch blazer-cur-user && m -jJ vendorbootimage
-    vendorkernelbootimage target-files-package otatools-package` in `S` with `OUT_DIR=out-blazer-build`,
+    vendorkernelbootimage target-files-package otatools-package` in `S` with
+    `OUT_DIR=out-blazer-build-B` (`compile.outDirTemplate`), `BUILD_NUMBER=B`, `BUILD_DATETIME=T`,
     `PATH=/usr/bin:/bin`, inherited `GIT_*` stripped and `GIT_CEILING_DIRECTORIES=S`. Its own
     session and process group end on a stop: SIGTERM, then SIGKILL after `killGraceSeconds`.
   - **Admission:**
@@ -477,7 +478,19 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     - the generated vendor tree is from the pinned adevtool;
     - the Rose integration binds (`I` is host-reconcile's receipt directory, `R` is the admitted
       `local-inputs.json`);
-    - no existing `out-blazer-build`, a free lock, and available − allowance ≥ the 300 GiB reserve.
+    - no existing `out-blazer-build-B` (an earlier build's output, such as a legacy `out-blazer-build`,
+      is never read, moved or written), a free lock, and available − allowance ≥ the 300 GiB reserve;
+    - **build identity:** `--build-number B` (`[1-9][0-9]{9}`) must equal `R`'s `candidate.build`,
+      whose reconcile receipt in `I` is labelled `blazer-B`. `--build-datetime T`
+      (`[1-9][0-9]{0,11}`, epoch seconds UTC) must equal the `reservedAt` of B's write-once
+      `roseos.blazer-allocation.v1` reservation at `I/../blazer-allocations/B.json`. That
+      reservation is read no-follow, must have exactly that schema, and must name this `I` as its
+      `integrationDir`. T must not be before B's UTC day or in the future. Both flags are required
+      for compile and refused for every other stage. Inherited `BUILD_NUMBER`, `BUILD_DATETIME` and
+      `BUILD_DATETIME_FILE` are dropped before the explicit values are set;
+    - `preflight.json`, `started.json` and `completed.json` carry
+      `buildIdentity: {buildNumber, buildDatetime}`. `completed.outDir` and the collected outputs use
+      `out-blazer-build-B`.
   - **First-build allowance** `capacity.compileAllowanceBytes` = 250 GiB (`compileAllowanceKind`
     `first-build-proposal`). It is reviewed, not measured; there is no prior-run gate. Admission
     therefore needs 550 GiB free on `S`'s filesystem.

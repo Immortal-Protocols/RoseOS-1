@@ -47,8 +47,12 @@ Git metadata (outside preparation): git-meta --host --lock --source-root ISOLATE
             system/global config are ignored, only the source's protocol is allowed, and no command touches the
             working tree; on any failure every .git this run created is removed. Needs runtime approval for its source.
 Build stage (outside preparation): compile --host --jobs --lock --source-root ISOLATED --integration-dir --inputs-receipt
-            `lunch blazer-cur-user && m -jN <makeGoals>` with OUT_DIR=out-blazer-build, PATH=/usr/bin:/bin and GIT_*
-            stripped, in ISOLATED (never the production source root), after the Rose integration admission. Its byte
+            --build-number B --build-datetime T
+            `lunch blazer-cur-user && m -jN <makeGoals>` with OUT_DIR=out-blazer-build-B (fresh per build; an existing one
+            refuses), BUILD_NUMBER=B and BUILD_DATETIME=T (B must be the admitted inputs' build; T must equal the reservedAt
+            of B's write-once reservation <integration-dir>/../blazer-allocations/B.json, whose integrationDir is this
+            --integration-dir, and not be in the future; inherited BUILD_NUMBER/BUILD_DATETIME/BUILD_DATETIME_FILE are
+            dropped), PATH=/usr/bin:/bin and GIT_* stripped, in ISOLATED (never the production source root), after the Rose integration admission. Its byte
             bound is capacity.compileAllowanceBytes, a finite first-build proposal (not a measurement and not a quota):
             preflight needs available - allowance >= reserve, and while it runs the filesystem's drop in available bytes
             since start (which counts any other writer on that filesystem too) is sampled against the allowance and
@@ -88,6 +92,7 @@ Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. 
 fetcher and a fake runner only.
 """
 import argparse
+import datetime
 import errno
 import fcntl
 import hashlib
@@ -137,6 +142,12 @@ SAFE_PATH = '/usr/bin:/bin'
 COMPILE_ALLOWANCE_KIND = 'first-build-proposal'
 COMPILE_MEASURE = 'filesystem-available-drop'
 COMPILE_MAX_SECONDS = 43200
+# F1/F2: compile carries the bound build identity, never the runner's, and writes a fresh OUT_DIR per build.
+COMPILE_OUT_DIR = 'out-blazer-build-{build}'
+BUILD_NUMBER = re.compile(r'[1-9][0-9]{9}')
+BUILD_DATETIME = re.compile(r'[1-9][0-9]{0,11}')  # epoch seconds (UTC), as W9 derives it from the reservation
+RESERVATIONS = 'blazer-allocations'  # blazer-allocate.py: <rose-actions>/blazer-allocations/<build>.json beside the integration
+IDENTITY_ENV = ('BUILD_NUMBER', 'BUILD_DATETIME', 'BUILD_DATETIME_FILE')
 NODE_PATH_DIR = 'node-path'  # inside the vendor stage's own receipt directory
 
 class InvalidInput(Exception):
@@ -201,8 +212,8 @@ def load(path=RECIPE, root=ROOT, probe=True):
         problems.append('kernelDir differs from the device contract')
     if recipe['generate']['argv'] != ['vendor/adevtool/bin/run', 'generate-all', '-d', DEVICE]:
         problems.append('generation must name -d blazer explicitly (never the all-device default)')
-    if recipe['compile']['outDir'] != 'out-blazer-build':
-        problems.append('compile OUT_DIR must be out-blazer-build')
+    if recipe['compile'].get('outDirTemplate') != COMPILE_OUT_DIR or 'outDir' in recipe['compile']:
+        problems.append(f'compile.outDirTemplate must be {COMPILE_OUT_DIR} (a fresh directory per bound build)')
     flavor = json.loads((root/recipe['flavor']).read_text())
     if flavor['device']['lunch'] != recipe['lunch'] or flavor['provenance']['adevtool'] != recipe['pins']['vendor/adevtool']:
         problems.append('recipe differs from the blazer flavor contract')
@@ -313,12 +324,13 @@ def preparation_problems(recipe, root, contract, probe=True):
     if lunch.get('expect') != {'TARGET_PRODUCT': product, 'TARGET_RELEASE': release, 'TARGET_BUILD_VARIANT': variant,
                                'TARGET_DEVICE': DEVICE}:
         problems.append(f'preparation.lunch.expect must follow lunch {recipe["lunch"]}')
-    if lunch.get('outDir') in (None, recipe['compile']['outDir']) or '/' in str(lunch.get('outDir')):
+    compile_family = re.escape(COMPILE_OUT_DIR.split('-{build}')[0]) + r'(-.*)?'  # out-blazer-build and every per-build dir
+    if lunch.get('outDir') is None or re.fullmatch(compile_family, str(lunch['outDir'])) or '/' in str(lunch.get('outDir')):
         problems.append('preparation.lunch.outDir must be its own top-level OUT_DIR, not the compile OUT_DIR')
     return problems
 
 def operator(host, source_root, jobs, lock, download_dir=None, integration_dir=None, max_jobs=256, inputs_receipt=None,
-             node=None):
+             node=None, build_number=None, build_datetime=None):
     """The operator's host inputs, validated for shape only. Nothing is invented: every value is required."""
     if not HOST_LABEL.fullmatch(str(host or '')):
         raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
@@ -332,7 +344,13 @@ def operator(host, source_root, jobs, lock, download_dir=None, integration_dir=N
         path = Path(value)
         if not path.is_absolute() or '..' in path.parts:
             raise InvalidInput(f'{name} must be an absolute path without ..')
-    return {'host': host, 'jobs': jobs, **{k: (Path(v) if v is not None else None) for k, v in paths.items()}}
+    for name, value, pattern, shape in (('--build-number', build_number, BUILD_NUMBER, 'a ten-digit YYYYMMDDNN build number'),
+                                        ('--build-datetime', build_datetime, BUILD_DATETIME, 'epoch seconds (1-12 digits)')):
+        if value is not None and not pattern.fullmatch(str(value)):
+            raise InvalidInput(f'{name} must be {shape}')
+    return {'host': host, 'jobs': jobs, 'buildNumber': None if build_number is None else str(build_number),
+            'buildDatetime': None if build_datetime is None else str(build_datetime),
+            **{k: (Path(v) if v is not None else None) for k, v in paths.items()}}
 
 def symlink_in(path):
     """The first existing component of path that is a symlink, or None."""
@@ -382,10 +400,11 @@ def commands(recipe, op, root=ROOT):
                               'argv': git_meta_argv(Path(src)/row['path'], spec['fetchUrlPrefix'] + row['name'], row['revision'])}
                              for row in spec['projects']],
                 'projectTimeoutSeconds': spec['projectTimeoutSeconds'], 'timeoutSeconds': spec['timeoutSeconds']}
-        if op['jobs'] is not None:
+        if op['jobs'] is not None and op['buildNumber'] is not None and op['buildDatetime'] is not None:
             make = 'm -j{} {}'.format(op['jobs'], ' '.join(recipe['compile']['makeGoals']))
-            rendered['compile'] = {'cwd': src, 'env': {'OUT_DIR': recipe['compile']['outDir'], 'PATH': SAFE_PATH,
-                                                       'GIT_CEILING_DIRECTORIES': src},
+            rendered['compile'] = {'cwd': src, 'env': {'OUT_DIR': compile_out_dir(recipe, op), 'PATH': SAFE_PATH,
+                                                       'GIT_CEILING_DIRECTORIES': src, 'BUILD_NUMBER': op['buildNumber'],
+                                                       'BUILD_DATETIME': op['buildDatetime']},
                 'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {make}'],
                 'timeoutSeconds': recipe['compile']['timeoutSeconds']}
     return rendered
@@ -599,6 +618,77 @@ def collect_compile_outputs(src, out_dir):
     return {'outDir': str(out), 'verdict': 'complete' if complete else 'incomplete', 'artifacts': artifacts,
             'collector': 'scripts/rango-collect.py (bound to blazer paths)', 'signed': False}
 
+def compile_out_dir(recipe, op):
+    """The bound build's own OUT_DIR (relative to the source root): fresh per build, never an earlier build's."""
+    return recipe['compile']['outDirTemplate'].format(build=op['buildNumber'])
+
+def allocation():
+    """Release's blazer-allocate.py, loaded only for its reservation schema constants (never run here)."""
+    spec = importlib.util.spec_from_file_location('blazer_allocate', ROOT/'scripts/blazer-allocate.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def reservation_datetime(op):
+    """(epoch seconds or None, problem or None, path): BUILD_DATETIME bound to the build's own write-once reservation, which
+    blazer-allocate.py writes beside the integration directory it names. The record must be exactly a blazer reservation
+    for this build whose integrationDir is this --integration-dir; its reservedAt is the build datetime."""
+    alloc, number, integration = allocation(), op['buildNumber'], op['integrationDir']
+    path = Path(integration).parent/RESERVATIONS/f'{number}.json'
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd) as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise ValueError('not a regular file')
+            record = json.loads(f.read(1 << 20))
+    except (OSError, ValueError) as error:
+        return None, f'no readable reservation {path} for build {number} ({type(error).__name__})', path
+    if (not isinstance(record, dict) or set(record) != alloc.RECORD_KEYS or record['schema'] != alloc.SCHEMA
+            or record['device'] != alloc.DEVICE or record['build'] != number):
+        return None, f'{path} is not exactly the {alloc.SCHEMA} reservation of build {number}', path
+    if record['integrationDir'] != str(integration):
+        return None, f'the reservation of build {number} names integration {record["integrationDir"]}, not {integration}', path
+    try:
+        reserved = datetime.datetime.strptime(record['reservedAt'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None, f'the reservation of build {number} has no UTC reservedAt', path
+    return int(reserved.timestamp()), None, path
+
+def identity_problems(op, wall):
+    """(problems, facts) binding compile's BUILD_NUMBER and BUILD_DATETIME: the number is the admitted inputs' build (the
+    reservation-derived integration, whose newest reconcile receipt must carry blazer-<build>); the datetime is exactly
+    that build's reservation reservedAt (blazer-allocate.py, beside this integration directory), within the build's UTC
+    day or later and no later than now. Nothing is taken from the runner."""
+    number, stamp = op['buildNumber'], op['buildDatetime']
+    facts = {'buildNumber': number, 'buildDatetime': stamp}
+    problems = []
+    try:
+        inputs = json.loads(Path(op['inputsReceipt']).read_text())
+        bound = str((inputs.get('candidate') or {}).get('build'))
+    except (OSError, ValueError, TypeError, AttributeError):
+        bound = None
+    facts['inputsReceiptBuild'] = bound
+    if bound != number:
+        problems.append(f'--build-number {number} is not the admitted inputs build {bound}: the build identity is unbound')
+    try:
+        day = datetime.datetime.strptime(number[:8], '%Y%m%d').replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return problems + [f'--build-number {number} does not start with a valid UTC date'], facts
+    when = int(stamp)
+    facts['buildDatetimeUtc'] = datetime.datetime.fromtimestamp(when, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    if when < int(day.timestamp()):
+        problems.append(f'--build-datetime {stamp} is before build {number}\'s UTC day')
+    if when > int(wall()):
+        problems.append(f'--build-datetime {stamp} is in the future')
+    if op['integrationDir'] is not None:
+        reserved, problem, path = reservation_datetime(op)
+        facts.update(reservation=str(path), reservedAtEpoch=reserved)
+        if problem:
+            problems.append(problem)
+        elif reserved != when:
+            problems.append(f'--build-datetime {stamp} is not the reservation reservedAt of build {number} ({reserved})')
+    return problems, facts
+
 def available_bytes(statvfs, where):
     fs = statvfs(where)
     return fs.f_bavail * fs.f_frsize
@@ -648,7 +738,7 @@ def source_preflight(recipe, src, production, problems, facts):
         problems.append(f'the production source root {production} is not an existing, link-free directory')
     return nearest_existing(src)
 
-def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=ROOT):
+def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=ROOT, wall=time.time):
     """{'ready': bool, 'problems': [...], 'facts': {...}} for one stage. Reads only; writes and runs nothing."""
     if stage not in STAGES:
         raise InvalidInput(f'stage must be one of {STAGES}')
@@ -663,8 +753,10 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
     needs = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'),
              'lunch': ('sourceRoot',), GIT_META_STAGE: ('sourceRoot',), 'compile': ('sourceRoot',)}[stage]
     absent = [n for n in needs if op[n] is None]
-    if stage == 'compile' and op['jobs'] is None:
-        absent.append('jobs')
+    if stage == 'compile':
+        absent += [n for n in ('jobs', 'buildNumber', 'buildDatetime') if op[n] is None]
+    elif op.get('buildNumber') is not None or op.get('buildDatetime') is not None:
+        problems.append('only compile takes --build-number and --build-datetime')
     if absent:
         problems.append(f'{stage} needs {", ".join("--" + re.sub(r"([A-Z])", lambda m: "-" + m[1].lower(), n) for n in absent)}')
         return {'ready': False, 'problems': problems, 'facts': facts}
@@ -741,12 +833,19 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         problems += tree_problems(recipe, src) + vendor_tree_problems(recipe, src)
         integration_problems, facts['roseIntegration'] = integration(recipe, src, op['integrationDir'], op['inputsReceipt'])
         problems += integration_problems
-        if os.path.lexists(src/recipe['compile']['outDir']):
-            problems.append(f'{recipe["compile"]["outDir"]} already exists; refusing to reuse or overwrite an OUT_DIR')
+        identity, facts['buildIdentity'] = identity_problems(op, wall)
+        problems += identity
+        out_dir = compile_out_dir(recipe, op)
+        facts['outDir'] = out_dir
+        if os.path.lexists(src/out_dir):
+            problems.append(f'{out_dir} already exists; refusing to reuse or overwrite an OUT_DIR')
     if not lock_probe(op['lock']):
         problems.append('the builder lock is held by another job')
     space(stage, recipe, where, statvfs, facts, problems)
-    return {'ready': not problems, 'problems': problems, 'facts': facts}
+    report = {'ready': not problems, 'problems': problems, 'facts': facts}
+    if stage == 'compile':
+        report['buildIdentity'] = {'buildNumber': op['buildNumber'], 'buildDatetime': op['buildDatetime']}
+    return report
 
 def stamp(now):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now()))
@@ -1833,7 +1932,9 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
             node_dir.mkdir(mode=0o700)
             os.symlink(op['node'], node_dir/'node')
             command['env']['PATH'] = f'{node_dir}:{SAFE_PATH}'
-        release_receipts.write_once(receipt_dir/'started.json', {**base, 'host': op['host'], 'command': command, 'at': stamp(now)})
+        identity = {'buildIdentity': report['buildIdentity']} if stage == 'compile' else {}
+        release_receipts.write_once(receipt_dir/'started.json', {**base, 'host': op['host'], 'command': command, **identity,
+                                                                 'at': stamp(now)})
         if stage == 'source':
             ok, outcome = construct(recipe, op, Path(report['facts']['productionSourceRoot']), probes.get('root', ROOT),
                                     statvfs=statvfs, clock=clock)
@@ -1849,7 +1950,9 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
             return 0 if ok else 1
         # Inherited GIT_* (e.g. a GIT_DIR or GIT_WORK_TREE elsewhere) never reaches a child: git answers only from
         # the tree itself, bounded by GIT_CEILING_DIRECTORIES at the source root.
-        env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_')}, **command['env']}
+        # Nor does an inherited build identity: compile sets BUILD_NUMBER and BUILD_DATETIME from the bound inputs only.
+        env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_') and k not in IDENTITY_ENV},
+               **command['env']}
         prep, capacity = recipe['preparation'], recipe['capacity']
         bound = capacity['compileAllowanceBytes'] if stage == 'compile' else prep[stage]['boundBytes']
         kind = capacity['compileAllowanceKind'] if stage == 'compile' else prep['boundsKind']
@@ -1898,9 +2001,10 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
             ok, outcome['error'] = False, (f'consumed {outcome["consumedBytes"]} bytes, above the {limits["boundBytes"]}-byte '
                                            'bound between samples (outputs are kept, not deleted)')
         if stage == 'compile':
-            outcome.update(measure=COMPILE_MEASURE, startAvailableBytes=start, outDir=recipe['compile']['outDir'])
+            outcome.update(measure=COMPILE_MEASURE, startAvailableBytes=start, outDir=compile_out_dir(recipe, op),
+                           buildIdentity=report['buildIdentity'])
             if ok:  # Signing's inputs: the unsigned target-files and otatools (and the vendor boot images), hashed
-                outcome['outputs'] = collect_compile_outputs(op['sourceRoot'], recipe['compile']['outDir'])
+                outcome['outputs'] = collect_compile_outputs(op['sourceRoot'], compile_out_dir(recipe, op))
                 if outcome['outputs']['verdict'] != 'complete':
                     ok, outcome['error'] = False, 'make exited 0 but the expected outputs are not all collected'
         if stage == 'vendor':
@@ -1973,12 +2077,14 @@ def main(argv=None):
     parser.add_argument('--node')
     parser.add_argument('--integration-dir')
     parser.add_argument('--inputs-receipt')
+    parser.add_argument('--build-number')
+    parser.add_argument('--build-datetime')
     parser.add_argument('--receipt-dir')
     a = parser.parse_args(argv)
     try:
         recipe = load(a.recipe)
         op = operator(a.host, a.source_root, a.jobs, a.lock, a.download_dir, a.integration_dir,
-            recipe['compile']['maxJobs'], a.inputs_receipt, a.node)
+            recipe['compile']['maxJobs'], a.inputs_receipt, a.node, a.build_number, a.build_datetime)
         inspect_only = {k: v for k, v in vars(a).items() if (k.startswith('candidate_') or k == 'reference_source_root') and v}
         if a.action == 'inspect':
             candidates = candidate_paths(a.candidate_root, recipe['preparation']['candidateLayout'], sourceRoot=a.candidate_source_root,
