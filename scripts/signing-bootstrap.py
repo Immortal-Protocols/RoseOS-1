@@ -153,8 +153,8 @@ def readiness(name, profiles, now):
     if (profile.get('archive') or {}).get('format') != 'openssh-ed25519':  # fixed generate_openssh, no recipe vocabulary
         reasons += [('recipe-missing' if code == 'missing' else 'recipe-invalid', detail)
             for code, detail in recipe_problems(profile)]
-    elif not factory_signing.PRINCIPAL.fullmatch(str(profile.get('principal'))):
-        reasons.append(('profile-principal', 'an openssh-ed25519 profile needs a plain principal'))
+    else:
+        reasons += openssh_problems(profile, now)
     access = profile.get('access', {})
     margin = timedelta(seconds=access.get('minimumRemainingSeconds', 1800))
     for key in ('addVersionExpires', 'accessorExpires'):
@@ -726,17 +726,56 @@ def pkcs12_identity(cert_pem, listing, generation):
         ('keyAlgorithm', 'keySize', 'signatureAlgorithm', 'subject', 'validityDays', 'notBefore')}}
 
 
+# Approved-proposal ceilings for the factory-archive identity's recorded IAM expiries. They are checked only against
+# expiries the profile records from an IAM readback; a null expiry is never treated as either duration (access-unknown).
+OPENSSH_BOOTSTRAP_MAX = timedelta(hours=4)
+OPENSSH_ACCESSOR_MAX = timedelta(days=30)
+
+
+def openssh_problems(profile, now):
+    """Closed shape of an openssh-ed25519 profile, plus the recorded-expiry ceilings. Nothing is invented: a missing
+    tool identity, public identity or expiry stays a refusal."""
+    problems = []
+    if not factory_signing.PRINCIPAL.fullmatch(str(profile.get('principal'))):
+        problems.append(('profile-invalid', 'an openssh-ed25519 profile needs a plain principal'))
+    inventory = profile.get('keyInventory') or {}
+    if inventory.get('requiredByConsumer') != [factory_signing.KEY_FILE] or inventory.get('optionalByConsumer'):
+        problems.append(('profile-invalid', 'keyInventory must be exactly id_ed25519'))
+    if sorted(profile.get('tools') or {}) != ['ssh-keygen'] or (profile['tools']['ssh-keygen'].get('kind') != 'installed'):
+        problems.append(('profile-invalid', 'tools must be exactly a measured installed ssh-keygen'))
+    if profile.get('recheckEmptyBeforeImport') is not True:
+        problems.append(('profile-invalid', 'recheckEmptyBeforeImport must be true'))
+    if profile.get('localProof') or (profile.get('generation') or {}).get('recipe') is not None:
+        problems.append(('profile-invalid', 'no local proof or recipe: generation is the fixed generate_openssh'))
+    access = profile.get('access') or {}
+    try:
+        add, accessor = parse_time(access['addVersionExpires']), parse_time(access['accessorExpires'])
+    except (KeyError, TypeError, ValueError):
+        return problems  # readiness already reports access-unknown: null expiries are never enforced or assumed
+    if not access.get('basis'):
+        problems.append(('access-unknown', 'recorded expiries need the IAM readback basis'))
+    if add - now > OPENSSH_BOOTSTRAP_MAX or accessor - now > OPENSSH_ACCESSOR_MAX or add > accessor:
+        problems.append(('access-window', f'recorded expiries exceed the approved {OPENSSH_BOOTSTRAP_MAX} bootstrap / '
+                         f'{OPENSSH_ACCESSOR_MAX.days} d accessor ceilings or are out of order'))
+    return problems
+
+
 def generate_openssh(workspace, profile, runner=None, token=None):
     """Factory-archive signing key: no recipe vocabulary; exactly factory_signing.generate_key, after the measured
     ssh-keygen identity is approved. The passphrase reaches ssh-keygen only through the pinned askpass helper."""
     identity = (profile.get('tools') or {}).get('ssh-keygen') or {}
     if not tool_approved(identity):
         raise Blocked('tool-unapproved', 'ssh-keygen: no measured installed path and sha256; nothing is run')
+    runner = runner or factory_signing.run_bounded
     try:
-        public = factory_signing.generate_key(workspace, tool_path(identity), runner or factory_signing.run_bounded, token=token)
+        public = factory_signing.generate_key(workspace, tool_path(identity), runner, token=token)
     except factory_signing.Refused as error:
         raise Blocked('generator-failed', str(error)) from None
-    return dict(public, principal=profile['principal'], namespace=factory_signing.NAMESPACE)
+    try:
+        checked = factory_signing.self_check(workspace, tool_path(identity), public, profile['principal'], runner)
+    except factory_signing.Refused as error:
+        raise Blocked('selfcheck-failed', str(error)) from None
+    return dict(public, principal=profile['principal'], namespace=factory_signing.NAMESPACE, selfCheck=checked)
 
 
 def subprocess_runner(tool, argv, cwd, stdin_path, timeout=900, stdout_path=None):
@@ -1031,7 +1070,10 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
         if not isinstance(generated, dict) or generated.get('publicKey') != header['publicKey'] \
                 or generated.get('principal') != profile.get('principal'):
             return stop('unexpected-output', 'the reported public identity is not the generated key', 'failed')
-        identity = dict(header, principal=profile['principal'], namespace=factory_signing.NAMESPACE)
+        if generated.get('selfCheck') != {'decrypt': True, 'signVerify': True, 'negativeRefused': True}:
+            return stop('selfcheck-failed', 'no complete decrypt/sign/verify self-check before import; nothing added', 'failed')
+        identity = dict(header, principal=profile['principal'], namespace=factory_signing.NAMESPACE,
+                        selfCheck=generated['selfCheck'])
     elif outputs == PKCS12_OUTPUTS:
         try:
             identity = verified_pkcs12(generated, created/'keystore.p12', profile)
