@@ -175,6 +175,28 @@ public final class MultiSessionTest {
             expect(MultiSession.VIEWER_LOCKED.equals(MultiSession.viewerStop(ended, true, "s-calc", "t-1", "t-1", true, true).refusal),
                 "while locked nothing about the session is decided or stopped");
         }
+        // The viewer's wording, exactly as agreed with Agent Product/Home (#410), and what each reply does.
+        expect(ViewerStop.BUTTON.equals("Stop") && ViewerStop.KEEP.equals("Keep working"), "the Background Work sheet's pair");
+        expect(ViewerStop.title("Clock").equals("Stop Rose\u2019s work in Clock?")
+            && ViewerStop.description("Clock").equals("Stop Rose\u2019s work in Clock"), "title and accessibility name");
+        expect(ViewerStop.MESSAGE.equals("This stops only this session. Rose\u2019s other work keeps running. Closing this view doesn\u2019t stop anything."),
+            "the agreed message: closing never stops");
+        Object[][] outcomes = {
+            {"stopped", true, "Stopped. Rose\u2019s other work keeps running.", true, false},
+            {"stopped", false, "Rose couldn\u2019t confirm the stop. It may still be running.", false, true},
+            {"cleanup_failed", false, "Android couldn\u2019t close this session yet. It may still be running.", false, true},
+            {MultiSession.VIEWER_LOCKED, false, "Unlock to stop it.", false, true},
+            {MultiSession.VIEWER_ENDED, false, "This work already ended. Nothing was stopped.", true, false},
+            {MultiSession.VIEWER_RETAGGED, false, "Rose moved this session to another task. Nothing was stopped.", true, false},
+            {MultiSession.VIEWER_REPLACED, false, "This view no longer matches Rose\u2019s work. Nothing was stopped.", true, false},
+            {MultiSession.VIEWER_UNBOUND, false, "This view no longer matches Rose\u2019s work. Nothing was stopped.", true, false},
+            // An error or unknown reply may have stopped part of the work: never "Stopped", never "Nothing was stopped".
+            {"error", false, "Rose couldn\u2019t confirm the stop. It may still be running.", false, true},
+            {"cleanup_failed", true, "Android couldn\u2019t close this session yet. It may still be running.", false, true}};
+        for (Object[] o : outcomes) {
+            ViewerStop.Outcome r = ViewerStop.of((String) o[0], (Boolean) o[1]);
+            expect(r.text.equals(o[2]) && r.closeViewer == (Boolean) o[3] && r.stopAgain == (Boolean) o[4], "outcome " + o[0] + "/" + o[1]);
+        }
         System.out.println("MultiSessionTest: " + checks + " checks passed");
     }
 }

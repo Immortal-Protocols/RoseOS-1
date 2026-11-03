@@ -164,7 +164,8 @@ done
 # MultiSession (two-app routing) uses CurrentApps' validated per-session answer.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MultiSession" \
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MultiSession.java \
- os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java os/background-control/tests/MultiSessionTest.java
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/ViewerStop.java os/background-control/tests/MultiSessionTest.java
 java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
