@@ -131,6 +131,24 @@ public final class CurrentAppsTest {
             Tracker fresh = new Tracker();
             expect(!fresh.apply(CurrentApps.EXPIRED) || fresh.state() == CurrentApps.State.UNAVAILABLE, "expired before anything: still the checking state");
             expect(fresh.apply(CurrentApps.fromBindings("r", "live", 1L, ra, rb, "E1", true)) && fresh.apps().size() == 1, "then the first report shows");
+            // Review finding (PR 437): the reader's own failures and the controller's fallback replies never retire it.
+            Tracker f = new Tracker();
+            f.apply(CurrentApps.fromBindings("r", "live", 5L, ra, rb, "E1", true));
+            expect(f.apply(CurrentApps.readerFailure(CurrentApps.UNREADABLE)) && f.reason().equals(CurrentApps.UNREADABLE) && f.apps().isEmpty(), "a failed read says so, with no stale card");
+            expect(f.registration().equals("controller:E1"), "and keeps the controller's registration");
+            expect(f.apply(CurrentApps.fromBindings("r", "live", 6L, ra, rb, "E1", true)) && f.apps().size() == 1, "the controller's next report is shown again");
+            f.apply(CurrentApps.readerFailure(CurrentApps.NOT_INSTALLED));
+            expect(f.reason().equals(CurrentApps.NOT_INSTALLED), "no provider: said");
+            expect(f.apply(CurrentApps.fromBindings("r", "live", 6L, ra, rb, "E1", true)), "same generation after a reader failure: shown again");
+            // A fallback reply (no owned_devices) from the same controller process carries its epoch: same registration.
+            Snapshot fallback = CurrentApps.fromReply("current_apps-9", "live", "s-0", "t-0", 7L, java.util.Arrays.asList(new CurrentApps.ReplyApp("com.android.calculator2", true, true)), "E1", "ready", false, "session_windows");
+            expect(fallback.registration.equals("controller:E1"), "the fallback reply is the same controller: " + fallback.registration);
+            expect(f.apply(fallback) && f.reason().equals(CurrentApps.INCOMPLETE), "its incomplete state is shown");
+            expect(f.apply(CurrentApps.fromBindings("r", "live", 8L, ra, rb, "E1", true)) && f.apps().size() == 1, "and the next owned_devices report is not refused");
+            expect(!f.apply(CurrentApps.fromBindings("r", "live", 7L, ra, rb, "E1", true)), "one generation order across both reply shapes");
+            Tracker first = new Tracker();
+            expect(first.apply(CurrentApps.readerFailure(CurrentApps.NOT_INSTALLED)) && first.state() == CurrentApps.State.UNAVAILABLE && first.reason().equals(CurrentApps.NOT_INSTALLED), "a first read that fails says why");
+            expect(first.apply(CurrentApps.fromBindings("r", "live", 1L, ra, rb, "E1", true)) && first.apps().size() == 1, "then the controller's first report shows");
             // current(): read since the last resume and within MAX_AGE_MS.
             long resumed = 1000, max = CurrentApps.MAX_AGE_MS;
             expect(CurrentApps.current(1000, resumed, 1000) && CurrentApps.current(1200, resumed, 1200 + max), "a read since resume, up to the max age");

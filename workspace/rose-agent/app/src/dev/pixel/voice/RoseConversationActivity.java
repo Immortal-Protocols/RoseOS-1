@@ -360,11 +360,11 @@ public final class RoseConversationActivity extends Activity {
   String reg="current_apps-"+(++appsReads);
   try{
    android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
-   if(client==null)return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.NOT_INSTALLED);
+   if(client==null)return CurrentApps.readerFailure(CurrentApps.NOT_INSTALLED);
    try{
     Bundle extras=new Bundle();extras.putString("params","{}");
     Bundle reply=client.call("current_apps",null,extras);String raw=reply==null?null:reply.getString("result");
-    if(raw==null||raw.length()>65536)return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);
+    if(raw==null||raw.length()>65536)return CurrentApps.readerFailure(CurrentApps.UNREADABLE);
     org.json.JSONObject o=new org.json.JSONObject(raw);
     java.util.List<CurrentApps.ReplyApp> apps=null;org.json.JSONArray a=o.optJSONArray("apps");
     if(a!=null){apps=new java.util.ArrayList<>();for(int i=0;i<a.length()&&i<64;i++){org.json.JSONObject x=a.optJSONObject(i);
@@ -377,10 +377,12 @@ public final class RoseConversationActivity extends Activity {
       o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null);
     return CurrentApps.fromReply(reg,o.isNull("status")?null:o.optString("status",null),o.isNull("sessionId")?null:o.optString("sessionId",null),
      o.isNull("taskId")?null:o.optString("taskId",null),o.has("generation")?o.optLong("generation"):null,apps,
-     o.isNull("instance")?null:o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
+     // The controller names its process as controllerEpoch on every reply (one generation order across both shapes),
+     // so a fallback reply keeps the same registration as an owned_devices one and never retires it.
+     o.isNull("instance")?jsonString(o,"controllerEpoch"):o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
      o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null,o.isNull("source")?null:o.optString("source",null));
    }finally{client.close();}
-  }catch(Exception e){return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);}
+  }catch(Exception e){return CurrentApps.readerFailure(CurrentApps.UNREADABLE);}
  }
  /** A JSON string field as read: null when absent, JSON null or not a string. */
  static String jsonString(org.json.JSONObject o,String key){Object v=o.opt(key);return v instanceof String?(String)v:null;}

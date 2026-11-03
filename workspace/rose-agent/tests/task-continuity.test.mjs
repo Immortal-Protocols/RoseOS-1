@@ -165,6 +165,10 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  assert.match(block,/if\(epoch==appsEpoch\)appsSnapshot=new AppsRead\(s,startedAt\);/,'a read from before re-entry never lands');
  assert.match(block,/return r!=null&&CurrentApps\.current\(r\.at,resumedAt,SystemClock\.uptimeMillis\(\)\)\?r\.snapshot:CurrentApps\.EXPIRED;/,'only a current report is shown; otherwise the checking state, never a retired registration');
  assert.doesNotMatch(activity,/unavailable\("pending"/,'no synthetic registration that would retire the controller\'s');
+ const reader=activity.slice(activity.indexOf('CurrentApps.Snapshot readCurrentApps()'),activity.indexOf(' static String jsonString('));
+ assert.doesNotMatch(reader,/Snapshot\.unavailable\(reg/,'the reader\'s own failures never become a registration');
+ assert.equal((reader.match(/CurrentApps\.readerFailure\(/g)||[]).length,3,'no provider, unreadable and failed reads are reader-local');
+ assert.match(reader,/o\.isNull\("instance"\)\?jsonString\(o,"controllerEpoch"\):o\.optString\("instance",null\)/,'a fallback reply keeps the controller\'s registration');
  assert.match(block,/void openOverview\(\)\{appsEpoch\+\+;appsSnapshot=null;appsPolledAt=0;/,'re-entry starts from a fresh read');
  assert.match(activity,/if\(overview!=null&&overview\.isOpen\(\)\)\{pollApps\(\);overview\.refresh\(\);\}/,'read only while the overview is open');
  assert.ok(!/WorkspaceOverviewFeed\.tasks\(\)/.test(block.slice(0,block.indexOf('WorkspaceOverviewPanel.Actions overviewActions()'))),'membership never reads task history');

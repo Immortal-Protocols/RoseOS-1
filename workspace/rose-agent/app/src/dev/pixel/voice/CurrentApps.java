@@ -92,6 +92,11 @@ final class CurrentApps {
   * keeps the registration and generation it had: a still-valid controller registration is never retired by it, and
   * that controller's next fresh report (same or newer generation) is shown again. Compared by identity. */
  static final Snapshot EXPIRED=Snapshot.unavailable("expired",Long.MIN_VALUE,NOT_REPORTED);
+ /** The registration of a state Rose's own reader produced (no provider, an unreadable reply, a failed call): it says
+  * why nothing can be shown, but it is not a report from any controller, so like EXPIRED it never replaces or retires
+  * the controller's registration, and that controller's next report (same or newer generation) is shown again. */
+ static final String READER_LOCAL="\u0000reader";
+ static Snapshot readerFailure(String reason){return Snapshot.unavailable(READER_LOCAL,Long.MIN_VALUE,reason);}
  /** The longest a current_apps read stays current: reads start about once a second while the overview is open. */
  static final long MAX_AGE_MS=3000;
  /** Whether a read started at readAt (uptime ms; negative when unknown) is current at now for a screen last resumed at
@@ -110,9 +115,10 @@ final class CurrentApps {
   synchronized boolean apply(Snapshot s){
    if(s==null)return false;
    String before=key();
-   if(s==EXPIRED){
-    // Hide what is no longer current without forgetting whose it was: no retirement, no new registration.
-    received=false;apps=Collections.emptyList();reason=NOT_REPORTED;expired=!registration.isEmpty();
+   if(s==EXPIRED||READER_LOCAL.equals(s.registration)){
+    // Hide what is no longer current, or say why the reader has nothing, without forgetting whose it was: no
+    // retirement, no new registration.
+    received=false;apps=Collections.emptyList();reason=s.reason.isEmpty()?NOT_REPORTED:s.reason;expired=!registration.isEmpty();
     return !key().equals(before);
    }
    if(retired.contains(s.registration))return false;
