@@ -17,9 +17,12 @@ Exactly these paths, fixed in source (no argument chooses a path):
   resources CPU count and affinity, MemTotal/MemAvailable, this process's cgroup v2 cpu.max and memory.max, and
             free/total bytes of the filesystem holding HOME/rose-actions
 
-Each file: every path component lstat'ed (a link anywhere is reported, never followed), opened O_NOFOLLOW, fstat'ed
-regular and the same inode as the lstat, hashed streamed within its byte cap and the global deadline, then fstat'ed
-again; a changed size, mtime or inode reports `changed`. Receipt and policy JSON are parsed only within
+Each path is reached by a descriptor walk from /: every directory component is opened O_DIRECTORY|O_NOFOLLOW relative
+to the previous descriptor and the leaf O_NOFOLLOW relative to its parent's, so a component that is or becomes a link is
+refused at that step and never traversed (no out-of-scope byte is read). The leaf is fstat'ed regular and the same
+inode as its lstat, hashed streamed within its byte cap and the global deadline, then fstat'ed again; a changed size,
+mtime or inode reports `changed`. Directory names are enumerated from such a descriptor. The .git types prove presence
+and type only, never a revision or a completed git-meta. Receipt and policy JSON are parsed only within
 JSON_BYTES and only allowlisted identity fields are emitted (no other content). Nothing is written, invoked, signed,
 allocated or changed. Partial results report complete:false with every reason; the output is at most OUTPUT_BYTES.
 Exit status: 0 report printed (complete true or false), 2 invalid usage.
@@ -81,43 +84,79 @@ class Budget:
         return self.clock() > self.deadline
 
 
-def linked_component(path):
-    for parent in reversed([*path.parents, path]):
-        try:
-            if stat.S_ISLNK(os.lstat(parent).st_mode):
-                return parent
-        except FileNotFoundError:
-            return None
-    return None
+DIR_OPEN = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+class Walk(Exception):
+    """A path component that is not a plain directory reached without links: state and the component."""
+    def __init__(self, state, component, target=None):
+        super().__init__(state)
+        self.state, self.component, self.target = state, component, target
+
+
+def open_parent(path):
+    """(parent directory fd, leaf name): every component from / opened O_DIRECTORY|O_NOFOLLOW relative to the previous
+    descriptor, so a component replaced by a link at any moment is refused, never traversed. The caller closes the fd."""
+    path = Path(path)
+    fd = os.open('/', DIR_OPEN)
+    walked = Path('/')
+    try:
+        for part in path.parts[1:-1]:
+            walked = walked/part
+            try:
+                child = os.open(part, DIR_OPEN, dir_fd=fd)
+            except FileNotFoundError:
+                raise Walk('absent', walked) from None
+            except OSError:
+                try:
+                    info = os.lstat(part, dir_fd=fd)
+                except OSError:
+                    raise Walk('error', walked) from None
+                if stat.S_ISLNK(info.st_mode):
+                    raise Walk('link', walked, os.readlink(part, dir_fd=fd)[:256]) from None
+                raise Walk('not-directory', walked) from None
+            os.close(fd)
+            fd = child
+        return fd, path.parts[-1]
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def observe_file(path, budget, keep=False):
-    """({state, size, sha256, ...}, the bytes when keep and small) with no link followed and no replacement missed."""
+    """({state, size, sha256, ...}, the bytes when keep and small). The leaf is opened O_NOFOLLOW relative to its
+    parent's descriptor from a no-follow walk: no link anywhere is followed and no out-of-scope byte is read."""
     row = {'path': str(path)}
-    link = linked_component(path)
-    if link is not None:
-        text = os.readlink(link)
-        row.update(state='link', link=str(link), target=text[:256])
+    try:
+        parent, leaf = open_parent(path)
+    except Walk as walk:
+        row.update(state=walk.state, component=str(walk.component), **({'target': walk.target} if walk.target else {}))
         return row, None
     try:
-        before = os.lstat(path)
-    except FileNotFoundError:
-        row['state'] = 'absent'
-        return row, None
-    except OSError as error:
-        row.update(state='error', error=type(error).__name__)
-        return row, None
-    if not stat.S_ISREG(before.st_mode):
-        row['state'] = 'not-regular'
-        return row, None
-    if before.st_size > LIMITS['fileBytes'] or budget.bytes + before.st_size > LIMITS['totalBytes']:
-        row.update(state='too-large', size=before.st_size)
-        return row, None
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError as error:
-        row.update(state='error', error=type(error).__name__)
-        return row, None
+        try:
+            before = os.lstat(leaf, dir_fd=parent)
+        except FileNotFoundError:
+            row['state'] = 'absent'
+            return row, None
+        except OSError as error:
+            row.update(state='error', error=type(error).__name__)
+            return row, None
+        if stat.S_ISLNK(before.st_mode):
+            row.update(state='link', component=str(path), target=os.readlink(leaf, dir_fd=parent)[:256])
+            return row, None
+        if not stat.S_ISREG(before.st_mode):
+            row['state'] = 'not-regular'
+            return row, None
+        if before.st_size > LIMITS['fileBytes'] or budget.bytes + before.st_size > LIMITS['totalBytes']:
+            row.update(state='too-large', size=before.st_size)
+            return row, None
+        try:
+            fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+        except OSError as error:
+            row.update(state='link' if error.errno == 40 else 'error', error=type(error).__name__)
+            return row, None
+    finally:
+        os.close(parent)
     try:
         opened = os.fstat(fd)
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino) or not stat.S_ISREG(opened.st_mode):
@@ -150,6 +189,24 @@ def observe_file(path, budget, keep=False):
     return row, (b''.join(kept) if keep and size <= LIMITS['jsonBytes'] else None)
 
 
+def open_directory(path):
+    """A descriptor of PATH itself, every component (the last included) opened no-follow; Walk otherwise."""
+    parent, leaf = open_parent(path)
+    try:
+        try:
+            return os.open(leaf, DIR_OPEN, dir_fd=parent)
+        except FileNotFoundError:
+            raise Walk('absent', Path(path)) from None
+        except OSError:
+            try:
+                info = os.lstat(leaf, dir_fd=parent)
+            except OSError:
+                raise Walk('error', Path(path)) from None
+            raise Walk('link' if stat.S_ISLNK(info.st_mode) else 'not-directory', Path(path)) from None
+    finally:
+        os.close(parent)
+
+
 def receipt_identity(data):
     try:
         receipt = json.loads(data)
@@ -176,25 +233,25 @@ def policy_identity(data):
 
 
 def matching_names(directory, pattern, budget):
-    """(matching names, other count, state) of one directory level; names only, never contents."""
-    if linked_component(directory) is not None:
-        return [], 0, 'link'
+    """(matching names, other count, state) of one directory level, enumerated from a descriptor reached by a no-follow
+    walk; names only, never contents, never a deeper level."""
     try:
-        info = os.lstat(directory)
-    except FileNotFoundError:
-        return [], 0, 'absent'
-    if not stat.S_ISDIR(info.st_mode):
-        return [], 0, 'not-directory'
+        fd = open_directory(directory)
+    except Walk as walk:
+        return [], 0, walk.state
     names, others, scanned = [], 0, 0
-    with os.scandir(directory) as it:
-        for entry in it:
-            scanned += 1
-            if scanned > LIMITS['nameEntries'] or budget.expired():
-                return sorted(names)[:LIMITS['reportedNames']], others, 'truncated'
-            if pattern.fullmatch(entry.name):
-                names.append(entry.name)
-            else:
-                others += 1
+    try:
+        with os.scandir(fd) as it:
+            for entry in it:
+                scanned += 1
+                if scanned > LIMITS['nameEntries'] or budget.expired():
+                    return sorted(names)[:LIMITS['reportedNames']], others, 'truncated'
+                if pattern.fullmatch(entry.name):
+                    names.append(entry.name)
+                else:
+                    others += 1
+    finally:
+        os.close(fd)
     if len(names) > LIMITS['reportedNames']:
         return sorted(names)[:LIMITS['reportedNames']], others, 'truncated'
     return sorted(names), others, 'listed'
@@ -268,16 +325,24 @@ def observe(host, root=ROOT, clock=time.monotonic, proc=Path('/proc'), cgroup_ro
     source = Path(source or json.loads((root/'os/build-only/blazer-prep-host.json').read_text())['sourceRoot'])
     git = {}
     for project in GIT_META_PATHS:
-        target = source/project/'.git'
         try:
-            mode = os.lstat(target).st_mode
+            fd = open_directory(source/project)
+        except Walk as walk:
+            git[project] = f'project {walk.state}'
+            continue
+        try:
+            mode = os.lstat('.git', dir_fd=fd).st_mode
             git[project] = 'directory' if stat.S_ISDIR(mode) else 'link' if stat.S_ISLNK(mode) else 'file' \
                 if stat.S_ISREG(mode) else 'other'
         except FileNotFoundError:
             git[project] = 'absent'
         except OSError as error:
             git[project] = type(error).__name__
-    report['gitMeta'] = {'sourceRoot': str(source), 'dotGit': git}
+        finally:
+            os.close(fd)
+    report['gitMeta'] = {'sourceRoot': str(source), 'dotGit': git,
+                         'evidence': 'lstat type of each .git only: presence and type, never a revision or a completed '
+                                     'git-meta; the original Infra git-meta receipts are the revision and completion evidence'}
     report['resources'] = resources(proc, cgroup_root, statvfs, storage)
     report['complete'] = not report['problems'] and not budget.expired()
     report['elapsedSeconds'] = round(clock() - (budget.deadline - LIMITS['seconds']), 3)

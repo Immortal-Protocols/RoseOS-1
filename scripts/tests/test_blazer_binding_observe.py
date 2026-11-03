@@ -110,11 +110,11 @@ class Observe(unittest.TestCase):
     def test_replacement_size_and_type_races_are_reported(self):
         real_open, target = obs.os.open, self.files['tool:java']
 
-        def swapping(path, flags, *a):
-            if Path(os.fsdecode(path)) == target:
+        def swapping(path, flags, *a, **kw):
+            if os.fsdecode(path) == target.name and kw.get('dir_fd') is not None:
                 target.unlink()
                 target.write_bytes(b'replaced after lstat')
-            return real_open(path, flags, *a)
+            return real_open(path, flags, *a, **kw)
         obs.os.open = swapping
         try:
             report = self.run_observe()
@@ -132,6 +132,65 @@ class Observe(unittest.TestCase):
             obs.LIMITS.update(saved)
         self.assertEqual(report['files']['tool:aapt']['state'], 'not-regular')
         self.assertEqual(report['files']['policy']['state'], 'too-large')
+
+    def swap_on_open(self, component, outside):
+        """Replace directory COMPONENT by a link to OUTSIDE at the moment the walk opens it."""
+        real_open = obs.os.open
+
+        def swapping(path, flags, *a, **kw):
+            name = os.fsdecode(path)
+            if kw.get('dir_fd') is not None and name == component.name and component.is_dir() and not component.is_symlink():
+                component.rename(component.with_name(component.name + '.moved'))
+                component.symlink_to(outside)
+            return real_open(path, flags, *a, **kw)
+        return real_open, swapping
+
+    def test_a_parent_replaced_by_a_link_during_a_file_read_is_never_traversed(self):
+        outside = self.tmp/'outside'
+        outside.mkdir()
+        for package in obs.PACKAGES:
+            (outside/f'{package}.apk').write_bytes(b'OUT-OF-SCOPE BYTES')
+            (outside/f'{package}.receipt.json').write_text('{"apk": "out-of-scope"}')
+        signed = self.files['apk:dev.pixel.voice'].parent
+        real_open, swapping = self.swap_on_open(signed, outside)
+        read = []
+        real_read = obs.os.read
+        obs.os.open = swapping
+        obs.os.read = lambda fd, n: (lambda data: (read.append(data), data)[1])(real_read(fd, n))
+        try:
+            report = self.run_observe()
+        finally:
+            obs.os.open, obs.os.read = real_open, real_read
+        for package in obs.PACKAGES:
+            row = report['files'][f'apk:{package}']
+            self.assertEqual((row['state'], row['component']), ('link', str(signed)))
+            self.assertNotIn('sha256', row)
+        self.assertFalse([d for d in read if b'OUT-OF-SCOPE' in d or b'out-of-scope' in d])
+        self.assertNotIn('out-of-scope', json.dumps(report))
+        self.assertFalse(report['complete'])
+
+    def test_a_parent_replaced_by_a_link_during_enumeration_lists_nothing(self):
+        outside = self.tmp/'outside-storage'
+        outside.mkdir()
+        (outside/'blazer-integrate-2099010101').mkdir()
+        storage = self.home/'rose-actions'
+        real_open, swapping = self.swap_on_open(storage, outside)
+        obs.os.open = swapping
+        try:
+            report = self.run_observe()
+        finally:
+            obs.os.open = real_open
+        self.assertEqual(report['names']['storage'], {'state': 'link', 'blazer': [], 'otherEntries': 0})
+        self.assertNotIn('2099010101', json.dumps(report))
+        self.assertIn('storage names: link', report['problems'])
+
+    def test_git_types_are_labelled_presence_only(self):
+        report = self.run_observe()
+        self.assertIn('never a revision or a completed git-meta', report['gitMeta']['evidence'])
+        (self.source/'packages/apps/Updater').rmdir()
+        (self.source/'packages/apps/Updater').symlink_to(self.tmp)
+        report = self.run_observe()
+        self.assertEqual(report['gitMeta']['dotGit']['packages/apps/Updater'], 'project link')
 
     def test_absent_unbound_deadline_truncation_and_output_cap(self):
         self.files['inventory'] = None
@@ -165,8 +224,13 @@ class Observe(unittest.TestCase):
         self.assertEqual(len(files), 12)
         self.assertEqual(obs.main(['observe', '--host', 'other']), 2)
         text = (ROOT/'scripts/blazer-binding-observe.py').read_text().split('"""', 2)[2]
-        for absent in ('subprocess', 'os.walk', 'rglob', 'urlopen', 'O_WRONLY', 'unlink(', 'rename', 'chmod'):
+        for absent in ('subprocess', 'os.walk', 'rglob', 'urlopen', 'O_WRONLY', 'unlink(', 'rename', 'chmod', 'linked_component'):
             self.assertNotIn(absent, text)
+        # every open is relative to a walked descriptor, except the walk's own start at /
+        import re as _re
+        opens = _re.findall(r'os\.open\(([^,]+),', text)
+        self.assertTrue(all(arg.strip() in ("'/'", 'part', 'leaf', 'path') for arg in opens), opens)
+        self.assertEqual(text.count('os.open(path,'), 1)  # small_read: /proc and cgroup files only
 
 
 if __name__ == '__main__':
