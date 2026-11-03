@@ -70,6 +70,7 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   super(c);
   setBackground(background!=null?background:new OxbloodField(OxbloodField.ROSE));
   setClickable(true);
+  setForeground(new GlassSheen(GlassSheen.BACKGROUND_WORK)); // the display's glass sheen (#410), drawn, never touched
   float density=getResources().getDisplayMetrics().density;
   // #410 (oxblood.css:418-422): no visible heading; the grid starts 60dp under the header row, 24dp in, 40dp clear at
   // the bottom, and scrolls under the fixed header.

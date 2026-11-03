@@ -147,4 +147,86 @@ public class HomeOxbloodRenderTest {
         assertTrue("listening shows a ring outside the pearl", ((listening >> 16) & 255) > ((quiet >> 16) & 255) + 20);
         assertTrue("speaking shows the breath", ((speaking >> 16) & 255) > ((quiet >> 16) & 255) + 20);
     }
+
+    /** #410 gap closure: the same Home with the display's glass sheen (GlassSheen at Home's .35), saved beside the plain
+     * render for before/after, and the sweep band at three points of its travel (drawable-driven frames, not a device
+     * recording). With animations off the band is parked: nothing extra is drawn. */
+    @Test public void glassSheenOverHome() throws Exception {
+        FrameLayout plain = home(STUDY, 0);
+        Bitmap before = draw(plain);
+        save(before, "oxblood-home-384x832-before-sheen");
+        FrameLayout root = home(STUDY, 0);
+        GlassSheen sheen = new GlassSheen(GlassSheen.HOME);
+        root.setForeground(sheen);
+        Bitmap after = draw(root);
+        save(after, "oxblood-home-384x832-sheen");
+        // The bright band crosses the upper left; the sheen only ever lightens (white at low alpha), never darkens.
+        int lit = 0, darker = 0;
+        for (int y = 0; y < H; y += 4) for (int x = 0; x < W; x += 4) {
+            int a = before.getPixel(x, y), b = after.getPixel(x, y);
+            int da = ((b >> 16) & 255) - ((a >> 16) & 255);
+            if (da > 3) lit++; if (da < -1) darker++;
+        }
+        assertTrue("the sheen lightens part of the screen: " + lit, lit > 200);
+        assertEquals("the sheen never darkens", 0, darker);
+        assertEquals("parked with no sweep", -1f, sheen.band, 0f);
+        for (float p : new float[]{.2f, .5f, .8f}) {
+            sheen.band = p;
+            save(draw(root), "oxblood-home-sheen-sweep-" + Math.round(p * 100));
+        }
+        sheen.band = -1;
+        // Reduced motion: no animator is started when animations are off.
+        durationScale(0f);
+        GlassSheen still = new GlassSheen(GlassSheen.HOME);
+        still.setVisible(true, false);
+        assertTrue("animations off: no sweep animator", still.sweep == null);
+        durationScale(1f);
+        GlassSheen live = new GlassSheen(GlassSheen.HOME);
+        live.setVisible(true, false);
+        assertTrue("animations on and visible: the sweep runs", live.sweep != null);
+        live.setVisible(false, false);
+        assertTrue("hidden: the sweep stops and the band parks", live.sweep == null && live.band == -1f);
+    }
+
+    /** #410 gap closure: backdrop blur. The same Home with the tiles drawing the field's blurred copy behind them
+     * (HomeGlassTile.Backdrop, sigma 6dp) versus without (the fallback). Only the tiles change; outside them the screen
+     * is identical. Saved as before/after for review. */
+    @Test public void backdropBlurBehindHomeTiles() throws Exception {
+        HomeGlassTile.Backdrop.set(null, null);
+        FrameLayout plain = home(STUDY, 0);
+        Bitmap before = draw(plain);
+        save(before, "oxblood-home-384x832-before-blur");
+        FrameLayout root = home(STUDY, 0);
+        HomeGlassTile.Backdrop.set((OxbloodField) root.getBackground(), root);
+        // Attach to a window so the tiles can find their place (Robolectric's activity window).
+        android.app.Activity a = org.robolectric.Robolectric.buildActivity(android.app.Activity.class).setup().get();
+        a.setContentView(root, new android.view.ViewGroup.LayoutParams(W, H));
+        Bitmap after = draw(root);
+        save(after, "oxblood-home-384x832-blur");
+        HomeAppPage grid = (HomeAppPage) root.getChildAt(0);
+        int changedIn = 0, changedOut = 0;
+        for (int y = 0; y < H; y += 2) for (int x = 0; x < W; x += 2) {
+            boolean inTile = false;
+            for (int k = 0; k < grid.getChildCount(); k++) {
+                View c = grid.getChildAt(k);
+                int l = c.getLeft() + (c.getWidth() - HomeAppLayout.TILE_DP) / 2, t = c.getTop();
+                if (x >= l && x < l + HomeAppLayout.TILE_DP && y >= t && y < t + HomeAppLayout.TILE_DP) inTile = true;
+            }
+            if (before.getPixel(x, y) != after.getPixel(x, y)) { if (inTile) changedIn++; else changedOut++; }
+        }
+        assertTrue("the tiles show the blurred field behind them: " + changedIn, changedIn > 50);
+        assertEquals("nothing outside the tiles changes", 0, changedOut);
+        // Fallback: with no backdrop (another window, or no blurred copy) the tile draws exactly as before.
+        HomeGlassTile.Backdrop.set(null, null);
+        assertTrue("fallback is the plain tile", sameAs(before, draw(root)));
+    }
+    static boolean sameAs(Bitmap a, Bitmap b) {
+        for (int y = 0; y < a.getHeight(); y += 2) for (int x = 0; x < a.getWidth(); x += 2) if (a.getPixel(x, y) != b.getPixel(x, y)) return false;
+        return true;
+    }
+
+    /** The system animator scale (the owner's "animations off" is 0), set through the platform's hidden test hook. */
+    static void durationScale(float scale) throws Exception {
+        android.animation.ValueAnimator.class.getMethod("setDurationScale", float.class).invoke(null, scale);
+    }
 }
