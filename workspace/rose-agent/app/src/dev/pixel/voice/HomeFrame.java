@@ -7,8 +7,8 @@ import android.widget.FrameLayout;
 
 /** The pager with Home's fixed edge (HomeTray) across the bottom and the one row of page dots just above it (#410
  * Oxblood geometry; OS-PAGING-158-M001); neither moves while the pages slide. The pages run full height so the field
- * continues under the edge. They receive as bottom inset the band's bottom: the edge plus BAND_BOTTOM_DP, so their
- * grids sit in the reference band above the dots. The edge reaches the screen bottom, 92dp tall plus the tappable
+ * continues under the edge. They receive as bottom inset the edge plus BAND_BOTTOM_DP, so their filled grids end
+ * just clear of the dots (#410 owner density correction). The edge reaches the screen bottom, 92dp tall plus the tappable
  * navigation inset (three-button navigation; gesture navigation needs none), and the dots' centre is 30dp above it. */
 final class HomeFrame extends FrameLayout {
  final LauncherPager pager;

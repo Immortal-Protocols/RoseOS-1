@@ -42,17 +42,29 @@ public class HomeOxbloodRenderTest {
 
     static FrameLayout home(String[] keys, int dotsSelected) {
         Context c = context();
+        View[] cells = new View[keys.length];
+        for (int i = 0; i < keys.length; i++) cells[i] = HomeAppTile.tile(c, new HomeGlyph(keys[i]), keys[i], true, false);
+        return home(cells, dotsSelected, 0);
+    }
+
+    /** Home as RoseHomeView builds it (#410 owner density correction): the date, then the unlabelled grid from 24dp
+     * below the date's line down to the pages' inset bottom (the edge, any tappable navigation inset, and the reserve). */
+    static FrameLayout home(View[] cells, int dotsSelected, int navInset) { return home(cells, dotsSelected, navInset, 4); }
+
+    static FrameLayout home(View[] cells, int dotsSelected, int navInset, int columns) {
+        Context c = context();
         FrameLayout root = new FrameLayout(c);
         root.setBackground(new OxbloodField(OxbloodField.HOME));
-        HomeAppPage grid = new HomeAppPage(c, 4, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, null);
-        for (String k : keys) grid.addView(HomeAppTile.tile(c, new HomeGlyph(k), k, true, false));
-        grid.setPadding(HomeAppLayout.MARGIN_DP, HomeAppLayout.TOP_DP, HomeAppLayout.MARGIN_DP, HomeAppLayout.EDGE_DP + HomeAppLayout.BAND_BOTTOM_DP);
-        root.addView(grid, new FrameLayout.LayoutParams(-1, -1));
         TextView date = new TextView(c);
         date.setText("Thu, Oct 29");
         date.setTextSize(HomeAppLayout.DATE_SP);
         date.setTextColor(HomeAppLayout.DATE_INK);
         date.setIncludeFontPadding(false);
+        HomeAppPage grid = new HomeAppPage(c, columns, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, null);
+        for (View cell : cells) grid.addView(cell);
+        grid.setPadding(HomeAppLayout.MARGIN_DP, Math.round(HomeAppLayout.homeTop(HomeAppLayout.DATE_TOP_DP, date.getLineHeight(), 1f)),
+            HomeAppLayout.MARGIN_DP, HomeAppLayout.EDGE_DP + navInset + HomeAppLayout.BAND_BOTTOM_DP);
+        root.addView(grid, new FrameLayout.LayoutParams(-1, -1));
         FrameLayout.LayoutParams dp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         dp.leftMargin = HomeAppLayout.DATE_LEFT_DP; dp.topMargin = HomeAppLayout.DATE_TOP_DP;
         root.addView(date, dp);
@@ -61,7 +73,7 @@ public class HomeOxbloodRenderTest {
         dots.setGravity(Gravity.CENTER);
         for (int i = 0; i < 3; i++) { View d = box(new HomeDot(1f)); d.setSelected(i == dotsSelected); dots.addView(d, new android.widget.LinearLayout.LayoutParams(19, HomeAppLayout.DOTS_DP)); }
         FrameLayout.LayoutParams dotsParams = new FrameLayout.LayoutParams(-1, HomeAppLayout.DOTS_DP, Gravity.BOTTOM);
-        dotsParams.bottomMargin = OxbloodEdge.HEIGHT_DP + HomeAppLayout.DOTS_ABOVE_EDGE_DP - HomeAppLayout.DOTS_DP / 2;
+        dotsParams.bottomMargin = OxbloodEdge.HEIGHT_DP + navInset + HomeAppLayout.DOTS_ABOVE_EDGE_DP - HomeAppLayout.DOTS_DP / 2;
         root.addView(dots, dotsParams);
         // The edge: plate, then the two controls centred 14dp apart in the flat area, as HomeTray lays them out.
         android.widget.LinearLayout edge = new android.widget.LinearLayout(c);
@@ -79,7 +91,7 @@ public class HomeOxbloodRenderTest {
         android.widget.LinearLayout.LayoutParams sp = new android.widget.LinearLayout.LayoutParams(OxbloodEdge.SWITCHER_W_DP, OxbloodEdge.CONTROL_H_DP);
         sp.leftMargin = OxbloodEdge.GAP_DP;
         edge.addView(switcher, sp);
-        root.addView(edge, new FrameLayout.LayoutParams(-1, OxbloodEdge.HEIGHT_DP, Gravity.BOTTOM));
+        root.addView(edge, new FrameLayout.LayoutParams(-1, OxbloodEdge.HEIGHT_DP + navInset, Gravity.BOTTOM));
         root.setTag(pearl);
         return root;
     }
@@ -106,9 +118,12 @@ public class HomeOxbloodRenderTest {
         save(b, "oxblood-home-384x832");
         HomeAppPage grid = (HomeAppPage) root.getChildAt(0);
         View first = grid.getChildAt(0), fifth = grid.getChildAt(4), fourth = grid.getChildAt(3);
-        // Reference (oxblood.css:354-360): grid top 475, columns at 45.75 / 123.25 / 200.75 / 278.25, rows at 475 and 548.
-        assertEquals("grid top 475", 475, first.getTop());
-        assertEquals("second row at 548", 548, fifth.getTop());
+        // #410 owner density correction: the grid starts 24dp below the date's line (not the reference's 475) and its
+        // rows are spaced to fill down to the reserve; the reference's columns (45.75 / 123.25 / 200.75 / 278.25) stay.
+        TextView date = (TextView) root.getChildAt(1);
+        assertEquals("grid starts below the date", date.getBottom() + HomeAppLayout.BELOW_DATE_DP, first.getTop(), 1);
+        int innerHeight = grid.getHeight() - grid.getPaddingTop() - grid.getPaddingBottom(), fit = HomeAppLayout.rows(innerHeight, first.getHeight(), 1f);
+        assertEquals("second row one pitch down", first.getTop() + HomeAppLayout.rowPitch(innerHeight, fit, first.getHeight(), 1f), fifth.getTop(), 1);
         assertTrue("first column at 45-46: " + first.getLeft(), Math.abs(first.getLeft() - 45.75) <= 1);
         assertTrue("fourth column at 278: " + fourth.getLeft(), Math.abs(fourth.getLeft() - 278.25) <= 1);
         assertEquals("60dp cells", 60, first.getWidth());
@@ -120,6 +135,7 @@ public class HomeOxbloodRenderTest {
         assertTrue("the fillet rises to the edge top at the sides", ((corner >> 16) & 255) > 45);
         // The pearl: ruby (red well over blue) at the Rose control's centre.
         View roseControl = ((android.widget.LinearLayout) root.getChildAt(3)).getChildAt(0);
+        assertTrue("the edge is the fourth child", root.getChildAt(3).getBackground() instanceof OxbloodEdge.Plate);
         int[] at = {roseControl.getLeft() + roseControl.getWidth() / 2, H - OxbloodEdge.HEIGHT_DP + roseControl.getTop() + roseControl.getHeight() / 2};
         int p = b.getPixel(at[0], at[1]);
         assertTrue("ruby pearl", ((p >> 16) & 255) > 150 && ((p >> 16) & 255) > ((p >> 8) & 255) + 60);
