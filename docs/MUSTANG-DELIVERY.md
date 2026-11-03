@@ -94,10 +94,13 @@ most four hours after action time: that existing bootstrap role and
 only**, for `roseos-build-signer@protocols-465723.iam.gserviceaccount.com`.
 `mustang-signing-setup.py binding-plan --expires-at <UTC>` renders the exact
 commands but performs no IAM mutation. Nathan has explicitly approved those four-hour grants and one journaled
-Mustang key bootstrap. The controller route is resolved. The first grant command failed; IAM readback
-confirmed it was not applied. The worker account has policy-read but lacks
-`secretmanager.secrets.setIamPolicy`, so all four grants remain unapplied.
-An existing IAM admin must run the [approved commands](MUSTANG-ADMIN-GRANTS.md). The operator transfer alone did not authorize them. No creator payload/list access
+Mustang key bootstrap. The controller route is resolved. The worker’s first grant failed without an
+applied binding because it lacks policy-write permission. Nathan then applied
+the four approved bindings through an existing IAM admin; readback confirmed
+all four with expiry **2026-11-04T00:50:06Z**. The profile is resource-bound for
+the one approved bootstrap. The exact metadata is in
+`os/signing-bootstrap/mustang-access-binding.json`; no key material has yet been
+generated or imported by this worker. The operator transfer alone did not authorize them. No creator payload/list access
 or project-wide grant is proposed.
 
 Once controller access is resolved and the setup is approved, the profile can

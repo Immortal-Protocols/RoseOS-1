@@ -11,5 +11,5 @@
   "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
   "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
   "basis": "Existing original-builder and Frankel app/tool paths from current committed contracts, proposed for Mustang and re-admitted at runtime. No Blazer or Rango artifacts. Not proof of current availability. No package installation or openssh-client change.",
-  "signingBlocker": "pro-mustang-v1 remains unbound: containers are created, but signer IAM, empty-container admission and bootstrap/public receipts are not established. No other-device grants or keys may be used."
+  "signingBlocker": "Mustang containers and four-hour signer bindings are confirmed. The one approved bootstrap/public identity receipt is not yet produced; fresh signer occupancy checks and tool proof must pass first."
 }
