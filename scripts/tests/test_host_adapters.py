@@ -1083,6 +1083,197 @@ class FirmwareObserveTest(unittest.TestCase):
         self.assertEqual(rfo.FORMAT['gitBlob'], provenance['files'][0]['gitBlob'])
 
 
+# ---- FOLD-ARCHIVE-SIGN: detached signature of a retained install ZIP (mocked secrets and ssh-keygen only)
+_spec = importlib.util.spec_from_file_location('factory_archive_sign', SCRIPTS/'factory-archive-sign.py')
+fas = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(fas)
+
+
+def openssh_fixture(raw=None, cipher=b'aes256-ctr'):
+    """An openssh-key-v1 layout with random bytes for the public key and body (not a key pair); returns (bytes, pub)."""
+    raw = os.urandom(32) if raw is None else raw
+    s = lambda b: struct.pack('>I', len(b)) + b
+    public = s(b'ssh-ed25519') + s(raw)
+    blob = (b'openssh-key-v1\0' + s(cipher) + s(b'bcrypt') + s(s(os.urandom(16)) + struct.pack('>I', 100))
+            + struct.pack('>I', 1) + s(public) + s(os.urandom(144)))
+    body = base64.b64encode(blob).decode()
+    text = '-----BEGIN OPENSSH PRIVATE KEY-----\n' + '\n'.join(body[i:i + 70] for i in range(0, len(body), 70)) \
+        + '\n-----END OPENSSH PRIVATE KEY-----\n'
+    return text.encode(), 'ssh-ed25519 ' + base64.b64encode(public).decode()
+
+
+class FactoryArchiveSignTest(unittest.TestCase):
+    """No secret is read and no ssh-keygen runs: fetch writes byte fixtures, the runner stands in for ssh-keygen."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.retained = self.root/'rango-factory-package-1/package'
+        self.retained.mkdir(parents=True)
+        self.archive = self.retained/'rango-install-2026103001.zip'
+        self.archive.write_bytes(b'synthetic install archive bytes')
+        self.before = sorted(os.listdir(self.retained))
+        self.tool = self.root/'ssh-keygen-stand-in'
+        self.tool.write_bytes(b'stand-in, never executed')
+        self.key, self.public = openssh_fixture()
+        self.pin = {'namespace': 'factory images', 'principal': 'roseos-factory-images-rango-v1', 'publicKey': self.public,
+                    'status': 'bound'}
+        self.fetched, self.calls = [], []
+
+    def args(self, **change):
+        values = {'device': 'rango', 'build': '2026103001', 'archive': str(self.archive),
+                  'archive_sha256': sha(self.archive.read_bytes()), 'project': 'protocols-465723',
+                  'key_secret': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', 'key_version': '1',
+                  'passphrase_secret': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'passphrase_version': '1',
+                  'ssh_keygen': str(self.tool), 'ssh_keygen_sha256': sha(self.tool.read_bytes()),
+                  'lock': str(self.root/'builder.lock'), 'out': str(self.root/'sign-run-1')}
+        values.update(change)
+        return type('Args', (), values)
+
+    def fetch(self, key=None):
+        def fetch(project, name, version, destination):
+            self.fetched.append((project, name, version))
+            Path(destination).write_bytes((key or self.key) if name.endswith('KEY_RANGO_V1') else b'SYNTHETIC-pass\n')
+            os.chmod(destination, 0o600)
+            return Path(destination)
+        return fetch
+
+    def runner(self, verify='ok', mutate=False):
+        def run(argv, env, cwd, seconds, stdin_path=None):
+            self.calls.append({'argv': argv, 'env': dict(env), 'stdin': stdin_path})
+            if argv[1:3] == ['-Y', 'sign']:
+                Path(argv[-1] + '.sig').write_text('-----BEGIN SSH SIGNATURE-----\nc3lu\n-----END SSH SIGNATURE-----\n')
+                if mutate:
+                    self.archive.write_bytes(b'changed')
+                return {'exit': 0, 'category': 'ok', 'outputBytes': 0, 'outputSha256': None}
+            return {'exit': 0 if verify == 'ok' else 255, 'category': verify, 'outputBytes': 0, 'outputSha256': None}
+        return run
+
+    def sign(self, args=None, pin='bound', **kw):
+        signing = self.pin if pin == 'bound' else pin
+        return fas.sign(args or self.args(), contract=lambda device: ('{device}-install-{build}.zip', signing),
+                        fetch=kw.pop('fetch', self.fetch()), runner=kw.pop('runner', self.runner()))
+
+    def test_signs_the_retained_archive_without_touching_it(self):
+        receipt = self.sign()
+        out = self.root/'sign-run-1'
+        self.assertEqual(sorted(os.listdir(out)), ['factory-archive-sign-receipt.json', 'rango-install-2026103001.zip.sig'])
+        self.assertEqual(sorted(os.listdir(self.retained)), self.before)  # no .sig beside the retained archive
+        self.assertEqual(self.archive.read_bytes(), b'synthetic install archive bytes')
+        sign, verify = self.calls
+        self.assertEqual(sign['argv'][:6], [str(self.tool), '-Y', 'sign', '-n', 'factory images', '-f'])
+        self.assertEqual(sign['argv'][-1], str(out/'work/rango-install-2026103001.zip'))
+        self.assertEqual(verify['argv'][verify['argv'].index('-I') + 1], 'roseos-factory-images-rango-v1')
+        self.assertEqual(self.fetched, [('protocols-465723', 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', '1'),
+                                        ('protocols-465723', 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', '1')])
+        self.assertEqual((receipt['status'], receipt['workRemoved'], receipt['identity']['publicKey']),
+                         ('signed', True, self.public))
+        self.assertEqual(receipt['signature']['sha256'], sha((out/'rango-install-2026103001.zip.sig').read_bytes()))
+        self.assertNotIn('SYNTHETIC-pass', (out/'factory-archive-sign-receipt.json').read_text())
+
+    def test_unbound_identity_refuses_before_reading_anything(self):
+        for flavor in ('rango', 'blazer'):
+            with self.subTest(flavor), self.assertRaisesRegex(fas.Refused, 'identity_unbound'):
+                fas.sign(self.args(device=flavor), fetch=self.fetch(), runner=self.runner())  # the committed null pins
+        with self.assertRaisesRegex(fas.Refused, 'identity_invalid'):
+            self.sign(pin=dict(self.pin, status='missing'))
+        self.assertEqual((self.fetched, self.calls), ([], []))
+        self.assertFalse((self.root/'sign-run-1').exists())
+
+    def test_wrong_inputs_refuse_before_any_secret(self):
+        link = self.root/'link.zip'
+        link.symlink_to(self.archive)
+        other = self.retained/'rango-install-2026103002.zip'
+        other.write_bytes(b'x')
+        (self.root/'exists').mkdir()
+        for change, pattern in (({'archive_sha256': '0' * 64}, 'hash_mismatch: archive'),
+                                ({'archive': str(link), 'archive_sha256': sha(self.archive.read_bytes())}, 'input_missing'),
+                                ({'archive': str(other), 'archive_sha256': sha(b'x')}, 'archive_refused'),
+                                ({'ssh_keygen_sha256': '0' * 64}, 'hash_mismatch: ssh-keygen'),
+                                ({'key_version': 'latest'}, 'pinned numeric version'),
+                                ({'out': str(self.root/'exists')}, 'output_exists'),
+                                ({'out': str(self.retained/'sig')}, 'inside the archive directory'),
+                                ({'build': '26'}, 'usage_refused')):
+            with self.subTest(change), self.assertRaisesRegex(fas.Refused, pattern):
+                self.sign(self.args(**change))
+        self.assertEqual((self.fetched, self.calls), ([], []))
+
+    def test_held_lock_refuses_before_any_secret(self):
+        import fcntl
+        holder = os.open(self.root/'builder.lock', os.O_RDWR | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self.assertRaisesRegex(fas.Refused, 'lock_held'):
+            self.sign()
+        self.assertEqual((self.fetched, self.calls), ([], []))
+        self.assertFalse((self.root/'sign-run-1').exists())
+
+    def test_wrong_key_failed_verify_or_changed_archive_leave_no_signature(self):
+        other_key, _ = openssh_fixture()
+        unencrypted, _ = openssh_fixture(cipher=b'none')
+        for n, (kw, pattern, signs) in enumerate(((({'fetch': self.fetch(other_key)}), 'key_mismatch', False),
+                                                  (({'fetch': self.fetch(unencrypted)}), 'key_invalid', False),
+                                                  (({'runner': self.runner(verify='nonzero_exit')}), 'signature_failed', True),
+                                                  (({'runner': self.runner(mutate=True)}), 'input_changed', True))):
+            with self.subTest(pattern):
+                self.calls.clear()
+                self.archive.write_bytes(b'synthetic install archive bytes')
+                out = self.root/f'fail-{n}'
+                with self.assertRaisesRegex(fas.Refused, pattern):
+                    self.sign(self.args(out=str(out), archive_sha256=sha(b'synthetic install archive bytes')), **kw)
+                self.assertEqual(sorted(os.listdir(out)), ['factory-archive-sign-receipt.json'])
+                self.assertEqual(bool(self.calls), signs)
+                self.assertEqual(json.loads((out/'factory-archive-sign-receipt.json').read_text())['status'], 'failed')
+                self.assertEqual(sorted(os.listdir(self.retained)), sorted(self.before + ['rango-install-2026103002.zip'])
+                                 if (self.retained/'rango-install-2026103002.zip').exists() else self.before)
+
+    def binding(self, **change):
+        tool = {'path': str(self.tool), 'sha256': sha(self.tool.read_bytes())}
+        value = {'schema': 'roseos.factory-archive-signing-binding.v1', 'device': 'rango', 'build': '2026103001',
+                 'project': 'protocols-465723', 'keySecret': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', 'keyVersion': '1',
+                 'passphraseSecret': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'passphraseVersion': '1', 'sshKeygen': tool}
+        value.update(change)
+        return value
+
+    def test_committed_binding_is_unbound_and_check_exits_4(self):
+        committed = json.loads((SCRIPTS.parent/'os/retained-rango/factory-signing.json').read_text())
+        self.assertEqual((committed['keyVersion'], committed['passphraseVersion'], committed['sshKeygen']),
+                         (None, None, {'path': None, 'sha256': None}))
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(fas.main(['check']), 4)
+        report = json.loads(stdout.getvalue())
+        self.assertFalse(report['ready'])
+        self.assertIn('os/flavors/rango.json factorySigning principal/publicKey (null)', report['missing'])
+        self.assertIn('binding.keyVersion (from the bootstrap receipt)', report['missing'])
+        bound = lambda device: ('{device}-install-{build}.zip', self.pin)
+        self.assertEqual(fas.binding_problems(self.binding(), bound), [])
+        for change, missing in (({'keyVersion': None}, 'binding.keyVersion'), ({'passphraseVersion': 'latest'}, 'binding.passphraseVersion'),
+                                ({'sshKeygen': {'path': None, 'sha256': None}}, 'binding.sshKeygen'),
+                                ({'project': 'X'}, 'binding.project'), ({'schema': 'other'}, 'binding: not')):
+            with self.subTest(change):
+                self.assertTrue(any(m.startswith(missing) for m in fas.binding_problems(self.binding(**change), bound)))
+
+    def test_sign_from_binding_and_cli_refusal_is_one_line(self):
+        bound = lambda device: ('{device}-install-{build}.zip', self.pin)
+        receipt = fas.sign_from_binding(self.binding(), str(self.archive), sha(self.archive.read_bytes()),
+                                        str(self.root/'builder.lock'), str(self.root/'b-run'), contract=bound,
+                                        fetch=self.fetch(), runner=self.runner())
+        self.assertEqual(receipt['status'], 'signed')
+        with self.assertRaisesRegex(fas.Refused, 'binding_unbound'):
+            fas.sign_from_binding(self.binding(keyVersion=None), str(self.archive), sha(self.archive.read_bytes()),
+                                  str(self.root/'builder.lock'), str(self.root/'c-run'), contract=bound,
+                                  fetch=self.fetch(), runner=self.runner())
+        self.assertFalse((self.root/'c-run').exists())
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(fas.main(['sign', '--archive', str(self.archive), '--archive-sha256', '0' * 64,
+                                       '--lock', str(self.root/'l'), '--out', str(self.root/'o')]), 3)
+        self.assertIn('binding_unbound', json.loads(stdout.getvalue())['refused'])
+        self.assertFalse((self.root/'o').exists())
+
+
 class IntegrateAdapterTest(Base):
     def setUp(self):
         super().setUp()
