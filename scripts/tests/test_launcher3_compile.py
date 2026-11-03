@@ -288,13 +288,13 @@ class Contract(unittest.TestCase):
 
     def test_a_bound_binding_passes_and_prints_its_bounds(self):
         result = run_cli('check', '--binding', str(self.binding()))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=16860\njob_minutes=291\n'))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=16860\nfinish_seconds=1800\njob_minutes=322\n'))
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate')))
         self.assertEqual(result.returncode, 4)
         self.assertIn('bundleReport.path, bundleReport.sha256', result.stderr)
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate',
                                                                 bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=18660\njob_minutes=321\n'))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=18660\nfinish_seconds=1800\njob_minutes=352\n'))
 
     def test_invalid_bindings_refuse(self):
         for change in ({'host': 'other'}, {'taskParent': '/tmp'}, {'branch': 'mixed'}, {'sourceTree': 'relative'},
@@ -1031,6 +1031,47 @@ class Run(unittest.TestCase):
         self.assertTrue(self.report()['refused'].startswith('lock_held'))
         with self.assertRaises(FileExistsError):
             self.run_adapter()
+
+    def test_finish_uploads_only_the_allowlist_and_removes_only_this_runs_work(self):
+        self.assertEqual(self.run_adapter(), 0)
+        run_root = self.parent/'launcher3-compile-41700000000-1'
+        (run_root/'receipts/extra.log').write_text('never uploaded')
+        sibling = self.parent/'launcher3-compile-41700000000-2'
+        (sibling/'tree').mkdir(parents=True)
+        upload = Path(tempfile.mkdtemp())/'upload'
+        self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload), 0)
+        self.assertEqual(sorted(p.name for p in upload.iterdir()), ['classification.json', 'cleanup.json', 'report.json'])
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((cleanup['removed'], cleanup['left']), (['tree', 'out', 'home', 'tmp'], []))
+        self.assertEqual(sorted(p.name for p in run_root.iterdir()), ['receipts'])
+        self.assertTrue((sibling/'tree').is_dir())
+        with self.assertRaises(FileExistsError):
+            adapter.finish(self.binding, '41700000000', '1', upload)
+
+    def test_finish_never_follows_links_and_reports_what_it_left(self):
+        run_root = self.parent/'launcher3-compile-41700000000-1'
+        (run_root/'receipts').mkdir(parents=True)
+        outside = Path(tempfile.mkdtemp())
+        (outside/'keep').write_text('x')
+        os.symlink(outside, run_root/'tree')
+        os.symlink(outside/'keep', run_root/'receipts/report.json')
+        (run_root/'out').write_text('not a directory')
+        upload = Path(tempfile.mkdtemp())/'upload'
+        self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload), 3)
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual(cleanup['uploaded'], [])
+        self.assertEqual([l['path'] for l in cleanup['left']], ['tree', 'out'])
+        self.assertTrue((outside/'keep').exists())
+        missing = Path(tempfile.mkdtemp())/'upload'
+        self.assertEqual(adapter.finish(self.binding, '41700000000', '9', missing), 0)
+        self.assertEqual(json.loads((missing/'cleanup.json').read_text())['absent'], [str(self.parent/'launcher3-compile-41700000000-9')])
+
+    def test_finish_and_run_options_are_exclusive(self):
+        for argv in (['check', '--upload-dir', '/u'], ['finish', '--run-id', '1', '--attempt', '1'],
+                     ['finish', '--run-id', '1', '--attempt', '1', '--upload-dir', 'rel']):
+            with self.subTest(argv=argv):
+                result = run_cli(*argv, '--binding', str(Contract.binding(Contract())))
+                self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_a_stopped_compile_is_recorded_and_never_a_pass(self):
         self.assertEqual(self.run_adapter(code=-15, stopped='memory'), 0)

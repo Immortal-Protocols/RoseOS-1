@@ -109,6 +109,7 @@ python3 scripts/tests/test_rango_factory_package_workflow.py
 python3 scripts/tests/test_rango_factory_inspect_workflow.py
 # Launcher3 compile-only adapter (synthetic trees, stand-in processes; no host, copy, lunch or build).
 python3 scripts/tests/test_launcher3_compile.py
+python3 scripts/tests/test_launcher3_compile_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py

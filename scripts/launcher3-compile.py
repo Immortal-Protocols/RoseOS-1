@@ -33,6 +33,11 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                                  outcome, the source-list and classpath proof and both aconfig flag values. Never a raw
                                  log, never current bytes as provenance.
 
+  finish --run-id --attempt --upload-dir
+                              always after run: only report.json and classification.json are copied for upload, then
+                              this run's tree, out, home and tmp are removed (cleanup.json says what was removed or left);
+                              nothing outside the run root is touched.
+
 What a passing report shows: the patched handlers and overlays type-check and compile on the real classpath, and the
 generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime behaviour. The sampled
 stops can overshoot and are not hard caps; containment is by paths and environment only (no cgroup or quota exists).
@@ -49,6 +54,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -68,6 +74,9 @@ APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', '
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20
 PIN_SECONDS = 30 * 60
+FINISH_SECONDS = 30 * 60
+UPLOAD = ('report.json', 'classification.json')
+WORK_DIRS = ('tree', 'out', 'home', 'tmp')
 BINDING = ROOT/'os/build-only/launcher3-compile-host.json'
 BINDING_KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'taskParent', 'branch', 'sourceTree', 'lunch',
                 'policyReceipt', 'bundleReport', 'reconstructSource'}
@@ -985,22 +994,73 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
     return status
 
 
+def finish(binding, run_id, attempt, upload_dir, rmtree=shutil.rmtree):
+    """After run, always: copy only the allowlisted receipts (UPLOAD, regular files, never a link) into a new upload
+    directory, then remove this run's own work directories (WORK_DIRS: the copied tree, OUT_DIR, HOME, TMPDIR) under
+    its run root, never anything else; receipts stay on the builder. Writes cleanup.json (removed, absent, left) beside
+    the uploads. A missing run root (the run never started) only records that."""
+    run_root = task_root(binding, run_id, attempt)
+    upload = Path(upload_dir)
+    upload.mkdir(mode=0o700)
+    report = {'schema': 'roseos.launcher3-compile-cleanup.v1', 'runRoot': str(run_root), 'uploaded': [], 'removed': [],
+              'absent': [], 'left': []}
+    if run_root.is_symlink() or (run_root.exists() and not run_root.is_dir()):
+        report['left'].append({'path': str(run_root), 'reason': 'the run root is not a plain directory; nothing touched'})
+    elif not run_root.exists():
+        report['absent'].append(str(run_root))
+    else:
+        for name in UPLOAD:
+            source = run_root/'receipts'/name
+            if source.is_file() and not source.is_symlink() and not (run_root/'receipts').is_symlink():
+                data, _ = read_nofollow(source)
+                write_bytes_once(upload/name, data)
+                report['uploaded'].append(name)
+        for name in WORK_DIRS:
+            target = run_root/name
+            if target.is_symlink() or (target.exists() and not target.is_dir()):
+                report['left'].append({'path': name, 'reason': 'not a plain directory'})
+            elif not target.exists():
+                report['absent'].append(name)
+            else:
+                try:
+                    rmtree(target)
+                    report['removed'].append(name)
+                except OSError as error:
+                    report['left'].append({'path': name, 'reason': type(error).__name__})
+    write_once(upload/'cleanup.json', report)
+    return 0 if not report['left'] else 3
+
+
+def write_bytes_once(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(data)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('check', 'run'))
+    p.add_argument('command', choices=('check', 'run', 'finish'))
     p.add_argument('--run-id')
     p.add_argument('--attempt')
+    p.add_argument('--upload-dir')
     p.add_argument('--binding', default=str(BINDING), help=argparse.SUPPRESS)
     a = p.parse_args(argv)
     try:
         manifest, binding = check(a.binding)
         if a.command == 'check':
-            if a.run_id or a.attempt:
+            if a.run_id or a.attempt or a.upload_dir:
                 raise Invalid('check takes no other option')
             prepare = PREPARE_SECONDS + KILL_GRACE_SECONDS + (2 if binding['branch'] == 'verifyBaseApplyCandidate' else 1) * PIN_SECONDS
             outer = prepare + COMPILE_SECONDS + KILL_GRACE_SECONDS + 600
-            print(f'outer_seconds={outer}\njob_minutes={-(-outer // 60) + 10}')
+            finish_outer = FINISH_SECONDS + KILL_GRACE_SECONDS
+            print(f'outer_seconds={outer}\nfinish_seconds={FINISH_SECONDS}\njob_minutes={-(-(outer + finish_outer) // 60) + 10}')
             return 0
+        if a.command == 'finish':
+            if not a.upload_dir or not os.path.isabs(a.upload_dir):
+                raise Invalid('finish needs an absolute --upload-dir')
+            return finish(binding, a.run_id, a.attempt, a.upload_dir)
+        if a.upload_dir:
+            raise Invalid('run takes no --upload-dir')
         return run(binding, manifest, a.run_id, a.attempt)
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)

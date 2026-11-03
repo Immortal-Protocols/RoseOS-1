@@ -661,7 +661,7 @@ class WorkflowTest(unittest.TestCase):
             self.assertNotIn(absent, export)
         self.assertIn('          name: emulator-alpha-export-${{ github.run_id }}\n', export)
         self.assertIn(', alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', job['cleanup'])
-        self.assertIn('app-reuse, emulator-alpha-export, rango-factory-observe]\n', RELEASE_WORKFLOW)
+        self.assertIn('app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile]\n', RELEASE_WORKFLOW)
 
 if __name__ == '__main__':
     unittest.main()
