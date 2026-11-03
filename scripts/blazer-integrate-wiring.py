@@ -9,7 +9,10 @@ failure.
       any is null. Prints outer_seconds and job_minutes. Reads no host path.
   blazer-integrate-wiring.py run --run-dir NEW --run-id N --run-attempt N
       the same check, then exactly:
-        0. tools      aapt and apksigner re-hashed against their expected sha256 (regular files, no link in the path)
+        0. tools      aapt, apksigner and apksigner's toolDependencies (its lib/apksigner.jar and the JDK java it execs)
+                      re-hashed against their expected sha256 (regular files, no link in the path)
+        0. inputs     the policy and exactly the six pinned app files of appsDir (<package>.apk, <package>.receipt.json)
+                      re-hashed against inputDigests the same way
         0. allocate   blazer-allocate.py reserve --home H --run-id N --run-attempt N --source HEAD --out NEW/allocation.json
                       (a fresh collision-checked blazer build under the shared lock); WORK and INTEGRATION_DIR are the
                       reservation's derived H/rose-actions/blazer-integrate-<build> and blazer-reconcile-<build>
@@ -17,6 +20,7 @@ failure.
                       --source-inventory INV --source-inventory-sha256 H --receipt-dir INTEGRATION_DIR
         2. assemble   blazer-candidate-bundle.py assemble --apps-dir A --policy P --build B --product HEAD --aapt T
                       --apksigner U --out WORK/bundle
+                      then the bundle's copied policy and six app files re-hashed against inputDigests
         3. admit      blazer_integration.py admit --bundle WORK/bundle --updater-route ROUTE --out WORK/inputs
                       --aapt T --apksigner U
         4. render     blazer_integration.py render --inputs WORK/inputs/local-inputs.json --source-root S --lock L
@@ -46,16 +50,23 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = ROOT/'os/build-only/blazer-integrate-host.json'
 KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRootFrom', 'frankelReceiptsFrom', 'updaterRoute',
-        'sourceRun', 'sourceInventory', 'appsDir', 'policy', 'aapt', 'apksigner'}
+        'sourceRun', 'sourceInventory', 'appsDir', 'policy', 'aapt', 'apksigner', 'inputDigests', 'toolDependencies',
+        'observation'}
 FACTS = ('sourceRun', 'sourceInventory.path', 'sourceInventory.sha256', 'appsDir', 'policy', 'aapt.path', 'aapt.sha256',
          'apksigner.path', 'apksigner.sha256')
 TOOLS = ('aapt', 'apksigner')
+# What the apksigner wrapper executes (host-sdk-layout.py): fixed relative to the wrapper and the production root.
+DEPENDENCIES = {'apksigner.jar': lambda tools, production: tools['apksigner']['path'].parent/'lib/apksigner.jar',
+                'java': lambda tools, production: production/'prebuilts/jdk/jdk21/linux-x86/bin/java'}
+OBSERVATION = {'run', 'runAttempt', 'source', 'artifact', 'artifactZipSha256', 'report', 'reportSha256'}
+RECONCILE = ROOT/'os/build-only/blazer-reconcile.json'
+SHA256 = re.compile(r'[0-9a-f]{64}')
 HOME = '/home/pixelbuild'
 # Read-only SDK tools may sit inside the production source root only below this exact prefix: they are executed and
 # hashed, never written. Every data path keeps the full production-root rejection.
 TOOL_PREFIX = 'prebuilts/sdk/'
 # Wrapper ceilings (seconds) per step, sized to the work, not measurements.
-STEPS = {'tools': 300, 'allocate': 120, 'seed': 600, 'assemble': 300, 'admit': 600, 'render': 120, 'candidate': 300,
+STEPS = {'tools': 300, 'inputs': 120, 'allocate': 120, 'seed': 600, 'assemble': 300, 'admit': 600, 'render': 120, 'candidate': 300,
          'reconcile': 3600}
 KILL_GRACE_SECONDS, OUTER_MARGIN_SECONDS, JOB_MARGIN_MINUTES = 30, 300, 10
 PRODUCTION = 'os/release-pipeline/frankel.json host.sourceRoot'
@@ -104,7 +115,7 @@ def resolve(binding_path=BINDING, root=ROOT):
     if not re.fullmatch(r'[1-9][0-9]{0,19}', str(values['sourceRun'])):
         raise Invalid('sourceRun must be the numeric run that made the copy')
     for name in ('sourceInventory.sha256', 'aapt.sha256', 'apksigner.sha256'):
-        if not re.fullmatch(r'[0-9a-f]{64}', str(values[name])):
+        if not SHA256.fullmatch(str(values[name])):
             raise Invalid(f'{name} must be a lowercase sha256')
     source = absolute('sourceRoot', pointer(root, binding['sourceRootFrom']))
     production = absolute('production', pointer(root, PRODUCTION))
@@ -122,13 +133,56 @@ def resolve(binding_path=BINDING, root=ROOT):
         if production in path.parents and not str(path).startswith(f'{production}/{TOOL_PREFIX}'):
             raise Invalid(f'{name}.path inside the production source root must be below {TOOL_PREFIX} (read-only SDK tools)')
         tools[name] = {'path': path, 'sha256': values[f'{name}.sha256']}
+    tools.update(dependencies(binding['toolDependencies'], tools, production))
+    digests = input_digests(binding['inputDigests'], paths['appsDir'], paths['policy'], root)
+    observed = binding['observation']
+    if not isinstance(observed, dict) or set(observed) != OBSERVATION \
+            or not all(re.fullmatch(r'[1-9][0-9]{0,19}', str(observed[k])) for k in ('run', 'runAttempt', 'artifact')) \
+            or not re.fullmatch(r'[0-9a-f]{40}', str(observed['source'])) or observed['report'] != 'binding-observation.json' \
+            or not all(SHA256.fullmatch(str(observed[k])) for k in ('artifactZipSha256', 'reportSha256')):
+        raise Invalid('observation must name the binding-observe run, attempt, source, artifact and the report and ZIP sha256')
     plan = {'source': source, 'lock': pointer(root, binding['lockFrom']), 'route': root/binding['updaterRoute'],
             'frankel': absolute('frankelReceipts', pointer(root, binding['frankelReceiptsFrom'])),
             'run': str(values['sourceRun']), 'inventory': paths['sourceInventory.path'],
             'inventorySha256': values['sourceInventory.sha256'], 'appsDir': paths['appsDir'], 'policy': paths['policy'],
-            'tools': tools, 'aapt': tools['aapt']['path'], 'apksigner': tools['apksigner']['path'], 'home': Path(HOME)}
+            'tools': tools, 'inputs': digests, 'aapt': tools['aapt']['path'], 'apksigner': tools['apksigner']['path'], 'home': Path(HOME)}
     outer = sum(STEPS.values()) + KILL_GRACE_SECONDS * len(STEPS) + OUTER_MARGIN_SECONDS
     return plan, outer, math.ceil((outer + KILL_GRACE_SECONDS) / 60) + JOB_MARGIN_MINUTES
+
+
+def dependencies(record, tools, production):
+    """apksigner's executed dependencies: exactly the fixed jar and java paths, each with a sha256. Unbound if absent."""
+    if record is None:
+        raise Unbound('integration needs host facts not yet bound: toolDependencies')
+    if not isinstance(record, dict) or set(record) != set(DEPENDENCIES):
+        raise Invalid(f'toolDependencies must be exactly {sorted(DEPENDENCIES)}')
+    found = {}
+    for name, derive in DEPENDENCIES.items():
+        spec = record[name]
+        if not isinstance(spec, dict) or set(spec) != {'path', 'sha256'} or None in spec.values():
+            raise Unbound(f'integration needs host facts not yet bound: toolDependencies.{name}')
+        path = absolute(f'toolDependencies.{name}.path', spec['path'])
+        if path != derive(tools, production):
+            raise Invalid(f'toolDependencies.{name}.path must be {derive(tools, production)}')
+        if not SHA256.fullmatch(str(spec['sha256'])):
+            raise Invalid(f'toolDependencies.{name}.sha256 must be a lowercase sha256')
+        found[name] = {'path': path, 'sha256': spec['sha256']}
+    return found
+
+
+def input_digests(record, apps_dir, policy, root=ROOT):
+    """{path: sha256} for the policy and exactly the six pinned app files of appsDir. Unbound if absent."""
+    if record is None:
+        raise Unbound('integration needs host facts not yet bound: inputDigests')
+    packages = [app['package'] for app in json.loads(Path(root/RECONCILE.relative_to(ROOT)).read_text())['candidateInputs']['apps']]
+    names = {f'{p}.apk' for p in packages} | {f'{p}.receipt.json' for p in packages}
+    if not isinstance(record, dict) or set(record) != {'policy', 'apps'} or not isinstance(record['apps'], dict) \
+            or set(record['apps']) != names:
+        raise Invalid(f'inputDigests must be exactly the policy and {sorted(names)}')
+    found = {policy: record['policy'], **{apps_dir/name: record['apps'][name] for name in sorted(names)}}
+    if not all(SHA256.fullmatch(str(v)) for v in found.values()):
+        raise Invalid('every inputDigests value must be a lowercase sha256')
+    return found
 
 
 def head(root=ROOT, run=subprocess.run):
@@ -227,6 +281,10 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
         record['steps'].append({'step': 'tools', 'exit': 0 if all(tools.values()) else 1, 'result': tools})
         if not all(tools.values()):
             return status
+        inputs = {path.name: hasher(path) == sha256 for path, sha256 in plan['inputs'].items()}
+        record['steps'].append({'step': 'inputs', 'exit': 0 if all(inputs.values()) else 1, 'result': inputs})
+        if not all(inputs.values()):
+            return status
         argv = [sys.executable, str(root/'scripts/blazer-allocate.py'), 'reserve', '--home', str(plan['home']),
                 '--run-id', str(run_id), '--run-attempt', str(attempt), '--source', recipe, '--out', str(run_dir/'allocation.json')]
         result = runner(argv, capture_output=True, text=True, timeout=STEPS['allocate'])
@@ -245,6 +303,13 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
             record['steps'].append({'step': name, 'exit': result.returncode, 'result': last_json(result.stdout or result.stderr)})
             if result.returncode:
                 return status
+            if name == 'assemble':
+                bundle = work/'bundle'
+                copies = {(bundle/'background-policy.json' if path == plan['policy'] else bundle/'signed-apps'/path.name): sha256
+                          for path, sha256 in plan['inputs'].items()}
+                if not all(hasher(path) == sha256 for path, sha256 in copies.items()):
+                    record['steps'][-1]['problem'] = 'the bundle copies are not the bound input bytes'
+                    return status
             if name == 'candidate':
                 checked = runner(['git', '-C', str(work/f'product-{recipe[:12]}'), 'rev-parse', 'HEAD'],
                                  capture_output=True, text=True, timeout=60)

@@ -46,12 +46,12 @@ def binding(**change):
 
 
 class Wiring(unittest.TestCase):
-    def test_the_committed_binding_is_unbound_and_exits_4(self):
-        self.assertEqual([BINDING[k] for k in ('jobs', 'integrationDir', 'inputsReceipt')], [None, None, None])
+    def test_the_committed_binding_binds_jobs_and_exits_4_until_an_integration_exists(self):
+        self.assertEqual([BINDING[k] for k in ('jobs', 'integrationDir', 'inputsReceipt')], [48, None, None])
         result = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-compile-wiring.py'), 'check'],
                                 capture_output=True, text=True)
         self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('jobs, integrationDir, inputsReceipt', result.stderr)
+        self.assertIn('needs inputs not yet bound in blazer-compile-host.json: integrationDir, inputsReceipt', result.stderr)
 
     def test_a_bound_binding_resolves_the_accepted_argv_and_recipe_bounds(self):
         tail, outer, minutes = wiring.resolve(binding())

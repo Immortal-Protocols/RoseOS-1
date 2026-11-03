@@ -1,5 +1,6 @@
-"""BLAZER-INTEGRATE wiring (scripts/blazer-integrate-wiring.py): the hosted check exits 4 while the committed binding is
-null; a bound binding runs exactly seed, assemble, admit, render, a local candidate worktree and the reconcile command
+"""BLAZER-INTEGRATE wiring (scripts/blazer-integrate-wiring.py): the committed binding carries the identities of the
+original Infra binding-observe report; every tool, tool dependency and app input is re-hashed before allocation and the
+bundle copies after assemble; a bound binding runs exactly seed, assemble, admit, render, a local candidate worktree and the reconcile command
 render printed, in order, stopping at the first failure; render may print only the fixed reconcile shape; only the
 allowlisted reports are uploaded. A fake runner stands in for every process: no host, git, reconcile or tree change."""
 import hashlib
@@ -19,6 +20,9 @@ wiring = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wiring)
 BINDING = json.loads((ROOT/'os/build-only/blazer-integrate-host.json').read_text())
 RECIPE = 'a' * 40
+PRODUCTION = '/home/pixelbuild/grapheneos-2026100600'
+JAVA = PRODUCTION + '/prebuilts/jdk/jdk21/linux-x86/bin/java'
+PACKAGES = ('dev.pixel.backgroundcontrol', 'dev.pixel.calculator.agent', 'dev.pixel.voice')
 
 
 class Result:
@@ -31,14 +35,30 @@ class Wiring(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.home = self.tmp/'home'
         (self.home/'rose-actions').mkdir(parents=True)
-        self.tool = {}
-        for name in ('aapt', 'apksigner'):
-            path = self.tmp/name
-            path.write_bytes(f'#!/bin/sh\n# {name}\n'.encode())
-            self.tool[name] = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        def pinned(path, data):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            return {'path': str(path), 'sha256': hashlib.sha256(data).hexdigest()}
+        self.tool = {name: pinned(self.tmp/'sdk'/name, f'#!/bin/sh\n# {name}\n'.encode()) for name in ('aapt', 'apksigner')}
+        # java sits at the fixed production JDK path; the test hasher maps that one path to a local file.
+        self.java = pinned(self.tmp/'jdk-java', b'java')
+        self.deps = {'apksigner.jar': pinned(self.tmp/'sdk/lib/apksigner.jar', b'jar'),
+                     'java': {'path': JAVA, 'sha256': self.java['sha256']}}
+        apps = {}
+        for package in PACKAGES:
+            for name in (f'{package}.apk', f'{package}.receipt.json'):
+                apps[name] = pinned(self.tmp/'signed'/name, name.encode())['sha256']
+        policy = pinned(self.tmp/'policy.json', b'{}')
         self.bound = {**BINDING, 'sourceRun': '41554911849',
                       'sourceInventory': {'path': str(self.tmp/'inventory.json'), 'sha256': 'b' * 64},
-                      'appsDir': str(self.tmp/'signed'), 'policy': str(self.tmp/'policy.json'), **self.tool}
+                      'appsDir': str(self.tmp/'signed'), 'policy': policy['path'], **self.tool,
+                      'toolDependencies': self.deps, 'inputDigests': {'policy': policy['sha256'], 'apps': apps}}
+
+    def hasher(self, path):
+        return wiring.tool_sha256(self.java['path'] if str(path) == JAVA else path)
+
+    def run_wiring(self, runner):
+        return wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE, hasher=self.hasher)
 
     def binding(self, **change):
         path = self.tmp/'binding.json'
@@ -49,11 +69,19 @@ class Wiring(unittest.TestCase):
         plan, _, _ = wiring.resolve(self.binding(**change))
         return {**plan, 'home': self.home}
 
-    def test_the_committed_binding_is_unbound_and_exits_4(self):
+    def test_the_committed_binding_carries_the_observed_report_identities(self):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-integrate-wiring.py'), 'check'],
                                 capture_output=True, text=True)
-        self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('appsDir, policy, aapt.sha256, apksigner.path, apksigner.sha256', result.stderr)
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=6630\njob_minutes=121\n'))
+        self.assertEqual(BINDING['observation'], {
+            'run': '41656426913', 'runAttempt': '1', 'source': 'cf3b60e5ab83e2d9b9f5419239b35a9c8bbf3b73',
+            'artifact': '13239462248', 'artifactZipSha256': 'cf3dc9838ac756c57d8f6ca44aaef99fe410a95cd4ea0740f645d6b0483b223d',
+            'report': 'binding-observation.json',
+            'reportSha256': '27cd95ff76f94913c8d5b227312c0218ba937ff65134ca07b4881207e543e577'})
+        release = '/home/pixelbuild/rose-actions/frankel-2026110301/release'
+        self.assertEqual((BINDING['appsDir'], BINDING['policy']), (release + '/signed-apps', release + '/background-policy.json'))
+        self.assertEqual(BINDING['apksigner']['path'], '/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner')
+        self.assertEqual(sorted(BINDING['inputDigests']['apps']), sorted(f'{p}{s}' for p in PACKAGES for s in ('.apk', '.receipt.json')))
         self.assertEqual((BINDING['sourceRun'], BINDING['sourceInventory']),
                          ('41554911849', {'path': '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source.selection.tsv',
                                           'sha256': '3c0f9af1cf2f931a6a6c238dc9297223730ca1477d8473b0853f72e2ad388c7d'}))
@@ -65,7 +93,7 @@ class Wiring(unittest.TestCase):
 
     def test_bounds(self):
         _, outer, minutes = wiring.resolve(self.binding())
-        self.assertEqual((outer, minutes), (6480, 119))
+        self.assertEqual((outer, minutes), (6630, 121))
 
     def test_invalid_bindings_refuse(self):
         source = json.loads((ROOT/'os/build-only/blazer-prep-host.json').read_text())['sourceRoot']
@@ -75,8 +103,22 @@ class Wiring(unittest.TestCase):
                        {'aapt': {'path': production + '/out/host/aapt', 'sha256': 'a' * 64}},
                        {'apksigner': {'path': production, 'sha256': 'a' * 64}}, {'aapt': {'path': '/a', 'sha256': 'A' * 64}},
                        {'aapt': '/opt/sdk/aapt'}, {'appsDir': 'relative'}, {'build': '2026110301'},
-                       {'frankelReceiptsFrom': 'os/build-only/rango.json host.reconcileReceiptDir'}, {'extra': 1}):
+                       {'frankelReceiptsFrom': 'os/build-only/rango.json host.reconcileReceiptDir'}, {'extra': 1},
+                       {'toolDependencies': {**self.deps, 'java': {'path': PRODUCTION + '/prebuilts/jdk/jdk17/bin/java',
+                                                                   'sha256': 'a' * 64}}},
+                       {'toolDependencies': {**self.deps, 'apksigner.jar': {'path': '/opt/apksigner.jar', 'sha256': 'a' * 64}}},
+                       {'toolDependencies': {**self.deps, 'extra': self.deps['java']}},
+                       {'inputDigests': {**self.bound['inputDigests'], 'apps': {'dev.pixel.voice.apk': 'a' * 64}}},
+                       {'inputDigests': {**self.bound['inputDigests'], 'policy': 'A' * 64}},
+                       {'observation': {**BINDING['observation'], 'reportSha256': None}},
+                       {'observation': {**BINDING['observation'], 'report': 'other.json'}}):
             with self.subTest(change=change), self.assertRaises(wiring.Invalid):
+                wiring.resolve(self.binding(**change))
+
+    def test_missing_dependencies_or_input_digests_are_unbound(self):
+        for change in ({'toolDependencies': None}, {'inputDigests': None},
+                       {'toolDependencies': {**self.deps, 'java': {'path': JAVA, 'sha256': None}}}):
+            with self.subTest(change=change), self.assertRaises(wiring.Unbound):
                 wiring.resolve(self.binding(**change))
 
     def test_read_only_sdk_tools_may_sit_inside_production_only_below_prebuilts_sdk(self):
@@ -87,8 +129,9 @@ class Wiring(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(wiring.Invalid):
                 wiring.resolve(self.binding(aapt={'path': production + bad, 'sha256': 'a' * 64}))
 
-    def fake(self, fail=None, printed=None, allocation=None):
+    def fake(self, fail=None, printed=None, allocation=None, tamper=None):
         calls = []
+        self.tamper = tamper
 
         def runner(argv, **kwargs):
             calls.append(argv)
@@ -111,6 +154,12 @@ class Wiring(unittest.TestCase):
                 step = 'reconcile'
             if fail and step == fail:
                 return Result(1, json.dumps({'verdict': 'REFUSED'}))
+            if step == 'assemble':
+                bundle = self.plan['workDir']/'bundle'
+                (bundle/'signed-apps').mkdir(parents=True)
+                for name in self.bound['inputDigests']['apps']:
+                    (bundle/'signed-apps'/name).write_bytes(name.encode() if name != self.tamper else b'other')
+                (bundle/'background-policy.json').write_bytes(b'{}')
             if step == 'admit':
                 inputs = self.plan['workDir']/'inputs'
                 inputs.mkdir(parents=True)
@@ -127,7 +176,7 @@ class Wiring(unittest.TestCase):
     def test_the_six_steps_run_exactly_in_order(self):
         self.plan = self.resolved()
         runner, calls = self.fake()
-        status = wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE)
+        status = self.run_wiring(runner)
         self.assertEqual(status, 0)
         names = [c[2] if c[0] == sys.executable else c[0] for c in calls]
         self.assertEqual(names, ['reserve', 'seed', 'assemble', 'admit', 'render', 'git', 'git', 'flock'])
@@ -144,7 +193,7 @@ class Wiring(unittest.TestCase):
         self.assertEqual(calls[-1][:5], ['flock', '--nonblock', '--conflict-exit-code', '75', '/home/pixelbuild/frankel-build.lock'])
         record = json.loads((self.tmp/'run/integrate.json').read_text())
         self.assertEqual((record['result'], [s['step'] for s in record['steps']]),
-                         ('integrated', ['tools', 'allocate', 'seed', 'assemble', 'admit', 'render', 'candidate', 'reconcile']))
+                         ('integrated', ['tools', 'inputs', 'allocate', 'seed', 'assemble', 'admit', 'render', 'candidate', 'reconcile']))
         self.assertEqual(record['build'], '2026110301')
 
     def test_the_first_failure_stops_everything_after_it(self):
@@ -153,7 +202,7 @@ class Wiring(unittest.TestCase):
                 self.setUp()
                 self.plan = self.resolved()
                 runner, calls = self.fake(fail=fail)
-                self.assertEqual(wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE), 1)
+                self.assertEqual(self.run_wiring(runner), 1)
                 record = json.loads((self.tmp/'run/integrate.json').read_text())
                 self.assertEqual((record['result'], record['steps'][-1]['step'], record['steps'][-1]['exit']), ('stopped', fail, 1))
                 if fail != 'reconcile':
@@ -162,7 +211,7 @@ class Wiring(unittest.TestCase):
     def test_render_may_print_only_the_fixed_reconcile_shape(self):
         self.plan = self.resolved()
         runner, calls = self.fake(printed=['bash', '-c', 'anything'])
-        self.assertEqual(wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE), 1)
+        self.assertEqual(self.run_wiring(runner), 1)
         self.assertFalse([c for c in calls if c[0] in ('flock', 'bash')])
         self.assertIn('fixed shape', json.loads((self.tmp/'run/integrate.json').read_text())['steps'][-1]['problem'])
 
@@ -170,29 +219,51 @@ class Wiring(unittest.TestCase):
         self.plan = self.resolved()
         (self.home/'rose-actions/blazer-integrate-2026110301').mkdir()
         runner, calls = self.fake()
-        self.assertEqual(wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE), 1)
+        self.assertEqual(self.run_wiring(runner), 1)
         self.assertEqual([c[2] for c in calls], ['reserve'])
         self.setUp()
         self.plan = self.resolved()
         runner, calls = self.fake(allocation={'device': 'blazer', 'build': '2026110301', 'source': RECIPE,
                                               'workDir': '/elsewhere', 'integrationDir': '/other'})
         with self.assertRaises(wiring.Invalid):
-            wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE)
+            self.run_wiring(runner)
         self.assertEqual([c[2] for c in calls], ['reserve'])
 
     def test_a_tool_that_is_not_its_pinned_bytes_stops_before_allocation(self):
         Path(self.tool['aapt']['path']).write_bytes(b'changed')
         self.plan = self.resolved()
         runner, calls = self.fake()
-        self.assertEqual(wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE), 1)
+        self.assertEqual(self.run_wiring(runner), 1)
         self.assertEqual(calls, [])
         record = json.loads((self.tmp/'run/integrate.json').read_text())
-        self.assertEqual(record['steps'], [{'step': 'tools', 'exit': 1, 'result': {'aapt': False, 'apksigner': True}}])
+        self.assertEqual(record['steps'], [{'step': 'tools', 'exit': 1, 'result': {
+            'aapt': False, 'apksigner': True, 'apksigner.jar': True, 'java': True}}])
+
+    def test_a_changed_tool_dependency_or_app_input_stops_before_allocation(self):
+        for changed in ('sdk/lib/apksigner.jar', 'jdk-java', 'signed/dev.pixel.voice.receipt.json', 'policy.json'):
+            with self.subTest(changed=changed):
+                self.setUp()
+                (self.tmp/changed).write_bytes(b'x')
+                self.plan = self.resolved()
+                runner, calls = self.fake()
+                self.assertEqual(self.run_wiring(runner), 1)
+                self.assertEqual(calls, [])
+                steps = json.loads((self.tmp/'run/integrate.json').read_text())['steps']
+                self.assertEqual(steps[-1]['exit'], 1)
+                self.assertIn(False, steps[-1]['result'].values())
+
+    def test_bundle_copies_that_are_not_the_bound_bytes_stop_after_assemble(self):
+        self.plan = self.resolved()
+        runner, calls = self.fake(tamper='dev.pixel.calculator.agent.apk')
+        self.assertEqual(self.run_wiring(runner), 1)
+        step = json.loads((self.tmp/'run/integrate.json').read_text())['steps'][-1]
+        self.assertEqual((step['step'], step['problem']), ('assemble', 'the bundle copies are not the bound input bytes'))
+        self.assertEqual([c[2] for c in calls], ['reserve', 'seed', 'assemble'])
 
     def test_report_uploads_only_the_allowlist(self):
         self.plan = self.resolved()
         runner, _ = self.fake()
-        wiring.run(self.plan, self.tmp/'run', '41700000000', '1', runner=runner, recipe=RECIPE)
+        self.run_wiring(runner)
         integration = self.plan['integrationDir']
         integration.mkdir()
         (integration/'0001-2026103101.json').write_text('{}')
