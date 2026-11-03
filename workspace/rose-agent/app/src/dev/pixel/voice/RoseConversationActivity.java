@@ -148,7 +148,7 @@ public final class RoseConversationActivity extends Activity {
 
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
- @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
+ @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;appsPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
  @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
@@ -339,28 +339,32 @@ public final class RoseConversationActivity extends Activity {
   * (App Core PR355), read with the controller state about once a second while the overview is open. Each read is one
   * complete report and its own registration (reads are serial), so a controller restart or a late reply never brings
   * old apps back. Only an attested complete reply is shown as membership (CurrentApps.fromReply); anything else is the
-  * explicit unavailable state. Task history is never consulted. */
- volatile CurrentApps.Snapshot appsSnapshot;long appsReads;volatile boolean appsPolling;long appsPolledAt;volatile int appsEpoch;
+  * explicit unavailable state. Task history is never consulted. A report counts only while current
+  * (CurrentApps.current: read since this screen last resumed and under MAX_AGE_MS old); otherwise the overview gets
+  * CurrentApps.EXPIRED, its checking state, which never retires the controller's still-valid registration. */
+ static final class AppsRead { final CurrentApps.Snapshot snapshot;final long at; AppsRead(CurrentApps.Snapshot s,long at){snapshot=s;this.at=at;} }
+ volatile AppsRead appsSnapshot;long appsReads;volatile boolean appsPolling;long appsPolledAt;volatile int appsEpoch;
  /** One read in flight, about once a second, only while the overview is open (never otherwise). */
  void pollApps(){
   if(appsPolling||SystemClock.uptimeMillis()-appsPolledAt<1000)return;appsPolling=true;appsPolledAt=SystemClock.uptimeMillis();
   final int epoch=appsEpoch;
-  new Thread(()->{CurrentApps.Snapshot s=readCurrentApps();if(epoch==appsEpoch)appsSnapshot=s;appsPolling=false;},"rose-current-apps").start();
+  final long startedAt=SystemClock.uptimeMillis();
+  new Thread(()->{CurrentApps.Snapshot s=readCurrentApps();if(epoch==appsEpoch)appsSnapshot=new AppsRead(s,startedAt);appsPolling=false;},"rose-current-apps").start();
  }
  CurrentApps.Snapshot currentApps(){
-  CurrentApps.Snapshot s=appsSnapshot;
-  return s!=null?s:CurrentApps.Snapshot.unavailable("pending",0,CurrentApps.NOT_REPORTED);
+  AppsRead r=appsSnapshot;
+  return r!=null&&CurrentApps.current(r.at,resumedAt,SystemClock.uptimeMillis())?r.snapshot:CurrentApps.EXPIRED;
  }
  /** One current_apps read (off the UI thread). Failures are fixed words; nothing is logged. */
  CurrentApps.Snapshot readCurrentApps(){
   String reg="current_apps-"+(++appsReads);
   try{
    android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
-   if(client==null)return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.NOT_INSTALLED);
+   if(client==null)return CurrentApps.readerFailure(CurrentApps.NOT_INSTALLED);
    try{
     Bundle extras=new Bundle();extras.putString("params","{}");
     Bundle reply=client.call("current_apps",null,extras);String raw=reply==null?null:reply.getString("result");
-    if(raw==null||raw.length()>65536)return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);
+    if(raw==null||raw.length()>65536)return CurrentApps.readerFailure(CurrentApps.UNREADABLE);
     org.json.JSONObject o=new org.json.JSONObject(raw);
     java.util.List<CurrentApps.ReplyApp> apps=null;org.json.JSONArray a=o.optJSONArray("apps");
     if(a!=null){apps=new java.util.ArrayList<>();for(int i=0;i<a.length()&&i<64;i++){org.json.JSONObject x=a.optJSONObject(i);
@@ -373,10 +377,12 @@ public final class RoseConversationActivity extends Activity {
       o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null);
     return CurrentApps.fromReply(reg,o.isNull("status")?null:o.optString("status",null),o.isNull("sessionId")?null:o.optString("sessionId",null),
      o.isNull("taskId")?null:o.optString("taskId",null),o.has("generation")?o.optLong("generation"):null,apps,
-     o.isNull("instance")?null:o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
+     // The controller names its process as controllerEpoch on every reply (one generation order across both shapes),
+     // so a fallback reply keeps the same registration as an owned_devices one and never retires it.
+     o.isNull("instance")?jsonString(o,"controllerEpoch"):o.optString("instance",null),o.isNull("sessionStatus")?null:o.optString("sessionStatus",null),
      o.has("complete")&&!o.isNull("complete")?o.optBoolean("complete"):null,o.isNull("source")?null:o.optString("source",null));
    }finally{client.close();}
-  }catch(Exception e){return CurrentApps.Snapshot.unavailable(reg,0,CurrentApps.UNREADABLE);}
+  }catch(Exception e){return CurrentApps.readerFailure(CurrentApps.UNREADABLE);}
  }
  /** A JSON string field as read: null when absent, JSON null or not a string. */
  static String jsonString(org.json.JSONObject o,String key){Object v=o.opt(key);return v instanceof String?(String)v:null;}
