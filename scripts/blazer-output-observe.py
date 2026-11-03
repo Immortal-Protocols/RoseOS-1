@@ -33,6 +33,12 @@ written, invoked, signed or changed. The whole observation holds the existing sh
 (os/release-pipeline/frankel.json host.lockPath), exclusive and non-blocking: never created, never waited on; held by
 another job, absent or unusable, the report is complete:false with that reason and nothing else is read.
 
+ZIP members are read only when stored or deflated (any other method, encryption, a duplicate name, a central directory
+beyond zipEntries/centralDirectoryBytes, or any decoding error is reported, never followed); the end-of-central-directory
+record is checked before the directory is parsed. Each file is checked unchanged by device, inode, size, mtime and
+ctime after its reads. Every emitted string is printable ASCII within VALUE_CHARS. An OSError in one section is
+reported in that section; the report is always printed.
+
 complete:true means every path above was measured within the limits; it says nothing about whether the identity is the
 expected one (for example whether build.version.incremental equals the allocated build): the receipt reports the values
 and the reviewer applies that gate. The CLI exits 0 whenever it printed a report (complete or not; os-release.yml's
@@ -75,7 +81,9 @@ VALUE_CHARS = 512
 PRINTABLE = re.compile(r'[ -~]*')
 LIMITS = {'seconds': 900, 'targetFilesBytes': 32 << 30, 'otatoolsBytes': 4 << 30, 'scriptBytes': 1 << 20,
           'memberBytes': 1 << 20, 'fastbootBytes': 128 << 20, 'propMembers': 32, 'zipEntries': 200000,
-          'nameEntries': 4096, 'outputBytes': 64 << 10}
+          'centralDirectoryBytes': 64 << 20, 'nameEntries': 4096, 'outputBytes': 64 << 10}
+READABLE_METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+OUT_DIR_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
 
 
 class Budget:
@@ -98,7 +106,7 @@ def paths(root=ROOT):
     """(S, OUT) from the committed bindings: never an argument."""
     source = Path(json.loads((root/'os/build-only/blazer-prep-host.json').read_text())['sourceRoot'])
     out_dir = json.loads((root/'os/build-only/blazer.json').read_text())['compile']['outDir']
-    if not source.is_absolute() or not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', str(out_dir)):
+    if not source.is_absolute() or not OUT_DIR_NAME.fullmatch(str(out_dir)) or '..' in str(out_dir):
         raise ValueError('the committed source root or compile OUT_DIR is malformed')
     return source, source/out_dir
 
@@ -112,7 +120,7 @@ def open_leaf(parent, leaf, path):
     except OSError as error:
         raise Stop('error', error=type(error).__name__) from None
     if stat.S_ISLNK(before.st_mode):
-        raise Stop('link', component=str(path), target=os.readlink(leaf, dir_fd=parent)[:256])
+        raise Stop('link', component=clean(str(path)), target=clean(os.readlink(leaf, dir_fd=parent)))
     if not stat.S_ISREG(before.st_mode):
         raise Stop('not-regular')
     try:
@@ -148,8 +156,11 @@ def hash_fd(fd, before, cap, budget):
 
 
 def unchanged(fd, before):
+    """Stop('changed') unless device, inode, size, mtime and ctime are all as first seen: an in-place rewrite that
+    restores mtime still changes ctime."""
     after = os.fstat(fd)
-    if (after.st_ino, after.st_size, after.st_mtime_ns) != (before.st_ino, before.st_size, before.st_mtime_ns):
+    fields = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    if fields(after) != fields(before):
         raise Stop('changed')
 
 
@@ -160,14 +171,24 @@ def identity(row, before, sha256):
 
 def clean(value):
     """An emitted value: printable ASCII, at most VALUE_CHARS characters, or a marker."""
-    value = value.strip()
+    value = value.strip(' \t\r')
     if not PRINTABLE.fullmatch(value):
         return '<non-printable>'
     return value if len(value) <= VALUE_CHARS else value[:VALUE_CHARS] + '<truncated>'
 
 
+def readable(info):
+    """Stop unless the member is a plain stored or deflated, unencrypted entry: other methods (bzip2, lzma) can expand
+    without bound inside a single read."""
+    if info.compress_type not in READABLE_METHODS:
+        raise Stop('unsupported-compression', method=int(info.compress_type))
+    if info.flag_bits & 0x1:
+        raise Stop('encrypted')
+
+
 def read_member(archive, info, cap, budget):
     """The member's bytes, at most CAP, CRC-checked by zipfile while read; Stop otherwise."""
+    readable(info)
     if info.file_size > cap:
         raise Stop('too-large', size=info.file_size)
     chunks, size = [], 0
@@ -183,12 +204,15 @@ def read_member(archive, info, cap, budget):
                 if size > cap:
                     raise Stop('too-large', size=size)
                 chunks.append(block)
-    except (zipfile.BadZipFile, EOFError, OSError, NotImplementedError, RuntimeError) as error:
+    except Stop:
+        raise
+    except Exception as error:  # noqa: BLE001 - any decoding fault (zlib.error, struct.error, ...) is a reported row
         raise Stop('corrupt', error=type(error).__name__) from None
     return b''.join(chunks)
 
 
 def hash_member(archive, info, cap, budget):
+    readable(info)
     if info.file_size > cap:
         raise Stop('too-large', size=info.file_size)
     digest, size = hashlib.sha256(), 0
@@ -204,55 +228,94 @@ def hash_member(archive, info, cap, budget):
                 if size > cap:
                     raise Stop('too-large', size=size)
                 digest.update(block)
-    except (zipfile.BadZipFile, EOFError, OSError, NotImplementedError, RuntimeError) as error:
+    except Stop:
+        raise
+    except Exception as error:  # noqa: BLE001 - any decoding fault is a reported row
         raise Stop('corrupt', error=type(error).__name__) from None
     return {'state': 'present', 'size': size, 'sha256': digest.hexdigest()}
 
 
-def open_archive(fd):
-    """A ZipFile over a duplicate of FD (the same open file), its entry count bounded; Stop otherwise."""
-    try:
-        archive = zipfile.ZipFile(os.fdopen(os.dup(fd), 'rb'))
-    except (zipfile.BadZipFile, OSError, EOFError) as error:
-        raise Stop('not-zip', error=type(error).__name__) from None
-    if len(archive.infolist()) > LIMITS['zipEntries']:
-        archive.close()
-        raise Stop('too-many-entries')
-    return archive
+class Archive:
+    """A ZipFile over a duplicate of FD (the same open file), opened only after its end-of-central-directory record
+    shows at most zipEntries entries and centralDirectoryBytes of directory; both handles are closed on exit."""
+    def __init__(self, fd, budget):
+        self.handle = os.fdopen(os.dup(fd), 'rb')
+        try:
+            if budget.expired():
+                raise Stop('deadline')
+            try:
+                end = zipfile._EndRecData(self.handle)  # the record zipfile itself reads first; it reads <= 64 KiB
+            except Exception as error:  # noqa: BLE001
+                raise Stop('not-zip', error=type(error).__name__) from None
+            if not end:
+                raise Stop('not-zip')
+            if end[zipfile._ECD_ENTRIES_TOTAL] > LIMITS['zipEntries']:
+                raise Stop('too-many-entries', entries=int(end[zipfile._ECD_ENTRIES_TOTAL]))
+            if end[zipfile._ECD_SIZE] > LIMITS['centralDirectoryBytes']:
+                raise Stop('central-directory-too-large', size=int(end[zipfile._ECD_SIZE]))
+            try:
+                self.archive = zipfile.ZipFile(self.handle)
+            except Exception as error:  # noqa: BLE001 - a malformed directory or name is a reported row
+                raise Stop('not-zip', error=type(error).__name__) from None
+            infos = self.archive.infolist()
+            if len(infos) > LIMITS['zipEntries']:
+                raise Stop('too-many-entries', entries=len(infos))
+            names = [info.filename for info in infos]
+            if len(set(names)) != len(names):
+                raise Stop('duplicate-members')
+            self.infos = {info.filename: info for info in infos}
+        except BaseException:
+            self.handle.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self.archive.close()
+        finally:
+            self.handle.close()
+
+
+def lines(data):
+    """Lines as Android's property parsers see them: split on '\\n' only, a trailing '\\r' dropped."""
+    return [line[:-1] if line.endswith('\r') else line for line in data.decode('utf-8', 'replace').split('\n')]
 
 
 def props(data):
     found = {}
-    for line in data.decode('utf-8', 'replace').splitlines():
+    for line in lines(data):
         key, sep, value = line.partition('=')
-        if sep and PROP_KEY.fullmatch(key.strip()):
-            found[key.strip()] = clean(value)
+        key = key.strip(' \t')
+        if sep and PROP_KEY.fullmatch(key):
+            found[key] = clean(value)
     return found
 
 
 def misc(data):
     found = {}
-    for line in data.decode('utf-8', 'replace').splitlines():
+    for line in lines(data):
         key, sep, value = line.partition('=')
-        if sep and key.strip() in MISC_KEYS:
-            found[key.strip()] = clean(value)
+        key = key.strip(' \t')
+        if sep and key in MISC_KEYS:
+            found[key] = clean(value)
     return found
 
 
 def android_info(data):
     found = {}
-    for line in data.decode('utf-8', 'replace').splitlines():
-        words = line.strip().split(None, 1)
-        if len(words) == 2 and words[0] == 'require':
-            key, sep, value = words[1].partition('=')
+    for line in lines(data):
+        word, _, rest = line.strip(' \t').partition(' ')
+        if word == 'require':
+            key, sep, value = rest.strip(' \t').partition('=')
             if sep and key in INFO_KEYS:
                 found[key] = [clean(v) for v in value.split('|')][:16]
     return found
 
 
-def target_files_members(archive, budget):
+def target_files_members(archive, infos, budget):
     """The allowlisted identity values of the target-files, and the problems."""
-    infos = {info.filename: info for info in archive.infolist()}
     problems, out = [], {'props': {}, 'miscInfo': None, 'androidInfo': None}
     prop_names = sorted(name for name in infos if PROP_MEMBER.fullmatch(name))
     if len(prop_names) > LIMITS['propMembers']:
@@ -306,8 +369,8 @@ def observe_target_files(out, budget):
     try:
         directory = base.open_directory(out/TARGET_FILES_DIR)
     except base.Walk as walk:
-        row.update(state=walk.state, component=str(walk.component), **({'target': walk.target} if walk.target else {}))
-        return row, [f'targetFiles: {walk.state} at {walk.component}']
+        row.update(state=walk.state, component=clean(str(walk.component)), **({'target': clean(walk.target)} if walk.target else {}))
+        return row, [f'targetFiles: {walk.state} at {clean(str(walk.component))}']
     try:
         names, scanned = [], 0
         with os.scandir(directory) as entries:
@@ -319,7 +382,7 @@ def observe_target_files(out, budget):
                 if TARGET_FILES_NAME.fullmatch(entry.name):
                     names.append(entry.name)
         if len(names) != 1:
-            row.update(state='absent' if not names else 'ambiguous', names=sorted(names)[:8])
+            row.update(state='absent' if not names else 'ambiguous', names=[clean(n) for n in sorted(names)[:8]])
             return row, [f'targetFiles: {len(names)} blazer-target_files*.zip, exactly one is required']
         name = names[0]
         row['path'] = str(out/TARGET_FILES_DIR/name)
@@ -332,11 +395,8 @@ def observe_target_files(out, budget):
         os.close(directory)
     try:
         sha256 = hash_fd(fd, before, LIMITS['targetFilesBytes'], budget)
-        archive = open_archive(fd)
-        try:
-            members, problems = target_files_members(archive, budget)
-        finally:
-            archive.close()
+        with Archive(fd, budget) as opened:
+            members, problems = target_files_members(opened.archive, opened.infos, budget)
         unchanged(fd, before)
     except Stop as stop:
         row.update(state=stop.state, **stop.detail)
@@ -353,7 +413,7 @@ def observe_regular(path, cap, budget):
     try:
         parent, leaf = base.open_parent(path)
     except base.Walk as walk:
-        raise Stop(walk.state, component=str(walk.component), **({'target': walk.target} if walk.target else {})) from None
+        raise Stop(walk.state, component=clean(str(walk.component)), **({'target': clean(walk.target)} if walk.target else {})) from None
     try:
         fd, before = open_leaf(parent, leaf, path)
     finally:
@@ -375,21 +435,17 @@ def observe_otatools(out, budget):
     except Stop as stop:
         return {'path': str(path), 'state': stop.state, **stop.detail}, [f'otatools: {stop.state}']
     try:
-        archive = open_archive(fd)
-        try:
-            infos = {info.filename: info for info in archive.infolist()}
-            if FASTBOOT not in infos:
+        with Archive(fd, budget) as opened:
+            if FASTBOOT not in opened.infos:
                 row['fastboot'] = {'state': 'absent'}
                 problems = [f'otatools: member {FASTBOOT} absent']
             else:
                 try:
-                    row['fastboot'] = hash_member(archive, infos[FASTBOOT], LIMITS['fastbootBytes'], budget)
+                    row['fastboot'] = hash_member(opened.archive, opened.infos[FASTBOOT], LIMITS['fastbootBytes'], budget)
                     problems = []
                 except Stop as stop:
                     row['fastboot'] = {'state': stop.state, **stop.detail}
                     problems = [f'otatools: member {FASTBOOT} {stop.state}']
-        finally:
-            archive.close()
         unchanged(fd, before)
     except Stop as stop:
         return {'path': str(path), 'state': stop.state, **stop.detail}, [f'otatools: {stop.state}']
@@ -431,12 +487,14 @@ def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=N
         report = {'schema': SCHEMA, 'host': host, 'limits': dict(LIMITS), 'lock': {'held': True, 'path': str(lock)},
                   'sourceRoot': str(source), 'outDir': str(out), 'problems': [],
                   'gate': 'complete:true measures; the reviewer compares summary.incremental with the allocated build'}
-        report['targetFiles'], problems = observe_target_files(out, budget)
-        report['problems'] += problems
-        report['otatools'], problems = observe_otatools(out, budget)
-        report['problems'] += problems
-        report['scripts'], problems = observe_scripts(source, budget)
-        report['problems'] += problems
+        for key, section in (('targetFiles', lambda: observe_target_files(out, budget)),
+                             ('otatools', lambda: observe_otatools(out, budget)),
+                             ('scripts', lambda: observe_scripts(source, budget))):
+            try:
+                report[key], problems = section()
+            except OSError as error:
+                report[key], problems = {'state': 'error', 'error': type(error).__name__}, [f'{key}: error {type(error).__name__}']
+            report['problems'] += problems
         if budget.expired():
             report['problems'].append('deadline: the observation exceeded its time bound')
         report['complete'] = not report['problems']
@@ -444,7 +502,7 @@ def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=N
     finally:
         os.close(held)  # releases the flock
     text = json.dumps(report, sort_keys=True, separators=(',', ':'))
-    if len(text.encode()) > LIMITS['outputBytes']:
+    if len(text.encode()) + 1 > LIMITS['outputBytes']:  # print() adds the newline the receipt reader counts
         text = json.dumps({'schema': SCHEMA, 'host': host, 'complete': False,
                            'problems': ['output: the report exceeds outputBytes']}, sort_keys=True)
     return text

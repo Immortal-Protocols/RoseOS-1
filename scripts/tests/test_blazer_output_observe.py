@@ -3,6 +3,9 @@ compile's outputs under the shared lock. Synthetic source trees, real ZIP files 
 build, signing or process; links are never followed and only allowlisted values are emitted."""
 import fcntl
 import hashlib
+import signal
+import struct
+import threading
 import importlib.util
 import json
 import os
@@ -28,10 +31,19 @@ INFO = 'require board=blazer\nrequire version-bootloader=bl-1|bl-2\nrequire vers
 FASTBOOT = b'\x7fELF fastboot'
 
 
+TEMPS = []
+
+
+def tearDownModule():
+    for temp in TEMPS:
+        temp.cleanup()
+
+
 class Tree:
-    """A synthetic isolated source tree S with OUT = S/out-blazer-build, and a lock file."""
+    """A synthetic isolated source tree S with OUT = S/out-blazer-build, and a lock file (removed after the module)."""
     def __init__(self, members=None, otatools=None):
-        self.tmp = Path(tempfile.mkdtemp())
+        TEMPS.append(tempfile.TemporaryDirectory())
+        self.tmp = Path(TEMPS[-1].name)
         self.source = self.tmp/'source'
         self.out = self.source/'out-blazer-build'
         self.inter = self.out/observer.TARGET_FILES_DIR
@@ -264,6 +276,275 @@ class Observe(unittest.TestCase):
         observer.LIMITS['outputBytes'] = 200
         report = tree.observe()
         self.assertEqual((report['complete'], report['problems']), (False, ['output: the report exceeds outputBytes']))
+
+
+def patched(test, owner, name, value):
+    original = getattr(owner, name)
+    setattr(owner, name, value)
+    test.addCleanup(setattr, owner, name, original)
+    return original
+
+
+def limits(test, **change):
+    saved = dict(observer.LIMITS)
+    test.addCleanup(observer.LIMITS.update, saved)
+    observer.LIMITS.update(change)
+
+
+class Guards(unittest.TestCase):
+    """One test per guard: deleting that guard alone fails its test."""
+    def test_a_directory_where_the_target_files_should_be_is_not_regular(self):
+        tree = Tree()
+        tree.target.unlink()
+        tree.target.mkdir()
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'not-regular')
+
+    def test_an_inode_swapped_between_lstat_and_open_is_changed(self):
+        tree = Tree()
+        real = os.fstat
+        def other_inode(fd):
+            st = real(fd)
+            if stat_is_target(st, tree):
+                return os.stat_result((st.st_mode, st.st_ino + 1) + tuple(st)[2:])
+            return st
+        patched(self, observer.os, 'fstat', other_inode)
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'changed')
+
+    def test_a_same_size_rewrite_with_mtime_restored_is_changed(self):
+        tree = Tree()
+        real = observer.hash_fd
+        def rewrite_then_hash(fd, before, cap, budget):
+            digest = real(fd, before, cap, budget)
+            if before.st_size == tree.target.stat().st_size and before.st_ino == tree.target.stat().st_ino:
+                data = bytearray(tree.target.read_bytes())
+                data[-1] ^= 0
+                with open(tree.target, 'r+b') as f:
+                    f.write(bytes(data))  # same bytes, same size: only ctime moves
+                os.utime(tree.target, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return digest
+        patched(self, observer, 'hash_fd', rewrite_then_hash)
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'changed')
+
+    def test_bzip2_lzma_and_encrypted_members_are_never_read(self):
+        tree = Tree()
+        Tree.write_zip(tree.target, {'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC,
+                                     'OTA/android-info.txt': INFO}, method=zipfile.ZIP_BZIP2)
+        report = tree.observe()
+        self.assertEqual(report['targetFiles']['props']['SYSTEM/build.prop'], {'state': 'unsupported-compression', 'method': 12})
+        self.assertFalse(report['complete'])
+        tree = Tree()
+        Tree.write_zip(tree.target, {'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC,
+                                     'OTA/android-info.txt': INFO}, method=zipfile.ZIP_STORED)
+        data = bytearray(tree.target.read_bytes())
+        for signature, offset in ((b'PK\x03\x04', 6), (b'PK\x01\x02', 8)):  # set the encryption flag in both headers
+            at = data.index(signature)
+            data[at + offset] |= 0x1
+        tree.target.write_bytes(bytes(data))
+        self.assertEqual(tree.observe()['targetFiles']['props']['SYSTEM/build.prop']['state'], 'encrypted')
+
+    def test_an_oversized_member_is_never_opened(self):
+        tree = Tree()
+        limits(self, memberBytes=16)
+        opened = []
+        real = zipfile.ZipFile.open
+        def spy(archive, name, *args, **kwargs):
+            opened.append(getattr(name, 'filename', name))
+            return real(archive, name, *args, **kwargs)
+        patched(self, zipfile.ZipFile, 'open', spy)
+        report = tree.observe()
+        self.assertEqual(report['targetFiles']['props']['SYSTEM/build.prop']['state'], 'too-large')
+        self.assertNotIn('SYSTEM/build.prop', opened)
+
+    def test_the_central_directory_is_bounded_before_it_is_parsed(self):
+        tree = Tree()
+        limits(self, zipEntries=2)
+        parsed = []
+        real = zipfile.ZipFile.__init__
+        def spy(self_, *args, **kwargs):
+            parsed.append(1)
+            return real(self_, *args, **kwargs)
+        patched(self, zipfile.ZipFile, '__init__', spy)
+        report = tree.observe()
+        self.assertEqual(report['targetFiles']['state'], 'too-many-entries')
+        self.assertEqual((report['otatools']['state'], len(parsed)), ('present', 1))  # only the otatools ZIP was parsed
+        tree = Tree()
+        limits(self, zipEntries=200000, centralDirectoryBytes=64)
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'central-directory-too-large')
+
+    def test_an_end_record_that_under_reports_entries_is_still_caught_after_parsing(self):
+        tree = Tree()
+        data = bytearray(tree.target.read_bytes())
+        at = data.rindex(b'PK\x05\x06')
+        struct.pack_into('<HH', data, at + 8, 1, 1)  # entries on this disk / total: claim 1
+        tree.target.write_bytes(bytes(data))
+        limits(self, zipEntries=2)
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'too-many-entries')
+
+    def test_duplicate_member_names_are_refused(self):
+        tree = Tree()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            with zipfile.ZipFile(tree.target, 'w') as archive:
+                for name, data in (('SYSTEM/build.prop', SYSTEM_PROP), ('SYSTEM/build.prop', 'ro.build.version.incremental=EVIL\n'),
+                                   ('META/misc_info.txt', MISC), ('OTA/android-info.txt', INFO)):
+                    archive.writestr(name, data)
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'duplicate-members')
+
+    def test_a_corrupt_deflate_stream_is_a_reported_row_not_a_crash(self):
+        tree = Tree()
+        data = bytearray(tree.target.read_bytes())
+        at = data.index(b'PK\x03\x04')
+        name_len, extra_len = struct.unpack_from('<HH', data, at + 26)
+        start = at + 30 + name_len + extra_len
+        for i in range(start, start + 8):
+            data[i] ^= 0xFF  # garble the first deflate bytes of the first member
+        tree.target.write_bytes(bytes(data))
+        report = tree.observe()
+        first = report['targetFiles']['props'].get('SYSTEM/build.prop') or {}
+        self.assertEqual(first.get('state'), 'corrupt')
+        self.assertIsInstance(report, dict)
+
+    def test_dot_names_are_refused_as_the_compile_out_dir(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        (root/'os/build-only').mkdir(parents=True)
+        (root/'os/build-only/blazer-prep-host.json').write_text(json.dumps({'sourceRoot': '/srv/source'}))
+        for bad in ('..', '.', '.hidden', 'a/b', ''):
+            with self.subTest(bad=bad):
+                (root/'os/build-only/blazer.json').write_text(json.dumps({'compile': {'outDir': bad}}))
+                with self.assertRaises(ValueError):
+                    observer.paths(root)
+
+    def test_values_are_printable_ascii_within_value_chars(self):
+        tree = Tree(members={'SYSTEM/build.prop': 'ro.build.version.incremental=2026110303\x0bro.build.id=EVIL\n'
+                                                  'ro.build.fingerprint=' + 'x' * 600 + '\n'
+                                                  'ro.build.type=us\x01er\n',
+                             'META/misc_info.txt': MISC, 'OTA/android-info.txt': INFO})
+        props = tree.observe()['targetFiles']['props']['SYSTEM/build.prop']
+        self.assertEqual(props['ro.build.version.incremental'], '<non-printable>')  # one line: \x0b never splits it
+        self.assertNotIn('ro.build.id', props)
+        self.assertTrue(props['ro.build.fingerprint'].endswith('<truncated>'))
+        self.assertEqual(len(props['ro.build.fingerprint']), observer.VALUE_CHARS + len('<truncated>'))
+        self.assertEqual(props['ro.build.type'], '<non-printable>')
+
+    def test_the_printed_report_including_its_newline_fits_the_receipt_cap(self):
+        tree = Tree()
+        fixed = lambda: 100.0  # noqa: E731 - a constant elapsedSeconds keeps the report length stable
+        text = lambda: observer.observe('immortal-os-builder', source=tree.source, out=tree.out, lock=tree.lock, clock=fixed)
+        limits(self, outputBytes=9999)  # the same digit count as the limits below, so the report length does not move
+        size = len(text().encode())
+        self.assertLess(size, 9999)
+        limits(self, outputBytes=size)  # print() adds a newline: size + 1 bytes would exceed the receipt cap
+        self.assertEqual(json.loads(text())['problems'], ['output: the report exceeds outputBytes'])
+        limits(self, outputBytes=size + 1)
+        self.assertTrue(json.loads(text())['complete'])
+
+    def test_a_fifo_at_the_lock_path_refuses_without_blocking(self):
+        tree = Tree()
+        tree.lock.unlink()
+        os.mkfifo(tree.lock)
+        result = []
+        worker = threading.Thread(target=lambda: result.append(tree.observe()), daemon=True)
+        worker.start()
+        worker.join(10)
+        self.assertFalse(worker.is_alive(), 'the observer blocked on a FIFO lock')
+        self.assertEqual(result[0]['lock'], {'held': False, 'reason': 'lock is not a regular file'})
+
+    def test_an_os_error_in_one_section_is_that_sections_row(self):
+        tree = Tree()
+        def broken(out, budget):
+            raise PermissionError('denied')
+        patched(self, observer, 'observe_otatools', broken)
+        report = tree.observe()
+        self.assertEqual(report['otatools'], {'state': 'error', 'error': 'PermissionError'})
+        self.assertEqual(report['targetFiles']['state'], 'present')
+        self.assertIn('otatools: error PermissionError', report['problems'])
+
+    def test_an_unreadable_real_directory_is_an_error_not_a_type(self):
+        tree = Tree()
+        real = os.open
+        def denied(path, flags, *args, dir_fd=None, **kwargs):
+            if path == 'target_files_intermediates' and dir_fd is not None:
+                raise PermissionError(13, 'denied')
+            return real(path, flags, *args, dir_fd=dir_fd, **kwargs)
+        patched(self, observer.os, 'open', denied)
+        row = tree.observe()['targetFiles']
+        self.assertEqual((row['state'], row.get('target')), ('error', 'EACCES'))
+
+    def test_name_and_prop_member_caps(self):
+        tree = Tree()
+        limits(self, nameEntries=1)  # the ZIP and the unzipped tree: two names
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'too-many-names')
+        tree = Tree()
+        limits(self, nameEntries=4096, propMembers=1)
+        self.assertIn('targetFiles: 2 build.prop members exceed propMembers', tree.observe()['problems'])
+
+    def test_a_swapped_inode_is_never_read(self):
+        tree = Tree()
+        real = os.fstat
+        def other_inode(fd):
+            st = real(fd)
+            return os.stat_result((st.st_mode, st.st_ino + 1) + tuple(st)[2:]) if stat_is_target(st, tree) else st
+        hashed = []
+        real_hash = observer.hash_fd
+        def spy(fd, before, cap, budget):
+            hashed.append(before.st_ino)
+            return real_hash(fd, before, cap, budget)
+        patched(self, observer.os, 'fstat', other_inode)
+        patched(self, observer, 'hash_fd', spy)
+        self.assertEqual(tree.observe()['targetFiles']['state'], 'changed')
+        self.assertNotIn(tree.target.stat().st_ino, hashed)  # refused at open: not one byte of it was hashed
+
+    def test_nothing_is_read_once_the_deadline_has_passed(self):
+        tree = Tree()
+        reads = []
+        real_read = os.read
+        def counting(fd, n):
+            reads.append(fd)
+            return real_read(fd, n)
+        patched(self, observer.os, 'read', counting)
+        ticks = iter([0.0] + [10000.0] * 1000)
+        report = tree.observe(clock=lambda: next(ticks))
+        self.assertEqual((report['targetFiles']['state'], 'sha256' in report['targetFiles']), ('deadline', False))
+        self.assertEqual(reads, [])
+
+    def test_every_zip_handle_is_closed_explicitly(self):
+        import gc, warnings
+        tree = Tree()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            tree.observe()
+            gc.collect()
+        self.assertFalse([w for w in caught if issubclass(w.category, ResourceWarning)])
+
+    def test_a_special_file_at_the_lock_path_is_never_opened(self):
+        tree = Tree()
+        tree.lock.unlink()
+        os.mkfifo(tree.lock)
+        opened = []
+        real = os.open
+        def spy(path, flags, *args, dir_fd=None, **kwargs):
+            opened.append(path)
+            return real(path, flags, *args, dir_fd=dir_fd, **kwargs)
+        patched(self, observer.base.os, 'open', spy)
+        self.assertEqual(tree.observe()['lock']['reason'], 'lock is not a regular file')
+        self.assertNotIn(tree.lock.name, opened)
+
+    def test_no_descriptor_is_left_open(self):
+        tree = Tree()
+        before = len(os.listdir('/proc/self/fd'))
+        for _ in range(3):
+            tree.observe()
+        self.assertEqual(len(os.listdir('/proc/self/fd')), before)
+
+
+def stat_is_target(st, tree):
+    try:
+        return st.st_ino == tree.target.stat().st_ino and st.st_size == tree.target.stat().st_size
+    except OSError:
+        return False
 
 
 class Fixed(unittest.TestCase):

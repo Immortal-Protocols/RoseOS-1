@@ -33,6 +33,7 @@ report is only complete:false with that reason and nothing is observed. It never
 Exit status: 0 report printed (complete true or false), 2 invalid usage.
 """
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -113,13 +114,15 @@ def open_parent(path):
                 child = os.open(part, DIR_OPEN, dir_fd=fd)
             except FileNotFoundError:
                 raise Walk('absent', walked) from None
-            except OSError:
+            except OSError as error:
                 try:
                     info = os.lstat(part, dir_fd=fd)
                 except OSError:
                     raise Walk('error', walked) from None
                 if stat.S_ISLNK(info.st_mode):
                     raise Walk('link', walked, os.readlink(part, dir_fd=fd)[:256]) from None
+                if stat.S_ISDIR(info.st_mode):  # a real directory that could not be opened (EACCES, EMFILE, EIO)
+                    raise Walk('error', walked, errno.errorcode.get(error.errno, 'OSError')) from None
                 raise Walk('not-directory', walked) from None
             os.close(fd)
             fd = child
@@ -203,11 +206,13 @@ def open_directory(path):
             return os.open(leaf, DIR_OPEN, dir_fd=parent)
         except FileNotFoundError:
             raise Walk('absent', Path(path)) from None
-        except OSError:
+        except OSError as error:
             try:
                 info = os.lstat(leaf, dir_fd=parent)
             except OSError:
                 raise Walk('error', Path(path)) from None
+            if stat.S_ISDIR(info.st_mode):  # a real directory that could not be opened (EACCES, EMFILE, EIO)
+                raise Walk('error', Path(path), errno.errorcode.get(error.errno, 'OSError')) from None
             raise Walk('link' if stat.S_ISLNK(info.st_mode) else 'not-directory', Path(path)) from None
     finally:
         os.close(parent)
@@ -311,11 +316,14 @@ def take_lock(path):
         return None, f'lock {walk.state} at {walk.component}'
     try:
         try:
-            if stat.S_ISLNK(os.lstat(leaf, dir_fd=parent).st_mode):
+            mode = os.lstat(leaf, dir_fd=parent).st_mode
+            if stat.S_ISLNK(mode):
                 return None, f'lock link at {path}'
+            if not stat.S_ISREG(mode):
+                return None, 'lock is not a regular file'
         except FileNotFoundError:
             return None, 'lock absent'
-        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
     except FileNotFoundError:
         return None, 'lock absent'
     except OSError as error:
