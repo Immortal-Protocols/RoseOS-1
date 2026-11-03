@@ -771,7 +771,7 @@
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
         "basis": null,
-        "policy": "Proposed ceilings only: bootstrap access <= 4 h and secretAccessor <= 30 d after grant, enforced by the actual IAM conditions. These fields are filled only from an IAM readback of those exact expiries (with basis); while null they are not enforced, assumed or substituted and readiness refuses (access-unknown). Recorded expiries beyond the ceilings refuse (access-window)."
+        "policy": "Access is proven live, not from recorded timestamps (owner decision 2026-11-03): after the signer login and under the lock, the run calls secrets describe and versions list on both secrets with the same credentials before any key is generated or journaled, and again just before the import; any failure (expiry, revocation, a wrong grant) stops it with nothing generated or added. The approved grants stay time-boxed by IAM conditions: bootstrap access <= 4 h, secretAccessor <= 30 d. Recording expiries here is optional; any that are recorded need a basis, are held to those ceilings and must leave minimumRemainingSeconds."
       },
       "missing": [
         "owner/security approval of the new identity (FOLD-FACTORY-IDENTITY proposal)",
@@ -1401,7 +1401,7 @@
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
         "basis": null,
-        "policy": "Proposed ceilings only: bootstrap access <= 4 h and secretAccessor <= 30 d after grant, enforced by the actual IAM conditions. These fields are filled only from an IAM readback of those exact expiries (with basis); while null they are not enforced, assumed or substituted and readiness refuses (access-unknown). Recorded expiries beyond the ceilings refuse (access-window)."
+        "policy": "Access is proven live, not from recorded timestamps (owner decision 2026-11-03): after the signer login and under the lock, the run calls secrets describe and versions list on both secrets with the same credentials before any key is generated or journaled, and again just before the import; any failure (expiry, revocation, a wrong grant) stops it with nothing generated or added. The approved grants stay time-boxed by IAM conditions: bootstrap access <= 4 h, secretAccessor <= 30 d. Recording expiries here is optional; any that are recorded need a basis, are held to those ceilings and must leave minimumRemainingSeconds."
       },
       "missing": [
         "owner/security approval of a new blazer factory-archive identity (BLAZER-SIGN proposal)",

@@ -1494,21 +1494,58 @@ class FactorySelfCheck(unittest.TestCase):
 
 
 class FactoryProfileValidation(unittest.TestCase):
-    def test_null_expiries_are_never_enforced_or_assumed(self):
+    def test_access_is_proven_live_so_unrecorded_expiries_are_not_required(self):
+        # Owner decision: the run's credentialed metadata calls prove access (any expiry, revocation or wrong grant),
+        # so a ready factory profile needs no recorded timestamps; a recorded one is still enforced (next test).
         profiles = factory_ready_profiles()
-        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None)
-        codes_ = [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)]
-        self.assertEqual(codes_, ['access-unknown', 'access-unknown'])
-        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # never partly recorded: all null, or a readback
-        values = (checked['addVersionExpires'], checked['accessorExpires'], checked['basis'])
-        self.assertTrue(all(v is None for v in values) or all(isinstance(v, str) and v for v in values), values)
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
+        self.assertEqual(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), profiles, NOW), [])
+        # Profiles of other formats keep the recorded-expiry rule.
+        fold = copy.deepcopy(READY)
+        fold['profiles']['fold-rango-v1']['access'].update(addVersionExpires=None)
+        self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-v1', fold, NOW)])
+        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
+        self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
+
+    def test_a_failed_live_access_call_stops_before_any_key_or_journal_and_can_be_retried(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        runner, fixture = KeygenMock(), Fixture(self)
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+
+        def bootstrap(executor):
+            return sb.run('fold-rango-factory-v1', profiles, executor, fixture.state, fixture.lock, SHA, NOW,
+                          workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+        for denial in (sb.Unavailable('permission denied: the access expired'), sb.Unavailable('the grant was revoked')):
+            with self.subTest(str(denial)):
+                executor = Executor(states={'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1': denial})
+                receipt = bootstrap(executor)
+                self.assertEqual((receipt['status'], codes(receipt)), ('blocked', ['metadata-unavailable']))
+                self.assertNotIn('generate', executor.kinds())
+                self.assertNotIn('add', executor.kinds())
+                self.assertFalse((fixture.state/'fold-rango-factory-v1.json').exists())  # nothing used up
+        retry = Executor()
+        self.assertEqual(bootstrap(retry)['status'], 'complete')
 
     def test_recorded_expiries_must_fit_the_approved_ceilings_with_a_basis(self):
         for change, code in (({'addVersionExpires': '2026-10-30T02:00:00Z'}, 'access-window'),   # 4 h 30 m
                              ({'accessorExpires': '2026-12-01T00:00:00Z'}, 'access-window'),     # > 30 d
                              ({'addVersionExpires': '2026-11-28T00:00:00Z'}, 'access-window'),   # after accessor
                              ({'basis': None}, 'access-unknown'),
-                             ({'addVersionExpires': '2026-10-29T21:45:00Z'}, 'access-expired')):  # inside the margin
+                             ({'addVersionExpires': '2026-10-29T21:45:00Z'}, 'access-expired'),  # inside the margin
+                             ({'accessorExpires': None, 'addVersionExpires': '2026-10-30T02:00:00Z'}, 'access-window'),
+                             ({'addVersionExpires': None, 'accessorExpires': '2026-12-01T00:00:00Z'}, 'access-window'),
+                             ({'addVersionExpires': None, 'basis': None}, 'access-unknown'),
+                             ({'addVersionExpires': 'tomorrow'}, 'access-unknown')):
             with self.subTest(change):
                 profiles = factory_ready_profiles()
                 profiles['profiles']['fold-rango-factory-v1']['access'].update(change)

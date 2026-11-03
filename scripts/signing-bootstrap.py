@@ -157,7 +157,10 @@ def readiness(name, profiles, now):
         reasons += openssh_problems(profile, now)
     access = profile.get('access', {})
     margin = timedelta(seconds=access.get('minimumRemainingSeconds', 1800))
+    live = (profile.get('archive') or {}).get('format') == 'openssh-ed25519'
     for key in ('addVersionExpires', 'accessorExpires'):
+        if live and access.get(key) is None:
+            continue  # proven live: the run's credentialed metadata calls fail closed before anything irreversible
         try:
             if parse_time(access[key]) - margin <= now:
                 reasons.append(('access-expired', f'{key} {access[key]} is within {margin} of {now:%Y-%m-%dT%H:%M:%SZ}'))
@@ -768,14 +771,24 @@ def openssh_problems(profile, now):
         problems.append(('profile-invalid', 'recheckEmptyBeforeImport must be true'))
     if profile.get('localProof') or (profile.get('generation') or {}).get('recipe') is not None:
         problems.append(('profile-invalid', 'no local proof or recipe: generation is the fixed generate_openssh'))
+    # Access is proven live, not from a recorded timestamp (owner decision, 2026-11-03): after the signer login and under
+    # the lock, the run's metadata calls on both secrets use the same credentials and stop it (metadata-unavailable)
+    # before any key is generated or journaled, whatever ended the access (expiry, revocation, a wrong grant); they are
+    # repeated just before the import. Expiries are optional here; any that are recorded are still held to the
+    # approved ceilings, need a basis, and must leave the 30-minute margin (readiness).
     access = profile.get('access') or {}
-    try:
-        add, accessor = parse_time(access['addVersionExpires']), parse_time(access['accessorExpires'])
-    except (KeyError, TypeError, ValueError):
-        return problems  # readiness already reports access-unknown: null expiries are never enforced or assumed
-    if not access.get('basis'):
+    recorded = {}
+    for key in ('addVersionExpires', 'accessorExpires'):
+        if access.get(key) is not None:
+            try:
+                recorded[key] = parse_time(access[key])
+            except (TypeError, ValueError):
+                return problems  # readiness reports the malformed value as access-unknown
+    if recorded and not access.get('basis'):
         problems.append(('access-unknown', 'recorded expiries need the IAM readback basis'))
-    if add - now > OPENSSH_BOOTSTRAP_MAX or accessor - now > OPENSSH_ACCESSOR_MAX or add > accessor:
+    add, accessor = recorded.get('addVersionExpires'), recorded.get('accessorExpires')
+    if (add and add - now > OPENSSH_BOOTSTRAP_MAX) or (accessor and accessor - now > OPENSSH_ACCESSOR_MAX) \
+            or (add and accessor and add > accessor):
         problems.append(('access-window', f'recorded expiries exceed the approved {OPENSSH_BOOTSTRAP_MAX} bootstrap / '
                          f'{OPENSSH_ACCESSOR_MAX.days} d accessor ceilings or are out of order'))
     return problems
