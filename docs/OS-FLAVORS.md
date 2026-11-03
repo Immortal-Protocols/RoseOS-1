@@ -178,7 +178,7 @@ readiness or safety keys, and every `sha256From` pointer must resolve to the sam
   - The build route is the existing `os/build-only/blazer.json` recipe (`scripts/blazer-build-only.py`),
     `blazer-reconcile.json` integration (`scripts/blazer_integration.py`) and
     `blazer-updater-route.json`. `buildRoute` references them without duplicating them.
-  - The recipe's operator capacity allowances are still null and unresolved; this adds no new gate.
+  - Compile's byte allowance is a finite first-build proposal (see **Compile** below); it is reviewed, not measured.
 
 **Test evidence is synthetic.** Tests use fresh throwaway OpenSSH keys, the real AOSP `simg2img`
 where the runner has it (otherwise a double that decodes the real sparse format), and an
@@ -465,9 +465,48 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
   proposal, not verified paths. No `source` copy has run, and none is authorized.
-- **Out of scope**: `compile` is outside preparation and still needs a measured
-  `compileAllowanceBytes`. Nothing here compiles, signs, publishes or flashes, and no runtime scope
-  is approved.
+- **Compile** (outside preparation; for Release's separate wiring):
+  `python3 scripts/blazer-build-only.py run --stage compile --host H --lock L --source-root S --jobs J
+  --integration-dir I --inputs-receipt R --receipt-dir NEW`
+  - Runs `source build/envsetup.sh && lunch blazer-cur-user && m -jJ vendorbootimage
+    vendorkernelbootimage target-files-package otatools-package` in `S` with `OUT_DIR=out-blazer-build`,
+    `PATH=/usr/bin:/bin`, inherited `GIT_*` stripped and `GIT_CEILING_DIRECTORIES=S`. Its own
+    session and process group end on a stop: SIGTERM, then SIGKILL after `killGraceSeconds`.
+  - **Admission:**
+    - `S` is isolated from the production source root (now checked for compile too);
+    - the generated vendor tree is from the pinned adevtool;
+    - the Rose integration binds (`I` is host-reconcile's receipt directory, `R` is the admitted
+      `local-inputs.json`);
+    - no existing `out-blazer-build`, a free lock, and available − allowance ≥ the 300 GiB reserve.
+  - **First-build allowance** `capacity.compileAllowanceBytes` = 250 GiB (`compileAllowanceKind`
+    `first-build-proposal`). It is reviewed, not measured; there is no prior-run gate. Admission
+    therefore needs 550 GiB free on `S`'s filesystem.
+    - While compile runs, the drop in that filesystem's available bytes since start is sampled
+      against 250 GiB and available bytes against the reserve. The drop is cheap to sample (an
+      OUT_DIR walk is not) and conservative, because it counts any other writer too.
+    - This is a sampled stop, not a quota: writes between samples can overshoot.
+    - `compile.timeoutSeconds` is 8 h, a cap rather than an estimate; the duration is unmeasured.
+    - Outputs are kept on any stop. An allowance that proves too small is revised from that run's
+      receipt.
+  - **Receipts** (write-once): `preflight.json`, `started.json`, `completed.json`. On exit 0,
+    `completed.json.outputs` binds Signing's inputs:
+    - `targetFiles`: the one `blazer-target_files*.zip` in
+      `target/product/blazer/obj/PACKAGING/target_files_intermediates/`;
+    - `otatools`: `host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/otatools-packagelinux_glibc_x86_64`;
+    - `vendorBootImage` and `vendorKernelBootImage` under `target/product/blazer/`.
+    Each has a path, size and sha256, from `scripts/rango-collect.py`'s no-follow, CRC-checked
+    collector bound to blazer paths. A clean make whose outputs aren't all collected is exit 1.
+    Exit 0 ok, 1 refused or failed, 2 invalid input. Compile neither signs nor packages
+    (`signed: false`).
+  - **Integration producers** (existing, unchanged):
+    - `blazer_integration.py admit --bundle DIR --updater-route ROUTE.json --out NEW_DIR --aapt P
+      --apksigner P` writes `NEW_DIR/local-inputs.json` (`blazer-local-inputs`);
+    - `render --inputs … --source-root S --lock L --receipt-dir I --work-dir W --out NEW.json` prints the
+      `host-reconcile.py apply … --label blazer-<build>` command, which writes `I/NNNN-blazer-<build>.json`.
+    - **Gap:** host-reconcile needs each reconciled project's own Git repository in `S` (`rev-parse
+      HEAD`, `clone --shared`). The isolated copy excludes all `.git`, so reconcile can't run on a
+      copied tree until genuine metadata for those projects is supplied (see the Git metadata proposal).
+- **Out of scope**: nothing here signs, publishes or flashes, and no runtime scope is approved.
 
 ## Callable contract
 
