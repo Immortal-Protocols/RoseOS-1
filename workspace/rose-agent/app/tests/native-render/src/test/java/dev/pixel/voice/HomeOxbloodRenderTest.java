@@ -186,6 +186,8 @@ public class HomeOxbloodRenderTest {
         assertTrue("the sheen lightens part of the screen: " + lit, lit > 200);
         assertEquals("the sheen never darkens", 0, darker);
         assertEquals("parked with no sweep", -1f, sheen.band, 0f);
+        // Every frame is the same sheen: the shaders are not dimmed by the paint state the previous frame left behind.
+        assertTrue("a second frame draws the same sheen as the first", draw(root).sameAs(after));
         for (float p : new float[]{.2f, .5f, .8f}) {
             sheen.band = p;
             save(draw(root), "oxblood-home-sheen-sweep-" + Math.round(p * 100));
