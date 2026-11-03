@@ -2,7 +2,7 @@
 contract (os/compile-contracts/launcher3-quickstep-lib.json, scripts/launcher3-compile-contract.py).
 
 Synthetic trees, a synthetic contract where bytes are needed, stand-in processes and fake locks only: no host, copy of
-a real tree, lunch, build, git or network. Exercised: the pinned contract and the binding (unbound exits 4), the
+a real tree, lunch, build or network; git runs only as hash-object (no -w) and apply on synthetic temporary trees. Exercised: the pinned contract and the binding (unbound exits 4), the
 branch classification (verifyIntegrated only on the exact post-state; mixed, pre, unknown and missing refuse; config.xml
 only through OS Product's bound-policy check, never normalised on a mismatch), the copy bounds, the contained
 environment, the sampled stops, the aconfig reader, the source and classpath proof and the write-once report."""
@@ -384,6 +384,202 @@ class Processes(unittest.TestCase):
         slow = lambda *args: time.sleep(5)
         with self.assertRaisesRegex(adapter.Refused, 'copy_timeout'):
             adapter.copy_tree(source, Path(tempfile.mkdtemp())/'tree', statvfs=lambda p: FS, copier=slow, seconds=0.2)
+
+
+def fs_tree():
+    class FS:
+        f_frsize, f_bavail = 1, 1 << 50
+    return lambda p: FS
+
+
+def git(*args, cwd, data=None):
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_AUTHOR_NAME='t',
+               GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@t')
+    return subprocess.run(['git', *args], cwd=cwd, input=data, capture_output=True, check=True, env=env).stdout
+
+
+def pinned(project):
+    """(records, sha256, count) from a real `git ls-tree -r` of project's committed tree, as A's listing gives them."""
+    records = {}
+    for line in git('ls-tree', '-r', '-z', 'HEAD', cwd=project).split(b'\0'):
+        if line:
+            meta, path = line.split(b'\t', 1)
+            mode, kind, oid = meta.split()
+            records[path] = (mode.decode(), oid.decode())
+    return (records, *adapter.tree_digest(records))
+
+
+class TreePin(unittest.TestCase):
+    def project(self):
+        project = Path(tempfile.mkdtemp())/'proj'
+        (project/'src/deep').mkdir(parents=True)
+        (project/'src/A.java').write_bytes(b'class A {}\n')
+        (project/'src/deep/B.java').write_bytes(b'class B {}\n')
+        (project/'run.sh').write_bytes(b'#!/bin/sh\n')
+        os.chmod(project/'run.sh', 0o755)
+        os.symlink('src/A.java', project/'link')
+        (project/'.gitattributes').write_bytes(b'*.java text eol=lf\n')
+        git('init', '-q', cwd=project)
+        git('add', '-A', cwd=project)
+        git('commit', '-qm', 'base', cwd=project)
+        return project
+
+    def test_recomputed_records_equal_a_real_git_tree_and_write_no_objects(self):
+        project = self.project()
+        objects = sorted(p.name for p in (project/'.git/objects').rglob('*'))
+        records, digest, count = pinned(project)
+        self.assertEqual(adapter.tree_records(project, ['.git']), records)
+        self.assertEqual(adapter.verify_tree_pin(project, records, digest, count, ['.git']), {'sha256': digest, 'count': count})
+        self.assertEqual(records[b'run.sh'][0], '100755')
+        self.assertEqual(records[b'link'], ('120000', blob(b'src/A.java')))
+        (project/'crlf.java').write_bytes(b'class C {}\r\n')  # .gitattributes says eol=lf: the raw bytes still hash
+        self.assertEqual(adapter.git_hash_objects([str(project/'crlf.java')]), [blob(b'class C {}\r\n')])
+        (project/'crlf.java').unlink()
+        self.assertEqual(sorted(p.name for p in (project/'.git/objects').rglob('*')), objects)
+        calls = []
+        real = subprocess.run
+        adapter.git_hash_objects([str(project/'run.sh')], run=lambda argv, **kw: calls.append(argv) or real(argv, **kw))
+        self.assertEqual(calls, [['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin-paths']])
+
+    def test_serialization_is_raw_byte_sorted_records(self):
+        records = {b'b': ('100644', '1' * 40), b'a/z': ('100755', '2' * 40), b'a-b': ('120000', '3' * 40)}
+        self.assertEqual(adapter.tree_serialization(records),
+                         b'120000 ' + b'3' * 40 + b'\ta-b\n100755 ' + b'2' * 40 + b'\ta/z\n100644 ' + b'1' * 40 + b'\tb\n')
+
+    def test_extra_missing_mode_content_and_link_differences_refuse(self):
+        changes = {'extra': lambda p: (p/'src/New.java').write_bytes(b'x'),
+                   'missing': lambda p: (p/'src/deep/B.java').unlink(),
+                   'mode': lambda p: os.chmod(p/'run.sh', 0o644),
+                   'content': lambda p: (p/'src/A.java').write_bytes(b'class A { }\n'),
+                   'link': lambda p: ((p/'link').unlink(), os.symlink('/abs/src/A.java', p/'link'))}
+        for name, change in changes.items():
+            with self.subTest(name):
+                project = self.project()
+                records, digest, count = pinned(project)
+                change(project)
+                with self.assertRaisesRegex(adapter.Refused, 'against the tree pin'):
+                    adapter.verify_tree_pin(project, records, digest, count, ['.git'])
+
+    def test_unsupported_types_a_bad_listing_and_unskipped_git_refuse(self):
+        project = self.project()
+        records, digest, count = pinned(project)
+        with self.assertRaises(adapter.Invalid):
+            adapter.verify_tree_pin(project, records, 'f' * 64, count, ['.git'])
+        with self.assertRaisesRegex(adapter.Refused, 'extra'):
+            adapter.verify_tree_pin(project, records, digest, count, [])
+        os.mkfifo(project/'fifo')
+        with self.assertRaisesRegex(adapter.Refused, 'unsupported file type'):
+            adapter.tree_records(project, ['.git'])
+
+    def test_skipped_listed_paths_are_outside_the_unlisted_digest(self):
+        project = self.project()
+        records, _, _ = pinned(project)
+        del records[b'src/A.java']
+        (project/'src/A.java').write_bytes(b'checked separately by its own image\n')
+        self.assertEqual(adapter.tree_records(project, ['.git', 'src/A.java']), records)
+
+    def test_the_reviewed_copy_keeps_execute_bits_and_relative_links(self):
+        source = Path(tempfile.mkdtemp())
+        project = source/'packages/apps/P'
+        (project/'src').mkdir(parents=True)
+        (project/'src/A.java').write_bytes(b'class A {}\n')
+        (project/'run.sh').write_bytes(b'#!/bin/sh\n')
+        os.chmod(project/'run.sh', 0o755)
+        os.symlink('src/A.java', project/'link')
+        (source/'vendor/adevtool/dl/unpacked/blob').mkdir(parents=True)
+        (source/'vendor/adevtool/dl/.find-ignore').write_bytes(b'')
+        dest = Path(tempfile.mkdtemp())/'tree'
+        old = os.umask(0o077)
+        try:
+            adapter.copy_tree(source, dest, statvfs=fs_tree())
+        finally:
+            os.umask(old)
+        self.assertEqual(adapter.tree_records(dest/'packages/apps/P', []), adapter.tree_records(project, []))
+
+
+EDGE_BASE = b'class Handler {\n    void a() {}\n}\n'
+EDGE_AFTER = b'class Handler {\n    void a() {}\n    void edge() {}\n}\n'
+
+
+class Candidate(unittest.TestCase):
+    def setUp(self):
+        self.tree = Path(tempfile.mkdtemp())/'tree'
+        self.project = self.tree/'packages/apps/Launcher3'
+        (self.project/'quickstep').mkdir(parents=True)
+        (self.project/'quickstep/Handler.java').write_bytes(EDGE_BASE)
+        os.chmod(self.project/'quickstep/Handler.java', 0o640)
+        (self.project/'quickstep/Gesture.java').write_bytes(b'main gesture\n')
+        self.bundle = Path(tempfile.mkdtemp())
+        work = Path(tempfile.mkdtemp())
+        (work/'quickstep').mkdir()
+        (work/'quickstep/Handler.java').write_bytes(EDGE_BASE)
+        git('init', '-q', cwd=work)
+        git('add', '-A', cwd=work)
+        git('commit', '-qm', 'b', cwd=work)
+        (work/'quickstep/Handler.java').write_bytes(EDGE_AFTER)
+        patch = git('diff', cwd=work)
+        (self.bundle/'candidate-pr440').mkdir()
+        (self.bundle/'candidate-pr440/rose-edge-launcher3.patch').write_bytes(patch)
+        (self.bundle/'candidate-pr440/Gesture.java').write_bytes(b'candidate gesture\n')
+        (self.bundle/'candidate-pr440/State.java').write_bytes(b'candidate state\n')
+        self.patches = [{'name': 'rose-edge-launcher3.patch', 'sha256': sha(patch), 'project': 'packages/apps/Launcher3',
+                         'bundlePath': 'candidate-pr440/rose-edge-launcher3.patch', 'strip': 1}]
+        self.files = [{'path': 'packages/apps/Launcher3/quickstep/Handler.java', 'before': sha(EDGE_BASE), 'after': sha(EDGE_AFTER)}]
+        self.overlays = [{'target': 'packages/apps/Launcher3/quickstep/Gesture.java', 'before': sha(b'main gesture\n'),
+                          'after': sha(b'candidate gesture\n'), 'bundlePath': 'candidate-pr440/Gesture.java'},
+                         {'target': 'packages/apps/Launcher3/quickstep/State.java', 'before': None,
+                          'after': sha(b'candidate state\n'), 'bundlePath': 'candidate-pr440/State.java'}]
+
+    def apply(self):
+        adapter.delta_preconditions(self.tree, self.files, self.overlays)
+        adapter.apply_candidate(self.tree, self.patches, self.overlays, self.bundle, self.files)
+        adapter.candidate_final(self.tree, self.files, self.overlays)
+
+    def test_base_plus_delta_reaches_the_exact_candidate_images_with_modes_kept(self):
+        old = os.umask(0o077)
+        try:
+            self.apply()
+        finally:
+            os.umask(old)
+        self.assertEqual((self.project/'quickstep/Handler.java').read_bytes(), EDGE_AFTER)
+        self.assertEqual(os.stat(self.project/'quickstep/Handler.java').st_mode & 0o7777, 0o640)
+        self.assertEqual(sorted(p.name for p in (self.project/'quickstep').iterdir()), ['Gesture.java', 'Handler.java', 'State.java'])
+
+    def test_a_second_application_or_a_partial_state_refuses_before_anything_changes(self):
+        self.apply()
+        with self.assertRaisesRegex(adapter.Refused, 'already applied or unknown'):
+            adapter.delta_preconditions(self.tree, self.files, self.overlays)
+        self.setUp()
+        (self.project/'quickstep/State.java').write_bytes(b'candidate state\n')
+        with self.assertRaisesRegex(adapter.Refused, 'already applied or unknown'):
+            adapter.delta_preconditions(self.tree, self.files, self.overlays)
+        self.setUp()
+        (self.project/'quickstep/Handler.java').write_bytes(EDGE_AFTER)
+        with self.assertRaisesRegex(adapter.Refused, 'already applied or unknown'):
+            adapter.delta_preconditions(self.tree, self.files, self.overlays)
+
+    def test_wrong_digests_refuse_and_apply_uses_no_fallback(self):
+        bad = [dict(self.patches[0], sha256='0' * 64)]
+        with self.assertRaisesRegex(adapter.Refused, 'not the bound candidate patch'):
+            adapter.apply_candidate(self.tree, bad, self.overlays, self.bundle, self.files)
+        self.assertEqual((self.project/'quickstep/Handler.java').read_bytes(), EDGE_BASE)
+        calls = []
+        real = subprocess.run
+        adapter.apply_candidate(self.tree, self.patches, [], self.bundle, self.files,
+                                run=lambda argv, **kw: calls.append(argv) or real(argv, **kw))
+        for argv in calls:
+            self.assertEqual(argv[3:4] + argv[-3:-1], ['apply', '-p1', '--whitespace=nowarn'])
+            self.assertFalse({'--3way', '--reject', '-C0', '--unidiff-zero'} & set(argv))
+        self.setUp()
+        overlays = [dict(self.overlays[0], after='0' * 64)]
+        with self.assertRaisesRegex(adapter.Refused, 'not the bound candidate overlay'):
+            adapter.apply_candidate(self.tree, [], overlays, self.bundle, [])
+        self.assertEqual((self.project/'quickstep/Gesture.java').read_bytes(), b'main gesture\n')
+
+    def test_a_patch_that_does_not_apply_cleanly_refuses(self):
+        (self.project/'quickstep/Handler.java').write_bytes(b'class Handler {\n    void b() {}\n}\n')
+        with self.assertRaisesRegex(adapter.Refused, 'git apply --check'):
+            adapter.apply_candidate(self.tree, self.patches, [], self.bundle, self.files)
 
 
 class Run(unittest.TestCase):

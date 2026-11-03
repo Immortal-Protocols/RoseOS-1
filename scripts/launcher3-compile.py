@@ -41,6 +41,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -102,6 +103,166 @@ def sha256_bytes(data):
 
 def git_blob(data):
     return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+TREE_MODES = ('100644', '100755', '120000')
+HASH_BATCH = 4096
+
+
+def git_hash_objects(paths, data=None, git='git', run=subprocess.run):
+    """Git blob IDs from actual bytes with Git's collision-detecting SHA-1: `git hash-object -t blob --no-filters`,
+    never -w, outside any repository (GIT_DIR unset, ceiling /). paths: regular files read by Git (stdin-paths), or
+    data: one bytes value (a symlink's readlink bytes) on stdin."""
+    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GIT_CEILING_DIRECTORIES': '/', 'HOME': '/nonexistent',
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'LC_ALL': 'C'}
+    if data is not None:
+        result = run([git, 'hash-object', '-t', 'blob', '--no-filters', '--stdin'], input=data, capture_output=True,
+                     env=env, cwd='/')
+        lines = result.stdout.split()
+        if result.returncode or len(lines) != 1:
+            raise Refused('git hash-object could not hash a symlink target')
+        return [lines[0].decode()]
+    oids = []
+    for start in range(0, len(paths), HASH_BATCH):
+        batch = paths[start:start + HASH_BATCH]
+        if any(b'\n' in os.fsencode(p) for p in batch):
+            raise Refused('a path contains a newline; git hash-object --stdin-paths cannot name it')
+        result = run([git, 'hash-object', '-t', 'blob', '--no-filters', '--stdin-paths'],
+                     input=b''.join(os.fsencode(p) + b'\n' for p in batch), capture_output=True, env=env, cwd='/')
+        lines = result.stdout.split()
+        if result.returncode or len(lines) != len(batch):
+            raise Refused('git hash-object did not hash every regular file')
+        oids += [line.decode() for line in lines]
+    return oids
+
+
+def tree_records(project, skipped, hasher=git_hash_objects):
+    """{relative path bytes: (mode, oid)} for every entry actually present under project (lstat walk, no symlink
+    followed), skipping exactly the given relative paths (a skipped directory skips its subtree). Regular files are
+    100755 when the owner-execute bit is set, else 100644; symlinks are 120000 over their readlink bytes. Directories
+    contribute only their entries (Git does not track empty ones); any other file type refuses."""
+    project = Path(project)
+    skipped = {os.fsencode(p) for p in skipped}
+    files, records, stack = [], {}, [b'']
+    while stack:
+        directory = stack.pop()
+        with os.scandir(os.fsencode(project) + (b'/' + directory if directory else b'')) as it:
+            names = sorted(e.name for e in it)
+        for name in names:
+            rel = directory + b'/' + name if directory else name
+            if rel in skipped:
+                continue
+            path = os.fsencode(project) + b'/' + rel
+            info = os.lstat(path)
+            if stat.S_ISDIR(info.st_mode):
+                stack.append(rel)
+            elif stat.S_ISREG(info.st_mode):
+                files.append((rel, path, info))
+            elif stat.S_ISLNK(info.st_mode):
+                records[rel] = ('120000', hasher(None, data=os.readlink(path))[0])
+            else:
+                raise Refused(f'{project.name}/{os.fsdecode(rel)}: unsupported file type for the tree pin')
+    for (rel, path, info), oid in zip(files, hasher([os.fsdecode(p) for _, p, _ in files]) if files else []):
+        after = os.lstat(path)
+        if (after.st_ino, after.st_size, after.st_mtime_ns, after.st_mode) != (info.st_ino, info.st_size, info.st_mtime_ns, info.st_mode):
+            raise Refused(f'{project.name}/{os.fsdecode(rel)} changed while it was hashed')
+        records[rel] = ('100755' if info.st_mode & stat.S_IXUSR else '100644', oid)
+    return records
+
+
+def tree_serialization(records):
+    """The agreed M2 form: `<mode> SP <oid> TAB <path> LF` per entry, sorted by raw path bytes."""
+    return b''.join(b'%s %s\t%s\n' % (records[p][0].encode(), records[p][1].encode(), p) for p in sorted(records))
+
+
+def tree_digest(records):
+    return sha256_bytes(tree_serialization(records)), len(records)
+
+
+def verify_tree_pin(project, expected, sha256, count, skipped, hasher=git_hash_objects):
+    """Refuse unless the actual copied entries (minus exactly skipped) equal the pinned records: same digest, count,
+    and per path mode and blob ID. expected: {path bytes: (mode, oid)} from the verified listing, used for the digest
+    cross-check and to name the first difference. Proves the copy's bytes match pinned Git blob IDs, nothing more."""
+    if tree_digest(expected) != (sha256, count):
+        raise Invalid(f'the pinned listing for {Path(project).name} does not match its pinned digest')
+    actual = tree_records(project, skipped, hasher)
+    if tree_digest(actual) == (sha256, count):
+        return {'sha256': sha256, 'count': count}
+    for path in sorted(set(actual) | set(expected)):
+        if actual.get(path) != expected.get(path):
+            kind = 'extra' if path not in expected else 'missing' if path not in actual else 'different'
+            raise Refused(f'{Path(project).name}/{os.fsdecode(path)}: {kind} against the tree pin')
+    raise Refused(f'{Path(project).name}: tree pin digest differs')
+
+
+def sha256_file(path):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        return None
+    return sha256_bytes(path.read_bytes())
+
+
+def delta_preconditions(tree, files, overlays):
+    """verifyBaseApplyCandidate's delta-preimages: every delta file at its before image and every overlay target at
+    its before image, or absent where before is null. Anything else (already partly or wholly applied, unknown) refuses;
+    nothing is applied twice."""
+    for item in files:
+        if sha256_file(Path(tree)/item['path']) != item['before']:
+            raise Refused(f'{item["path"]} is not at its base image: already applied or unknown')
+    for item in overlays:
+        target = Path(tree)/item['target']
+        present = target.exists() or target.is_symlink()
+        if (item['before'] is None and present) or (item['before'] is not None and sha256_file(target) != item['before']):
+            raise Refused(f'{item["target"]} is not at its base overlay image: already applied or unknown')
+
+
+def apply_candidate(tree, patches, overlays, bundle, files, git='git', run=subprocess.run):
+    """Apply the digest-bound candidate delta to the isolated copy only: each patch checked against its sha256, then
+    `git apply --check` and `git apply -p<strip> --whitespace=nowarn` in its project (no --3way, no --reject, no fuzz
+    option), the patched files' copied modes restored (git apply rewrites them under the umask), and each overlay
+    installed from the bundle after its sha256 check. The caller checks the final images."""
+    tree, bundle = Path(tree), Path(bundle)
+    modes = {item['path']: stat.S_IMODE(os.lstat(tree/item['path']).st_mode) for item in files}
+    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GIT_CEILING_DIRECTORIES': str(tree), 'HOME': '/nonexistent',
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'LC_ALL': 'C'}
+    for patch in patches:
+        source = bundle/patch['bundlePath']
+        if sha256_file(source) != patch['sha256']:
+            raise Refused(f'{patch["bundlePath"]} is not the bound candidate patch')
+        for check in (['--check'], []):
+            result = run([git, '-C', str(tree/patch['project']), 'apply', *check, f'-p{int(patch["strip"])}',
+                          '--whitespace=nowarn', str(source)], capture_output=True, env=env)
+            if result.returncode:
+                raise Refused(f'git apply {" ".join(check)} of {patch["bundlePath"]} failed in {patch["project"]}')
+    for path, mode in modes.items():
+        if stat.S_IMODE(os.lstat(tree/path).st_mode) != mode:
+            os.chmod(tree/path, mode)
+    for item in overlays:
+        source, target = bundle/item['bundlePath'], tree/item['target']
+        data = read_bytes(source)
+        if data is None or sha256_bytes(data) != item['after']:
+            raise Refused(f'{item["bundlePath"]} is not the bound candidate overlay')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.with_name(f'.{target.name}.rose-candidate')
+        fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+        os.chmod(staging, stat.S_IMODE(os.stat(source).st_mode))
+        os.replace(staging, target)
+
+
+def candidate_final(tree, files, overlays):
+    """final-exact: every delta file and overlay target equals its candidate image after the delta."""
+    for item in files:
+        if sha256_file(Path(tree)/item['path']) != item['after']:
+            raise Refused(f'{item["path"]} is not at its candidate image after the delta')
+    for item in overlays:
+        if sha256_file(Path(tree)/item['target']) != item['after']:
+            raise Refused(f'{item["target"]} is not at its candidate overlay image after the delta')
 
 
 def load_manifest(path=MANIFEST, pinned=MANIFEST_SHA256):
