@@ -195,7 +195,7 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 
 | Stage | Required inputs | Does | Bound (proposal) |
 |---|---|---|---|
-| `source` | `--source-root ISO` | Copies the production source root (only read) into a new `ISO` in-process, byte by byte into new inodes, with the reviewed emulator-alpha code and exclusions, plus `out_adevtool_deps`. Details below. | 150 GiB, 7200 s |
+| `source` | `--source-root ISO` | Copies the production source root (only read) into a new `ISO` in-process, byte by byte into new inodes, with the reviewed emulator-alpha code and exclusions, plus adevtool's deps (`adevtool_revision` and `host/linux-x86`). Details below. | 150 GiB, 7200 s |
 | `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | 8 GiB (unverified for Pro), 3600 s |
 | `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`<receipt-dir>/node-path:/usr/bin:/bin`, a private directory holding only a `node` link to `N`) resolves; nothing else beside `N` (e.g. the rest of `/usr/local/bin`) is visible. Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`. | 128 GiB, 10800 s |
 | `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user` (`PATH=/usr/bin:/bin`), then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
@@ -207,8 +207,26 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 - **Source construction** (`source`):
   - Exclusions are `os/release-pipeline/cuttlefish-alpha.json` `preparation.exclusions`: root
     `.repo`, `keys`, `releases`, `out`, `out-*`, `out_*`; `.git`/`.repo` anywhere; the adevtool unpack
-    cache. `out_adevtool_deps` (the vendor stage's host tools) is copied as its own selection, and a
-    link that leaves it refuses.
+    cache.
+  - **adevtool deps.** From `out_adevtool_deps` only two paths are selected (`preparation.source.includePaths`):
+    - `adevtool_revision`, a regular file;
+    - the complete `host/linux-x86` distribution: the 14 tools in `bin/` plus the `lib64/` libraries
+      and `framework/` JARs they load. It is its own selection, and a link that leaves it refuses.
+  - **Why the rest of the deps is never walked.** The deps directory can be a whole build OUT_DIR
+    (historically `OUT_DIR=out_adevtool_deps`). Attempt 41547295738 refused on six such entries:
+    `.ninja_fifo`, four `target/product/emu64x/...` links into `/apex`, and a `siso_config` link into
+    `build/soong`. Nothing else under it is selected, walked or dereferenced.
+  - **Parents.** `out_adevtool_deps` and `out_adevtool_deps/host` must be real directories and keep
+    their modes.
+  - **Vendor checks first.** Before writing, the base must already pass the vendor stage's
+    `tree_problems`:
+    - `adevtool_revision` equals the pin;
+    - every tool is a regular executable file;
+    - the tree needs and the kernel directory are present.
+
+    These checks run only once the include paths are known to be plain, so `adevtool_revision` is
+    never read through a link.
+  - **Not traced.** The pinned adevtool sources that read the deps are not in this repository.
   - Before writing, the full selection is walked (no entry cap). It refuses on any link escape,
     unsupported file type or unproven cache boundary, when the dense, block-rounded projection exceeds
     the bound, or when available − projection < reserve.

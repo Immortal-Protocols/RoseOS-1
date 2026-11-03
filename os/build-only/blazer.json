@@ -89,12 +89,14 @@
       "cleanupSeconds": 240,
       "cleanupBasis": "After a stop, removal of this run's own staging is bounded to 240 s, inside the 300 s between timeoutSeconds and Release's outer timeout, so completed.json is written before that timeout. Removal of ~1.7 million files is unmeasured: whatever is not removed in time stays, is named in completed.json (stagingLeft) and blocks the next source run until it is removed deliberately.",
       "exclusionsFrom": "os/release-pipeline/cuttlefish-alpha.json preparation.exclusions",
-      "includeRoots": [
-        "out_adevtool_deps"
+      "includePaths": [
+        "out_adevtool_deps/adevtool_revision",
+        "out_adevtool_deps/host/linux-x86"
       ],
+      "includeBasis": "adevtool's deps as the vendor stage consumes them (tree_problems: adevtool_revision equal to the pin and the depsTools as regular executable files in host/linux-x86/bin), with the rest of that host distribution its tools load (host/linux-x86/lib64 libraries, framework/ JARs). out_adevtool_deps itself can be a whole build OUT_DIR (os/reference-scripts/build-tray-emulator-current.sh, historical: OUT_DIR=out_adevtool_deps), so nothing else in it is selected or walked; attempt 41547295738 refused on six such entries (.ninja_fifo, target/product/emu64x links into /apex, siso_config link into build/soong). The pinned adevtool sources that read the deps are not in this repository.",
       "stagingPrefix": ".source-staging-",
       "boundBasis": "150 GiB and 7200 s are unverified proposals. Basis (historical, not a measurement of the current tree): the emulator alpha's copy of the same production root with the same exclusions allocated 120.16 GiB in 1,696,997 files on 2026-10-28 (cuttlefish-alpha.json preparation.basis), and its copy budget was 150 GiB. The stage measures its own full selection (no entry cap) before writing and refuses when the projected bytes exceed this bound; the Pro inspect's 1,131,550,560,256-byte reference walk was truncated, counts excluded outputs and repo metadata, and is never used as an estimate.",
-      "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includeRoots are adevtool's host-tool deps, which the vendor stage needs, copied as their own selection whose links may not leave them. The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
+      "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includePaths are adevtool's deps the vendor stage needs (the adevtool_revision file and the complete host/linux-x86 distribution, copied as its own selection whose links may not leave it); the base must already pass the vendor stage's tree checks. The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
     },
     "download": {
       "boundBytes": 8589934592,
