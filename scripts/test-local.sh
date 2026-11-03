@@ -222,6 +222,9 @@ java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRoseLaunch" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeRoseLaunch.java workspace/rose-agent/app/tests/HomeRoseLaunchTest.java
+java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DockLabel" \
  workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java workspace/rose-agent/app/tests/DockLabelTest.java
 java -Djava.awt.headless=true -cp "$JAVA_TESTS/DockLabel" dev.pixel.voice.DockLabelTest workspace/rose-agent/app/assets/fonts/nunito.ttf

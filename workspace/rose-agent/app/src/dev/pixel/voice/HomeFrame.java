@@ -27,6 +27,8 @@ final class HomeFrame extends FrameLayout {
   LayoutParams dotsParams = new LayoutParams(-1, dotsHeight, Gravity.BOTTOM);
   dotsParams.bottomMargin = dotsBottom();
   addView(dots, dotsParams);
+  // The display's glass sheen over all of Home (#410, GlassSheen): drawn, never touched.
+  setForeground(new GlassSheen(GlassSheen.HOME));
  }
 
  static final int DOTS_DP = HomeAppLayout.DOTS_DP, DOTS_ABOVE_EDGE_DP = HomeAppLayout.DOTS_ABOVE_EDGE_DP;

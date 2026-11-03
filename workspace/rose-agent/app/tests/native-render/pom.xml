@@ -77,6 +77,7 @@
             <testInclude>dev/pixel/voice/OxbloodEdge.java</testInclude>
             <testInclude>dev/pixel/voice/RosePearl.java</testInclude>
             <testInclude>dev/pixel/voice/OxbloodRose.java</testInclude>
+            <testInclude>dev/pixel/voice/GlassSheen.java</testInclude>
             <testInclude>dev/pixel/voice/HomeGlyph.java</testInclude>
             <testInclude>dev/pixel/voice/HomeAppTile.java</testInclude>
             <testInclude>dev/pixel/voice/HomeAppPage.java</testInclude>

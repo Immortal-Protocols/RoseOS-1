@@ -381,6 +381,7 @@ public class MainActivity extends Activity {
   selected=HomePages.restore(selected,count);
   // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
   pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));
+  HomeGlassTile.Backdrop.set((OxbloodField)launcherPager.getBackground(),launcherPager); // the tiles' backdrop blur samples this field (#410)
   launcherPager.permission=this::canSwipePages;
   launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);};
   if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);
@@ -390,7 +391,7 @@ public class MainActivity extends Activity {
   launcherPager.addView(roseHome=new RoseHomeView(this,RoseHomeView.homeApps(getPackageManager(),getPackageName(),launchable,!folderApps.isEmpty()),homeColumns));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),entries.isEmpty()));
-  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseConversation,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
+  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
   setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
@@ -522,11 +523,11 @@ public class MainActivity extends Activity {
   endSlot.setVisibility(active||starting||ending?View.VISIBLE:View.GONE);end.setEnabled(!ending&&(active||starting));if(!ending){end.animate().cancel();end.setAlpha(1f);}
   updateText(end,"×");end.setContentDescription(ending?endingLabel:starting?"Cancel connection":"End session");
  }
- @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;roseLaunch.reset();ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onStop(){super.onStop();homeStopped=true;}
  /** The shown page survives recreation (HomePages.restore). */
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
- @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
+ @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();roseLaunch.reset();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
  @Override public void onNewIntent(Intent i){super.onNewIntent(i);int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);showSettingsFor(i);}
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
  String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
@@ -538,6 +539,18 @@ public class MainActivity extends Activity {
  /** Home's Rose entry: App's conversation surface (APP-P2-002-HOOK-001). Plain explicit Intent in this task, so Back
   * returns Home and HOME clears it; navigation only, never a voice or task command. */
  void openRoseConversation(){startActivity(new Intent(this,RoseConversationActivity.class));}
+ final HomeRoseLaunch roseLaunch=new HomeRoseLaunch();
+ /** Home's Rose control (#410, app.js:183-201): the same plain explicit Intent as openRoseConversation, opened with the
+  * platform's clip-reveal from the control's rectangle when animations are on (the system runs and scales it), and one
+  * launch at a time (HomeRoseLaunch): a repeated or interrupted tap opens nothing extra. */
+ void openRoseFromHome(){
+  if(!roseLaunch.tap(SystemClock.uptimeMillis()))return;
+  Intent i=new Intent(this,RoseConversationActivity.class);View from=homeTray==null?null:homeTray.presence;
+  float scale=android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f);
+  if(from!=null&&from.isAttachedToWindow()&&from.getWidth()>0&&HomeRoseLaunch.animate(scale))
+   startActivity(i,ActivityOptions.makeClipRevealAnimation(from,0,0,from.getWidth(),from.getHeight()).toBundle());
+  else startActivity(i);
+ }
  // The tray's overview well: the system task overview through the owner-enabled phone-controls service only (HomeOverview).
  static boolean overviewAvailable(){return PhoneAccessibility.active!=null;}
  void openOverview(){HomeOverview.Result result=homeOverview.request(SystemClock.elapsedRealtime(),()->{PhoneAccessibility a=PhoneAccessibility.active;return a==null?null:a.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS);});String notice=HomeOverview.notice(result);if(notice!=null)Toast.makeText(this,notice,Toast.LENGTH_SHORT).show();if(result==HomeOverview.Result.REQUESTED)checkOverviewLater(homeOverview.token());}
