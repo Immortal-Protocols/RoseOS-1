@@ -73,7 +73,7 @@ class Guard(unittest.TestCase):
         guard = jobs()['guard']
         check = step(guard, 'Rango factory observation check')
         self.assertIn(f"        if: inputs.mode == '{MODE}'\n        run: python3 scripts/rango-factory-observe.py check\n", check)
-        self.assertIn(f'"$MODE" == rango-factory-observe ]] || git merge-base --is-ancestor', guard)
+        self.assertIn(f'"$MODE" == rango-factory-observe || "$MODE" == launcher3-compile ]] || git merge-base --is-ancestor', guard)
         self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
 
 
