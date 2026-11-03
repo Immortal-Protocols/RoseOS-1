@@ -1259,7 +1259,7 @@ jobs:
     # bound source tree read-only into a new run root under the binding's taskParent, checks the copy for the bound
     # branch (verifyIntegrated, or verifyBaseApplyCandidate with the candidate delta applied in that copy only; never the
     # source tree, never a reset), and only then runs a contained `m -j8 Launcher3QuickStepLib` with both aconfig flag
-    # outputs. Its own bounds: copy 7200 s, tree pins 1800 s per check, compile 7200 s with sampled output and memory
+    # outputs. Its own bounds: copy 7200 s, tree pins 1800 s per check, lunch 1200 s, compile 7200 s with sampled output and memory
     # stops (ceilings, not measurements; a stop is a recorded failure, never a pass), each +30 s kill; the outer and job
     # times are derived from the helper by the hosted guard and re-checked here. finish always runs: it uploads only
     # report.json, classification.json and cleanup.json (7 days; never a log, the tree or outputs) and removes only this

@@ -104,21 +104,21 @@ class Job(unittest.TestCase):
         script = '\n'.join(line[10:] for line in body.splitlines())
         tmp = Path(tempfile.mkdtemp())
         fake = tmp/'python3'
-        fake.write_text('#!/bin/sh\nprintf "outer_seconds=16860\\nfinish_seconds=1800\\njob_minutes=322\\n"\n')
+        fake.write_text('#!/bin/sh\nprintf "outer_seconds=18090\\nfinish_seconds=1800\\njob_minutes=342\\n"\n')
         fake.chmod(0o755)
         env = {'PATH': f'{tmp}:{os.environ["PATH"]}', 'RUNNER_TEMP': str(tmp)}
         run = lambda **e: subprocess.run(['bash', '-c', script], env={**env, **e}, cwd=ROOT, capture_output=True).returncode
-        self.assertEqual(run(OUTER_SECONDS='16860', FINISH_SECONDS='1800'), 0)
-        for change in ({'OUTER_SECONDS': '16861', 'FINISH_SECONDS': '1800'}, {'OUTER_SECONDS': '16860', 'FINISH_SECONDS': '1801'},
+        self.assertEqual(run(OUTER_SECONDS='18090', FINISH_SECONDS='1800'), 0)
+        for change in ({'OUTER_SECONDS': '18091', 'FINISH_SECONDS': '1800'}, {'OUTER_SECONDS': '18090', 'FINISH_SECONDS': '1801'},
                        {'OUTER_SECONDS': '', 'FINISH_SECONDS': '1800'}, {'OUTER_SECONDS': '1;x', 'FINISH_SECONDS': '1800'}):
             with self.subTest(change=change):
                 self.assertNotEqual(run(**change), 0)
 
     def test_guard_outputs_match_the_adapter_bounds(self):
-        outer = adapter.PREPARE_SECONDS + adapter.KILL_GRACE_SECONDS + adapter.PIN_SECONDS + adapter.COMPILE_SECONDS \
+        outer = adapter.PREPARE_SECONDS + adapter.KILL_GRACE_SECONDS + adapter.PIN_SECONDS + adapter.LUNCH_SECONDS + adapter.KILL_GRACE_SECONDS + adapter.COMPILE_SECONDS \
             + adapter.KILL_GRACE_SECONDS + 600
         minutes = -(-(outer + adapter.FINISH_SECONDS + adapter.KILL_GRACE_SECONDS) // 60) + 10
-        self.assertEqual((outer, adapter.FINISH_SECONDS, minutes), (16860, 1800, 322))
+        self.assertEqual((outer, adapter.FINISH_SECONDS, minutes), (18090, 1800, 342))
 
 
 class Ownership(unittest.TestCase):

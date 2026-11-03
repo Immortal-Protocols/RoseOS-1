@@ -281,20 +281,27 @@ class Contract(unittest.TestCase):
 
     def binding(self, **change):
         path = Path(tempfile.mkdtemp())/'binding.json'
-        record = {**BINDING, 'sourceTree': '/home/pixelbuild/grapheneos-2026100600', 'lunch': 'frankel-cur-user',
+        record = {**BINDING, 'sourceTree': '/home/pixelbuild/grapheneos-2026100600', 'lunch': 'example-cur-user',
                   'policyReceipt': {'path': '/home/pixelbuild/receipts/policy.json', 'sha256': 'a' * 64}, **change}
         path.write_text(json.dumps(record))
         return path
 
     def test_a_bound_binding_passes_and_prints_its_bounds(self):
         result = run_cli('check', '--binding', str(self.binding()))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=16860\nfinish_seconds=1800\njob_minutes=322\n'))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=18090\nfinish_seconds=1800\njob_minutes=342\n'))
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate')))
         self.assertEqual(result.returncode, 4)
         self.assertIn('bundleReport.path, bundleReport.sha256', result.stderr)
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate',
                                                                 bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=18660\nfinish_seconds=1800\njob_minutes=352\n'))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=19890\nfinish_seconds=1800\njob_minutes=372\n'))
+
+    def test_a_version_checked_lunch_is_unbound_before_the_controller(self):
+        for branch in ('verifyIntegrated', 'verifyBaseApplyCandidate'):
+            result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', branch=branch,
+                             bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
+            self.assertEqual((result.returncode, result.stdout), (4, ''))
+            self.assertIn('adevtool_git_missing', result.stderr)
 
     def test_invalid_bindings_refuse(self):
         for change in ({'host': 'other'}, {'taskParent': '/tmp'}, {'branch': 'mixed'}, {'sourceTree': 'relative'},
@@ -585,6 +592,27 @@ class Reports(unittest.TestCase):
 
 
 class Processes(unittest.TestCase):
+    def test_git_in_the_copy_never_finds_a_parent_repository(self):
+        parent = Path(tempfile.mkdtemp())
+        git('init', '-q', cwd=parent)
+        run_root = parent/'launcher3-compile-1-1'
+        (run_root/'tree/vendor/adevtool').mkdir(parents=True)
+        (run_root/'home').mkdir()
+        env = adapter.contained_env(run_root)
+        self.assertEqual(env['GIT_CEILING_DIRECTORIES'], str(run_root/'tree'))
+        found = subprocess.run(['git', '-C', str(run_root/'tree/vendor/adevtool'), 'rev-parse', '--show-toplevel'],
+                               env=dict(env, PATH=os.environ['PATH']), capture_output=True)
+        self.assertNotEqual(found.returncode, 0)
+        unbounded = subprocess.run(['git', '-C', str(run_root/'tree/vendor/adevtool'), 'rev-parse', '--show-toplevel'],
+                                   capture_output=True, text=True)
+        self.assertEqual(unbounded.stdout.strip(), str(parent))  # what the ceiling prevents
+
+    def test_lunch_runs_on_its_own(self):
+        self.assertEqual(adapter.lunch_argv('example-cur-user'), ['bash', '-c', 'set -eo pipefail; source build/envsetup.sh '
+                         '>/dev/null; lunch "$1" >/dev/null', 'launcher3-lunch', 'example-cur-user'])
+        self.assertTrue(adapter.version_checked('frankel-cur-user'))
+        self.assertFalse(adapter.version_checked('frankelx-cur-user') or adapter.version_checked(None))
+
     def test_compile_command_targets_and_contained_environment(self):
         out = Path('/home/pixelbuild/rose-actions/launcher3-compile-1-1/out')
         targets = adapter.compile_targets(adapter.load_manifest(), out)
@@ -599,7 +627,7 @@ class Processes(unittest.TestCase):
         for key in ('HOME', 'TMPDIR', 'OUT_DIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'GRADLE_USER_HOME'):
             self.assertTrue(env[key].startswith(str(run_root) + '/'), key)
         self.assertEqual(env['USE_CCACHE'], '0')
-        self.assertFalse([k for k in env if k.startswith('GIT_')])
+        self.assertEqual(sorted(k for k in env if k.startswith('GIT_')), ['GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'])
 
     def test_sampled_stops_end_the_group(self):
         saved = adapter.SAMPLE_SECONDS
@@ -899,10 +927,11 @@ class Run(unittest.TestCase):
     def setUp(self):
         self.parent = Path(tempfile.mkdtemp())
         self.s = Synthetic(tempfile.mkdtemp())
-        self.binding = {**BINDING, 'taskParent': str(self.parent), 'sourceTree': '/src', 'lunch': 'frankel-cur-user',
+        self.binding = {**BINDING, 'taskParent': str(self.parent), 'sourceTree': '/src', 'lunch': 'example-cur-user',
                         'policyReceipt': {'path': '/p.json', 'sha256': self.s.policy_sha}}
         self.bundle_sha = sha(json.dumps(self.s.bundle_content).encode())
         self.calls = []
+        self.lunch_result = (0, None)
 
     def copier(self, state='post'):
         def copy(source, destination):
@@ -913,6 +942,9 @@ class Run(unittest.TestCase):
 
     def compiler(self, code=0, stopped=None):
         def compile_(argv, env, cwd, seconds, out_dir):
+            if 'm -j' not in argv[2]:
+                self.calls.append(('lunch', argv[-1], env['GIT_CEILING_DIRECTORIES'], seconds))
+                return self.lunch_result
             self.calls.append(('compile', argv[-2:], env['OUT_DIR'], seconds))
             out = Path(out_dir)
             module = out/'soong/.intermediates/packages/apps/Launcher3/Launcher3QuickStepLib'
@@ -944,7 +976,10 @@ class Run(unittest.TestCase):
         report = self.report()
         self.assertEqual(self.calls[:2], ['copy', ('pins', 'final')])
         out = self.parent/'launcher3-compile-41700000000-1/out'
-        self.assertEqual(self.calls[2][1:], ([f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/'
+        tree = self.parent/'launcher3-compile-41700000000-1/tree'
+        self.assertEqual(self.calls[2], ('lunch', 'example-cur-user', str(tree), adapter.LUNCH_SECONDS))
+        self.assertEqual(report['lunch'], {'exit': 0, 'stoppedBy': None})
+        self.assertEqual(self.calls[3][1:], ([f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/'
             'aconfig-flags.txt', f'{out}/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/'
             'aconfig-flags.txt'], str(out), adapter.COMPILE_SECONDS))
         self.assertEqual(report['classification']['branch'], 'verifyIntegrated')
@@ -993,7 +1028,7 @@ class Run(unittest.TestCase):
         report = self.report()
         self.assertEqual([c['id'] for c in report['conditions']], adapter.CONDITIONS)
         self.assertEqual(self.calls[:3], ['copy', ('pins', 'base'), ('pins', 'final')])
-        self.assertEqual(self.calls[3][0], 'compile')
+        self.assertEqual([c[0] for c in self.calls[3:5]], ['lunch', 'compile'])
         tree = self.parent/'launcher3-compile-41700000000-1/tree'
         self.assertEqual((tree/L3/EDGE_FILE).read_bytes(), EDGE_AFTER)
         self.assertEqual((tree/L3/FALLBACK/'RoseEdgeState.java').read_bytes(), b'candidate state\n')
@@ -1072,6 +1107,23 @@ class Run(unittest.TestCase):
             with self.subTest(argv=argv):
                 result = run_cli(*argv, '--binding', str(Contract.binding(Contract())))
                 self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_a_failed_lunch_is_reported_and_m_is_not_run(self):
+        for result in ((2, None), (-15, 'deadline')):
+            with self.subTest(result=result):
+                self.setUp()
+                self.lunch_result = result
+                self.assertEqual(self.run_adapter(), 0)
+                report = self.report()
+                self.assertEqual((report['lunch'], report['result']), ({'exit': result[0], 'stoppedBy': result[1]}, 'incomplete'))
+                self.assertNotIn('compile', report)
+                self.assertFalse([c for c in self.calls if c[0] == 'compile'])
+
+    def test_a_version_checked_lunch_is_refused_before_anything_is_copied(self):
+        self.binding['lunch'] = 'frankel-cur-user'
+        self.assertEqual(self.run_adapter(), 3)
+        self.assertEqual(self.calls, [])
+        self.assertTrue(self.report()['refused'].startswith('adevtool_git_missing'))
 
     def test_a_stopped_compile_is_recorded_and_never_a_pass(self):
         self.assertEqual(self.run_adapter(code=-15, stopped='memory'), 0)
