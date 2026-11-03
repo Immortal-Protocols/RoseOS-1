@@ -51,8 +51,8 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (#440 d3bd939). A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '256bad1f6c51b5fdfe70b5d844505e0ea6360df2d6b102fb40d11e917d06f6e3'
+# OS Product's reviewed contract version (#440 e361d1c). A different manifest is refused until this pin is updated.
+MANIFEST_SHA256 = '2c556473e0d1848a46660c98b710d2fe2161c814fb2784d557fb895f3ec68d13'
 BINDING = ROOT/'os/build-only/launcher3-compile-host.json'
 BINDING_KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'taskParent', 'branch', 'sourceTree', 'lunch',
                 'policyReceipt', 'reconstructSource'}
@@ -65,11 +65,10 @@ SOURCE_BOUND_BYTES, RESERVE_BYTES = 150 * GIB, 300 * GIB
 PREPARE_SECONDS, COMPILE_SECONDS = 120 * 60, 120 * 60
 OUTPUT_STOP_BYTES, MEMORY_STOP_BYTES = 150 * GIB, 64 * GIB
 SAMPLE_SECONDS, KILL_GRACE_SECONDS = 5, 30
-# aconfig flags the report must bind: (package, name, expected state, expected permission, cache module directory).
-# The android.security declarations module is not stated by the contract yet; it is reported unresolved until it is.
-FLAGS = (('com.android.launcher3', 'enable_fallback_overview_in_window', 'DISABLED', 'READ_ONLY',
-          'packages/apps/Launcher3/com_android_launcher3_flags'),
-         ('android.security', 'content_uri_permission_apis', 'ENABLED', 'READ_ONLY', None))
+# The aconfig flags the report binds come from the contract's flagEvidence: each flag's own aconfig_declarations module,
+# its expectedOutputDir (out/... relative to OUT_DIR's parent naming) and its exact expectedLine
+# ("<package>.<name>:<permission>=<state:bool>", the format of the module's aconfig-flags.txt).
+FLAG_TEXT, FLAG_CACHE = 'aconfig-flags.txt', 'aconfig-cache.pb'
 # build/make tools/aconfig/aconfig_protos/protos/aconfig.proto at b0f697df: parsed_flags.parsed_flag = 1;
 # parsed_flag: package = 1, name = 2, state = 6, permission = 7; ENABLED = 1, DISABLED = 2; READ_ONLY = 1, READ_WRITE = 2.
 STATE, PERMISSION = {1: 'ENABLED', 2: 'DISABLED'}, {1: 'READ_ONLY', 2: 'READ_WRITE'}
@@ -112,6 +111,10 @@ def load_manifest(path=MANIFEST, pinned=MANIFEST_SHA256):
     manifest = json.loads(data)
     if (manifest.get('schemaVersion'), manifest.get('kind'), manifest.get('target')) != (1, 'rose-launcher3-compile-inputs', TARGET):
         raise Invalid('the contract is not a rose-launcher3-compile-inputs v1 for Launcher3QuickStepLib')
+    flags = (manifest.get('flagEvidence') or {}).get('flags') or []
+    if {f.get('flag') for f in flags} != {'android.security.content_uri_permission_apis',
+                                          'com.android.launcher3.enable_fallback_overview_in_window'}:
+        raise Invalid('the contract must bind exactly the identity and fallback flags in flagEvidence')
     return manifest
 
 
@@ -286,26 +289,46 @@ def bounded_files(directory, suffixes, limit=PROOF_ENTRIES):
     return found, False
 
 
-def flag_report(out):
+def flag_dirs(manifest, out):
+    """[(flag evidence row, its module's output directory under this run's OUT_DIR)] from the contract."""
     rows = []
-    for package, name, state, permission, module in FLAGS:
-        row = {'flag': f'{package}.{name}', 'expected': f'{state}/{permission}'}
-        if module is None:
-            row.update(observed=None, ok=False, reason='the declarations module is not stated by the contract')
+    for row in manifest['flagEvidence']['flags']:
+        relative = row['expectedOutputDir']
+        if not relative.startswith('out/soong/.intermediates/') or '..' in Path(relative).parts:
+            raise Invalid(f'{row["flag"]}: expectedOutputDir must be under out/soong/.intermediates')
+        rows.append((row, Path(out)/relative[len('out/'):]))
+    return rows
+
+
+def flag_line(package, name, value):
+    state, permission = value
+    return f'{package}.{name}:{permission}={"true" if state == "ENABLED" else "false" if state == "DISABLED" else state}'
+
+
+def flag_report(out, manifest):
+    """Each flag: exactly one line in its own module's aconfig-flags.txt equal to the expected line, and the same value
+    decoded independently from that module's aconfig-cache.pb. Absent, duplicated, disagreeing or other: not ok."""
+    rows = []
+    for evidence, directory in flag_dirs(manifest, out):
+        row = {'flag': evidence['flag'], 'module': evidence['module'], 'expected': evidence['expectedLine']}
+        text_path, cache_path = directory/FLAG_TEXT, directory/FLAG_CACHE
+        lines = []
+        if text_path.is_file() and not text_path.is_symlink():
+            lines = [l for l in text_path.read_text(errors='replace').splitlines() if l.startswith(evidence['flag'] + ':')]
+        decoded = None
+        if cache_path.is_file() and not cache_path.is_symlink():
+            with contextlib.suppress(ValueError, OSError, UnicodeDecodeError):
+                value = flag_values(cache_path.read_bytes()).get((evidence['package'], evidence['flag'][len(evidence['package']) + 1:]))
+                decoded = flag_line(evidence['package'], evidence['flag'][len(evidence['package']) + 1:], value) if value else None
+        row.update(textLines=lines[:3], decodedCache=decoded)
+        if len(lines) != 1:
+            row.update(ok=False, reason=f'{len(lines)} lines for the flag in {FLAG_TEXT}, expected exactly one')
+        elif lines[0] != evidence['expectedLine']:
+            row.update(ok=False, reason='the module text differs from the expected line')
+        elif decoded != lines[0]:
+            row.update(ok=False, reason='the decoded cache does not agree with the module text')
         else:
-            caches, truncated = bounded_files(Path(out)/'soong/.intermediates'/module, ('.pb',))
-            seen = set()
-            for cache in caches:
-                with contextlib.suppress(ValueError, OSError):
-                    value = flag_values(cache.read_bytes()).get((package, name))
-                    if value:
-                        seen.add(value)
-            if len(seen) == 1:
-                observed = '/'.join(str(v) for v in next(iter(seen)))
-                row.update(observed=observed, ok=observed == row['expected'])
-            else:
-                row.update(observed=None, ok=False, truncated=truncated,
-                           reason='not found' if not seen else 'conflicting values in more than one cache')
+            row['ok'] = True
         rows.append(row)
     return rows
 
@@ -405,8 +428,10 @@ def compile_argv(lunch, targets):
     return ['bash', '-c', script, 'launcher3-compile', lunch, *targets]
 
 
-def compile_targets():
-    return [TARGET, *sorted({Path(module).name for *_, module in FLAGS if module})]
+def compile_targets(manifest, out):
+    """The library plus each flag module's aconfig-flags.txt as an explicit output goal (the tree's own pinned rule
+    produces the text; a module invocation alone is not assumed to)."""
+    return [TARGET, *sorted(str(directory/FLAG_TEXT) for _, directory in flag_dirs(manifest, out))]
 
 
 # ---------------------------------------------------------------- run
@@ -507,13 +532,15 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
             write_once(receipts/'classification.json', result)
             if result['branch'] != 'verifyIntegrated':
                 raise Refused('state_refused: the copied tree is not exactly the contract post-state; nothing applied')
-            code, stopped = compiler(compile_argv(binding['lunch'], compile_targets()), contained_env(run_root),
-                                     str(run_root/'tree'), COMPILE_SECONDS, str(run_root/'out'))
-            report['compile'] = {'exit': code, 'stoppedBy': stopped, 'targets': compile_targets()}
             out = run_root/'out'
+            targets = compile_targets(manifest, out)
+            code, stopped = compiler(compile_argv(binding['lunch'], targets), contained_env(run_root),
+                                     str(run_root/'tree'), COMPILE_SECONDS, str(out))
+            report['compile'] = {'exit': code, 'stoppedBy': stopped, 'targets': [TARGET, *[
+                str(Path(t).relative_to(out.parent)) for t in targets[1:]]]}
             report['sourceProof'] = source_proof(out, manifest)
             report['classpathProof'] = classpath_proof(out)
-            report['flags'] = flag_report(out)
+            report['flags'] = flag_report(out, manifest)
             passed = (code == 0 and not stopped and report['sourceProof']['ok'] and report['classpathProof']['ok']
                       and all(f['ok'] for f in report['flags']))
             report['result'] = 'compiled-and-proven' if passed else 'incomplete'

@@ -81,7 +81,8 @@ class Synthetic:
                          'proves': 'compile only', 'identitySharing': {'appliesWithEdgeOff': True},
                          'projects': [{'path': p, 'files': f} for p, f in projects.items()],
                          'overlays': [{'target': self.overlay[0], 'sha256': sha(self.overlay[1]), 'role': 'required'},
-                                      {'target': 'frameworks/base/Ignored.java', 'sha256': 'f' * 64, 'role': 'notAnInput'}]}
+                                      {'target': 'frameworks/base/Ignored.java', 'sha256': 'f' * 64, 'role': 'notAnInput'}],
+                         'flagEvidence': adapter.load_manifest()['flagEvidence']}
         self.policy_sha = sha(json.dumps(POLICY).encode())
 
     def write(self, state='post', skip=()):
@@ -244,22 +245,47 @@ class Reports(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
-    def test_aconfig_cache_values_and_unresolved_modules(self):
-        cache = parsed_flag('com.android.launcher3', 'enable_fallback_overview_in_window', 2, 1) + \
-            parsed_flag('com.android.launcher3', 'other', 1, 2)
-        self.assertEqual(adapter.flag_values(cache)[('com.android.launcher3', 'enable_fallback_overview_in_window')],
-                         ('DISABLED', 'READ_ONLY'))
-        self.cache('packages/apps/Launcher3/com_android_launcher3_flags', cache)
-        rows = {r['flag']: r for r in adapter.flag_report(self.out)}
-        self.assertEqual((rows['com.android.launcher3.enable_fallback_overview_in_window']['observed'],
-                          rows['com.android.launcher3.enable_fallback_overview_in_window']['ok']), ('DISABLED/READ_ONLY', True))
-        self.assertFalse(rows['android.security.content_uri_permission_apis']['ok'])  # its module is not stated yet
-        self.cache('packages/apps/Launcher3/com_android_launcher3_flags',
-                   parsed_flag('com.android.launcher3', 'enable_fallback_overview_in_window', 1, 1), 'other.pb')
-        row = adapter.flag_report(self.out)[0]
-        self.assertEqual((row['ok'], row['reason']), (False, 'conflicting values in more than one cache'))
-        with self.assertRaises(ValueError):
-            adapter.flag_values(b'\x0a\xff')
+    def module_output(self, flag, text=None, cache=None):
+        manifest = adapter.load_manifest()
+        evidence = next(e for e in manifest['flagEvidence']['flags'] if e['flag'] == flag)
+        directory = self.out/evidence['expectedOutputDir'][len('out/'):]
+        directory.mkdir(parents=True, exist_ok=True)
+        if text is not None:
+            (directory/'aconfig-flags.txt').write_text(text)
+        if cache is not None:
+            (directory/'aconfig-cache.pb').write_bytes(cache)
+        return manifest
+
+    def test_both_flags_need_their_own_module_text_and_an_agreeing_cache(self):
+        self.assertEqual(adapter.flag_values(parsed_flag('com.android.launcher3', 'enable_fallback_overview_in_window', 2, 1)),
+                         {('com.android.launcher3', 'enable_fallback_overview_in_window'): ('DISABLED', 'READ_ONLY')})
+        launcher = 'com.android.launcher3.enable_fallback_overview_in_window'
+        security = 'android.security.content_uri_permission_apis'
+        manifest = self.module_output(launcher, f'{launcher}:READ_ONLY=false\ncom.android.launcher3.other:READ_WRITE=true\n',
+                                      parsed_flag('com.android.launcher3', 'enable_fallback_overview_in_window', 2, 1))
+        self.module_output(security, f'{security}:READ_ONLY=true\n',
+                           parsed_flag('android.security', 'content_uri_permission_apis', 1, 1))
+        rows = {r['flag']: r for r in adapter.flag_report(self.out, manifest)}
+        self.assertEqual({k: (r['ok'], r['module']) for k, r in rows.items()},
+                         {launcher: (True, 'com_android_launcher3_flags'), security: (True, 'android.security.flags-aconfig')})
+        cases = ((security, f'{security}:READ_ONLY=false\n', parsed_flag('android.security', 'content_uri_permission_apis', 2, 1),
+                  'differs from the expected line'),
+                 (security, f'{security}:READ_ONLY=true\n{security}:READ_ONLY=true\n', None, '2 lines'),
+                 (security, '', None, '0 lines'),
+                 (security, f'{security}:READ_ONLY=true\n', parsed_flag('android.security', 'content_uri_permission_apis', 2, 1),
+                  'does not agree'),
+                 (security, f'{security}:READ_ONLY=true\n', b'\x0a\xff', 'does not agree'))
+        for flag, text, cache, reason in cases:
+            with self.subTest(reason=reason):
+                self.out = Path(tempfile.mkdtemp())/'out'
+                manifest = self.module_output(flag, text, cache)
+                row = next(r for r in adapter.flag_report(self.out, manifest) if r['flag'] == flag)
+                self.assertFalse(row['ok'])
+                self.assertIn(reason, row['reason'])
+        # the flag's line in another module's output never counts
+        self.out = Path(tempfile.mkdtemp())/'out'
+        manifest = self.module_output(launcher, f'{security}:READ_ONLY=true\n')
+        self.assertFalse(next(r for r in adapter.flag_report(self.out, manifest) if r['flag'] == security)['ok'])
 
     def test_source_and_classpath_proof(self):
         manifest = adapter.load_manifest()
@@ -285,11 +311,14 @@ class Reports(unittest.TestCase):
 
 class Processes(unittest.TestCase):
     def test_compile_command_targets_and_contained_environment(self):
-        self.assertEqual(adapter.compile_targets(), ['Launcher3QuickStepLib', 'com_android_launcher3_flags'])
-        argv = adapter.compile_argv('frankel-cur-user', adapter.compile_targets())
+        out = Path('/home/pixelbuild/rose-actions/launcher3-compile-1-1/out')
+        targets = adapter.compile_targets(adapter.load_manifest(), out)
+        self.assertEqual(targets, ['Launcher3QuickStepLib',
+            f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt',
+            f'{out}/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt'])
+        argv = adapter.compile_argv('frankel-cur-user', targets)
         self.assertEqual(argv, ['bash', '-c', 'set -eo pipefail; source build/envsetup.sh >/dev/null; lunch "$1" >/dev/null; '
-                                'shift; m -j8 "$@"', 'launcher3-compile', 'frankel-cur-user', 'Launcher3QuickStepLib',
-                                'com_android_launcher3_flags'])
+                                'shift; m -j8 "$@"', 'launcher3-compile', 'frankel-cur-user', *targets])
         run_root = Path('/home/pixelbuild/rose-actions/launcher3-compile-1-1')
         env = adapter.contained_env(run_root, '/usr/bin:/bin')
         for key in ('HOME', 'TMPDIR', 'OUT_DIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'GRADLE_USER_HOME'):
@@ -398,11 +427,17 @@ class Run(unittest.TestCase):
         self.assertEqual(self.run_adapter(), 0)
         report = self.report()
         self.assertEqual(self.calls[0], 'copy')
-        self.assertEqual(self.calls[1][1:], (['Launcher3QuickStepLib', 'com_android_launcher3_flags'],
-                         str(self.parent/'launcher3-compile-41700000000-1/out'), adapter.COMPILE_SECONDS))
+        out = self.parent/'launcher3-compile-41700000000-1/out'
+        self.assertEqual(self.calls[1][1:], ([f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/'
+            'aconfig-flags.txt', f'{out}/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/'
+            'aconfig-flags.txt'], str(out), adapter.COMPILE_SECONDS))
         self.assertEqual(report['classification']['branch'], 'verifyIntegrated')
-        self.assertEqual(report['compile'], {'exit': 0, 'stoppedBy': None,
-                                             'targets': ['Launcher3QuickStepLib', 'com_android_launcher3_flags']})
+        self.assertEqual(report['compile'], {'exit': 0, 'stoppedBy': None, 'targets': ['Launcher3QuickStepLib',
+            'out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt',
+            'out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt']})
+        self.assertEqual({f['flag']: f['ok'] for f in report['flags']},
+                         {'android.security.content_uri_permission_apis': False,
+                          'com.android.launcher3.enable_fallback_overview_in_window': False})
         self.assertEqual(report['result'], 'incomplete')  # no source list, classpath or flag evidence was produced
         self.assertEqual(report['policyInputs'], {'receiptSha256': self.s.policy_sha, 'referenceDisplayAddress': None,
                                                   'lockedControl': False})
