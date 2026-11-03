@@ -367,12 +367,12 @@ class Job(unittest.TestCase):
 class Ownership(unittest.TestCase):
     def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect' || inputs.mode == 'launcher3-compile'"
+        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'rango-factory-sign'"
         self.assertIn(f'      - if: {own}\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
         self.assertIn(f'        if: always() && ({own})\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
         self.assertIn(f'      - if: {own}\n        env:\n          STARTED: ${{{{ needs.controller.outputs.started }}}}\n'
                       '        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"\n', cleanup)
-        self.assertIn('blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn('blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
 
 
 

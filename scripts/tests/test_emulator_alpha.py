@@ -1447,7 +1447,7 @@ class WorkflowAlphaTest(unittest.TestCase):
             "        run: python3 scripts/emulator-alpha.py preflight --job guard\n", guard)
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
+        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, rango-factory-sign, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
         self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
 
