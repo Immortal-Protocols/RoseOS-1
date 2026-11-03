@@ -61,6 +61,11 @@ and full containment need host-side cgroup/quota configuration that this tool do
   blazer-build-only.py inspect-git-set --host H --target-set NAME
             the same git-only inspection of exactly one explicit preparation.gitInspection.targetSets entry
             (adevtool-projects-gitdir: the production .repo/projects/vendor/adevtool.git), same bounds; no other argument
+  blazer-build-only.py inspect-git-objects --host immortal-os-builder
+            O2 metadata only: the fixed preparation.gitObjectsInspection objects directory, walked through no-follow
+            directory descriptors (100,000 entries, depth 3, cooperative 120 s, JSON at most 64 KiB), no file content
+            opened, no link followed, no other filesystem; hooks and rr-cache excluded, info/alternates and
+            info/http-alternates existence and type only; complete:false names every limit or exception
   blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
             metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
             pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes, one level of
@@ -70,6 +75,7 @@ Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. 
 fetcher and a fake runner only.
 """
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -230,6 +236,7 @@ def preparation_problems(recipe, root, contract, probe=True):
         problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
                         'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
     problems += git_inspection_problems(recipe, root, probe)
+    problems += git_objects_problems(recipe, root)
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -1136,6 +1143,270 @@ def inspect_git_set(recipe, host, name, root=ROOT, clock=time.monotonic):
             'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
             'elapsedSeconds': round(clock() - started, 3)}
 
+GIT_OBJECTS_INSPECTION = 'roseos.blazer-git-objects-inspection.v1'
+# The proposed bounds (Original Infra, O2) and the report's own caps; the recipe must repeat the bounds exactly.
+GIT_OBJECTS = {'maxEntries': 100000, 'maxDepth': 3, 'maxSeconds': 120, 'maxOutputBytes': 65536}
+GIT_OBJECTS_CAPS = {'groups': 32, 'exceptions': 32, 'excludedListed': 32, 'nameBytes': 128, 'linkTextBytes': 128}
+GIT_OBJECTS_EXCLUDED = ('hooks', 'rr-cache')
+GIT_OBJECTS_EXISTENCE_ONLY = ('info/alternates', 'info/http-alternates')
+GIT_OBJECTS_REASONS = ('absent', 'linked-component', 'not-a-directory', 'inaccessible', 'replaced', 'cross-filesystem',
+                       'unsafe-link', 'special', 'depth', 'entries', 'deadline', 'output')
+DIR_OPEN = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+FANOUT = re.compile(r'[0-9a-f]{2}')
+
+def git_objects_spec(production):
+    """The one fixed preparation.gitObjectsInspection, apart from its basis text."""
+    return {'host': 'immortal-os-builder', 'root': production, 'path': '.repo/project-objects/adevtool.git/objects',
+            **GIT_OBJECTS, 'excludeNames': list(GIT_OBJECTS_EXCLUDED), 'existenceOnly': list(GIT_OBJECTS_EXISTENCE_ONLY)}
+
+def git_objects_problems(recipe, root=ROOT):
+    """preparation.gitObjectsInspection must be exactly the fixed objects target, host and bounds (lexical only)."""
+    prep = recipe.get('preparation') or {}
+    try:
+        production = pointer(root, prep['productionSourceRootFrom'])
+    except (KeyError, OSError, ValueError, TypeError):
+        return ['preparation.gitObjectsInspection needs the production source root']
+    spec = dict(prep.get('gitObjectsInspection') or {})
+    basis = spec.pop('basis', None)
+    want = git_objects_spec(production)
+    if spec != want or not isinstance(basis, str):
+        return [f'preparation.gitObjectsInspection must be exactly {want} plus a basis text']
+    return []
+
+def entry_kind(mode):
+    return ('link' if stat.S_ISLNK(mode) else 'dir' if stat.S_ISDIR(mode) else 'file' if stat.S_ISREG(mode)
+            else 'special')
+
+class ObjectsWalk:
+    """One bounded, metadata-only walk below an already opened, no-follow directory descriptor. Directories are
+    opened only relative to their parent's descriptor with O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK and re-identified
+    with fstat against the lstat that admitted them; nothing else is opened. Links are never followed (their text
+    is read, escaped and capped), special files are never opened, and no other filesystem is entered."""
+
+    def __init__(self, bounds, clock, started):
+        self.bounds, self.clock, self.deadline = bounds, clock, started + bounds['maxSeconds']
+        self.reasons, self.exceptions, self.exceptions_total = {}, [], 0
+        self.totals = {kind: {'count': 0, 'apparentBytes': 0, 'allocatedBytes': 0} for kind in ('file', 'dir', 'link', 'special')}
+        self.groups, self.folded, self.inodes, self.hardlinked = {}, set(), set(), 0
+        self.listed = self.max_depth = 0
+        self.excluded, self.excluded_total = [], 0
+        self.existence = {rel: {'observed': False} for rel in GIT_OBJECTS_EXISTENCE_ONLY}
+
+    def stop(self, reason, detail):
+        self.reasons.setdefault(reason, detail)
+
+    def halted(self):
+        if 'deadline' not in self.reasons and self.clock() > self.deadline:
+            self.stop('deadline', f'the cooperative {self.bounds["maxSeconds"]} s deadline passed')
+        return 'deadline' in self.reasons or 'entries' in self.reasons
+
+    def exception(self, rel, kind, **extra):
+        self.exceptions_total += 1
+        if len(self.exceptions) < GIT_OBJECTS_CAPS['exceptions']:
+            self.exceptions.append({'path': sanitized(rel, GIT_OBJECTS_CAPS['nameBytes'])[0], 'kind': kind, **extra})
+
+    def add(self, parent, kind, st):
+        key = '/'.join('[0-9a-f]{2}' if FANOUT.fullmatch(part) else sanitized(part, GIT_OBJECTS_CAPS['nameBytes'])[0]
+                       for part in parent.split('/')) if parent else '.'
+        if key not in self.groups and len(self.groups) >= GIT_OBJECTS_CAPS['groups']:
+            self.folded.add(key)
+            key = '(other)'
+        unique = (st.st_dev, st.st_ino) not in self.inodes
+        if unique:
+            self.inodes.add((st.st_dev, st.st_ino))
+        else:
+            self.hardlinked += 1
+        allocated = st.st_blocks * 512 if unique else 0
+        for row in (self.totals[kind], self.groups.setdefault(key, {}).setdefault(
+                kind, {'count': 0, 'apparentBytes': 0, 'allocatedBytes': 0})):
+            row['count'] += 1
+            row['apparentBytes'] += st.st_size
+            row['allocatedBytes'] += allocated
+
+    def walk(self, fd, rel, depth, device):
+        """List one directory (names only, bounded) and admit each entry by lstat relative to FD."""
+        names = []
+        try:
+            with os.scandir(fd) as it:
+                for entry in it:
+                    if self.halted():
+                        break
+                    if self.listed >= self.bounds['maxEntries']:
+                        self.stop('entries', f'{self.bounds["maxEntries"]} entries listed')
+                        break
+                    self.listed += 1
+                    names.append(entry.name)
+        except OSError as error:
+            self.exception(rel or '.', 'inaccessible', error=type(error).__name__)
+            self.stop('inaccessible', f'{rel or "."}: {type(error).__name__} while listing')
+            return
+        listed_whole = not self.halted() and 'entries' not in self.reasons
+        if listed_whole and (rel == 'info' or (rel == '' and 'info' not in names)):
+            for name in ('alternates', 'http-alternates'):
+                if rel == '' or name not in names:  # a complete listing without it observes its absence
+                    self.existence[f'info/{name}'] = {'observed': True, 'exists': False}
+        for name in sorted(names):
+            if self.halted():
+                return
+            child = f'{rel}/{name}' if rel else name
+            if name in GIT_OBJECTS_EXCLUDED:
+                self.excluded_total += 1
+                if len(self.excluded) < GIT_OBJECTS_CAPS['excludedListed']:
+                    self.excluded.append(sanitized(child, GIT_OBJECTS_CAPS['nameBytes'])[0])
+                continue
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                self.exception(child, 'replaced', detail='vanished after listing')
+                self.stop('replaced', f'{child}: vanished after listing')
+                continue
+            except OSError as error:
+                self.exception(child, 'inaccessible', error=type(error).__name__)
+                self.stop('inaccessible', f'{child}: {type(error).__name__}')
+                continue
+            kind = entry_kind(st.st_mode)
+            if child in GIT_OBJECTS_EXISTENCE_ONLY:  # existence and type only: no size, no link text, never opened
+                self.existence[child] = {'observed': True, 'exists': True, 'type': kind}
+                continue
+            if st.st_dev != device:
+                self.exception(child, 'cross-filesystem', type=kind)
+                self.stop('cross-filesystem', f'{child}: on another filesystem')
+                continue
+            self.add(rel, kind, st)
+            self.max_depth = max(self.max_depth, depth + 1)
+            if kind == 'link':
+                try:
+                    text = os.readlink(name, dir_fd=fd)
+                except OSError as error:  # no longer a link: replaced after its lstat
+                    self.exception(child, 'replaced', error=type(error).__name__)
+                    self.stop('replaced', f'{child}: {type(error).__name__} reading the admitted link')
+                    continue
+                lexical = os.path.normpath(os.path.join(rel or '.', text))
+                unsafe = os.path.isabs(text) or lexical == '..' or lexical.startswith('../')
+                shown, cut = sanitized(text, GIT_OBJECTS_CAPS['linkTextBytes'])
+                self.exception(child, 'link', linkText=shown, linkTextTruncated=cut, unsafe=unsafe)
+                if unsafe:
+                    self.stop('unsafe-link', f'{child}: link text is absolute or leaves the objects root')
+            elif kind == 'special':
+                self.exception(child, 'special', mode=oct(st.st_mode))
+                self.stop('special', f'{child}: special file type {oct(stat.S_IFMT(st.st_mode))}')
+            elif kind == 'dir':
+                if depth + 1 >= self.bounds['maxDepth']:
+                    self.exception(child, 'depth')
+                    self.stop('depth', f'{child}: a directory at depth {depth + 1} is not listed')
+                    continue
+                self.descend(fd, name, child, depth + 1, st, device)
+
+    def descend(self, fd, name, child, depth, st, device):
+        try:
+            sub = os.open(name, DIR_OPEN, dir_fd=fd)
+        except OSError as error:
+            replaced = error.errno in (errno.ELOOP, errno.ENOTDIR, errno.ENOENT)
+            kind = 'replaced' if replaced else 'inaccessible'
+            self.exception(child, kind, error=type(error).__name__)
+            self.stop(kind, f'{child}: {type(error).__name__} opening the admitted directory')
+            return
+        try:
+            now = os.fstat(sub)
+            if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino) or not stat.S_ISDIR(now.st_mode):
+                self.exception(child, 'replaced', detail='identity changed between lstat and open')
+                self.stop('replaced', f'{child}: identity changed between lstat and open')
+                return
+            self.walk(sub, child, depth, device)
+        finally:
+            os.close(sub)
+
+def open_no_follow(path):
+    """Open absolute PATH component by component from /, each with O_DIRECTORY|O_NOFOLLOW relative to its parent's
+    descriptor: (fd, None) or (None, (reason, prefix)). A link or non-directory anywhere refuses."""
+    parts = Path(path).parts
+    fd, prefix = os.open('/', DIR_OPEN), Path('/')
+    try:
+        for part in parts[1:]:
+            prefix = prefix/part
+            try:
+                nxt = os.open(part, DIR_OPEN, dir_fd=fd)
+            except OSError as error:
+                reason = {errno.ENOENT: 'absent'}.get(error.errno, 'inaccessible')
+                if error.errno in (errno.ELOOP, errno.ENOTDIR):  # Linux gives either for a link with O_DIRECTORY
+                    try:  # the refused component's own lstat only, to name what it is
+                        reason = 'linked-component' if stat.S_ISLNK(os.stat(part, dir_fd=fd, follow_symlinks=False).st_mode) \
+                            else 'not-a-directory'
+                    except OSError:
+                        reason = 'replaced'
+                return None, (reason, f'{prefix}: {type(error).__name__}')
+            os.close(fd)
+            fd = nxt
+        result, fd = fd, None
+        return result, None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+def fit_report(report, limit):
+    """Compact JSON of REPORT at most LIMIT bytes; anything trimmed to fit is named and makes it incomplete."""
+    def text():
+        return json.dumps(report, separators=(',', ':'))
+    out = text()
+    for trim in ('exceptions', 'excluded', 'groups'):
+        if len(out.encode()) <= limit:
+            return out
+        if not any(r['reason'] == 'output' for r in report['incomplete']):
+            report['complete'] = False
+            report['incomplete'].append({'reason': 'output', 'detail': f'the report exceeded {limit} bytes; trimmed'})
+        report[trim] = [] if trim != 'groups' else {}
+        report.setdefault('trimmed', []).append(trim)
+        out = text()
+    if len(out.encode()) <= limit:
+        return out
+    # Still too large (only with a test-sized limit): the fixed-size core, always whole, never cut mid-document.
+    return json.dumps({k: report[k] for k in ('schema', 'complete', 'incomplete', 'totals', 'trimmed')}, separators=(',', ':'))
+
+def inspect_git_objects(recipe, host, root=ROOT, clock=time.monotonic, bounds=None):
+    """O2: bounded metadata of exactly the fixed objects directory (preparation.gitObjectsInspection). No other
+    preparation probe, no file content, no link followed, no other filesystem, no process, no write. BOUNDS exists
+    for tests only; the CLI always uses GIT_OBJECTS. Returns the compact JSON text (at most maxOutputBytes)."""
+    problems = git_objects_problems(recipe, root)
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec = recipe['preparation']['gitObjectsInspection']
+    if host != spec['host']:
+        raise InvalidInput(f'--host must be {spec["host"]}')
+    bounds = dict(GIT_OBJECTS if bounds is None else bounds)
+    absolute = f'{spec["root"]}/{spec["path"]}'
+    started = clock()
+    run = ObjectsWalk(bounds, clock, started)
+    target = {'absolutePath': absolute, 'root': spec['root'], 'path': spec['path'], 'exists': None}
+    fd, refused = open_no_follow(absolute)
+    if refused:
+        run.stop(*refused)
+        target['exists'] = False if refused[0] == 'absent' else None
+    else:
+        try:
+            st = os.fstat(fd)
+            target.update(exists=True, device=st.st_dev, inode=st.st_ino, mode=oct(st.st_mode), uid=st.st_uid)
+            run.walk(fd, '', 0, st.st_dev)
+        finally:
+            os.close(fd)
+    incomplete = [{'reason': r, 'detail': d} for r, d in run.reasons.items()]
+    report = {
+        'schema': GIT_OBJECTS_INSPECTION, 'device': DEVICE, 'host': host, 'metadataOnly': True, 'contentsOpened': False,
+        'linksFollowed': False, 'filesystemsCrossed': False, 'gitProcess': False, 'processesStarted': 0,
+        'network': False, 'writes': False, 'enablesPreparation': False,
+        'proves': 'metadata only: not object integrity, reachability or provenance',
+        'deadlineKind': 'cooperative: checked before each entry; one blocking system call is not interrupted',
+        'bounds': bounds, 'target': target, 'complete': not incomplete, 'incomplete': incomplete,
+        'totals': {'listedEntries': run.listed, 'byType': run.totals,
+                   'apparentBytes': sum(t['apparentBytes'] for t in run.totals.values()),
+                   'allocatedBytes': sum(t['allocatedBytes'] for t in run.totals.values()),
+                   'hardlinkedRepeats': run.hardlinked, 'deepestEntry': run.max_depth},
+        'groups': run.groups, 'groupsFolded': len(run.folded),
+        'existenceOnly': run.existence,
+        'excluded': run.excluded, 'excludedTotal': run.excluded_total,
+        'exceptions': run.exceptions, 'exceptionsTotal': run.exceptions_total,
+        'elapsedSeconds': round(clock() - started, 3)}
+    return fit_report(report, bounds['maxOutputBytes'])
+
 def tree_facts(recipe, src, budget, clock):
     """Project presence, the adevtool revision marker (128 bytes) and bounded collision sizes of one tree."""
     prep = recipe['preparation']
@@ -1420,8 +1691,23 @@ def main_git(argv, target_set=False):
         print(f'invalid input: {error}', file=sys.stderr)
         return 2
 
+def main_git_objects(argv):
+    """`inspect-git-objects --host immortal-os-builder`: no other argument; one compact JSON document on stdout."""
+    parser = argparse.ArgumentParser(prog='blazer-build-only.py inspect-git-objects',
+                                     description='bounded metadata of the fixed adevtool objects directory')
+    parser.add_argument('--host', required=True)
+    a = parser.parse_args(argv)
+    try:
+        print(inspect_git_objects(load(RECIPE, probe=False), a.host))  # lexical load: no unrelated probe
+        return 0
+    except InvalidInput as error:
+        print(f'invalid input: {error}', file=sys.stderr)
+        return 2
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ['inspect-git-objects']:
+        return main_git_objects(argv[1:])
     if argv[:1] == ['inspect-git']:
         return main_git(argv[1:])
     if argv[:1] == ['inspect-git-set']:

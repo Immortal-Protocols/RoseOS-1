@@ -415,6 +415,53 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     Validation checks the candidate target lexically, so no other path is touched. It is source
     only: Release wiring and its execution are separate, and O2 (sizing the object store) and any
     copy remain proposals.
+- **`inspect-git-objects`** (O2, metadata only; for a separately approved observation):
+  `python3 scripts/blazer-build-only.py inspect-git-objects --host immortal-os-builder`
+  - Takes only `--host`, which must be `immortal-os-builder`. Exit 0 means a report was written,
+    whether `complete` is true or false; 2 means invalid input, with nothing on stdout. Output is one
+    compact JSON document on one line, at most 64 KiB.
+  - **Fixed target** in `preparation.gitObjectsInspection`:
+    `/home/pixelbuild/grapheneos-2026100600/.repo/project-objects/adevtool.git/objects`. Original
+    Infra derived this lexically from O1's `objects` link (runtime 41586224611); its existence, layout
+    and size are unobserved. The block must equal the fixed host, path and bounds, or loading refuses.
+    Loading for this mode is lexical, so no other preparation probe runs.
+  - **Traversal:** the path is opened component by component from `/`, each with
+    `O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK` relative to its parent's descriptor. Inside the tree:
+    - each listed name is `lstat`ed relative to its directory's descriptor;
+    - a directory is opened the same way and re-identified with `fstat`;
+    - link text is read (escaped, at most 128 bytes) but never followed;
+    - special files are never opened, and no other filesystem is entered;
+    - no file content is opened and no Git process runs.
+    `hooks` and `rr-cache` are excluded by name (never `lstat`ed). `info/alternates` and
+    `info/http-alternates` get existence and type only.
+  - **Bounds:** 100,000 listed entries, entries to depth 3 below the root (a directory at depth 3 is
+    not listed), a cooperative 120 s deadline checked before each entry (one blocking system call is
+    not interrupted), and 64 KiB of JSON. Groups, exceptions and the excluded list are capped at 32
+    each; excess groups fold into `(other)`.
+  - **Receipt** `roseos.blazer-git-objects-inspection.v1`:
+    - `target`: absolute path, `exists`, and the root's device, inode, mode and uid;
+    - `complete` and `incomplete`: an ordered list of `{reason, detail}`;
+    - `totals`: listed entries; count, apparent bytes and allocated bytes by type (a hardlinked
+      inode is allocated once); `hardlinkedRepeats`; `deepestEntry`;
+    - `groups`: the same figures by relative directory, with `[0-9a-f]{2}` for the loose-object
+      fan-out;
+    - `existenceOnly`, `excluded`, `exceptions` (path, kind, and for links the escaped text and
+      `unsafe`), and the constants for metadata only, no contents, links, filesystems, processes,
+      network or writes.
+  - **`complete:false` reasons**, each with partial totals: `absent`, `linked-component`,
+    `not-a-directory`, `inaccessible`, `replaced` (vanished, swapped for a link, or a different
+    identity at open), `cross-filesystem`, `unsafe-link` (absolute, or leaving the objects root),
+    `special`, `depth`, `entries`, `deadline` and `output` (trimmed to fit; `trimmed` names what).
+    A relative in-tree link is reported but leaves the report complete.
+  - **Feasibility (virtual, not a guarantee):** in a Linux container with a warm cache, a synthetic
+    tree of exactly 100,000 entries took about 0.8 s and 1.8 KB of JSON; one more entry gave
+    `complete:false` with reason `entries`. The production disk, its cold cache and its real layout
+    are unmeasured.
+  - Metadata totals prove no object integrity, reachability or provenance. A later metadata copy
+    needs its own approved HEAD/refs/shallow/safe-config scope.
+  - Workflow wiring is Release's. Its proposed stage `git-objects-inspect` is a 180 s outer timeout
+    plus a 30 s kill grace, a 15-minute job and 7-day private JSON retention, with the existing
+    start-ownership cleanup and STOP. These are proposals, not runtime approval.
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
   proposal, not verified paths. No `source` copy has run, and none is authorized.

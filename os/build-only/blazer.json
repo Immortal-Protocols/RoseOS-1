@@ -177,6 +177,24 @@
         }
       },
       "targetSetsBasis": "Explicit, additive target sets for the separate `inspect-git-set --target-set NAME`; `inspect-git` keeps inspecting exactly the two targets above. adevtool-projects-gitdir is the gitdir that the production vendor/adevtool/.git link names (observation 41566744429: ../../.repo/projects/vendor/adevtool.git), inspected with the same git_facts bounds; the link itself is never followed by the helper. For a separately approved observation (O1) only."
+    },
+    "gitObjectsInspection": {
+      "host": "immortal-os-builder",
+      "root": "/home/pixelbuild/grapheneos-2026100600",
+      "path": ".repo/project-objects/adevtool.git/objects",
+      "maxEntries": 100000,
+      "maxDepth": 3,
+      "maxSeconds": 120,
+      "maxOutputBytes": 65536,
+      "excludeNames": [
+        "hooks",
+        "rr-cache"
+      ],
+      "existenceOnly": [
+        "info/alternates",
+        "info/http-alternates"
+      ],
+      "basis": "O2, inspect-git-objects: bounded metadata of the objects directory that O1 (runtime 41586224611) found linked from .repo/projects/vendor/adevtool.git/objects (link text ../../../project-objects/adevtool.git/objects); Original Infra derived this exact lexical target. Its existence, layout and size are unobserved. Walked through no-follow directory descriptors from /, at most 100,000 listed entries, depth 3 below the root, a cooperative 120 s deadline and at most 64 KiB of JSON; no file content is opened, no link followed and no other filesystem entered. hooks and rr-cache are excluded; info/alternates and info/http-alternates get existence and type only. Proposed bounds for a separately approved observation only; metadata totals prove no object integrity, reachability or provenance."
     }
   }
 }
