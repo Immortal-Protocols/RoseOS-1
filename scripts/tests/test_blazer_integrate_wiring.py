@@ -195,7 +195,8 @@ class Wiring(unittest.TestCase):
         self.assertEqual(seed[3:], ['--frankel-receipts', '/home/pixelbuild/rose-actions/reconcile', '--source-root',
                                     str(self.plan['source']), '--source-run', '41554911849', '--source-inventory',
                                     self.bound['sourceInventory']['path'], '--source-inventory-sha256', 'b' * 64,
-                                    '--receipt-dir', str(self.home/'rose-actions/blazer-reconcile-2026110301')])
+                                    '--receipt-dir', str(self.home/'rose-actions/blazer-reconcile-2026110301'),
+                                    '--prior-integrations', str(self.home/'rose-actions')])
         self.assertEqual(assemble[assemble.index('--build') + 1], '2026110301')
         self.assertEqual(assemble[assemble.index('--product') + 1], RECIPE)
         self.assertEqual(calls[-1], wiring.expected_reconcile(self.plan, RECIPE))
