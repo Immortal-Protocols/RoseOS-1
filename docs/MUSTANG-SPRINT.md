@@ -90,7 +90,7 @@ no Rango/Blazer grant, identity or artifact fills a gap.
 
 Signing, reduced factory packaging and private export are implemented through
 `os-release.yml mode=mustang-delivery`, consuming successful producer-run pins.
-The current corrected unsigned run is `41719106957`; no duplicate run should be
+The current corrected unsigned run is `41720536968`; no duplicate run should be
 dispatched. Its integration and compile remain on one main source SHA. A
 successful unsigned compile ends before the separate delivery stage. See
 [Mustang delivery](MUSTANG-DELIVERY.md) for actual stage outcomes and earlier
