@@ -4,10 +4,12 @@
  "owner": "OS Product (#410). Release owns the adapter; this states inputs only.",
  "target": "Launcher3QuickStepLib",
  "proves": "the patched handlers and overlays type-check and compile on the real classpath, plus the generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime.",
+ "provenance": "every hash here is an expected value derived from pinned public sources and the committed patches; an adapter compares current bytes with them and never records current bytes as provenance",
+ "candidatePatches": "frameworks/base and build/release in apply-os-changes.py --background-policy order; Launcher3 adds rose-edge-launcher3.patch, which apply-os-changes.py does not register yet, so a tree integrated by the current patcher is a mixed state for this contract and is refused",
  "branches": {
-  "verifyIntegrated": "every affected file equals post (config.xml via integrationRewrite), every required overlay is present with its sha256, no patch is applied again",
-  "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files are absent, patches are applied in order and must give exactly post; required overlays are then copied",
-  "otherwise": "refuse: mixed pre/post, unknown hash, missing file or overlay. Never reset or trust a snapshot."
+  "verifyIntegrated": "every affected file equals post (config.xml only through integrationRewrite with its bound inputs), every required overlay is present with its sha256, no patch is applied again",
+  "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files and every overlay target are absent beforehand, patches are applied in order and must give exactly post; required overlays are then copied",
+  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed by applying rose-edge-launcher3.patch alone. Never reset or trust a snapshot."
  },
  "projects": [
   {
@@ -239,15 +241,20 @@
       }
      ],
      "integrationRewrite": {
-      "by": "scripts/apply-os-changes.py (background policy)",
-      "compare": "normalize_config(integrated bytes) must equal post",
+      "by": "scripts/apply-os-changes.py, the `if policy:` block, after patching",
       "elements": [
        "config_pixelComputerControlAgents",
        "config_pixelComputerControlTargets",
        "config_pixelComputerControlPrototypeAgents",
        "config_pixelComputerControlReferenceDisplayAddress",
        "config_pixelComputerControlLockedSessions"
-      ]
+      ],
+      "generatingInputs": [
+       "the background policy receipt (agent, targets, prototypeControl), whose sha256 must equal the one bound for that tree outside this contract",
+       "--reference-display-address (absent unless given)",
+       "--locked-control (false unless given)"
+      ],
+      "compare": "scripts/launcher3-compile-contract.py verify_integrated_config: each element must be exactly the text the patcher writes from those inputs, and only those texts are put back to their markers before comparing with post; a missing input or binding, or any other difference, refuses"
      }
     },
     {
@@ -1176,10 +1183,10 @@
    "role": "required"
   }
  ],
- "unaffected": "every other project the library or lunch needs must be byte-identical to its pinned revision; that is Infra provenance, not this contract",
+ "unaffected": "inside the three projects, every path not listed in files or overlays must equal the pinned revision's tree, and any extra file is refused; every other project the library or lunch needs must be byte-identical to its pinned revision (Infra provenance, not this contract)",
  "notInputs": [
   "packages/apps/PixelBackgroundControl and Agent.apk",
-  "policy receipt",
+  "the policy receipt in reconstruct (only verifyIntegrated needs it, bound, to check config.xml)",
   "build/make patches",
   "packages/apps/Updater",
   "packages/modules/Permission",
@@ -1201,6 +1208,7 @@
   ],
   "change": "ActivityOptions.makeCustomAnimation(mContext, 0, 0).setShareIdentityEnabled(true)",
   "appliesWithEdgeOff": true,
-  "consumer": "Home replies to gesture_nav_contract_v1 only through its fail-closed caller gate (#410 6594409930 section 4); no dedicated exported entry"
+  "consumer": "requirement on Home, not implemented or tested in this repository yet: reply to gesture_nav_contract_v1 only through a fail-closed caller gate (#410 6594409930 section 4); no dedicated exported entry",
+  "consumerImplemented": false
  }
 }

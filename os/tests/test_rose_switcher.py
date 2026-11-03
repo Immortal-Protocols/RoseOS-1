@@ -1565,11 +1565,12 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
 
 class Launcher3CompileContractTest(unittest.TestCase):
     """#410: os/compile-contracts/launcher3-quickstep-lib.json, the inputs for Release's compile-only adapter
-    (verify-integrated or reconstruct; anything else refused). Offline checks against the committed os/ bundle; the
-    frameworks/base and build/release images were computed from pinned public sources by
-    scripts/launcher3-compile-contract.py --write and are bound here by each patch's own index lines."""
+    (verify-integrated or reconstruct; anything else refused). Every pre-image, post-image and blob chain is recomputed
+    offline from committed pinned fixtures and patches; config.xml is accepted only with its bound generating inputs."""
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
+    # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
+    AGREED_SHA256 = '9d722c5116c4d551d2ba9f9a044ce2db4fd016a0cf41601d881dcc3151c2a208'
 
     def contract(self):
         import importlib.util
@@ -1578,70 +1579,119 @@ class Launcher3CompileContractTest(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_the_manifest_matches_the_committed_bundle(self):
+    def manifest(self):
+        import json
+        return json.loads(self.MANIFEST.read_text())
+
+    def test_the_manifest_is_the_agreed_version_and_recomputes_offline(self):
+        self.assertEqual(hashlib.sha256(self.MANIFEST.read_bytes()).hexdigest(), self.AGREED_SHA256)
+        manifest = self.manifest()
+        self.assertEqual((manifest['kind'], manifest['schemaVersion']), ('rose-launcher3-compile-inputs', 1))
         result = subprocess.run(['python3', str(self.SCRIPT)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('33 patch steps match the blobs their own index lines record', result.stdout)
+        self.assertIn('42 files recomputed from pinned fixtures', result.stdout)
 
-    def test_the_branches_refuse_anything_else(self):
-        import json
-        manifest = json.loads(self.MANIFEST.read_text())
-        self.assertEqual(manifest['target'], 'Launcher3QuickStepLib')
-        self.assertEqual(set(manifest['branches']), {'verifyIntegrated', 'reconstruct', 'otherwise'})
-        self.assertIn('no patch is applied again', manifest['branches']['verifyIntegrated'])
-        self.assertIn('refuse', manifest['branches']['otherwise'])
-        self.assertIn('Never reset or trust a snapshot', manifest['branches']['otherwise'])
-        for project in manifest['projects']:
-            for row in project['files']:
-                self.assertRegex(row['post']['sha256'], r'^[0-9a-f]{64}$')
-                if row['pre'] is not None:
-                    self.assertRegex(row['pre']['gitBlob'], r'^[0-9a-f]{40}$')
-        required = [o['target'] for o in manifest['overlays'] if o['role'] == 'required']
-        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 8)
-        self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
-
-    def test_config_xml_is_compared_after_reversing_exactly_the_policy_rewrites(self):
+    def test_the_patch_order_is_the_patchers_plus_the_unregistered_edge_patch(self):
         contract = self.contract()
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
-        self.assertIn("for name, rows in [('Agents', [policy['agent']]), ('Targets', policy['targets'])]:", patcher,
-            'Agents and Targets are rewritten through one template')
-        policy_block = patcher[patcher.index("    config = source/'frameworks/base/core/res/res/values/config.xml'"):]
-        self.assertEqual(policy_block.count('marker = '), 4,
-            'five elements through four markers (Agents/Targets share a template), no more')
-        for marker in ('    <string-array name="config_pixelComputerControl{name}" translatable="false" />',
-                '    <string-array name="config_pixelComputerControlPrototypeAgents" translatable="false" />',
-                '    <string name="config_pixelComputerControlReferenceDisplayAddress" translatable="false"></string>',
-                '    <bool name="config_pixelComputerControlLockedSessions">false</bool>'):
-            self.assertIn(marker, patcher, 'the markers are the patcher\'s own')
-        base = 'x\n' + '\n'.join(m for _, _, m in contract.CONFIG_MARKERS) + '\ny\n'
-        rewritten = base
-        for name in ('Agents', 'Targets', 'PrototypeAgents'):
-            marker = f'    <string-array name="config_pixelComputerControl{name}" translatable="false" />'
-            rewritten = rewritten.replace(marker, f'    <string-array name="config_pixelComputerControl{name}" '
-                'translatable="false">\n        <item>dev.pixel.backgroundcontrol:' + 'AB' * 32 + '</item>\n'
-                '        <item>com.example:' + 'CD' * 32 + '</item>\n    </string-array>')
-        rewritten = rewritten.replace('translatable="false"></string>', 'translatable="false">4619827259835644672</string>')
-        rewritten = rewritten.replace('LockedSessions">false</bool>', 'LockedSessions">true</bool>')
-        self.assertNotEqual(rewritten, base)
-        self.assertEqual(contract.normalize_config(rewritten), base)
-        self.assertEqual(contract.normalize_config(base), base, 'an unrewritten file is already normal')
-        with self.assertRaises(ValueError):
-            contract.normalize_config(base.replace('LockedSessions', 'Other'))
-        with self.assertRaises(ValueError):
-            contract.normalize_config(base + contract.CONFIG_MARKERS[0][2] + '\n')
-        import json
-        rows = {r['path']: r for r in json.loads(self.MANIFEST.read_text())['projects'][0]['files']}
-        self.assertEqual(rows['core/res/res/values/config.xml']['integrationRewrite']['elements'],
-            [name for _, name, _ in contract.CONFIG_MARKERS])
-        self.assertEqual([p for p, r in rows.items() if 'integrationRewrite' in r], ['core/res/res/values/config.xml'])
+        background = (ROOT/'scripts/background_apks.py').read_text()
+        base = re.search(r"projects = \{'frameworks/base': (\[[^\]]*\])\}", patcher).group(1)
+        extra = re.search(r'BACKGROUND_FRAMEWORK_PATCHES = (\[[^\]]*\])', background).group(1)
+        import ast
+        order = dict((p, patches) for p, _, patches in contract.PROJECTS)
+        self.assertEqual(order['frameworks/base'], ast.literal_eval(base) + ast.literal_eval(extra))
+        self.assertIn("projects['build/release'] = " + repr(order['build/release']), patcher)
+        self.assertIn("projects['packages/apps/Launcher3'] = " + repr(order['packages/apps/Launcher3'][:1]), patcher)
+        self.assertEqual(order['packages/apps/Launcher3'][1:], ['rose-edge-launcher3.patch'])
+        manifest = self.manifest()
+        self.assertIn('does not register yet', manifest['candidatePatches'])
+        self.assertIn('must not be completed by applying rose-edge-launcher3.patch alone', manifest['branches']['otherwise'])
+
+    def test_the_branches_refuse_anything_else(self):
+        manifest = self.manifest()
+        self.assertEqual(set(manifest['branches']), {'verifyIntegrated', 'reconstruct', 'otherwise'})
+        self.assertIn('no patch is applied again', manifest['branches']['verifyIntegrated'])
+        self.assertIn('every overlay target are absent beforehand', manifest['branches']['reconstruct'])
+        self.assertIn('Never reset or trust a snapshot', manifest['branches']['otherwise'])
+        self.assertIn('any extra file is refused', manifest['unaffected'])
+        self.assertIn('never records current bytes as provenance', manifest['provenance'])
+        for project in manifest['projects']:
+            for row in project['files']:
+                if row['pre'] is not None:
+                    self.assertNotEqual(row['pre']['sha256'], row['post']['sha256'], f'{row["path"]}: pre and post '
+                        'are distinguishable, so mixed state is always detectable')
+        required = [o['target'] for o in manifest['overlays'] if o['role'] == 'required']
+        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 8)
+        self.assertEqual(len([t for t in required if t.startswith('build/release/')]), 4)
+        self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
+
+    def integrated(self, policy, address=None, locked=False):
+        """The real post-image config.xml, rewritten by apply-os-changes.py's own policy block (executed as written)."""
+        contract = self.contract()
+        project = self.manifest()['projects'][0]
+        pre = {r['path']: None if r['pre'] is None else contract.fixture_path('frameworks/base', r['path']).read_bytes()
+            for r in project['files']}
+        post, _ = contract.apply_in_scratch(pre, contract.PROJECTS[0][2])
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        block = patcher[patcher.index("    config = source/'frameworks/base/core/res/res/values/config.xml'"):
+            patcher.index("    config.write_text(text)")]
+        import textwrap, types
+        code = textwrap.dedent(block.replace("config = source/'frameworks/base/core/res/res/values/config.xml'", '')
+            .replace('text = config.read_text()', 'text = original'))
+        scope = {'policy': policy, 'a': types.SimpleNamespace(reference_display_address=address, locked_control=locked),
+            'original': post['core/res/res/values/config.xml'].decode()}
+        exec(code, scope)
+        row = [r for r in project['files'] if r['path'] == 'core/res/res/values/config.xml'][0]
+        return scope['text'].encode(), row['post']['sha256']
+
+    def test_config_xml_is_accepted_only_as_exactly_rewritten_from_bound_inputs(self):
+        contract = self.contract()
+        cert, other = 'AB' * 32, 'CD' * 32
+        policy = {'agent': {'packageName': 'dev.pixel.backgroundcontrol', 'certificates': [cert]},
+            'targets': [{'packageName': 'dev.pixel.calculator.agent', 'certificates': [other]}], 'prototypeControl': True}
+        bound = hashlib.sha256(b'the receipt').hexdigest()
+        integrated, post = self.integrated(policy, address='4619827259835644672', locked=True)
+        verify = lambda data, **kw: contract.verify_integrated_config(data, post, kw.get('policy', policy),
+            kw.get('sha', bound), kw.get('bound', bound), kw.get('address', '4619827259835644672'), kw.get('locked', True))
+        self.assertEqual(verify(integrated), [], 'the producer\'s exact output with its bound inputs is accepted')
+        # The patcher's defaults (no prototype, address or locked control) are accepted with matching inputs only.
+        plain_policy = dict(policy, prototypeControl=False)
+        plain, _ = self.integrated(plain_policy)
+        self.assertEqual(contract.verify_integrated_config(plain, post, plain_policy, bound, bound), [])
+        refusals = {
+            'unbound receipt': verify(integrated, bound=None),
+            'a different receipt': verify(integrated, sha='0' * 64),
+            'missing receipt': verify(integrated, policy=None),
+            'another certificate': verify(integrated, policy=dict(policy, agent={'packageName': 'dev.pixel.backgroundcontrol',
+                'certificates': ['EF' * 32]})),
+            'prototype not bound': verify(integrated, policy=dict(policy, prototypeControl=False)),
+            'locked not bound': verify(integrated, locked=False),
+            'address not bound': verify(integrated, address=None),
+            'another address': verify(integrated, address='12'),
+            'an extra item': verify(integrated.replace(b'</item>\n    </string-array>', b'</item>\n        <item>x.y:' +
+                b'12' * 32 + b'</item>\n    </string-array>', 1)),
+            'a change elsewhere': verify(integrated.replace(b'<resources', b'<resources ', 1)),
+            'CRLF': verify(integrated.replace(b'\n', b'\r\n')),
+            'a duplicated element': verify(integrated + contract.CONFIG_MARKERS['config_pixelComputerControlLockedSessions'].encode()),
+            'not rewritten at all': verify(plain),
+            'a lowercase certificate': verify(integrated, policy=dict(policy, targets=[{'packageName': 'dev.pixel.calculator.agent',
+                'certificates': [other.lower()]}])),
+        }
+        for case, errors in refusals.items():
+            self.assertTrue(errors, f'{case}: must be refused')
+        self.assertEqual(list(contract.CONFIG_MARKERS), [r['integrationRewrite']['elements'] for p in self.manifest()['projects']
+            for r in p['files'] if 'integrationRewrite' in r][0])
+        self.assertNotIn('def normalize_config', self.SCRIPT.read_text(), 'no pattern-based normalisation')
 
     def test_identity_sharing_is_explicit_and_independent_of_the_edge_switch(self):
-        import json
-        sharing = json.loads(self.MANIFEST.read_text())['identitySharing']
+        sharing = self.manifest()['identitySharing']
         self.assertTrue(sharing['appliesWithEdgeOff'])
         self.assertIn('setShareIdentityEnabled(true)', sharing['change'])
         self.assertIn('no dedicated exported entry', sharing['consumer'])
-        fallback = (ROOT/'os/patches/rose-edge-launcher3.patch').read_text()
+        self.assertFalse(sharing['consumerImplemented'], 'Home\'s gate is a stated requirement until it lands')
+        home = '\n'.join(p.read_text(errors='ignore') for p in (ROOT/'workspace/rose-agent/app/src').rglob('*.java'))
+        self.assertNotIn('gesture_nav_contract_icon_position', home, 'no Home reply exists yet: update consumerImplemented '
+            'and test the gate when it lands')
         tree = Path(tempfile.mkdtemp(prefix='launcher3-identity-'))
         self.addCleanup(shutil.rmtree, tree, True)
         for name, relative in EDGE_TARGETS.items():
@@ -1649,15 +1699,17 @@ class Launcher3CompileContractTest(unittest.TestCase):
             shutil.copyfile(FIXTURES/name, tree/relative)
         subprocess.run(['git', 'init', '-q', str(tree)], check=True)
         subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        checked = 0
         for name, relative in EDGE_TARGETS.items():
             code = (tree/relative).read_text()
-            if 'startHomeIntent(' not in code or name == 'AbsSwipeUpHandler.java':
+            if 'private void startHomeIntent(' not in code:
                 continue
             start = code[code.index('private void startHomeIntent('):]
             start = start[:start.index('\n    }\n')]
             self.assertIn('.setShareIdentityEnabled(true);', start, name)
             self.assertNotIn('mRoseEdge', start, f'{name}: not gated by the edge switch')
-        self.assertIn('setShareIdentityEnabled', fallback)
+            checked += 1
+        self.assertEqual(checked, 2)
 
 if __name__ == '__main__':
     unittest.main()

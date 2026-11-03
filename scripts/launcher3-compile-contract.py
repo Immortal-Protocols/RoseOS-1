@@ -4,21 +4,30 @@
 Release owns the adapter that uses it; this file only states the inputs. The manifest,
 os/compile-contracts/launcher3-quickstep-lib.json, names every affected file in the three projects that change what
 Launcher3QuickStepLib compiles against (frameworks/base, packages/apps/Launcher3, build/release). For each it gives the
-pinned pre-image (sha256 and git blob id, or absent for a new file) and the post-image after the ordered patches, and it
-lists the overlays copied into those projects. The adapter takes exactly one of two branches and refuses anything else:
+pinned pre-image (sha256 and git blob id, or absent for a new file), the post-image after the ordered patches and the
+blob chain between them, and it lists the overlays copied into those projects. Its hashes are expected values derived
+from pinned public sources and the committed patches; an adapter compares current bytes with them and never records
+the current bytes' hashes as provenance.
 
-- verifyIntegrated: every affected file already equals its post-image (config.xml after reversing the integration
-  rewrites below), every required overlay is present with its hash, and no patch is applied again.
+The patches are those of this candidate: apply-os-changes.py's --background-policy order for frameworks/base and
+build/release, and for Launcher3 rose-switcher-launcher3.patch then rose-edge-launcher3.patch. apply-os-changes.py
+does not register rose-edge-launcher3.patch yet, so a tree it integrates today is a mixed state for this contract.
+
+The adapter takes exactly one of two branches and refuses anything else:
+- verifyIntegrated: every affected file already equals its post-image, every required overlay is present with its
+  hash, and no patch is applied again. config.xml is the one file the patcher rewrites afterwards: it is accepted only
+  through verify_integrated_config, which needs the separately bound generating inputs.
 - reconstruct: every affected file equals its pinned pre-image (and its pinned git blob), new files are absent, and
   the patches are applied in order to give exactly the post-images.
-- Any other state (some files pre, some post, an unknown hash, a missing input) is refused. Nothing is reset.
+- Any other state (some files pre and some post, an unknown hash, a missing input or binding) is refused. Nothing is
+  reset; no snapshot is trusted.
 
 Usage:
-  scripts/launcher3-compile-contract.py          offline: check the committed manifest against the committed os/
-                                                 bundle (patch and overlay bytes, Launcher3 fixtures, pins)
+  scripts/launcher3-compile-contract.py          offline: recompute every pre-image, post-image and chain from the
+                                                 committed fixtures and patches, and compare with the manifest
   scripts/launcher3-compile-contract.py --write  regenerate it: fetches the pinned pre-images read-only from
                                                  GrapheneOS's public GitHub at the pinned SHAs (no host, no
-                                                 credentials), applies the patches in a scratch git tree
+                                                 credentials) into the fixtures, applies the patches in scratch
 """
 import argparse
 import hashlib
@@ -26,7 +35,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -34,8 +42,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 PINNED = ROOT/'os/pinned-manifest.xml'
-FIXTURES = ROOT/'os/tests/fixtures/rose-switcher'
-# The order apply-os-changes.py applies them with --background-policy (scripts/background_apks.py).
+# Pinned pre-images, byte for byte: Launcher3's are the switcher fixtures (by file name); the others are stored
+# under their project paths.
+LAUNCHER3_FIXTURES = ROOT/'os/tests/fixtures/rose-switcher'
+FIXTURES = ROOT/'os/tests/fixtures/launcher3-compile-contract'
+# frameworks/base and build/release: apply-os-changes.py's --background-policy order (scripts/background_apks.py).
+# Launcher3: this candidate's two patches (apply-os-changes.py:106 lists only the first so far).
 PROJECTS = [
     ('frameworks/base', 'platform_frameworks_base', ['frameworks-base.patch',
         'rose-agent-self-update-frameworks-base.patch', 'background-control-frameworks-base.patch',
@@ -46,37 +58,83 @@ PROJECTS = [
     ('build/release', 'platform_build_release', ['background-control-build-release.patch']),
 ]
 REQUIRED_OVERLAYS = ('packages/apps/Launcher3/', 'build/release/')
-# apply-os-changes.py rewrites these five marker elements of frameworks/base config.xml from the background policy
-# after patching. The contract compares an integrated config.xml after putting each element back to its marker.
+
+# apply-os-changes.py rewrites exactly these five elements of frameworks/base config.xml after patching, from the
+# background policy receipt and two flags. Each is either its marker (left alone) or the exact text written below.
 CONFIG = 'core/res/res/values/config.xml'
-CONFIG_MARKERS = [
-    ('string-array', 'config_pixelComputerControlAgents',
-        '    <string-array name="config_pixelComputerControlAgents" translatable="false" />'),
-    ('string-array', 'config_pixelComputerControlTargets',
-        '    <string-array name="config_pixelComputerControlTargets" translatable="false" />'),
-    ('string-array', 'config_pixelComputerControlPrototypeAgents',
-        '    <string-array name="config_pixelComputerControlPrototypeAgents" translatable="false" />'),
-    ('string', 'config_pixelComputerControlReferenceDisplayAddress',
-        '    <string name="config_pixelComputerControlReferenceDisplayAddress" translatable="false"></string>'),
-    ('bool', 'config_pixelComputerControlLockedSessions',
-        '    <bool name="config_pixelComputerControlLockedSessions">false</bool>'),
-]
+ARRAY = '    <string-array name="config_pixelComputerControl{name}" translatable="false" />'
+CONFIG_MARKERS = {
+    'config_pixelComputerControlAgents': ARRAY.format(name='Agents'),
+    'config_pixelComputerControlTargets': ARRAY.format(name='Targets'),
+    'config_pixelComputerControlPrototypeAgents': ARRAY.format(name='PrototypeAgents'),
+    'config_pixelComputerControlReferenceDisplayAddress':
+        '    <string name="config_pixelComputerControlReferenceDisplayAddress" translatable="false"></string>',
+    'config_pixelComputerControlLockedSessions': '    <bool name="config_pixelComputerControlLockedSessions">false</bool>',
+}
+CERT = re.compile(r'[0-9A-F]{64}')
+PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+')
 
 
-def normalize_config(text):
-    """An integrated config.xml with apply-os-changes.py's five policy rewrites put back to their markers."""
-    for kind, name, marker in CONFIG_MARKERS:
-        if kind == 'string-array':
-            pattern = r'    <string-array name="%s" translatable="false"(?: />|>\n(?:        <item>[^<\n]*</item>\n)*    </string-array>)' % name
-        elif kind == 'string':
-            pattern = r'    <string name="%s" translatable="false">[^<\n]*</string>' % name
+def expected_config_elements(policy, reference_display_address=None, locked_control=False):
+    """{element name: exact text} that apply-os-changes.py writes for these inputs (scripts/apply-os-changes.py, the
+    `if policy:` block). policy is the background policy receipt; it must be the separately bound receipt."""
+    agent, targets = policy['agent'], policy['targets']
+    rows = [agent] + list(targets)
+    for row in rows:
+        if not PACKAGE.fullmatch(row['packageName']) or not row['certificates'] or not all(
+                isinstance(c, str) and CERT.fullmatch(c) for c in row['certificates']):
+            raise ValueError(f'policy row {row.get("packageName")!r}: not a package with uppercase SHA-256 certificates')
+    if reference_display_address is not None and not (str(reference_display_address).isdecimal()
+            and 0 < int(reference_display_address) < 2**63):
+        raise ValueError('reference display address: not a positive signed-64-bit number')
+
+    def array(name, items):
+        entries = ''.join(f'        <item>{row["packageName"]}:{cert}</item>\n' for row in items for cert in row['certificates'])
+        return f'    <string-array name="config_pixelComputerControl{name}" translatable="false">\n{entries}    </string-array>'
+
+    out = dict(CONFIG_MARKERS)
+    out['config_pixelComputerControlAgents'] = array('Agents', [agent])
+    out['config_pixelComputerControlTargets'] = array('Targets', targets)
+    if policy.get('prototypeControl', False):
+        out['config_pixelComputerControlPrototypeAgents'] = array('PrototypeAgents', [agent])
+    if reference_display_address is not None:
+        out['config_pixelComputerControlReferenceDisplayAddress'] = ('    <string name="config_pixelComputerControl'
+            f'ReferenceDisplayAddress" translatable="false">{reference_display_address}</string>')
+    if locked_control:
+        out['config_pixelComputerControlLockedSessions'] = \
+            '    <bool name="config_pixelComputerControlLockedSessions">true</bool>'
+    return out
+
+
+def verify_integrated_config(integrated, post_sha256, policy, policy_sha256, bound_policy_sha256,
+        reference_display_address=None, locked_control=False):
+    """Errors (empty when accepted) for an integrated config.xml. Accepted only when the policy receipt's sha256 equals
+    the one bound for this tree outside this contract, each of the five elements is exactly the text apply-os-changes.py
+    writes from those inputs, and putting exactly those texts back to their markers gives the post-image. Nothing else
+    is normalised: any other difference, a missing input or a missing binding refuses."""
+    errors = []
+    if not bound_policy_sha256 or policy is None or policy_sha256 != bound_policy_sha256:
+        return ['the policy receipt is missing or not the one bound for this tree']
+    try:
+        expected = expected_config_elements(policy, reference_display_address, locked_control)
+    except (KeyError, TypeError, ValueError) as error:
+        return [f'policy inputs refused: {error}']
+    try:
+        text = integrated.decode('utf-8')
+    except UnicodeDecodeError:
+        return ['config.xml is not UTF-8']
+    for name, wanted in expected.items():
+        # The element's opening must appear exactly once, and exactly as the expected text.
+        opening = re.findall(r'<(?:string-array|string|bool) name="%s"' % name, text)
+        if len(opening) != 1:
+            errors.append(f'{name}: {len(opening)} elements, expected exactly one')
+        elif text.count(wanted) != 1:
+            errors.append(f'{name}: not the exact text apply-os-changes.py writes from the bound inputs')
         else:
-            pattern = r'    <bool name="%s">(?:true|false)</bool>' % name
-        found = re.findall(pattern, text)
-        if len(found) != 1:
-            raise ValueError(f'{name}: expected exactly one element, found {len(found)}')
-        text = re.sub(pattern, lambda m: marker, text)
-    return text
+            text = text.replace(wanted, CONFIG_MARKERS[name])
+    if not errors and sha256(text.encode('utf-8')) != post_sha256:
+        errors.append('config.xml differs from the post-image outside the five policy elements')
+    return errors
 
 
 def sha256(data):
@@ -146,7 +204,7 @@ def overlays():
 
 
 def apply_in_scratch(pre, patches):
-    """{path: bytes or None} -> {path: bytes} after applying the patches in order with git apply."""
+    """({path: bytes}, {path: chain}) after applying the patches in order with git apply to {path: bytes or None}."""
     tree = Path(tempfile.mkdtemp(prefix='l3-contract-'))
     try:
         for path, data in pre.items():
@@ -170,10 +228,15 @@ def apply_in_scratch(pre, patches):
                 else:
                     base = 'different'
                 chain[f].append({'patch': patch, 'before': before[f], 'after': after, 'index': lines, 'base': base})
-        apply_in_scratch.chain = chain
-        return {path: (tree/path).read_bytes() for path in pre}
+        return {path: (tree/path).read_bytes() for path in pre}, chain
     finally:
         shutil.rmtree(tree, True)
+
+
+def fixture_path(project, path):
+    if project == 'packages/apps/Launcher3':
+        return LAUNCHER3_FIXTURES/Path(path).name
+    return FIXTURES/project/path
 
 
 def fetch(repo, revision, path):
@@ -187,17 +250,36 @@ def build():
     projects = []
     for path, repo, patches in PROJECTS:
         files = touched(patches)
-        pre = {f: None if meta['new'] else fetch(repo, revisions[path], f) for f, meta in files.items()}
-        post = apply_in_scratch(pre, patches)
-        rows = []
+        pre = {}
         for f, meta in files.items():
+            if meta['new']:
+                pre[f] = None
+                continue
+            pre[f] = fetch(repo, revisions[path], f)
+            target = fixture_path(path, f)
+            if path == 'packages/apps/Launcher3':
+                if not target.exists() or target.read_bytes() != pre[f]:
+                    raise SystemExit(f'{target}: the Launcher3 fixture is not the pinned file')
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(pre[f])
+        post, chain = apply_in_scratch(pre, patches)
+        rows = []
+        for f in files:
             row = {'path': f, 'pre': None if pre[f] is None else {'sha256': sha256(pre[f]), 'gitBlob': git_blob(pre[f])},
-                'post': {'sha256': sha256(post[f]), 'gitBlob': git_blob(post[f])},
-                'chain': apply_in_scratch.chain[f]}
+                'post': {'sha256': sha256(post[f]), 'gitBlob': git_blob(post[f])}, 'chain': chain[f]}
             if path == 'frameworks/base' and f == CONFIG:
-                row['integrationRewrite'] = {'by': 'scripts/apply-os-changes.py (background policy)',
-                    'compare': 'normalize_config(integrated bytes) must equal post',
-                    'elements': [name for _, name, _ in CONFIG_MARKERS]}
+                row['integrationRewrite'] = {
+                    'by': 'scripts/apply-os-changes.py, the `if policy:` block, after patching',
+                    'elements': list(CONFIG_MARKERS),
+                    'generatingInputs': ['the background policy receipt (agent, targets, prototypeControl), whose '
+                        'sha256 must equal the one bound for that tree outside this contract',
+                        '--reference-display-address (absent unless given)', '--locked-control (false unless given)'],
+                    'compare': 'scripts/launcher3-compile-contract.py verify_integrated_config: each element must be '
+                        'exactly the text the patcher writes from those inputs, and only those texts are put back to '
+                        'their markers before comparing with post; a missing input or binding, or any other '
+                        'difference, refuses',
+                }
             rows.append(row)
         projects.append({'path': path, 'repo': f'GrapheneOS/{repo}', 'revision': revisions[path],
             'patches': [{'name': p, 'sha256': sha256((ROOT/'os/patches'/p).read_bytes())} for p in patches],
@@ -209,19 +291,29 @@ def build():
         'target': 'Launcher3QuickStepLib',
         'proves': 'the patched handlers and overlays type-check and compile on the real classpath, plus the '
             'generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime.',
+        'provenance': 'every hash here is an expected value derived from pinned public sources and the committed '
+            'patches; an adapter compares current bytes with them and never records current bytes as provenance',
+        'candidatePatches': 'frameworks/base and build/release in apply-os-changes.py --background-policy order; '
+            'Launcher3 adds rose-edge-launcher3.patch, which apply-os-changes.py does not register yet, so a tree '
+            'integrated by the current patcher is a mixed state for this contract and is refused',
         'branches': {
-            'verifyIntegrated': 'every affected file equals post (config.xml via integrationRewrite), every required '
-                'overlay is present with its sha256, no patch is applied again',
-            'reconstruct': 'every affected file equals pre (sha256 and gitBlob at revision), new files are absent, '
-                'patches are applied in order and must give exactly post; required overlays are then copied',
-            'otherwise': 'refuse: mixed pre/post, unknown hash, missing file or overlay. Never reset or trust a snapshot.',
+            'verifyIntegrated': 'every affected file equals post (config.xml only through integrationRewrite with its '
+                'bound inputs), every required overlay is present with its sha256, no patch is applied again',
+            'reconstruct': 'every affected file equals pre (sha256 and gitBlob at revision), new files and every '
+                'overlay target are absent beforehand, patches are applied in order and must give exactly post; '
+                'required overlays are then copied',
+            'otherwise': 'refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree '
+                'integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed '
+                'by applying rose-edge-launcher3.patch alone. Never reset or trust a snapshot.',
         },
         'projects': projects,
         'overlays': overlays(),
-        'unaffected': 'every other project the library or lunch needs must be byte-identical to its pinned revision; '
-            'that is Infra provenance, not this contract',
-        'notInputs': ['packages/apps/PixelBackgroundControl and Agent.apk', 'policy receipt', 'build/make patches',
-            'packages/apps/Updater', 'packages/modules/Permission', 'preinstall APKs',
+        'unaffected': 'inside the three projects, every path not listed in files or overlays must equal the pinned '
+            'revision\'s tree, and any extra file is refused; every other project the library or lunch needs must be '
+            'byte-identical to its pinned revision (Infra provenance, not this contract)',
+        'notInputs': ['packages/apps/PixelBackgroundControl and Agent.apk', 'the policy receipt in reconstruct (only '
+            'verifyIntegrated needs it, bound, to check config.xml)', 'build/make patches', 'packages/apps/Updater',
+            'packages/modules/Permission', 'preinstall APKs',
             'frameworks/base overlays (WindowManager-Shell, SystemUI-core: not on the library classpath)'],
         'outputsToBind': [
             'Soong source and resource lists of Launcher3QuickStepLib contain every Launcher3 post-image and '
@@ -238,19 +330,21 @@ def build():
                 'quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)'],
             'change': 'ActivityOptions.makeCustomAnimation(mContext, 0, 0).setShareIdentityEnabled(true)',
             'appliesWithEdgeOff': True,
-            'consumer': "Home replies to gesture_nav_contract_v1 only through its fail-closed caller gate "
-                "(#410 6594409930 section 4); no dedicated exported entry",
+            'consumer': "requirement on Home, not implemented or tested in this repository yet: reply to "
+                "gesture_nav_contract_v1 only through a fail-closed caller gate (#410 6594409930 section 4); no "
+                "dedicated exported entry",
+            'consumerImplemented': False,
         },
     }
 
 
 def check(manifest):
-    """Everything that can be checked offline against the committed os/ bundle."""
+    """Recompute everything from the committed fixtures and patches and compare with the manifest."""
     errors = []
     bound = [0, 0]
     revisions = pins()
     if [p['path'] for p in manifest['projects']] != [p for p, _, _ in PROJECTS]:
-        errors.append('projects differ from PROJECTS')
+        return ['projects differ from PROJECTS']
     for project, (path, repo, patches) in zip(manifest['projects'], PROJECTS):
         if project['revision'] != revisions[path]:
             errors.append(f'{path}: revision {project["revision"]} is not the pinned {revisions[path]}')
@@ -260,52 +354,33 @@ def check(manifest):
         files = touched(patches)
         if [r['path'] for r in project['files']] != list(files):
             errors.append(f'{path}: affected files differ from the patch headers')
-        parsed = {p: patch_index(p) for p in patches}
+            continue
+        pre = {}
         for row in project['files']:
-            if (row['pre'] is None) != files.get(row['path'], {}).get('new', False):
-                errors.append(f'{path}/{row["path"]}: new-file state disagrees with the patch')
-            chain = row['chain']
-            steps = [p for p in patches if row['path'] in parsed[p]]
-            if [c['patch'] for c in chain] != steps:
-                errors.append(f'{path}/{row["path"]}: chain does not follow the patch order')
+            if row['pre'] is None:
+                if not files[row['path']]['new']:
+                    errors.append(f'{path}/{row["path"]}: absent pre-image but the patch does not create it')
+                pre[row['path']] = None
                 continue
-            if chain[0]['before'] != (row['pre'] and row['pre']['gitBlob']) or chain[-1]['after'] != row['post']['gitBlob']:
-                errors.append(f'{path}/{row["path"]}: chain ends are not the pre- and post-images')
-            for c, nxt in zip(chain, chain[1:]):
-                if c['after'] != nxt['before']:
-                    errors.append(f'{path}/{row["path"]}: chain is broken after {c["patch"]}')
-            for c in chain:
-                lines = parsed[c['patch']][row['path']]
-                if c['index'] != lines:
-                    errors.append(f'{path}/{row["path"]}: {c["patch"]} index lines changed')
-                elif c['base'] == 'exact':
-                    bound[0] += 1
-                    pre_ok = c['before'] is None and set(lines[0]) == {'0'} or c['before'] and c['before'].startswith(lines[0])
-                    if not (pre_ok and c['after'].startswith(lines[1])):
-                        errors.append(f'{path}/{row["path"]}: {c["patch"]} does not produce the blob its index records')
-                elif c['base'] == 'different':
-                    bound[1] += 1
-                    if c['before'] and c['before'].startswith(lines[0]):
-                        errors.append(f'{path}/{row["path"]}: {c["patch"]} is marked different-base but matches')
-                elif lines is not None:
-                    errors.append(f'{path}/{row["path"]}: {c["patch"]} has index lines but is marked noIndex')
-    launcher = manifest['projects'][1]
-    pre = {}
-    for row in launcher['files']:
-        fixture = FIXTURES/Path(row['path']).name
-        if row['pre'] is None:
-            pre[row['path']] = None
-        elif fixture.exists() and sha256(fixture.read_bytes()) == row['pre']['sha256']:
-            pre[row['path']] = fixture.read_bytes()
-        else:
-            errors.append(f'Launcher3 {row["path"]}: no pinned fixture with the contract pre-image')
-    if len(pre) == len(launcher['files']):
-        post = apply_in_scratch(pre, PROJECTS[1][2])
-        for row in launcher['files']:
-            if sha256(post[row['path']]) != row['post']['sha256']:
-                errors.append(f'Launcher3 {row["path"]}: post-image differs from the contract')
-            if row['pre'] is not None and git_blob(pre[row['path']]) != row['pre']['gitBlob']:
-                errors.append(f'Launcher3 {row["path"]}: git blob differs')
+            fixture = fixture_path(path, row['path'])
+            data = fixture.read_bytes() if fixture.exists() else None
+            if data is None or sha256(data) != row['pre']['sha256'] or git_blob(data) != row['pre']['gitBlob']:
+                errors.append(f'{path}/{row["path"]}: no committed fixture with the contract pre-image')
+            pre[row['path']] = data
+        if any(row['pre'] is not None and pre[row['path']] is None for row in project['files']):
+            continue
+        post, chain = apply_in_scratch(pre, patches)
+        for row in project['files']:
+            if sha256(post[row['path']]) != row['post']['sha256'] or git_blob(post[row['path']]) != row['post']['gitBlob']:
+                errors.append(f'{path}/{row["path"]}: post-image differs from the contract')
+            if row['chain'] != chain[row['path']]:
+                errors.append(f'{path}/{row["path"]}: blob chain differs from the contract')
+            for c in chain[row['path']]:
+                bound[0 if c['base'] == 'exact' else 1] += c['base'] in ('exact', 'different')
+            if ('integrationRewrite' in row) != (path == 'frameworks/base' and row['path'] == CONFIG):
+                errors.append(f'{path}/{row["path"]}: only frameworks/base config.xml has an integration rewrite')
+            elif 'integrationRewrite' in row and row['integrationRewrite']['elements'] != list(CONFIG_MARKERS):
+                errors.append('config.xml: the rewritten elements are not exactly the five')
     if manifest['overlays'] != overlays():
         errors.append('overlays changed; regenerate with --write')
     check.bound = tuple(bound)
@@ -325,9 +400,9 @@ def main():
     if errors:
         raise SystemExit(1)
     total = sum(len(p['files']) for p in json.loads(MANIFEST.read_text())['projects'])
-    print(f'{MANIFEST.relative_to(ROOT)} matches the committed os/ bundle (sha256 {sha256(MANIFEST.read_bytes())}); '
-        f'{check.bound[0]} patch steps match the blobs their own index lines record; {check.bound[1]} were authored on a '
-        f'different base and apply by context (recorded per file)')
+    print(f'{MANIFEST.relative_to(ROOT)} matches the committed bundle (sha256 {sha256(MANIFEST.read_bytes())}): {total} '
+        f'files recomputed from pinned fixtures; {check.bound[0]} patch steps match the blobs their own index lines '
+        f'record; {check.bound[1]} were authored on a different base and apply by context (recorded per file)')
 
 
 if __name__ == '__main__':
