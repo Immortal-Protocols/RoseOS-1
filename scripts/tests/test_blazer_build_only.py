@@ -1765,7 +1765,10 @@ class InspectTest(Fixture):
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 code, touched, reads = self.touched_during(lambda: bb.main(argv))
             self.assertEqual(code, 0)
-            return json.loads(out.getvalue()), sorted({(n, p) for n, p in touched if not p.startswith(str(ROOT) + '/')}), reads
+            # argparse's gettext probes the interpreter's message catalogues (*/LC_MESSAGES/*.mo) when a locale is set;
+            # those are the interpreter's own lookups, never a recipe or host path.
+            return json.loads(out.getvalue()), sorted({(n, p) for n, p in touched if not p.startswith(str(ROOT) + '/')
+                                                       and not ('/LC_MESSAGES/' in p and p.endswith('.mo'))}), reads
         report, touched, reads = outside(['inspect-git-set', '--host', 'immortal-os-builder', '--target-set',
                                           'adevtool-projects-gitdir'])
         target = '/home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git'
