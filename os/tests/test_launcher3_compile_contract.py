@@ -23,12 +23,12 @@ EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
 
 class Launcher3CompileContractTest(unittest.TestCase):
     """#410: os/compile-contracts/launcher3-quickstep-lib.json, the inputs for Release's compile-only adapter
-    (verify-integrated or reconstruct; anything else refused). Every pre-image, post-image and blob chain is recomputed
+    (verify-integrated, reconstruct, or the proposed verify-base-apply-candidate; anything else refused). Every pre-image, post-image and blob chain is recomputed
     offline from committed pinned fixtures and patches; config.xml is accepted only with its bound generating inputs."""
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '84282f95989151bc290f13ef225440bfc6cb2332d991e8c05b91cf8f6c889c65'
+    AGREED_SHA256 = 'cdf4c3d5038dd92cc7d0137fab76b50bbce086c4809171a012fc08da814a727e'
 
     def contract(self):
         import importlib.util
@@ -109,8 +109,10 @@ class Launcher3CompileContractTest(unittest.TestCase):
                     f'{path}: the switcher patch never touches the edge files')
             else:
                 self.assertEqual(base_files[path], post, f'{path}: outside the delta the base is already final')
-        candidate_overlays = {o['target']: o['sha256'] for o in manifest['overlays']}
-        base_overlays = {o['target']: o['sha256'] for o in base['overlays']}
+        candidate_overlays = {o['target']: o.get('sha256') for o in manifest['overlays']}
+        base_overlays = {o['target']: o.get('sha256') for o in base['overlays']}
+        for o in manifest['overlays'] + base['overlays']:
+            self.assertEqual('sha256' in o, o['role'] == 'required', f'{o["target"]}: hashed exactly when required')
         for o in delta['overlays']:
             self.assertEqual(candidate_overlays[o['target']], o['after'])
             self.assertEqual(base_overlays.get(o['target']), o['before'])
@@ -166,7 +168,10 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertEqual([(p['project'], p['name']) for p in content['patches']],
             [(p['path'], x['name']) for p in manifest['base']['projects'] for x in p['patches']])
         self.assertNotIn('rose-edge-launcher3.patch', [p['name'] for p in content['patches']])
-        self.assertEqual({o['target'] for o in content['overlays']}, {o['target'] for o in manifest['base']['overlays']})
+        self.assertEqual({o['target'] for o in content['overlays']},
+            {o['target'] for o in manifest['base']['overlays'] if o['role'] == 'required'})
+        self.assertEqual(set(content['notAnInputOverlays']),
+            {o['target'] for o in manifest['base']['overlays'] if o['role'] == 'notAnInput'})
         self.assertNotIn('commit', ' '.join(manifest['base']['match'].split()[:3]), 'bound by content, not a commit')
 
     def test_the_delta_application_and_branch_conditions_are_exact(self):

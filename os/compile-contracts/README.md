@@ -81,8 +81,11 @@ pinned fixtures in `os/tests/fixtures/launcher3-compile-contract/`, kept byte fo
 `index` lines confirm the steps that carry one. Two hunks of `locked-control-frameworks-base.patch` were authored on a
 different base and apply by context; that is recorded per file.
 
-`--write` regenerates the manifest and fixtures from GrapheneOS's public sources at the pinned SHAs, without
-credentials. `os/tests/test_launcher3_compile_contract.py` pins the agreed manifest sha256, so any change needs re-agreement with
+`--write` regenerates the manifest. It refetches the pinned pre-images and tree listings from GrapheneOS's public sources
+at the pinned SHAs, without credentials. It leaves the candidate bundle as committed, and it keeps the recorded base
+("before") of the candidate's overlays. It refuses when that base is unknown and os/ already holds the candidate's
+bytes. Overlays that are not inputs of the library are listed by target only, so edits to their contents don't touch the
+contract; adding or removing one does. `os/tests/test_launcher3_compile_contract.py` pins the agreed manifest sha256, so any change needs re-agreement with
 Release.
 
 `flagEvidence` names, for each flag the adapter reports, the `aconfig_declarations` module that owns it:

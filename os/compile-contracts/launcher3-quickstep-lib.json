@@ -7,14 +7,14 @@
  "provenance": "every hash here is an expected value derived from pinned public sources and the committed patches; an adapter compares current bytes with them and never records current bytes as provenance",
  "candidatePatches": "frameworks/base and build/release in apply-os-changes.py --background-policy order; Launcher3 adds rose-edge-launcher3.patch (candidateDelta), which apply-os-changes.py does not register, so a tree integrated by any patcher today is not at these final images",
  "branches": {
-  "verifyIntegrated": "every affected file equals post (config.xml only through integrationRewrite with its bound inputs), every required overlay is present with its sha256, no patch is applied again",
+  "verifyIntegrated": "every affected file equals post (config.xml only through integrationRewrite with its bound inputs), every required overlay is present with its sha256 (notAnInput overlays may be present with any bytes), every unlisted path matches its treePin, no extra path, no patch is applied again",
   "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files and every overlay target are absent beforehand, patches are applied in order and must give exactly post; required overlays are then copied",
   "verifyBaseApplyCandidate": {
    "status": "proposal, stated as data only: Release implements it, and any run needs separate authority",
    "conditions": [
     {
      "id": "base-exact",
-     "text": "the integrating bundle matches base.bundleContent; every affected file of every project equals base.projects post (config.xml only through integrationRewrite with its bound inputs); every base overlay is present with its sha256; every unlisted path matches the project treePin; no extra path"
+     "text": "the integrating bundle matches base.bundleContent; every affected file of every project equals base.projects post (config.xml only through integrationRewrite with its bound inputs); every required base overlay is present with its sha256 (notAnInput overlays may be present with any bytes); every unlisted path matches the project treePin; no extra path"
     },
     {
      "id": "delta-preimages",
@@ -1211,37 +1211,30 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-   "sha256": "488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c",
    "role": "notAnInput"
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
-   "sha256": "051555bfdecb0d10a21461ec823368b229e0dccbe0f770c84627816957f52391",
    "role": "notAnInput"
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-   "sha256": "f24014f09bb88a4d33e9f7cc9cec63317fb20ae28d9e50a376f6b3b28e84c0ca",
    "role": "notAnInput"
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
-   "sha256": "a75f22cfa635d3e0b3d7d3ba16bf78c9c778ce87924af2d8bf058157c3fc5bdc",
    "role": "notAnInput"
   },
   {
    "target": "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
-   "sha256": "bb55a5ca5c2042335b3991af27c4d0705d0ef41cac6164ac737fd8f2a1e85207",
    "role": "notAnInput"
   },
   {
    "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
-   "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65",
    "role": "notAnInput"
   },
   {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
-   "sha256": "d13a2d5b95c201d140fdb81c9182dc6e8c8782d2411f9737490ce0781d01f4cc",
    "role": "notAnInput"
   },
   {
@@ -1364,34 +1357,6 @@
      "sha256": "bdaff12f1cd200b3793dabd32633de7489033e890be7c9fc6a055b1d6bf1811a"
     },
     {
-     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-     "sha256": "488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c"
-    },
-    {
-     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
-     "sha256": "051555bfdecb0d10a21461ec823368b229e0dccbe0f770c84627816957f52391"
-    },
-    {
-     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-     "sha256": "f24014f09bb88a4d33e9f7cc9cec63317fb20ae28d9e50a376f6b3b28e84c0ca"
-    },
-    {
-     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
-     "sha256": "a75f22cfa635d3e0b3d7d3ba16bf78c9c778ce87924af2d8bf058157c3fc5bdc"
-    },
-    {
-     "target": "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
-     "sha256": "bb55a5ca5c2042335b3991af27c4d0705d0ef41cac6164ac737fd8f2a1e85207"
-    },
-    {
-     "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
-     "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65"
-    },
-    {
-     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
-     "sha256": "d13a2d5b95c201d140fdb81c9182dc6e8c8782d2411f9737490ce0781d01f4cc"
-    },
-    {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
      "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea"
     },
@@ -1415,6 +1380,15 @@
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
      "sha256": "7d822296cb2c71c201052ea4e7658db81d851fca5e3e66e09484a5834b5104ee"
     }
+   ],
+   "notAnInputOverlays": [
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+    "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+    "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
    ]
   },
   "match": "the integrating bundle's source contents (the patches it applied to these projects and the overlays it copied into them, as Infra reports them) must equal bundleContent exactly; any other bundle does not match and refuses",
@@ -2559,37 +2533,30 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-    "sha256": "488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c",
     "role": "notAnInput"
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
-    "sha256": "051555bfdecb0d10a21461ec823368b229e0dccbe0f770c84627816957f52391",
     "role": "notAnInput"
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-    "sha256": "f24014f09bb88a4d33e9f7cc9cec63317fb20ae28d9e50a376f6b3b28e84c0ca",
     "role": "notAnInput"
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
-    "sha256": "a75f22cfa635d3e0b3d7d3ba16bf78c9c778ce87924af2d8bf058157c3fc5bdc",
     "role": "notAnInput"
    },
    {
     "target": "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
-    "sha256": "bb55a5ca5c2042335b3991af27c4d0705d0ef41cac6164ac737fd8f2a1e85207",
     "role": "notAnInput"
    },
    {
     "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
-    "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65",
     "role": "notAnInput"
    },
    {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
-    "sha256": "d13a2d5b95c201d140fdb81c9182dc6e8c8782d2411f9737490ce0781d01f4cc",
     "role": "notAnInput"
    },
    {

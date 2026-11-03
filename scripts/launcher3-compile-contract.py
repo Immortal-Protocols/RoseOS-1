@@ -9,25 +9,28 @@ blob chain between them, and it lists the overlays copied into those projects. I
 from pinned public sources and the committed patches; an adapter compares current bytes with them and never records
 the current bytes' hashes as provenance.
 
-The patches are those of this candidate: apply-os-changes.py's --background-policy order for frameworks/base and
-build/release, and for Launcher3 rose-switcher-launcher3.patch then rose-edge-launcher3.patch. apply-os-changes.py
-does not register rose-edge-launcher3.patch yet, so a tree it integrates today is a mixed state for this contract.
+The candidate is #440 (draft, unregistered, default-off). Its own inputs are inert copies in the fixtures; the base
+is what a bundle with the contents in base.bundleContent produces (Launcher3 with the switcher patch only). A tree
+integrated by today's patcher is therefore at base, not at the candidate's final images.
 
-The adapter takes exactly one of two branches and refuses anything else:
-- verifyIntegrated: every affected file already equals its post-image, every required overlay is present with its
-  hash, and no patch is applied again. config.xml is the one file the patcher rewrites afterwards: it is accepted only
-  through verify_integrated_config, which needs the separately bound generating inputs.
+The adapter takes exactly one of these branches, and refuses anything else:
+- verifyIntegrated: every affected file already equals its candidate post-image, every required overlay is present
+  with its hash, and no patch is applied again. config.xml is the one file the patcher rewrites afterwards: it is
+  accepted only by the integrationRewrite rule with its separately bound generating inputs. It refuses a tree at base.
 - reconstruct: every affected file equals its pinned pre-image (and its pinned git blob), new files are absent, and
-  the patches are applied in order to give exactly the post-images.
+  the patches are applied in order to give exactly the post-images. It refuses a tree at base.
+- verifyBaseApplyCandidate (a proposal stated as data; any run needs separate authority): the tree is exactly at base,
+  then the candidate delta is applied in an isolated copy only, and the result must be exactly the candidate.
 - Any other state (some files pre and some post, an unknown hash, a missing input or binding) is refused. Nothing is
   reset; no snapshot is trusted.
 
 Usage:
   scripts/launcher3-compile-contract.py          offline: recompute every pre-image, post-image and chain from the
                                                  committed fixtures and patches, and compare with the manifest
-  scripts/launcher3-compile-contract.py --write  regenerate it: fetches the pinned pre-images read-only from
-                                                 GrapheneOS's public GitHub at the pinned SHAs (no host, no
-                                                 credentials) into the fixtures, applies the patches in scratch
+  scripts/launcher3-compile-contract.py --write  regenerate the manifest: fetches the pinned pre-images and tree
+                                                 listings read-only from GrapheneOS's public GitHub at the pinned SHAs
+                                                 (no host, no credentials) into the fixtures, applies the patches in
+                                                 scratch; keeps the recorded base of the candidate's overlays
 """
 import argparse
 import gzip
@@ -229,8 +232,10 @@ def overlay_targets():
 
 
 def overlays():
-    return [{'target': t, 'sha256': sha256(data), 'role': 'required' if t.startswith(REQUIRED_OVERLAYS) else 'notAnInput'}
-        for t, data in overlay_targets().items()]
+    """Required overlays with their sha256; overlays that are not inputs of the library by target only, so their contents
+    can change without touching the contract (adding or removing one does change it)."""
+    return [{'target': t, 'sha256': sha256(data), 'role': 'required'} if t.startswith(REQUIRED_OVERLAYS)
+        else {'target': t, 'role': 'notAnInput'} for t, data in overlay_targets().items()]
 
 
 def apply_in_scratch(pre, patches):
@@ -536,7 +541,8 @@ def base_and_delta(projects, recorded_overlay_before=None):
         'bundleContent': {
             'patches': [{'project': p['path'], 'name': x['name'], 'sha256': x['sha256']} for p in base_projects
                 for x in p['patches']],
-            'overlays': [{'target': o['target'], 'sha256': o['sha256']} for o in base_overlays],
+            'overlays': [{'target': o['target'], 'sha256': o['sha256']} for o in base_overlays if o['role'] == 'required'],
+            'notAnInputOverlays': [o['target'] for o in base_overlays if o['role'] != 'required'],
         },
         'match': 'the integrating bundle\'s source contents (the patches it applied to these projects and the overlays '
             'it copied into them, as Infra reports them) must equal bundleContent exactly; any other bundle does not '
@@ -603,7 +609,16 @@ def build():
             'files': project_rows(path, patches, pre)})
     for project in projects:
         project['treePin'] = tree_pin(project['path'], project['revision'], roots[project['path']], excluded(project))
-    base, delta = base_and_delta(projects)
+    recorded = None
+    if MANIFEST.exists():
+        recorded = {o['target']: o['before'] for o in json.loads(MANIFEST.read_text()).get('candidateDelta', {})
+            .get('overlays', [])} or None
+    if recorded is None:
+        for f in bundle_files():
+            committed = ROOT/'os'/f
+            if f.startswith('overlays/') and committed.exists() and committed.read_bytes() == (BUNDLE/f).read_bytes():
+                raise SystemExit(f'os/{f} already holds the candidate bytes: its base is unknown; record it first')
+    base, delta = base_and_delta(projects, recorded)
     evidence, rules = evidence_rows(revisions, flag_evidence(revisions, True))
     return {
         'schemaVersion': 2,
@@ -619,7 +634,8 @@ def build():
             'a tree integrated by any patcher today is not at these final images',
         'branches': {
             'verifyIntegrated': 'every affected file equals post (config.xml only through integrationRewrite with its '
-                'bound inputs), every required overlay is present with its sha256, no patch is applied again',
+                'bound inputs), every required overlay is present with its sha256 (notAnInput overlays may be present '
+                'with any bytes), every unlisted path matches its treePin, no extra path, no patch is applied again',
             'reconstruct': 'every affected file equals pre (sha256 and gitBlob at revision), new files and every '
                 'overlay target are absent beforehand, patches are applied in order and must give exactly post; '
                 'required overlays are then copied',
@@ -628,8 +644,8 @@ def build():
                 'conditions': [
                     {'id': 'base-exact', 'text': 'the integrating bundle matches base.bundleContent; every affected file '
                         'of every project equals base.projects post (config.xml only through integrationRewrite with its '
-                        'bound inputs); every base overlay is present with its sha256; every unlisted path matches the '
-                        'project treePin; no extra path'},
+                        'bound inputs); every required base overlay is present with its sha256 (notAnInput overlays may be '
+                        'present with any bytes); every unlisted path matches the project treePin; no extra path'},
                     {'id': 'delta-preimages', 'text': 'every candidateDelta file and overlay is at its before image, or '
                         'absent where before is null; anything at after, or neither, refuses'},
                     {'id': 'isolated-apply', 'text': 'in an isolated copy only, each candidateDelta patch (sha256-checked '
