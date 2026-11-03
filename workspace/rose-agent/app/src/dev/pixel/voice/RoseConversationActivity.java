@@ -29,7 +29,7 @@ public final class RoseConversationActivity extends Activity {
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";boolean shownTaskActive;
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
- volatile TaskControl.ControllerRead ctl=TaskControl.ControllerRead.PENDING_READ;volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
+ volatile TaskControl.ControllerRead ctl=TaskControl.ControllerRead.PENDING_READ;volatile long resumedAt;volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
  String stopPendingFor,stopMessage="";boolean stopInFlight;
  int headTop;
  int noticeSerial;
@@ -148,7 +148,7 @@ public final class RoseConversationActivity extends Activity {
 
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
- @Override protected void onResume(){super.onResume();resumed=true;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
+ @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
  @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
@@ -174,9 +174,13 @@ public final class RoseConversationActivity extends Activity {
   String cap=OxbloodRose.caption(state,visual);if(!cap.contentEquals(caption.getText()))caption.setText(cap);
   // The pearl is the screen's spoken state (the caption is its visible twin, hidden so it isn't read twice).
   String said=RosePresenceModel.describe(visual);if(!said.contentEquals(pearlView.getContentDescription()==null?"":pearlView.getContentDescription()))pearlView.setContentDescription(said);
-  // Working only while Rose's session is authoritatively running (reported exactly ready; #410 rose.workButton.working),
-  // the same definition as Background Work's running edge: never while launching, waiting or holding a failed close.
-  workGlyph.set(ctl.failure==TaskControl.ReadFailure.NONE&&CurrentApps.sessionRunning(ctl.status),reducedMotion());
+  // Working while at least one of Rose's sessions, in any slot, is authoritatively running (status exactly ready; #410
+  // rose.workButton.working), the same definition as Background Work's running edge, from a read begun since this
+  // screen last resumed and still current: never while launching, waiting or holding a failed close, never from a
+  // stale or failed read.
+  // Dark until a read begun since this resume lands, and again once the newest read is older than WORK_MAX_AGE_MS:
+  // the button never repeats a state from before a pause, lock or user switch, nor holds one while reads stall.
+  workGlyph.set(ctl.working(resumedAt,SystemClock.uptimeMillis()),reducedMotion());
   renderTask(s);
   if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
  }
@@ -222,6 +226,7 @@ public final class RoseConversationActivity extends Activity {
   * validated status (idle = no workspace running) or a fixed failure category (absent provider, denied, malformed
   * answer, other failure). No exception text is kept. Read-only: never starts a task or workspace. Off the UI thread. */
  TaskControl.ControllerRead controllerState(){
+  final long startedAt=SystemClock.uptimeMillis();final java.util.List<String[]> slots=new java.util.ArrayList<>();final boolean[] summarized={false};
   return TaskControl.readController(()->{
    android.content.ContentProviderClient client=getContentResolver().acquireUnstableContentProviderClient(CONTROLLER_AUTHORITY);
    if(client==null)throw new TaskControl.NoProvider();
@@ -232,9 +237,13 @@ public final class RoseConversationActivity extends Activity {
     // The overview card names the workspace's app; targetPackage is optional and never makes the read malformed.
     Object pkg=c.opt("targetPackage");TaskControl.ControllerRead r=TaskControl.ControllerRead.of(f[0],f[1],f[2]);
     ctlPackage=new String[]{r.key(),pkg instanceof String?(String)pkg:""};
+    // The same reply's routed sessions summary (every slot, read together by the controller): only each slot's session
+    // id and status, for the work button's "any session ready". Absent on an older single-session controller.
+    org.json.JSONArray a=c.optJSONArray("sessions");
+    if(a!=null){summarized[0]=true;for(int i=0;i<a.length()&&i<8;i++){org.json.JSONObject x=a.optJSONObject(i);if(x!=null)slots.add(new String[]{jsonString(x,"sessionId"),jsonString(x,"status")});}}
     return f;
    }finally{client.close();}
-  });
+  }).withSessions(summarized[0]?slots:null,startedAt);
  }
  /** A get_state field as read: null when absent or JSON null; any non-string value makes the answer malformed. */
  static String stateField(org.json.JSONObject c,String key)throws TaskControl.InvalidReply{

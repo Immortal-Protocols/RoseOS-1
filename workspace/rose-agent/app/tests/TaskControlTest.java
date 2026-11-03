@@ -152,6 +152,61 @@ public final class TaskControlTest {
         expect(TaskControl.settled("t1", "t1", "completed"), "Finished first: nothing left to stop");
         expect(TaskControl.settled("t1", "t2", "running"), "Selected task replaced: stop waiting, never retarget");
 
+        // #410 work button: lit when ANY session in the same get_state reply's routed summary is exactly ready (not just
+        // slot 0), only from a successful read started since the screen last resumed.
+        long resumed = 1000;
+        TaskControl.ControllerRead idle0 = TaskControl.ControllerRead.of("idle", null, null);
+        java.util.List<String[]> secondOnly = java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-1", "ready"});
+        expect(idle0.withSessions(secondOnly, 1200).working(resumed, 2300), "second-slot-only ready lights the button");
+        expect(TaskControl.ControllerRead.of("stopped", "s-0", "t").withSessions(secondOnly, 1200).working(resumed, 2300), "slot 0 ended, slot 1 ready: lit");
+        java.util.List<String[]> reordered = java.util.Arrays.asList(new String[]{"s-1", "ready"}, new String[]{null, "idle"});
+        expect(idle0.withSessions(reordered, 1200).working(resumed, 2300), "order does not matter");
+        expect(!idle0.withSessions(secondOnly, 1200).sessionId.equals("s-1") && idle0.withSessions(secondOnly, 1200).status.equals("idle"), "the read's own slot fields are unchanged (Watch/Stop keep slot 0)");
+        expect(idle0.withSessions(secondOnly, 1200).key().equals(idle0.key()), "the task key is unchanged by the summary");
+        for (String st : new String[]{"starting", "scheduled", "consent_required", "launching", "blocked", "cleanup_failed", "stopped", "closed", "failed", "idle", "Ready", "READY", "", null}) {
+            java.util.List<String[]> one = java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-1", st});
+            expect(!idle0.withSessions(one, 1200).working(resumed, 2300), "slot 1 " + st + ": not lit");
+        }
+        TaskControl.ControllerRead ready0 = TaskControl.ControllerRead.of("ready", "s-0", "t");
+        expect(ready0.withSessions(null, 1200).working(resumed, 2300), "older controller (no summary): slot 0 ready still lights");
+        expect(ready0.withSessions(java.util.Arrays.asList(new String[]{"s-0", "ready"}, new String[]{null, "idle"}), 1200).working(resumed, 2300), "slot 0 ready");
+        expect(!TaskControl.ControllerRead.of("launching", "s-0", "t").withSessions(null, 1200).working(resumed, 2300), "slot 0 launching, no summary: dark");
+        // Transitions: ready -> ended / blocked / cleanup_failed clears on the next read; replacement by another session.
+        for (String next : new String[]{"stopped", "blocked", "cleanup_failed", "closed"})
+            expect(!idle0.withSessions(java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-1", next}), 2200).working(resumed, 2300), "ready -> " + next + ": cleared");
+        expect(idle0.withSessions(java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-1b", "ready"}), 2200).working(resumed, 2300), "replaced by a new ready session: lit");
+        expect(!idle0.withSessions(java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-1b", "starting"}), 2200).working(resumed, 2300), "replaced by a starting session: dark");
+        // Malformed or private-free entries never light; only id+status are carried.
+        expect(!idle0.withSessions(java.util.Arrays.asList(new String[]{null, "ready"}, new String[]{"", "ready"}, new String[]{"null", "ready"}), 1200).working(resumed, 2300), "ready without a session id: not authoritative");
+        expect(!idle0.withSessions(java.util.Arrays.asList((String[]) null, new String[]{"s-1"}), 1200).working(resumed, 2300), "malformed entries ignored");
+        expect(!idle0.withSessions(java.util.Collections.<String[]>emptyList(), 1200).working(resumed, 2300), "empty summary, idle slot 0: dark");
+        // Failed / pending reads and lifecycle: never lit, whatever the summary.
+        for (TaskControl.ReadFailure f : TaskControl.ReadFailure.values()) if (f != TaskControl.ReadFailure.NONE)
+            expect(!TaskControl.ControllerRead.failed(f).withSessions(secondOnly, 1200).working(resumed, 2300), f + ": never lit");
+        expect(!TaskControl.ControllerRead.PENDING_READ.working(0, 2300), "pending: dark");
+        expect(!TaskControl.ControllerRead.of("error", null, null).withSessions(secondOnly, 1200).working(resumed, 2300), "provider error: dark");
+        expect(!idle0.withSessions(secondOnly, 900).working(resumed, 2300), "a read started before the screen resumed never lights after it");
+        expect(idle0.withSessions(secondOnly, 1000).working(resumed, 2300), "a read started at resume counts");
+        expect(!ready0.working(resumed, 2300), "an unstamped read never lights");
+        expect(!idle0.withSessions(secondOnly, 1200).working(1300, 2300), "pause/resume after the read: dark until the next read");
+        // Retention bound (Chief review): never a held last-shown state, never stale evidence presented as current.
+        long max = TaskControl.WORK_MAX_AGE_MS;
+        TaskControl.ControllerRead beforePause = idle0.withSessions(secondOnly, 500);
+        expect(beforePause.working(400, 600), "while that resume lasts, the read counts");
+        for (long now : new long[]{resumed, resumed + 1, resumed + 150, resumed + 2000})
+            expect(!beforePause.working(resumed, now), "after a pause/lock/user switch, a read from before it never lights (now+" + (now - resumed) + ")");
+        expect(!TaskControl.ControllerRead.PENDING_READ.working(0, 0) && !TaskControl.ControllerRead.PENDING_READ.working(resumed, resumed + 100), "pending: dark");
+        TaskControl.ControllerRead fresh = idle0.withSessions(secondOnly, resumed + 10);
+        expect(fresh.working(resumed, resumed + 10) && fresh.working(resumed, resumed + 10 + max), "fresh ready read lights, up to the max age");
+        expect(!fresh.working(resumed, resumed + 11 + max), "no newer read within the max age (a hung call): dark");
+        expect(!fresh.working(resumed, resumed + 10 + 60_000), "never indefinitely");
+        TaskControl.ControllerRead freshEnded = idle0.withSessions(java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-1", "stopped"}), resumed + 1200);
+        expect(!freshEnded.working(resumed, resumed + 1200), "the next read decides at once: ended clears");
+        TaskControl.ControllerRead freshFailed = TaskControl.ControllerRead.failed(TaskControl.ReadFailure.READ_FAILED).withSessions(secondOnly, resumed + 1200);
+        expect(!freshFailed.working(resumed, resumed + 1200) && freshFailed.readAt == resumed + 1200, "a failed read (provider gone, disconnected, denied) is stamped and dark at once");
+        expect(!TaskControl.ControllerRead.failed(TaskControl.ReadFailure.NO_PROVIDER).withSessions(null, resumed + 5).working(resumed, resumed + 5), "no provider: dark");
+        TaskControl.ControllerRead replaced = idle0.withSessions(java.util.Arrays.asList(new String[]{null, "idle"}, new String[]{"s-2", "consent_required"}), resumed + 1200);
+        expect(!replaced.working(resumed, resumed + 1200), "session replaced by one not yet ready: dark at once");
         System.out.println("TaskControlTest: " + checks + " checks passed");
     }
 }
