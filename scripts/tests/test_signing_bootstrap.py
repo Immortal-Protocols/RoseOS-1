@@ -522,7 +522,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", JOBS['cleanup'])
         self.assertIn('  group: os-release-frankel\n', WORKFLOW)
         self.assertIn("      - name: Signing-bootstrap guard\n        if: inputs.mode == 'signing-bootstrap'\n", JOBS['guard'])
-        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1]', WORKFLOW)
+        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1, pro-blazer-factory-v1]', WORKFLOW)
         self.assertIn('        options: [frankel]\n', WORKFLOW)  # no device is admitted
 
     def guard_script(self):
@@ -1285,13 +1285,14 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertTrue(any(f.startswith('profile-unbound') for f in sb.guard(env, unbound, NOW)))
         self.assertTrue(sb.guard(dict(env, ROSE_DEVICE='rango'), unbound, NOW))  # the dispatch shape is unchanged
 
-    def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
+    def test_checked_in_profile_is_ready_and_an_unbound_copy_refuses_before_anything(self):
         unbound = copy.deepcopy(PROFILES)
         unbound['profiles']['fold-rango-factory-v1']['status'] = 'unbound'
         self.assertEqual(sb.readiness('fold-rango-factory-v1', unbound, NOW)[0][0], 'profile-unbound')
-        if PROFILES['profiles']['fold-rango-factory-v1']['status'] != 'resource-bound':
-            self.assertEqual(sb.readiness('fold-rango-factory-v1', PROFILES, NOW)[0][0], 'profile-unbound')
         profile = PROFILES['profiles']['fold-rango-factory-v1']
+        # Committed: resource-bound, nothing missing, access checked live (no recorded expiry, so NOW does not matter).
+        self.assertEqual((profile['status'], profile['missing']), ('resource-bound', []))
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', PROFILES, NOW), [])
         self.assertEqual((profile['principal'], profile['archive']['format']), ('roseos-factory-images-rango-v1', 'openssh-ed25519'))
         self.assertEqual(profile['secrets'], {'keys': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1',
                                               'passphrase': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1'})
@@ -1501,12 +1502,57 @@ class FactoryProfileValidation(unittest.TestCase):
         profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
         self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
         self.assertEqual(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), profiles, NOW), [])
-        # Profiles of other formats keep the recorded-expiry rule.
+        # Only profiles that opt in (access.liveCheck) drop the recorded-expiry rule.
         fold = copy.deepcopy(READY)
         fold['profiles']['fold-rango-v1']['access'].update(addVersionExpires=None)
         self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-v1', fold, NOW)])
+        fold['profiles']['fold-rango-v1']['access']['liveCheck'] = True
+        self.assertNotIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-v1', fold, NOW)])
+        unopted = copy.deepcopy(profiles)
+        unopted['profiles']['fold-rango-factory-v1']['access'].pop('liveCheck')
+        self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-factory-v1', unopted, NOW)])
+        self.assertEqual({n for n, p in PROFILES['profiles'].items() if (p.get('access') or {}).get('liveCheck') is True},
+                         {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1'})
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
+        # Each opted-in policy text claims the recorded-expiry ceilings only where they are enforced (openssh_problems),
+        # and a pre-import recheck only where the run makes one (recheckEmptyBeforeImport, _inside).
+        for name, profile in PROFILES['profiles'].items():
+            if (profile.get('access') or {}).get('liveCheck') is True:
+                openssh = profile['archive']['format'] == 'openssh-ed25519'
+                self.assertEqual('held to those ceilings' in profile['access']['policy'], openssh, name)
+                self.assertEqual('repeat just before the import' in profile['access']['policy'],
+                                 profile.get('recheckEmptyBeforeImport') is True, name)
+
+    def test_a_live_check_profile_must_recheck_and_a_bound_profile_lists_nothing_missing(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
+        # Without recorded expiries there is no margin, so the pre-import recheck is required with liveCheck.
+        for name in ('fold-rango-factory-v1', 'fold-rango-v1'):
+            source = profiles if name == 'fold-rango-factory-v1' else copy.deepcopy(READY)
+            with self.subTest(name):
+                bad = copy.deepcopy(source)
+                bad['profiles'][name]['access'].update(liveCheck=True, addVersionExpires=None, accessorExpires=None)
+                bad['profiles'][name].pop('recheckEmptyBeforeImport', None)
+                self.assertIn(('profile-invalid', 'access.liveCheck needs recheckEmptyBeforeImport true'),
+                              sb.readiness(name, bad, NOW))
+                bad['profiles'][name]['recheckEmptyBeforeImport'] = True
+                self.assertNotIn('profile-invalid', [c for c, _ in sb.readiness(name, bad, NOW)])
+        self.assertTrue(all(p.get('recheckEmptyBeforeImport') is True for p in PROFILES['profiles'].values()
+                            if (p.get('access') or {}).get('liveCheck') is True))
+        # A resource-bound profile that still lists a missing prerequisite is refused before anything else.
+        pending = copy.deepcopy(profiles)
+        pending['profiles']['fold-rango-factory-v1']['missing'] = ['one approved bootstrap run']
+        self.assertEqual([c for c, _ in sb.readiness('fold-rango-factory-v1', pending, NOW)], ['profile-unbound'])
+        self.assertTrue(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), pending, NOW))
+        self.assertFalse([n for n, p in PROFILES['profiles'].items() if p.get('status') == 'resource-bound' and p.get('missing')])
+        # While a live-check profile still lists its bootstrap grant, the entry asks for the one binding per secret.
+        for name, profile in PROFILES['profiles'].items():
+            grants = [m for m in profile.get('missing') or [] if 'versions.add' in str(m)]
+            if (profile.get('access') or {}).get('liveCheck') is True and grants:
+                with self.subTest(name):
+                    self.assertTrue(all('one binding per secret' in m and 'at most 4 h' in m for m in grants), grants)
 
     def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
         profiles = factory_ready_profiles()
@@ -1547,10 +1593,17 @@ class FactoryProfileValidation(unittest.TestCase):
                 self.assertEqual(codes(retry), ['previous-attempt'])  # never retried or regenerated
 
     def test_plan_tells_the_admin_to_grant_one_binding_per_secret(self):
-        grant = sb.plan('fold-rango-factory-v1', PROFILES)['grant']
-        self.assertIn('one binding per secret', grant)
-        self.assertIn('versions.add', grant)
-        self.assertIsNone(sb.plan('fold-rango-v1', PROFILES)['grant'])
+        plan = sb.plan('fold-rango-factory-v1', PROFILES)
+        self.assertIn('one binding per secret', plan['grant'])
+        self.assertIn('versions.add', plan['grant'])
+        rows = plan['metadata'] + plan['add']  # no row may suggest the split predefined-role grant
+        self.assertEqual({r['grantedBy'] for r in rows}, {'the one bootstrap binding on this secret (grant)'})
+        self.assertEqual(sorted({r['permission'] for r in rows}),
+                         ['secretmanager.secrets.get', 'secretmanager.versions.add', 'secretmanager.versions.list'])
+        fold = sb.plan('fold-rango-v1', PROFILES)  # a recorded-expiry profile keeps the predefined roles
+        self.assertIsNone(fold['grant'])
+        self.assertEqual({r['grantedBy'] for r in fold['metadata'] + fold['add']},
+                         {'roles/secretmanager.viewer', 'roles/secretmanager.secretVersionAdder'})
 
     def test_a_failed_live_access_call_stops_before_any_key_or_journal_and_can_be_retried(self):
         profiles = factory_ready_profiles()
@@ -1698,9 +1751,9 @@ class BlazerProfiles(unittest.TestCase):
                 profile = PROFILES['profiles'][name]
                 self.assertEqual((profile['status'], profile['device']), ('unbound', 'blazer'))
                 self.assertTrue(profile['missing'])
-                # pro-blazer-v1 is a dispatch choice (Release's handoff; the guard still refuses it while unbound);
-                # pro-blazer-factory-v1 is not yet one.
-                self.assertEqual(name in bootstrap_options(), name == 'pro-blazer-v1')
+                # Both are dispatch choices (pro-blazer-v1 by Release's handoff, pro-blazer-factory-v1 by the owner's
+                # 2026-11-03 instruction); the guard still refuses each while it is unbound.
+                self.assertIn(name, bootstrap_options())
 
     def test_blazer_secrets_are_new_and_distinct(self):
         profiles = PROFILES['profiles']
@@ -1719,20 +1772,27 @@ class BlazerProfiles(unittest.TestCase):
     def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
         rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
         self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
-        def shape(profile):  # bindings (status, access, the measured identity) may land for Rango first
+        # status, access and resourceBasis are per-profile records; the measured identity is held equal-or-null to the
+        # committed evidence by ssh-keygen-observe.py committed_problems.
+        def shape(profile):
             value = copy.deepcopy({k: v for k, v in profile.items()
                                    if k not in ('device', 'principal', 'purpose', 'secrets', 'missing', 'status', 'access',
                                                 'resourceBasis')})
             value['tools']['ssh-keygen'].pop('installed')
             return value
         self.assertEqual(shape(pro), shape(rango))
+        # The committed Blazer profile lacks only its approvals: status alone never admits it while its missing list
+        # names them; marked resource-bound with nothing missing it is ready as committed (measured tool, live access,
+        # no recorded expiry needed).
         ready = copy.deepcopy(PROFILES)
-        profile = ready['profiles']['pro-blazer-factory-v1']
-        profile['status'] = 'resource-bound'
-        profile['tools']['ssh-keygen']['installed'] = {'path': '/opt/synthetic/ssh-keygen', 'sha256': 'a' * 64}
-        profile['access'].update(addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z',
-                                 basis='synthetic test readback')
+        ready['profiles']['pro-blazer-factory-v1']['status'] = 'resource-bound'
+        self.assertEqual([c for c, _ in sb.readiness('pro-blazer-factory-v1', ready, NOW)], ['profile-unbound'])
+        ready['profiles']['pro-blazer-factory-v1']['missing'] = []
         self.assertEqual(sb.readiness('pro-blazer-factory-v1', ready, NOW), [])
+        recorded = copy.deepcopy(ready)  # a recorded expiry inside the ceilings, with its basis, is still accepted
+        recorded['profiles']['pro-blazer-factory-v1']['access'].update(
+            addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z', basis='synthetic test readback')
+        self.assertEqual(sb.readiness('pro-blazer-factory-v1', recorded, NOW), [])
 
 
 if __name__ == '__main__':
