@@ -18,7 +18,7 @@ exists.
 
 render writes the operator's host-reconcile.py --config (write-once) from os/build-only/blazer-reconcile.json, the
 admitted inputs and the operator's host paths, refusing symlinks, relative paths and paths shared with the Frankel or
-Rango builders, and prints the host-reconcile command (label blazer-BUILD) to run under the operator's lock.
+Rango builders (only --lock may be exactly Frankel's shared host.lockPath, the intended serialization point), and prints the host-reconcile command (label blazer-BUILD) to run under the operator's lock.
 
 compile_problems is the compile-preflight binding scripts/blazer-build-only.py calls: the reconcile receipt must be
 labelled for the admitted build, have installed the admitted APK bytes, Launcher3 and the routed Updater config, and
@@ -274,13 +274,19 @@ def other_builder_paths(root=ROOT):
             host.get('workDir'), host.get('inputsDir'), reconcile.get('receiptDir')) if p}
     return paths
 
+def shared_lock(root=ROOT):
+    """The builder lock blazer shares with Frankel by design (blazer.json lockFrom): frankel.json host.lockPath. It is
+    the one other-builder path an operator path may equal, and only as lockPath, so host-reconcile serializes on it."""
+    value = json.loads((root/OTHER_BUILDERS[0]).read_text()).get('host', {}).get('lockPath')
+    return Path(value) if value else None
+
 def render(inputs_path, source_root, lock, receipt_dir, work_dir, out, template_path=TEMPLATE, root=ROOT):
     """(rendered config, host-reconcile command). The config is written once, only after every check passes."""
     template, inputs = load_template(template_path, root), read_inputs(inputs_path)
     if inputs['template']['sha256'] != sha256_file(template_path):
         raise Failed('the inputs were admitted against another reconcile template')
     host = {'sourceRoot': source_root, 'lockPath': lock, 'receiptDir': receipt_dir, 'workDir': work_dir}
-    taken = other_builder_paths(root)
+    taken, shared = other_builder_paths(root), shared_lock(root)
     for name, value in host.items():
         path = Path(value or '')
         if not path.is_absolute() or '..' in path.parts:
@@ -290,7 +296,10 @@ def render(inputs_path, source_root, lock, receipt_dir, work_dir, out, template_
             current = current/part
             if current.is_symlink():
                 raise Failed(f'{name} passes through a symlink ({current})')
-        if path in taken or any(path == t or t in path.parents or path in t.parents for t in taken):
+        # Exactly the shared Frankel lock, as lockPath only, is the intended serialization point, not a collision; it is
+        # still checked against every other builder path. Every data path keeps the full check, the shared lock included.
+        others = taken - {shared} if name == 'lockPath' and shared is not None and path == shared else taken
+        if path in others or any(path == t or t in path.parents or path in t.parents for t in others):
             raise Failed(f'{name} {path} collides with another device\'s builder paths')
     if not Path(source_root).is_dir():
         raise Failed(f'sourceRoot {source_root} is not an existing directory')
