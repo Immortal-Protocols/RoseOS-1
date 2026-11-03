@@ -1318,12 +1318,12 @@ class OxbloodHumanCardTest(unittest.TestCase):
         self.assertNotIn('setTextColor', source, 'nor its name\'s colour, so the layout attribute holds')
 
 class RoseEdgeGestureTest(unittest.TestCase):
-    """#410: the bottom-edge swipe-up's release rules and live preview geometry (RoseEdgeGesture), against the frozen
-    reference's app.js/oxblood.css and Home's homeEdge keys. Pure source and JVM checks: not wired into Launcher3's
+    """#410: the bottom-edge swipe-up's release rules and live preview geometry (RoseEdgeGesture), against values
+    copied from the frozen reference's app.js/oxblood.css (as RoseFanTest does) and Home's homeEdge keys. Pure source and JVM checks: not wired into Launcher3's
     swipe handler yet, so no navigation changes; touch, timing and the real relayout need the builder and a device."""
     EDGE = (OVERLAY/'RoseEdgeGesture.java').read_text()
 
-    def test_the_release_rules_and_preview_match_the_frozen_reference(self):
+    def test_the_release_rules_and_preview_match_the_reference_values(self):
         out = Path(tempfile.mkdtemp(prefix='rose-edge-'))
         self.addCleanup(shutil.rmtree, out, True)
         subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-source', '11', '-target', '11',
