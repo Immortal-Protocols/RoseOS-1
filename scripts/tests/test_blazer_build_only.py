@@ -240,6 +240,16 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation'].update(boundsKind='measured'), 'labelled proposal'),
             (lambda r: r['preparation'].update(stages=['download', 'vendor', 'lunch', 'compile']), 'preparation.stages'),
             (lambda r: r['capacity'].update(compileAllowanceBytes=None), 'positive finite allowance'),
+            (lambda r: r['gitMeta']['projects'][0].update(revision='0' * 40), 'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta']['projects'].pop(), 'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta']['projects'].append({'path': 'frameworks/av', 'name': 'x', 'revision': '0' * 40}),
+             'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta'].update(fetchUrlPrefix='https://example.com/'), 'fetchUrlPrefix must be the pinned'),
+            (lambda r: r['gitMeta'].update(objectsSource='production-pack'), 'gitMeta.objectsSource must be one of'),
+            (lambda r: r['gitMeta'].update(timeoutSeconds=7201), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(projectTimeoutSeconds=9000), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(boundBytes=0), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(boundKind='measured'), 'gitMeta.boundKind must be proposal'),
             (lambda r: r['capacity'].update(compileAllowanceBytes=0), 'positive finite allowance'),
             (lambda r: r['capacity'].update(compileAllowanceKind='measured'), 'positive finite allowance'),
             (lambda r: r['capacity'].pop('compileAllowanceKind'), 'positive finite allowance'),
@@ -2312,6 +2322,154 @@ class RunTest(Fixture):
             self.assertEqual(not space, admitted, report['problems'])
             self.assertEqual((report['facts']['capacity']['boundBytes'], report['facts']['capacity']['boundKind']),
                              (250 << 30, 'first-build-proposal'))
+
+class GitMetaTest(Fixture):
+    """git-meta against local upstream repositories standing in for the pinned remotes (never a real fetch)."""
+    ENV = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t',
+           'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(['git', *args], cwd=cwd, env={**self.ENV, 'HOME': str(self.tmp)}, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def projects(self):
+        """Upstream repos with two commits each (the pin is the second); the isolated tree holds the pinned bytes,
+        one integrated (Rose-changed) file, and no .git."""
+        up, rows = self.tmp/'up', []
+        if os.path.lexists(self.src/'vendor/adevtool/.git'):  # the shared fixture's vendor-stage stand-in
+            shutil.rmtree(self.src/'vendor/adevtool/.git')
+        for path in bb.GIT_META_PATHS:
+            name = 'platform_' + path.replace('/', '_')
+            repo = up/name
+            (repo/'res').mkdir(parents=True)
+            (repo/'res/config.xml').write_text('old\n')
+            self.git('init', '-q', str(repo))
+            self.git('-C', str(repo), 'add', '-A')
+            self.git('-C', str(repo), 'commit', '-qm', 'old')
+            (repo/'res/config.xml').write_text('pinned\n')
+            (repo/'keep.txt').write_text(path + '\n')
+            self.git('-C', str(repo), 'add', '-A')
+            self.git('-C', str(repo), 'commit', '-qm', 'pin')
+            revision = self.git('-C', str(repo), 'rev-parse', 'HEAD')
+            work = self.src/path
+            (work/'res').mkdir(parents=True, exist_ok=True)
+            (work/'res/config.xml').write_text('integrated by Rose\n' if path == 'frameworks/base' else 'pinned\n')
+            (work/'keep.txt').write_text(path + '\n')
+            rows.append({'path': path, 'name': name, 'revision': revision})
+        spec = self.synthetic['gitMeta']
+        spec.update(projects=rows, fetchUrlPrefix=f'file://{up}/')
+        return rows
+
+    def run_meta(self, out='r', recipe=None):
+        code = bb.run(recipe or self.synthetic, 'git-meta', self.op(), self.tmp/out, now=lambda: 0, statvfs=fs(10 ** 15),
+                      lock_probe=lambda path: True, root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
+
+    def worktree(self):
+        return {str(p): p.read_bytes() for p in sorted(self.src.rglob('*')) if p.is_file() and '/.git/' not in str(p)}
+
+    def test_each_project_gets_genuine_shallow_metadata_and_the_working_tree_is_untouched(self):
+        rows = self.projects()
+        before = self.worktree()
+        # Neither inherited GIT_* nor a global insteadOf redirect reaches the helper's git.
+        os.environ['GIT_DIR'] = str(self.tmp/'elsewhere/.git')
+        self.addCleanup(os.environ.pop, 'GIT_DIR', None)
+        (self.tmp/'.gitconfig').write_text(f'[url "file://{self.tmp}/nowhere/"]\n\tinsteadOf = file://{self.tmp}/up/\n')
+        code, done, report = self.run_meta()
+        self.assertEqual((report['problems'], code, done['ok']), ([], 0, True), done)
+        self.assertEqual(self.worktree(), before, 'no command touches the working tree, Rose-integrated bytes included')
+        self.assertEqual(done['workingTreeCommands'], [])
+        for row in rows:
+            work = self.src/row['path']
+            self.assertEqual(self.git('-C', str(work), 'rev-parse', 'HEAD'), row['revision'])
+            self.assertEqual((work/'.git/shallow').read_text(), row['revision'] + '\n')
+            self.assertFalse((work/'.git/objects/info/alternates').exists())
+            self.assertFalse((work/'.git/hooks').exists(), 'no template hooks')
+            self.assertEqual(self.git('-C', str(work), 'show', 'HEAD:res/config.xml'), 'pinned')
+            self.assertEqual(done['projects'][row['path']]['revision'], row['revision'])
+        # host-reconcile's own sequence on the result: a shared clone, a sparse checkout of HEAD.
+        base = self.src/'frameworks/base'
+        shadow = self.tmp/'shadow/frameworks/base'
+        self.git('clone', '--quiet', '--shared', '--no-checkout', str(base), str(shadow))
+        self.git('-C', str(shadow), 'sparse-checkout', 'set', '--no-cone', 'res/config.xml')
+        self.git('-C', str(shadow), 'checkout', '--quiet', '--detach', rows[2]['revision'])
+        self.assertEqual((shadow/'res/config.xml').read_text(), 'pinned\n')
+        self.assertEqual((base/'res/config.xml').read_text(), 'integrated by Rose\n')
+
+    def test_an_existing_git_dir_or_the_production_tree_refuses_before_any_process(self):
+        self.projects()
+        (self.src/'build/make/.git').mkdir()
+        code, done, report = self.run_meta()
+        self.assertEqual((code, done), (1, None))
+        self.assertIn('build/make/.git already exists', ' '.join(report['problems']))
+        self.assertFalse((self.src/'frameworks/base/.git').exists())
+        os.rmdir(self.src/'build/make/.git')
+        code = bb.run(self.synthetic, 'git-meta', self.op(source_root=str(self.production)), self.tmp/'r2', now=lambda: 0,
+                      statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn('production source root', ' '.join(json.loads((self.tmp/'r2/preflight.json').read_text())['problems']))
+
+    def test_a_wrong_revision_removes_every_git_dir_this_run_created(self):
+        rows = self.projects()
+        before = self.worktree()
+        self.synthetic['gitMeta']['projects'][3]['revision'] = rows[0]['revision']  # not in that repository
+        code, done, _ = self.run_meta()
+        self.assertEqual((code, done['ok'], done['failedProject']), (1, False, rows[3]['path']))
+        self.assertIn('fetch failed', done['error'])
+        self.assertEqual([r['removed'] for r in done['createdRemoved']], [True] * 4)
+        for row in rows:
+            self.assertFalse(os.path.lexists(self.src/row['path']/'.git'))
+        self.assertEqual(self.worktree(), before)
+
+    def test_the_byte_bound_and_a_non_shallow_or_foreign_head_refuse(self):
+        rows = self.projects()
+        tight = json.loads(json.dumps(self.synthetic))
+        tight['gitMeta']['boundBytes'] = 1
+        code, done, _ = self.run_meta(recipe=tight)
+        self.assertEqual((code, done['ok'], done['failedProject']), (1, False, rows[0]['path']))
+        self.assertIn('above the 1-byte bound', done['error'])
+        self.assertFalse(os.path.lexists(self.src/rows[0]['path']/'.git'), 'its own .git is removed')
+        real = bb.supervise
+        def unshallow(argv, *a, **k):
+            result = real(argv, *a, **k)
+            if 'update-ref' in argv:
+                (Path(argv[2])/'.git/shallow').unlink()
+            return result
+        bb.supervise = unshallow
+        try:
+            code, done, _ = self.run_meta(out='r2')
+        finally:
+            bb.supervise = real
+        self.assertEqual(code, 1)
+        self.assertIn('not shallow at exactly the pinned commit', done['error'])
+        self.assertFalse(os.path.lexists(self.src/rows[0]['path']/'.git'))
+        def foreign_head(argv, *a, **k):
+            result = real(argv, *a, **k)
+            if 'update-ref' in argv:  # HEAD moved off the pin after it was written; shallow still names the pin
+                (Path(argv[2])/'.git/HEAD').write_text('ref: refs/heads/elsewhere\n')
+            return result
+        bb.supervise = foreign_head
+        try:
+            code, done, _ = self.run_meta(out='r3')
+        finally:
+            bb.supervise = real
+        self.assertEqual(code, 1)
+        self.assertIn('HEAD is not exactly the pinned revision', done['error'])
+
+    def test_the_checked_in_recipe_pins_the_seven_manifest_projects(self):
+        spec = self.recipe['gitMeta']
+        self.assertEqual([r['path'] for r in spec['projects']], list(bb.GIT_META_PATHS))
+        self.assertEqual({r['path']: r['revision'] for r in spec['projects']}['vendor/adevtool'], ADEVTOOL)
+        self.assertEqual((spec['objectsSource'], spec['fetchUrlPrefix'], spec['boundBytes'], spec['projectTimeoutSeconds'],
+                          spec['timeoutSeconds']), ('public-fetch', 'https://github.com/GrapheneOS/', 8 << 30, 1800, 5400))
+        argv = bb.commands(self.recipe, self.op())['git-meta']['projects'][0]['argv']
+        self.assertEqual(argv[1][3:], ['fetch', '--quiet', '--depth=1', '--no-tags',
+                                       'https://github.com/GrapheneOS/platform_build', spec['projects'][0]['revision']])
+        env = bb.git_meta_env(self.src, self.tmp/'h', spec['fetchUrlPrefix'])
+        self.assertEqual((env['GIT_ALLOW_PROTOCOL'], env['GIT_CONFIG_GLOBAL'], env['GIT_TERMINAL_PROMPT'], env['PATH']),
+                         ('https', os.devnull, '0', '/usr/bin:/bin'))
+        self.assertFalse(any(k.startswith('GIT_DIR') for k in env))
 
 class CompileRunTest(Fixture):
     def envsetup(self, make='mkdir -p "$OUT_DIR"; echo "$@" > "$OUT_DIR/goals"'):

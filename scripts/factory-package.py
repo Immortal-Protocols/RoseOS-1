@@ -6,7 +6,7 @@
   factory-package.py classify ARCHIVE --flavor F [evidence...]
   factory-package.py package  ARCHIVE --flavor F --out NEW_DIR [evidence...]
 evidence: --target-files TF --target-files-observation OBS.json --firmware-observation FW.json
-          --otatools ZIP --otatools-sha256 H [--ssh-keygen PATH] [--work-dir DIR] [--max-work-bytes N]
+          --otatools ZIP --otatools-sha256 H [--ssh-keygen PATH] [--work-dir DIR] [--max-work-bytes N] [--signature ABS.sig]
           [--build B] [--avb-public-key-sha256 H] [--first-use-binding FIRST_USE.json]
 
 F is os/flavors/F.json (frankel or rango), cross-checked against os/devices/pixel10.json and the pinned adevtool
@@ -26,11 +26,13 @@ contentVerified       the super segments rebuilt with simg2img and unpacked with
                       otatools archive (never from the candidate) in a bounded job-owned directory that is removed on
                       success and failure; the unpacked dynamic partition set and every logical image byte-equal to the
                       signed target-files, which matches the release-delivered names-only observation.
-signatureVerified     ARCHIVE.sig verified by ssh-keygen -Y verify against the flavor's pinned factory-signing principal,
-                      public key and namespace "factory images" (generate-release.sh). Never an adjacent key; presence
+signatureVerified     ARCHIVE.sig, or --signature ABS.sig (e.g. Signing's own output root), read once no-follow and
+                      verified by ssh-keygen -Y verify against the flavor's pinned factory-signing principal, public
+                      key and namespace "factory images" (generate-release.sh), over the archive streamed no-follow
+                      and re-hashed to the classified sha256. Never an adjacent key; presence
                       alone is nothing. AVB key equality is a separate check.
 factoryReady = all three with no missing input or problem. It is still not relock safety, first boot or phone acceptance.
-package copies a factory-ready ARCHIVE and ARCHIVE.sig into NEW_DIR with factory-package.json binding the archive,
+package copies a factory-ready ARCHIVE and its verified signature (as ARCHIVE.sig) into NEW_DIR with factory-package.json binding the archive,
 signed target-files, tool identities and observed inventory. observe writes the names-only target-files observation
 (no image bytes) that the release owner delivers through its normal receipt path.
 Exit status: 0 ready / packaged / observed / contract valid, 3 refused (the JSON names every missing input and
@@ -876,16 +878,75 @@ def verify_content(archive_path, target_files, inventory_dynamic, super_members,
     finally:
         shutil.rmtree(job, ignore_errors=True)
 
-def verify_signature(path, flavor, ssh_keygen, work_dir, result):
-    """ssh-keygen -Y verify against the contract's pinned principal and key, namespace "factory images"."""
+SIGNATURE_MAX_BYTES = 65536
+NO_FOLLOW = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+def signature_path(path, signature):
+    """The detached signature: the sibling ARCHIVE.sig by default, or an explicit absolute --signature PATH (e.g. a new
+    output root that holds only the signature); ContractError for a relative or .. path."""
+    if signature is None:
+        return Path(str(path) + '.sig'), 'sibling'
+    sig = Path(signature)
+    if not sig.is_absolute() or '..' in sig.parts:
+        raise ContractError('--signature must be an absolute path without ..')
+    return sig, 'explicit'
+
+def read_signature(sig):
+    """The signature's exact bytes from one O_NOFOLLOW descriptor (regular, at most SIGNATURE_MAX_BYTES); None if it is
+    absent, a link or not a regular file."""
+    try:
+        fd = os.open(sig, NO_FOLLOW)
+    except OSError:
+        return None
+    try:
+        if not statmod.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, SIGNATURE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    return data if 0 < len(data) <= SIGNATURE_MAX_BYTES else None
+
+def verify_streamed(tool, signers, principal, sig_copy, path, timeout=600):
+    """(returncode, sha256 of exactly the archive bytes ssh-keygen read): the archive is opened O_NOFOLLOW and streamed
+    to ssh-keygen -Y verify through a pipe while it is hashed, so the verdict binds to those bytes."""
+    fd = os.open(path, NO_FOLLOW)
+    digest, complete = hashlib.sha256(), True
+    try:
+        proc = subprocess.Popen([str(tool), '-Y', 'verify', '-f', str(signers), '-I', principal, '-n', NAMESPACE,
+                                 '-s', str(sig_copy)], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        try:
+            while True:
+                block = os.read(fd, 1 << 20)
+                if not block:
+                    break
+                digest.update(block)
+                proc.stdin.write(block)
+        except BrokenPipeError:
+            complete = False  # the verifier stopped reading; its exit status decides, the digest binds nothing
+        finally:
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                complete = False
+        returncode = proc.wait(timeout=timeout)
+    finally:
+        os.close(fd)
+    return returncode, digest.hexdigest() if complete else None
+
+def verify_signature(path, flavor, ssh_keygen, work_dir, result, signature=None):
+    """ssh-keygen -Y verify against the contract's pinned principal and key, namespace "factory images", of exactly the
+    signature bytes read once (no-follow) and exactly the archive bytes classified (streamed and re-hashed)."""
     signing, device = flavor['factorySigning'], flavor['device']['codename']
-    sig = Path(str(path) + '.sig')
-    result['signature'] = {'file': sig.name, 'namespace': NAMESPACE, 'principal': signing['principal']}
+    sig, source = signature_path(path, signature)
+    result['signature'] = {'file': sig.name, 'path': str(sig), 'source': source, 'namespace': NAMESPACE,
+                           'principal': signing['principal']}
     if signing['publicKey'] is None:
         result['missing'].append(f'factory-signing identity: pinned principal and ssh-ed25519 public key for {device}, '
                                  f'namespace "{NAMESPACE}" ({signing["owner"]}; never generated here)')
         return False
-    if sig.is_symlink() or not sig.is_file():
+    data = read_signature(sig)
+    if data is None:
         result['missing'].append(f'factory:{sig.name} (detached signature)')
         return False
     tool = ssh_keygen or shutil.which('ssh-keygen')
@@ -894,19 +955,21 @@ def verify_signature(path, flavor, ssh_keygen, work_dir, result):
         return False
     result['signature']['verifier'] = {'path': str(tool), 'sha256': sha256_file(tool)}
     with tempfile.TemporaryDirectory(prefix='factory-signers-', dir=work_dir) as job:
-        signers = Path(job)/'allowed_signers'
+        signers, copy = Path(job)/'allowed_signers', Path(job)/'archive.sig'
         signers.write_text(f'{signing["principal"]} namespaces="{NAMESPACE}" {signing["publicKey"]}\n')
-        with open(path, 'rb') as stream:
-            try:
-                done = subprocess.run([str(tool), '-Y', 'verify', '-f', str(signers), '-I', signing['principal'],
-                                       '-n', NAMESPACE, '-s', str(sig)], stdin=stream, capture_output=True, timeout=600)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                result['problems'].append(f'signature-invalid:verifier {type(error).__name__}')
-                return False
-    if done.returncode:
+        copy.write_bytes(data)
+        try:
+            returncode, streamed = verify_streamed(tool, signers, signing['principal'], copy, path)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result['problems'].append(f'signature-invalid:verifier {type(error).__name__}')
+            return False
+    if returncode:
         result['problems'].append('signature-invalid:ssh-keygen -Y verify refused the detached signature')
         return False
-    result['signature']['sha256'] = sha256_file(sig)
+    if streamed != result.get('sha256'):
+        result['problems'].append('identity-mismatch:the archive bytes verified differ from the bytes classified')
+        return False
+    result['signature']['sha256'] = hashlib.sha256(data).hexdigest()
     return True
 
 def resolve_avb_key(flavor, avb_key, first_use_binding, root, result):
@@ -925,7 +988,7 @@ def resolve_avb_key(flavor, avb_key, first_use_binding, root, result):
 
 def classify(path, flavor_name, target_files=None, build=None, avb_key=None, root=ROOT, *, target_files_observation=None,
              firmware_observation=None, otatools=None, otatools_sha256=None, ssh_keygen=None, first_use_binding=None,
-             work_dir=None, max_work_bytes=DEFAULT_MAX_WORK, allow_synthetic=False):
+             work_dir=None, max_work_bytes=DEFAULT_MAX_WORK, allow_synthetic=False, signature=None):
     flavor = load_flavor(flavor_name, root)
     device = flavor['device']['codename']
     path = Path(path)
@@ -971,7 +1034,7 @@ def classify(path, flavor_name, target_files=None, build=None, avb_key=None, roo
     if result['structurallyComplete']:
         result['contentVerified'] = verify_content(path, target_files, inventory['dynamic'], result['superMembers'], otatools,
             otatools_sha256, work_dir, max_work_bytes, result, result.pop('sparseMembers', {}))
-    result['signatureVerified'] = verify_signature(path, flavor, ssh_keygen, work_dir, result)
+    result['signatureVerified'] = verify_signature(path, flavor, ssh_keygen, work_dir, result, signature)
     result['factoryReady'] = all(result[k] for k in ('structurallyComplete', 'contentVerified', 'signatureVerified')) \
         and not result['missing'] and not result['problems']
     return result
@@ -983,9 +1046,11 @@ def package(path, flavor_name, target_files, out, build=None, avb_key=None, root
     path, out = Path(path), Path(out)
     out.mkdir(parents=True, exist_ok=False)
     copied = {}
-    for source in (path, path.with_name(path.name + '.sig')):
-        shutil.copyfile(source, out/source.name)
-        copied[source.name] = sha256_file(out/source.name)
+    shutil.copyfile(path, out/path.name)
+    copied[path.name] = sha256_file(out/path.name)
+    data = read_signature(Path(result['signature']['path']))  # the explicit or sibling signature, read no-follow again
+    (out/(path.name + '.sig')).write_bytes(data or b'')
+    copied[path.name + '.sig'] = sha256_file(out/(path.name + '.sig'))
     if copied[path.name] != result['sha256'] or copied[path.name + '.sig'] != result['signature']['sha256']:
         shutil.rmtree(out)
         raise Refused(dict(result, factoryReady=False, problems=['identity-mismatch:archive or signature changed while packaging']))
@@ -1007,7 +1072,7 @@ def main(argv=None):
         p.add_argument('--flavor', required=True)
         p.add_argument('--target-files', required=name == 'package')
         for flag in ('--build', '--avb-public-key-sha256', '--target-files-observation', '--firmware-observation',
-                     '--otatools', '--otatools-sha256', '--ssh-keygen', '--first-use-binding', '--work-dir'):
+                     '--otatools', '--otatools-sha256', '--ssh-keygen', '--first-use-binding', '--work-dir', '--signature'):
             p.add_argument(flag)
         p.add_argument('--max-work-bytes', type=int, default=DEFAULT_MAX_WORK)
         if name == 'package':
@@ -1032,7 +1097,8 @@ def main(argv=None):
                 raise ContractError(f'--{flag.replace("_", "-")} must be 64 lowercase hex digits')
         evidence = dict(target_files_observation=args.target_files_observation, firmware_observation=args.firmware_observation,
             otatools=args.otatools, otatools_sha256=args.otatools_sha256, ssh_keygen=args.ssh_keygen,
-            first_use_binding=args.first_use_binding, work_dir=args.work_dir, max_work_bytes=args.max_work_bytes)
+            first_use_binding=args.first_use_binding, work_dir=args.work_dir, max_work_bytes=args.max_work_bytes,
+            signature=args.signature)
         if args.command == 'classify':
             result = classify(args.archive, args.flavor, args.target_files, args.build, args.avb_public_key_sha256, **evidence)
         else:
