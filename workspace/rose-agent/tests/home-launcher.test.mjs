@@ -36,7 +36,7 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
  // Cold start routes only a fresh intent; recreation (saved state) keeps the saved page, never reopening the conversation.
  assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);showSettingsFor\(getIntent\(\)\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);\}/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
  assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)\{closeVoiceControls\(\);closeSystemFolder\(\);\}if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
@@ -491,4 +491,28 @@ test('the tray Rose renders and speaks the same authoritative state as the tray 
 test('Back from the conversation or app pages returns Home',()=>{
  assert.match(main,/else if\(drawer&&launcherPager!=null\)launcherPager\.showPage\(homePage,true\);else if\(experimentalHome&&chatMode\)\{chatMode=false;home\(\);\}else if\(voiceControls\)closeVoiceControls\(\);else if\(launcherPager!=null\)launcherPager\.showPage\(homePage,true\);\}/);
  // #223: Back first leaves the conversation mode inside the voice controls, then closes them back to Home.
+});
+
+test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents component, failing closed',()=>{
+ const g=main.slice(main.indexOf(' void gestureContract(Intent i,boolean homeShown){'),main.indexOf(' static String recentsPackage(){'));
+ assert.ok(g.length>0,'the handler exists');
+ assert.match(main,/showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/,'after the existing navigation, which it never changes');
+ assert.match(g,/GestureContract\.entry\(getClass\(\)==MainActivity\.class,Build\.VERSION\.SDK_INT,homeIntent,homeShown\)/,'MainActivity itself, SDK 35+, HOME, Home not showing');
+ assert.ok(g.indexOf('getCurrentCaller()')>0&&g.indexOf('getCurrentCaller()')<g.indexOf('getBundleExtra('),'the caller is checked before any extra is read');
+ assert.match(g,/GestureContract\.caller\(caller\.getPackage\(\),caller\.getUid\(\),recentsPackage\(\)\)/);
+ assert.match(g,/callback\.replyTo==null\|\|!\(callback\.obj instanceof ParcelUuid\)\|\|!android\.os\.Process\.myUserHandle\(\)\.equals\(user\)/,'well-formed, this user');
+ assert.match(g,/catch\(RuntimeException unreadable\)\{\}/,'a malformed contract is no contract');
+ assert.match(g,/data\.putParcelable\(GestureContract\.ICON_POSITION,target\);reply\.setData\(data\);/,'the rect is the only data');
+ assert.doesNotMatch(g,/SurfaceControl|surface_control|finish_callback|SurfaceView/,'never a surface or a finish callback');
+ assert.doesNotMatch(g,/Log\.|showPage\(|startActivity|startService|command\(/,'no logging, navigation, voice or task action');
+ assert.match(main,/tile\.setTag\(GestureContract\.tag\(app\.activityInfo\.packageName,app\.activityInfo\.name\)\);/,'tiles carry their exact component');
+ assert.match(main,/tile\.setTag\(GestureContract\.FOLDER_TAG\);/);
+ // Review of beb371c: the listener lives on the window's observer (never a detachable pager's), and the send waits
+ // for that frame's measure callbacks and is skipped while they re-plan Home.
+ assert.doesNotMatch(g,/pager\.getViewTreeObserver\(\)/,'never the pager\'s observer');
+ assert.equal((g.match(/decor\.getViewTreeObserver\(\)\.removeOnPreDrawListener\(once\[0\]\)/g)||[]).length,2,'both removals on the window observer');
+ assert.match(g,/handler\.post\(\(\)->sendGestureReply\(pager,tag,folder,reply,to\)\)/,'one message after the pre-draw');
+ assert.match(main,/if\(pager!=launcherPager\|\|replanPending\|\|isFinishing\(\)\)return;/,'no target while Home is about to be rebuilt');
+ assert.equal((main.match(/Height=cell;replanPending=true;\n  handler\.post\(\(\)->\{if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}\);/g)||[]).length,2,'both re-plans mark it');
+ assert.match(main,/void attachLauncherPages\(boolean preservePage\)\{\n  replanPending=false;/,'a rebuild clears it');
 });

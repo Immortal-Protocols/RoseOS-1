@@ -346,7 +346,10 @@ public class MainActivity extends Activity {
    return "com.android.vending".equals(installer);
   }catch(PackageManager.NameNotFoundException|IllegalArgumentException|SecurityException unavailable){return false;}
  }
+ /** A measured page asked for Home to be re-planned and the rebuild has not run yet: its cells are about to move. */
+ boolean replanPending;
  void attachLauncherPages(boolean preservePage){
+  replanPending=false;
   // A rebuild that keeps the page keeps it while it still exists (HomePages.restore); a fresh build opens on Home.
   int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():-1;
   Intent query=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
@@ -443,7 +446,7 @@ public class MainActivity extends Activity {
   float density=getResources().getDisplayMetrics().density;
   if(homeColumns==HomeAppLayout.homeColumns(width/density)&&homeCapacity==HomeAppLayout.homeCapacity(width,height,cell,density))return;
   if(width==homeAreaWidth&&height==homeAreaHeight&&cell==homeCellHeight)return;
-  homeAreaWidth=width;homeAreaHeight=height;homeCellHeight=cell;
+  homeAreaWidth=width;homeAreaHeight=height;homeCellHeight=cell;replanPending=true;
   handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
  }
  /** The identity of a launchable entry (package and activity), for placing each app exactly once. */
@@ -452,7 +455,7 @@ public class MainActivity extends Activity {
  void appPageMeasured(int width,int height,float cell){
   if(!HomeAppLayout.replan(appColumns,appPerPage,width,height,cell,getResources().getDisplayMetrics().density))return;
   if(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight)return;
-  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;
+  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;replanPending=true;
   handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
  }
  /** One app page: the measured grid of real apps over the shared wallpaper, or a truthful note when none are installed. */
@@ -491,6 +494,7 @@ public class MainActivity extends Activity {
   boolean mono=glyph!=null&&HomeGlyph.known(glyph);
   View tile=HomeAppTile.tile(this,mono?new HomeGlyph(glyph):appMark(app),label,mono,labelled);
   tile.setOnClickListener(v->{closeSystemFolder();WorkspaceLauncher.open(this,app,label);});
+  tile.setTag(GestureContract.tag(app.activityInfo.packageName,app.activityInfo.name)); // the gesture's landing target (GestureContract)
   return tile;
  }
  /** Any other app's mark (#410): its own icon, unrestyled, so a regular installed app keeps its identity. Rose's suite
@@ -504,6 +508,7 @@ public class MainActivity extends Activity {
   View tile=HomeAppTile.tile(this,new HomeGlyph("system"),HomeAppGroups.FOLDER_LABEL,true,labelled);
   tile.setContentDescription(HomeAppGroups.folderDescription(folderApps.size()));
   tile.setOnClickListener(v->openSystemFolder());
+  tile.setTag(GestureContract.FOLDER_TAG);
   return tile;
  }
  void openSystemFolder(){
@@ -557,7 +562,56 @@ public class MainActivity extends Activity {
  /** The shown page survives recreation (HomePages.restore). */
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
  @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();roseLaunch.reset();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
- @Override public void onNewIntent(Intent i){super.onNewIntent(i);int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);showSettingsFor(i);}
+ @Override public void onNewIntent(Intent i){super.onNewIntent(i);int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);showSettingsFor(i);gestureContract(i,homeShown);}
+ /** Launcher3's gesture_nav_contract_v1 on a swipe Home from an app (GestureContract; #410 comments 6593674343,
+  * 6593742638): reply with the window rect of the closing app's tile on the page Home lands on, so the closing window
+  * springs into it. Fails closed at every step, and never changes the page, layout, voice, tasks or sessions:
+  * no reply unless this is MainActivity itself on SDK 35+, a HOME intent with Home not already showing, from the
+  * device's recents component as the platform names it (ComponentCaller; Launcher3 must share its identity), with an
+  * exact, well-formed v1 Bundle for this user, and a wholly visible tile. The reply is a RectF only, sent once. */
+ void gestureContract(Intent i,boolean homeShown){
+  if(Build.VERSION.SDK_INT<GestureContract.MIN_SDK)return;
+  try{
+   boolean homeIntent=Intent.ACTION_MAIN.equals(i.getAction())&&i.hasCategory(Intent.CATEGORY_HOME);
+   if(!GestureContract.entry(getClass()==MainActivity.class,Build.VERSION.SDK_INT,homeIntent,homeShown))return;
+   // Identity before any of the sender's extras is read; getCurrentCaller throws where per-intent callers are off.
+   android.app.ComponentCaller caller=getCurrentCaller();
+   if(caller==null||!GestureContract.caller(caller.getPackage(),caller.getUid(),recentsPackage()))return;
+   Bundle c=i.getBundleExtra(GestureContract.EXTRA);if(c==null||c.isEmpty()||!c.getBoolean(GestureContract.ENABLE,true))return;
+   ComponentName root=c.getParcelable(GestureContract.COMPONENT,ComponentName.class);
+   UserHandle user=c.getParcelable(GestureContract.USER,UserHandle.class);
+   Message callback=c.getParcelable(GestureContract.CALLBACK,Message.class);
+   if(root==null||user==null||callback==null||callback.replyTo==null||!(callback.obj instanceof ParcelUuid)||!android.os.Process.myUserHandle().equals(user))return;
+   String key=root.getPackageName()+"/"+root.getClassName();boolean inFolder=false;
+   for(ResolveInfo app:folderApps)if(componentKey(app).equals(key))inFolder=true;
+   final String tag=GestureContract.tag(root.getPackageName(),root.getClassName());final boolean folder=inFolder;
+   final Message reply=Message.obtain();reply.copyFrom(callback);final Messenger to=callback.replyTo;
+   final LauncherPager pager=launcherPager;if(pager==null)return;
+   // Once, after the landing page is laid out: at the next pre-draw, or never (no reply) if none comes within 500ms.
+   // The window's own observer (the decor stays attached), so the listener is always removed even if Home is rebuilt
+   // first; the send runs one message later, after that frame's measure callbacks, and not while they re-plan Home.
+   final View decor=getWindow().getDecorView();
+   final android.view.ViewTreeObserver.OnPreDrawListener[] once=new android.view.ViewTreeObserver.OnPreDrawListener[1];
+   once[0]=()->{decor.getViewTreeObserver().removeOnPreDrawListener(once[0]);handler.post(()->sendGestureReply(pager,tag,folder,reply,to));return true;};
+   decor.getViewTreeObserver().addOnPreDrawListener(once[0]);
+   handler.postDelayed(()->decor.getViewTreeObserver().removeOnPreDrawListener(once[0]),500);
+  }catch(RuntimeException unreadable){} // a malformed or unreadable contract is no contract
+ }
+ void sendGestureReply(LauncherPager pager,String tag,boolean inFolder,Message reply,Messenger to){
+  try{
+   if(pager!=launcherPager||replanPending||isFinishing())return; // a rebuilt or about-to-be-rebuilt Home: no target
+   View decor=getWindow().getDecorView();
+   android.graphics.RectF target=HomeGestureTarget.find(pager.getChildAt(pager.currentPage()),tag,inFolder,decor.getWidth(),decor.getHeight());
+   if(target==null)return;
+   Bundle data=new Bundle();data.putParcelable(GestureContract.ICON_POSITION,target);reply.setData(data);
+   to.send(reply);
+  }catch(RemoteException|RuntimeException lost){} // sent once or not at all; never retried, nothing logged
+ }
+ /** The package of the device's recents component (framework config_recentsComponentName), or null. */
+ static String recentsPackage(){
+  try{android.content.res.Resources r=android.content.res.Resources.getSystem();int id=r.getIdentifier("config_recentsComponentName","string","android");
+   return id==0?null:GestureContract.recentsPackage(r.getString(id));}catch(RuntimeException unavailable){return null;}
+ }
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
  String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
  /** An unchanged HOME or app-icon return keeps the built Home, pager, catalog, conversation page and draft (OS-HOME-REUSE-001). */
