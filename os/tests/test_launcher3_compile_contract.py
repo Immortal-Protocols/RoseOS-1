@@ -250,15 +250,21 @@ class Launcher3CompileContractTest(unittest.TestCase):
             self.assertEqual(pin['unlisted']['count'], len(entries) - len(set(listed) & set(entries)))
             self.assertEqual(pin['gitlinks'], 'none: generation refuses any mode 160000 entry')
 
-    def test_a_gitlink_is_refused_at_generation_and_check(self):
+    def test_a_gitlink_or_quoted_path_is_refused_at_generation_and_check(self):
+        """M3: generation reads NUL-terminated ls-tree records and refuses a gitlink or any path a text listing would
+        quote; the checker reports such an entry, or a non-blob one, in a fixture instead of hashing it."""
+        import gzip
         contract = self.contract()
-        listing = b'100644 blob ' + b'1' * 40 + b'\tREADME\n160000 commit ' + b'2' * 40 + b'\tsub\n'
+        listing = b'100644 blob ' + b'1' * 40 + b'\tREADME\x00' + b'160000 commit ' + b'2' * 40 + b'\tsub\x00'
+        calls = []
 
         class Fake:
-            def run(self, *a, **k):
-                return subprocess.CompletedProcess(a, 0)
+            def run(self, argv, **k):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 0)
 
             def check_output(self, argv, **k):
+                calls.append(argv)
                 return ('3' * 40 + '\n') if 'rev-parse' in argv else listing
         real = contract.subprocess
         contract.subprocess = Fake()
@@ -268,19 +274,34 @@ class Launcher3CompileContractTest(unittest.TestCase):
         finally:
             contract.subprocess = real
         self.assertIn('gitlink', str(refused.exception))
-        project = dict(self.manifest()['projects'][2])
+        ls_tree = [argv for argv in calls if 'ls-tree' in argv]
+        self.assertEqual(len(ls_tree), 1)
+        self.assertEqual(ls_tree[0][-5:], ['ls-tree', '-r', '-z', '--full-tree', '0' * 40])
+        plain = b'100644 blob ' + b'1' * 40 + b'\tdir/README\0' + b'120000 blob ' + b'5' * 40 + b'\tlink\0'
+        self.assertEqual(contract.text_listing(plain, 'x'), plain.replace(b'\0', b'\n'))
+        for path in ('é.txt'.encode(), b'a"b', b'a\\b', b'a\nb', b'a\tb', b''):
+            with self.assertRaises(SystemExit, msg=path):
+                contract.text_listing(b'100644 blob ' + b'1' * 40 + b'\t' + path + b'\0', 'x')
+        with self.assertRaises(SystemExit):
+            contract.text_listing(plain[:-1], 'x')
+        project = self.manifest()['projects'][2]
+        pinned = gzip.decompress((ROOT/project['treePin']['listing']['path']).read_bytes())
         with tempfile.TemporaryDirectory() as scratch:
-            import gzip
             fixture = Path(scratch)/contract.tree_fixture(project['path']).name
-            fixture.write_bytes(gzip.compress(gzip.decompress(contract.tree_fixture(project['path']).read_bytes())
-                + b'160000 commit ' + b'2' * 40 + b'\tsub\n', 9, mtime=0))
             contract.TREES = Path(scratch)
-            errors = contract.check_tree_pin(project)
-        self.assertEqual(errors, ['build/release/sub: a gitlink (mode 160000), which the pin does not support'])
+            for extra, error in ((b'160000 commit ' + b'2' * 40 + b'\tsub\n',
+                    'build/release/sub: a gitlink (mode 160000), which the pin does not support'),
+                    (b'040000 tree ' + b'3' * 40 + b'\tdir\n',
+                    'build/release/dir: a tree entry, which a recursive blob listing never has'),
+                    (b'100644 blob ' + b'4' * 40 + b'\t"\\303\\251.txt"\n',
+                    'build/release/"\\303\\251.txt": a quoted path, which the pin does not support')):
+                fixture.write_bytes(gzip.compress(pinned + extra, 9, mtime=0))
+                self.assertEqual(contract.check_tree_pin(project), [error])
 
     def test_blob_ids_come_from_the_exact_hash_object_invocation(self):
-        """M1: git hash-object -t blob --no-filters --stdin (collision-detecting, no attribute filters, no object write),
-        run outside any repository, gives every pinned pre-image's gitBlob; a symlink hashes its readlink bytes."""
+        """M1: the manifest's git hash-object -t blob --no-filters --stdin (collision-detecting, no attribute filters,
+        no object write), run outside any repository, gives every pinned pre-image's gitBlob; inside a repository whose
+        attributes would rewrite the bytes it still hashes them raw; a symlink hashes its readlink bytes."""
         import os
         contract = self.contract()
         manifest = self.manifest()
@@ -297,22 +318,124 @@ class Launcher3CompileContractTest(unittest.TestCase):
                 data = contract.fixture_path(project['path'], row['path']).read_bytes()
                 self.assertEqual(self.git_isolated(blob['argv'], data).strip(), row['pre']['gitBlob'])
                 self.assertEqual(contract.git_blob(data), row['pre']['gitBlob'])
+        argv = manifest['projects'][0]['treePin']['blobHash']['argv']
+        crlf = b'a\r\nb\r\n'
         with tempfile.TemporaryDirectory() as repo:
             subprocess.run(['git', 'init', '-q', repo], check=True)
-            # Attribute filters would change these bytes; --no-filters must not apply them, and nothing is written.
+            # These attributes turn CRLF into LF on the way in, so a filtered hash differs from the raw one.
             Path(repo, '.gitattributes').write_text('* text=auto eol=crlf\n')
-            Path(repo, 'target.txt').write_bytes(b'a\nb\n')
+            Path(repo, 'target.txt').write_bytes(crlf)
             os.symlink('target.txt', Path(repo, 'link'))
             before = sorted(str(p) for p in Path(repo, '.git/objects').rglob('*') if p.is_file())
-            self.assertEqual(self.git_isolated(self.HASH_OBJECT, b'a\nb\n', cwd=repo).strip(),
-                contract.git_blob(b'a\nb\n'))
-            linked = self.git_isolated(self.HASH_OBJECT, os.readlink(Path(repo, 'link')).encode(),
+            raw = contract.git_blob(crlf)
+            filtered = self.git_isolated(['git', 'hash-object', '-t', 'blob', '--stdin', '--path', 'target.txt'], crlf,
                 cwd=repo).strip()
+            self.assertNotEqual(filtered, raw, 'the fixture really has a filter to suppress')
+            self.assertEqual(self.git_isolated(argv, crlf, cwd=repo).strip(), raw)
+            # The same flags over the file itself: without --no-filters git filters it, with it the bytes stay raw.
+            paths_argv = [a for a in argv if a != '--stdin'] + ['--stdin-paths']
+            self.assertEqual(self.git_isolated(paths_argv, b'target.txt\n', cwd=repo).strip(), raw)
+            self.assertEqual(self.git_isolated([a for a in paths_argv if a != '--no-filters'], b'target.txt\n',
+                cwd=repo).strip(), filtered)
+            refused = subprocess.run(argv + ['--path', 'target.txt'], input=crlf, capture_output=True, cwd=repo)
+            self.assertNotEqual(refused.returncode, 0, 'git refuses to combine --no-filters with --path')
+            linked = self.git_isolated(argv, os.readlink(Path(repo, 'link')).encode(), cwd=repo).strip()
             self.assertEqual(sorted(str(p) for p in Path(repo, '.git/objects').rglob('*') if p.is_file()), before,
                 'hash-object wrote no object')
             subprocess.run(['git', '-C', repo, 'add', 'link'], check=True)
             staged = subprocess.check_output(['git', '-C', repo, 'ls-files', '-s', 'link'], text=True).split()
             self.assertEqual(staged[:2], ['120000', linked], 'a symlink is its readlink bytes, mode 120000')
+
+    @staticmethod
+    def images_after_each_patch(contract, pre, patches):
+        """[{path: bytes or None}] before the first patch and after each one, applied in order with plain git apply."""
+        with tempfile.TemporaryDirectory() as tree:
+            for f, data in pre.items():
+                if data is not None:
+                    Path(tree, f).parent.mkdir(parents=True, exist_ok=True)
+                    Path(tree, f).write_bytes(data)
+            subprocess.run(['git', 'init', '-q', tree], check=True)
+            images = [dict(pre)]
+            for patch in patches:
+                subprocess.run(['git', '-C', tree, 'apply', str(contract.bundle_or_os('patches/' + patch))], check=True)
+                images.append({f: Path(tree, f).read_bytes() if Path(tree, f).exists() else None for f in pre})
+            return images
+
+    def test_every_generated_blob_id_is_confirmed_by_git(self):
+        """blobHash.implementation: every pre, post, chain, base and delta gitBlob the offline generator records equals
+        what the manifest's no-filters hash-object gives for those bytes (one --stdin-paths call per project)."""
+        contract = self.contract()
+        manifest = self.manifest()
+        argv = [a for a in manifest['projects'][0]['treePin']['blobHash']['argv'] if a != '--stdin'] + ['--stdin-paths']
+        base = {p['path']: p for p in manifest['base']['projects']}
+        delta = {f['path']: f for f in manifest['candidateDelta']['files']}
+        checked = 0
+        for project, (path, _, patches) in zip(manifest['projects'], contract.PROJECTS):
+            pre = {r['path']: None if r['pre'] is None else contract.fixture_path(path, r['path']).read_bytes()
+                for r in project['files']}
+            images = self.images_after_each_patch(contract, pre, patches)
+            base_patches = [p['name'] for p in base[path]['patches']]
+            self.assertEqual(patches[:len(base_patches)], base_patches, f'{path}: the base is a prefix of the candidate')
+            base_post = images[len(base_patches)]
+            claims = []
+            for row in project['files']:
+                f = row['path']
+                if row['pre'] is not None:
+                    claims.append((pre[f], row['pre']['gitBlob']))
+                claims.append((images[-1][f], row['post']['gitBlob']))
+                for c in row['chain']:
+                    k = patches.index(c['patch'])
+                    if c['before'] is not None:
+                        claims.append((images[k][f], c['before']))
+                    claims.append((images[k + 1][f], c['after']))
+                post = next(r for r in base[path]['files'] if r['path'] == f)['post']
+                claims.append((base_post[f], post['gitBlob']))
+                if f'{path}/{f}' in delta:
+                    claims.append((base_post[f], delta[f'{path}/{f}']['before']['gitBlob']))
+                    claims.append((images[-1][f], delta[f'{path}/{f}']['after']['gitBlob']))
+            with tempfile.TemporaryDirectory() as scratch:
+                names = []
+                for i, (data, _) in enumerate(claims):
+                    Path(scratch, str(i)).write_bytes(data)
+                    names.append(str(Path(scratch, str(i))))
+                ids = self.git_isolated(argv, ('\n'.join(names) + '\n').encode()).split()
+            self.assertEqual(ids, [claimed for _, claimed in claims], path)
+            checked += len(claims)
+        self.assertGreater(checked, 100)
+
+    def test_a_malformed_manifest_is_reported_not_raised(self):
+        import copy
+        contract = self.contract()
+        manifest = self.manifest()
+        edits = (lambda m: m['projects'][0].__setitem__('treePin', None),
+            lambda m: m['projects'][0]['treePin']['unlisted'].__setitem__('excludedPaths', None),
+            lambda m: m['projects'][0]['treePin']['unlisted']['excludedPaths'].append([1]),
+            lambda m: m['flagEvidence'].__setitem__('flags', None),
+            lambda m: m['flagEvidence']['flags'][0].__setitem__('definedIn', 'x'),
+            lambda m: m.__setitem__('projects', None),
+            lambda m: m.__setitem__('overlayRoles', 7))
+        for edit in edits:
+            changed = copy.deepcopy(manifest)
+            edit(changed)
+            errors = contract.check(changed)
+            self.assertTrue(errors and all(isinstance(e, str) for e in errors), errors)
+
+    def test_only_reviewed_targets_can_be_not_an_input(self):
+        """M4: notAnInput is an exact allowlist; any other overlay outside Launcher3 and build/release is refused, so
+        location alone never makes an overlay an unpinned input."""
+        contract = self.contract()
+        self.assertEqual(list(contract.NOT_AN_INPUT), self.manifest()['overlayRoles']['notAnInput']['targets'])
+        real = contract.overlay_targets
+        added = 'frameworks/base/core/java/android/companion/virtual/computercontrol/RoseInjected.java'
+        contract.overlay_targets = lambda: dict(real(), **{added: b'class RoseInjected {}\n'})
+        try:
+            with self.assertRaises(ValueError) as refused:
+                contract.overlays()
+            self.assertIn('neither required nor a reviewed notAnInput target', str(refused.exception))
+            errors = contract.check(self.manifest())
+            self.assertTrue(any(added in e for e in errors), errors)
+        finally:
+            contract.overlay_targets = real
 
     def test_each_root_tree_is_reconstructed_offline_and_confirmed_by_git(self):
         """M5: every tree object of each pinned listing is rebuilt offline; git hash-object -t tree (its own SHA-1 and

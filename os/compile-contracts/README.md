@@ -27,28 +27,35 @@ packages/apps/Launcher3 and build/release, it lists:
   adapter never takes either from the tree it checks;
 - `objectFormat` `sha1`;
 - `listing`: the committed `git ls-tree -r --full-tree` output, bound by the sha256 of its decompressed bytes and by
-  `compressedSha256` of the gzip file;
+  `compressedSha256` of the gzip file. Generation reads NUL-terminated (`-z`) records and refuses any path a text
+  listing would quote, so every path is its raw bytes;
 - `unlisted`: every path in the pinned tree except `excludedPaths`, as records `<mode> SP <oid> TAB <path> LF` with
   project-relative paths sorted by raw bytes. It carries the sha256 of the concatenated records and their count;
 - `excludedPaths`: the exact list of this project's affected files and overlay targets, with no globs. A listed path
   that the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing;
-- `modes`, and no gitlinks: generation and the checker refuse any mode `160000` entry;
+- `modes`, and no gitlinks: generation and the checker refuse any mode `160000` entry, and the checker also refuses a
+  non-blob or quoted entry;
 - `blobHash.argv`: `git hash-object -t blob --no-filters --stdin`. That is git's collision-detecting SHA-1, with no
   attribute filters and no object write. A symlink (mode `120000`) hashes its `readlink` bytes. Never `-w`,
-  `--literally`, `--path` or a plain SHA-1. The test runs that exact invocation on every pinned pre-image and a real
-  symlink, and confirms every rebuilt tree object with `git hash-object -t tree`.
+  `--literally`, `--path` or a plain SHA-1 (git itself refuses `--path` with `--no-filters`). The test runs that
+  invocation on every pinned pre-image, in a repository whose attributes would rewrite the bytes, and on a real
+  symlink. With the same flags it confirms every pre, post, chain, base and delta blob id the offline generator
+  records, and it confirms every rebuilt tree object with `git hash-object -t tree`.
 
 Any extra file is refused. Per-path sha256 would need every file's contents, which the bounded fixtures do not hold.
 The pin uses the git blob ids from the pinned commit's own tree objects instead.
 
 **`overlayRoles`** lists `required` and `notAnInput` overlays by exact target, plus the `compileGoals`:
 `Launcher3QuickStepLib` and the two `aconfig-flags.txt` outputs. Required overlays stay pinned by sha256. The seven
-`notAnInput` overlays are frameworks/base WindowManager-Shell and SystemUI files. Each one:
+`notAnInput` overlays are an exact allowlist (`NOT_AN_INPUT`) of frameworks/base WindowManager-Shell and SystemUI files;
+any other overlay outside Launcher3 and build/release is refused, so its location alone never makes it unpinned. Each
+one:
 - is excluded from frameworks/base's `treePin` by exact path;
 - is never a compile goal or a `flagEvidence` input;
 - is never in Launcher3 or build/release.
 
-The checker recomputes `overlayRoles` and refuses any difference.
+The checker recomputes `overlayRoles` and refuses any difference. A malformed manifest is reported as a failure, never
+a traceback.
 
 **`base`** has the same per-project shape as `projects`. It is bound by **content**: `bundleContent` lists the patches
 (by project, name and sha256) and the overlays (by target and sha256). A tree matches `base` only if Infra reports that

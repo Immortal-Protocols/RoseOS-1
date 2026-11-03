@@ -67,6 +67,18 @@ PROJECTS = [
     ('build/release', 'platform_build_release', ['background-control-build-release.patch']),
 ]
 REQUIRED_OVERLAYS = ('packages/apps/Launcher3/', 'build/release/')
+# The reviewed overlays that are not inputs of Launcher3QuickStepLib, by exact target (M4): WindowManager-Shell and
+# SystemUI sources and assets, off the library's classpath. Any other overlay outside REQUIRED_OVERLAYS is refused, so a
+# new one can never become an unpinned input by its location alone.
+NOT_AN_INPUT = (
+    'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java',
+    'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java',
+    'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java',
+    'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java',
+    'frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf',
+    'frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java',
+)
 # The two flags the adapter must show from the build's own decoded aconfig output. Each comes from one
 # aconfig_declarations module; Soong writes aconfig-cache.pb and its decoded aconfig-flags.txt (aconfigTextRule:
 # dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}') to that module's output directory.
@@ -236,8 +248,15 @@ def overlay_targets():
 def overlays():
     """Required overlays with their sha256; overlays that are not inputs of the library by target only, so their contents
     can change without touching the contract (adding or removing one does change it)."""
-    return [{'target': t, 'sha256': sha256(data), 'role': 'required'} if t.startswith(REQUIRED_OVERLAYS)
-        else {'target': t, 'role': 'notAnInput'} for t, data in overlay_targets().items()]
+    rows = []
+    for t, data in overlay_targets().items():
+        if t.startswith(REQUIRED_OVERLAYS):
+            rows.append({'target': t, 'sha256': sha256(data), 'role': 'required'})
+        elif t in NOT_AN_INPUT:
+            rows.append({'target': t, 'role': 'notAnInput'})
+        else:
+            raise ValueError(f'{t}: an overlay that is neither required nor a reviewed notAnInput target')
+    return rows
 
 
 def overlay_roles(projects, evidence):
@@ -628,6 +647,23 @@ def base_and_delta(projects, recorded_overlay_before=None):
     return base, delta
 
 
+def text_listing(records, what):
+    """The committed listing format from NUL-terminated `git ls-tree -r -z` records: one LF-terminated line per record.
+    Refuses a gitlink (mode 160000) and any path git would C-quote in a text listing (control or non-ASCII bytes, '"' or
+    '\\'), so every path in the fixture is its raw bytes."""
+    if not records.endswith(b'\0'):
+        raise SystemExit(f'{what}: not a NUL-terminated listing')
+    out = []
+    for record in records[:-1].split(b'\0'):
+        meta, _, path = record.partition(b'\t')
+        if meta.startswith(b'160000 '):
+            raise SystemExit(f'{what}: a submodule (gitlink) entry; the pin does not support one')
+        if not path or any(c < 0x20 or c > 0x7e or c in b'"\\' for c in path):
+            raise SystemExit(f'{what}: a path git would quote; the pin supports plain paths only')
+        out.append(record + b'\n')
+    return b''.join(out)
+
+
 def fetch_tree(repo, revision):
     """(root tree id, gzipped `git ls-tree -r --full-tree` listing) of a pinned commit, from a blobless, depth-1 fetch
     of GrapheneOS's public repository (tree objects only, no file contents)."""
@@ -637,9 +673,8 @@ def fetch_tree(repo, revision):
         subprocess.run(['git', '-C', str(work), 'fetch', '-q', '--depth', '1', '--filter=blob:none',
             f'https://github.com/GrapheneOS/{repo}', revision], check=True)
         root = subprocess.check_output(['git', '-C', str(work), 'rev-parse', revision + '^{tree}'], text=True).strip()
-        listing = subprocess.check_output(['git', '-C', str(work), 'ls-tree', '-r', '--full-tree', revision])
-        if any(line.startswith(b'160000 ') for line in listing.splitlines()):
-            raise SystemExit(f'{repo} {revision}: a submodule (gitlink) entry; the pin does not support one')
+        listing = text_listing(subprocess.check_output(['git', '-C', str(work), 'ls-tree', '-r', '-z', '--full-tree',
+            revision]), f'{repo} {revision}')
         return root, gzip.compress(listing, 9, mtime=0)
     finally:
         shutil.rmtree(work, True)
@@ -757,7 +792,16 @@ def build():
 
 
 def check(manifest):
-    """Recompute everything from the committed fixtures and patches and compare with the manifest."""
+    """Recompute everything from the committed fixtures and patches and compare with the manifest. A malformed
+    manifest is reported as a failure, never a traceback."""
+    try:
+        return check_all(manifest)
+    except (KeyError, ValueError, TypeError, AttributeError, IndexError) as error:
+        check.bound = (0, 0)
+        return [f'malformed manifest or refused input: {type(error).__name__}: {error}']
+
+
+def check_all(manifest):
     errors = []
     bound = [0, 0]
     revisions = pins()
@@ -805,7 +849,7 @@ def check(manifest):
     try:
         if manifest.get('overlayRoles') != overlay_roles(manifest['projects'], manifest['flagEvidence']['flags']):
             errors.append('overlayRoles differ from the overlays, treePins and flagEvidence; regenerate with --write')
-    except (KeyError, ValueError) as error:
+    except (KeyError, ValueError, TypeError, AttributeError) as error:
         errors.append(f'overlayRoles: {error}')
     errors += check_evidence(manifest, revisions)
     if not errors:
@@ -820,8 +864,10 @@ def check_tree_pin(project):
     if not tree_fixture(path).exists():
         return [f'{path}: no pinned tree listing fixture']
     listing = read_listing(path)
-    errors = [f'{path}/{p}: a gitlink (mode 160000), which the pin does not support' for m, _, _, p in listing
-        if m == '160000']
+    errors = [f'{path}/{p}: a gitlink (mode 160000), which the pin does not support' if m == '160000' else
+        f'{path}/{p}: a {k} entry, which a recursive blob listing never has' if k != 'blob' else
+        f'{path}/{p}: a quoted path, which the pin does not support' for m, k, _, p in listing
+        if m == '160000' or k != 'blob' or p.startswith('"')]
     if errors:
         return errors
     if git_tree_hash(listing) != pin.get('rootTree'):
