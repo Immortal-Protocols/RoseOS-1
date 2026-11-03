@@ -75,7 +75,7 @@ on:
       bootstrap_profile:
         description: signing-bootstrap only - reviewed profile in os/signing-bootstrap/profiles.json (not a device admission)
         type: choice
-        options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1]
+        options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1, pro-blazer-factory-v1]
         default: none
       models_bootstrap_run:
         description: models-sign only - run id of the completed protected models-v0 bootstrap whose public receipt binds the signer

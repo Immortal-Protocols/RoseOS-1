@@ -4,6 +4,7 @@ Exercises the real load, operator, commands, preflight and run functions against
 fetcher and a fake runner. Nothing downloads, generates, runs lunch, compiles or signs, and no host or phone is reached;
 a passing run proves admission, bounds and rendering logic only, never a real preparation or build."""
 from pathlib import Path
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -117,15 +118,23 @@ class Fixture(unittest.TestCase):
             setattr(owner, name, boom)
             self.addCleanup(setattr, owner, name, original)
 
-    def op(self, **change):
+    def op(self, identity=False, **change):
         values = dict(host='operator-builder-1', source_root=str(self.src), jobs=16, lock=str(self.lock),
             download_dir=str(self.download), integration_dir=None, inputs_receipt=getattr(self, 'inputs', None),
             node=str(self.node))
+        if identity:
+            values.update(self.identity())
         values.update(change)
         return bb.operator(**values)
 
+    def identity(self):
+        """The bound compile identity: the admitted inputs' build and a timestamp at noon UTC of that build's day."""
+        build = json.loads(Path(self.inputs).read_text())['candidate']['build'] if getattr(self, 'inputs', None) else '2026103150'
+        noon = datetime.datetime.strptime(build[:8], '%Y%m%d').replace(hour=12, tzinfo=datetime.timezone.utc)
+        return dict(build_number=build, build_datetime=str(int(noon.timestamp())))
+
     def preflight(self, stage, recipe=None, available=10 ** 15, lock_free=True, **change):
-        return bb.preflight(recipe or self.synthetic, stage, self.op(**change), statvfs=fs(available),
+        return bb.preflight(recipe or self.synthetic, stage, self.op(identity=stage == 'compile', **change), statvfs=fs(available),
             lock_probe=lambda path: lock_free, root=self.root)
 
     def archive(self):
@@ -161,7 +170,22 @@ class Fixture(unittest.TestCase):
         receipts.mkdir()
         body.update(record)
         (receipts/'0001-blazer.json').write_text(json.dumps(body))
+        self.reserve(receipts)
         return receipts
+
+    def reserve(self, integration, **change):
+        """The build's write-once blazer-allocate reservation beside the integration dir, reserved at noon UTC of its day."""
+        ident = self.identity()
+        noon = datetime.datetime.fromtimestamp(int(ident['build_datetime']), datetime.timezone.utc)
+        record = {'schema': 'roseos.blazer-allocation.v1', 'device': 'blazer', 'build': ident['build_number'], 'source': 'a' * 40,
+                  'runId': '1', 'runAttempt': '1', 'reservedAt': noon.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                  'workDir': str(integration.parent/f'blazer-integrate-{ident["build_number"]}'), 'integrationDir': str(integration),
+                  'observed': {}}
+        record.update(change)
+        path = integration.parent/'blazer-allocations'/f'{ident["build_number"]}.json'
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(record))
+        return path
 
 class RecipeTest(Fixture):
     def test_checked_in_recipe_binds_the_pinned_sources_and_proposal_bounds(self):
@@ -210,7 +234,7 @@ class RecipeTest(Fixture):
             self.assertNotIn(absent, json.dumps(recipe))
 
     def test_rendered_commands(self):
-        rendered = bb.commands(self.recipe, self.op())
+        rendered = bb.commands(self.recipe, self.op(build_number='2026103150', build_datetime='1793448000'))
         self.assertEqual(rendered['download'], {'url': 'https://dl.google.com/dl/android/aosp/' + FACTORY,
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
             'maxBytes': 11362467847, 'expectedBytes': 11362467847, 'timeoutSeconds': 3600})
@@ -233,8 +257,8 @@ class RecipeTest(Fixture):
             ' && echo TARGET_RELEASE=$TARGET_RELEASE && echo TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT'
             ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)')
         self.assertNotIn(' m ', rendered['lunch']['argv'][2] + ' ')
-        self.assertEqual(rendered['compile'], {'cwd': str(self.src), 'env': {'OUT_DIR': 'out-blazer-build', 'PATH': '/usr/bin:/bin',
-            'GIT_CEILING_DIRECTORIES': str(self.src)}, 'argv': ['bash', '-c', 'source build/envsetup.sh && lunch blazer-cur-user'
+        self.assertEqual(rendered['compile'], {'cwd': str(self.src), 'env': {'OUT_DIR': 'out-blazer-build-2026103150', 'PATH': '/usr/bin:/bin',
+            'GIT_CEILING_DIRECTORIES': str(self.src), 'BUILD_NUMBER': '2026103150', 'BUILD_DATETIME': '1793448000'}, 'argv': ['bash', '-c', 'source build/envsetup.sh && lunch blazer-cur-user'
             ' && m -j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package'], 'timeoutSeconds': 28800})
 
     def test_drifted_recipes_are_refused(self):
@@ -320,6 +344,10 @@ class RecipeTest(Fixture):
              'targetSets must be exactly'),
             (lambda r: r['preparation']['lunch']['expect'].update(TARGET_BUILD_VARIANT='userdebug'), 'lunch.expect'),
             (lambda r: r['preparation']['lunch'].update(outDir='out-blazer-build'), 'its own top-level OUT_DIR'),
+            (lambda r: r['preparation']['lunch'].update(outDir='out-blazer-build-2026103150'), 'its own top-level OUT_DIR'),
+            (lambda r: r['compile'].update(outDirTemplate='out-blazer-build'), 'compile.outDirTemplate must be out-blazer-build-{build}'),
+            (lambda r: r['compile'].update(outDirTemplate='out-{build}'), 'compile.outDirTemplate must be out-blazer-build-{build}'),
+            (lambda r: r['compile'].update(outDir='out-blazer-build'), 'compile.outDirTemplate must be out-blazer-build-{build}'),
             (lambda r: r['preparation'].update(totalTimeoutSeconds=2700), 'sum of the stage timeouts'),
             (lambda r: r['preparation']['limits'].update(enforcement='quota'), 'sampled-stop enforcement'),
             (lambda r: r['preparation']['limits'].update(sampleSeconds=0), 'sampled-stop enforcement'),
@@ -2358,7 +2386,7 @@ class RunTest(Fixture):
         receipts = self.integrated()
         need = self.recipe['capacity']['reserveBytes'] + self.recipe['capacity']['compileAllowanceBytes']
         for available, admitted in ((need, True), (need - 1, False)):
-            report = bb.preflight(self.recipe, 'compile', self.op(integration_dir=str(receipts)), statvfs=fs(available),
+            report = bb.preflight(self.recipe, 'compile', self.op(identity=True, integration_dir=str(receipts)), statvfs=fs(available),
                                   lock_probe=lambda path: True)
             space = [p for p in report['problems'] if 'reserve' in p]
             self.assertEqual(not space, admitted, report['problems'])
@@ -2514,6 +2542,10 @@ class GitMetaTest(Fixture):
         self.assertFalse(any(k.startswith('GIT_DIR') for k in env))
 
 class CompileRunTest(Fixture):
+    @property
+    def out(self):
+        return self.src/f'out-blazer-build-{self.identity()["build_number"]}'
+
     def envsetup(self, make='mkdir -p "$OUT_DIR"; echo "$@" > "$OUT_DIR/goals"'):
         (self.src/'build').mkdir(exist_ok=True)
         (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer; }}
@@ -2526,7 +2558,7 @@ m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$P
         if not hasattr(self, 'receipts'):
             self.receipts = self.integrated()
         receipts = self.receipts
-        code = bb.run(recipe or self.synthetic, 'compile', self.op(integration_dir=str(receipts), **change), self.tmp/out,
+        code = bb.run(recipe or self.synthetic, 'compile', self.op(identity=True, integration_dir=str(receipts), **change), self.tmp/out,
                       now=lambda: 0, statvfs=statvfs or fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
         done = self.tmp/out/'completed.json'
         return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
@@ -2544,15 +2576,15 @@ m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$P
         code, done, _ = self.compile()
         self.assertEqual((code, done['ok'], done['outputs']['verdict'], done['outputs']['signed']), (0, True, 'complete', False), done)
         arts = done['outputs']['artifacts']
-        tf = self.src/'out-blazer-build/target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip'
+        tf = self.out/'target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip'
         self.assertEqual((arts['targetFiles']['path'], arts['targetFiles']['sha256']),
                          (str(tf), hashlib.sha256(tf.read_bytes()).hexdigest()))
         self.assertEqual({k: a['state'] for k, a in arts.items()}, dict.fromkeys(
             ('vendorBootImage', 'vendorKernelBootImage', 'otatools', 'targetFiles'), 'collected'))
         self.assertEqual(arts['otatools']['format'], 'zip')
         tf.unlink()
-        shutil.rmtree(self.src/'out-blazer-build/target/product/blazer/obj')
-        (self.src/'out-blazer-build').rename(self.tmp/'kept-out')
+        shutil.rmtree(self.out/'target/product/blazer/obj')
+        self.out.rename(self.tmp/'kept-out')
         self.envsetup(self.OUTPUTS + '; rm $p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip')
         code, done, _ = self.compile(out='r2')
         self.assertEqual((code, done['ok'], done['outputs']['artifacts']['targetFiles']['state']), (1, False, 'missing'))
@@ -2569,12 +2601,12 @@ m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$P
         code, done, report = self.compile()
         self.assertEqual(report['problems'], [])
         self.assertEqual((code, done['ok'], done['stopped'], done['signed'], done['releaseReady']), (0, True, None, False, False), done)
-        self.assertEqual((self.src/'out-blazer-build/goals').read_text(),
+        self.assertEqual((self.out/'goals').read_text(),
                          '-j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package\n')
         self.assertEqual((self.tmp/'compile-git-env').read_text(), f'GIT_CEILING_DIRECTORIES={self.src}\n')
         self.assertEqual((self.tmp/'compile-path').read_text(), '/usr/bin:/bin\n')
         self.assertEqual((done['boundBytes'], done['boundKind'], done['measure'], done['enforcement'], done['outDir']),
-                         (10, 'first-build-proposal', 'filesystem-available-drop', 'sampled-stop', 'out-blazer-build'))
+                         (10, 'first-build-proposal', 'filesystem-available-drop', 'sampled-stop', self.out.name))
         self.assertEqual((done['startAvailableBytes'], done['consumedBytes']), (10 ** 15, 0))
 
     def test_the_allowance_reserve_and_timeout_stop_the_build_and_keep_outputs(self):
@@ -2589,14 +2621,14 @@ m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$P
         self.assertEqual((code, done['ok']), (1, False))
         self.assertIn('above the 10-byte bound', done['stopped'])
         self.assertIn('outputs are kept, not deleted', done['error'])
-        self.assertTrue((self.src/'out-blazer-build/partial').exists())
+        self.assertTrue((self.out/'partial').exists())
         # Admission needs reserve + allowance free, so a drop below the reserve normally trips the allowance first; the
         # reserve stop matters when another writer took space between preflight and start.
         roomy = json.loads(json.dumps(self.synthetic))
         roomy['capacity']['compileAllowanceBytes'] = 10 ** 6
         reserve = roomy['capacity']['reserveBytes']
         falling = iter([reserve + 10 ** 7, reserve + 5] + [reserve - 1] * 10 ** 6)
-        shutil.rmtree(self.src/'out-blazer-build')
+        shutil.rmtree(self.out)
         code, done, _ = self.compile(recipe=roomy, out='r2', statvfs=lambda path: types.SimpleNamespace(
             f_bavail=next(falling), f_frsize=1, f_blocks=2 * 10 ** 15))
         self.assertEqual(code, 1)
@@ -2604,7 +2636,7 @@ m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$P
         self.assertEqual(done['startAvailableBytes'], reserve + 5)
         brief = json.loads(json.dumps(self.synthetic))
         brief['compile']['timeoutSeconds'] = 1
-        shutil.rmtree(self.src/'out-blazer-build')
+        shutil.rmtree(self.out)
         code, done, _ = self.compile(recipe=brief, out='r3')
         self.assertEqual((code, done['stopped']), (1, 'exceeded 1 s'))
 
@@ -2613,12 +2645,101 @@ m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$P
         code, done, report = self.compile(source_root=str(self.production))
         self.assertEqual((code, done), (1, None), 'refused before any process starts')
         self.assertIn('production source root', ' '.join(report['problems']))
-        self.assertFalse((self.production/'out-blazer-build').exists())
+        self.assertFalse((self.production/self.out.name).exists())
         tight = self.synthetic['capacity']['reserveBytes'] + self.synthetic['capacity']['compileAllowanceBytes'] - 1
         code, done, report = self.compile(statvfs=fs(tight), out='r2')
         self.assertEqual((code, done), (1, None))
         self.assertIn('below the reserve', ' '.join(report['problems']))
-        self.assertFalse((self.src/'out-blazer-build').exists())
+        self.assertFalse(self.out.exists())
+
+    def test_the_build_identity_is_bound_to_the_admitted_inputs(self):
+        self.envsetup()
+        self.generated()
+        self.receipts = self.integrated()
+        bound = self.identity()
+        self.assertEqual(self.preflight('compile', integration_dir=str(self.receipts))['problems'], [])
+        report = self.preflight('compile', integration_dir=str(self.receipts))
+        reservation = self.tmp/'blazer-allocations'/f'{bound["build_number"]}.json'
+        self.assertEqual(report['facts']['buildIdentity'], {'buildNumber': bound['build_number'], 'buildDatetime': bound['build_datetime'],
+            'inputsReceiptBuild': bound['build_number'], 'reservation': str(reservation), 'reservedAtEpoch': int(bound['build_datetime']),
+            'buildDatetimeUtc': f'{bound["build_number"][:4]}-{bound["build_number"][4:6]}-{bound["build_number"][6:8]}T12:00:00Z'})
+        self.assertEqual(report['buildIdentity'], {'buildNumber': bound['build_number'], 'buildDatetime': bound['build_datetime']})
+        # T is bound to the build's own reservation, not merely accepted by range: a plausible other second refuses.
+        self.assertIn(f'is not the reservation reservedAt of build {bound["build_number"]}', ' '.join(self.preflight(
+            'compile', integration_dir=str(self.receipts), build_datetime=str(int(bound['build_datetime']) + 1))['problems']))
+        original = reservation.read_text()
+        for change, pattern in (
+                (dict(integrationDir='/elsewhere/blazer-reconcile-x'), 'names integration /elsewhere'),
+                (dict(build='2026103199'), 'is not exactly the roseos.blazer-allocation.v1 reservation'),
+                (dict(schema='other'), 'is not exactly the roseos.blazer-allocation.v1 reservation'),
+                (dict(extra=1), 'is not exactly the roseos.blazer-allocation.v1 reservation'),
+                (dict(reservedAt='2026-10-31 12:00'), 'has no UTC reservedAt')):
+            with self.subTest(pattern):
+                self.reserve(self.receipts, **change)
+                self.assertIn(pattern, ' '.join(self.preflight('compile', integration_dir=str(self.receipts))['problems']))
+        reservation.unlink()
+        self.assertIn('no readable reservation', ' '.join(self.preflight('compile', integration_dir=str(self.receipts))['problems']))
+        (self.tmp/'elsewhere.json').write_text(original)
+        os.symlink(self.tmp/'elsewhere.json', reservation)
+        self.assertIn('no readable reservation', ' '.join(self.preflight('compile', integration_dir=str(self.receipts))['problems']),
+                      'a linked reservation is never followed')
+        reservation.unlink()
+        reservation.write_text(original)
+        day = int(bound['build_datetime']) - 12 * 3600
+        other = str(int(bound['build_number']) + 1)
+        for change, pattern in (
+                (dict(build_number=other), f'--build-number {other} is not the admitted inputs build {bound["build_number"]}'),
+                (dict(build_datetime=str(day - 1)), 'is before build'),
+                (dict(build_datetime=str(day)), 'is not the reservation reservedAt'),
+                (dict(build_datetime=str(int(time.time()) + 3600)), 'is in the future'),
+                (dict(build_number=None), 'compile needs --build-number'),
+                (dict(build_datetime=None), 'compile needs --build-datetime')):
+            with self.subTest(pattern):
+                self.assertIn(pattern, ' '.join(self.preflight('compile', integration_dir=str(self.receipts), **change)['problems']))
+        for value in ('202611031', '0026110301', '2026110301x', ''):
+            with self.subTest(value), self.assertRaisesRegex(bb.InvalidInput, 'must be a ten-digit YYYYMMDDNN'):
+                self.op(build_number=value)
+        for value in ('0', '01793718000', '1793718000.5', '-1', '1234567890123'):
+            with self.subTest(value), self.assertRaisesRegex(bb.InvalidInput, r'must be epoch seconds \(1-12 digits\)'):
+                self.op(build_datetime=value)
+        self.assertEqual(self.op(build_datetime='1793718000')['buildDatetime'], '1793718000')
+        self.assertIn('only compile takes --build-number and --build-datetime',
+                      ' '.join(bb.preflight(self.synthetic, 'lunch', self.op(identity=True), statvfs=fs(10 ** 15),
+                                            lock_probe=lambda path: True, root=self.root)['problems']))
+        code, done, _ = self.compile(build_number=other)
+        self.assertEqual((code, done), (1, None), 'a mismatched identity starts nothing')
+
+    def test_the_runner_identity_never_reaches_the_build(self):
+        self.envsetup('env | grep -E "^BUILD_(NUMBER|DATETIME)" | sort > ' + str(self.tmp/'identity-env') + '; ' + self.OUTPUTS)
+        for name, value in (('BUILD_NUMBER', '1111111111'), ('BUILD_DATETIME', '1'), ('BUILD_DATETIME_FILE', '/tmp/runner-date')):
+            os.environ[name] = value
+            self.addCleanup(os.environ.pop, name, None)
+        code, done, _ = self.compile()
+        bound = self.identity()
+        self.assertEqual((code, done['ok']), (0, True), done)
+        self.assertEqual((self.tmp/'identity-env').read_text(),
+                         f'BUILD_DATETIME={bound["build_datetime"]}\nBUILD_NUMBER={bound["build_number"]}\n')
+        started = json.loads((self.tmp/'r/started.json').read_text())
+        self.assertEqual((started['command']['env']['BUILD_NUMBER'], started['command']['env']['BUILD_DATETIME'],
+                          started['command']['env']['OUT_DIR']), (bound['build_number'], bound['build_datetime'], self.out.name))
+        pair = {'buildNumber': bound['build_number'], 'buildDatetime': bound['build_datetime']}
+        self.assertEqual((done['buildIdentity'], started['buildIdentity'], done['outDir']), (pair, pair, self.out.name))
+        self.assertEqual(json.loads((self.tmp/'r/preflight.json').read_text())['buildIdentity'], pair)
+        self.assertTrue(done['outputs']['outDir'].endswith(self.out.name))
+
+    def test_each_build_writes_a_fresh_out_dir_and_earlier_outputs_are_preserved(self):
+        legacy = self.src/'out-blazer-build'
+        (legacy/'target').mkdir(parents=True)
+        (legacy/'target/kept.img').write_bytes(b'an earlier build')
+        before = self.snapshot(legacy)
+        self.envsetup(self.OUTPUTS)
+        code, done, _ = self.compile()
+        self.assertEqual((code, done['ok'], done['outDir']), (0, True, self.out.name), done)
+        self.assertEqual(self.snapshot(legacy), before, 'an earlier OUT_DIR is never read, moved or written')
+        code, done, report = self.compile(out='r2')
+        self.assertEqual((code, done), (1, None))
+        self.assertIn(f'{self.out.name} already exists; refusing to reuse or overwrite an OUT_DIR', ' '.join(report['problems']))
+        self.assertEqual(self.snapshot(legacy), before)
 
 if __name__ == '__main__':
     unittest.main()

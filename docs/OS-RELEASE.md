@@ -1571,3 +1571,18 @@ Current state (OCT29-INFRA-S006): `fold-rango-v1` is resource-bound but blocked.
 The collision check needs `secretmanager.secrets.get` and `secretmanager.versions.list` on both secrets. The add-only
 and accessor grants do not include them, so metadata stays unavailable and the run stops. `python3
 scripts/signing-bootstrap.py plan --profile fold-rango-v1` prints the exact operations. A merged workflow is not an admitted key operation.
+
+**Factory-archive profiles and live access (2026-11-03).** `fold-rango-factory-v1` (Rango) and `pro-blazer-factory-v1`
+(Blazer) each bootstrap one passphrase-encrypted Ed25519 factory-archive key with the builder's measured `ssh-keygen`
+(bound from `os/signing-bootstrap/ssh-keygen-evidence.json`). The Rango profile is resource-bound; the Blazer profile
+stays unbound until its approvals, containers and `secretAccessor` exist and its one bootstrap run is approved. These two
+profiles and `pro-blazer-v1` opt in with `access.liveCheck`: no expiry is recorded, and the run's first credentialed
+`secrets describe` and `versions list` calls on both secrets, after the signer login and before any key exists, check
+the access. A failure there (including a missing or occupied secret) stops the run with nothing used up. A live-check
+profile must also recheck both secrets just before the import (`recheckEmptyBeforeImport`; readiness refuses it
+otherwise), and a resource-bound profile lists nothing missing. `versions.add` cannot be tested without adding, so the
+bootstrap grant is one binding per secret holding `secretmanager.secrets.get`, `secretmanager.versions.list` and
+`secretmanager.versions.add` with one expiry of at most 4 h, made at action time, and the run is dispatched well inside
+that window. A failed recheck or a denied add after generation uses up the run (`failed-before-commit` or
+`recovery-needed`). Each profile's `access.policy` states the full rule; `plan --profile P` prints the operations and
+the grant.
