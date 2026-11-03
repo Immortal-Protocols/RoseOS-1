@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -117,7 +117,7 @@ class Guard(unittest.TestCase):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
                       'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
-                      'lunch, inspect]\n        default: none\n', WORKFLOW)
+                      'lunch, inspect, git-inspect]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
         self.assertIn('blazer_prep_stage', inputs)
@@ -306,6 +306,80 @@ class Inspect(unittest.TestCase):
         self.assertEqual(report['limits'], {'maxEntries': 200000, 'maxSeconds': 900})
         self.assertEqual(wire(*argv).returncode, 2)
         self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['inspection.json'])
+
+
+class GitInspect(unittest.TestCase):
+    """The narrow git-only route: `inspect-git --host H` and nothing else; no broad scan; one write-once receipt."""
+    BROAD = {'--stage', '--lock', '--receipt-dir', '--source-root', '--download-dir', '--node', '--candidate-root',
+             '--candidate-source-root', '--candidate-download-dir', '--candidate-receipts-dir', '--candidate-node',
+             '--candidate-node-from-path', '--reference-source-root', '--max-entries', '--max-seconds', '--jobs'}
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_exact_narrow_call_and_bounds(self):
+        tail, outer, minutes = wiring.resolve('git-inspect')
+        self.assertEqual(tail, ['--host', 'immortal-os-builder'])
+        self.assertFalse(self.BROAD & set(tail))
+        self.assertEqual((outer, minutes), (120, 13))
+        self.assertLess(wiring.helper().GIT_INSPECT_MAX_SECONDS, outer)
+        self.assertLessEqual(outer + 30, minutes * 60 - 180)
+        self.assertEqual(wire('check', '--stage', 'git-inspect').stdout, 'outer_seconds=120\njob_minutes=13\n')
+
+    def test_recipe_targets_agree_with_the_bound_source_root_and_production(self):
+        recipe = json.loads((ROOT/'os/build-only/blazer.json').read_text())['preparation']['gitInspection']['targets']
+        self.assertEqual(recipe, {'production': f'{PRODUCTION}/vendor/adevtool/.git',
+                                  'candidate': BINDING['sourceRoot'] + '/vendor/adevtool/.git'})
+        moved = self.tmp/'moved.json'
+        moved.write_text(json.dumps({**BINDING, 'sourceRoot': '/home/pixelbuild/rose-actions/blazer-prep-9-1/source'}))
+        self.assertEqual(wire('check', '--stage', 'git-inspect', '--binding', str(moved)).returncode, 2)
+
+    def test_real_helper_writes_exactly_one_git_receipt_and_refuses_reuse(self):
+        receipts = self.tmp/'run'
+        argv = ('run', '--stage', 'git-inspect', '--receipt-dir', str(receipts), '--run-id', '41600000000', '--attempt', '1')
+        result = wire(*argv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[0]),
+                         {'helper': [str(ROOT/'scripts/blazer-build-only.py'), 'inspect-git', '--host', 'immortal-os-builder']})
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['git-inspection.json'])
+        report = json.loads((receipts/'git-inspection.json').read_text())
+        self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'],
+                          report['writes'], report['gitProcess'], report['enablesPreparation']),
+                         ('roseos.blazer-git-inspection.v1', True, 0, False, False, False, False))
+        self.assertEqual(set(report['targets']), {'production', 'candidate'})
+        self.assertEqual(report['bounds']['maxSeconds'], 60)
+        for absent in ('reference', 'candidates', 'node', 'bound', 'download', 'collisions', 'projects'):
+            self.assertNotIn(absent, report)  # no broad scan section
+        self.assertEqual(wire(*argv).returncode, 2)
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['git-inspection.json'])
+
+    def test_the_helper_declares_only_host_for_inspect_git(self):
+        import argparse
+        declared, original = {}, argparse.ArgumentParser.add_argument
+
+        def record(parser, *flags, **kwargs):
+            declared[flags[0]] = kwargs.get('required', False)
+            return original(parser, *flags, **kwargs)
+        argparse.ArgumentParser.add_argument = record
+        try:
+            with open(os.devnull, 'w') as null:
+                stderr, sys.stderr = sys.stderr, null
+                try:
+                    with self.assertRaises(SystemExit):
+                        wiring.helper().main_git([])
+                finally:
+                    sys.stderr = stderr
+        finally:
+            argparse.ArgumentParser.add_argument = original
+        self.assertEqual({k: v for k, v in declared.items() if k != '-h'}, {'--host': True})
+
+    def test_existing_routes_are_unchanged(self):
+        self.assertEqual(wiring.resolve('inspect', run_id='5', attempt='1')[1:], (960, 20))
+        for stage, bounds in (('source', (7500, 136)), ('download', (3900, 76)), ('vendor', (11100, 196)), ('lunch', (2100, 46))):
+            tail, outer, minutes = wiring.resolve(stage)
+            self.assertEqual((outer, minutes), bounds, stage)
+            self.assertEqual(tail[:2], ['--stage', stage])
+        self.assertIn('git-inspection.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
 
 
 class Job(unittest.TestCase):
