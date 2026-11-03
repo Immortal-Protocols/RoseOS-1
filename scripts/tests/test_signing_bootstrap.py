@@ -521,7 +521,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", JOBS['cleanup'])
         self.assertIn('  group: os-release-frankel\n', WORKFLOW)
         self.assertIn("      - name: Signing-bootstrap guard\n        if: inputs.mode == 'signing-bootstrap'\n", JOBS['guard'])
-        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1]', WORKFLOW)
+        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1]', WORKFLOW)
         self.assertIn('        options: [frankel]\n', WORKFLOW)  # no device is admitted
 
     def guard_script(self):
@@ -1271,6 +1271,16 @@ class SshKeygenEvidence(unittest.TestCase):
 
 
 class FactoryBootstrapProfile(unittest.TestCase):
+    def test_factory_profile_is_a_dispatch_choice_that_the_guard_refuses_until_ready(self):
+        self.assertIn('fold-rango-factory-v1', bootstrap_options())  # owner-authorized dispatch choice
+        env = dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1', ROSE_DEVICE='frankel')
+        # The hosted guard refuses exactly while readiness has reasons, whatever is committed.
+        self.assertEqual(bool(sb.guard(env, PROFILES, NOW)), bool(sb.readiness('fold-rango-factory-v1', PROFILES, NOW)))
+        unbound = copy.deepcopy(PROFILES)
+        unbound['profiles']['fold-rango-factory-v1']['status'] = 'unbound'
+        self.assertTrue(any(f.startswith('profile-unbound') for f in sb.guard(env, unbound, NOW)))
+        self.assertTrue(sb.guard(dict(env, ROSE_DEVICE='rango'), unbound, NOW))  # the dispatch shape is unchanged
+
     def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
         reasons = sb.readiness('fold-rango-factory-v1', PROFILES, NOW)
         self.assertEqual(reasons[0][0], 'profile-unbound')
