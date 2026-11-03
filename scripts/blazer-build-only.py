@@ -29,8 +29,10 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
             stream the pinned official URL to DIR/<file>.part (byte and time bound), rename to DIR/<file> only when its
             sha256 equals the pin; an existing archive is never replaced; a failed attempt removes only its own .part
   vendor    --host --lock --download-dir --source-root ISOLATED --node PATH
-            `node --version` must meet the floor, then `vendor/adevtool/bin/run generate-all -d blazer` with
-            ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
+            `node --version` must meet the floor and `git -C vendor/adevtool rev-parse HEAD` must print exactly the
+            pin (ISOLATED needs vendor/adevtool/.git; GIT_* stripped, GIT_CEILING_DIRECTORIES=ISOLATED), then
+            `vendor/adevtool/bin/run generate-all -d blazer` with ADEVTOOL_SKIP_DEP_BUILD=1 (adevtool never rebuilds its
+            deps) and ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
             (os/release-pipeline/frankel.json host.sourceRoot); the archive's sha256, the adevtool deps revision marker, the
             host tools and the kernel directory must be present (project revisions are not checked) and every collision
             path absent; consumed bytes are measured afterwards against the bound
@@ -214,6 +216,11 @@ def preparation_problems(recipe, root, contract):
             problems.append('preparation.source.exclusionsFrom must exclude repo metadata, keys, releases, outputs and .git')
     except (KeyError, OSError, ValueError, TypeError, AttributeError):
         problems.append('preparation.source.exclusionsFrom must resolve to the checked-in alpha exclusion policy')
+    git = vendor.get('adevtoolGit') or {}
+    if (git.get('metadataPath') != 'vendor/adevtool/.git' or git.get('argv') != ['git', '-C', 'vendor/adevtool', 'rev-parse', 'HEAD']
+            or git.get('skipDepBuildEnv') != {'ADEVTOOL_SKIP_DEP_BUILD': '1'} or not positive(git.get('timeoutSeconds'))):
+        problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
+                        'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -276,12 +283,16 @@ def commands(recipe, op, root=ROOT):
             'exclusionsFrom': spec['exclusionsFrom'], 'includePaths': list(spec['includePaths']),
             'maxBytes': spec['boundBytes'], 'timeoutSeconds': spec['timeoutSeconds'], 'processes': 0, 'method': spec['method']}
         if op['downloadDir'] is not None:
+            git = prep['vendor']['adevtoolGit']
             rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir']),
-                    'PATH': f'<receipt-dir>/{NODE_PATH_DIR}:{SAFE_PATH}' if op['node'] else SAFE_PATH},
+                    'PATH': f'<receipt-dir>/{NODE_PATH_DIR}:{SAFE_PATH}' if op['node'] else SAFE_PATH,
+                    'GIT_CEILING_DIRECTORIES': src, **git['skipDepBuildEnv']},
                 'argv': list(recipe['generate']['argv']), 'timeoutSeconds': prep['vendor']['timeoutSeconds'],
-                'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version']}
+                'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version'],
+                'adevtoolHead': list(git['argv']), 'adevtoolHeadTimeoutSeconds': git['timeoutSeconds']}
         checks = ' && '.join(f'echo {v}=${v}' for v in LUNCH_VARS[:3]) + ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)'
-        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH},
+        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH,
+                                                 'GIT_CEILING_DIRECTORIES': src},
             'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {checks}'],
             'timeoutSeconds': prep['lunch']['timeoutSeconds']}
         if op['jobs'] is not None:
@@ -373,15 +384,7 @@ def tree_problems(recipe, src):
     for needed in TREE_NEEDS:
         if not (src/needed).exists():
             problems.append(f'{needed} is missing from the source tree')
-    deps = src/recipe['adevtool']['depsDir']
-    revision = (deps/'adevtool_revision').read_text().strip() if (deps/'adevtool_revision').is_file() else None
-    if revision != recipe['pins']['vendor/adevtool']:
-        problems.append(f'{recipe["adevtool"]["depsDir"]}/adevtool_revision is {revision!r}, not the pinned revision')
-    tools = deps/'host/linux-x86/bin'
-    missing = [t for t in recipe['adevtool']['depsTools']
-        if not (tools/t).is_file() or (tools/t).is_symlink() or not os.access(tools/t, os.X_OK)]
-    if missing:
-        problems.append(f'adevtool host tools missing or not executable: {missing}')
+    problems += deps_problems(recipe, src)  # the same exact, no-follow marker and tool checks as the source stage
     if not (src/recipe['kernelDir']).is_dir():
         problems.append(f'{recipe["kernelDir"]} (pinned laguna kernel) is missing from the source tree')
     return problems
@@ -478,6 +481,12 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         for rel in prep['vendor']['collisionPaths']:
             if os.path.lexists(src/rel):
                 problems.append(f'{rel} already exists; generate-all would replace it (nothing is deleted or reused)')
+        git = src/prep['vendor']['adevtoolGit']['metadataPath']
+        facts['adevtoolGit'] = meta(git)
+        if not os.path.lexists(git):
+            problems.append(f'{prep["vendor"]["adevtoolGit"]["metadataPath"]} is missing: no git version data for adevtool '
+                            '(its version check needs `git -C vendor/adevtool rev-parse HEAD`; a source-stage snapshot '
+                            'has no .git, so vendor cannot run on it)')
         node = op['node']
         if node.is_symlink() or not node.is_file() or not os.access(node, os.X_OK):
             problems.append(f'node {node} is not an executable regular file')
@@ -1157,7 +1166,9 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
             ok, outcome = download(recipe, command, fetcher, clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
             return 0 if ok else 1
-        env = {**{k: v for k, v in os.environ.items() if k not in ('PATH',)}, **command['env']}
+        # Inherited GIT_* (e.g. a GIT_DIR or GIT_WORK_TREE elsewhere) never reaches a child: git answers only from
+        # the tree itself, bounded by GIT_CEILING_DIRECTORIES at the source root.
+        env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_')}, **command['env']}
         prep, capacity = recipe['preparation'], recipe['capacity']
         limits = {**prep['limits'], 'boundBytes': prep[stage]['boundBytes'], 'reserveBytes': capacity['reserveBytes']}
         if stage == 'vendor':
@@ -1173,6 +1184,18 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False, 'node': report['facts']['node'],
                     'nodeVersion': (node.get('stdout') or '').strip(), 'error': f'node must be >= {floor}', 'at': stamp(now)})
                 return 1
+            # ADEVTOOL_SKIP_DEP_BUILD=1 skips adevtool's own marker-vs-HEAD comparison; it is made here instead, before
+            # any generation: the marker is the exact pin (preflight), and HEAD must print exactly the pin too.
+            head = supervise(command['adevtoolHead'], command['cwd'], env, command['adevtoolHeadTimeoutSeconds'], limits,
+                             capture=True, statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
+            want = recipe['pins']['vendor/adevtool'] + '\n'
+            if head['returncode'] or head['stopped'] or head.get('stdout') != want:
+                release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
+                    'adevtoolHead': {'returncode': head['returncode'], 'stopped': head['stopped'],
+                                     'stdout': (head.get('stdout') or '')[:128]},
+                    'error': 'git -C vendor/adevtool rev-parse HEAD did not print exactly the pinned revision; no genuine '
+                             'adevtool version data, so nothing is generated', 'at': stamp(now)})
+                return 1
         paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
         watch = [str(op['sourceRoot']/rel) for rel in paths]
         outcome = supervise(command['argv'], command['cwd'], env, command['timeoutSeconds'], limits, watch=watch,
@@ -1187,6 +1210,8 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                                            'bound between samples (outputs are kept, not deleted)')
         if stage == 'vendor':
             outcome['node'] = report['facts']['node']
+            outcome['adevtoolHead'] = want.strip()
+            outcome['skipDepBuild'] = dict(prep['vendor']['adevtoolGit']['skipDepBuildEnv'])
         if stage == 'lunch' and outcome['returncode'] == 0 and not outcome['stopped']:
             seen = dict(line.split('=', 1) for line in stdout.splitlines() if '=' in line)
             outcome['targets'] = {k: seen.get(k) for k in LUNCH_VARS}
