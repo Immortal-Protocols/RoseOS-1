@@ -60,7 +60,8 @@ test('Oxblood composition: header pearl and title, upper-right work entry, capti
  assert.match(activity,/taskTitle=presentedText\(ConversationPresentation\.TITLE_SP,ink\(\)/);assert.match(activity,/taskBody=presentedText\(ConversationPresentation\.BODY_SP,ink2\(\)/);
  assert.match(activity,/work\.setContentDescription\("Open Rose’s background work"\);work\.setOnClickListener\(v->openOverview\(\)\);/);
  assert.ok(!/work\.setEnabled\(false\)/.test(activity),'the work entry is never disabled');
- assert.match(activity,/workShown=TaskControl\.workShown\(ctl,resumedAt,SystemClock\.uptimeMillis\(\),workShown\);workGlyph\.set\(workShown,reducedMotion\(\)\);/,'any authoritative session ready, from a fresh read (brief hold on resume)');
+ assert.match(activity,/workGlyph\.set\(ctl\.working\(resumedAt,SystemClock\.uptimeMillis\(\)\),reducedMotion\(\)\);/,'any authoritative session ready, from a current read only');
+ assert.doesNotMatch(activity,/workShown|WORK_HOLD/,'never a held last-shown state');
  assert.match(activity,/resumed=true;resumedAt=SystemClock\.uptimeMillis\(\);ctlPolledAt=0;/,'a resume makes older reads stale and starts a fresh read at once');
  assert.match(activity,/\}\)\.withSessions\(summarized\[0\]\?slots:null,startedAt\);/,'the same get_state reply\'s routed sessions summary');
  assert.match(activity,/slots\.add\(new String\[\]\{jsonString\(x,"sessionId"\),jsonString\(x,"status"\)\}\)/,'only each slot\'s id and status are kept');

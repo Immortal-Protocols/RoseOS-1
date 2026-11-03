@@ -29,7 +29,7 @@ public final class RoseConversationActivity extends Activity {
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";boolean shownTaskActive;
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
- volatile TaskControl.ControllerRead ctl=TaskControl.ControllerRead.PENDING_READ;volatile long resumedAt;boolean workShown;volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
+ volatile TaskControl.ControllerRead ctl=TaskControl.ControllerRead.PENDING_READ;volatile long resumedAt;volatile boolean ctlPolling;long ctlPolledAt;boolean watchOpening;
  String stopPendingFor,stopMessage="";boolean stopInFlight;
  int headTop;
  int noticeSerial;
@@ -176,9 +176,11 @@ public final class RoseConversationActivity extends Activity {
   String said=RosePresenceModel.describe(visual);if(!said.contentEquals(pearlView.getContentDescription()==null?"":pearlView.getContentDescription()))pearlView.setContentDescription(said);
   // Working while at least one of Rose's sessions, in any slot, is authoritatively running (status exactly ready; #410
   // rose.workButton.working), the same definition as Background Work's running edge, from a read begun since this
-  // screen last resumed: never while launching, waiting or holding a failed close, and never from a stale read.
-  // Until the first read begun since the resume arrives, what was shown is held briefly (TaskControl.WORK_HOLD_MS).
-  workShown=TaskControl.workShown(ctl,resumedAt,SystemClock.uptimeMillis(),workShown);workGlyph.set(workShown,reducedMotion());
+  // screen last resumed and still current: never while launching, waiting or holding a failed close, never from a
+  // stale or failed read.
+  // Dark until a read begun since this resume lands, and again once the newest read is older than WORK_MAX_AGE_MS:
+  // the button never repeats a state from before a pause, lock or user switch, nor holds one while reads stall.
+  workGlyph.set(ctl.working(resumedAt,SystemClock.uptimeMillis()),reducedMotion());
   renderTask(s);
   if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
  }

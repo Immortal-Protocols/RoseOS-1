@@ -65,22 +65,18 @@ final class TaskControl {
    if(slots!=null)for(String[] e:slots)if(e!=null&&e.length>=2&&e[0]!=null&&!e[0].isEmpty()&&!"null".equals(e[0])&&READY.equals(e[1]))any=true;
    return new ControllerRead(status,sessionId,taskId,failure,any,startedAt);
   }
-  /** Rose's work button (#410 rose.workButton.working): lit only from a successful read started at or after the
-   * screen last resumed in which at least one session is authoritatively running. */
-  boolean working(long resumedAt){return failure==ReadFailure.NONE&&anyReady&&readAt>=0&&readAt>=resumedAt;}
-  /** Whether this read was started since the screen last resumed (stamped and fresh). */
-  boolean freshSince(long resumedAt){return readAt>=0&&readAt>=resumedAt;}
+  /** Rose's work button (#410 rose.workButton.working): lit only while this read is current evidence that at least one
+   * session is authoritatively running: a successful read, started since the screen last resumed (a read from before
+   * a pause, lock or user switch never counts), and started no more than WORK_MAX_AGE_MS ago (a read that is not
+   * followed by another, e.g. a hung provider call, stops counting). Otherwise dark: never the last shown state. */
+  boolean working(long resumedAt,long now){
+   return failure==ReadFailure.NONE&&anyReady&&readAt>=0&&readAt>=resumedAt&&now-readAt<=WORK_MAX_AGE_MS;
+  }
   String key(){return failure+"|"+status+"|"+sessionId+"|"+taskId;}
  }
- /** How long, after the screen resumes, the work button keeps what it last showed while the first fresh read is in
-  * flight (no lit-dark-lit blink on every return). Past it, without a fresh read, it is dark: never a stale claim. */
- static final long WORK_HOLD_MS=2000;
- /** The work button's state now: a fresh read decides; before one arrives, what was shown is held for at most
-  * WORK_HOLD_MS after the resume, then dark. */
- static boolean workShown(ControllerRead read,long resumedAt,long now,boolean shown){
-  if(read.freshSince(resumedAt))return read.working(resumedAt);
-  return shown&&now>=resumedAt&&now-resumedAt<WORK_HOLD_MS;
- }
+ /** The longest a read stays evidence for the work button: reads start about once a second while the screen is
+  * resumed, so this allows one late or slow read; past it, with no newer read, the button is dark. */
+ static final long WORK_MAX_AGE_MS=3000;
  /** The one controller status that means running (same word as CurrentApps.SESSION_READY). */
  static final String READY="ready";
  private static final java.util.List<String> ACTIVE=java.util.Arrays.asList("ready","blocked","launching");
