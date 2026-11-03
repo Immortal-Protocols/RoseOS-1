@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Rose HiFi Prototype</title>
 <style>
 :root{--wallpaper:url(%%WALLPAPER%%);--brush:url(%%BRUSH%%);--ox-home:url(%%OX_HOME%%);--ox-rose:url(%%OX_ROSE%%)}
 /*%%CSS%%*/
 </style></head>
 <body>
+<noscript><div class="noscript"><b>This viewer isn’t running the prototype.</b> It shows the page without JavaScript, so nothing can move. Open the file in a browser instead: on Android, open it with Chrome from the Files app; on a computer, open it in Chrome, Safari, Edge or Firefox.</div></noscript>
 <div class="page">
 <main class="stage" id="stage" aria-label="Rose HiFi prototype">
  <div class="fit" id="fit">
@@ -108,6 +109,7 @@
   <p class="hstatus" id="h-render">Starting renderer…</p>
  </fieldset>
 </aside>
+<button class="harness-toggle" id="h-toggle" aria-expanded="false" aria-label="Show prototype controls"><span aria-hidden="true">⋯</span></button>
 </div>
 <div class="sr" id="announcer" aria-live="polite"></div>
 <script>/*%%MODEL%%*/</script>

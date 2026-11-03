@@ -10,6 +10,11 @@
   let reducedOverride = false, epoch = 0;
   const timers = new Set();
   const reduced = () => reducedOverride || media.matches;
+  // Phone mode: opened on a phone (or ?phone=1), the simulated screen fills the real one, the bezel
+  // goes, and the simulation controls fold into a sheet behind a small button. ?phone=0 opts out.
+  const phoneParam = new URLSearchParams(location.search).get('phone');
+  const phoneMode = () => phoneParam === '1' || (phoneParam !== '0' && (window.innerWidth <= 540 || matchMedia('(pointer: coarse) and (max-width: 900px)').matches));
+  document.documentElement.classList.toggle('phone-mode', phoneMode());
 
   const RESULTS = {
     saturday: {
@@ -475,6 +480,17 @@
     $('announcer').textContent = peek ? 'System controls shown. Swipe down to hide them.' : '';
   }
   function goHomeFromGesture() { setPeek(false, { leaving: true }); dispatch({ type: 'home' }); }
+  // Real touch: a swipe that starts on the bottom edge belongs to the edge gesture, so stop the
+  // browser from turning it into a scroll (which would cancel the pointer stream mid-swipe).
+  let edgeTouch = false;
+  screen.addEventListener('touchstart', (e) => {
+    edgeTouch = false;
+    if (device.dataset.theme !== 'oxblood' || e.touches.length !== 1) return;
+    const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight, up = (r.bottom - e.touches[0].clientY) / k;
+    edgeTouch = peek ? up <= 104 : up <= 56 && (peekable() || state.view === 'switcher');
+  }, { passive: true });
+  screen.addEventListener('touchmove', (e) => { if (edgeTouch && e.cancelable) e.preventDefault(); }, { passive: false });
+  screen.addEventListener('touchend', () => { edgeTouch = false; }, { passive: true });
   screen.addEventListener('pointerdown', (e) => {
     if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
@@ -506,7 +522,8 @@
       if (homeSwipe) goHomeFromGesture();
       else if (dy < -36) setPeek(true);
     } else {
-      if (dy > 36) setPeek(false);
+      // The raised edge is short, so a small or quick downward swipe on it is enough to lower it.
+      if (dy > 22 || (dy > 10 && v > 0.35)) setPeek(false);
       else if (dy < -120) goHomeFromGesture();
     }
   };
@@ -580,7 +597,19 @@
     const stage = $('stage'), w = state.layout === 'unfolded' ? 748 : 384;
     const dw = w + 24, dh = 832 + 24;
     let k;
-    if (window.innerWidth <= 820) {
+    const phone = phoneMode();
+    document.documentElement.classList.toggle('phone-mode', phone);
+    if (!phone) document.documentElement.style.removeProperty('--screen-h');
+    if (phone) {
+      // The screen fills the real display edge to edge (no bezel); any spare space reads as black bezel.
+      stage.style.height = '';
+      // Match the real display's shape: width maps to the 384pt design width, and the simulated screen
+      // takes the real height (kept within 640–900pt so every layout still holds).
+      const vv = window.visualViewport, vw = vv ? vv.width : window.innerWidth, vh = vv ? vv.height : window.innerHeight;
+      const sh = Math.round(Math.max(640, Math.min(900, vh * w / vw)));
+      document.documentElement.style.setProperty('--screen-h', sh + 'px');
+      k = Math.min(vw / w, vh / sh);
+    } else if (window.innerWidth <= 820) {
       // Narrow screens: fit by width and let the page scroll to the controls below.
       k = Math.min(1, (window.innerWidth - 16) / dw);
       stage.style.height = Math.ceil(dh * k + 16) + 'px';
@@ -592,6 +621,13 @@
     if ($('fit').style.getPropertyValue('--fit') !== kk) { $('fit').style.setProperty('--fit', kk); renderer.refresh(); }
   }
   window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', () => setTimeout(fit, 250));
+  $('h-toggle').addEventListener('click', () => {
+    const open = !document.documentElement.classList.contains('harness-open');
+    document.documentElement.classList.toggle('harness-open', open);
+    $('h-toggle').setAttribute('aria-expanded', String(open));
+    $('h-toggle').setAttribute('aria-label', open ? 'Hide prototype controls' : 'Show prototype controls');
+  });
   // Glass sheen follows the pointer slightly, like light across a real display.
   let sheenRaf = 0;
   $('stage').addEventListener('pointermove', (e) => {
