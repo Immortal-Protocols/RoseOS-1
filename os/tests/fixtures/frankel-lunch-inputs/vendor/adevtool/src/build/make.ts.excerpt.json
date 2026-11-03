@@ -1,0 +1,16 @@
+{
+ "lines": {
+  "164": "  blocks.push(`include ${getVersionCheckFilePath(dirs)}`)",
+  "4": "import { getVersionCheckFilePath, VendorDirectories } from '../blobs/build'",
+  "564": "  blocks.push(`PRODUCT_MAKEFILES += $(LOCAL_DIR)/${productName}.mk`)"
+ },
+ "path": "src/build/make.ts",
+ "project": "vendor/adevtool",
+ "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+ "selectedBy": [
+  "getVersionCheckFilePath",
+  "PRODUCT_MAKEFILES"
+ ],
+ "upstreamGitBlob": "07dc40ea2a3cf7ab84ba09d50726473078e389f6",
+ "upstreamSha256": "313f962cc05592b99d7b55f39f1402746386598bb4d593cc587f2b45c1af5729"
+}

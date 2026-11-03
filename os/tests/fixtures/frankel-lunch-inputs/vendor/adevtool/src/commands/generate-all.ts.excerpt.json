@@ -1,0 +1,19 @@
+{
+ "lines": {
+  "190": "    noVerify: Flags.boolean({",
+  "317": "          if (!flags.noVerify) {",
+  "322": "              await compareToReferenceFileTreeSpec(vendorDirs, config)",
+  "329": "        await writeVersionCheckFile(config, vendorDirs, flags.noVerify)",
+  "344": "async function compareToReferenceFileTreeSpec(vendorDirs: VendorDirectories, config: DeviceConfig) {"
+ },
+ "path": "src/commands/generate-all.ts",
+ "project": "vendor/adevtool",
+ "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+ "selectedBy": [
+  "noVerify",
+  "compareToReferenceFileTreeSpec(",
+  "writeVersionCheckFile("
+ ],
+ "upstreamGitBlob": "4609d74c8537091688745dffe99f74f69f274518",
+ "upstreamSha256": "3b94fecb1eefe8eece73ec60de80b2c0fc55a21151b8672ba923c760911706b9"
+}

@@ -1,0 +1,572 @@
+{
+ "schemaVersion": 1,
+ "kind": "rose-frankel-lunch-inputs",
+ "owner": "OS Product (#410). Release owns the adapter, the observer and the workflow; they read this as data.",
+ "lunch": {
+  "target": "frankel-cur-user",
+  "product": "frankel",
+  "release": "cur",
+  "variant": "user"
+ },
+ "provenance": "every value is an expected value derived from the pinned public sources below; none is a host fact. An observer or adapter compares current bytes with them and never copies them into any receipt, bundle report or binding",
+ "sources": [
+  {
+   "path": "vendor/adevtool",
+   "repo": "GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "rootTree": "f0863541755769c12b01f5e1a429bdc6cb704f07",
+   "listing": {
+    "path": "os/tests/fixtures/frankel-lunch-inputs/trees/vendor__adevtool.ls-tree.txt.gz",
+    "sha256": "9524aba018afb18c1d29dd6f7b770d53da747ac2c3881ca31fdbf1ef110b160a",
+    "compressedSha256": "d9832e9c46b3670ea5a66c56771d50760b6ba8e2364364c83006adda57f0dac0",
+    "paths": 55890
+   }
+  },
+  {
+   "path": "build/make",
+   "repo": "GrapheneOS/platform_build",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "rootTree": "8cba4028c35f5cc4e4ebab97b01b6ca93700623f",
+   "listing": {
+    "path": "os/tests/fixtures/frankel-lunch-inputs/trees/build__make.ls-tree.txt.gz",
+    "sha256": "958bfe6712d2675118b86d6d9a9978cc3626cad0c00c94af43a312f266e8b2bd",
+    "compressedSha256": "78d8474b95c5c348e92de95aad4f5f3c574a30d6aa5f4dd6d7f4d4f564eccb4d",
+    "paths": 1680
+   }
+  },
+  {
+   "path": "device/google/laguna-kernels/6.6",
+   "repo": "GrapheneOS/device_google_laguna-kernels_6.6",
+   "revision": "275dad3c1f144f6bdd6d2c1ec22eccbfbd467da9",
+   "rootTree": "50a4ff771115c0cf74c49595d2730af299b5e201",
+   "listing": {
+    "path": "os/tests/fixtures/frankel-lunch-inputs/trees/device__google__laguna-kernels__6.6.ls-tree.txt.gz",
+    "sha256": "7c3c447450331fa2ee55782f1942c6d749261512fffc0eae0869802bc68c48e6",
+    "compressedSha256": "d3f705e5eb2314d01f27f2d0a78a4c3e6983e4cb4920dc77b588dd12cd8a7335",
+    "paths": 828
+   }
+  }
+ ],
+ "fixtures": [
+  {
+   "fixture": "vendor/adevtool/LICENSE",
+   "project": "vendor/adevtool",
+   "path": "LICENSE",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "adb54865e788ac06f688ec40d6b830e1ec7c2341",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/blobs/build.ts",
+   "project": "vendor/adevtool",
+   "path": "src/blobs/build.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "9b4378c285fe52fc6992960ffdf50bffa2f9bb3b",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/config/paths.ts",
+   "project": "vendor/adevtool",
+   "path": "src/config/paths.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "a1773534eae7401e0ce8a86bed62d5a73fab4aab",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/util/file-tree-spec.ts",
+   "project": "vendor/adevtool",
+   "path": "src/util/file-tree-spec.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "a25dba05747771bece7360e66fbff534c15bec9d",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/AndroidProducts.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "13545fa9229c5cb0f466a4e3f2a48a272c83b88c",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/BoardConfig.mk",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/BoardConfig.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "5d29d418b548f5cd5857933758de7ebb80d45018",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/Android.mk",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/Android.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "892e041a750c0c7e8c76f52ee7e8c4dc9f598b80",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/cmds-for-envsetup.sh",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/cmds-for-envsetup.sh",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "663f38a01ef26b90862480445df0df4b007c2ed0",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/config/mk/google_devices/device/frankel/device.mk",
+   "project": "vendor/adevtool",
+   "path": "config/mk/google_devices/device/frankel/device.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "bbff4d6178fbefde503470472a221fb02a3e752d",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/config/mk/google_devices/common/BoardConfig-common.mk",
+   "project": "vendor/adevtool",
+   "path": "config/mk/google_devices/common/BoardConfig-common.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "ed3c1742e06fe5b15b71611bfa626b673122f29a",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+   "project": "vendor/adevtool",
+   "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "b332c6c5578a5727ac76b1eadd9235505eaddd1e",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/config/mk/google_devices/platform/laguna/BoardConfig-common.mk",
+   "project": "vendor/adevtool",
+   "path": "config/mk/google_devices/platform/laguna/BoardConfig-common.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "8b7b82eb855a955d48ec856df541fa01dea30f23",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/dl/.find-ignore",
+   "project": "vendor/adevtool",
+   "path": "dl/.find-ignore",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/.find-ignore",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/.find-ignore",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk.excerpt.json",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/frankel.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-specs/google_devices/frankel.yml.excerpt.json",
+   "project": "vendor/adevtool",
+   "path": "vendor-specs/google_devices/frankel.yml",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "vendor/adevtool/src/build/make.ts.excerpt.json",
+   "project": "vendor/adevtool",
+   "path": "src/build/make.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "07dc40ea2a3cf7ab84ba09d50726473078e389f6",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "vendor/adevtool/src/commands/generate-all.ts.excerpt.json",
+   "project": "vendor/adevtool",
+   "path": "src/commands/generate-all.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "4609d74c8537091688745dffe99f74f69f274518",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "build/make/envsetup.sh.excerpt.json",
+   "project": "build/make",
+   "path": "envsetup.sh",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "gitBlob": "27f15f8da9f8ddcc1af70b03fc3bd48de10a0c13",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "build/make/core/version_util.mk.excerpt.json",
+   "project": "build/make",
+   "path": "core/version_util.mk",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "gitBlob": "ea80c8c9c2aa4965e9fcb294f8db117d717b0a95",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "build/make/core/build_id.mk.excerpt.json",
+   "project": "build/make",
+   "path": "core/build_id.mk",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "gitBlob": "ffc8991ece4f08f934d8ab647df0e98f405f4ecb",
+   "kind": "excerpt"
+  },
+  {
+   "fixture": "build/make/core/product_config.mk.excerpt.json",
+   "project": "build/make",
+   "path": "core/product_config.mk",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "gitBlob": "2bcc764b55a5a1d207a4b077d83f15e3c1130beb",
+   "kind": "excerpt"
+  }
+ ],
+ "versionCheck": {
+  "path": "vendor/google_devices/frankel/adevtool-version-check.mk",
+  "writer": {
+   "project": "vendor/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "path": "src/blobs/build.ts",
+   "line": 38,
+   "text": "export async function writeVersionCheckFile(config: DeviceConfig, dirs: VendorDirectories, warnOnly: boolean = false) {",
+   "template": [
+    "let contents =",
+    "`ifneq ($(shell git -C ${RELATIVE_ADEVTOOL_PATH} rev-parse HEAD),${adevtoolRevision})\\n` +",
+    "`  $(${warnOnly ? 'warning' : 'error'} ${deviceName} vendor module is outdated. Run \\`adevtool generate-all -d ${deviceName}\\` to update it)\\n` +",
+    "`endif`"
+   ]
+  },
+  "expected": {
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "form": "error",
+   "error": {
+    "sha256": "ecb7d5333dc39e40e77b3fe50de413f67cacabc7b877d26f03b078361fbc68c4",
+    "gitBlob": "c879f87d1145da4cf90399aa2bccdcea8a4cf326",
+    "bytes": 199
+   },
+   "warning": {
+    "sha256": "c2ae74310968fba1d83d81fc374ee68e984fc09224e04d472a239b6dd1481af2",
+    "gitBlob": "b8d74c2f89eb8b3a5170cd146a879083c80c52d8",
+    "bytes": 201
+   }
+  },
+  "formRule": "only the error form is accepted. generate-all writes the warning form only with --noVerify, which also skips the comparison of the generated vendor module with its reference FileTreeSpec, so a warning-form module is unverified vendor provenance and is refused",
+  "formSource": {
+   "project": "vendor/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "path": "src/commands/generate-all.ts",
+   "line": 329,
+   "text": "await writeVersionCheckFile(config, vendorDirs, flags.noVerify)"
+  },
+  "includedFrom": {
+   "path": "vendor/google_devices/frankel/frankel.mk",
+   "line": 4,
+   "text": "include vendor/google_devices/frankel/adevtool-version-check.mk"
+  },
+  "selectedBy": {
+   "path": "vendor/google_devices/frankel/AndroidProducts.mk",
+   "text": "PRODUCT_MAKEFILES += $(LOCAL_DIR)/frankel.mk",
+   "productConfig": {
+    "project": "build/make",
+    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+    "path": "core/product_config.mk",
+    "line": 212,
+    "text": "current_product_makefile := $(call _second,$(filter $(TARGET_PRODUCT):%,$(product_paths)),:)"
+   }
+  },
+  "executes": {
+   "make": "$(shell git -C vendor/adevtool rev-parse HEAD)",
+   "argv": [
+    "git",
+    "-C",
+    "vendor/adevtool",
+    "rev-parse",
+    "HEAD"
+   ],
+   "cwd": "the source root",
+   "compare": "$(shell) stdout, trailing newline removed, must equal expected.revision exactly"
+  },
+  "runsIn": [
+   "lunch: build_build_var_cache runs soong_ui --dumpvars-mode, whose product configuration imports frankel.mk for TARGET_PRODUCT=frankel",
+   "m: the same product configuration again (its dumpvars and the main kati run)"
+  ],
+  "lunchSource": {
+   "project": "build/make",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "path": "envsetup.sh",
+   "line": 69,
+   "text": "build_dicts_script=`\\builtin cd $T; build/soong/soong_ui.bash --dumpvars-mode \\"
+  },
+  "skipSwitch": null,
+  "inFileTreeSpec": false,
+  "withoutGit": "git exits non-zero with nothing on stdout, the comparison fails and the error form stops lunch with \"frankel vendor module is outdated\""
+ },
+ "gitRequirement": {
+  "project": "vendor/adevtool",
+  "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+  "rootTree": "f0863541755769c12b01f5e1a429bdc6cb704f07",
+  "path": "vendor/adevtool/.git",
+  "functionalMinimum": "git accepts a directory with a valid HEAD and enterable objects/ and refs/ as a repository, and rev-parse HEAD on a detached HEAD reads no object; so a lunch that passes the check does not show that the Git data is genuine (os/tests/test_frankel_lunch_inputs.py demonstrates it)",
+  "genuineSource": {
+   "link": "vendor/adevtool/.git",
+   "linkText": "../../.repo/projects/vendor/adevtool.git",
+   "gitdir": ".repo/projects/vendor/adevtool.git",
+   "basis": "repo checks a project out with .git as a link into .repo/projects; observation 41566744429 recorded this link text on the production tree, which is historical evidence, not current state"
+  },
+  "acceptance": [
+   "HEAD is exactly revision plus one newline",
+   "in the copy, with GIT_* stripped and GIT_CEILING_DIRECTORIES at the copy root, git -C vendor/adevtool rev-parse HEAD prints exactly revision, cat-file -t revision is commit and revision^{tree} is rootTree",
+   "these checks rule out an empty or redirected store but do not prove a complete one: the gitdir and the object store it uses are copied byte for byte from genuineSource under an approval that names exact paths and bounds"
+  ],
+  "options": [
+   {
+    "class": "genuine-copy",
+    "status": "allowed only under a separate approval with exact paths and bounds; Release owns the mechanism"
+   },
+   {
+    "class": "redirect",
+    "status": "refused",
+    "means": "GIT_DIR, a link, alternates or any other way of pointing the copy at the production gitdir"
+   },
+   {
+    "class": "fabrication",
+    "status": "refused",
+    "means": "any HEAD, ref, object or gitdir written rather than copied"
+   },
+   {
+    "class": "relaxation",
+    "status": "refused",
+    "means": "regenerating the vendor module with --noVerify, or editing, replacing or removing adevtool-version-check.mk or frankel.mk"
+   }
+  ],
+  "environment": {
+   "GIT_CEILING_DIRECTORIES": "the copy root",
+   "strip": "GIT_*",
+   "why": "without a ceiling git searches above the copy, and a parent repository would answer with a foreign HEAD"
+  },
+  "otherGit": "none: in the pinned public sources nothing else needs .git or a git process for this lunch and Launcher3QuickStepLib (every *.mk and *.bp of the pinned manifest was searched, #410); content the generated vendor module adds beyond its reference is not covered"
+ },
+ "buildId": {
+  "expected": "CP3A.261005.005",
+  "checkedBy": {
+   "path": "vendor/google_devices/frankel/frankel.mk",
+   "line": 6,
+   "text": "ifneq ($(BUILD_ID),CP3A.261005.005)"
+  },
+  "setBy": {
+   "path": "vendor/google_devices/frankel/cmds-for-envsetup.sh",
+   "text": "export BUILD_ID_frankel=\"CP3A.261005.005\""
+  },
+  "sourcedBy": {
+   "project": "build/make",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "path": "envsetup.sh",
+   "line": 463,
+   "text": "local EXTRA_CMDS_ARR=(vendor/*/\"$PRODUCT\"/\"$SCRIPT_NAME\")"
+  },
+  "readBy": {
+   "project": "build/make",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "path": "core/version_util.mk",
+   "line": 43,
+   "text": "BUILD_ID := $(BUILD_ID_$(TARGET_PRODUCT))"
+  },
+  "defaultWithout": {
+   "project": "build/make",
+   "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+   "path": "core/build_id.mk",
+   "line": 26,
+   "text": "BUILD_ID=CP2A.260605.016"
+  },
+  "rule": "exactly one vendor/*/frankel/cmds-for-envsetup.sh must exist; none leaves BUILD_ID at the default and frankel.mk stops lunch; more than one makes envsetup exit"
+ },
+ "kernelModuleLists": {
+  "dir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
+  "setBy": {
+   "project": "vendor/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "path": "config/mk/google_devices/device/frankel/device.mk",
+   "line": 3,
+   "text": "TARGET_KERNEL_DIR ?= device/google/laguna-kernels/6.6/grapheneos/muzel"
+  },
+  "files": [
+   {
+    "path": "device/google/laguna-kernels/6.6/grapheneos/muzel/vendor_kernel_boot.modules.load",
+    "mode": "100755",
+    "gitBlob": "0586647d9eee52e201561f3d7f33ba8d57f38180",
+    "readBy": {
+     "project": "vendor/adevtool",
+     "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+     "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+     "line": 6,
+     "text": "BOARD_VENDOR_KERNEL_RAMDISK_KERNEL_MODULES_LOAD_FILE := $(strip $(shell cat $(KERNEL_MODULE_DIR)/vendor_kernel_boot.modules.load))"
+    }
+   },
+   {
+    "path": "device/google/laguna-kernels/6.6/grapheneos/muzel/vendor_dlkm.modules.load",
+    "mode": "100755",
+    "gitBlob": "0a69d15fad31e575e16950dd0fabd13931a3fcca",
+    "readBy": {
+     "project": "vendor/adevtool",
+     "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+     "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+     "line": 15,
+     "text": "BOARD_VENDOR_KERNEL_MODULES_LOAD := $(strip $(shell cat $(KERNEL_MODULE_DIR)/vendor_dlkm.modules.load))"
+    }
+   },
+   {
+    "path": "device/google/laguna-kernels/6.6/grapheneos/muzel/system_dlkm.modules.load",
+    "mode": "100755",
+    "gitBlob": "86fa5de982e705fb0126d6d2e59b3288bec83f78",
+    "readBy": {
+     "project": "vendor/adevtool",
+     "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+     "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+     "line": 30,
+     "text": "BOARD_SYSTEM_KERNEL_MODULES_LOAD := $(strip $(shell cat $(KERNEL_MODULE_DIR)/system_dlkm.modules.load))"
+    }
+   }
+  ],
+  "rule": "each is read with $(shell cat ...) at lunch, and a missing or empty one stops it with $(error)"
+ },
+ "finderPrune": {
+  "markers": [
+   {
+    "path": "vendor/adevtool/dl/.find-ignore",
+    "gitBlob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+   },
+   {
+    "path": "vendor/adevtool/vendor-skels/.find-ignore",
+    "gitBlob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+   }
+  ],
+  "why": "vendor/adevtool/vendor-skels holds an AndroidProducts.mk for 25 devices; without its .find-ignore the product finder would also list a second frankel product"
+ },
+ "manifestFiles": [
+  {
+   "kind": "linkfile",
+   "project": "build/soong",
+   "src": "root.bp",
+   "dest": "Android.bp"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/soong",
+   "src": "bootstrap.bash",
+   "dest": "bootstrap.bash"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/make",
+   "src": "CleanSpec.mk",
+   "dest": "build/CleanSpec.mk"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/make",
+   "src": "buildspec.mk.default",
+   "dest": "build/buildspec.mk.default"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/make",
+   "src": "core",
+   "dest": "build/core"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/make",
+   "src": "envsetup.sh",
+   "dest": "build/envsetup.sh"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/make",
+   "src": "target",
+   "dest": "build/target"
+  },
+  {
+   "kind": "linkfile",
+   "project": "build/make",
+   "src": "tools",
+   "dest": "build/tools"
+  },
+  {
+   "kind": "copyfile",
+   "project": "trusty/vendor/google/aosp",
+   "src": "lk_inc.mk",
+   "dest": "lk_inc.mk"
+  },
+  {
+   "kind": "linkfile",
+   "project": "trusty/host/common",
+   "src": "bazel/bazelrc",
+   "dest": "trusty/.bazelrc"
+  },
+  {
+   "kind": "linkfile",
+   "project": "trusty/host/common",
+   "src": "bazel/WORKSPACE.bazel",
+   "dest": "trusty/WORKSPACE.bazel"
+  }
+ ],
+ "generatedVendor": {
+  "path": "vendor/google_devices/frankel",
+  "generator": {
+   "project": "vendor/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "command": "generate-all -d frankel"
+  },
+  "reference": {
+   "path": "vendor/adevtool/vendor-specs/google_devices/frankel.yml",
+   "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
+   "kind": "FileTreeSpec: sha256 of every regular file of the module, \"dir\" for each directory"
+  },
+  "verification": "without --noVerify, generate-all compares the generated module with reference and fails on any difference; the version check is written after that comparison and is not in reference",
+  "verificationSource": {
+   "project": "vendor/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "path": "src/commands/generate-all.ts",
+   "line": 322,
+   "text": "await compareToReferenceFileTreeSpec(vendorDirs, config)"
+  },
+  "observable": [
+   {
+    "path": "vendor/google_devices/frankel/frankel.mk",
+    "sha256": "e12dadf4bb07bebb73b3f66431dfc09f2fb9d6cf177479f243aae6d338873736",
+    "skeleton": "vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk",
+    "skeletonGitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af"
+   },
+   {
+    "path": "vendor/google_devices/frankel/AndroidProducts.mk",
+    "sha256": "32fc87508a7f835837b8e596ca5629c8f8baf7b1677ca8ad12bde3a4ff17cc26",
+    "skeleton": "vendor/adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
+    "skeletonGitBlob": "13545fa9229c5cb0f466a4e3f2a48a272c83b88c"
+   },
+   {
+    "path": "vendor/google_devices/frankel/BoardConfig.mk",
+    "sha256": "6d09d7da63d5c55c264d2ddf5364f66774467022e8989167798914c34d0edee7",
+    "skeleton": "vendor/adevtool/vendor-skels/google_devices/frankel/BoardConfig.mk",
+    "skeletonGitBlob": "5d29d418b548f5cd5857933758de7ebb80d45018"
+   },
+   {
+    "path": "vendor/google_devices/frankel/Android.mk",
+    "sha256": "e9e263f265cb737cf4b34dfd8e888e3775d910fbea6993b957e37595b9bfff59",
+    "skeleton": "vendor/adevtool/vendor-skels/google_devices/frankel/Android.mk",
+    "skeletonGitBlob": "892e041a750c0c7e8c76f52ee7e8c4dc9f598b80"
+   },
+   {
+    "path": "vendor/google_devices/frankel/cmds-for-envsetup.sh",
+    "sha256": "11c8f4ae8c9db828b35ef6e9920ed9d486e01c4e9d35a3e1dc4d8c6f1766db3f",
+    "skeleton": "vendor/adevtool/vendor-skels/google_devices/frankel/cmds-for-envsetup.sh",
+    "skeletonGitBlob": "663f38a01ef26b90862480445df0df4b007c2ed0"
+   }
+  ],
+  "notEstablished": "the host's generated bytes, and whether it was generated with --noVerify"
+ },
+ "branchUse": "every branch of launcher3-quickstep-lib.json runs this lunch, so each needs versionCheck satisfied by gitRequirement and the markers above present; none of this is a bundle report, a policy receipt or evidence about the three contract projects"
+}
