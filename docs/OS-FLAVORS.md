@@ -218,15 +218,21 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     `build/soong`. Nothing else under it is selected, walked or dereferenced.
   - **Parents.** `out_adevtool_deps` and `out_adevtool_deps/host` must be real directories and keep
     their modes.
-  - **Vendor checks first.** Before writing, the base must already pass the vendor stage's
-    `tree_problems`:
-    - `adevtool_revision` equals the pin;
-    - every tool is a regular executable file;
-    - the tree needs and the kernel directory are present.
+  - **Deps checks only.** Before writing, the selected deps must provide what their consumer reads
+    (`deps_problems`):
+    - `adevtool_revision` is exactly the pinned hash and one newline, read no-follow;
+    - every tool is a regular, unlinked, executable file.
 
-    These checks run only once the include paths are known to be plain, so `adevtool_revision` is
-    never read through a link.
-  - **Not traced.** The pinned adevtool sources that read the deps are not in this repository.
+    These checks run only once the include paths are known to be plain. The vendor stage's other tree
+    needs (adevtool's run script, envsetup, prebuilts) and the kernel directory are its own admission,
+    never a gate on the snapshot.
+  - **Consumer trace.** The only one is the earlier pinned read recorded in
+    `scripts/device-readiness.py`: adevtool `17df3b79` `src/config/paths.ts` `getHostBinPath`, which
+    uses `host/linux-x86/bin` and compares `adevtool_revision` with raw `git rev-parse HEAD` stdout.
+    The adevtool sources themselves are not in this repository, so this is not a dependency closure.
+  - **Finite unknown.** The snapshot excludes `.git`, so that `git rev-parse HEAD` has no repository
+    there, and how adevtool then behaves is not established. Resolving it needs a read of the pinned
+    `getHostBinPath`, which is not authorized here.
   - Before writing, the full selection is walked (no entry cap). It refuses on any link escape,
     unsupported file type or unproven cache boundary, when the dense, block-rounded projection exceeds
     the bound, or when available − projection < reserve.

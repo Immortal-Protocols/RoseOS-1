@@ -15,8 +15,9 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
             exist (one missing parent under the ancestor boundary is created owner-only): the emulator alpha's exclusion
             policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly
             out_adevtool_deps/adevtool_revision and the complete out_adevtool_deps/host/linux-x86 (nothing else of the
-            deps is walked), and only when the base already passes the vendor stage's tree checks; the full selection
-            is measured before anything is written and refused above its bound, the
+            deps is walked), and only when those deps hold the pinned revision and the tools (never the vendor stage's
+            other tree or kernel needs); the full selection is measured before anything is written and refused above
+            its bound, the
             copy is staged beside ISOLATED and renamed into place only when complete, and a stop (timeout, SIGTERM,
             reserve) removes only this run's staging directory within cleanupSeconds (a remainder is left, named and
             blocks the next run); no subprocess, reflink, hardlink or mount. The result is a
@@ -635,6 +636,32 @@ class StageStopped(Exception):
 class Refused(Exception):
     """The source stage refused before writing anything."""
 
+def deps_problems(recipe, base):
+    """Only what the selected deps themselves must provide, as their pinned consumer reads them (adevtool 17df3b79
+    src/config/paths.ts getHostBinPath, recorded in scripts/device-readiness.py): adevtool_revision exactly the pinned
+    hash plus one newline (it is compared with raw `git rev-parse HEAD` stdout; read no-follow, at most 128 bytes) and
+    each depsTool a regular executable file in host/linux-x86/bin. The vendor stage's other tree needs (adevtool's
+    run script, envsetup, prebuilts) and the kernel directory are its own admission, never a gate on the copy."""
+    deps, problems = base/recipe['adevtool']['depsDir'], []
+    want = (recipe['pins']['vendor/adevtool'] + '\n').encode()
+    try:
+        fd = os.open(deps/'adevtool_revision', os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            have = os.read(fd, 128)
+        finally:
+            os.close(fd)
+    except OSError:
+        have = None
+    if have != want:
+        problems.append(f'{recipe["adevtool"]["depsDir"]}/adevtool_revision is {have!r}, not exactly the pinned hash and '
+                        'one newline')
+    tools = deps/'host/linux-x86/bin'
+    missing = [t for t in recipe['adevtool']['depsTools']
+               if (tools/t).is_symlink() or not (tools/t).is_file() or not os.access(tools/t, os.X_OK)]
+    if missing:
+        problems.append(f'adevtool host tools missing, linked or not executable: {missing}')
+    return problems
+
 def include_paths(recipe):
     """adevtool's deps as the vendor stage consumes them: the adevtool_revision marker and the complete host/linux-x86
     distribution (bin/ tools with their lib64/ libraries and framework/ JARs). Nothing else of the deps directory, which
@@ -647,8 +674,8 @@ def source_selection(recipe, base, root, planner=alpha_source.plan_copy):
     for cache references): the alpha exclusion policy, then each include path: a regular file taken as is, or a
     directory as its own selection with only .git/.repo excluded, so none of its links may leave it. Their parent
     directories must be real directories and are created with their own modes; nothing else beside them is walked.
-    The base must also already satisfy the vendor stage's tree checks (tree_problems), so nothing is copied that
-    vendor would refuse."""
+    The selected deps must also provide what their consumer needs (deps_problems: the pinned revision and the tools);
+    the vendor stage's other admission (tree needs, kernel) is not a copy gate."""
     spec = recipe['preparation']['source']
     policy = pointer(root, spec['exclusionsFrom'])
     plan = planner(base, policy)
@@ -687,8 +714,8 @@ def source_selection(recipe, base, root, planner=alpha_source.plan_copy):
         else:
             problems.append(f'{rel} is not a regular file or real directory in the production source root')
             included = False
-    if included:  # tree_problems reads adevtool_revision: only once it is known to be a regular file, never a link
-        problems += [f'base: {problem}' for problem in tree_problems(recipe, base)]
+    if included:  # deps_problems reads adevtool_revision: only once it is known to be a regular file, never a link
+        problems += [f'deps: {problem}' for problem in deps_problems(recipe, base)]
     return {'entries': entries, 'problems': problems, 'excluded': excluded}
 
 def projected_bytes(entries, block):
