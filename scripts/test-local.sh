@@ -33,6 +33,7 @@ node --test \
  workspace/rose-agent/server/owner-stop.test.mjs \
  workspace/rose-agent/server/server-stop-gate.test.mjs \
  workspace/rose-agent/tests/home-launcher.test.mjs \
+ workspace/rose-agent/tests/exported-components.test.mjs \
  workspace/experiments/phone-command-push/push.test.mjs \
  workspace/experiments/phone-command-push/delivery.test.cjs \
  workspace/experiments/phone-control-metrics/metrics.test.mjs \
@@ -226,6 +227,9 @@ java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRoseLaunch" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeRoseLaunch.java workspace/rose-agent/app/tests/HomeRoseLaunchTest.java
 java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GestureContract" \
+ workspace/rose-agent/app/src/dev/pixel/voice/GestureContract.java workspace/rose-agent/app/tests/GestureContractTest.java
+java -cp "$JAVA_TESTS/GestureContract" dev.pixel.voice.GestureContractTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DockLabel" \
  workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java workspace/rose-agent/app/tests/DockLabelTest.java
 java -Djava.awt.headless=true -cp "$JAVA_TESTS/DockLabel" dev.pixel.voice.DockLabelTest workspace/rose-agent/app/assets/fonts/nunito.ttf

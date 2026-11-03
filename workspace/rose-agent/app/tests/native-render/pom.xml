@@ -82,6 +82,8 @@
             <testInclude>dev/pixel/voice/HomeAppTile.java</testInclude>
             <testInclude>dev/pixel/voice/HomeAppPage.java</testInclude>
             <testInclude>dev/pixel/voice/HomeAppLayout.java</testInclude>
+            <testInclude>dev/pixel/voice/GestureContract.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeGestureTarget.java</testInclude>
             <testInclude>dev/pixel/voice/HomeFolder.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverview.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverviewView.java</testInclude>
