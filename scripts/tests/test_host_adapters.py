@@ -1,6 +1,7 @@
 """host-sign.py / host-integrate.py with fake gcloud, SDK and recipes: pinned secret versions, owner-only
 RAM copies removed on success and failure, archive and pin checks, apps signed before integration."""
 import base64
+import copy
 import hashlib
 import importlib.util
 import io
@@ -1174,9 +1175,13 @@ class FactoryArchiveSignTest(unittest.TestCase):
         self.assertNotIn('SYNTHETIC-pass', (out/'factory-archive-sign-receipt.json').read_text())
 
     def test_unbound_identity_refuses_before_reading_anything(self):
-        for flavor in ('rango', 'blazer'):
-            with self.subTest(flavor), self.assertRaisesRegex(fas.Refused, 'identity_unbound'):
-                fas.sign(self.args(device=flavor), fetch=self.fetch(), runner=self.runner())  # the committed null pins
+        unpinned = lambda device: ('{device}-install-{build}.zip', dict(self.pin, principal=None, publicKey=None, status='missing'))
+        with self.assertRaisesRegex(fas.Refused, 'identity_unbound'):
+            fas.sign(self.args(), contract=unpinned, fetch=self.fetch(), runner=self.runner())
+        for flavor in ('rango', 'blazer'):  # every committed pin that is still null refuses the same way
+            if fas.flavor_contract(flavor)[1].get('publicKey') is None:
+                with self.subTest(flavor), self.assertRaisesRegex(fas.Refused, 'identity_unbound'):
+                    fas.sign(self.args(device=flavor), fetch=self.fetch(), runner=self.runner())
         with self.assertRaisesRegex(fas.Refused, 'identity_invalid'):
             self.sign(pin=dict(self.pin, status='missing'))
         self.assertEqual((self.fetched, self.calls), ([], []))
@@ -1229,33 +1234,177 @@ class FactoryArchiveSignTest(unittest.TestCase):
                 self.assertEqual(sorted(os.listdir(self.retained)), sorted(self.before + ['rango-install-2026103002.zip'])
                                  if (self.retained/'rango-install-2026103002.zip').exists() else self.before)
 
+    def world(self, **receipt_change):
+        """A complete SYNTHETIC committed state in a temporary repo: the profile's measured tool, the committed public
+        bootstrap receipt for self.pin's key, and the binding naming both. Returns (repo, profiles, receipt bytes)."""
+        repo = self.root/'repo'
+        (repo/'os/retained-rango').mkdir(parents=True, exist_ok=True)
+        profiles = copy.deepcopy(fas.load_profiles())
+        tool = {'path': str(self.tool), 'sha256': sha(self.tool.read_bytes())}
+        profiles['fold-rango-factory-v1']['tools']['ssh-keygen']['installed'] = dict(tool)
+        fingerprint = fas.factory_signing.public_identity(base64.b64decode(self.public.split()[1]))['fingerprint']
+        receipt = {'schema': 'roseos.signing-bootstrap-receipt.v1', 'profile': 'fold-rango-factory-v1', 'device': 'rango',
+                   'project': 'protocols-465723', 'recipeSha': 'a' * 40, 'status': 'complete', 'reasons': [],
+                   'recoveryNeeded': False, 'payloadReadback': 'not performed', 'operations': [],
+                   'secrets': {'keys': {'name': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', 'committedVersion': '1', 'state': 'committed'},
+                               'passphrase': {'name': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'committedVersion': '1',
+                                              'state': 'committed'}},
+                   'publicIdentity': {'publicKey': self.public, 'fingerprint': fingerprint, 'principal': 'roseos-factory-images-rango-v1',
+                                      'namespace': 'factory images', 'selfCheck': {'decrypt': True, 'signVerify': True,
+                                                                                    'negativeRefused': True}},
+                   'tools': {'ssh-keygen': {'installedSha256': tool['sha256'], 'source': None}},
+                   'cleanup': {'workspaceCreated': True, 'workspaceRemoved': True}}
+        receipt.update(receipt_change)
+        data = json.dumps(receipt, sort_keys=True).encode()
+        (repo/fas.RECEIPT_FILE).write_bytes(data)
+        return repo, profiles, data
+
     def binding(self, **change):
         tool = {'path': str(self.tool), 'sha256': sha(self.tool.read_bytes())}
+        data = (self.root/'repo'/fas.RECEIPT_FILE).read_bytes() if (self.root/'repo'/fas.RECEIPT_FILE).exists() else b''
         value = {'schema': 'roseos.factory-archive-signing-binding.v1', 'device': 'rango', 'build': '2026103001',
-                 'project': 'protocols-465723', 'keySecret': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', 'keyVersion': '1',
-                 'passphraseSecret': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'passphraseVersion': '1', 'sshKeygen': tool}
+                 'profile': 'fold-rango-factory-v1', 'project': 'protocols-465723',
+                 'signer': 'roseos-build-signer@protocols-465723.iam.gserviceaccount.com',
+                 'keySecret': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', 'keyVersion': '1',
+                 'passphraseSecret': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'passphraseVersion': '1', 'sshKeygen': tool,
+                 'bootstrap': {'runId': '41700000002', 'attempt': '1', 'recipeSha': 'a' * 40, 'receipt': fas.RECEIPT_FILE,
+                               'receiptSha256': sha(data)}}
         value.update(change)
         return value
 
-    def test_committed_binding_is_unbound_and_check_exits_4(self):
+    def test_committed_binding_follows_its_committed_receipt_and_check_reports_it(self):
         committed = json.loads((SCRIPTS.parent/'os/retained-rango/factory-signing.json').read_text())
-        # The bootstrap receipt values stay unbound until the key setup; the measured ssh-keygen identity is checked
-        # against its committed evidence by test_signing_bootstrap.SshKeygenEvidence.
-        self.assertEqual((committed['keyVersion'], committed['passphraseVersion']), (None, None))
+        self.assertEqual(committed['profile'], 'fold-rango-factory-v1')
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            self.assertEqual(fas.main(['check']), 4)
+            code = fas.main(['check'])
         report = json.loads(stdout.getvalue())
-        self.assertFalse(report['ready'])
-        self.assertIn('os/flavors/rango.json factorySigning principal/publicKey (null)', report['missing'])
-        self.assertIn('binding.keyVersion (from the bootstrap receipt)', report['missing'])
+        self.assertEqual((code, report['ready']), (0, True) if not report['missing'] else (4, False))
+        # Whatever is committed, versions and the pin are bound only with the committed receipt (never invented).
+        self.assertFalse([m for m in report['missing'] if 'binding.bootstrap' in m or 'not the' in m], report['missing'])
+        if committed['bootstrap'] is None:
+            self.assertEqual((committed['keyVersion'], committed['passphraseVersion']), (None, None))
+            self.assertIn('binding.keyVersion (from the bootstrap receipt)', report['missing'])
+
+    def test_a_complete_synthetic_state_is_ready_and_every_field_is_checked(self):
+        repo, profiles, _ = self.world()
         bound = lambda device: ('{device}-install-{build}.zip', self.pin)
-        self.assertEqual(fas.binding_problems(self.binding(), bound), [])
+        self.assertEqual(fas.binding_problems(self.binding(), bound, profiles, repo), [])
         for change, missing in (({'keyVersion': None}, 'binding.keyVersion'), ({'passphraseVersion': 'latest'}, 'binding.passphraseVersion'),
                                 ({'sshKeygen': {'path': None, 'sha256': None}}, 'binding.sshKeygen'),
                                 ({'project': 'X'}, 'binding.project'), ({'schema': 'other'}, 'binding: not')):
             with self.subTest(change):
-                self.assertTrue(any(m.startswith(missing) for m in fas.binding_problems(self.binding(**change), bound)))
+                self.assertTrue(any(m.startswith(missing) for m in fas.binding_problems(self.binding(**change), bound, profiles, repo)))
+
+    def test_bind_turns_a_complete_receipt_into_the_exact_fields(self):
+        repo, profiles, data = self.world()
+        fields, problems = fas.receipt_fields(data, self.binding(), profiles, '41700000002', '1')
+        self.assertEqual(problems, [])
+        self.assertEqual(fields['binding'], {'keyVersion': '1', 'passphraseVersion': '1', 'bootstrap': {
+            'runId': '41700000002', 'attempt': '1', 'recipeSha': 'a' * 40, 'receipt': fas.RECEIPT_FILE, 'receiptSha256': sha(data)}})
+        self.assertEqual(fields['factorySigning'], self.pin)
+        self.assertEqual(fas.factory_signing.bound_pin(fields['factorySigning']), {'principal': self.pin['principal'],
+                                                                                    'publicKey': self.public})
+        self.assertEqual(fields['binding']['bootstrap'], self.binding()['bootstrap'])  # bind output is what check expects
+
+    def test_bind_refuses_every_incomplete_or_foreign_receipt(self):
+        repo, profiles, _ = self.world()
+        other_key = 'ssh-ed25519 ' + base64.b64encode(struct.pack('>I', 11) + b'ssh-ed25519' + struct.pack('>I', 32) + bytes(32)).decode()
+        cases = {
+            'blocked': dict(status='blocked'), 'recovery': dict(recoveryNeeded=True), 'reasons': dict(reasons=[{'code': 'x'}]),
+            'other profile': dict(profile='pro-blazer-factory-v1'), 'other project': dict(project='other-project'),
+            'no recipe': dict(recipeSha='main'),
+            'other secret': dict(secrets={'keys': {'name': 'PIXEL_OS_SIGNING_KEYS_RANGO_V1', 'committedVersion': '1', 'state': 'committed'},
+                                          'passphrase': {'name': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'committedVersion': '1', 'state': 'committed'}}),
+            'uncertain add': dict(secrets={'keys': {'name': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', 'committedVersion': None, 'state': 'uncertain'},
+                                           'passphrase': {'name': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1', 'committedVersion': '1', 'state': 'committed'}}),
+            'blazer principal': 'principal', 'namespace': 'namespace', 'fingerprint': 'fingerprint', 'key': 'key',
+            'self-check': 'selfCheck', 'other tool': dict(tools={'ssh-keygen': {'installedSha256': '0' * 64}}),
+            'workspace kept': dict(cleanup={'workspaceCreated': True, 'workspaceRemoved': False}),
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                if isinstance(change, str):
+                    identity = json.loads(self.world()[2])['publicIdentity']
+                    identity.update({'principal': {'principal': 'roseos-factory-images-blazer-v1'},
+                                     'namespace': {'namespace': 'file'}, 'fingerprint': {'fingerprint': 'SHA256:' + 'A' * 43},
+                                     'key': {'publicKey': other_key[:-4] + '!!!!'}, 'selfCheck': {'selfCheck': {'decrypt': True}}}[change])
+                    change = dict(publicIdentity=identity)
+                _, _, data = self.world(**change)
+                fields, problems = fas.receipt_fields(data, self.binding(), profiles, '41700000002', '1')
+                self.assertIsNone(fields)
+                self.assertTrue(problems)
+        _, _, data = self.world()
+        for run_id, attempt in (('0', '1'), ('41700000002', '0'), ('x', '1')):
+            self.assertIsNone(fas.receipt_fields(data, self.binding(), profiles, run_id, attempt)[0])
+        self.assertEqual(fas.receipt_fields(b'x' * (fas.RECEIPT_BYTES + 1), self.binding(), profiles, '1', '1'),
+                         (None, ['receipt: larger than 64 KiB']))
+        self.assertEqual(fas.receipt_fields(b'not json', self.binding(), profiles, '1', '1'), (None, ['receipt: not JSON']))
+
+    def test_bind_cli_exit_codes(self):
+        repo, profiles, data = self.world()
+        receipt = self.root/'receipt.json'
+        receipt.write_bytes(data)
+        binding = self.root/'binding.json'
+        binding.write_text(json.dumps(self.binding()))
+        with mock.patch.object(fas, 'load_profiles', return_value=profiles), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(fas.main(['bind', '--receipt', str(receipt), '--run-id', '41700000002', '--attempt', '1',
+                                       '--binding', str(binding)]), 0)
+        self.assertEqual(json.loads(out.getvalue())['factorySigning']['status'], 'bound')
+        receipt.write_bytes(self.world(status='blocked')[2])
+        with mock.patch.object(fas, 'load_profiles', return_value=profiles), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(fas.main(['bind', '--receipt', str(receipt), '--run-id', '41700000002', '--attempt', '1',
+                                       '--binding', str(binding)]), 4)
+        self.assertFalse(json.loads(out.getvalue())['bindable'])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(fas.main(['bind', '--receipt', str(self.root/'absent.json'), '--run-id', '1', '--attempt', '1',
+                                       '--binding', str(binding)]), 2)
+
+    def test_check_cross_checks_the_binding_against_its_profile(self):
+        repo, profiles, _ = self.world()
+        bound = lambda device: ('{device}-install-{build}.zip', self.pin)
+        for name, change, expected in (
+                ('rango OS key container', {'keySecret': 'PIXEL_OS_SIGNING_KEYS_RANGO_V1'}, 'binding.keySecret: not the fold-rango-factory-v1 value'),
+                ('foreign project', {'project': 'some-other-proj1'}, 'binding.project: not the fold-rango-factory-v1 value'),
+                ('foreign signer', {'signer': 'other@protocols-465723.iam.gserviceaccount.com'}, 'binding.signer: not the fold-rango-factory-v1 value'),
+                ('no profile', {'profile': None}, 'binding.profile: not an openssh-ed25519 bootstrap profile'),
+                ('OS profile', {'profile': 'fold-rango-v1'}, 'binding.profile: not an openssh-ed25519 bootstrap profile'),
+                ('other device', {'device': 'blazer'}, 'binding.profile: not an openssh-ed25519 bootstrap profile')):
+            with self.subTest(name):
+                problems = fas.binding_problems(self.binding(**change), bound, profiles, repo)
+                self.assertTrue(any(p.startswith(expected) for p in problems), problems)
+        problems = fas.binding_problems(self.binding(keySecret='PIXEL_OS_SIGNING_KEYS_RANGO_V1'), bound, profiles, repo)
+        self.assertIn('binding secrets: also named by another bootstrap profile', problems)
+        blazer = lambda device: ('{device}-install-{build}.zip', dict(self.pin, principal='roseos-factory-images-blazer-v1'))
+        self.assertIn('os/flavors/rango.json factorySigning principal: not the fold-rango-factory-v1 principal',
+                      fas.binding_problems(self.binding(), blazer, profiles, repo))
+        other_tool = copy.deepcopy(profiles)
+        other_tool['fold-rango-factory-v1']['tools']['ssh-keygen']['installed']['sha256'] = '0' * 64
+        self.assertIn('binding.sshKeygen: not the fold-rango-factory-v1 measured identity',
+                      fas.binding_problems(self.binding(), bound, other_tool, repo))
+
+    def test_versions_and_pin_come_only_from_the_committed_receipt(self):
+        repo, profiles, data = self.world()
+        bound = lambda device: ('{device}-install-{build}.zip', self.pin)
+        unpinned = lambda device: ('{device}-install-{build}.zip', dict(self.pin, principal=None, publicKey=None, status='missing'))
+        self.assertIn('binding.keyVersion/passphraseVersion: bound without binding.bootstrap',
+                      fas.binding_problems(self.binding(bootstrap=None), unpinned, profiles, repo))
+        self.assertIn('os/flavors/rango.json factorySigning: bound without binding.bootstrap',
+                      fas.binding_problems(self.binding(bootstrap=None, keyVersion=None, passphraseVersion=None), bound, profiles, repo))
+        for name, change, expected in (
+                ('digest', {'bootstrap': dict(self.binding()['bootstrap'], receiptSha256='0' * 64)}, 'binding.bootstrap: receiptSha256'),
+                ('path', {'bootstrap': dict(self.binding()['bootstrap'], receipt='os/elsewhere.json')}, 'binding.bootstrap: not {'),
+                ('version', {'keyVersion': '2'}, 'binding.keyVersion: not the committed receipt value'),
+                ('recipe', {'bootstrap': dict(self.binding()['bootstrap'], recipeSha='b' * 40)}, 'binding.bootstrap: not the committed receipt value')):
+            with self.subTest(name):
+                problems = fas.binding_problems(self.binding(**change), bound, profiles, repo)
+                self.assertTrue(any(p.startswith(expected) for p in problems), problems)
+        other = lambda device: ('{device}-install-{build}.zip', dict(self.pin, publicKey='ssh-ed25519 ' + base64.b64encode(
+            struct.pack('>I', 11) + b'ssh-ed25519' + struct.pack('>I', 32) + bytes(range(32))).decode()))
+        self.assertIn('os/flavors/rango.json factorySigning: not the committed receipt identity',
+                      fas.binding_problems(self.binding(), other, profiles, repo))
+        (repo/fas.RECEIPT_FILE).unlink()
+        self.assertIn(f'binding.bootstrap: {fas.RECEIPT_FILE} is missing', fas.binding_problems(self.binding(), bound, profiles, repo))
 
     def restore_signals(self):
         saved = {each: signal.getsignal(each) for each in fas.factory_signing.STOP_SIGNALS}
@@ -1331,31 +1480,36 @@ class FactoryArchiveSignTest(unittest.TestCase):
         self.assertEqual(fas.BOUNDS['signSeconds'], fas.factory_signing.LIMITS['signSeconds'])
 
     def test_a_noexec_workspace_refuses_before_any_secret(self):
+        repo, profiles, _ = self.world()
         bound = lambda device: ('{device}-install-{build}.zip', self.pin)
         fetched = []
         with self.assertRaisesRegex(fas.Refused, '^workspace_noexec'):
             fas.sign_from_binding(self.binding(), str(self.archive), sha(self.archive.read_bytes()),
                                   str(self.root/'builder.lock'), str(self.root/'nx-run'), contract=bound,
+                                  profiles=profiles, root=repo,
                                   fetch=lambda *a: fetched.append(a), runner=self.runner(),
                                   workspace_check=lambda path: 'workspace_noexec: synthetic')
         self.assertEqual(fetched, [])
         self.assertFalse((self.root/'nx-run'/f'{self.archive.name}.sig').exists())
 
     def test_sign_from_binding_and_cli_refusal_is_one_line(self):
+        repo, profiles, _ = self.world()
         bound = lambda device: ('{device}-install-{build}.zip', self.pin)
         receipt = fas.sign_from_binding(self.binding(), str(self.archive), sha(self.archive.read_bytes()),
                                         str(self.root/'builder.lock'), str(self.root/'b-run'), contract=bound,
-                                        fetch=self.fetch(), runner=self.runner())
+                                        profiles=profiles, root=repo, fetch=self.fetch(), runner=self.runner())
         self.assertEqual(receipt['status'], 'signed')
         with self.assertRaisesRegex(fas.Refused, 'binding_unbound'):
             fas.sign_from_binding(self.binding(keyVersion=None), str(self.archive), sha(self.archive.read_bytes()),
                                   str(self.root/'builder.lock'), str(self.root/'c-run'), contract=bound,
-                                  fetch=self.fetch(), runner=self.runner())
+                                  profiles=profiles, root=repo, fetch=self.fetch(), runner=self.runner())
         self.assertFalse((self.root/'c-run').exists())
+        unbound = self.root/'unbound-binding.json'  # an explicit unbound binding, whatever is committed
+        unbound.write_text(json.dumps(self.binding(keyVersion=None, passphraseVersion=None, bootstrap=None)))
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            self.assertEqual(fas.main(['sign', '--archive', str(self.archive), '--archive-sha256', '0' * 64,
-                                       '--lock', str(self.root/'l'), '--out', str(self.root/'o')]), 3)
+            self.assertEqual(fas.main(['sign', '--binding', str(unbound), '--archive', str(self.archive), '--archive-sha256',
+                                       '0' * 64, '--lock', str(self.root/'l'), '--out', str(self.root/'o')]), 3)
         self.assertIn('binding_unbound', json.loads(stdout.getvalue())['refused'])
         self.assertFalse((self.root/'o').exists())
 

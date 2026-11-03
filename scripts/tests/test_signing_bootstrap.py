@@ -1086,9 +1086,12 @@ class BoundedRunner(unittest.TestCase):
 class FactoryPin(unittest.TestCase):
     def test_bound_pin_only_when_genuinely_bound(self):
         self.assertIsNone(fs.bound_pin({'namespace': 'factory images', 'principal': None, 'publicKey': None, 'status': 'missing'}))
-        for flavor in ('rango', 'frankel'):  # the checked-in pins are unbound: signing stays off
-            pin = json.loads((ROOT/f'os/flavors/{flavor}.json').read_text())['factorySigning']
-            self.assertIsNone(fs.bound_pin(pin))
+        for flavor in ('rango', 'frankel'):  # a committed pin is null (signing off) or genuinely bound; a bound pin's
+            pin = json.loads((ROOT/f'os/flavors/{flavor}.json').read_text())['factorySigning']  # receipt is checked by
+            if pin.get('publicKey') is None and pin.get('principal') is None:                  # factory-archive-sign check
+                self.assertIsNone(fs.bound_pin(pin))
+            else:
+                self.assertEqual(fs.bound_pin(pin)['principal'], pin['principal'])
         good = {'namespace': 'factory images', 'principal': 'roseos-factory-images-rango-v1', 'publicKey': fake_key()[1],
                 'status': 'bound'}
         self.assertEqual(fs.bound_pin(good)['principal'], 'roseos-factory-images-rango-v1')
@@ -1283,8 +1286,11 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertTrue(sb.guard(dict(env, ROSE_DEVICE='rango'), unbound, NOW))  # the dispatch shape is unchanged
 
     def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
-        reasons = sb.readiness('fold-rango-factory-v1', PROFILES, NOW)
-        self.assertEqual(reasons[0][0], 'profile-unbound')
+        unbound = copy.deepcopy(PROFILES)
+        unbound['profiles']['fold-rango-factory-v1']['status'] = 'unbound'
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', unbound, NOW)[0][0], 'profile-unbound')
+        if PROFILES['profiles']['fold-rango-factory-v1']['status'] != 'resource-bound':
+            self.assertEqual(sb.readiness('fold-rango-factory-v1', PROFILES, NOW)[0][0], 'profile-unbound')
         profile = PROFILES['profiles']['fold-rango-factory-v1']
         self.assertEqual((profile['principal'], profile['archive']['format']), ('roseos-factory-images-rango-v1', 'openssh-ed25519'))
         self.assertEqual(profile['secrets'], {'keys': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1',
@@ -1493,8 +1499,9 @@ class FactoryProfileValidation(unittest.TestCase):
         profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None)
         codes_ = [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)]
         self.assertEqual(codes_, ['access-unknown', 'access-unknown'])
-        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']
-        self.assertEqual((checked['addVersionExpires'], checked['accessorExpires'], checked['basis']), (None, None, None))
+        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # never partly recorded: all null, or a readback
+        values = (checked['addVersionExpires'], checked['accessorExpires'], checked['basis'])
+        self.assertTrue(all(v is None for v in values) or all(isinstance(v, str) and v for v in values), values)
 
     def test_recorded_expiries_must_fit_the_approved_ceilings_with_a_basis(self):
         for change, code in (({'addVersionExpires': '2026-10-30T02:00:00Z'}, 'access-window'),   # 4 h 30 m
@@ -1631,8 +1638,9 @@ class BlazerProfiles(unittest.TestCase):
     def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
         rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
         self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
-        def shape(profile):  # the measured identity may be bound for Rango first (SshKeygenEvidence checks both copies)
-            value = copy.deepcopy({k: v for k, v in profile.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')})
+        def shape(profile):  # bindings (status, access, the measured identity) may land for Rango first
+            value = copy.deepcopy({k: v for k, v in profile.items()
+                                   if k not in ('device', 'principal', 'purpose', 'secrets', 'missing', 'status', 'access')})
             value['tools']['ssh-keygen'].pop('installed')
             return value
         self.assertEqual(shape(pro), shape(rango))

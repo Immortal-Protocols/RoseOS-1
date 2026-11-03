@@ -5,9 +5,22 @@
   python3 scripts/factory-archive-sign.py sign [--binding ...] --archive ZIP --archive-sha256 H \
       --lock SHARED_BUILDER_LOCK --out NEW_ROOT
 
+  python3 scripts/factory-archive-sign.py bind --receipt RECEIPT.json --run-id N --attempt A [--binding ...]
+
 check (hosted-safe, reads only committed files): exit 0 when the binding (device, build, project, both secret names
 and pinned numeric versions, the measured ssh-keygen path and sha256) and the flavor factorySigning pin are complete,
-exit 4 listing every missing or invalid field otherwise.
+exit 4 listing every missing or invalid field otherwise. It also requires that the binding and the pin agree with the
+bootstrap profile the binding names (project, signer, both secret names, which no other profile may use, the measured
+ssh-keygen identity, and the principal), and that bound versions and a bound pin come from the committed bootstrap
+receipt (os/retained-rango/factory-signing-bootstrap-receipt.json, named in binding.bootstrap with its sha256).
+
+bind (pure, writes nothing): validates the public receipt of the profile's signing-bootstrap run (complete, no recovery,
+no reasons, both versions committed under the profile's secret names, the self-check, principal and namespace, the
+measured ssh-keygen sha256, the workspace removed) and prints the exact values to commit: binding keyVersion,
+passphraseVersion and bootstrap {runId, attempt, recipeSha, receipt, receiptSha256}, and the flavor factorySigning
+{namespace, principal, publicKey, status "bound"}. Exit 0 with those fields, 4 with {"bindable": false, "problems"}.
+The public receipt carries no run identity: runId and attempt are the run whose artifact signing-bootstrap-<run>-<attempt>
+held it, recorded as provenance; every other bootstrap field is checked against the committed receipt bytes.
 
 No regeneration and no change to the archive: the retained ZIP is only read. The identity is the flavor's
 os/flavors/<device>.json factorySigning pin; while its principal/publicKey are null the run refuses before reading
@@ -36,6 +49,7 @@ Exit status: check 0 ready / 4 unbound (JSON {"ready": false, "missing": [...]})
 3 refused (one JSON line {"refused": "<category>: <detail>"}); 2 usage.
 """
 import argparse
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -56,6 +70,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 'roseos.factory-archive-signature.v1'
 BINDING_SCHEMA = 'roseos.factory-archive-signing-binding.v1'
 DEFAULT_BINDING = ROOT/'os/retained-rango/factory-signing.json'
+PROFILES = 'os/signing-bootstrap/profiles.json'
+RECEIPT_SCHEMA = 'roseos.signing-bootstrap-receipt.v1'
+RECEIPT_FILE = 'os/retained-rango/factory-signing-bootstrap-receipt.json'
+RECEIPT_BYTES = 64 << 10
+SELF_CHECK = {'decrypt': True, 'signVerify': True, 'negativeRefused': True}
 HEX64 = re.compile(r'[0-9a-f]{64}')
 SECRET = re.compile(r'[A-Za-z0-9_-]{1,255}')
 BOUNDS = {'hashSeconds': 300, 'fetchSeconds': 120, 'signSeconds': factory_signing.LIMITS['signSeconds'],
@@ -127,11 +146,22 @@ def shared_lock(path):
         os.close(fd)
 
 
-def binding_problems(binding, contract=flavor_contract):
-    """Every missing or invalid committed value, without touching any host, secret or credential."""
+def load_profiles(root=ROOT):
+    try:
+        return json.loads((Path(root)/PROFILES).read_text())['profiles']
+    except (OSError, ValueError, KeyError):
+        raise Refused(f'profiles_missing: {PROFILES} is unreadable') from None
+
+
+def binding_problems(binding, contract=flavor_contract, profiles=None, root=ROOT):
+    """Every missing, invalid or inconsistent committed value, without touching any host, secret or credential."""
     problems = []
     if not isinstance(binding, dict) or binding.get('schema') != BINDING_SCHEMA:
         return ['binding: not a roseos.factory-archive-signing-binding.v1 document']
+    try:
+        profiles = load_profiles(root) if profiles is None else profiles
+    except Refused as error:
+        return [str(error)]
     if not re.fullmatch(r'[a-z][a-z0-9]{1,31}', str(binding.get('device'))) or not re.fullmatch(r'[0-9]{10}', str(binding.get('build'))):
         problems.append('binding.device/build')
     if not re.fullmatch(r'[a-z][a-z0-9-]{4,28}[a-z0-9]', str(binding.get('project'))):
@@ -144,6 +174,7 @@ def binding_problems(binding, contract=flavor_contract):
     tool = binding.get('sshKeygen') or {}
     if not re.fullmatch(r'/[\w./-]+', str(tool.get('path'))) or not HEX64.fullmatch(str(tool.get('sha256'))):
         problems.append('binding.sshKeygen.path/sha256 (measured installed identity)')
+    signing = None
     if 'binding.device/build' not in problems:
         try:
             _, signing = contract(binding['device'])
@@ -151,7 +182,120 @@ def binding_problems(binding, contract=flavor_contract):
                 problems.append(f'os/flavors/{binding["device"]}.json factorySigning principal/publicKey (null)')
         except (Refused, factory_signing.Refused) as error:
             problems.append(f'os/flavors/{binding["device"]}.json factorySigning: {error}')
+    problems += profile_problems(binding, profiles, signing)
+    problems += evidence_problems(binding, profiles, signing, root)
     return problems
+
+
+def profile_problems(binding, profiles, signing):
+    """The binding and the flavor pin agree with the openssh bootstrap profile the binding names; its two secrets are
+    used by no other profile (never an OS, APK or other device's container)."""
+    name = binding.get('profile')
+    profile = profiles.get(name) if isinstance(name, str) else None
+    if not isinstance(profile, dict) or (profile.get('archive') or {}).get('format') != 'openssh-ed25519' \
+            or profile.get('device') != binding.get('device'):
+        return [f'binding.profile: not an openssh-ed25519 bootstrap profile for {binding.get("device")}']
+    problems = []
+    secrets = profile.get('secrets') or {}
+    for field, expected in (('project', profile.get('project')), ('signer', profile.get('signer')),
+                            ('keySecret', secrets.get('keys')), ('passphraseSecret', secrets.get('passphrase'))):
+        if binding.get(field) != expected:
+            problems.append(f'binding.{field}: not the {name} value')
+    others = {v for other, p in profiles.items() if other != name and isinstance(p, dict) for v in (p.get('secrets') or {}).values()}
+    if {binding.get('keySecret'), binding.get('passphraseSecret')} & others:
+        problems.append('binding secrets: also named by another bootstrap profile')
+    tool = binding.get('sshKeygen') or {}
+    if tool.get('sha256') is not None and tool != ((profile.get('tools') or {}).get('ssh-keygen') or {}).get('installed'):
+        problems.append(f'binding.sshKeygen: not the {name} measured identity')
+    if isinstance(signing, dict) and signing.get('principal') is not None and signing.get('principal') != profile.get('principal'):
+        problems.append(f'os/flavors/{binding.get("device")}.json factorySigning principal: not the {name} principal')
+    return problems
+
+
+def evidence_problems(binding, profiles, signing, root=ROOT):
+    """Bound versions and a bound pin come only from the committed bootstrap receipt named in binding.bootstrap."""
+    bootstrap = binding.get('bootstrap')
+    pinned = isinstance(signing, dict) and (signing.get('principal') is not None or signing.get('publicKey') is not None)
+    versions = binding.get('keyVersion') is not None or binding.get('passphraseVersion') is not None
+    if bootstrap is None:
+        problems = ['binding.keyVersion/passphraseVersion: bound without binding.bootstrap'] if versions else []
+        if pinned:
+            problems.append(f'os/flavors/{binding.get("device")}.json factorySigning: bound without binding.bootstrap')
+        return problems
+    if not isinstance(bootstrap, dict) or set(bootstrap) != {'runId', 'attempt', 'recipeSha', 'receipt', 'receiptSha256'} \
+            or bootstrap.get('receipt') != RECEIPT_FILE or not HEX64.fullmatch(str(bootstrap.get('receiptSha256'))):
+        return [f'binding.bootstrap: not {{runId, attempt, recipeSha, receipt: {RECEIPT_FILE}, receiptSha256}}']
+    try:
+        with open(Path(root)/RECEIPT_FILE, 'rb') as f:
+            data = f.read(RECEIPT_BYTES + 1)
+    except OSError:
+        return [f'binding.bootstrap: {RECEIPT_FILE} is missing']
+    if hashlib.sha256(data).hexdigest() != bootstrap['receiptSha256']:
+        return ['binding.bootstrap: receiptSha256 is not the committed receipt bytes']
+    fields, refused = receipt_fields(data, binding, profiles, bootstrap.get('runId'), bootstrap.get('attempt'))
+    if fields is None:
+        return [f'binding.bootstrap: the committed receipt is refused ({"; ".join(refused)})']
+    problems = []
+    for key in ('keyVersion', 'passphraseVersion', 'bootstrap'):
+        if binding.get(key) != fields['binding'][key]:
+            problems.append(f'binding.{key}: not the committed receipt value')
+    if pinned and {k: signing.get(k) for k in fields['factorySigning']} != fields['factorySigning']:
+        problems.append(f'os/flavors/{binding.get("device")}.json factorySigning: not the committed receipt identity')
+    return problems
+
+
+def receipt_fields(data, binding, profiles, run_id, attempt):
+    """(fields, []) for a complete public receipt of the binding's openssh bootstrap profile, or (None, problems). Pure:
+    the receipt is data from a host run; only allowlisted public values are read and nothing is written."""
+    if len(data) > RECEIPT_BYTES:
+        return None, ['receipt: larger than 64 KiB']
+    try:
+        receipt = json.loads(data)
+    except ValueError:
+        return None, ['receipt: not JSON']
+    name = binding.get('profile') if isinstance(binding, dict) else None
+    profile = profiles.get(name) if isinstance(name, str) else None
+    if not isinstance(receipt, dict) or receipt.get('schema') != RECEIPT_SCHEMA or not isinstance(profile, dict):
+        return None, [f'receipt: not a {RECEIPT_SCHEMA} receipt of a known profile']
+    problems = []
+    if not re.fullmatch(r'[1-9][0-9]{0,19}', str(run_id)) or not re.fullmatch(r'[1-9][0-9]{0,3}', str(attempt)):
+        problems.append('receipt run: --run-id and --attempt must be the bootstrap run and attempt')
+    if (receipt.get('profile'), receipt.get('device'), receipt.get('project')) != (name, binding.get('device'), profile.get('project')):
+        problems.append(f'receipt: not the {name} bootstrap for {binding.get("device")} in {profile.get("project")}')
+    if receipt.get('status') != 'complete' or receipt.get('recoveryNeeded') is not False or receipt.get('reasons'):
+        problems.append('receipt: not complete, or recovery needed, or reasons recorded')
+    if not re.fullmatch(r'[0-9a-f]{40}', str(receipt.get('recipeSha'))):
+        problems.append('receipt.recipeSha: not a commit')
+    versions = {}
+    for role, field in (('keys', 'keyVersion'), ('passphrase', 'passphraseVersion')):
+        entry = (receipt.get('secrets') or {}).get(role) or {}
+        if entry.get('name') != (profile.get('secrets') or {}).get(role) or entry.get('state') != 'committed' \
+                or not re.fullmatch(r'[1-9][0-9]*', str(entry.get('committedVersion'))):
+            problems.append(f'receipt.secrets.{role}: not a committed version of the profile secret')
+        versions[field] = str(entry.get('committedVersion'))
+    identity = receipt.get('publicIdentity') or {}
+    try:
+        derived = factory_signing.public_identity(base64.b64decode(str(identity.get('publicKey')).split()[1], validate=True)) \
+            if factory_signing.PUBLIC_KEY.fullmatch(str(identity.get('publicKey'))) else None
+    except (factory_signing.Refused, ValueError, IndexError):
+        derived = None
+    if derived is None or identity.get('fingerprint') != derived['fingerprint']:
+        problems.append('receipt.publicIdentity: not an ssh-ed25519 key with its fingerprint')
+    if identity.get('principal') != profile.get('principal') or identity.get('namespace') != factory_signing.NAMESPACE:
+        problems.append('receipt.publicIdentity: not the profile principal and namespace')
+    if identity.get('selfCheck') != SELF_CHECK:
+        problems.append('receipt.publicIdentity.selfCheck: not a complete decrypt/sign/verify/negative check')
+    tool = binding.get('sshKeygen') or {}
+    if not HEX64.fullmatch(str(tool.get('sha256'))) or ((receipt.get('tools') or {}).get('ssh-keygen') or {}).get('installedSha256') != tool['sha256']:
+        problems.append('receipt.tools.ssh-keygen: not generated with the committed measured ssh-keygen')
+    if (receipt.get('cleanup') or {}).get('workspaceRemoved') is not True:
+        problems.append('receipt.cleanup: the workspace was not removed')
+    if problems:
+        return None, problems
+    return {'binding': dict(versions, bootstrap={'runId': str(run_id), 'attempt': str(attempt), 'recipeSha': receipt['recipeSha'],
+                                                 'receipt': RECEIPT_FILE, 'receiptSha256': hashlib.sha256(data).hexdigest()}),
+            'factorySigning': {'namespace': factory_signing.NAMESPACE, 'principal': identity['principal'],
+                               'publicKey': identity['publicKey'], 'status': 'bound'}}, []
 
 
 def load_binding(path):
@@ -162,7 +306,7 @@ def load_binding(path):
 
 
 def sign_from_binding(binding, archive, archive_sha256, lock_path, out, **kw):
-    problems = binding_problems(binding, kw.get('contract', flavor_contract))
+    problems = binding_problems(binding, kw.get('contract', flavor_contract), kw.pop('profiles', None), kw.pop('root', ROOT))
     if problems:
         raise Refused('binding_unbound: ' + '; '.join(problems))
     tool = binding['sshKeygen']
@@ -263,13 +407,27 @@ def main(argv=None):
     factory_signing.stop_on_signals(stop)  # a stop still runs every cleanup (RAM secrets, work, partial signature)
     p = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = p.add_subparsers(dest='command', required=True)
-    for name in ('check', 'sign'):
+    for name in ('check', 'sign', 'bind'):
         c = sub.add_parser(name)
         c.add_argument('--binding', default=str(DEFAULT_BINDING))
         if name == 'sign':
             for flag in ('--archive', '--archive-sha256', '--lock', '--out'):
                 c.add_argument(flag, required=True)
+        if name == 'bind':
+            for flag in ('--receipt', '--run-id', '--attempt'):
+                c.add_argument(flag, required=True)
     args = p.parse_args(argv)
+    if args.command == 'bind':
+        try:
+            binding, profiles = load_binding(args.binding), load_profiles()
+            with open(args.receipt, 'rb') as f:
+                data = f.read(RECEIPT_BYTES + 1)
+        except (Refused, OSError) as error:
+            print(json.dumps({'bindable': False, 'problems': [str(error) if isinstance(error, Refused) else 'receipt: unreadable']}))
+            return 2
+        fields, problems = receipt_fields(data, binding, profiles, args.run_id, args.attempt)
+        print(json.dumps(fields if fields is not None else {'bindable': False, 'problems': problems}, sort_keys=True))
+        return 0 if fields is not None else 4
     try:
         binding = load_binding(args.binding)
     except Refused as error:
