@@ -1339,15 +1339,390 @@ class RoseEdgeGestureTest(unittest.TestCase):
         self.assertIn(f'EDGE_HEIGHT_DP = {edge["height"]}, EDGE_FLAT_TOP_DP = {edge["flatTop"]}', self.EDGE)
         self.assertIn(f'CORNER_DP = {edge["concaveFilletRadius"]}', self.EDGE)
 
-    def test_nothing_calls_it_yet_and_it_has_no_android_or_platform_reach(self):
+    def test_only_the_edge_swipe_calls_it_and_it_has_no_android_or_platform_reach(self):
         quickstep = ROOT/'os/overlays/packages/apps/Launcher3'
-        callers = [p for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
-            and 'RoseEdgeGesture' in p.read_text()]
-        self.assertEqual(callers, [], 'wired only with OS Core\'s half, behind a builder compile')
+        callers = sorted(p.name for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
+            and 'RoseEdgeGesture' in p.read_text())
+        self.assertEqual(callers, ['RoseEdgeSwipe.java'], 'its only callers are E2a\'s, behind the unregistered edge patch')
         self.assertNotIn('RoseEdgeGesture', PATCH.read_text())
         self.assertNotIn('import ', self.EDGE, 'pure: no Android, IPC, permission or sensor types')
         for reach in ('SensorPrivacy', 'AudioManager', 'Binder', 'Intent', 'Settings', 'System.', 'Thread'):
             self.assertNotIn(reach, self.EDGE)
+
+EDGE_PATCH = ROOT/'os/patches/rose-edge-launcher3.patch'
+# Launcher3 47accce, byte for byte: the swipe handlers the edge patch changes, and the classes whose members it uses.
+EDGE_PINNED = {'AbsSwipeUpHandler.java': '7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df',
+    'FallbackSwipeHandler.java': '194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161',
+    'SwipeUpAnimationLogic.java': '9874ec5f07f78c0c255c50713046e9c74722dbc4ed53e1a168ee3c1d4c72afb3',
+    'GestureState.java': '3ceb83b87e02cd0505cd7a1aa727aa0d672e3c1fc2d586119346373a485c94cb',
+    'TransformParams.java': '22b960e05c9e6c694cbe725329b6ac6234fdccfd396523283055197a6a5d7eb2',
+    'SurfaceTransaction.java': 'f5ba9a7c03444b39a6702c944b267ad4c5abd5d88be65897fb9327fb41c7083c',
+    'TaskViewSimulator.java': '61642176403139f131ddfab56a61472cd6e7ff008729a43637210940d4dbb6e6',
+    'TopTaskTracker.java': '153de2f4898e8f90ef837b98682152c01124f3028760f49a0319d4a68de1aecc',
+    'RecentsAnimationDeviceState.java': '083299e6b7bec5bbb908566566dcacf2b102d6c19d97bf1932e2e039fdd58388',
+    'RemoteTargetGluer.java': '3ed7539dce2b071f0451ac294088e0a4d09f4d30f008c36ed93d4eb9b6aeab62',
+    'RecentsOrientedState.java': '6c008c0dff701471fa140a59f79eef76ae815950ac709e4acefe039723e3dd83',
+    'RecentsWindowSwipeHandler.java': 'c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c'}
+EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
+    'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java',
+    'RecentsWindowSwipeHandler.java': f'{QUICKSTEP}/window/RecentsWindowSwipeHandler.java'}
+
+class RoseEdgeSwipePatchTest(unittest.TestCase):
+    """#410 E2a: rose-edge-launcher3.patch wires RoseEdgeGesture into Launcher3's fallback swipe handler, off unless
+    persist.wm.debug.rose_edge. Source checks only: the patch applies byte for byte to the pinned handlers, keeps
+    stock behaviour in the base class, and uses only members the pinned sources declare. The patched handlers are NOT
+    compiled here (that needs a real Launcher3 module build on the builder), and nothing is run on a device."""
+    EDGE_SWIPE = (OVERLAY/'RoseEdgeSwipe.java').read_text()
+    EDGE_STATE = (OVERLAY/'RoseEdgeState.java').read_text()
+
+    def patched(self):
+        tree = Path(tempfile.mkdtemp(prefix='launcher3-edge-'))
+        self.addCleanup(shutil.rmtree, tree, True)
+        for name, relative in EDGE_TARGETS.items():
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(FIXTURES/name, tree/relative)
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        check = subprocess.run(['git', '-C', str(tree), 'apply', '--check', str(EDGE_PATCH)], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        return {name: (tree/relative).read_text() for name, relative in EDGE_TARGETS.items()}
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in EDGE_PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_the_patch_applies_and_changes_only_two_stock_lines(self):
+        text = EDGE_PATCH.read_text()
+        self.assertEqual(re.findall(r'^\+\+\+ b/(\S+)', text, re.M), list(EDGE_TARGETS.values()))
+        removed = [l for l in text.splitlines() if l.startswith('-') and not l.startswith('---')]
+        self.assertEqual(removed, ['-        final GestureEndTarget endTarget = calculateEndTarget(',
+            '-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);',
+            '-                taskViewSimulator.apply(transformParams);',
+            '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);',
+            '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);'])
+        self.assertNotIn('\t', ''.join(l for l in text.splitlines() if l.startswith('+')), 'Launcher3 indents with spaces')
+        files = set(re.findall(r'^\+\+\+ b/(\S+)', PATCH.read_text(), re.M))
+        self.assertFalse(files & set(EDGE_TARGETS.values()), 'disjoint from rose-switcher-launcher3.patch')
+        self.patched()
+
+    def test_both_home_starts_share_launcher3s_identity_and_nothing_else(self):
+        """Home replies to gesture_nav_contract_v1 only after verifying the system recents component through the
+        Android 15 caller identity (Home's review, #410). The opt-in needs no permission and adds no authority: the
+        home app learns Launcher3's package and uid. It applies whether or not the edge switch is on."""
+        patched = self.patched()
+        opt_in = ('ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)\n'
+            '                .setShareIdentityEnabled(true);')
+        for name in ('FallbackSwipeHandler.java', 'RecentsWindowSwipeHandler.java'):
+            self.assertEqual(patched[name].count(opt_in), 1, name)
+            self.assertEqual(patched[name].count('makeCustomAnimation('), 1, f'{name}: the only home start')
+        rwsh = self.added_blocks('RecentsWindowSwipeHandler.java')
+        self.assertNotIn('Rose', rwsh.replace('RoseOS (#410)', ''), 'nothing else changes in the inactive handler')
+        self.assertEqual(len(rwsh.splitlines()), 4)
+
+    def test_the_base_class_keeps_stock_behaviour(self):
+        abs_ = self.patched()['AbsSwipeUpHandler.java']
+        self.assertIn('final GestureEndTarget endTarget = refineEndTarget(calculateEndTarget(\n'
+            '                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed),\n'
+            '                isCancel, mIsMotionPaused);', abs_)
+        self.assertIn('GestureEndTarget endTarget, boolean isCancel, boolean isMotionPaused) {\n        return endTarget;\n    }', abs_)
+        self.assertIn('TaskViewSimulator taskViewSimulator, TransformParams transformParams) {\n'
+            '        taskViewSimulator.apply(transformParams);\n    }', abs_)
+        self.assertIn('return mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;', abs_)
+        self.assertEqual(abs_.count('applyTargetTransform(taskViewSimulator, transformParams);'), 1)
+        self.assertNotIn('Rose', abs_.replace('RoseOS (#410)', ''), 'no Rose logic in the shared base class')
+
+    def added_blocks(self, name):
+        """The patch's added lines for one file, as text (the '+' stripped)."""
+        text = EDGE_PATCH.read_text()
+        part = text[text.index(f'+++ b/{EDGE_TARGETS[name]}'):]
+        nxt = part.find('\ndiff --git ', 1)
+        part = part if nxt < 0 else part[:nxt]
+        return '\n'.join(l[1:] for l in part.splitlines()[1:] if l.startswith('+'))
+
+    def test_the_fallback_handler_adds_exactly_this(self):
+        """Every line the patch adds to FallbackSwipeHandler, pinned: nothing here is compiled, so the text is the
+        check (a mistake in it would otherwise pass)."""
+        self.patched()
+        added = self.added_blocks('FallbackSwipeHandler.java')
+        expected = (ROOT/'os/tests/fixtures/rose-switcher/rose-edge-fallback-added.txt').read_text()
+        self.assertEqual(added + '\n', expected)
+
+    def test_the_fallback_handler_maps_only_its_own_outcomes(self):
+        fallback = self.patched()['FallbackSwipeHandler.java']
+        refine = fallback[fallback.index('protected GestureEndTarget refineEndTarget('):fallback.index('protected void applyTargetTransform(')]
+        self.assertTrue(refine.split('\n')[2:5] == ['        if (!mRoseEdge.enabled()) {',
+            '            return endTarget;', '        }'], 'switch off (the default): stock end target first')
+        self.assertIn('if (mGestureState.isHandlingAtomicEvent()) {\n            mRoseEdge.settled(endTarget == '
+            'GestureEndTarget.LAST_TASK);\n            return endTarget;', refine, 'atomic gestures keep their target but settle')
+        self.assertIn('endTarget == GestureEndTarget.HOME, mCurrentDisplacement)', refine)
+        self.assertIn('case RoseEdgeGesture.RAISE:\n            case RoseEdgeGesture.STAY:\n'
+            '                refined = GestureEndTarget.LAST_TASK;', refine)
+        self.assertIn('case RoseEdgeGesture.HOME:\n                refined = GestureEndTarget.HOME;', refine)
+        self.assertIn('default:\n                break;', refine, "STOCK keeps Launcher3's own target")
+        self.assertIn('mRoseEdge.settled(refined == GestureEndTarget.LAST_TASK);', refine)
+        transform = fallback[fallback.index('protected void applyTargetTransform('):fallback.index('private boolean isRoseGestureNavigation()')]
+        self.assertTrue(transform.split('\n')[2:6] == ['        if (!mRoseEdge.enabled()) {',
+            '            super.applyTargetTransform(taskViewSimulator, transformParams);', '            return;', '        }'],
+            'switch off (the default): stock transform first, nothing else evaluated')
+        self.assertEqual(transform.count('super.applyTargetTransform(taskViewSimulator, transformParams);'), 2)
+        self.assertIn('mRoseAttached |= hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS\n'
+            '                || endTarget == GestureEndTarget.NEW_TASK;', transform, 'attachment is latched for the gesture')
+        self.assertIn('mCurrentShift.value * mTransitionDragLength', transform, 'the raw shift, never the magnetic one')
+        self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture\n'
+            '                        || !isRoseFullscreenTask()', fallback, 'never over Home, a trackpad, a continued gesture '
+            'or a task that is not full screen')
+        self.assertIn('mGestureState.getSwipeUpStartTimeMs(), mDeviceState.getTouchSlop(),', fallback,
+            'distances and speed count from touch-down')
+        self.assertIn('mRemoteTargetHandles.length == 1', fallback, 'one app only: never split screen')
+
+    def test_every_launcher3_member_it_uses_is_declared_at_the_pinned_revision(self):
+        """Derived from the patch: every method called and every m-field read on an added line is declared in the
+        pinned sources (or used there the same way), unless the patch or Rose's overlay classes define it."""
+        pinned = '\n'.join((FIXTURES/name).read_text() for name in EDGE_PINNED)
+        overlay = '\n'.join((OVERLAY/f).read_text() for f in ('RoseEdgeSwipe.java', 'RoseEdgeGesture.java', 'RoseEdgeState.java'))
+        added = self.added_blocks('AbsSwipeUpHandler.java') + '\n' + self.added_blocks('FallbackSwipeHandler.java')
+        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', added, flags=re.S))
+        defined = set(re.findall(r'(?:protected|private|public)[^;=(]*?\b(\w+)\s*\(', code))
+        defined |= set(re.findall(r'private (?:final )?[\w\[\]<>]+ (m\w+)', code))
+        rose = set(re.findall(r'public (?:static )?[\w\[\]<>]+ (\w+)\s*\(', overlay))
+        methods = set(re.findall(r'\.(\w+)\(', code)) | set(re.findall(r'(?<![\w.])(\w+)\(', code))
+        keywords = {'if', 'switch', 'return', 'super', 'new', 'RoseEdgeSwipe', 'Matrix', 'Rect'}
+        # Public SDK members the patch calls, checked against the platform's own android.jar below.
+        sdk = {'setShareIdentityEnabled': ('android.app.ActivityOptions',
+            'public android.app.ActivityOptions setShareIdentityEnabled(boolean);')}
+        import os
+        jars = sorted(Path(os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk').glob('platforms/android-*/android.jar'))
+        for name, (cls, signature) in sdk.items():
+            if jars:
+                api = subprocess.run(['javap', '-cp', str(jars[-1]), cls], capture_output=True, text=True).stdout
+                self.assertIn(signature, api, f'{cls}.{name} in {jars[-1].parent.name}')
+        keywords |= set(sdk)
+        checked = 0
+        own = {f: (FIXTURES/f).read_text() for f in EDGE_TARGETS}
+        for name in sorted(methods - defined - rose - keywords):
+            declared = re.search(r'(?:public|protected)[^;=(\n]*\b%s\s*\(' % name, pinned) or any(
+                re.search(r'private[^;=(\n]*\b%s\s*\(' % name, own[f]) and f'{name}(' in self.added_blocks(f)
+                for f in own) or any(  # package-private, in the handlers' own package
+                re.search(r'^    (?!private)[\w<>\[\]]+ %s\s*\(' % name, (FIXTURES/f).read_text(), re.M)
+                for f in EDGE_PINNED if 'package com.android.quickstep;' in (FIXTURES/f).read_text())
+            used = re.search(r'\.%s\(' % name, pinned)
+            self.assertTrue(declared or used, f'{name}() is neither declared nor used at the pinned revision')
+            checked += 1
+        for field in sorted(set(re.findall(r'\b(m[A-Z]\w*)', code)) - defined):
+            self.assertRegex(pinned, r'(?:protected|public)?\s*(?:final\s+)?[\w.<>\[\]]+\s+%s\s*[;=]' % field,
+                f'{field} is declared at the pinned revision')
+            checked += 1
+        self.assertGreater(checked, 30)
+        # The two members read from FallbackSwipeHandler's own pinned fields and constructor.
+        fallback = (FIXTURES/'FallbackSwipeHandler.java').read_text()
+        self.assertIn('private final boolean mRunningOverHome;', fallback)
+        self.assertIn('boolean continuingLastGesture,', fallback)
+        for imported in ('import android.app.TaskInfo;', 'import android.view.Surface;', 'import android.graphics.Rect;',
+                'import com.android.quickstep.util.TransformParams.BuilderProxy;'):
+            self.assertIn(imported, fallback, 'already imported by the pinned file')
+        self.assertIn('long getSwipeUpStartTimeMs()', (FIXTURES/'GestureState.java').read_text(),
+            'package-private, and FallbackSwipeHandler is in the same package')
+
+    def test_the_overlay_classes_compile_against_the_sdk(self):
+        import os
+        sdk = os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk'
+        jars = sorted(Path(sdk).glob('platforms/android-*/android.jar'))
+        if not jars:
+            self.skipTest('no Android SDK platform')
+        tmp = Path(tempfile.mkdtemp(prefix='rose-edge-compile-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        stub = tmp/'src/android/os/SystemProperties.java'
+        stub.parent.mkdir(parents=True)
+        # frameworks/base 84183aff core/java/android/os/SystemProperties.java (hidden; Launcher3 builds with platform APIs).
+        stub.write_text('package android.os; public class SystemProperties { '
+            'public static boolean getBoolean(String key, boolean def) { return def; } }')
+        result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:all', '-Xlint:-options',
+            '-implicit:none', '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
+            str(OVERLAY/'RoseEdgeSwipe.java'), str(OVERLAY/'RoseEdgeState.java'), str(OVERLAY/'RoseEdgeGesture.java')],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        warnings = [l for l in result.stderr.splitlines() if l.strip() and not l.startswith('Picked up JAVA_TOOL_OPTIONS')]
+        self.assertEqual(warnings, [], 'no warnings')
+
+    def test_it_is_off_by_default_and_reaches_nothing_new(self):
+        self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
+        self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
+        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.hasListener()\n'
+            '                && (keyguard == null || !keyguard.isKeyguardLocked());', self.EDGE_SWIPE,
+            'never without an edge window to draw it')
+        self.assertIn('if (LISTENERS.isEmpty()) return false;', self.EDGE_STATE, 'no raise without a listener')
+        self.assertIn('this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;', self.EDGE_SWIPE)
+        for source in (self.EDGE_SWIPE, self.EDGE_STATE):
+            code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', source, flags=re.S))
+            for reach in ('SensorPrivacy', 'AudioManager', 'setMicrophoneMute', 'Binder', 'Intent', 'startActivity',
+                    'ContentResolver', 'Settings', 'SystemProperties.set', 'WindowManager', 'permission'):
+                self.assertNotIn(reach, code, reach)
+        self.assertIn('Looper.myLooper() != Looper.getMainLooper()', self.EDGE_STATE)
+
+    def test_no_build_applies_it_until_release_and_infra_agree(self):
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertNotIn('rose-edge-launcher3.patch', patcher, 'registered only with an agreed compile route')
+
+class Launcher3CompileContractTest(unittest.TestCase):
+    """#410: os/compile-contracts/launcher3-quickstep-lib.json, the inputs for Release's compile-only adapter
+    (verify-integrated or reconstruct; anything else refused). Every pre-image, post-image and blob chain is recomputed
+    offline from committed pinned fixtures and patches; config.xml is accepted only with its bound generating inputs."""
+    SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
+    MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
+    # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
+    AGREED_SHA256 = '256bad1f6c51b5fdfe70b5d844505e0ea6360df2d6b102fb40d11e917d06f6e3'
+
+    def contract(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('launcher3_compile_contract', self.SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def manifest(self):
+        import json
+        return json.loads(self.MANIFEST.read_text())
+
+    def test_the_manifest_is_the_agreed_version_and_recomputes_offline(self):
+        self.assertEqual(hashlib.sha256(self.MANIFEST.read_bytes()).hexdigest(), self.AGREED_SHA256)
+        manifest = self.manifest()
+        self.assertEqual((manifest['kind'], manifest['schemaVersion']), ('rose-launcher3-compile-inputs', 1))
+        result = subprocess.run(['python3', str(self.SCRIPT)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('42 files recomputed from pinned fixtures', result.stdout)
+
+    def test_the_patch_order_is_the_patchers_plus_the_unregistered_edge_patch(self):
+        contract = self.contract()
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        background = (ROOT/'scripts/background_apks.py').read_text()
+        base = re.search(r"projects = \{'frameworks/base': (\[[^\]]*\])\}", patcher).group(1)
+        extra = re.search(r'BACKGROUND_FRAMEWORK_PATCHES = (\[[^\]]*\])', background).group(1)
+        import ast
+        order = dict((p, patches) for p, _, patches in contract.PROJECTS)
+        self.assertEqual(order['frameworks/base'], ast.literal_eval(base) + ast.literal_eval(extra))
+        self.assertIn("projects['build/release'] = " + repr(order['build/release']), patcher)
+        self.assertIn("projects['packages/apps/Launcher3'] = " + repr(order['packages/apps/Launcher3'][:1]), patcher)
+        self.assertEqual(order['packages/apps/Launcher3'][1:], ['rose-edge-launcher3.patch'])
+        manifest = self.manifest()
+        self.assertIn('does not register yet', manifest['candidatePatches'])
+        self.assertIn('must not be completed by applying rose-edge-launcher3.patch alone', manifest['branches']['otherwise'])
+
+    def test_the_branches_refuse_anything_else(self):
+        manifest = self.manifest()
+        self.assertEqual(set(manifest['branches']), {'verifyIntegrated', 'reconstruct', 'otherwise'})
+        self.assertIn('no patch is applied again', manifest['branches']['verifyIntegrated'])
+        self.assertIn('every overlay target are absent beforehand', manifest['branches']['reconstruct'])
+        self.assertIn('Never reset or trust a snapshot', manifest['branches']['otherwise'])
+        self.assertIn('any extra file is refused', manifest['unaffected'])
+        self.assertIn('never records current bytes as provenance', manifest['provenance'])
+        for project in manifest['projects']:
+            for row in project['files']:
+                if row['pre'] is not None:
+                    self.assertNotEqual(row['pre']['sha256'], row['post']['sha256'], f'{row["path"]}: pre and post '
+                        'are distinguishable, so mixed state is always detectable')
+        required = [o['target'] for o in manifest['overlays'] if o['role'] == 'required']
+        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 8)
+        self.assertEqual(len([t for t in required if t.startswith('build/release/')]), 4)
+        self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
+
+    def integrated(self, policy, address=None, locked=False):
+        """The real post-image config.xml, rewritten by apply-os-changes.py's own policy block (executed as written)."""
+        contract = self.contract()
+        project = self.manifest()['projects'][0]
+        pre = {r['path']: None if r['pre'] is None else contract.fixture_path('frameworks/base', r['path']).read_bytes()
+            for r in project['files']}
+        post, _ = contract.apply_in_scratch(pre, contract.PROJECTS[0][2])
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        block = patcher[patcher.index("    config = source/'frameworks/base/core/res/res/values/config.xml'"):
+            patcher.index("    config.write_text(text)")]
+        import textwrap, types
+        code = textwrap.dedent(block.replace("config = source/'frameworks/base/core/res/res/values/config.xml'", '')
+            .replace('text = config.read_text()', 'text = original'))
+        scope = {'policy': policy, 'a': types.SimpleNamespace(reference_display_address=address, locked_control=locked),
+            'original': post['core/res/res/values/config.xml'].decode()}
+        exec(code, scope)
+        row = [r for r in project['files'] if r['path'] == 'core/res/res/values/config.xml'][0]
+        return scope['text'].encode(), row['post']['sha256']
+
+    def test_config_xml_is_accepted_only_as_exactly_rewritten_from_bound_inputs(self):
+        contract = self.contract()
+        cert, other = 'AB' * 32, 'CD' * 32
+        policy = {'agent': {'packageName': 'dev.pixel.backgroundcontrol', 'certificates': [cert]},
+            'targets': [{'packageName': 'dev.pixel.calculator.agent', 'certificates': [other]}], 'prototypeControl': True}
+        bound = hashlib.sha256(b'the receipt').hexdigest()
+        integrated, post = self.integrated(policy, address='4619827259835644672', locked=True)
+        verify = lambda data, **kw: contract.verify_integrated_config(data, post, kw.get('policy', policy),
+            kw.get('sha', bound), kw.get('bound', bound), kw.get('address', '4619827259835644672'), kw.get('locked', True))
+        self.assertEqual(verify(integrated), [], 'the producer\'s exact output with its bound inputs is accepted')
+        # The patcher's defaults (no prototype, address or locked control) are accepted with matching inputs only.
+        plain_policy = dict(policy, prototypeControl=False)
+        plain, _ = self.integrated(plain_policy)
+        self.assertEqual(contract.verify_integrated_config(plain, post, plain_policy, bound, bound), [])
+        refusals = {
+            'unbound receipt': verify(integrated, bound=None),
+            'a different receipt': verify(integrated, sha='0' * 64),
+            'missing receipt': verify(integrated, policy=None),
+            'another certificate': verify(integrated, policy=dict(policy, agent={'packageName': 'dev.pixel.backgroundcontrol',
+                'certificates': ['EF' * 32]})),
+            'prototype not bound': verify(integrated, policy=dict(policy, prototypeControl=False)),
+            'locked not bound': verify(integrated, locked=False),
+            'address not bound': verify(integrated, address=None),
+            'another address': verify(integrated, address='12'),
+            'an extra item': verify(integrated.replace(b'</item>\n    </string-array>', b'</item>\n        <item>x.y:' +
+                b'12' * 32 + b'</item>\n    </string-array>', 1)),
+            'a change elsewhere': verify(integrated.replace(b'<resources', b'<resources ', 1)),
+            'CRLF': verify(integrated.replace(b'\n', b'\r\n')),
+            'a duplicated element': verify(integrated + contract.CONFIG_MARKERS['config_pixelComputerControlLockedSessions'].encode()),
+            'not rewritten at all': verify(plain),
+            'a lowercase certificate': verify(integrated, policy=dict(policy, targets=[{'packageName': 'dev.pixel.calculator.agent',
+                'certificates': [other.lower()]}])),
+        }
+        for case, errors in refusals.items():
+            self.assertTrue(errors, f'{case}: must be refused')
+        self.assertEqual(list(contract.CONFIG_MARKERS), [r['integrationRewrite']['elements'] for p in self.manifest()['projects']
+            for r in p['files'] if 'integrationRewrite' in r][0])
+        self.assertNotIn('def normalize_config', self.SCRIPT.read_text(), 'no pattern-based normalisation')
+
+    def test_identity_sharing_is_explicit_and_independent_of_the_edge_switch(self):
+        sharing = self.manifest()['identitySharing']
+        self.assertTrue(sharing['appliesWithEdgeOff'])
+        self.assertIn('setShareIdentityEnabled(true)', sharing['change'])
+        self.assertIn('no dedicated exported entry', sharing['consumer'])
+        self.assertTrue(sharing['consumerImplemented'])
+        # Home's gate (#442), read here, never edited: the caller is checked before any of the sender's extras, against
+        # the platform's recents package with a shared uid, only on SDK 35+, and the reply is a RectF only.
+        app = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice'
+        main, rules = (app/'MainActivity.java').read_text(), (app/'GestureContract.java').read_text()
+        gate = main[main.index(' void gestureContract(Intent i,boolean homeShown){'):main.index(' void sendGestureReply(')]
+        self.assertLess(gate.index('getCurrentCaller()'), gate.index('getBundleExtra(GestureContract.EXTRA)'),
+            'identity before any extra is read')
+        self.assertIn('GestureContract.caller(caller.getPackage(),caller.getUid(),recentsPackage())', gate)
+        self.assertIn('return recentsPackage != null && callerUid >= 0 && recentsPackage.equals(callerPackage);', rules)
+        self.assertIn('static final int MIN_SDK = 35;', rules)
+        self.assertIn('getIdentifier("config_recentsComponentName","string","android")', main)
+        reply = main[main.index(' void sendGestureReply('):main.index(' static String recentsPackage()')]
+        self.assertIn('data.putParcelable(GestureContract.ICON_POSITION,target);', reply)
+        for never in ('surface_control', 'finish_callback', 'ICON_SURFACE', 'ON_FINISH'):
+            self.assertNotIn(never, main + rules, f'RectF only: no {never}')
+        self.assertTrue((ROOT/'workspace/rose-agent/app/tests/GestureContractTest.java').exists(), 'Home tests its rules')
+        tree = Path(tempfile.mkdtemp(prefix='launcher3-identity-'))
+        self.addCleanup(shutil.rmtree, tree, True)
+        for name, relative in EDGE_TARGETS.items():
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(FIXTURES/name, tree/relative)
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        checked = 0
+        for name, relative in EDGE_TARGETS.items():
+            code = (tree/relative).read_text()
+            if 'private void startHomeIntent(' not in code:
+                continue
+            start = code[code.index('private void startHomeIntent('):]
+            start = start[:start.index('\n    }\n')]
+            self.assertIn('.setShareIdentityEnabled(true);', start, name)
+            self.assertNotIn('mRoseEdge', start, f'{name}: not gated by the edge switch')
+            checked += 1
+        self.assertEqual(checked, 2)
 
 if __name__ == '__main__':
     unittest.main()
