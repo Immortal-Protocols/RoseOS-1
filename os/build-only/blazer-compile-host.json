@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-blazer-compile-host",
+  "basis": "BLAZER-COMPILE workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-compile passes to scripts/blazer-build-only.py run --stage compile. The host and lock are the blazer-prep binding's; the source root is that binding's isolated work tree (sourceRootFrom), never the production root. jobs, integrationDir (the blazer host-reconcile receipt directory, the render --receipt-dir) and inputsReceipt (blazer_integration.py admit's local-inputs.json) are null until a reviewed integration of that tree exists; while any is null the hosted check exits 4 before the controller. The helper re-checks isolation, the integration binding (blazer_integration.compile_problems), the lock, space against the reviewed first-build allowance and its own timeout on every run. Nothing here was run on any host.",
+  "host": "immortal-os-builder",
+  "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
+  "sourceRootFrom": "os/build-only/blazer-prep-host.json sourceRoot",
+  "jobs": null,
+  "integrationDir": null,
+  "inputsReceipt": null
+}
